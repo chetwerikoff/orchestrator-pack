@@ -119,3 +119,91 @@ function Test-AutonomousWorkerRecoveryGitAllow {
     }
     return @{ allowed = $false; reason = [string]$verdict.reason }
 }
+
+function Test-AutonomousWorkerRecoveryBranchGitAllow {
+    param(
+        [string[]]$Argv,
+        [string[]]$FixtureParentChain = @(),
+        [string]$ProjectId = 'orchestrator-pack',
+        [string]$Namespace = ''
+    )
+
+    $parsed = Invoke-WorkerRecoveryBoundaryCli -Subcommand 'evaluateBranchGitAllow' -Payload @{
+        argv = @($Argv)
+        recoveryParent = $false
+    }
+    if ($parsed.reason -in @('not_branch', 'not_force_delete')) {
+        return @{ allowed = $false; reason = 'not_recovery_branch_delete' }
+    }
+
+    $recoveryParent = $false
+    if ($FixtureParentChain.Count -gt 0) {
+        foreach ($line in $FixtureParentChain) {
+            if (Test-ProcessCommandLineIsWorkerRecoveryParent -CommandLine $line) {
+                $recoveryParent = $true
+                break
+            }
+        }
+    }
+    else {
+        $chain = Get-ProcessParentChainCommandLines
+        foreach ($line in $chain) {
+            if (Test-ProcessCommandLineIsWorkerRecoveryParent -CommandLine $line) {
+                $recoveryParent = $true
+                break
+            }
+        }
+    }
+    if (-not $recoveryParent) {
+        return @{ allowed = $false; reason = 'missing_recovery_parent' }
+    }
+
+    $branchCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery-branch-cleanup.mjs'
+    $branchParsed = Invoke-MechanicalNodeFilterCli -FilterCliPath $branchCli -Subcommand 'parseBranchDeleteArgv' -Payload @{ argv = @($Argv) } -Label 'worker-recovery-branch-gate' -JsonDepth 30
+    if (-not $branchParsed.ok) {
+        return @{ allowed = $false; reason = 'not_recovery_branch_delete' }
+    }
+
+    $active = $null
+    $ns = Resolve-WorkerRecoveryNamespace -ProjectId $ProjectId -Namespace $Namespace
+    if (Test-Path -LiteralPath $ns) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $ns -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
+            $read = Read-WorkerRecoveryClaimRecord -Path $file.FullName
+            if (-not $read.ok) { continue }
+            $phase = [string]$read.record.phase
+            if ($phase -notin @('cleanup_pending', 'branch_cleanup_pending', 'claimed')) { continue }
+            $boundBranch = [string]$read.record.boundBranch
+            if ($boundBranch -and $boundBranch -ieq [string]$branchParsed.branch) {
+                $active = @{ path = $file.FullName; record = $read.record; namespace = $ns }
+                break
+            }
+        }
+    }
+    if (-not $active) {
+        return @{ allowed = $false; reason = 'no_active_recovery_claim' }
+    }
+
+    $boundBranch = [string]$active.record.boundBranch
+    if (-not $boundBranch) {
+        return @{ allowed = $false; reason = 'bound_branch_missing' }
+    }
+
+    $verdict = Invoke-MechanicalNodeFilterCli -FilterCliPath $branchCli -Subcommand 'evaluateBranchGitAllow' -Payload @{
+        argv             = @($Argv)
+        recoveryParent   = $true
+        boundBranch      = $boundBranch
+        boundSessionId   = [string]$active.record.sessionId
+        claimSessionId   = [string]$active.record.sessionId
+    } -Label 'worker-recovery-branch-gate' -JsonDepth 30
+    if ($verdict.allowed) {
+        return @{
+            allowed = $true
+            reason  = 'recovery_branch_delete_allow'
+            branch  = [string]$verdict.branch
+            claimPath = $active.path
+            claimKey  = [string]$active.record.claimKey
+        }
+    }
+    return @{ allowed = $false; reason = [string]$verdict.reason }
+}
+

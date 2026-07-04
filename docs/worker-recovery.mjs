@@ -256,6 +256,16 @@ export function evaluateCleanupEligibility(input) {
     return { eligible: true, outcome: 'removed_terminated_session', reason: 'terminated_session_clean', liveness, ownership };
   }
 
+  if (liveness.verdict === 'terminated' && !worktreePresent) {
+    return {
+      eligible: true,
+      outcome: 'orphan_branch_pending',
+      reason: 'terminated_session_branch_cleanup',
+      liveness,
+      ownership,
+    };
+  }
+
   return { eligible: false, outcome: 'skipped_ambiguous', reason: 'no_cleanup_cell', liveness, ownership };
 }
 

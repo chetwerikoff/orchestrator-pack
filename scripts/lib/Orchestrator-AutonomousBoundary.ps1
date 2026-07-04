@@ -734,6 +734,20 @@ function Test-GitArgvIsWorktreeList {
     return [string]$Argv[$index + 1] -match '^(?i)list$'
 }
 
+
+
+function Test-GitArgvIsBranchDeleteForce {
+    param([string[]]$Argv)
+
+    $index = Get-GitArgvSubcommandIndex -Argv $Argv
+    if ($index -ge $Argv.Count) { return $false }
+    if ([string]$Argv[$index] -notmatch '^(?i)branch$') { return $false }
+    for ($i = $index + 1; $i -lt $Argv.Count; $i++) {
+        if ([string]$Argv[$i] -match '^(?i)(-D|--delete)$') { return $true }
+    }
+    return $false
+}
+
 function Test-GitArgvIsWorktreeRemoveForce {
     param([string[]]$Argv)
 
@@ -836,6 +850,15 @@ function Test-AutonomousGitDenied {
             return @{ denied = $true; reason = [string]$spawnAllow.reason }
         }
         return @{ denied = $true; reason = 'autonomous_mutating_git_denied' }
+    }
+
+
+    if (Test-GitArgvIsBranchDeleteForce -Argv $Argv) {
+        $branchRecoveryAllow = Test-AutonomousWorkerRecoveryBranchGitAllow -Argv $Argv -FixtureParentChain $FixtureParentChain
+        if ($branchRecoveryAllow.allowed) {
+            return @{ denied = $false; reason = 'recovery_branch_delete_allow' }
+        }
+        return @{ denied = $true; reason = [string]$branchRecoveryAllow.reason }
     }
 
     if (Test-GitArgvIsWorktreeRemoveForce -Argv $Argv) {
