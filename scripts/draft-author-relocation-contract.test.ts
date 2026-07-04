@@ -81,6 +81,15 @@ describe('validateCompletionRecord', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/dispositionStatus/);
   });
+
+  it('rejects invalid selectionBasis values', () => {
+    const result = validateCompletionRecord({
+      ...valid,
+      selectionBasis: 'defualt',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/invalid selectionBasis/);
+  });
 });
 
 describe('validateDelegateResult', () => {

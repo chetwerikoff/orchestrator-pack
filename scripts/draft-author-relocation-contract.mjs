@@ -42,6 +42,7 @@ const REQUIRED_COMPLETION_FIELDS = [
 ];
 
 const ALLOWED_ENGINES = new Set(['cursor', 'codex', 'sonnet-5', 'sonnet5']);
+const ALLOWED_SELECTION_BASES = new Set(['default', 'explicit-request']);
 const NON_CURSOR_ENGINES = new Set(['codex', 'sonnet-5', 'sonnet5']);
 const DRAFT_PATH_PREFIX = 'docs/issues_drafts/';
 
@@ -107,7 +108,11 @@ export function validateCompletionRecord(record) {
 
   const engine = String(record.authoringEngine ?? '').toLowerCase();
   const basis = String(record.selectionBasis ?? '').toLowerCase();
-  if (!ALLOWED_ENGINES.has(engine)) {
+  if (!ALLOWED_SELECTION_BASES.has(basis)) {
+    errors.push(
+      `invalid selectionBasis "${record.selectionBasis}"; allowed: default, explicit-request`,
+    );
+  } else if (!ALLOWED_ENGINES.has(engine)) {
     errors.push(
       `unrecognized authoringEngine "${record.authoringEngine}"; allowed: cursor, codex, sonnet-5`,
     );
