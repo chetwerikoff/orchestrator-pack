@@ -1,5 +1,5 @@
 {
-  "issue_number": 581,
+  "issue_number": 582,
   "iteration_id": "codex-telemetry-audit",
   "iteration_id_source": "wrapper_generated",
   "supersedes": null,
@@ -10,7 +10,7 @@
     "active_scope_hash": "sha256:45756fd65db1d4fe85a88146a23ec069f60ac459dfea3f30d23751aecb7965b9"
   },
   "declared_paths": [
-    "docs/declarations/581.codex-telemetry-audit.json",
+    "docs/declarations/582.codex-telemetry-audit.json",
     "scripts/gh-wrapper.test.ts",
     "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
