@@ -4,6 +4,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const RATE_LIMIT_HEADER_NAMES = new Set([
+  'retry-after',
+  'x-ratelimit-limit',
+  'x-ratelimit-remaining',
+  'x-ratelimit-reset',
+  'x-ratelimit-resource',
+  'x-ratelimit-used',
+]);
+let lastGhApiRateLimitHeaders = {};
 
 /**
  * @param {string} realGh
@@ -169,12 +178,56 @@ export function applyListedJq(value, jq) {
 }
 
 /**
+ * @param {string} text
+ * @returns {{ body: string, rateLimitHeaders: Record<string, string> }}
+ */
+function splitGhApiIncludeOutput(text) {
+  const normalized = String(text ?? '').replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  let headerStart = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^HTTP\/\d(?:\.\d)?\s+\d+/.test(lines[i])) {
+      headerStart = i;
+    }
+  }
+  if (headerStart < 0) {
+    return { body: normalized, rateLimitHeaders: {} };
+  }
+
+  let bodyStart = headerStart + 1;
+  const headers = {};
+  for (let i = headerStart + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === '') {
+      bodyStart = i + 1;
+      break;
+    }
+    const idx = line.indexOf(':');
+    if (idx <= 0) {
+      continue;
+    }
+    const name = line.slice(0, idx).trim().toLowerCase();
+    if (RATE_LIMIT_HEADER_NAMES.has(name)) {
+      headers[name] = line.slice(idx + 1).trim();
+    }
+  }
+
+  return { body: lines.slice(bodyStart).join('\n'), rateLimitHeaders: headers };
+}
+
+export function consumeGhApiRateLimitHeaders() {
+  const out = lastGhApiRateLimitHeaders;
+  lastGhApiRateLimitHeaders = {};
+  return out;
+}
+
+/**
  * @param {string} realGh
  * @param {string} endpoint
  * @param {{ hostname?: string | null, cwd?: string }} options
  */
 export function ghApiJson(realGh, endpoint, options = {}) {
-  const args = ['api', endpoint];
+  const args = ['api', endpoint, '--include'];
   if (options.hostname) {
     args.unshift('--hostname', options.hostname);
   }
@@ -184,11 +237,18 @@ export function ghApiJson(realGh, endpoint, options = {}) {
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
     maxBuffer: 50 * 1024 * 1024,
   });
+  const parsed = splitGhApiIncludeOutput(result.stdout);
+  if (Object.keys(parsed.rateLimitHeaders).length > 0) {
+    lastGhApiRateLimitHeaders = {
+      ...lastGhApiRateLimitHeaders,
+      ...parsed.rateLimitHeaders,
+    };
+  }
   if (result.status !== 0) {
-    const err = (result.stderr || result.stdout || '').trim() || `gh api failed (exit ${result.status})`;
+    const err = (result.stderr || parsed.body || result.stdout || '').trim() || `gh api failed (exit ${result.status})`;
     throw new Error(err);
   }
-  return JSON.parse(result.stdout);
+  return JSON.parse(parsed.body);
 }
 
 /**
