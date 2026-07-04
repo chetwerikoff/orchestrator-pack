@@ -1,0 +1,29 @@
+{
+  "issue_number": 576,
+  "iteration_id": "opk-130",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-04T07:12:28.518Z",
+  "baseline": {
+    "commit_sha": "b50e1f64efae30047e868fe89784e7814daa6d3b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:cbe6f4e465e90f1f3c5a7747372d3cb93facbe9b4d478ae5790036bb5357ac39"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "scripts/check-tier-gate-guard.ps1",
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/lib/tier-marker-screen.ts",
+    "scripts/tier-gate-guard.ts",
+    "scripts/tier-gate-guard.test.ts",
+    "scripts/lib/publish-issue-body-sync.ts",
+    "scripts/publish-issue-body-sync.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/fixtures/tier-gate/marker-free-t1-brief.md",
+    "tests/fixtures/tier-gate/marker-hit-sub-t3-brief.md",
+    "tests/fixtures/tier-gate/skip-line-brief.md",
+    "tests/fixtures/tier-gate/t1-missing-floor-brief.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
