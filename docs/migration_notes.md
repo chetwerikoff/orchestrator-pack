@@ -376,7 +376,10 @@ Operator adoption after merge:
 Adds `Gh-FleetRepoTickSnapshot.ps1` on top of the #453/#569 cache family. Covered
 wake-supervisor open-PR inventory reads (`Invoke-GhOpenPrList` /
 `Invoke-GhFleetCachedOpenPrListRaw`) refresh one repo-tick generation per bounded
-interval (`GH_FLEET_REPO_TICK_INTERVAL_SECONDS`, default 30s). The producer
+interval (`GH_FLEET_REPO_TICK_INTERVAL_SECONDS`, default 30s). Stale serving extends
+for `GH_FLEET_REPO_TICK_STALE_SERVE_SECONDS` (default 30s) **after** the fresh
+interval (`[interval, interval + staleServe)`), so lock contention can still return
+the previous generation while a single producer refreshes. The producer
 populates open-PR list, PR view, CI/check, and branch-protection per-key caches in
 one pass; staggered child ticks within the interval consume that generation instead
 of per-PR/per-key TTL repopulates. Scoped PR-number reads (`Invoke-GhOpenPrListForNumbers`,

@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
@@ -99,6 +99,78 @@ try {
     expect(second.status).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate_failed\b/)).toBe(1);
+  });
+
+  it('expired repo-tick error records allow a fresh populate retry', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-err-expiry-');
+    const failGh = `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"\necho 'rate limited' >&2\nexit 1\n`;
+    writeFileSync(join(harness.root, 'bin/gh'), failGh, { mode: 0o755 });
+    const failScript = `
+$ErrorActionPreference = 'Stop'
+. '${join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''")}'
+try {
+  $null = Invoke-GhOpenPrList -RepoRoot '${repoRoot.replace(/'/g, "''")}'
+  throw 'expected failure'
+} catch {
+  if ($_.Exception.Message -notmatch 'snapshot_populate_failed') { throw }
+  Write-Output 'failed-expected'
+}
+`;
+    const first = await spawnPwsh(failScript, repoRoot, harness.env);
+    expect(first.status).toBe(0);
+
+    const inventoryCache = join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");
+    const expireScript = `
+$ErrorActionPreference = 'Stop'
+. '${inventoryCache}'
+$paths = Get-GhFleetRepoTickPaths -RepoRoot '${repoRoot.replace(/'/g, "''")}'
+$record = Get-Content -LiteralPath $paths.GenerationPath -Raw | ConvertFrom-Json
+$record.expiresAt = ([datetime]::UtcNow.AddSeconds(-5)).ToString('o')
+$record | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $paths.GenerationPath -Encoding utf8NoBOM
+Write-Output 'expired'
+`;
+    const expired = await spawnPwsh(expireScript, repoRoot, harness.env);
+    expect(expired.status, expired.stderr || expired.stdout).toBe(0);
+
+    writeFileSync(join(harness.root, 'bin/gh'), readFileSync(join(repoRoot, 'scripts/fixtures/github-fleet-cache/fake-gh.sh')), {
+      mode: 0o755,
+    });
+
+    const retry = await spawnPwsh(REPO_TICK_CONSUMERS[0].script, repoRoot, harness.env);
+    expect(retry.status, retry.stderr || retry.stdout).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(2);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
+  });
+
+  it('stale-serve window extends beyond the fresh interval', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-stale-window-');
+    harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '2';
+    harness.env.GH_FLEET_REPO_TICK_STALE_SERVE_SECONDS = '30';
+    const warm = await spawnPwsh(REPO_TICK_CONSUMERS[0].script, repoRoot, harness.env);
+    expect(warm.status).toBe(0);
+    const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    const staleScript = `
+$ErrorActionPreference = 'Stop'
+. '${join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''")}'
+$paths = Get-GhFleetRepoTickPaths -RepoRoot '${repoRoot.replace(/'/g, "''")}'
+New-Item -ItemType File -Path $paths.LockPath -Force | Out-Null
+try {
+  $record = Ensure-GhFleetRepoTickSnapshot -RepoRoot '${repoRoot.replace(/'/g, "''")}' -Consumer 'stale-window-test' -DataClass 'open_pr_list'
+  if (-not $record.generation) { throw 'expected stale generation' }
+  Write-Output 'stale-served'
+}
+finally {
+  Remove-Item -LiteralPath $paths.LockPath -Force -ErrorAction SilentlyContinue
+}
+`;
+    const stale = await spawnPwsh(staleScript, repoRoot, harness.env);
+    expect(stale.status, stale.stderr || stale.stdout).toBe(0);
+    expect(stale.stdout).toContain('stale-served');
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(baselineList);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_stale_hit\b/)).toBeGreaterThanOrEqual(1);
   });
 
   it('AC#6 action-boundary stale head cannot authorize checks bundle', async () => {

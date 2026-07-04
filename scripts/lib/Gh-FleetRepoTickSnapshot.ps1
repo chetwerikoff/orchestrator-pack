@@ -51,6 +51,23 @@ function Get-GhFleetRepoTickPaths {
     }
 }
 
+function Test-GhFleetRepoTickEnvelopeExpired {
+    param($Envelope)
+
+    if (-not $Envelope -or -not $Envelope.expiresAt) {
+        return $false
+    }
+
+    try {
+        $expiresAt = [datetimeoffset]::Parse([string]$Envelope.expiresAt).UtcDateTime
+    }
+    catch {
+        return $false
+    }
+
+    return (Get-Date).ToUniversalTime() -gt $expiresAt
+}
+
 function Read-GhFleetRepoTickGenerationRecord {
     param([string]$GenerationPath)
 
@@ -61,6 +78,9 @@ function Read-GhFleetRepoTickGenerationRecord {
     try {
         $record = Get-Content -LiteralPath $GenerationPath -Raw | ConvertFrom-Json
         if ($record.error) {
+            if (Test-GhFleetRepoTickEnvelopeExpired -Envelope $record) {
+                return $null
+            }
             return @{ kind = 'error'; message = [string]$record.error; record = $record }
         }
         return @{ kind = 'data'; record = $record }
@@ -91,8 +111,11 @@ function Test-GhFleetRepoTickGenerationFresh {
 function Test-GhFleetRepoTickGenerationStaleServable {
     param(
         $Record,
+        [int]$IntervalSeconds,
         [int]$StaleServeSeconds
     )
+
+    if ($StaleServeSeconds -le 0) { return $false }
 
     $data = if ($Record.record) { $Record.record } elseif ($Record.generation) { $Record } else { $null }
     if (-not $data -or -not $data.storedAt) { return $false }
@@ -103,7 +126,8 @@ function Test-GhFleetRepoTickGenerationStaleServable {
         return $false
     }
     $ageSeconds = ((Get-Date).ToUniversalTime() - $storedAt).TotalSeconds
-    return $ageSeconds -lt $StaleServeSeconds
+    $staleUpperBound = $IntervalSeconds + $StaleServeSeconds
+    return ($ageSeconds -ge $IntervalSeconds) -and ($ageSeconds -lt $staleUpperBound)
 }
 
 function Get-GhFleetRepoTickGenerationAgeSeconds {
@@ -367,7 +391,7 @@ function Ensure-GhFleetRepoTickSnapshot {
         return $record
     }
 
-    $staleServable = $record -and (Test-GhFleetRepoTickGenerationStaleServable -Record $record -StaleServeSeconds $staleServe)
+    $staleServable = $record -and (Test-GhFleetRepoTickGenerationStaleServable -Record $record -IntervalSeconds $interval -StaleServeSeconds $staleServe)
     $lockHeld = Test-Path -LiteralPath $paths.LockPath -PathType Leaf
 
     if ($staleServable -and $lockHeld) {
