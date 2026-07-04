@@ -116,6 +116,19 @@ if ($bundle.ciChecksByPr.Count -lt ${minBundlePrCount}) { throw 'expected pr che
 Write-Output 'ok'
 `,
     },
+    {
+      id: 'review-ready-report-state-seed',
+      script: `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$null = Ensure-GhFleetRepoTickSnapshot -RepoRoot '${packRootEscaped}' -Consumer 'review-ready-report-state-seed' -DataClass 'github_snapshot'
+$open = @(Invoke-GhOpenPrListForNumbers -RepoRoot '${packRootEscaped}' -PrNumbers ${scopedLiteral} -Consumer 'review-ready-report-state-seed')
+if ($open.Count -lt ${scopedPrNumbers.length}) { throw 'expected scoped pr rows' }
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-ready-report-state-seed' -MergeRequiredNames { param($p) @($p.contexts) }
+if ($bundle.ciChecksByPr.Count -lt ${scopedPrNumbers.length}) { throw 'expected checks bundle' }
+Write-Output 'ok'
+`,
+    },
   ];
 }
 

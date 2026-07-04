@@ -390,9 +390,18 @@ Operator adoption after merge:
 
 1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
 2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
-3. Optional: `export GH_FLEET_CACHE_AUDIT=1` and inspect
-   `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` plus test audit lines for
-   `repo_tick_populate`, `repo_tick_hit`, `repo_tick_wait_hit`, and `repo_tick_stale_hit`.
+3. AC#10 measurement uses shipped #582/#581 telemetry (no local helper):
+   - `export GH_FLEET_CACHE_AUDIT=1` and `export GH_WRAPPER_AUDIT=1` (supervisor children
+     default both post-#581).
+   - Wrapper audit: `$AO_SIDE_PROCESS_STATE_DIR/gh-wrapper-audit.jsonl` — compare `entry` /
+     `complete` rows by `child`, `route`, `command`, `prNumber`, `headRef`, `status`,
+     `rateLimit`, and `rateLimitKind`.
+   - Fleet cache audit: `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` —
+     `repo_tick_populate`, `repo_tick_hit`, `repo_tick_wait_hit`, `repo_tick_stale_hit`,
+     populate failures, and bypass denials.
+   - Record one normal fleet window and one busy/head-advance window; compare wrapper
+     `pr list` / per-PR `pr view` counts for `review-ready-report-state-seed` and other
+     covered children before vs after merge.
 4. Verification: `npm test -- github-fleet-repo-tick-snapshot` and
    `pwsh -NoProfile -File scripts/check-github-fleet-repo-tick-coverage.ps1`.
 

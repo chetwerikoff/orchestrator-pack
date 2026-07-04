@@ -152,9 +152,11 @@ function New-ReviewReadyReportStateSeedGitHubSnapshot {
         Write-ReviewReadyReportStateSeedGitHubRefreshProgress -ProgressWriter $ProgressWriter -Step $Step -Ordinal $Ordinal
     }.GetNewClosure()
 
+    & $refreshProgress 'repo_tick'
+    $null = Ensure-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed' -DataClass 'github_snapshot'
     & $refreshProgress 'start'
     $openPrs = if (@($TrackedPrNumbers).Count -gt 0) {
-        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers) -ProgressWriter $refreshProgress)
+        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers) -Consumer 'review-ready-report-state-seed' -ProgressWriter $refreshProgress)
     }
     else {
         @()

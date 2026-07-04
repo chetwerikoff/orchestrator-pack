@@ -173,6 +173,17 @@ finally {
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_stale_hit\b/)).toBeGreaterThanOrEqual(1);
   });
 
+  it('review-ready-report-state-seed background snapshot uses repo-tick generation', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-seed-');
+    const seed = REPO_TICK_CONSUMERS.find((c) => c.id === 'review-ready-report-state-seed');
+    expect(seed).toBeTruthy();
+    const result = await spawnPwsh(seed!.script, repoRoot, harness.env);
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(10);
+  });
+
   it('AC#6 action-boundary stale head cannot authorize checks bundle', async () => {
     harness = withMultiPrHarness('gh-repo-tick-ac6-');
     const ghChecks = join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''");

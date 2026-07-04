@@ -14,11 +14,11 @@ $ExpectedCoverage = @(
     @{ id = 'review-finding-delivery-confirm'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrListForNumbers') }
     @{ id = 'review-trigger-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReconcileChecksByPr') }
     @{ id = 'review-trigger-reeval'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReviewTriggerReevalChecksByPr') }
+    @{ id = 'review-ready-report-state-seed'; classification = 'repo-tick snapshot'; helpers = @('Ensure-GhFleetRepoTickSnapshot', 'Invoke-GhOpenPrListForNumbers', 'Get-GhChecksBundleByPr', 'Invoke-ReviewStartScopedGhPrView') }
     @{ id = 'listener'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'heartbeat'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'review-run-recovery'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'worker-message-submit-reconcile'; classification = 'out of coverage'; helpers = @() }
-    @{ id = 'review-ready-report-state-seed'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'review-start-claim-reaper'; classification = 'out of coverage'; helpers = @() }
 )
 
@@ -30,12 +30,42 @@ $ChildScriptMap = @{
     'review-finding-delivery-confirm'   = 'review-finding-delivery-confirm.ps1'
     'review-trigger-reconcile'          = 'review-trigger-reconcile.ps1'
     'review-trigger-reeval'             = 'review-trigger-reeval.ps1'
+    'review-ready-report-state-seed'    = 'review-ready-report-state-seed.ps1'
     'listener'                          = 'orchestrator-wake-listener.ps1'
     'heartbeat'                         = 'orchestrator-wake-heartbeat.ps1'
     'review-run-recovery'               = 'review-run-recovery.ps1'
     'worker-message-submit-reconcile'   = 'worker-message-submit-reconcile.ps1'
-    'review-ready-report-state-seed'    = 'review-ready-report-state-seed.ps1'
     'review-start-claim-reaper'         = 'review-start-claim-reaper.ps1'
+}
+
+$LibScriptMap = @{
+    'review-ready-report-state-seed' = 'lib/Invoke-ReviewReadyReportStateSeed.ps1'
+}
+
+function Test-RepoTickCoverageContent {
+    param(
+        [string]$Content,
+        [string[]]$Helpers,
+        [string]$ChildId
+    )
+
+    $matched = $false
+    foreach ($helper in $Helpers) {
+        if ($Content -match [regex]::Escape($helper)) {
+            $matched = $true
+            break
+        }
+    }
+    if (-not $matched -and $Content -match 'Gh-PrChecks\.ps1|Invoke-GhOpenPrList|Get-OpenPrList') {
+        $matched = $true
+    }
+    if (-not $matched) {
+        return "must reference cached fleet inventory helpers ($($Helpers -join ', '))"
+    }
+    if ($Content -match '(^|[^a-zA-Z])gh\s+pr\s+list' -and $Content -notmatch 'Invoke-GhOpenPrList|Invoke-GhOpenPrListForNumbers|Get-OpenPrList') {
+        return 'must not call bare gh pr list outside cached helpers'
+    }
+    return $null
 }
 
 $violations = @()
@@ -53,21 +83,27 @@ foreach ($row in $ExpectedCoverage) {
     }
     $content = Get-Content -LiteralPath $scriptPath -Raw
     if ($row.classification -eq 'repo-tick snapshot') {
-        $matched = $false
-        foreach ($helper in $row.helpers) {
-            if ($content -match [regex]::Escape($helper)) {
-                $matched = $true
-                break
+        $combined = $content
+        if ($LibScriptMap.ContainsKey($id)) {
+            $libPath = Join-Path $Root "scripts/$($LibScriptMap[$id])"
+            if (-not (Test-Path -LiteralPath $libPath -PathType Leaf)) {
+                $violations += "missing lib script for ${id}: $libPath"
+                continue
             }
+            $combined += "`n" + (Get-Content -LiteralPath $libPath -Raw)
         }
-        if (-not $matched -and $content -match 'Gh-PrChecks\.ps1|Invoke-GhOpenPrList|Get-OpenPrList') {
-            $matched = $true
+        $issue = Test-RepoTickCoverageContent -Content $combined -Helpers $row.helpers -ChildId $id
+        if ($issue) {
+            $violations += "$id $issue"
         }
-        if (-not $matched) {
-            $violations += "$id must reference cached fleet inventory helpers ($($row.helpers -join ', '))"
-        }
-        if ($content -match '(^|[^a-zA-Z])gh\s+pr\s+list' -and $content -notmatch 'Invoke-GhOpenPrList|Invoke-GhOpenPrListForNumbers|Get-OpenPrList') {
-            $violations += "$id must not call bare gh pr list outside cached helpers"
+        if ($id -eq 'review-ready-report-state-seed') {
+            $libContent = Get-Content -LiteralPath (Join-Path $Root "scripts/$($LibScriptMap[$id])") -Raw
+            if ($libContent -notmatch 'function New-ReviewReadyReportStateSeedGitHubSnapshot[\s\S]*Ensure-GhFleetRepoTickSnapshot') {
+                $violations += 'review-ready-report-state-seed background snapshot must warm repo-tick before scoped reads'
+            }
+            if ($libContent -notmatch 'Invoke-ReviewStartScopedGhPrView') {
+                $violations += 'review-ready-report-state-seed must preserve fresh pre-claim scoped pr view'
+            }
         }
     }
 }
