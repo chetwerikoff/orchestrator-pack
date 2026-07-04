@@ -28,11 +28,15 @@ export declare function findRunnableSpawnCommands(text: string): RunnableSpawnMa
 
 export declare function parseSpawnShapeFlags(command: string): SpawnShapeFlags;
 
+export declare function tokenizeSpawnArgv(command: string): string[];
+
+export declare function isDocumentationSpawnTemplate(match: RunnableSpawnMatch): boolean;
+
 export declare function validateRunnableSpawnCommand(command: string): string[];
 
 export declare function scanSpawnShapeViolations(
   text: string,
-  options?: { relPath?: string; allowedCommands?: string[] },
+  options?: { relPath?: string },
 ): SpawnShapeViolation[];
 
 export declare function scanSpawnShapeCorpus(

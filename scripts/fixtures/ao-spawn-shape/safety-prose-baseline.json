@@ -1,11 +1,3 @@
 {
-  "description": "Non-runnable ao spawn mentions accepted by the Issue #589 shape guard (safety prose / historical references).",
-  "allowedCommands": [
-    "ao spawn --claim-pr",
-    "ao spawn --claim-pr <PR>",
-    "ao spawn --claim-pr <n>",
-    "ao spawn --claim-pr <PR> (ping/respawn discipline below)",
-    "ao spawn <issue>",
-    "ao spawn or ao spawn --claim-pr"
-  ]
+  "description": "Issue #589 spawn-shape guard baseline. Backtick documentation templates with angle-bracket placeholders (e.g. `ao spawn --claim-pr <PR>`) are skipped by isDocumentationSpawnTemplate; runnable line matches are always validated with no global command allowlist."
 }

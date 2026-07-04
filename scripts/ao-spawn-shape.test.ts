@@ -5,8 +5,10 @@ import { describe, expect, it } from 'vitest';
 import {
   AO_SPAWN_DISPLAY_NAME_MAX_LENGTH,
   findRunnableSpawnCommands,
+  isDocumentationSpawnTemplate,
   scanSpawnShapeCorpus,
   scanSpawnShapeViolations,
+  tokenizeSpawnArgv,
   validateRunnableSpawnCommand,
 } from '../docs/ao-spawn-shape.mjs';
 
@@ -48,6 +50,35 @@ describe('validateRunnableSpawnCommand', () => {
       ),
     ).toEqual([
       `--name exceeds ${AO_SPAWN_DISPLAY_NAME_MAX_LENGTH} chars (AO 0.10.x display label limit)`,
+    ]);
+  });
+
+  it('parses quoted multi-word --name before enforcing length', () => {
+    expect(
+      validateRunnableSpawnCommand(
+        'ao spawn --project orchestrator-pack --name "This Label Is Far Too Long" --claim-pr 589',
+      ),
+    ).toEqual([
+      `--name exceeds ${AO_SPAWN_DISPLAY_NAME_MAX_LENGTH} chars (AO 0.10.x display label limit)`,
+    ]);
+  });
+});
+
+describe('tokenizeSpawnArgv', () => {
+  it('preserves quoted values as single tokens', () => {
+    expect(
+      tokenizeSpawnArgv(
+        'ao spawn --project orchestrator-pack --name "This Label Is Far Too Long" --claim-pr 589',
+      ),
+    ).toEqual([
+      'ao',
+      'spawn',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'This Label Is Far Too Long',
+      '--claim-pr',
+      '589',
     ]);
   });
 });
@@ -101,5 +132,22 @@ describe('scanSpawnShapeCorpus', () => {
     const missingName =
       '        ao spawn --project orchestrator-pack --claim-pr <PR>\n';
     expect(scanSpawnShapeViolations(missingName)).toHaveLength(1);
+  });
+
+  it('does not globally whitelist forbidden runnable line shapes', () => {
+    const badRunnableLine = '        ao spawn --claim-pr <PR>\n';
+    expect(scanSpawnShapeViolations(badRunnableLine)).toHaveLength(1);
+  });
+
+  it('skips backtick documentation templates with placeholders', () => {
+    const prose = 'Use `ao spawn --claim-pr <PR>` for recovery\n';
+    expect(scanSpawnShapeViolations(prose)).toEqual([]);
+    expect(
+      isDocumentationSpawnTemplate({
+        line: 1,
+        command: 'ao spawn --claim-pr <PR>',
+        kind: 'backtick',
+      }),
+    ).toBe(true);
   });
 });

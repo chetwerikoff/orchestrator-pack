@@ -94,10 +94,53 @@ export function findRunnableSpawnCommands(text) {
 }
 
 /**
+ * Tokenize a spawn command argv while preserving quoted values.
+ * @param {string} command
+ * @returns {string[]}
+ */
+export function tokenizeSpawnArgv(command) {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+        tokens.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
+/**
  * @param {string} command
  */
 export function parseSpawnShapeFlags(command) {
-  const tokens = String(command).trim().split(/\s+/);
+  const tokens = tokenizeSpawnArgv(String(command).trim());
   /** @type {{ project?: string; name?: string }} */
   const flags = {};
 
@@ -108,7 +151,7 @@ export function parseSpawnShapeFlags(command) {
       const flag = inline[1].toLowerCase();
       const value = inline[2];
       if (flag === '--project') {
-        flags.project = value;
+        flags.project = stripQuotes(value);
       }
       if (flag === '--name') {
         flags.name = stripQuotes(value);
@@ -118,7 +161,7 @@ export function parseSpawnShapeFlags(command) {
 
     const lower = token.toLowerCase();
     if (lower === '--project' && index + 1 < tokens.length) {
-      flags.project = tokens[index + 1];
+      flags.project = stripQuotes(tokens[index + 1]);
       index += 1;
       continue;
     }
@@ -169,16 +212,24 @@ export function validateRunnableSpawnCommand(command) {
 }
 
 /**
+ * Backtick documentation templates with angle-bracket placeholders are not runnable.
+ * Runnable line matches are always validated — no global command allowlist.
+ * @param {RunnableSpawnMatch} match
+ */
+export function isDocumentationSpawnTemplate(match) {
+  return match.kind === 'backtick' && /<[A-Za-z][\w-]*>/.test(match.command);
+}
+
+/**
  * @param {string} text
- * @param {{ relPath?: string; allowedCommands?: string[] }} [options]
+ * @param {{ relPath?: string }} [options]
  */
 export function scanSpawnShapeViolations(text, options = {}) {
-  const allowed = new Set(options.allowedCommands ?? []);
   /** @type {Array<{ relPath?: string; line: number; command: string; violations: string[] }>} */
   const violations = [];
 
   for (const match of findRunnableSpawnCommands(text)) {
-    if (allowed.has(match.command)) {
+    if (isDocumentationSpawnTemplate(match)) {
       continue;
     }
     const matchViolations = validateRunnableSpawnCommand(match.command);
@@ -203,20 +254,12 @@ export async function scanSpawnShapeCorpus(rootDir, config) {
   const { readFile } = await import('node:fs/promises');
   const { join } = await import('node:path');
 
-  const baselineRaw = await readFile(join(rootDir, config.baselineRelPath), 'utf8');
-  const baseline = JSON.parse(baselineRaw);
-  const allowedCommands = Array.isArray(baseline.allowedCommands)
-    ? baseline.allowedCommands
-    : [];
-
   /** @type {ReturnType<typeof scanSpawnShapeViolations>} */
   const allViolations = [];
 
   for (const relPath of config.corpusRelPaths) {
     const text = await readFile(join(rootDir, relPath), 'utf8');
-    allViolations.push(
-      ...scanSpawnShapeViolations(text, { relPath, allowedCommands }),
-    );
+    allViolations.push(...scanSpawnShapeViolations(text, { relPath }));
   }
 
   return allViolations;
