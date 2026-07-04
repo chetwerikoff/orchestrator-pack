@@ -17,7 +17,7 @@ $GuardScript = Join-Path $PSScriptRoot 'tier-gate-guard.ts'
 
 Push-Location $Root
 try {
-    & node --import tsx $GuardScript --text-file (Resolve-Path $DraftPath).Path --repo-root $Root
+    & node --import tsx $GuardScript --text-file (Resolve-Path $DraftPath).Path --draft-path (Resolve-Path $DraftPath).Path --repo-root $Root
     exit $LASTEXITCODE
 }
 finally {

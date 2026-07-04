@@ -18,6 +18,7 @@ import {
 interface CliOptions {
   textPath: string | null;
   text: string | null;
+  draftPath: string | null;
   tier: string | null;
   skipLine: boolean;
   explicitAdversarialWrapper: boolean;
@@ -29,6 +30,7 @@ function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     textPath: null,
     text: null,
+    draftPath: null,
     tier: null,
     skipLine: false,
     explicitAdversarialWrapper: false,
@@ -41,6 +43,9 @@ function parseArgs(argv: string[]): CliOptions {
     switch (arg) {
       case '--text-file':
         opts.textPath = String(argv[++i] ?? '');
+        break;
+      case '--draft-path':
+        opts.draftPath = String(argv[++i] ?? '');
         break;
       case '--text':
         opts.text = String(argv[++i] ?? '');
@@ -92,6 +97,7 @@ export function runCli(argv: string[]): number {
       skipLine: opts.skipLine,
       explicitAdversarialWrapper: opts.explicitAdversarialWrapper,
       repoRoot: opts.repoRoot,
+      draftPath: opts.draftPath ?? opts.textPath ?? undefined,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

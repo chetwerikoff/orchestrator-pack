@@ -11,6 +11,10 @@ advisory-prior: T1
 action-producing
 ```
 
+```contract-evidence
+none
+```
+
 ## Goal
 
 Change which CI jobs are fail-closed required checks for merge (branch protection contract).

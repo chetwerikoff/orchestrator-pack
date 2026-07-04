@@ -1,14 +1,9 @@
-# Marker-free T1 brief
+# T1 missing behavior-kind
 
 GitHub Issue: TBD
 
 ```complexity-tier
 tier: T1
-advisory-prior: T1
-```
-
-```behavior-kind
-record-only
 ```
 
 ```contract-evidence
@@ -17,7 +12,7 @@ none
 
 ## Goal
 
-Add a Usage subsection to a plugin README documenting existing CLI flags.
+Small docs tweak.
 
 ## Denylist
 
@@ -32,8 +27,8 @@ docs/**
 
 ## Acceptance criteria
 
-1. README documents flags.
+1. Done.
 
 ## Verification
 
-1. Manual read of README.
+1. Manual check.

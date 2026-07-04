@@ -15,15 +15,23 @@ const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../tests/fixtures/tier-gate',
 );
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function loadFixture(name: string) {
   return readFileSync(path.join(fixturesDir, `${name}.md`), 'utf8');
 }
 
+function fixturePath(name: string) {
+  return path.join(fixturesDir, `${name}.md`);
+}
+
 describe('tier-gate guard fails a red-flag-marked task assigned below T3 and passes a marker-free task on its lower tier', () => {
   it('fails when a red-flag marker phrase coincides with a T1 fence', () => {
     const text = loadFixture('marker-hit-sub-t3-brief');
-    const result = checkTierGateGuard(text);
+    const result = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('marker-hit-sub-t3-brief'),
+    });
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/below T3|ci-review-gating/);
     expect(screenRedFlagMarkers(text).hits).toContain('ci-review-gating');
@@ -31,7 +39,10 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
 
   it('passes a marker-free T1 brief with required worker-safety floor', () => {
     const text = loadFixture('marker-free-t1-brief');
-    const result = checkTierGateGuard(text);
+    const result = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('marker-free-t1-brief'),
+    });
     expect(result.ok).toBe(true);
     expect(result.receipt?.kind).toBe('tier-fence');
     if (result.receipt?.kind === 'tier-fence') {
@@ -52,22 +63,25 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
 
   it('passes skip-line input after marker screen is clean', () => {
     const text = loadFixture('skip-line-brief');
-    const result = checkTierGateGuard(text);
+    const result = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('skip-line-brief'),
+    });
     expect(result.ok).toBe(true);
     expect(result.receipt?.kind).toBe('no-tier');
   });
 
   it('exits non-zero on CLI for marker+sub-T3 fixture', () => {
-    const fixturePath = path.join(fixturesDir, 'marker-hit-sub-t3-brief.md');
+    const fixtureFile = path.join(fixturesDir, 'marker-hit-sub-t3-brief.md');
     expect(
-      runCli(['node', 'tier-gate-guard.ts', '--text-file', fixturePath]),
+      runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile]),
     ).toBe(1);
   });
 
   it('exits zero on CLI for marker-free T1 fixture', () => {
-    const fixturePath = path.join(fixturesDir, 'marker-free-t1-brief.md');
+    const fixtureFile = path.join(fixturesDir, 'marker-free-t1-brief.md');
     expect(
-      runCli(['node', 'tier-gate-guard.ts', '--text-file', fixturePath]),
+      runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile]),
     ).toBe(0);
   });
 });
@@ -85,9 +99,29 @@ describe('floor on every tier', () => {
     const text = loadFixture('t1-missing-floor-brief');
     const floor = checkWorkerSafetyFloor(text);
     expect(floor.ok).toBe(false);
-    const gate = checkTierGateGuard(text);
+    const gate = checkTierGateGuard(text, { repoRoot, draftPath: fixturePath('t1-missing-floor-brief') });
     expect(gate.ok).toBe(false);
     expect(gate.errors.join(' ')).toMatch(/denylist|allowed-roots|Verification/);
+  });
+
+  it('fails when a T1 draft is missing behavior-kind floor', () => {
+    const text = loadFixture('t1-missing-behavior-kind-brief');
+    const gate = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('t1-missing-behavior-kind-brief'),
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.errors.join(' ')).toMatch(/behavior-kind/);
+  });
+
+  it('fails when a T1 draft is missing contract-evidence floor', () => {
+    const text = loadFixture('t1-missing-contract-evidence-brief');
+    const gate = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('t1-missing-contract-evidence-brief'),
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.errors.join(' ')).toMatch(/contract-evidence/);
   });
 
   it('fails when a draft has denylist but no allowed-roots fence', () => {
@@ -95,7 +129,10 @@ describe('floor on every tier', () => {
     const floor = checkWorkerSafetyFloor(text);
     expect(floor.ok).toBe(false);
     expect(floor.errors.join(' ')).toMatch(/allowed-roots/);
-    const gate = checkTierGateGuard(text);
+    const gate = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('denylist-only-missing-allowed-roots-brief'),
+    });
     expect(gate.ok).toBe(false);
   });
 
@@ -108,7 +145,11 @@ describe('floor on every tier', () => {
     });
     expect(stages.effectiveTier).toBe('T2');
     expect(stages.review).toContain('competitive-adversarial');
-    const gate = checkTierGateGuard(text, { explicitAdversarialWrapper: true });
+    const gate = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('marker-free-t1-brief'),
+      explicitAdversarialWrapper: true,
+    });
     expect(gate.ok).toBe(true);
     if (gate.receipt?.kind === 'tier-fence') {
       expect(gate.receipt.wrapperFloorApplied).toBe(true);

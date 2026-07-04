@@ -6,6 +6,14 @@ GitHub Issue: TBD
 skip-line: true
 ```
 
+```behavior-kind
+record-only
+```
+
+```contract-evidence
+none
+```
+
 ## Goal
 
 Fix a typo in README.

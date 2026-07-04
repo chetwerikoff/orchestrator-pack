@@ -2,6 +2,9 @@
  * Tier gate core: marker screen, fence parsing, stage selection, floor checks (Issue #576).
  */
 import { screenRedFlagMarkers } from './tier-marker-screen.js';
+import { checkNeverSkippedFloors } from './tier-gate-floor.js';
+
+export { checkWorkerSafetyFloor } from './tier-gate-floor.js';
 
 export const VALID_TIERS = new Set(['T1', 'T2', 'T3']);
 export const FLOOR_CHECKS = [
@@ -56,26 +59,6 @@ export function parseComplexityTierFence(draftText: string): ComplexityTierFence
     advisoryPrior: advisoryPrior && VALID_TIERS.has(advisoryPrior) ? advisoryPrior : undefined,
     skipLine: false,
   };
-}
-
-export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors: string[] } {
-  const errors: string[] = [];
-  if (!/^##\s+Goal\b/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ## Goal section');
-  }
-  if (!/```denylist\s*\n[\s\S]*?```/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ```denylist fence');
-  }
-  if (!/```allowed-roots\s*\n[\s\S]*?```/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ```allowed-roots fence');
-  }
-  if (!/^##\s+Acceptance criteria\b/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ## Acceptance criteria section');
-  }
-  if (!/^##\s+Verification\b/m.test(draftText)) {
-    errors.push('worker-safety floor: missing ## Verification section');
-  }
-  return { ok: errors.length === 0, errors };
 }
 
 export interface StageSelectionInput {
@@ -143,6 +126,7 @@ export interface TierGateGuardOptions {
   adversarialSkipped?: boolean;
   explicitAdversarialWrapper?: boolean;
   repoRoot?: string;
+  draftPath?: string;
 }
 
 export type TierGateReceipt =
@@ -224,7 +208,10 @@ export function checkTierGateGuard(
     errors.push('unparseable marker screen — fail closed to T3');
   }
 
-  const workerSafety = checkWorkerSafetyFloor(text);
+  const workerSafety = checkNeverSkippedFloors(text, {
+    repoRoot: opts.repoRoot,
+    draftPath: opts.draftPath,
+  });
   if (!workerSafety.ok) {
     errors.push(...workerSafety.errors);
   }

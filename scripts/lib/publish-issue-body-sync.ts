@@ -46,7 +46,7 @@ export interface PublishIssueBodySyncDeps {
   runGh(argv: string[]): GhInvocationResult;
   writeBodyFile(content: string): string;
   emitAudit(record: MutationAuditRecord): void;
-  validateTierGateGuard?: (draftContent: string) => TierGateGuardValidationResult;
+  validateTierGateGuard?: (draftContent: string, draftPath?: string) => TierGateGuardValidationResult;
 }
 
 export interface CreateIssueBodySyncInput {
@@ -269,8 +269,12 @@ export function readLiveIssueBodyViaRest(
 
 export function validateTierGateGuardReceipt(
   draftContent: string,
+  draftPath?: string,
 ): TierGateGuardValidationResult {
-  const result = checkTierGateGuard(draftContent);
+  const result = checkTierGateGuard(draftContent, {
+    draftPath,
+    repoRoot: process.cwd(),
+  });
   if (!result.ok) {
     return {
       ok: false,
@@ -293,7 +297,7 @@ export function syncPublishIssueBody(
 
   if (input.mode !== 'verify') {
     const validateTierGate = deps.validateTierGateGuard ?? validateTierGateGuardReceipt;
-    const tierGate = validateTierGate(input.draftContent);
+    const tierGate = validateTierGate(input.draftContent, input.draftPath);
     if (!tierGate.ok) {
       return {
         ok: false,
