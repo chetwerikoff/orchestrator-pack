@@ -154,7 +154,9 @@ function New-ReviewReadyReportStateSeedGitHubSnapshot {
 
     & $refreshProgress 'start'
     $openPrs = if (@($TrackedPrNumbers).Count -gt 0) {
-        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers) -ProgressWriter $refreshProgress)
+        & $refreshProgress 'repo_tick'
+        $null = Get-GhFleetRepoTickSnapshotIfConsumable -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed' -DataClass 'github_snapshot'
+        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers) -Consumer 'review-ready-report-state-seed' -ProgressWriter $refreshProgress)
     }
     else {
         @()

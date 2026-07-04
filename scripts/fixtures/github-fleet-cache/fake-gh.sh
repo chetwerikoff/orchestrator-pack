@@ -25,26 +25,32 @@ case "$joined" in
     fi
     ;;
   *"pr view"*)
-    if [[ "$joined" == *" 1"* ]] || [[ "$joined" == *" 1 --"* ]]; then
-      if [[ -n "${GH_FLEET_TEST_PR1_VIEW_JSON:-}" ]]; then
-        cat "$GH_FLEET_TEST_PR1_VIEW_JSON"
-      else
-        echo '{"number":1,"headRefOid":"sha1111111111111111111111111111111111111111","baseRefName":"main","headRefName":"feat/pr-1","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE"}'
-      fi
-    elif [[ "$joined" == *" 2"* ]] || [[ "$joined" == *" 2 --"* ]]; then
-      echo '{"number":2,"headRefOid":"sha2222222222222222222222222222222222222222","baseRefName":"main","headRefName":"feat/pr-2","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE"}'
-    else
+    pr_num=""
+    for tok in "$@"; do
+      if [[ "$tok" =~ ^[0-9]+$ ]]; then pr_num="$tok"; break; fi
+    done
+    if [[ -z "$pr_num" ]]; then
       echo "fake-gh: unhandled pr view argv: $joined" >&2
       exit 1
     fi
+    if [[ "$pr_num" == "1" && -n "${GH_FLEET_TEST_PR1_VIEW_JSON:-}" ]]; then
+      cat "$GH_FLEET_TEST_PR1_VIEW_JSON"
+    else
+      digit="$pr_num"
+      sha="sha$(printf '%.0s'"$digit" {1..40})"
+      printf '{"number":%s,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/pr-%s","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE"}
+' "$pr_num" "$sha" "$pr_num"
+    fi
     ;;
   *"pr checks"*)
-    if [[ "$joined" == *" 1"* ]] || [[ "$joined" == *" 1 --"* ]]; then
-      echo '[{"name":"Verify orchestrator-pack structure","state":"SUCCESS","bucket":"pass","workflow":"scope-guard"}]'
-    elif [[ "$joined" == *" 2"* ]] || [[ "$joined" == *" 2 --"* ]]; then
+    pr_num=""
+    for tok in "$@"; do
+      if [[ "$tok" =~ ^[0-9]+$ ]]; then pr_num="$tok"; break; fi
+    done
+    if [[ "$pr_num" == "2" ]]; then
       echo '[{"name":"Verify orchestrator-pack structure","state":"PENDING","bucket":"pending","workflow":"scope-guard"}]'
     else
-      echo '[]'
+      echo '[{"name":"Verify orchestrator-pack structure","state":"SUCCESS","bucket":"pass","workflow":"scope-guard"}]'
     fi
     ;;
   *"branches/"*"protection"*)

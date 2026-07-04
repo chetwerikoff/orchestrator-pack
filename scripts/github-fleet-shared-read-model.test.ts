@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
+  buildGithubFleetWakeConsumers,
   createGithubFleetCacheHarness,
   spawnPwsh,
   spawnPwshParallel,
@@ -18,63 +19,7 @@ const packRootEscaped = repoRoot.replace(/'/g, "''");
 const GH_AUDIT_CALL_PATTERNS = [/\bpr list\b/, /\bpr view\b/, /\bpr checks\b/, /branches\/.*\/protection/] as const;
 
 
-const CONSUMERS: Array<{ id: string; script: string }> = [
-  {
-    id: 'review-trigger-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-trigger-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if ($bundle.ciChecksByPr.Count -lt 1) { throw 'missing checks bundle' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'ci-green-wake-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'ci-green-wake-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if ($bundle.requiredCheckNamesByPr.Count -lt 1) { throw 'missing required checks' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'review-send-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-send-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if (-not $bundle.ciChecksByPr['1']) { throw 'missing pr1 checks' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'review-finding-delivery-confirm',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot '${packRootEscaped}' -PrNumbers @(1,2) -Consumer 'review-finding-delivery-confirm')
-if ($scoped.Count -lt 2) { throw 'expected scoped pr rows' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'ci-failure-notification-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$idx = Get-GhFleetOpenPrIndexes -RepoRoot '${packRootEscaped}'
-if ($idx.byNumber.Count -lt 2) { throw 'expected pr index' }
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $idx.prs -Consumer 'ci-failure-notification-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if ($bundle.ciChecksByPr.Count -lt 2) { throw 'expected both pr checks' }
-Write-Output 'ok'
-`,
-  },
-];
+const CONSUMERS = buildGithubFleetWakeConsumers(repoRoot);
 
 function auditLines(auditFile: string): string[] {
   return readFileSync(auditFile, 'utf8').split('\n').filter(Boolean);

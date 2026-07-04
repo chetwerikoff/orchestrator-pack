@@ -370,6 +370,41 @@ Operator adoption after merge:
 4. Verification: `npm test -- github-fleet-shared-read-model` and
    `pwsh -NoProfile -File scripts/check-github-fleet-cache-bypass.ps1`.
 
+
+## GitHub fleet repo-tick inventory snapshot (Issue #583)
+
+Adds `Gh-FleetRepoTickSnapshot.ps1` on top of the #453/#569 cache family. Covered
+wake-supervisor open-PR inventory reads (`Invoke-GhOpenPrList` /
+`Invoke-GhFleetCachedOpenPrListRaw`) refresh one repo-tick generation per bounded
+interval (`GH_FLEET_REPO_TICK_INTERVAL_SECONDS`, default 30s). Stale serving extends
+for `GH_FLEET_REPO_TICK_STALE_SERVE_SECONDS` (default 30s) **after** the fresh
+interval (`[interval, interval + staleServe)`), so lock contention can still return
+the previous generation while a single producer refreshes. The producer
+populates open-PR list, PR view, CI/check, and branch-protection per-key caches in
+one pass; staggered child ticks within the interval consume that generation instead
+of per-PR/per-key TTL repopulates. Scoped PR-number reads (`Invoke-GhOpenPrListForNumbers`,
+`Invoke-GhFleetCachedPrView` warm hits) still avoid full open-PR list upstream calls
+(#557).
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. AC#10 measurement uses shipped #582/#581 telemetry (no local helper):
+   - `export GH_FLEET_CACHE_AUDIT=1` and `export GH_WRAPPER_AUDIT=1` (supervisor children
+     default both post-#581).
+   - Wrapper audit: `$AO_SIDE_PROCESS_STATE_DIR/gh-wrapper-audit.jsonl` — compare `entry` /
+     `complete` rows by `child`, `route`, `command`, `prNumber`, `headRef`, `status`,
+     `rateLimit`, and `rateLimitKind`.
+   - Fleet cache audit: `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` —
+     `repo_tick_populate`, `repo_tick_hit`, `repo_tick_wait_hit`, `repo_tick_stale_hit`,
+     populate failures, and bypass denials.
+   - Record one normal fleet window and one busy/head-advance window; compare wrapper
+     `pr list` / per-PR `pr view` counts for `review-ready-report-state-seed` and other
+     covered children before vs after merge.
+4. Verification: `npm test -- github-fleet-repo-tick-snapshot` and
+   `pwsh -NoProfile -File scripts/check-github-fleet-repo-tick-coverage.ps1`.
+
 ## Issue-keyed task-continuation nudge (Issue #430)
 
 Extends the #384 worker-nudge gate with `task-continuation` — issue-keyed tuples that stay
