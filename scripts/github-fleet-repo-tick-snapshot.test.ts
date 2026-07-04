@@ -1,89 +1,24 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
+  buildGithubFleetWakeConsumers,
+  countGithubFleetAuditPattern,
+  countGithubFleetGhRoute,
   createGithubFleetCacheHarness,
+  readGithubFleetAuditLines,
   spawnPwsh,
   spawnPwshParallel,
   type FleetHarness,
 } from './github-fleet-cache-test-harness.js';
 
 const repoRoot = join(import.meta.dirname, '..');
-const scriptsDir = join(repoRoot, 'scripts');
-const ghChecks = join(scriptsDir, 'lib/Gh-PrChecks.ps1').replace(/'/g, "''");
-const fleetCache = join(scriptsDir, 'lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");
-const packRootEscaped = repoRoot.replace(/'/g, "''");
-const multiPrList = join(scriptsDir, 'fixtures/github-fleet-cache/open-pr-list-10.json');
-
-const REPO_TICK_CONSUMERS: Array<{ id: string; script: string }> = [
-  {
-    id: 'review-trigger-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-trigger-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if ($bundle.ciChecksByPr.Count -lt 1) { throw 'missing checks bundle' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'ci-green-wake-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'ci-green-wake-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if ($bundle.requiredCheckNamesByPr.Count -lt 1) { throw 'missing required checks' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'review-send-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-send-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if (-not $bundle.ciChecksByPr['1']) { throw 'missing pr1 checks' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'review-finding-delivery-confirm',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot '${packRootEscaped}' -PrNumbers @(1,2,3) -Consumer 'review-finding-delivery-confirm')
-if ($scoped.Count -lt 3) { throw 'expected scoped pr rows' }
-Write-Output 'ok'
-`,
-  },
-  {
-    id: 'ci-failure-notification-reconcile',
-    script: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$idx = Get-GhFleetOpenPrIndexes -RepoRoot '${packRootEscaped}'
-if ($idx.byNumber.Count -lt 10) { throw 'expected pr index' }
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $idx.prs -Consumer 'ci-failure-notification-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
-if ($bundle.ciChecksByPr.Count -lt 10) { throw 'expected all pr checks' }
-Write-Output 'ok'
-`,
-  },
-];
-
-function auditLines(auditFile: string): string[] {
-  return readFileSync(auditFile, 'utf8').split('\n').filter(Boolean);
-}
-
-function countPattern(auditFile: string, pattern: RegExp): number {
-  return auditLines(auditFile).filter((line) => pattern.test(line)).length;
-}
-
-function countGhRoute(auditFile: string, route: RegExp): number {
-  return auditLines(auditFile).filter((line) => !line.startsWith('fleet-cache-audit') && route.test(line)).length;
-}
+const multiPrList = join(repoRoot, 'scripts/fixtures/github-fleet-cache/open-pr-list-10.json');
+const REPO_TICK_CONSUMERS = buildGithubFleetWakeConsumers(repoRoot, {
+  minIndexedPrCount: 10,
+  minBundlePrCount: 10,
+  scopedPrNumbers: [1, 2, 3],
+});
 
 function withMultiPrHarness(prefix: string): FleetHarness {
   const harness = createGithubFleetCacheHarness(prefix);
@@ -111,10 +46,10 @@ describe.sequential('github-fleet-repo-tick-snapshot (Issue #583)', () => {
       const result = await spawnPwsh(script, repoRoot, harness.env);
       expect(result.status, `consumer ${index}: ${result.stderr || result.stdout}`).toBe(0);
     }
-    expect(countPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
-    expect(countGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
-    expect(countGhRoute(harness.auditFile, /\bpr view\b/)).toBe(10);
-    expect(countGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(10);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(10);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(10);
   });
 
   it('AC#3 TTL-stagger leak closed across per-key TTL window', async () => {
@@ -123,9 +58,9 @@ describe.sequential('github-fleet-repo-tick-snapshot (Issue #583)', () => {
     harness.env.GH_FLEET_CI_CHECKS_TTL_SECONDS = '15';
     const warm = await spawnPwsh(REPO_TICK_CONSUMERS[0].script, repoRoot, harness.env);
     expect(warm.status).toBe(0);
-    const baselineList = countGhRoute(harness.auditFile, /\bpr list\b/);
-    const baselineView = countGhRoute(harness.auditFile, /\bpr view\b/);
-    const baselineChecks = countGhRoute(harness.auditFile, /\bpr checks\b/);
+    const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
+    const baselineView = countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/);
+    const baselineChecks = countGithubFleetGhRoute(harness.auditFile, /\bpr checks\b/);
 
     await new Promise((resolve) => setTimeout(resolve, 1600));
     for (const consumer of REPO_TICK_CONSUMERS.slice(1, 4)) {
@@ -134,10 +69,10 @@ describe.sequential('github-fleet-repo-tick-snapshot (Issue #583)', () => {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
-    expect(countGhRoute(harness.auditFile, /\bpr list\b/)).toBe(baselineList);
-    expect(countGhRoute(harness.auditFile, /\bpr view\b/)).toBe(baselineView);
-    expect(countGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(baselineChecks);
-    expect(countPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(baselineList);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(baselineView);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(baselineChecks);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
   });
 
   it('AC#4 populate failure is not cached as success and waiters do not bypass', async () => {
@@ -149,9 +84,9 @@ describe.sequential('github-fleet-repo-tick-snapshot (Issue #583)', () => {
     );
     const failScript = `
 $ErrorActionPreference = 'Stop'
-. '${ghChecks}'
+. '${join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''")}'
 try {
-  $null = Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}'
+  $null = Invoke-GhOpenPrList -RepoRoot '${repoRoot.replace(/'/g, "''")}'
   throw 'expected failure'
 } catch {
   if ($_.Exception.Message -notmatch 'snapshot_populate_failed') { throw }
@@ -162,37 +97,38 @@ try {
     expect(first.status).toBe(0);
     const second = await spawnPwsh(failScript, repoRoot, harness.env);
     expect(second.status).toBe(0);
-    expect(countGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
-    expect(countPattern(harness.auditFile, /event=repo_tick_populate_failed\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate_failed\b/)).toBe(1);
   });
 
   it('AC#6 action-boundary stale head cannot authorize checks bundle', async () => {
     harness = withMultiPrHarness('gh-repo-tick-ac6-');
+    const ghChecks = join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''");
     const warmScript = `
 $ErrorActionPreference = 'Stop'
 . '${ghChecks}'
-$null = Invoke-GhFleetCachedPrView -RepoRoot '${packRootEscaped}' -PrNumber 1
+$null = Invoke-GhFleetCachedPrView -RepoRoot '${repoRoot.replace(/'/g, "''")}' -PrNumber 1
 Write-Output 'warmed'
 `;
     const warm = await spawnPwsh(warmScript, repoRoot, harness.env);
     expect(warm.status).toBe(0);
-    const baselineChecks = countGhRoute(harness.auditFile, /\bpr checks\b/);
+    const baselineChecks = countGithubFleetGhRoute(harness.auditFile, /\bpr checks\b/);
     const fenceScript = `
 $ErrorActionPreference = 'Stop'
 . '${ghChecks}'
 $open = @([pscustomobject]@{ number = 1; headRefOid = 'sha9999999999999999999999999999999999999999' })
-$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -MergeRequiredNames { param($p) @($p.contexts) }
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${repoRoot.replace(/'/g, "''")}' -OpenPrs $open -MergeRequiredNames { param($p) @($p.contexts) }
 if ($bundle.ciChecksByPr.ContainsKey('1')) { throw 'stale head must not populate checks' }
 Write-Output 'fenced'
 `;
     const fenced = await spawnPwsh(fenceScript, repoRoot, harness.env);
     expect(fenced.status).toBe(0);
-    expect(countGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(baselineChecks);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(baselineChecks);
   });
 
   it('AC#7 call-site coverage guard passes', async () => {
-    const check = join(scriptsDir, 'check-github-fleet-repo-tick-coverage.ps1');
-    const result = await spawnPwsh(`& '${check.replace(/'/g, "''")}'`, repoRoot, process.env);
+    const check = join(repoRoot, 'scripts/check-github-fleet-repo-tick-coverage.ps1').replace(/'/g, "''");
+    const result = await spawnPwsh(`& '${check}'`, repoRoot, process.env);
     expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(result.stdout).toContain('[PASS]');
   });
@@ -201,7 +137,7 @@ Write-Output 'fenced'
     harness = withMultiPrHarness('gh-repo-tick-ac11-');
     const result = await spawnPwsh(REPO_TICK_CONSUMERS[0].script, repoRoot, harness.env);
     expect(result.status).toBe(0);
-    const audit = readFileSync(harness.auditFile, 'utf8');
+    const audit = readGithubFleetAuditLines(harness.auditFile).join('\n');
     expect(audit).toMatch(/event=repo_tick_populate\b/);
     expect(audit).toMatch(/generation=/);
     expect(audit).toMatch(/route=repo_inventory/);
@@ -212,16 +148,16 @@ Write-Output 'fenced'
     harness = withMultiPrHarness('gh-repo-tick-cold-');
     const worker = `
 $ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$null = Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}'
+. '${join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''")}'
+$null = Invoke-GhOpenPrList -RepoRoot '${repoRoot.replace(/'/g, "''")}'
 Write-Output 'done'
 `;
     const parallel = await spawnPwshParallel(5, worker, repoRoot, harness.env);
     for (const result of parallel) {
       expect(result.status, result.stderr || result.stdout).toBe(0);
     }
-    expect(countPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBeGreaterThanOrEqual(1);
-    expect(countPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBeLessThanOrEqual(2);
-    expect(countGhRoute(harness.auditFile, /\bpr list\b/)).toBeLessThanOrEqual(2);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBeGreaterThanOrEqual(1);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBeLessThanOrEqual(2);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBeLessThanOrEqual(2);
   });
 });

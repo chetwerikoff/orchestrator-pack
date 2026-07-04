@@ -41,6 +41,98 @@ export async function spawnPwshParallel(
   return Promise.all(Array.from({ length: count }, () => spawnPwsh(command, cwd, env)));
 }
 
+export type GithubFleetWakeConsumer = { id: string; script: string };
+
+export type GithubFleetWakeConsumerOptions = {
+  minIndexedPrCount?: number;
+  minBundlePrCount?: number;
+  scopedPrNumbers?: number[];
+};
+
+export function buildGithubFleetWakeConsumers(
+  packRoot: string,
+  options: GithubFleetWakeConsumerOptions = {},
+): GithubFleetWakeConsumer[] {
+  const ghChecks = join(packRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''");
+  const packRootEscaped = packRoot.replace(/'/g, "''");
+  const minIndexedPrCount = options.minIndexedPrCount ?? 2;
+  const minBundlePrCount = options.minBundlePrCount ?? 2;
+  const scopedPrNumbers = options.scopedPrNumbers ?? [1, 2];
+  const scopedLiteral = `@(${scopedPrNumbers.join(',')})`;
+
+  return [
+    {
+      id: 'review-trigger-reconcile',
+      script: `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-trigger-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
+if ($bundle.ciChecksByPr.Count -lt 1) { throw 'missing checks bundle' }
+Write-Output 'ok'
+`,
+    },
+    {
+      id: 'ci-green-wake-reconcile',
+      script: `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'ci-green-wake-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
+if ($bundle.requiredCheckNamesByPr.Count -lt 1) { throw 'missing required checks' }
+Write-Output 'ok'
+`,
+    },
+    {
+      id: 'review-send-reconcile',
+      script: `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$open = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-send-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
+if (-not $bundle.ciChecksByPr['1']) { throw 'missing pr1 checks' }
+Write-Output 'ok'
+`,
+    },
+    {
+      id: 'review-finding-delivery-confirm',
+      script: `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$scoped = @(Invoke-GhOpenPrListForNumbers -RepoRoot '${packRootEscaped}' -PrNumbers ${scopedLiteral} -Consumer 'review-finding-delivery-confirm')
+if ($scoped.Count -lt ${scopedPrNumbers.length}) { throw 'expected scoped pr rows' }
+Write-Output 'ok'
+`,
+    },
+    {
+      id: 'ci-failure-notification-reconcile',
+      script: `
+$ErrorActionPreference = 'Stop'
+. '${ghChecks}'
+$idx = Get-GhFleetOpenPrIndexes -RepoRoot '${packRootEscaped}'
+if ($idx.byNumber.Count -lt ${minIndexedPrCount}) { throw 'expected pr index' }
+$bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $idx.prs -Consumer 'ci-failure-notification-reconcile' -MergeRequiredNames { param($p) @($p.contexts) }
+if ($bundle.ciChecksByPr.Count -lt ${minBundlePrCount}) { throw 'expected pr checks bundle' }
+Write-Output 'ok'
+`,
+    },
+  ];
+}
+
+export function readGithubFleetAuditLines(auditFile: string): string[] {
+  return readFileSync(auditFile, 'utf8').split('\n').filter(Boolean);
+}
+
+export function countGithubFleetAuditPattern(auditFile: string, pattern: RegExp): number {
+  return readGithubFleetAuditLines(auditFile).filter((line) => pattern.test(line)).length;
+}
+
+export function countGithubFleetGhRoute(auditFile: string, route: RegExp): number {
+  return readGithubFleetAuditLines(auditFile).filter(
+    (line) => !line.startsWith('fleet-cache-audit') && route.test(line),
+  ).length;
+}
+
 export function createGithubFleetCacheHarness(prefix = 'gh-fleet-cache-'): FleetHarness {
   const repoRoot = join(import.meta.dirname, '..');
   const fakeGh = join(repoRoot, 'scripts/fixtures/github-fleet-cache/fake-gh.sh');
