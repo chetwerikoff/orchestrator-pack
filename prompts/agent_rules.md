@@ -893,9 +893,11 @@ exactly one valid disposition: `addressed`. The guard fails when a protected
 finding is `rejected` **or omitted** while present in capture. Contested protected
 findings **escalate to the architect** — never self-waivable by the draft author.
 
-**Guard:** `scripts/check-finding-ledger-guard.ps1` (or `check-draft-discipline.ps1
--Command finding-ledger`) runs **pre-sync** alongside other draft-discipline checks;
-non-zero exit blocks issue sync/publish. Omission detection is layered and fails
+**Guard:** `scripts/check-finding-ledger-guard.ps1 -CapturesDir …` (or
+`check-draft-discipline.ps1 -Command finding-ledger`) validates **every**
+`*.capture.txt` under the draft review directory against the ledger — not only the
+final pass — and runs **pre-sync** alongside other draft-discipline checks; non-zero
+exit blocks issue sync/publish. Omission detection is layered and fails
 closed: typed `type:` tags are checked directly; conservative protected-signal
 hits in capture with no matching ledger row also fail (false positives escalate to
 the architect; unparseable prose never passes silently).

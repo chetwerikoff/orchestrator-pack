@@ -284,7 +284,7 @@ For each draft in the publish commit that declares `behavior-kind` or
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
-  -CapturePath docs/issues_drafts/.review/NN-<slug>/final.capture.txt `
+  -CapturesDir docs/issues_drafts/.review/NN-<slug> `
   -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
 ```
 

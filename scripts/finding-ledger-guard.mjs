@@ -3,8 +3,8 @@
  * Finding-disposition ledger guard (Issue #575).
  * Fails closed when protected findings are rejected or omitted vs verbatim capture.
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
 export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 
@@ -145,11 +145,54 @@ function ledgerHasProtectedRejection(ledger) {
   );
 }
 
-function typedFindingCoveredInLedger(captureFinding, ledger) {
-  return ledger.findings.some((row) => row.id === captureFinding.id);
+function ledgerRowForCaptureFinding(captureFinding, ledger) {
+  return ledger.findings.find((row) => row.id === captureFinding.id);
 }
 
-export function checkFindingLedgerGuard(capture, ledgerText) {
+function validateCaptureFindingInLedger(captureFinding, ledger, errors) {
+  const row = ledgerRowForCaptureFinding(captureFinding, ledger);
+  if (!row) {
+    errors.push(
+      `capture finding type: ${captureFinding.type} (id: ${captureFinding.id}) is missing from the ledger`,
+    );
+    return;
+  }
+
+  if (PROTECTED_TYPES.has(captureFinding.type) && row.type !== captureFinding.type) {
+    errors.push(
+      `protected finding ${captureFinding.id} was reclassified in the ledger as type: ${row.type} (capture type: ${captureFinding.type})`,
+    );
+    return;
+  }
+
+  if (PROTECTED_TYPES.has(captureFinding.type) && row.disposition !== 'addressed') {
+    errors.push(
+      `protected finding ${captureFinding.id} (type: ${captureFinding.type}) must be disposition addressed`,
+    );
+  }
+}
+
+export function mergeCaptureFindings(captures) {
+  const merged = new Map();
+  const errors = [];
+
+  for (const capture of captures) {
+    for (const finding of detectTypedFindingsInCapture(capture)) {
+      const existing = merged.get(finding.id);
+      if (existing && existing.type !== finding.type) {
+        errors.push(
+          `capture finding ${finding.id} has conflicting types across passes (${existing.type} vs ${finding.type})`,
+        );
+      }
+      merged.set(finding.id, finding);
+    }
+  }
+
+  return { findings: [...merged.values()], errors };
+}
+
+export function checkFindingLedgerGuard(captureOrCaptures, ledgerText) {
+  const captures = Array.isArray(captureOrCaptures) ? captureOrCaptures : [captureOrCaptures];
   const errors = [];
   const ledger = parseLedger(ledgerText);
 
@@ -159,23 +202,34 @@ export function checkFindingLedgerGuard(capture, ledgerText) {
     );
   }
 
-  const captureFindings = detectTypedFindingsInCapture(capture);
+  const { findings: captureFindings, errors: mergeErrors } = mergeCaptureFindings(captures);
+  errors.push(...mergeErrors);
+
   for (const captureFinding of captureFindings) {
-    if (!typedFindingCoveredInLedger(captureFinding, ledger)) {
-      errors.push(
-        `capture finding type: ${captureFinding.type} (id: ${captureFinding.id}) is missing from the ledger`,
-      );
+    validateCaptureFindingInLedger(captureFinding, ledger, errors);
+  }
+
+  const protectedSignals = new Set();
+  for (const capture of captures) {
+    for (const signal of detectProtectedSignalsInCapture(capture)) {
+      protectedSignals.add(signal);
     }
   }
 
-  const protectedSignals = detectProtectedSignalsInCapture(capture);
   for (const protectedType of protectedSignals) {
     const typedInCapture = captureFindings.some((row) => row.type === protectedType);
     const covered =
       typedInCapture
         ? captureFindings
             .filter((row) => row.type === protectedType)
-            .every((row) => typedFindingCoveredInLedger(row, ledger))
+            .every((row) => {
+              const ledgerRow = ledgerRowForCaptureFinding(row, ledger);
+              return (
+                ledgerRow &&
+                ledgerRow.type === row.type &&
+                ledgerRow.disposition === 'addressed'
+              );
+            })
         : ledgerHasProtectedCoverage(ledger, protectedType);
 
     if (!covered) {
@@ -195,31 +249,52 @@ export function checkFindingLedgerGuard(capture, ledgerText) {
     }
   }
 
-  return { ok: errors.length === 0, errors, ledger, captureFindings, protectedSignals };
+  return {
+    ok: errors.length === 0,
+    errors,
+    ledger,
+    captureFindings,
+    protectedSignals: [...protectedSignals],
+  };
 }
 
-function isCliMain() {
-  const entry = process.argv[1]?.replace(/\\/g, '/');
-  return Boolean(entry?.endsWith('finding-ledger-guard.mjs'));
+function listCaptureFilesInDir(capturesDir) {
+  return readdirSync(capturesDir)
+    .filter((name) => name.endsWith('.capture.txt'))
+    .sort()
+    .map((name) => path.join(capturesDir, name));
 }
 
 export function runCli(argv) {
-  const captureFlag = argv.indexOf('--capture');
   const ledgerFlag = argv.indexOf('--ledger');
+  const capturesDirFlag = argv.indexOf('--captures-dir');
+  const capturePaths = [];
 
-  if (captureFlag < 0 || ledgerFlag < 0) {
-    process.stderr.write('finding-ledger guard: --capture <path> and --ledger <path> are required\n');
+  for (let index = 2; index < argv.length; index += 1) {
+    if (argv[index] === '--capture' && argv[index + 1]) {
+      capturePaths.push(argv[index + 1]);
+      index += 1;
+    }
+  }
+
+  if (capturesDirFlag >= 0) {
+    capturePaths.push(...listCaptureFilesInDir(argv[capturesDirFlag + 1]));
+  }
+
+  if (ledgerFlag < 0 || capturePaths.length === 0) {
+    process.stderr.write(
+      'finding-ledger guard: --ledger <path> and at least one --capture <path> or --captures-dir <path> are required\n',
+    );
     return 2;
   }
 
-  const capturePath = argv[captureFlag + 1];
   const ledgerPath = argv[ledgerFlag + 1];
-  const capture = readFileSync(capturePath, 'utf8');
+  const captures = capturePaths.map((capturePath) => readFileSync(capturePath, 'utf8'));
   const ledgerText = readFileSync(ledgerPath, 'utf8');
 
   let result;
   try {
-    result = checkFindingLedgerGuard(capture, ledgerText);
+    result = checkFindingLedgerGuard(captures, ledgerText);
   } catch (error) {
     process.stderr.write(`finding-ledger guard: ${error.message}\n`);
     return 1;
@@ -232,8 +307,13 @@ export function runCli(argv) {
     return 1;
   }
 
-  process.stdout.write('finding-ledger guard: PASS\n');
+  process.stdout.write(`finding-ledger guard: PASS (${captures.length} capture file(s))\n`);
   return 0;
+}
+
+function isCliMain() {
+  const entry = process.argv[1]?.replace(/\\/g, '/');
+  return Boolean(entry?.endsWith('finding-ledger-guard.mjs'));
 }
 
 if (isCliMain()) {

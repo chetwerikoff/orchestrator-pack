@@ -404,14 +404,15 @@ pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outco
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
-  -CapturePath docs/issues_drafts/.review/NN-<slug>/final.capture.txt `
+  -CapturesDir docs/issues_drafts/.review/NN-<slug> `
   -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
 ```
 
 Fix failures before sync. Drafts without a `behavior-kind` fence are not
-checked for positive-outcome (additive guard only). The finding-ledger guard
-runs when review emitted findings; skip only on a clean `NO_FINDINGS` path with
-no capture artifacts.
+checked for positive-outcome (additive guard only). The finding-ledger guard validates **every** `*.capture.txt` under the review
+directory against the ledger — not only the final pass — so protected findings
+from early competitive/architectural passes cannot be omitted when a later pass is
+`NO_FINDINGS`. Skip the guard only when the review directory has no capture files.
 
 ## Per-tier draft review (before sync)
 
@@ -437,7 +438,6 @@ docs/issues_drafts/.review/NN-<slug>/
   pass-01-competitive.capture.txt      # verbatim reviewer output
   pass-02-architectural.capture.txt
   finding-disposition-ledger.json      # normalized ledger (all passes)
-  final.capture.txt                    # last architectural or verification capture for the guard
 ```
 
 **Ledger JSON** (`finding-disposition-ledger.json`):
@@ -518,8 +518,8 @@ After T3 architectural review converges:
 
 1. Architect reads the ledger **reject partition** only (does not re-open accepts).
 2. Apply simplification lens (what to cut / what is excess); may edit the draft.
-3. Run one final architectural (Codex) verification pass over architect edits.
-4. Point `final.capture.txt` at that verification capture for the pre-sync guard.
+3. Run one final architectural (Codex) verification pass over architect edits; save
+   verbatim output to `pass-NN-final.capture.txt` like every other pass.
 
 ### Drift escalation
 

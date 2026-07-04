@@ -31,7 +31,12 @@
     "tests/fixtures/finding-ledger/security-rejected.capture.txt",
     "tests/fixtures/finding-ledger/security-rejected.ledger.json",
     "tests/fixtures/finding-ledger/same-type-partial.capture.txt",
-    "tests/fixtures/finding-ledger/same-type-partial.ledger.json"
+    "tests/fixtures/finding-ledger/same-type-partial.ledger.json",
+    "tests/fixtures/finding-ledger/protected-reclassified.capture.txt",
+    "tests/fixtures/finding-ledger/protected-reclassified.ledger.json",
+    "tests/fixtures/finding-ledger/multi-pass/pass-01-competitive.capture.txt",
+    "tests/fixtures/finding-ledger/multi-pass/pass-02-final.capture.txt",
+    "tests/fixtures/finding-ledger/multi-pass/finding-disposition-ledger.json"
   ],
   "declared_globs": [],
   "amendments": []

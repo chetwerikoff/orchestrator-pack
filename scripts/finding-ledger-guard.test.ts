@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -36,6 +36,43 @@ describe('finding-ledger guard fails when a protected finding is rejected or omi
     const result = checkFindingLedgerGuard(capture, ledger);
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/sec-credential-log/);
+  });
+
+  it('fails when a protected finding is reclassified in the ledger', () => {
+    const { capture, ledger } = loadFixturePair('protected-reclassified');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/reclassified/);
+  });
+
+  it('fails when an early pass finding is omitted but the final pass is NO_FINDINGS', () => {
+    const multiPassDir = path.join(fixturesDir, 'multi-pass');
+    const captures = readdirSync(multiPassDir)
+      .filter((name) => name.endsWith('.capture.txt'))
+      .sort()
+      .map((name) => readFileSync(path.join(multiPassDir, name), 'utf8'));
+    const ledger = readFileSync(
+      path.join(multiPassDir, 'finding-disposition-ledger.json'),
+      'utf8',
+    );
+    const result = checkFindingLedgerGuard(captures, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/sec-spawn-grant/);
+  });
+
+  it('validates all capture files in a directory via CLI', () => {
+    const capturesDir = path.join(fixturesDir, 'multi-pass');
+    const ledgerPath = path.join(capturesDir, 'finding-disposition-ledger.json');
+    expect(
+      runCli([
+        'node',
+        'finding-ledger-guard.mjs',
+        '--captures-dir',
+        capturesDir,
+        '--ledger',
+        ledgerPath,
+      ]),
+    ).toBe(1);
   });
 
   it('passes when every captured finding is recorded and protected ones are addressed', () => {

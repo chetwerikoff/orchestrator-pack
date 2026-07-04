@@ -11,6 +11,7 @@ param(
 
     [string]$DraftPath,
     [string]$CapturePath,
+    [string]$CapturesDir,
     [string]$LedgerPath,
     [string]$MockIssuesPath,
     [string]$ManifestPath,
@@ -24,13 +25,20 @@ $CheckScript = Join-Path $PSScriptRoot 'draft-discipline.mjs'
 $FindingLedgerGuardScript = Join-Path $PSScriptRoot 'finding-ledger-guard.mjs'
 
 if ($Command -eq 'finding-ledger') {
-    if (-not $CapturePath -or -not $LedgerPath) {
-        Write-Error 'finding-ledger requires -CapturePath and -LedgerPath'
+    if (-not $LedgerPath -or (-not $CapturePath -and -not $CapturesDir)) {
+        Write-Error 'finding-ledger requires -LedgerPath and either -CapturePath or -CapturesDir'
         exit 2
     }
     Push-Location $Root
     try {
-        & node $FindingLedgerGuardScript --capture (Resolve-Path $CapturePath).Path --ledger (Resolve-Path $LedgerPath).Path
+        $guardArgs = @('--ledger', (Resolve-Path $LedgerPath).Path)
+        if ($CapturesDir) {
+            $guardArgs += '--captures-dir', (Resolve-Path $CapturesDir).Path
+        }
+        if ($CapturePath) {
+            $guardArgs += '--capture', (Resolve-Path $CapturePath).Path
+        }
+        & node $FindingLedgerGuardScript @guardArgs
         exit $LASTEXITCODE
     }
     finally {
