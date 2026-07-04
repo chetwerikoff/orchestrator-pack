@@ -5,6 +5,8 @@ export interface MockIssue {
   intentionallyResolved?: boolean;
 }
 
+export function parseBehaviorKind(markdown: string): 'action-producing' | 'record-only' | null;
+
 export function checkPositiveOutcome(markdown: string): {
   ok: boolean;
   errors: string[];
