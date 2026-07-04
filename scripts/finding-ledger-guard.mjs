@@ -45,9 +45,11 @@ export function detectUntypedFindingsInCapture(capture) {
     }
 
     const idMatch = block.match(FINDING_ID_EXTRACT);
+    const hasCaptureId = Boolean(idMatch);
     const id = idMatch ? idMatch[1] : `untyped-${findings.length + 1}`;
     findings.push({
       id,
+      hasCaptureId,
       type: 'untyped',
       anchor: index,
       summary: match[3].trim().slice(0, 160),
@@ -149,10 +151,12 @@ export function detectTypedFindingsInCapture(capture) {
     const before = capture.slice(windowStart, match.index);
     const after = capture.slice(match.index, windowEnd);
     const idMatch = after.match(FINDING_ID_EXTRACT) ?? [...before.matchAll(FINDING_ID_PATTERN)].at(-1);
-    const id = idMatch ? idMatch[1] : `capture-${type}-${findings.length + 1}`;
+    const hasCaptureId = Boolean(idMatch);
+    const id = idMatch ? idMatch[1] : `capture-${type}@${match.index}`;
 
     findings.push({
       id,
+      hasCaptureId,
       type,
       anchor: match.index,
       summary: `${before}${after}`.replace(/\s+/g, ' ').trim().slice(0, 160),
@@ -189,12 +193,18 @@ function ledgerHasProtectedRejection(ledger) {
   );
 }
 
-function ledgerRowForCaptureFinding(captureFinding, ledger) {
-  return ledger.findings.find((row) => row.id === captureFinding.id);
+function ledgerRowForCaptureFinding(captureFinding, ledger, consumedLedgerIds = new Set()) {
+  if (captureFinding.hasCaptureId) {
+    return ledger.findings.find((row) => row.id === captureFinding.id);
+  }
+
+  return ledger.findings.find(
+    (row) => row.type === captureFinding.type && !consumedLedgerIds.has(row.id),
+  );
 }
 
-function validateCaptureFindingInLedger(captureFinding, ledger, errors) {
-  const row = ledgerRowForCaptureFinding(captureFinding, ledger);
+function validateCaptureFindingInLedger(captureFinding, ledger, errors, consumedLedgerIds) {
+  const row = ledgerRowForCaptureFinding(captureFinding, ledger, consumedLedgerIds);
   if (!row) {
     if (captureFinding.type === 'untyped') {
       errors.push(
@@ -202,11 +212,19 @@ function validateCaptureFindingInLedger(captureFinding, ledger, errors) {
       );
       return;
     }
+    if (captureFinding.hasCaptureId) {
+      errors.push(
+        `capture finding type: ${captureFinding.type} (id: ${captureFinding.id}) is missing from the ledger`,
+      );
+      return;
+    }
     errors.push(
-      `capture finding type: ${captureFinding.type} (id: ${captureFinding.id}) is missing from the ledger`,
+      `capture finding type: ${captureFinding.type} has no matching ledger row — normalize the reviewer finding into the ledger`,
     );
     return;
   }
+
+  consumedLedgerIds.add(row.id);
 
   if (captureFinding.type === 'untyped') {
     return;
@@ -265,8 +283,9 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText) {
   const { findings: captureFindings, errors: mergeErrors } = mergeCaptureFindings(captures);
   errors.push(...mergeErrors);
 
+  const consumedLedgerIds = new Set();
   for (const captureFinding of captureFindings) {
-    validateCaptureFindingInLedger(captureFinding, ledger, errors);
+    validateCaptureFindingInLedger(captureFinding, ledger, errors, consumedLedgerIds);
   }
 
   const protectedSignals = new Set();
@@ -276,6 +295,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText) {
     }
   }
 
+  const protectedConsumedLedgerIds = new Set();
   for (const protectedType of protectedSignals) {
     const typedInCapture = captureFindings.some((row) => row.type === protectedType);
     const covered =
@@ -283,7 +303,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText) {
         ? captureFindings
             .filter((row) => row.type === protectedType)
             .every((row) => {
-              const ledgerRow = ledgerRowForCaptureFinding(row, ledger);
+              const ledgerRow = ledgerRowForCaptureFinding(row, ledger, protectedConsumedLedgerIds);
               return (
                 ledgerRow &&
                 ledgerRow.type === row.type &&

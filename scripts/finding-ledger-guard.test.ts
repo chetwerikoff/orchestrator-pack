@@ -90,6 +90,20 @@ describe('finding-ledger guard fails when a protected finding is rejected or omi
     expect(result.errors.join(' ')).toMatch(/untyped capture finding/);
   });
 
+  it('passes when a typed capture has no id but the ledger uses a normalized id', () => {
+    const { capture, ledger } = loadFixturePair('normalized-id');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('fails when multiple same-type captures lack ids but the ledger is incomplete', () => {
+    const { capture, ledger } = loadFixturePair('same-type-no-id-partial');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/type: security/);
+  });
+
   it('passes when every captured finding is recorded and protected ones are addressed', () => {
     const { capture, ledger } = loadFixturePair('complete');
     const result = checkFindingLedgerGuard(capture, ledger);

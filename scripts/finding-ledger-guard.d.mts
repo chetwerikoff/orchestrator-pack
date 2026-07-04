@@ -12,6 +12,7 @@ export function parseLedger(ledgerText: string): {
 
 export function detectTypedFindingsInCapture(capture: string): Array<{
   id: string;
+  hasCaptureId: boolean;
   type: string;
   anchor: number;
   summary: string;
@@ -21,6 +22,7 @@ export function detectProtectedSignalsInCapture(capture: string): string[];
 
 export function detectUntypedFindingsInCapture(capture: string): Array<{
   id: string;
+  hasCaptureId: boolean;
   type: string;
   anchor: number;
   summary: string;

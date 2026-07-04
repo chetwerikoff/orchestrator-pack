@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "draft": "docs/issues_drafts/example.md",
+  "findings": [
+    {
+      "id": "sec-spawn-grant",
+      "summary": "Missing auth on spawn grant",
+      "type": "security",
+      "disposition": "addressed"
+    }
+  ]
+}

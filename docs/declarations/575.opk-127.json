@@ -40,7 +40,11 @@
     "tests/fixtures/finding-ledger/no-findings-with-finding.capture.txt",
     "tests/fixtures/finding-ledger/no-findings-with-finding.ledger.json",
     "tests/fixtures/finding-ledger/untyped-finding.capture.txt",
-    "tests/fixtures/finding-ledger/untyped-finding.ledger.json"
+    "tests/fixtures/finding-ledger/untyped-finding.ledger.json",
+    "tests/fixtures/finding-ledger/normalized-id.capture.txt",
+    "tests/fixtures/finding-ledger/normalized-id.ledger.json",
+    "tests/fixtures/finding-ledger/same-type-no-id-partial.capture.txt",
+    "tests/fixtures/finding-ledger/same-type-no-id-partial.ledger.json"
   ],
   "declared_globs": [],
   "amendments": []
