@@ -62,6 +62,20 @@ describe('validateRunnableSpawnCommand', () => {
       `--name exceeds ${AO_SPAWN_DISPLAY_NAME_MAX_LENGTH} chars (AO 0.10.x display label limit)`,
     ]);
   });
+
+  it('rejects another option flag as a missing --project or --name value', () => {
+    expect(
+      validateRunnableSpawnCommand(
+        'ao spawn --project orchestrator-pack --name --claim-pr 589',
+      ),
+    ).toContain('missing or empty --name');
+    expect(
+      validateRunnableSpawnCommand('ao spawn --project --claim-pr 589 --name "Claim PR"'),
+    ).toContain('missing --project');
+    expect(
+      validateRunnableSpawnCommand('ao spawn --project=--claim-pr --name "Claim PR"'),
+    ).toContain('missing --project');
+  });
 });
 
 describe('tokenizeSpawnArgv', () => {

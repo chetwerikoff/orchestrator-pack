@@ -137,6 +137,38 @@ export function tokenizeSpawnArgv(command) {
 }
 
 /**
+ * @param {string} value
+ */
+function stripQuotes(value) {
+  const trimmed = String(value).trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+/**
+ * @param {string | undefined} token
+ */
+function isSpawnOptionFlag(token) {
+  return typeof token === 'string' && /^--[\w-]+/i.test(token);
+}
+
+/**
+ * @param {string | undefined} token
+ */
+function isValidSpawnOptionValue(token) {
+  if (token === undefined) {
+    return false;
+  }
+  const value = stripQuotes(token);
+  return value.length > 0 && !isSpawnOptionFlag(value);
+}
+
+/**
  * @param {string} command
  */
 export function parseSpawnShapeFlags(command) {
@@ -150,42 +182,34 @@ export function parseSpawnShapeFlags(command) {
     if (inline) {
       const flag = inline[1].toLowerCase();
       const value = inline[2];
-      if (flag === '--project') {
+      if (flag === '--project' && isValidSpawnOptionValue(value)) {
         flags.project = stripQuotes(value);
       }
-      if (flag === '--name') {
+      if (flag === '--name' && isValidSpawnOptionValue(value)) {
         flags.name = stripQuotes(value);
       }
       continue;
     }
 
     const lower = token.toLowerCase();
-    if (lower === '--project' && index + 1 < tokens.length) {
-      flags.project = stripQuotes(tokens[index + 1]);
-      index += 1;
+    if (lower === '--project') {
+      const value = tokens[index + 1];
+      if (isValidSpawnOptionValue(value)) {
+        flags.project = stripQuotes(value);
+        index += 1;
+      }
       continue;
     }
-    if (lower === '--name' && index + 1 < tokens.length) {
-      flags.name = stripQuotes(tokens[index + 1]);
-      index += 1;
+    if (lower === '--name') {
+      const value = tokens[index + 1];
+      if (isValidSpawnOptionValue(value)) {
+        flags.name = stripQuotes(value);
+        index += 1;
+      }
     }
   }
 
   return flags;
-}
-
-/**
- * @param {string} value
- */
-function stripQuotes(value) {
-  const trimmed = String(value).trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }
 
 /**
