@@ -15,6 +15,7 @@
     "docs/phase0-audit-retention.md",
     "scripts/audit-jsonl-retention-policy.json",
     "scripts/audit-jsonl-retention.test.ts",
+    "scripts/fixtures/fleet-cache-audit-retention-matrix.ps1",
     "scripts/lib/Audit-JsonlRetention.ps1",
     "scripts/lib/Gh-FleetInventoryCache.ps1",
     "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",

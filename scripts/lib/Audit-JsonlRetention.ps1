@@ -294,7 +294,7 @@ function Get-AuditJsonlSegments {
             name    = $item.Name
             path    = $item.FullName
             size    = $item.Length
-            mtimeMs = [DateTimeOffset]$item.LastWriteTimeUtc.ToUniversalTime().ToUnixTimeMilliseconds()
+            mtimeMs = ([DateTimeOffset]$item.LastWriteTimeUtc.ToUniversalTime()).ToUnixTimeMilliseconds()
             ts      = (Get-AuditJsonlSegmentTimestamp -Name $item.Name -ActivePath $ActivePath)
         }
     }

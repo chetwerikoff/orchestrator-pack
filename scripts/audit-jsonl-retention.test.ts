@@ -1,14 +1,17 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -29,6 +32,62 @@ import {
 } from './lib/audit-jsonl-retention.mjs';
 
 const repoRoot = join(import.meta.dirname, '..');
+const retentionLib = join(repoRoot, 'scripts/lib/Audit-JsonlRetention.ps1').replace(/'/g, "''");
+const cacheMatrixFixture = join(repoRoot, 'scripts/fixtures/fleet-cache-audit-retention-matrix.ps1').replace(/'/g, "''");
+
+function psQuote(value: string) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runPwsh(script: string) {
+  const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  return result;
+}
+
+function runPwshAsync(script: string) {
+  return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn('pwsh', ['-NoProfile', '-Command', script], { cwd: repoRoot });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+function runCacheMatrixCell(cell: string, root: string) {
+  const result = runPwsh(`& ${psQuote(cacheMatrixFixture)} -Cell ${psQuote(cell)} -Root ${psQuote(root)}`);
+  expect(result.status).toBe(0);
+  if (result.stderr) {
+    expect(result.stderr).toBe('');
+  }
+  return JSON.parse(result.stdout.trim()) as { cell: string; ok: boolean; detail: Record<string, unknown> };
+}
+
+function collectAllJsonlRecords(root: string, activePath: string) {
+  const records: Array<Record<string, unknown>> = [];
+  const files = [activePath, ...listSegments(root, activePath).map((segment) => segment.path)];
+  for (const filePath of files) {
+    if (!existsSync(filePath)) {
+      continue;
+    }
+    for (const line of readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean)) {
+      records.push(JSON.parse(line));
+    }
+  }
+  return records;
+}
 
 function parseJsonl(filePath: string) {
   if (!existsSync(filePath)) {
@@ -279,6 +338,33 @@ Write-GhFleetInventoryCacheAudit -Event 'setup_guard' -Fields @{ key = 'x' }
     }
   });
 
+
+  it('prunes corrupted historical segments without breaking active appends', () => {
+    const root = makeRoot();
+    const activePath = join(root, 'gh-wrapper-audit.jsonl');
+    const base = 'gh-wrapper-audit';
+    const expiredValid = join(root, `${base}.20200101T000000000Z-deadbeef.jsonl`);
+    const expiredCorrupt = join(root, `${base}.20200102T000000000Z-cafebabe.jsonl`);
+    writeFileSync(expiredValid, '{"event":"expired-valid"}\n');
+    writeFileSync(expiredCorrupt, '{not-json\n');
+    const oldTime = Date.now() - (10 * 24 * 60 * 60 * 1000);
+    utimesSync(expiredValid, oldTime / 1000, oldTime / 1000);
+    utimesSync(expiredCorrupt, oldTime / 1000, oldTime / 1000);
+    const policy = {
+      ...resolveAuditJsonlPolicy('gh-wrapper', {}),
+      maxActiveBytes: 96,
+      maxTotalBytes: 256,
+      maxAgeMs: 2 * 24 * 60 * 60 * 1000,
+    };
+    for (let i = 0; i < 6; i += 1) {
+      appendAuditJsonlLine(activePath, makeLine(i), { policy });
+    }
+    const records = collectAllJsonlRecords(root, activePath);
+    expect(records).toHaveLength(6);
+    expect(existsSync(expiredValid)).toBe(false);
+    expect(existsSync(expiredCorrupt)).toBe(false);
+  });
+
   it('does not fail wrapped gh calls when audit maintenance fails', () => {
     const root = makeRoot();
     const auditPath = root;
@@ -306,42 +392,114 @@ describe('fleet cache audit retention scenarios', () => {
     }
   });
 
-  it('covers writer/rotator matrix cells via PowerShell harness', () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleet-cache-audit-retention-'));
+  function makeRoot(suffix: string) {
+    const root = mkdtempSync(join(tmpdir(), `fleet-cache-audit-${suffix}-`));
     roots.push(root);
-    const retentionLib = join(repoRoot, 'scripts/lib/Audit-JsonlRetention.ps1').replace(/'/g, "''");
-    const script = `
-. '${retentionLib}'
-$active = '${root.replace(/'/g, "''")}/audit.jsonl'
-$policy = Resolve-AuditJsonlRetentionPolicy -StreamId 'github-fleet-cache'
-$policy.maxActiveBytes = 128
-$policy.maxTotalBytes = 384
-Add-AuditJsonlLine -ActivePath $active -Line '{"event":"one"}' -Policy $policy
-Add-AuditJsonlLine -ActivePath $active -Line '{"event":"two"}' -Policy $policy
-for ($i = 0; $i -lt 6; $i++) {
-  Add-AuditJsonlLine -ActivePath $active -Line "{\\"event\\":\\"row-$i\\"}" -Policy $policy
-}
-$segments = Get-AuditJsonlSegments -ActivePath $active
-$activeCount = if (Test-Path -LiteralPath $active) { (Get-Content -LiteralPath $active).Count } else { 0 }
-@{ activeCount = $activeCount; segmentCount = $segments.Count } | ConvertTo-Json -Compress
-`;
-    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    expect(result.status).toBe(0);
-    const summary = JSON.parse(result.stdout.trim());
-    expect(summary.activeCount + summary.segmentCount).toBeGreaterThan(0);
+    return root;
+  }
+
+  it('matrix: below bound appends without rotation', () => {
+    const result = runCacheMatrixCell('below_bound', makeRoot('below'));
+    expect(result.ok).toBe(true);
+    expect(result.detail.segmentCount).toBe(0);
+    expect(result.detail.lineCount).toBe(2);
+  });
+
+  it('matrix: same-process rotation keeps valid JSONL over size bound', () => {
+    const result = runCacheMatrixCell('rotate_over_bound', makeRoot('rotate'));
+    expect(result.ok).toBe(true);
+    expect(result.detail.recordCount).toBe(8);
+    expect(result.detail.segmentCount).toBeGreaterThan(0);
+  });
+
+  it('matrix: concurrent cache writers keep complete JSONL lines', async () => {
+    const root = makeRoot('concurrent');
     const activePath = join(root, 'audit.jsonl');
-    const allFiles = readdirSync(root).filter((name) => name.endsWith('.jsonl'));
-    for (const name of allFiles) {
-      const lines = readFileSync(join(root, name), 'utf8').trim().split('\n').filter(Boolean);
-      for (const line of lines) {
-        expect(() => JSON.parse(line)).not.toThrow();
-      }
+    mkdirSync(root, { recursive: true });
+    const writers = Array.from({ length: 8 }, (_, index) => {
+      const line = JSON.stringify({ event: 'concurrent', index });
+      return runPwshAsync(`
+. '${retentionLib}'
+$active = ${psQuote(activePath)}
+$policy = @{
+  streamId = 'github-fleet-cache'
+  maxActiveBytes = 96
+  maxTotalBytes = 4096
+  maxAgeMs = 604800000
+}
+Add-AuditJsonlLine -ActivePath $active -Line '${line}' -Policy $policy
+`);
+    });
+    const results = await Promise.all(writers);
+    for (const result of results) {
+      expect(result.status).toBe(0);
     }
-    if (existsSync(activePath)) {
-      expect(statSync(activePath).size).toBeGreaterThan(0);
+    const records = collectAllJsonlRecords(root, activePath);
+    expect(records).toHaveLength(8);
+    expect(new Set(records.map((record) => record.index)).size).toBe(8);
+  });
+
+  it('matrix: lock contenders skip rotation and still append', async () => {
+    const root = makeRoot('lock');
+    const activePath = join(root, 'audit.jsonl');
+    mkdirSync(root, { recursive: true });
+    const lockPath = `${activePath}.maintenance.lock`;
+    const holder = spawn('pwsh', [
+      '-NoProfile',
+      '-Command',
+      `. '${retentionLib}'; if (-not (Test-AuditJsonlMaintenanceLock -LockPath ${psQuote(lockPath)})) { exit 2 }; Start-Sleep -Seconds 6; Remove-AuditJsonlMaintenanceLock -LockPath ${psQuote(lockPath)}`,
+    ], { cwd: repoRoot, stdio: 'ignore' });
+    await sleep(500);
+    const policyScript = `@{
+  streamId = 'github-fleet-cache'
+  maxActiveBytes = 1
+  maxTotalBytes = 100000
+  maxAgeMs = 604800000
+}`;
+    const contenders = await Promise.all([0, 1].map((index) => {
+      const line = JSON.stringify({ event: 'lock', index });
+      return runPwshAsync(`
+. '${retentionLib}'
+$active = ${psQuote(activePath)}
+$policy = ${policyScript}
+if (-not (Test-Path -LiteralPath $active)) { Set-Content -LiteralPath $active -Value '{"event":"seed"}' -Encoding UTF8 }
+Add-AuditJsonlLine -ActivePath $active -Line '${line}' -Policy $policy
+`);
+    }));
+    await new Promise<void>((resolve, reject) => {
+      holder.on('close', (code) => {
+        if (code === 0 || code === 2) {
+          resolve();
+          return;
+        }
+        reject(new Error(`lock holder exited ${code}`));
+      });
+    });
+    for (const result of contenders) {
+      expect(result.status).toBe(0);
     }
+    const records = collectAllJsonlRecords(root, activePath);
+    expect(records.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('matrix: open writer rename race keeps complete records', () => {
+    const result = runCacheMatrixCell('open_before_rename', makeRoot('open'));
+    expect(result.ok).toBe(true);
+    expect(result.detail.recordCount).toBe(2);
+  });
+
+  it('matrix: blocked rotation remains appendable and observable', () => {
+    const result = runCacheMatrixCell('rotate_blocked', makeRoot('blocked'));
+    expect(result.ok).toBe(true);
+    expect(result.detail.recordCount).toBeGreaterThanOrEqual(2);
+    expect(result.detail.maintenanceEvents).toContain('rotate_failed');
+  });
+
+  it('matrix: corrupted historical segments prune without touching active JSONL', () => {
+    const result = runCacheMatrixCell('corrupted_segment_prune', makeRoot('corrupt'));
+    expect(result.ok).toBe(true);
+    expect(result.detail.recordCount).toBe(6);
+    expect(result.detail.expiredStillPresent).toEqual([false, false]);
   });
 });
+
