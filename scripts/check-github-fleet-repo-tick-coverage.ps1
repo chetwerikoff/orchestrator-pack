@@ -14,7 +14,7 @@ $ExpectedCoverage = @(
     @{ id = 'review-finding-delivery-confirm'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrListForNumbers') }
     @{ id = 'review-trigger-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReconcileChecksByPr') }
     @{ id = 'review-trigger-reeval'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReviewTriggerReevalChecksByPr') }
-    @{ id = 'review-ready-report-state-seed'; classification = 'repo-tick snapshot'; helpers = @('Ensure-GhFleetRepoTickSnapshot', 'Invoke-GhOpenPrListForNumbers', 'Get-GhChecksBundleByPr', 'Invoke-ReviewStartScopedGhPrView') }
+    @{ id = 'review-ready-report-state-seed'; classification = 'repo-tick snapshot'; helpers = @('Get-GhFleetRepoTickSnapshotIfConsumable', 'Invoke-GhOpenPrListForNumbers', 'Get-GhChecksBundleByPr', 'Invoke-ReviewStartScopedGhPrView') }
     @{ id = 'listener'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'heartbeat'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'review-run-recovery'; classification = 'out of coverage'; helpers = @() }
@@ -98,8 +98,8 @@ foreach ($row in $ExpectedCoverage) {
         }
         if ($id -eq 'review-ready-report-state-seed') {
             $libContent = Get-Content -LiteralPath (Join-Path $Root "scripts/$($LibScriptMap[$id])") -Raw
-            if ($libContent -notmatch 'function New-ReviewReadyReportStateSeedGitHubSnapshot[\s\S]*Ensure-GhFleetRepoTickSnapshot') {
-                $violations += 'review-ready-report-state-seed background snapshot must warm repo-tick before scoped reads'
+            if ($libContent -notmatch 'function New-ReviewReadyReportStateSeedGitHubSnapshot[\s\S]*Get-GhFleetRepoTickSnapshotIfConsumable') {
+                $violations += 'review-ready-report-state-seed background snapshot must consume repo-tick when warm before scoped reads'
             }
             if ($libContent -notmatch 'Invoke-ReviewStartScopedGhPrView') {
                 $violations += 'review-ready-report-state-seed must preserve fresh pre-claim scoped pr view'
@@ -114,6 +114,9 @@ if (-not (Test-Path -LiteralPath $repoTickPath -PathType Leaf)) {
 }
 elseif ((Get-Content -LiteralPath $repoTickPath -Raw) -notmatch 'function Ensure-GhFleetRepoTickSnapshot') {
     $violations += 'repo-tick snapshot API missing Ensure-GhFleetRepoTickSnapshot'
+}
+elseif ((Get-Content -LiteralPath $repoTickPath -Raw) -notmatch 'function Get-GhFleetRepoTickSnapshotIfConsumable') {
+    $violations += 'repo-tick snapshot API missing Get-GhFleetRepoTickSnapshotIfConsumable'
 }
 
 if ($violations.Count -gt 0) {

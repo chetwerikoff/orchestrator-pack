@@ -121,7 +121,7 @@ Write-Output 'ok'
       script: `
 $ErrorActionPreference = 'Stop'
 . '${ghChecks}'
-$null = Ensure-GhFleetRepoTickSnapshot -RepoRoot '${packRootEscaped}' -Consumer 'review-ready-report-state-seed' -DataClass 'github_snapshot'
+$null = Get-GhFleetRepoTickSnapshotIfConsumable -RepoRoot '${packRootEscaped}' -Consumer 'review-ready-report-state-seed' -DataClass 'github_snapshot'
 $open = @(Invoke-GhOpenPrListForNumbers -RepoRoot '${packRootEscaped}' -PrNumbers ${scopedLiteral} -Consumer 'review-ready-report-state-seed')
 if ($open.Count -lt ${scopedPrNumbers.length}) { throw 'expected scoped pr rows' }
 $bundle = Get-GhChecksBundleByPr -RepoRoot '${packRootEscaped}' -OpenPrs $open -Consumer 'review-ready-report-state-seed' -MergeRequiredNames { param($p) @($p.contexts) }

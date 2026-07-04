@@ -240,15 +240,33 @@ finally {
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_stale_hit\b/)).toBeGreaterThanOrEqual(1);
   });
 
-  it('review-ready-report-state-seed background snapshot uses repo-tick generation', async () => {
-    harness = withMultiPrHarness('gh-repo-tick-seed-');
+  it('review-ready-report-state-seed uses scoped reads when fleet repo-tick is cold', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-seed-cold-');
     const seed = REPO_TICK_CONSUMERS.find((c) => c.id === 'review-ready-report-state-seed');
     expect(seed).toBeTruthy();
     const result = await spawnPwsh(seed!.script, repoRoot, harness.env);
     expect(result.status, result.stderr || result.stdout).toBe(0);
-    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(1);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(10);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(3);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr checks\b/)).toBe(3);
+  });
+
+  it('review-ready-report-state-seed consumes warm repo-tick generation without full fleet refresh', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-seed-');
+    const warm = await spawnPwsh(REPO_TICK_CONSUMERS[0].script, repoRoot, harness.env);
+    expect(warm.status, warm.stderr || warm.stdout).toBe(0);
+    const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
+    const baselinePopulate = countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/);
+
+    const seed = REPO_TICK_CONSUMERS.find((c) => c.id === 'review-ready-report-state-seed');
+    expect(seed).toBeTruthy();
+    const result = await spawnPwsh(seed!.script, repoRoot, harness.env);
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(baselinePopulate);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(baselineList);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_hit\b/)).toBeGreaterThanOrEqual(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBeGreaterThanOrEqual(10);
   });
 
   it('AC#6 action-boundary stale head cannot authorize checks bundle', async () => {

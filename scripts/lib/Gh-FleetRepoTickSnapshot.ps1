@@ -368,12 +368,13 @@ function Invoke-GhFleetRepoTickProducer {
     }
 }
 
-function Ensure-GhFleetRepoTickSnapshot {
+function Resolve-GhFleetRepoTickSnapshot {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [string]$Consumer = '',
-        [string]$DataClass = ''
+        [string]$DataClass = '',
+        [bool]$AllowPopulate = $true
     )
 
     if (-not (Test-GhFleetRepoTickEnabled)) { return $null }
@@ -393,7 +394,10 @@ function Ensure-GhFleetRepoTickSnapshot {
 
     $recordEntry = Read-GhFleetRepoTickGenerationRecord -GenerationPath $paths.GenerationPath
     if ($recordEntry -and $recordEntry.kind -eq 'error') {
-        throw [string]$recordEntry.message
+        if ($AllowPopulate) {
+            throw [string]$recordEntry.message
+        }
+        return $null
     }
     $record = if ($recordEntry -and $recordEntry.record) { $recordEntry.record } else { $null }
     if ($record -and (Test-GhFleetRepoTickGenerationFresh -Record $record -IntervalSeconds $interval)) {
@@ -415,36 +419,48 @@ function Ensure-GhFleetRepoTickSnapshot {
         return $record
     }
 
-    for ($populatePass = 0; $populatePass -lt 2; $populatePass++) {
-        $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
-        if ($acquired) {
-            try {
-                $recordAfterLockEntry = Read-GhFleetRepoTickGenerationRecord -GenerationPath $paths.GenerationPath
-                if ($recordAfterLockEntry -and $recordAfterLockEntry.kind -eq 'error') {
-                    throw [string]$recordAfterLockEntry.message
-                }
-                $recordAfterLock = if ($recordAfterLockEntry -and $recordAfterLockEntry.record) { $recordAfterLockEntry.record } else { $null }
-                if ($recordAfterLock -and (Test-GhFleetRepoTickGenerationFresh -Record $recordAfterLock -IntervalSeconds $interval)) {
-                    Write-GhFleetCacheAuditLine -Event 'repo_tick_hit' -Fields ($auditBase + @{
-                        generation   = [string]$recordAfterLock.generation
-                        afterLock    = $true
-                        stalenessAge = (Get-GhFleetRepoTickGenerationAgeSeconds -Record $recordAfterLock)
-                    })
-                    return $recordAfterLock
-                }
+    if (-not $AllowPopulate -and -not $lockHeld) {
+        return $null
+    }
 
-                return Invoke-GhFleetRepoTickProducer -RepoRoot $RepoRoot -Consumer $Consumer
+    for ($populatePass = 0; $populatePass -lt 2; $populatePass++) {
+        if ($AllowPopulate) {
+            $acquired = Enter-GhFleetPopulateLock -LockPath $paths.LockPath
+            if ($acquired) {
+                try {
+                    $recordAfterLockEntry = Read-GhFleetRepoTickGenerationRecord -GenerationPath $paths.GenerationPath
+                    if ($recordAfterLockEntry -and $recordAfterLockEntry.kind -eq 'error') {
+                        throw [string]$recordAfterLockEntry.message
+                    }
+                    $recordAfterLock = if ($recordAfterLockEntry -and $recordAfterLockEntry.record) { $recordAfterLockEntry.record } else { $null }
+                    if ($recordAfterLock -and (Test-GhFleetRepoTickGenerationFresh -Record $recordAfterLock -IntervalSeconds $interval)) {
+                        Write-GhFleetCacheAuditLine -Event 'repo_tick_hit' -Fields ($auditBase + @{
+                            generation   = [string]$recordAfterLock.generation
+                            afterLock    = $true
+                            stalenessAge = (Get-GhFleetRepoTickGenerationAgeSeconds -Record $recordAfterLock)
+                        })
+                        return $recordAfterLock
+                    }
+
+                    return Invoke-GhFleetRepoTickProducer -RepoRoot $RepoRoot -Consumer $Consumer
+                }
+                finally {
+                    Exit-GhFleetPopulateLock -LockPath $paths.LockPath
+                }
             }
-            finally {
-                Exit-GhFleetPopulateLock -LockPath $paths.LockPath
-            }
+        }
+        elseif (-not (Test-Path -LiteralPath $paths.LockPath -PathType Leaf)) {
+            return $null
         }
 
         $deadline = (Get-Date).AddSeconds($Script:GhFleetPopulateWaitSeconds)
         while ((Get-Date) -lt $deadline) {
             $waitedEntry = Read-GhFleetRepoTickGenerationRecord -GenerationPath $paths.GenerationPath
             if ($waitedEntry -and $waitedEntry.kind -eq 'error') {
-                throw [string]$waitedEntry.message
+                if ($AllowPopulate) {
+                    throw [string]$waitedEntry.message
+                }
+                return $null
             }
             $waited = if ($waitedEntry -and $waitedEntry.record) { $waitedEntry.record } else { $null }
             if ($waited -and (Test-GhFleetRepoTickGenerationFresh -Record $waited -IntervalSeconds $interval)) {
@@ -484,8 +500,34 @@ function Ensure-GhFleetRepoTickSnapshot {
         return $record
     }
 
+    if (-not $AllowPopulate) {
+        return $null
+    }
+
     Write-GhFleetCacheAuditLine -Event 'repo_tick_bypass_denied' -Fields $auditBase
     throw (Format-GhFleetCacheFailure -Kind 'repo_tick_bypass' -InnerMessage "repo-tick snapshot bypass denied for repo=$repoSlug")
+}
+
+function Ensure-GhFleetRepoTickSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [string]$Consumer = '',
+        [string]$DataClass = ''
+    )
+
+    return Resolve-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer $Consumer -DataClass $DataClass -AllowPopulate $true
+}
+
+function Get-GhFleetRepoTickSnapshotIfConsumable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [string]$Consumer = '',
+        [string]$DataClass = ''
+    )
+
+    return Resolve-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer $Consumer -DataClass $DataClass -AllowPopulate $false
 }
 
 function Get-GhFleetRepoTickGenerationContract {
