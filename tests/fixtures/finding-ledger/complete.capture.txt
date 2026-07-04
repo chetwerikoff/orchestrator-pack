@@ -1,0 +1,14 @@
+P1 — Draft prescribes function signature in acceptance criteria
+
+type: scope-violation
+id: scope-signature
+
+The draft names `checkFindingLedgerGuard(capturePath, ledgerPath)` which violates
+planner freedom.
+
+P2 — Helper could be inlined
+
+type: quality
+id: qual-inline
+
+The guard adds a thin wrapper around JSON parsing with no reuse site yet.

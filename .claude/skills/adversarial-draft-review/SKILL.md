@@ -57,7 +57,8 @@ node "$SCRIPT" adversarial-review --wait --json --scope working-tree \
 ### 3. Read findings as proposals
 
 Codex argues to break confidence. Each finding is a challenge to weigh — never an
-instruction to apply.
+instruction to apply. Capture verbatim output and normalize into the draft's
+finding-disposition ledger per `create-issue-draft` (Issue #575).
 
 ### 4. Evaluate each finding
 

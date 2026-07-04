@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "draft": "docs/issues_drafts/example.md",
+  "findings": [
+    {
+      "id": "sec-spawn-grant",
+      "summary": "Missing auth check on spawn grant path",
+      "type": "security",
+      "disposition": "rejected",
+      "rejectReason": "Out of scope for this draft"
+    }
+  ]
+}

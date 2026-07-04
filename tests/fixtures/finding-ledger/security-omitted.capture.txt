@@ -1,0 +1,14 @@
+P0 — Draft edits vendor/** despite denylist
+
+type: scope-violation
+id: scope-vendor
+
+The allowed_roots section does not fence vendor/** but the acceptance criteria
+require changing packages/core internals.
+
+P2 — Acceptance criteria rely on manual inspection
+
+type: quality
+id: qual-manual-ac
+
+Several AC rows say "grep-level" only with no observable command.

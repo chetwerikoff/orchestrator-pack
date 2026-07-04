@@ -839,6 +839,87 @@ If reality is larger than the assigned tier, **stop and escalate the tier upward
 Mechanical guard: `scripts/check-tier-calibration-consistency.ps1` over the
 committed calibration sample.
 
+
+## Per-tier draft-review flow (Issue #575)
+
+Governs **create-issue-draft spec review** only. Worker **PR-code** review
+(`prompts/codex_review_prompt.md`, `ao review run`) is unchanged.
+
+**Roles.** The **architect** authors the task brief, assigns intake tier, runs the
+T3 architect lens pass, and is the escalation target. The **draft author** — the
+Cursor drafting session working from that brief — authors the spec and runs the
+review loop. The draft author owns accept/reject on competitive and architectural
+stages; the architect does **not** re-decide accepted findings.
+
+### Per-tier pipeline (ceilings, not quotas)
+
+Clean `NO_FINDINGS` ends a stage early. Stage caps compose with shipped contracts
+(#37 adversarial ≤3, architectural ≤4 + final 1 = 5 Codex iterations) — they do
+not override them.
+
+| Tier | Stages |
+|------|--------|
+| **T1** | One light architectural (Codex) pass. |
+| **T2** | Architectural (Codex) review, up to **3** passes; first `NO_FINDINGS` ends and publishes. No competitive stage. Architect re-enters only on drift. |
+| **T3** | Competitive adversarial (**GPT** by default; **Codex** substitutes when GPT is unavailable — record substitution) up to **3** → architectural (Codex) up to **4** → **architect lens** pass **1** → final architectural (Codex) over architect edits **1**. |
+
+**T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
+in Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
+(cite by reference — do not restate). When T3-critical: competitive **+Codex is
+mandatory** (GPT and Codex together); draft must include rollback/migration note
+plus crash/race/stale-state test. Non-critical T3 uses the default pipeline above.
+
+### Finding-disposition ledger + normalization
+
+Reviewers cannot be relied on for structured output. Per pass the draft author:
+
+1. Captures **raw reviewer output verbatim** (audit anchor).
+2. **Normalizes** every emitted finding into a draft-bound disposition ledger with
+   stable `id`, `summary`, `type`, and `disposition` — `addressed` or `rejected`
+   plus one-line `rejectReason`.
+
+Ledger format: JSON at `docs/issues_drafts/.review/<draft-stem>/finding-disposition-ledger.json`
+(see `.claude/skills/create-issue-draft/SKILL.md`). Verbatim captures live alongside
+as `pass-NN-<stage>.capture.txt`.
+
+**Completeness:** a finding present in capture but absent from the ledger is a
+silent drop — invalid. `NO_FINDINGS` passes owe no rows. Re-worded findings on
+later passes map to the carried-forward `id`, not a new row.
+
+### Non-rejectable carve-out
+
+Findings with `type: security` or `type: scope-violation` (#51 vocabulary) have
+exactly one valid disposition: `addressed`. The guard fails when a protected
+finding is `rejected` **or omitted** while present in capture. Contested protected
+findings **escalate to the architect** — never self-waivable by the draft author.
+
+**Guard:** `scripts/check-finding-ledger-guard.ps1` (or `check-draft-discipline.ps1
+-Command finding-ledger`) runs **pre-sync** alongside other draft-discipline checks;
+non-zero exit blocks issue sync/publish. Omission detection is layered and fails
+closed: typed `type:` tags are checked directly; conservative protected-signal
+hits in capture with no matching ledger row also fail (false positives escalate to
+the architect; unparseable prose never passes silently).
+
+### Simplification lens
+
+On competitive and architectural stages the reviewer prompt
+(`prompts/codex_draft_review_prompt.md`) mandates the four-question lens: what can
+be simplified / must not be simplified / is excess / is missing. Lens findings
+flow through the normal ledger and remain subject to the carve-out. The architect
+applies the same lens on the T3 lens pass.
+
+### Architect T3 lens pass
+
+On T3 only, after architectural review converges: architect audits the ledger's
+**reject partition** (re-judges rejects; does **not** re-open accepts), may edit
+the draft, then one final architectural (Codex) pass verifies those edits.
+
+### Drift escalation
+
+After review, tier is recomputed (draft C / Issue #189). Upward drift — including
+scope growth from accepted findings — escalates to the architect before publish.
+Downward drift is impossible (#574 monotonic rule).
+
 ## RCA spec discipline (Issue #221)
 
 Workers and architects share these invariants when authoring specs or
@@ -860,7 +941,8 @@ investigating recurrence. Full procedure: `prompts/investigate_root_cause.md`
   not from within a managed session)
 
 Mechanical guards: `scripts/check-draft-discipline.ps1` (positive-outcome,
-parked-root, surfaces). Architecture: §T in
+parked-root, surfaces), `scripts/check-finding-ledger-guard.ps1` (protected
+finding carve-out on the disposition ledger). Architecture: §T in
 `docs/issues_drafts/00-architecture-decisions.md`.
 
 ## Operator adoption handoff

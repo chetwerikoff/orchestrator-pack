@@ -30,16 +30,19 @@ if (-not (Test-Path -LiteralPath $ArtifactPath)) {
 
 $resolved = (Resolve-Path -LiteralPath $ArtifactPath).Path
 $text = Get-Content -Raw -LiteralPath $resolved
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$draftReviewPromptPath = Join-Path $repoRoot 'prompts/codex_draft_review_prompt.md'
 
 $roleBlock = switch ($Kind) {
     'issue-draft' {
-@'
-You are the lead architect reviewer for orchestrator-pack (read-only issue-draft spec review).
-Review the DRAFT below for planner-freedom, observable acceptance criteria, command accuracy
-(real ao / ao-declare flags; pwsh 7+ on Linux), denylist/allowed-roots fences, and cross-draft consistency.
-Do NOT explore the repository unless the draft text is ambiguous.
-Do NOT suggest implementation file names unless the draft already violates planner freedom.
-'@
+        if (-not (Test-Path -LiteralPath $draftReviewPromptPath)) {
+            Write-Error "Missing draft review prompt: $draftReviewPromptPath"
+            exit 2
+        }
+        (Get-Content -Raw -LiteralPath $draftReviewPromptPath).Replace(
+            '{{ARTIFACT_SECTION}}',
+            "--- ARTIFACT ($resolved) ---`n$text"
+        )
     }
     'adoption-proposal' {
 @'
@@ -59,7 +62,11 @@ that are closed, merged, or already on main, and patches proposed as durable fix
     }
 }
 
-$prompt = @"
+$prompt = if ($Kind -eq 'issue-draft') {
+    $roleBlock
+} else {
+@"
+
 $roleBlock
 
 Tag valid issues P0, P1, or P2.
@@ -68,6 +75,7 @@ If no concrete issues remain, respond with exactly NO_FINDINGS on its own line.
 --- ARTIFACT ($resolved) ---
 $text
 "@
+}
 
 Write-Host "== architect codex review ($Kind) =="
 Write-Host "Artifact: $resolved"
