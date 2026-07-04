@@ -42,12 +42,12 @@ function Write-GhFleetInventoryCacheAudit {
     $root = Get-GhFleetInventoryCacheRoot
     if (-not $root) { return }
 
-    $auditPath = Join-Path $root 'audit.jsonl'
-    $dir = Split-Path -Parent $auditPath
-    if (-not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    if (-not $Script:AuditJsonlRetentionLoaded) {
+        . (Join-Path $PSScriptRoot 'Audit-JsonlRetention.ps1')
+        $Script:AuditJsonlRetentionLoaded = $true
     }
 
+    $auditPath = Join-Path $root 'audit.jsonl'
     $payload = @{
         at    = (Get-Date).ToString('o')
         event = $Event
@@ -55,7 +55,26 @@ function Write-GhFleetInventoryCacheAudit {
     foreach ($key in $Fields.Keys) {
         $payload[$key] = $Fields[$key]
     }
-    Add-Content -LiteralPath $auditPath -Value ($payload | ConvertTo-Json -Compress)
+    $policy = Resolve-AuditJsonlRetentionPolicy -StreamId 'github-fleet-cache'
+    $logWriter = {
+        param($Kind, $Fields)
+        if (-not $env:GH_FLEET_CACHE_AUDIT) { return }
+        $suffix = ($Fields.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '
+        if ($suffix) {
+            [Console]::Error.WriteLine("github-fleet-cache-audit-retention: $Kind $suffix")
+        }
+        else {
+            [Console]::Error.WriteLine("github-fleet-cache-audit-retention: $Kind")
+        }
+    }
+    try {
+        Add-AuditJsonlLine -ActivePath $auditPath -Line ($payload | ConvertTo-Json -Compress) -Policy $policy -LogWriter $logWriter
+    }
+    catch {
+        if ($env:GH_FLEET_CACHE_AUDIT) {
+            [Console]::Error.WriteLine("github-fleet-cache-audit: write_failed reason=$($_.Exception.Message)")
+        }
+    }
 }
 
 function Get-GhFleetInventoryCacheRoot {

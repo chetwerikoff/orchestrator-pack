@@ -92,7 +92,9 @@ function Invoke-OrchestratorClaimedReviewRun {
 
     $preflight = Test-OrchestratorReviewStartGatePreflight -FixtureMode:([bool]$FixtureSnapshot)
     if (-not $preflight.ok) {
-        Write-OrchestratorReviewStartPreflightRefusal -AuditRoot $AuditRoot -Reason $preflight.reason -MarkerState ([string]$preflight.markerState) | Out-Null
+        $preflightHead = ([string]$EventHeadSha).Trim().ToLowerInvariant()
+        Write-OrchestratorReviewStartPreflightRefusal -AuditRoot $AuditRoot -Reason $preflight.reason `
+            -MarkerState ([string]$preflight.markerState) -PrNumber $PrNumber -HeadSha $preflightHead | Out-Null
         return @{ started = $false; reason = $preflight.reason; preflightRefusal = $true }
     }
 
@@ -122,7 +124,9 @@ function Invoke-OrchestratorClaimedReviewRun {
                 -ClaimOutcome 'no_claim' | Out-Null
         }
         else {
-            Write-OrchestratorReviewStartPreflightRefusal -AuditRoot $AuditRoot -Reason ([string]$preClaim.reason) -MarkerState 'head_unresolved' | Out-Null
+            $refusalHead = ([string]$EventHeadSha).Trim().ToLowerInvariant()
+            Write-OrchestratorReviewStartPreflightRefusal -AuditRoot $AuditRoot -Reason ([string]$preClaim.reason) `
+                -MarkerState 'head_unresolved' -PrNumber $PrNumber -HeadSha $refusalHead | Out-Null
         }
         & $writeLog "orchestrator-claimed-review-run: denied before claim PR #$PrNumber reason=$($preClaim.reason)"
         return @{ started = $false; reason = [string]$preClaim.reason; deniedBeforeClaim = $true; gate = $preClaim }

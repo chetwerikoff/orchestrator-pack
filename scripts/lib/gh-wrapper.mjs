@@ -4,8 +4,8 @@
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { appendAuditJsonlLine, resolveAuditJsonlPolicy } from './audit-jsonl-retention.mjs';
 import { classifyArgv } from './gh-inventory-match.mjs';
 import { exitCodeForPrChecks } from './gh-pr-checks.mjs';
 import { resolveRealGhBinary } from './gh-resolve-real-binary.mjs';
@@ -148,12 +148,24 @@ function writeWrapperAudit(event, fields = {}) {
   const filePath = auditFilePath();
   if (filePath) {
     try {
-      mkdirSync(dirname(filePath), { recursive: true });
-      appendFileSync(filePath, `${JSON.stringify({
+      const line = JSON.stringify({
         at: new Date().toISOString(),
         event,
         ...allFields,
-      })}\n`);
+      });
+      const logMaintenance = (kind, fields = {}) => {
+        if (process.env.GH_WRAPPER_AUDIT !== '1') {
+          return;
+        }
+        const suffix = Object.entries(fields)
+          .map(([key, value]) => `${key}=${formatAuditValue(value)}`)
+          .join(' ');
+        process.stderr.write(`gh-wrapper-audit-retention: ${kind}${suffix ? ` ${suffix}` : ''}\n`);
+      };
+      appendAuditJsonlLine(filePath, line, {
+        streamId: 'gh-wrapper',
+        log: logMaintenance,
+      });
     } catch (err) {
       if (process.env.GH_WRAPPER_AUDIT === '1') {
         const reason = err instanceof Error ? err.message : String(err);

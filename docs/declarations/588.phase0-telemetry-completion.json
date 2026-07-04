@@ -1,0 +1,28 @@
+{
+  "issue_number": 588,
+  "iteration_id": "phase0-telemetry-completion",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-04T13:50:00.000Z",
+  "baseline": {
+    "commit_sha": "3160e3c837fa2b66dc5151f85e7b30c8bf88b33b",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:phase0-telemetry-completion-588"
+  },
+  "declared_paths": [
+    "docs/declarations/588.phase0-telemetry-completion.json",
+    "docs/migration_notes.md",
+    "docs/phase0-audit-retention.md",
+    "scripts/audit-jsonl-retention-policy.json",
+    "scripts/audit-jsonl-retention.test.ts",
+    "scripts/lib/Audit-JsonlRetention.ps1",
+    "scripts/lib/Gh-FleetInventoryCache.ps1",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
+    "scripts/lib/audit-jsonl-retention.mjs",
+    "scripts/lib/gh-wrapper.mjs",
+    "scripts/orchestrator-review-start-preflight-audit.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
