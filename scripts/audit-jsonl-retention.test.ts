@@ -99,13 +99,13 @@ describe('gh-wrapper audit retention scenarios', () => {
     }
     const activeLines = parseJsonl(activePath);
     const segments = listSegments(root, activePath);
-    expect(activeLines.length + segments.reduce((sum, seg) => sum + parseJsonl(seg.path).length, 0)).toBe(8);
+    expect(activeLines.length + segments.reduce((sum: number, seg) => sum + parseJsonl(seg.path).length, 0)).toBe(8);
     for (const file of [activePath, ...segments.map((seg) => seg.path)]) {
       if (existsSync(file)) {
         parseJsonl(file).forEach((row) => expect(row).toHaveProperty('index'));
       }
     }
-    const totalBytes = activeFileSize(activePath) + segments.reduce((sum, seg) => sum + seg.size, 0);
+    const totalBytes = activeFileSize(activePath) + segments.reduce((sum: number, seg) => sum + seg.size, 0);
     expect(totalBytes).toBeLessThanOrEqual(policy.maxTotalBytes + 256);
   });
 

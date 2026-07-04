@@ -18,6 +18,7 @@
     "scripts/lib/Audit-JsonlRetention.ps1",
     "scripts/lib/Gh-FleetInventoryCache.ps1",
     "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
+    "scripts/lib/audit-jsonl-retention.d.mts",
     "scripts/lib/audit-jsonl-retention.mjs",
     "scripts/lib/gh-wrapper.mjs",
     "scripts/orchestrator-review-start-preflight-audit.test.ts",

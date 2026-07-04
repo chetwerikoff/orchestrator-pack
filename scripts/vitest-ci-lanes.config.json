@@ -30,6 +30,7 @@
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/_test-stub-pack-import-closure.test.ts": "light",
     "scripts/audit-jsonl-retention.test.ts": "light",
+    "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",
     "scripts/autonomous-orchestrator-interposer.test.ts": "heavy",
     "scripts/autonomous-review-retry.test.ts": "heavy",
     "scripts/autonomous-review-worktree-e2e-smoke.test.ts": "heavy",
