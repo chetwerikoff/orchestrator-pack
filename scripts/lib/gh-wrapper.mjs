@@ -44,7 +44,15 @@ function formatStdout(result, parsed, route) {
 
 function passthrough(argv) {
   const realGh = resolveRealGhBinary();
-  if (tryGraphqlDegradedPassthrough(argv, realGh)) {
+  if (tryGraphqlDegradedPassthrough(argv, realGh, {
+    onComplete: (fields = {}) => {
+      writeWrapperAudit('complete', buildAuditFields(argv, {
+        kind: 'passthrough',
+        route: 'graphql-degraded',
+        ...fields,
+      }));
+    },
+  })) {
     return;
   }
   const result = spawnSync(realGh, argv, {

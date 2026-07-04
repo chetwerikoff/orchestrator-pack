@@ -470,6 +470,58 @@ OUT
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('writes completion audit for graphql degraded passthroughs handled internally', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-graphql-audit-'));
+    try {
+      const fakeGh = join(root, 'fake-gh');
+      const auditPath = join(root, 'audit.jsonl');
+      const cacheDir = join(root, 'cache');
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+joined="$*"
+if [[ "$1" == "auth" && "$2" == "token" ]]; then
+  printf '%s' "token-a"
+  exit 0
+fi
+if [[ "$joined" == *"api rate_limit"* ]]; then
+  printf '%s\\n' '{"resources":{"graphql":{"limit":5000,"remaining":5000,"reset":1783140000,"used":0}}}'
+  exit 0
+fi
+if [[ "$joined" == *"api graphql"* ]]; then
+  printf '%s\\n' '{"data":{"viewer":{"login":"fixture"}}}'
+  exit 0
+fi
+echo "fake-gh: unhandled argv: $joined" >&2
+exit 1
+`);
+
+      const script = `import { appendFileSync } from 'node:fs';
+import { tryGraphqlDegradedPassthrough } from './lib/gh-graphql-degraded.mjs';
+tryGraphqlDegradedPassthrough(['api', 'graphql', '-f', 'query={viewer{login}}'], ${JSON.stringify(fakeGh)}, {
+  env: process.env,
+  onComplete: (fields) => appendFileSync(${JSON.stringify(auditPath)}, JSON.stringify(fields) + '\\n'),
+});`;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        cwd: import.meta.dirname,
+        env: {
+          ...process.env,
+          GH_TOKEN: 'token-a',
+          GH_GRAPHQL_DEGRADED_CACHE_DIR: cacheDir,
+        },
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+
+      expect(result.status).toBe(0);
+      const rows = readFileSync(auditPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(rows).toEqual([{
+        status: 0,
+      }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 

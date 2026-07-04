@@ -616,12 +616,15 @@ function shouldRefreshRateLimit(cache, currentMs) {
   return currentMs - cache.lastRateLimitFetchMs >= RATE_LIMIT_REFRESH_MS;
 }
 
-function emitPassthroughResult(result) {
+function emitPassthroughResult(result, onComplete = null) {
   if (result.stdout) {
     process.stdout.write(result.stdout);
   }
   if (result.stderr) {
     process.stderr.write(result.stderr);
+  }
+  if (onComplete) {
+    onComplete({ status: result.status ?? 1 });
   }
   process.exit(result.status ?? 1);
 }
@@ -643,14 +646,14 @@ function emitCacheIoFailureDiagnostic(partitionKey, err) {
  * @param {string} realGh
  * @param {NodeJS.ProcessEnv} env
  */
-function passthroughGraphqlDirect(argv, realGh, env) {
+function passthroughGraphqlDirect(argv, realGh, env, onComplete = null) {
   const graphqlResult = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...env, GH_WRAPPER_ACTIVE: '1' },
     encoding: 'utf8',
     maxBuffer: 50 * 1024 * 1024,
   });
-  emitPassthroughResult(graphqlResult);
+  emitPassthroughResult(graphqlResult, onComplete);
 }
 
 /**
@@ -679,7 +682,7 @@ function tryWriteDegradedCache(cacheDir, partitionKey, state) {
  * @param {NodeJS.ProcessEnv} env
  * @param {number} currentMs
  */
-function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs) {
+function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs, onComplete = null) {
   let cache = readDegradedCache(cacheDir, partitionKey);
 
   const refreshResult = maybeRefreshDegradedCache(
@@ -692,6 +695,9 @@ function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs)
   );
   cache = refreshResult.cache;
   if (isActivelyDegraded(cache, currentMs)) {
+    if (onComplete) {
+      onComplete({ status: SUPPRESSION_EXIT_CODE, suppressed: true });
+    }
     exitSuppressed(partitionKey, effectiveResetEpochSec(cache, currentMs));
   }
 
@@ -702,7 +708,7 @@ function applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs)
  * Handle gh api graphql passthrough with degraded-mode gate. Exits on graphql argv.
  * @param {string[]} argv
  * @param {string} realGh
- * @param {{ env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ env?: NodeJS.ProcessEnv, onComplete?: (fields: Record<string, unknown>) => void }} [options]
  * @returns {boolean} false when argv is not graphql passthrough
  */
 export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
@@ -711,6 +717,15 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
   }
 
   const env = options.env ?? process.env;
+  const onComplete = typeof options.onComplete === 'function'
+    ? (fields) => {
+      try {
+        options.onComplete(fields);
+      } catch {
+        // Audit callbacks must not change gh passthrough behavior.
+      }
+    }
+    : null;
   const currentMs = nowMs();
   let cacheDir = '';
   let partitionKey = '';
@@ -720,10 +735,10 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
   try {
     cacheDir = resolveCacheDir(env);
     partitionKey = resolvePartitionKey(realGh, argv, env);
-    ({ cache, refreshed } = applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs));
+    ({ cache, refreshed } = applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs, onComplete));
   } catch (err) {
     emitCacheIoFailureDiagnostic(partitionKey, err);
-    passthroughGraphqlDirect(argv, realGh, env);
+    passthroughGraphqlDirect(argv, realGh, env, onComplete);
     return true;
   }
 
@@ -748,6 +763,9 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     }
     if (graphqlResult.stderr) {
       process.stderr.write(graphqlResult.stderr);
+    }
+    if (onComplete) {
+      onComplete({ status: 0 });
     }
     process.exit(0);
   }
@@ -796,9 +814,12 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
     } else {
       process.stderr.write(`${PRIMARY_QUOTA_MARKER}\n`);
     }
+    if (onComplete) {
+      onComplete({ status: graphqlResult.status ?? SUPPRESSION_EXIT_CODE });
+    }
     process.exit(graphqlResult.status ?? SUPPRESSION_EXIT_CODE);
   }
 
-  emitPassthroughResult(graphqlResult);
+  emitPassthroughResult(graphqlResult, onComplete);
   return true;
 }
