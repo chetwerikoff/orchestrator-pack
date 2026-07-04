@@ -207,7 +207,7 @@ describe('review-start preflight transient shield (#584)', () => {
       const gate = evaluateOrchestratorTurnGate({
         prNumber: 584,
         provenanceAutonomous: true,
-        openPrs: [{ number: 584, headRefOid: stableHead, state: 'OPEN', baseRefName: 'main' }],
+        openPrs: [{ number: 584, headRefOid: stableHead, baseRefName: 'main' } as { number: number; headRefOid: string; baseRefName: string }],
         reviewRuns: [],
         sessions: [],
         ciChecks: [],

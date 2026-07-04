@@ -114,7 +114,7 @@ describe('review-start-envelope-ledger unit', () => {
 
   it('claimed-snapshot-transport-failure-skips-live-ao-reads', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
-    const transportBlock = src.match(/if \(-not \$transport\.ok\) \{([\s\S]*?)\n        \}/);
+    const transportBlock = src.match(/if \(\$preflight\.transportFailure\) \{([\s\S]*?)\n        \}/);
     expect(transportBlock).not.toBeNull();
     const block = transportBlock![1];
     expect(block).not.toMatch(/@\(Get-AoReviewRuns\)/);
