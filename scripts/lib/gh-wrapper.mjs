@@ -13,15 +13,6 @@ import { tryGraphqlDegradedPassthrough } from './gh-graphql-degraded.mjs';
 import { executeRestRoute } from './gh-rest-routes.mjs';
 import { consumeGhApiRateLimitHeaders, REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
 
-const RATE_LIMIT_HEADER_NAMES = [
-  'retry-after',
-  'x-ratelimit-limit',
-  'x-ratelimit-remaining',
-  'x-ratelimit-reset',
-  'x-ratelimit-resource',
-  'x-ratelimit-used',
-];
-
 function formatStdout(result, parsed, route) {
   if (route?.id === 'pr-diff-name-only') {
     return `${result.join('\n')}\n`;
@@ -59,21 +50,13 @@ function passthrough(argv) {
   const result = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    encoding: 'utf8',
-    maxBuffer: 50 * 1024 * 1024,
+    stdio: 'inherit',
   });
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
   const status = result.status ?? 1;
   writeWrapperAudit('complete', buildAuditFields(argv, {
     kind: 'passthrough',
     route: 'passthrough',
     status,
-    rateLimit: extractRateLimitHeaders(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
   }));
   process.exit(status);
 }
@@ -131,22 +114,6 @@ function buildAuditFields(argv, fields = {}, parsed = {}) {
     ...extractPrAndHead(argv, parsed),
     ...fields,
   };
-}
-
-function extractRateLimitHeaders(text) {
-  const out = {};
-  const lines = String(text ?? '').split(/\r?\n/);
-  for (const line of lines) {
-    const idx = line.indexOf(':');
-    if (idx <= 0) {
-      continue;
-    }
-    const name = line.slice(0, idx).trim().toLowerCase();
-    if (RATE_LIMIT_HEADER_NAMES.includes(name)) {
-      out[name] = line.slice(idx + 1).trim();
-    }
-  }
-  return out;
 }
 
 function rateLimitKind(headers = {}) {
