@@ -974,6 +974,25 @@ else {
 
 Write-Check 'verify-runtime/github-fleet-cache-vitest' 'SKIP' 'owned by check-github-fleet-cache-bypass.ps1 + full Vitest lane (Issue #488)'
 
+Write-Host '== github fleet repo-tick snapshot (Issue #583) =='
+$repoTickCoverageCheck = Join-Path $Root 'scripts/check-github-fleet-repo-tick-coverage.ps1'
+if (Test-Path -LiteralPath $repoTickCoverageCheck -PathType Leaf) {
+    & $repoTickCoverageCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-github-fleet-repo-tick-coverage.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'github fleet repo-tick coverage guard failed (Issue #583)'
+    }
+    else {
+        Write-Check 'scripts/check-github-fleet-repo-tick-coverage.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-github-fleet-repo-tick-coverage.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing github fleet repo-tick coverage guard (Issue #583)'
+}
+
+
+
 
 Write-Host '== Draft discipline guards (Issue #221) =='
 $draftDisciplineCheck = Join-Path $Root 'scripts/check-draft-discipline.ps1'

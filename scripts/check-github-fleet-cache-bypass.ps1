@@ -34,6 +34,7 @@ $Script:AllowedUpstreamFetchFunctions = @(
 
 $Script:AllowedDirectGhPaths = @(
     'scripts/lib/Gh-FleetInventoryCache.ps1',
+    'scripts/lib/Gh-FleetRepoTickSnapshot.ps1',
     'scripts/lib/Get-AutoReviewPrContext.ps1',
     'scripts/check-gh-inventory-static.ps1',
     'scripts/check-github-fleet-cache-bypass.ps1',
@@ -196,6 +197,7 @@ if ($cacheContent -match 'token bucket|TokenBucket|cooperative backoff|circuit b
 Get-ChildItem -LiteralPath (Join-Path $Root 'scripts') -Recurse -File -Filter '*.ps1' |
     Where-Object {
         $_.FullName -notlike '*Gh-FleetInventoryCache.ps1' -and
+        $_.FullName -notlike '*Gh-FleetRepoTickSnapshot.ps1' -and
         $_.Name -notlike 'check-*.ps1'
     } |
     ForEach-Object {

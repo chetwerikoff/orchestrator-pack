@@ -61,6 +61,8 @@ export function createGithubFleetCacheHarness(prefix = 'gh-fleet-cache-'): Fleet
     GH_FLEET_BRANCH_PROTECTION_TTL_SECONDS: '300',
     GH_FLEET_NEGATIVE_LOOKUP_TTL_SECONDS: '30',
     GH_FLEET_REVIEW_FRESHNESS_TTL_SECONDS: '30',
+    GH_FLEET_REPO_TICK_INTERVAL_SECONDS: '30',
+    GH_FLEET_REPO_TICK_STALE_SERVE_SECONDS: '30',
     GH_FLEET_TEST_AUDIT_FILE: auditFile,
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
   };

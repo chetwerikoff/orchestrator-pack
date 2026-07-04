@@ -370,6 +370,29 @@ Operator adoption after merge:
 4. Verification: `npm test -- github-fleet-shared-read-model` and
    `pwsh -NoProfile -File scripts/check-github-fleet-cache-bypass.ps1`.
 
+
+## GitHub fleet repo-tick inventory snapshot (Issue #583)
+
+Adds `Gh-FleetRepoTickSnapshot.ps1` on top of the #453/#569 cache family. Covered
+wake-supervisor open-PR inventory reads (`Invoke-GhOpenPrList` /
+`Invoke-GhFleetCachedOpenPrListRaw`) refresh one repo-tick generation per bounded
+interval (`GH_FLEET_REPO_TICK_INTERVAL_SECONDS`, default 30s). The producer
+populates open-PR list, PR view, CI/check, and branch-protection per-key caches in
+one pass; staggered child ticks within the interval consume that generation instead
+of per-PR/per-key TTL repopulates. Scoped PR-number reads (`Invoke-GhOpenPrListForNumbers`,
+`Invoke-GhFleetCachedPrView` warm hits) still avoid full open-PR list upstream calls
+(#557).
+
+Operator adoption after merge:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Optional: `export GH_FLEET_CACHE_AUDIT=1` and inspect
+   `$AO_SIDE_PROCESS_STATE_DIR/github-fleet-cache/audit.jsonl` plus test audit lines for
+   `repo_tick_populate`, `repo_tick_hit`, `repo_tick_wait_hit`, and `repo_tick_stale_hit`.
+4. Verification: `npm test -- github-fleet-repo-tick-snapshot` and
+   `pwsh -NoProfile -File scripts/check-github-fleet-repo-tick-coverage.ps1`.
+
 ## Issue-keyed task-continuation nudge (Issue #430)
 
 Extends the #384 worker-nudge gate with `task-continuation` — issue-keyed tuples that stay

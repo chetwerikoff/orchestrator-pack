@@ -363,7 +363,8 @@ function Wait-GhFleetSnapshotEnvelope {
 function Invoke-GhFleetCachedOpenPrListRaw {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RepoRoot
+        [string]$RepoRoot,
+        [string]$Consumer = ''
     )
 
     $cacheRoot = Get-GhFleetInventoryCacheRoot
@@ -390,6 +391,18 @@ function Invoke-GhFleetCachedOpenPrListRaw {
         }
         Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_hit' -Fields @{ key = $cacheKey }
         return @($warm.envelope.prs)
+    }
+
+    if ((Get-Command Test-GhFleetRepoTickEnabled -ErrorAction SilentlyContinue) -and (Test-GhFleetRepoTickEnabled)) {
+        $null = Ensure-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer $Consumer -DataClass 'open_pr_list'
+        $warmAfterTick = Read-GhFleetCacheEnvelope -Path $paths.SnapshotPath -TtlSeconds $ttl
+        if ($warmAfterTick) {
+            if ($warmAfterTick.kind -eq 'error') {
+                throw [string]$warmAfterTick.message
+            }
+            Write-GhFleetInventoryCacheAudit -Event 'open_pr_list_hit' -Fields @{ key = $cacheKey; afterRepoTick = $true }
+            return @($warmAfterTick.envelope.prs)
+        }
     }
 
     for ($populatePass = 0; $populatePass -lt 2; $populatePass++) {
@@ -1339,3 +1352,5 @@ function Get-GhFleetInventoryCacheTtlContract {
     openPrList       = Get-GhFleetInventoryCacheTtlSeconds -Name 'openPrList'
   }
 }
+
+. (Join-Path $PSScriptRoot 'Gh-FleetRepoTickSnapshot.ps1')
