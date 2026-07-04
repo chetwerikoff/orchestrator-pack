@@ -14,6 +14,7 @@
     "scripts/gh-wrapper.test.ts",
     "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/gh-repo-resolve.d.mts",
     "scripts/lib/gh-repo-resolve.mjs",
     "scripts/lib/gh-wrapper.mjs",
     "scripts/orchestrator-review-start-preflight-audit.test.ts",

@@ -139,12 +139,19 @@ function writeWrapperAudit(event, fields = {}) {
   };
   const filePath = auditFilePath();
   if (filePath) {
-    mkdirSync(dirname(filePath), { recursive: true });
-    appendFileSync(filePath, `${JSON.stringify({
-      at: new Date().toISOString(),
-      event,
-      ...allFields,
-    })}\n`);
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+      appendFileSync(filePath, `${JSON.stringify({
+        at: new Date().toISOString(),
+        event,
+        ...allFields,
+      })}\n`);
+    } catch (err) {
+      if (process.env.GH_WRAPPER_AUDIT === '1') {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`gh-wrapper-audit: write_failed reason=${formatAuditValue(reason)}\n`);
+      }
+    }
   }
   if (process.env.GH_WRAPPER_AUDIT !== '1') {
     return;

@@ -449,6 +449,27 @@ OUT
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('does not fail the wrapped command when persistent audit write fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-audit-fail-'));
+    try {
+      const result = spawnSync(join(import.meta.dirname, 'gh'), ['auth', 'status'], {
+        env: {
+          ...process.env,
+          GH_REAL_BINARY: '/bin/true',
+          GH_WRAPPER_AUDIT: '1',
+          GH_WRAPPER_AUDIT_FILE: root,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('gh-wrapper-audit: write_failed');
+      expect(result.stderr).toContain('gh-wrapper-audit: complete');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 
