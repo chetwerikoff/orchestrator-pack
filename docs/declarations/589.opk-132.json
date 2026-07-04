@@ -1,0 +1,30 @@
+{
+  "issue_number": 589,
+  "iteration_id": "opk-132",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-04T16:04:37.119Z",
+  "baseline": {
+    "commit_sha": "e3ff26d4760fed6876c3511b83a8f56364071693",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7a41a99f6c227499a6de5becbec6f89c3d340b9276d20fd7255845969ce57870"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "docs/ao-spawn-shape.mjs",
+    "docs/migration_notes.md",
+    "docs/orchestrator-recovery-runbook.md",
+    "scripts/ao-spawn-shape.test.ts",
+    "scripts/check-ao-spawn-shape.ps1",
+    "scripts/fixtures/ao-spawn-shape/safety-prose-baseline.json",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "prompts/**",
+    "docs/**",
+    "scripts/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}
