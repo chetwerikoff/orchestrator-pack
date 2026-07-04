@@ -85,7 +85,7 @@ describe('scanSpawnShapeCorpus', () => {
     const corpusRelPaths = await collectDefaultCorpusRelPaths(rootDir);
     const violations = await scanSpawnShapeCorpus(rootDir, {
       corpusRelPaths,
-      baselineRelPath: 'tests/fixtures/ao-spawn-shape/safety-prose-baseline.json',
+      baselineRelPath: 'scripts/fixtures/ao-spawn-shape/safety-prose-baseline.json',
     });
     expect(violations).toEqual([]);
   });

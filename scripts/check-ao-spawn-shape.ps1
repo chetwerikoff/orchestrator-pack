@@ -6,7 +6,7 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $mjs = Join-Path $Root 'docs/ao-spawn-shape.mjs'
-$baseline = Join-Path $Root 'tests/fixtures/ao-spawn-shape/safety-prose-baseline.json'
+$baseline = Join-Path $Root 'scripts/fixtures/ao-spawn-shape/safety-prose-baseline.json'
 
 if (-not (Test-Path -LiteralPath $mjs -PathType Leaf)) {
     Write-Host 'Missing docs/ao-spawn-shape.mjs'
@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $mjs -PathType Leaf)) {
 }
 
 if (-not (Test-Path -LiteralPath $baseline -PathType Leaf)) {
-    Write-Host 'Missing tests/fixtures/ao-spawn-shape/safety-prose-baseline.json'
+    Write-Host 'Missing scripts/fixtures/ao-spawn-shape/safety-prose-baseline.json'
     exit 1
 }
 
