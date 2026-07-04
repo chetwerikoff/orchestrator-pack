@@ -4,6 +4,7 @@ export function ghApiJson(
   endpoint: string,
   options?: { hostname?: string | null; cwd?: string },
 ): unknown;
+export function consumeGhApiRateLimitHeaders(): Record<string, string>;
 export function mapPullState(pull: Record<string, unknown>): string;
 export function mapPullToGhJson(pull: Record<string, unknown>, fields: string[]): Record<string, unknown>;
 export function mapIssueState(issue: Record<string, unknown>): string;

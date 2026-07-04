@@ -64,6 +64,7 @@
     "scripts/mechanical-reconcile-bounds.test.ts": "heavy",
     "scripts/orchestrator-claimed-review-run.test.ts": "heavy",
     "scripts/orchestrator-message-registry.test.ts": "heavy",
+    "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
     "scripts/orchestrator-wake-heartbeat.test.ts": "heavy",
     "scripts/orchestrator-wake-listener.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor.test.ts": "heavy",

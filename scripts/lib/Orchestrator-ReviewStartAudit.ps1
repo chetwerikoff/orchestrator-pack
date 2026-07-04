@@ -106,13 +106,17 @@ function Write-OrchestratorReviewStartPreflightRefusal {
     param(
         [string]$AuditRoot,
         [string]$Reason,
-        [string]$MarkerState
+        [string]$MarkerState,
+        [int]$PrNumber = 0,
+        [string]$HeadSha = ''
     )
 
     Initialize-OrchestratorReviewStartAuditRoot -AuditRoot $AuditRoot
     $path = Join-Path (Get-OrchestratorReviewStartPreflightDir -AuditRoot $AuditRoot) ("$([guid]::NewGuid().ToString('n')).json")
     $record = @{
         kind        = 'preflight_refusal'
+        prNumber    = $PrNumber
+        headSha     = ([string]$HeadSha).Trim().ToLowerInvariant()
         reason      = $Reason
         markerState = $MarkerState
         atUtc       = (Get-Date).ToUniversalTime().ToString('o')
