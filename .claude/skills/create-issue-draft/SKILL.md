@@ -459,7 +459,7 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
 
 1. **Intake:** recompute tier from brief text vs #574; brief tier is advisory only.
 2. **Marker screen (brief):** fail-closed red-flag screen using #574 marker vocabulary
-   via `scripts/lib/tier-marker-screen.mjs` (shared logic — same vocabulary future
+   via `scripts/lib/tier-marker-screen.ts` (shared logic — same vocabulary future
    consumers may call).
 3. **Stage selection** by recomputed tier:
    - **T1:** skip #237 design-analysis gate and adversarial stage; one light

@@ -40,6 +40,7 @@ function makeDeps(overrides: {
   liveBody?: string;
   liveReadResult?: GhInvocationResult;
   onRunGh?: (argv: string[]) => GhInvocationResult;
+  validateTierGateGuard?: (draftContent: string) => { ok: boolean; message: string };
 } = {}) {
   const audits: MutationAuditRecord[] = [];
   const mutationCalls: string[][] = [];
@@ -71,9 +72,10 @@ function makeDeps(overrides: {
     emitAudit(record: MutationAuditRecord) {
       audits.push(record);
     },
-    validateTierGateGuard() {
-      return { ok: true, message: 'tier-gate guard: PASS (test stub)' };
-    },
+    validateTierGateGuard: overrides.validateTierGateGuard ?? (() => ({
+      ok: true,
+      message: 'tier-gate guard: PASS (test stub)',
+    })),
   };
 
   return { deps, audits, mutationCalls, liveReadCalls };

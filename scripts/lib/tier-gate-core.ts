@@ -1,7 +1,7 @@
 /**
  * Tier gate core: marker screen, fence parsing, stage selection, floor checks (Issue #576).
  */
-import { screenRedFlagMarkers } from './tier-marker-screen.mjs';
+import { screenRedFlagMarkers } from './tier-marker-screen.js';
 
 export const VALID_TIERS = new Set(['T1', 'T2', 'T3']);
 export const FLOOR_CHECKS = [
@@ -9,17 +9,16 @@ export const FLOOR_CHECKS = [
   'contract-evidence',
   'behavior-kind',
   'finding-ledger-carve-out',
-];
+] as const;
 
 const FENCE_RE = /```complexity-tier\s*\n([\s\S]*?)```/i;
 
-/**
- * @param {string} draftText
- * @returns {{ kind: 'tier-fence'; tier: string; advisoryPrior?: string; skipLine: false }
- *   | { kind: 'no-tier'; skipLine: true }
- *   | { kind: 'unparseable'; reason: string }}
- */
-export function parseComplexityTierFence(draftText) {
+export type ComplexityTierFence =
+  | { kind: 'tier-fence'; tier: string; advisoryPrior?: string; skipLine: false }
+  | { kind: 'no-tier'; skipLine: true }
+  | { kind: 'unparseable'; reason: string };
+
+export function parseComplexityTierFence(draftText: string): ComplexityTierFence {
   const match = draftText.match(FENCE_RE);
   if (!match) {
     return { kind: 'unparseable', reason: 'missing complexity-tier fence' };
@@ -31,7 +30,7 @@ export function parseComplexityTierFence(draftText) {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const fields = new Map();
+  const fields = new Map<string, string>();
   for (const line of lines) {
     const sep = line.indexOf(':');
     if (sep < 0) {
@@ -59,12 +58,8 @@ export function parseComplexityTierFence(draftText) {
   };
 }
 
-/**
- * @param {string} draftText
- * @returns {{ ok: boolean; errors: string[] }}
- */
-export function checkWorkerSafetyFloor(draftText) {
-  const errors = [];
+export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
   if (!/^##\s+Goal\b/m.test(draftText)) {
     errors.push('worker-safety floor: missing ## Goal section');
   }
@@ -83,17 +78,24 @@ export function checkWorkerSafetyFloor(draftText) {
   return { ok: errors.length === 0, errors };
 }
 
-/**
- * @param {{
- *   tier: string | null;
- *   skipLine: boolean;
- *   explicitAdversarialWrapper?: boolean;
- * }} input
- */
-export function selectAuthoringReviewStages(input) {
+export interface StageSelectionInput {
+  tier: string | null;
+  skipLine: boolean;
+  explicitAdversarialWrapper?: boolean;
+}
+
+export interface StageSelectionResult {
+  effectiveTier: string | null;
+  floor: string[];
+  authoring: string[];
+  review: string[];
+  wrapperFloorApplied: boolean;
+}
+
+export function selectAuthoringReviewStages(input: StageSelectionInput): StageSelectionResult {
   const floor = [...FLOOR_CHECKS];
-  const authoring = [];
-  const review = [];
+  const authoring: string[] = [];
+  const review: string[] = [];
 
   if (input.skipLine) {
     return { effectiveTier: null, floor, authoring, review, wrapperFloorApplied: false };
@@ -127,26 +129,48 @@ export function selectAuthoringReviewStages(input) {
   return { effectiveTier, floor, authoring, review, wrapperFloorApplied };
 }
 
-function designAdversarialSkipped(stages) {
+function designAdversarialSkipped(stages: StageSelectionResult) {
   const designSkipped = !stages.authoring.includes('full-design-analysis')
     && !stages.authoring.includes('light-design-analysis');
   const adversarialSkipped = !stages.review.includes('competitive-adversarial');
   return { designSkipped, adversarialSkipped };
 }
 
-/**
- * @param {string} text
- * @param {{
- *   tier?: string | null;
- *   skipLine?: boolean;
- *   designSkipped?: boolean;
- *   adversarialSkipped?: boolean;
- *   explicitAdversarialWrapper?: boolean;
- *   repoRoot?: string;
- * }} [opts]
- */
-export function checkTierGateGuard(text, opts = {}) {
-  const errors = [];
+export interface TierGateGuardOptions {
+  tier?: string | null;
+  skipLine?: boolean;
+  designSkipped?: boolean;
+  adversarialSkipped?: boolean;
+  explicitAdversarialWrapper?: boolean;
+  repoRoot?: string;
+}
+
+export type TierGateReceipt =
+  | { kind: 'no-tier'; skipLine: true; markers: string[] }
+  | {
+      kind: 'tier-fence';
+      tier: string;
+      advisoryPrior?: string;
+      markers: string[];
+      effectiveTier: string | null;
+      wrapperFloorApplied: boolean;
+      explicitAdversarialWrapper: boolean;
+    };
+
+export interface TierGateGuardResult {
+  ok: boolean;
+  errors: string[];
+  receipt: TierGateReceipt | null;
+  screen: ReturnType<typeof screenRedFlagMarkers>;
+  fence: ComplexityTierFence;
+  stages: StageSelectionResult;
+}
+
+export function checkTierGateGuard(
+  text: string,
+  opts: TierGateGuardOptions = {},
+): TierGateGuardResult {
+  const errors: string[] = [];
   const fence = parseComplexityTierFence(text);
   const screen = screenRedFlagMarkers(text, { repoRoot: opts.repoRoot });
 
@@ -155,7 +179,7 @@ export function checkTierGateGuard(text, opts = {}) {
   }
 
   const tier = opts.tier ?? (fence.kind === 'tier-fence' ? fence.tier : null);
-  const skipLine = opts.skipLine ?? (fence.kind === 'no-tier' ? true : false);
+  const skipLine = opts.skipLine ?? (fence.kind === 'no-tier');
 
   const stages = selectAuthoringReviewStages({
     tier,
@@ -205,14 +229,14 @@ export function checkTierGateGuard(text, opts = {}) {
     errors.push(...workerSafety.errors);
   }
 
-  let receipt = null;
+  let receipt: TierGateReceipt | null = null;
   if (errors.length === 0) {
     if (skipLine || fence.kind === 'no-tier') {
       receipt = { kind: 'no-tier', skipLine: true, markers: screen.hits };
     } else {
       receipt = {
         kind: 'tier-fence',
-        tier: tier ?? fence.tier,
+        tier: tier ?? (fence.kind === 'tier-fence' ? fence.tier : 'T3'),
         advisoryPrior: fence.kind === 'tier-fence' ? fence.advisoryPrior : undefined,
         markers: screen.hits,
         effectiveTier: stages.effectiveTier,
@@ -232,7 +256,7 @@ export function checkTierGateGuard(text, opts = {}) {
   };
 }
 
-export function formatTierGatePassMessage(result) {
+export function formatTierGatePassMessage(result: TierGateGuardResult): string {
   if (!result.receipt) {
     return 'tier-gate guard: PASS';
   }

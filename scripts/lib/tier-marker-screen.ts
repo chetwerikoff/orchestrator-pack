@@ -1,6 +1,5 @@
 /**
  * Fail-closed red-flag marker screen (Issue #574 vocabulary, Issue #576 gate).
- * Vocabulary is pinned to tests/fixtures/task-complexity-tier-calibration.json.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -8,8 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** @type {Record<string, RegExp[]>} */
-export const MARKER_HEURISTICS = {
+export const MARKER_HEURISTICS: Record<string, RegExp[]> = {
   'trust-boundary': [
     /\btrust[- ]boundary\b/i,
     /\b(auth(?:entication)?|permission)\b/i,
@@ -86,9 +84,9 @@ export const MARKER_HEURISTICS = {
   ],
 };
 
-let cachedMarkerClasses = null;
+let cachedMarkerClasses: string[] | null = null;
 
-export function loadMarkerClasses(repoRoot = join(__dirname, '..', '..')) {
+export function loadMarkerClasses(repoRoot = join(__dirname, '..', '..')): string[] {
   if (cachedMarkerClasses) {
     return cachedMarkerClasses;
   }
@@ -96,7 +94,7 @@ export function loadMarkerClasses(repoRoot = join(__dirname, '..', '..')) {
     repoRoot,
     'tests/fixtures/task-complexity-tier-calibration.json',
   );
-  const doc = JSON.parse(readFileSync(samplePath, 'utf8'));
+  const doc = JSON.parse(readFileSync(samplePath, 'utf8')) as { markerClasses?: string[] };
   if (!Array.isArray(doc.markerClasses) || doc.markerClasses.length === 0) {
     throw new Error('task-complexity-tier-calibration.json missing markerClasses');
   }
@@ -104,18 +102,21 @@ export function loadMarkerClasses(repoRoot = join(__dirname, '..', '..')) {
   return cachedMarkerClasses;
 }
 
-export function resetMarkerClassCache() {
+export function resetMarkerClassCache(): void {
   cachedMarkerClasses = null;
 }
 
-/**
- * @param {string} text
- * @param {{ repoRoot?: string }} [opts]
- * @returns {{ hits: string[]; unparseable: boolean }}
- */
-export function screenRedFlagMarkers(text, opts = {}) {
+export interface MarkerScreenResult {
+  hits: string[];
+  unparseable: boolean;
+}
+
+export function screenRedFlagMarkers(
+  text: string,
+  opts: { repoRoot?: string } = {},
+): MarkerScreenResult {
   const markerClasses = loadMarkerClasses(opts.repoRoot);
-  const hits = [];
+  const hits: string[] = [];
   for (const markerClass of markerClasses) {
     const patterns = MARKER_HEURISTICS[markerClass];
     if (!patterns) {

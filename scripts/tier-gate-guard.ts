@@ -9,10 +9,24 @@ import {
   checkTierGateGuard,
   formatTierGatePassMessage,
   selectAuthoringReviewStages,
-} from './lib/tier-gate-core.mjs';
+} from './lib/tier-gate-core.js';
+import {
+  isDirectCliExecution,
+  runReviewerTsCli,
+} from './lib/reviewer-ts-cli.js';
 
-function parseArgs(argv) {
-  const opts = {
+interface CliOptions {
+  textPath: string | null;
+  text: string | null;
+  tier: string | null;
+  skipLine: boolean;
+  explicitAdversarialWrapper: boolean;
+  repoRoot: string;
+  emitStagesJson: boolean;
+}
+
+function parseArgs(argv: string[]): CliOptions {
+  const opts: CliOptions = {
     textPath: null,
     text: null,
     tier: null,
@@ -23,13 +37,13 @@ function parseArgs(argv) {
   };
 
   for (let i = 2; i < argv.length; i += 1) {
-    const arg = argv[i];
+    const arg = argv[i]!;
     switch (arg) {
       case '--text-file':
-        opts.textPath = argv[++i];
+        opts.textPath = String(argv[++i] ?? '');
         break;
       case '--text':
-        opts.text = argv[++i];
+        opts.text = String(argv[++i] ?? '');
         break;
       case '--tier':
         opts.tier = String(argv[++i] ?? '').toUpperCase();
@@ -41,7 +55,7 @@ function parseArgs(argv) {
         opts.explicitAdversarialWrapper = true;
         break;
       case '--repo-root':
-        opts.repoRoot = resolve(argv[++i]);
+        opts.repoRoot = resolve(String(argv[++i] ?? opts.repoRoot));
         break;
       case '--emit-stages-json':
         opts.emitStagesJson = true;
@@ -54,12 +68,13 @@ function parseArgs(argv) {
   return opts;
 }
 
-export function runCli(argv) {
-  let opts;
+export function runCli(argv: string[]): number {
+  let opts: CliOptions;
   try {
     opts = parseArgs(argv);
   } catch (error) {
-    process.stderr.write(`tier-gate guard: ${error.message}\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`tier-gate guard: ${message}\n`);
     return 2;
   }
 
@@ -79,13 +94,14 @@ export function runCli(argv) {
       repoRoot: opts.repoRoot,
     });
   } catch (error) {
-    process.stderr.write(`tier-gate guard: ${error.message}\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`tier-gate guard: ${message}\n`);
     return 1;
   }
 
   if (opts.emitStagesJson) {
     const stages = selectAuthoringReviewStages({
-      tier: result.receipt?.tier ?? opts.tier,
+      tier: result.receipt?.kind === 'tier-fence' ? result.receipt.tier : opts.tier,
       skipLine: opts.skipLine || result.fence.kind === 'no-tier',
       explicitAdversarialWrapper: opts.explicitAdversarialWrapper,
     });
@@ -103,11 +119,10 @@ export function runCli(argv) {
   return 0;
 }
 
-function isCliMain() {
-  const entry = process.argv[1]?.replace(/\\/g, '/');
-  return Boolean(entry?.endsWith('tier-gate-guard.mjs'));
+function main(): void {
+  process.exit(runCli(process.argv));
 }
 
-if (isCliMain()) {
-  process.exit(runCli(process.argv));
+if (isDirectCliExecution(import.meta.url, process.argv[1])) {
+  runReviewerTsCli(main);
 }

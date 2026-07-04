@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import {
   checkTierGateGuard,
   formatTierGatePassMessage,
-} from './tier-gate-core.mjs';
+} from './tier-gate-core.js';
 
 export type IssueMutationSubcommand = 'issue create' | 'issue edit';
 
@@ -274,7 +274,7 @@ export function validateTierGateGuardReceipt(
   if (!result.ok) {
     return {
       ok: false,
-      message: result.errors.map((error) => `tier-gate guard: ${error}`).join('\n'),
+      message: result.errors.map((error: string) => `tier-gate guard: ${error}`).join('\n'),
     };
   }
   return {

@@ -108,6 +108,7 @@
     "scripts/spawn-worktree-branch-operand-binding.test.ts": "heavy",
     "scripts/spawn-worktree-grant-finalization.test.ts": "heavy",
     "scripts/spawn-worktree-repository-identity-binding.test.ts": "heavy",
+    "scripts/submit-worker-input-draft.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/supervisor-auto-recovery.test.ts": "heavy",
     "scripts/supervisor-child-openprs-null.test.ts": "heavy",

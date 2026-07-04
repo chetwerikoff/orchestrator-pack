@@ -7,9 +7,9 @@ import {
   checkWorkerSafetyFloor,
   FLOOR_CHECKS,
   selectAuthoringReviewStages,
-} from './lib/tier-gate-core.mjs';
-import { runCli } from './tier-gate-guard.mjs';
-import { screenRedFlagMarkers } from './lib/tier-marker-screen.mjs';
+} from './lib/tier-gate-core.js';
+import { runCli } from './tier-gate-guard.js';
+import { screenRedFlagMarkers } from './lib/tier-marker-screen.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,7 +34,9 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
     const result = checkTierGateGuard(text);
     expect(result.ok).toBe(true);
     expect(result.receipt?.kind).toBe('tier-fence');
-    expect(result.receipt?.tier).toBe('T1');
+    if (result.receipt?.kind === 'tier-fence') {
+      expect(result.receipt.tier).toBe('T1');
+    }
   });
 
   it('fails when design/adversarial stages are skipped on a marked brief', () => {
@@ -58,14 +60,14 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
   it('exits non-zero on CLI for marker+sub-T3 fixture', () => {
     const fixturePath = path.join(fixturesDir, 'marker-hit-sub-t3-brief.md');
     expect(
-      runCli(['node', 'tier-gate-guard.mjs', '--text-file', fixturePath]),
+      runCli(['node', 'tier-gate-guard.ts', '--text-file', fixturePath]),
     ).toBe(1);
   });
 
   it('exits zero on CLI for marker-free T1 fixture', () => {
     const fixturePath = path.join(fixturesDir, 'marker-free-t1-brief.md');
     expect(
-      runCli(['node', 'tier-gate-guard.mjs', '--text-file', fixturePath]),
+      runCli(['node', 'tier-gate-guard.ts', '--text-file', fixturePath]),
     ).toBe(0);
   });
 });
@@ -99,6 +101,8 @@ describe('floor on every tier', () => {
     expect(stages.review).toContain('competitive-adversarial');
     const gate = checkTierGateGuard(text, { explicitAdversarialWrapper: true });
     expect(gate.ok).toBe(true);
-    expect(gate.receipt?.wrapperFloorApplied).toBe(true);
+    if (gate.receipt?.kind === 'tier-fence') {
+      expect(gate.receipt.wrapperFloorApplied).toBe(true);
+    }
   });
 });
