@@ -20,7 +20,8 @@
     "scripts/lib/gh-wrapper.mjs",
     "scripts/orchestrator-review-start-preflight-audit.test.ts",
     "scripts/orchestrator-review-start-preflight.ps1",
-    "scripts/orchestrator-wake-supervisor.test.ts"
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
   "amendments": []
