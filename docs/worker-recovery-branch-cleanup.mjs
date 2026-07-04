@@ -53,6 +53,53 @@ export function parseBranchDeleteForceArgv(argv) {
 }
 
 /**
+ * @param {string[]} argv
+ */
+export function parseUpdateRefBranchDeleteArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  const updateRefIndex = list.findIndex((token, index) => {
+    if (token.toLowerCase() !== 'update-ref') return false;
+    return index === 0 || !list[index - 1].startsWith('-');
+  });
+  if (updateRefIndex < 0 || updateRefIndex + 3 >= list.length) {
+    return { ok: false, reason: 'not_update_ref_branch_delete' };
+  }
+  if (list[updateRefIndex + 1] !== '-d') {
+    return { ok: false, reason: 'not_update_ref_delete' };
+  }
+  const ref = String(list[updateRefIndex + 2] ?? '');
+  const oid = normalizeOid(list[updateRefIndex + 3]);
+  if (!ref.startsWith('refs/heads/')) {
+    return { ok: false, reason: 'not_branch_ref' };
+  }
+  const normalized = normalizeWorkerBranchRef(ref.slice('refs/heads/'.length));
+  if (!normalized.ok) {
+    return { ok: false, reason: normalized.reason };
+  }
+  if (!oid) {
+    return { ok: false, reason: 'invalid_expected_oid' };
+  }
+  return {
+    ok: true,
+    branch: normalized.branch,
+    expectedOid: oid,
+    force: true,
+    mechanism: 'update_ref_expected_oid',
+  };
+}
+
+/**
+ * @param {string[]} argv
+ */
+export function parseRecoveryBranchDeleteArgv(argv) {
+  const branchDelete = parseBranchDeleteForceArgv(argv);
+  if (branchDelete.ok) {
+    return { ...branchDelete, mechanism: 'branch_force_delete' };
+  }
+  return parseUpdateRefBranchDeleteArgv(argv);
+}
+
+/**
  * @param {object} input
  */
 export function evaluateBranchObservationFreshness(input) {
@@ -426,7 +473,7 @@ export function evaluateBranchPreexistsClassification(input) {
  * @param {object} input
  */
 export function evaluateWorkerRecoveryBranchGitAllow(input) {
-  const parsed = parseBranchDeleteForceArgv(input.argv);
+  const parsed = parseRecoveryBranchDeleteArgv(input.argv);
   if (!parsed.ok) {
     return { allowed: false, reason: parsed.reason };
   }
@@ -482,6 +529,10 @@ function handleCliSubcommand(subcommand, payload) {
       return normalizeWorkerBranchRef(payload.branch);
     case 'parseBranchDeleteArgv':
       return parseBranchDeleteForceArgv(payload.argv);
+    case 'parseUpdateRefBranchDeleteArgv':
+      return parseUpdateRefBranchDeleteArgv(payload.argv);
+    case 'parseRecoveryBranchDeleteArgv':
+      return parseRecoveryBranchDeleteArgv(payload.argv);
     case 'evaluateObservationFreshness':
       return evaluateBranchObservationFreshness(payload);
     case 'evaluateOpenPrTriState':

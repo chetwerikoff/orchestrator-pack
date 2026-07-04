@@ -748,6 +748,27 @@ function Test-GitArgvIsBranchDeleteForce {
     return $false
 }
 
+
+function Test-GitArgvIsUpdateRefBranchDeleteForce {
+    param([string[]]$Argv)
+
+    $index = Get-GitArgvSubcommandIndex -Argv $Argv
+    if ($index -ge $Argv.Count) { return $false }
+    if ([string]$Argv[$index] -notmatch '^(?i)update-ref$') { return $false }
+    for ($i = $index + 1; $i -lt $Argv.Count; $i++) {
+        if ([string]$Argv[$i] -match '^(?i)-d$') {
+            if (($i + 2) -lt $Argv.Count) {
+                $ref = [string]$Argv[$i + 1]
+                $oid = [string]$Argv[$i + 2]
+                if ($ref -match '^refs/heads/' -and $oid -match '^[0-9a-f]{40}$') {
+                    return $true
+                }
+            }
+        }
+    }
+    return $false
+}
+
 function Test-GitArgvIsWorktreeRemoveForce {
     param([string[]]$Argv)
 
@@ -853,7 +874,7 @@ function Test-AutonomousGitDenied {
     }
 
 
-    if (Test-GitArgvIsBranchDeleteForce -Argv $Argv) {
+    if (Test-GitArgvIsBranchDeleteForce -Argv $Argv -or (Test-GitArgvIsUpdateRefBranchDeleteForce -Argv $Argv)) {
         $branchRecoveryAllow = Test-AutonomousWorkerRecoveryBranchGitAllow -Argv $Argv -FixtureParentChain $FixtureParentChain
         if ($branchRecoveryAllow.allowed) {
             return @{ denied = $false; reason = 'recovery_branch_delete_allow' }

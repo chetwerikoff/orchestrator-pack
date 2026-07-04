@@ -424,32 +424,86 @@ function Invoke-WorkerRecoveryBranchCleanup {
 
     $deleted = $false
     if (-not $DryRun) {
-        & git -C $RepoRoot branch -D $branchName 2>$null
-        if ($LASTEXITCODE -eq 0) {
+        $expectedDeleteOid = [string]$revalidation.expectedDeleteOid
+        $freshBranchState = Get-WorkerRecoveryBranchGitState -RepoRoot $RepoRoot -Branch $branchName
+        if (-not $freshBranchState.ok) {
+            return @{ ok = $false; reason = $freshBranchState.reason; escalation = 'branch_state_unavailable' }
+        }
+        if (-not $freshBranchState.exists) {
             $deleted = $true
         }
         else {
-            $postState = Get-WorkerRecoveryBranchGitState -RepoRoot $RepoRoot -Branch $branchName
-            if ($postState.exists) {
-                $escalation = 'blocked_oid_race'
+            $finalRevalidation = Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'evaluateDeletionRevalidation' -Payload @{
+                branch                         = $branchName
+                branchHeadOid                  = [string]$freshBranchState.branchHeadOid
+                sessionId                      = $SessionId
+                canonicalPath                  = $CanonicalPath
+                grant                          = if ($grant.ok) { $grant.record } else { $null }
+                worktreeRecords                = @($porcelain)
+                localAheadCount                = [int]$freshBranchState.localAheadCount
+                remoteAheadCount               = [int]$freshBranchState.remoteAheadCount
+                diverged                       = [bool]$freshBranchState.diverged
+                reflogEntries                  = @($freshBranchState.reflogEntries)
+                danglingReachableCount         = [int]$freshBranchState.danglingReachableCount
+                openPrByHeadRefName            = $observation.openPrByHeadRefName
+                observedAtUtc                  = [string]$observation.observedAtUtc
+                ttlSeconds                     = $ttl
+                fetchFailed                    = [bool]$observation.fetchFailed
+                rateLimited                    = [bool]$observation.rateLimited
+                remoteAdvancedAfterObservation = [bool]$observation.remoteAdvancedAfterObservation
+                liveDifferentOwner             = [bool]$LiveDifferentOwner
+                expectedDeleteOid              = $expectedDeleteOid
+            }
+            if (-not $finalRevalidation.ok) {
+                $escalation = [string]$finalRevalidation.reason
                 $audit = Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'buildBranchCleanupAudit' -Payload @{
                     kind          = 'branch_preserved'
                     attemptId     = $AttemptId
                     sessionId     = $SessionId
+                    taskId        = if ($IssueNumber -gt 0) { [string]$IssueNumber } else { '' }
                     branch        = $branchName
                     repoIdentity  = $RepoRoot
+                    predicates    = @{ revalidation = $finalRevalidation }
+                    observation   = $observation
                     escalation    = $escalation
                 }
                 Write-WorkerRecoveryAudit -Namespace $ns -Record (ConvertTo-WorkerRecoveryBranchAuditHashtable $audit)
                 return @{
                     ok         = $false
-                    reason     = $escalation
+                    reason     = $finalRevalidation.reason
                     branch     = $branchName
                     deleted    = $false
                     escalation = $escalation
+                    audit      = $audit
                 }
             }
-            $deleted = $true
+            & git -C $RepoRoot update-ref -d "refs/heads/$branchName" $expectedDeleteOid 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $deleted = $true
+            }
+            else {
+                $postState = Get-WorkerRecoveryBranchGitState -RepoRoot $RepoRoot -Branch $branchName
+                if ($postState.exists) {
+                    $escalation = 'blocked_oid_race'
+                    $audit = Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'buildBranchCleanupAudit' -Payload @{
+                        kind          = 'branch_preserved'
+                        attemptId     = $AttemptId
+                        sessionId     = $SessionId
+                        branch        = $branchName
+                        repoIdentity  = $RepoRoot
+                        escalation    = $escalation
+                    }
+                    Write-WorkerRecoveryAudit -Namespace $ns -Record (ConvertTo-WorkerRecoveryBranchAuditHashtable $audit)
+                    return @{
+                        ok         = $false
+                        reason     = $escalation
+                        branch     = $branchName
+                        deleted    = $false
+                        escalation = $escalation
+                    }
+                }
+                $deleted = $true
+            }
         }
     }
     else {

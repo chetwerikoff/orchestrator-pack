@@ -159,7 +159,7 @@ function Test-AutonomousWorkerRecoveryBranchGitAllow {
     }
 
     $branchCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery-branch-cleanup.mjs'
-    $branchParsed = Invoke-MechanicalNodeFilterCli -FilterCliPath $branchCli -Subcommand 'parseBranchDeleteArgv' -Payload @{ argv = @($Argv) } -Label 'worker-recovery-branch-gate' -JsonDepth 30
+    $branchParsed = Invoke-MechanicalNodeFilterCli -FilterCliPath $branchCli -Subcommand 'parseRecoveryBranchDeleteArgv' -Payload @{ argv = @($Argv) } -Label 'worker-recovery-branch-gate' -JsonDepth 30
     if (-not $branchParsed.ok) {
         return @{ allowed = $false; reason = 'not_recovery_branch_delete' }
     }
