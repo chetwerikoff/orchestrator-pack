@@ -1,0 +1,18 @@
+{
+  "gh-wrapper": {
+    "maxActiveBytes": 67108864,
+    "maxTotalBytes": 1073741824,
+    "maxAgeDays": 7,
+    "measuredLineBytes": 264,
+    "measuredDailyMb": "100-130",
+    "footprintEnvelope": "roughly 0.7-1.5 GB/week before total-footprint cap prunes older segments"
+  },
+  "github-fleet-cache": {
+    "maxActiveBytes": 16777216,
+    "maxTotalBytes": 209715200,
+    "maxAgeDays": 7,
+    "measuredLineBytes": 517,
+    "measuredDailyMb": "15-20",
+    "footprintEnvelope": "roughly 0.1-0.2 GB/week before total-footprint cap prunes older segments"
+  }
+}

@@ -1957,3 +1957,18 @@ wire the new guard and per-tier stages.
 2. Optional smoke: `npx vitest run scripts/finding-ledger-guard.test.ts` and
    `pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 -CapturePath tests/fixtures/finding-ledger/complete.capture.txt -LedgerPath tests/fixtures/finding-ledger/complete.ledger.json`.
 
+## Phase-0 audit retention bounds (Issue #588)
+
+After merge, no daemon restart is required — supervisor children pick up script changes on
+their next respawn. For documentation only:
+
+1. Read [`docs/phase0-audit-retention.md`](phase0-audit-retention.md) for default footprint
+   envelopes, state paths, and optional `GH_WRAPPER_AUDIT_*` / `GH_FLEET_CACHE_AUDIT_*`
+   override env vars.
+2. Existing JSONL history remains readable; rotation only renames the active file to
+   timestamped segments and prunes by age/total footprint.
+3. Maintenance failures surface as `*-audit-retention:` or `write_failed` stderr lines and
+   never block wrapped `gh` calls or fleet cache populate paths.
+
+No operator adoption required for live yaml — bounds are script defaults.
+
