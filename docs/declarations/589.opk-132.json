@@ -7,10 +7,11 @@
   "baseline": {
     "commit_sha": "e3ff26d4760fed6876c3511b83a8f56364071693",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:7a41a99f6c227499a6de5becbec6f89c3d340b9276d20fd7255845969ce57870"
+    "active_scope_hash": "sha256:513c685c8c26c2d4cfb97c4df2eb2f76901ae076a11663dbcb84ca24628db794"
   },
   "declared_paths": [
     "agent-orchestrator.yaml.example",
+    "docs/ao-spawn-shape.d.mts",
     "docs/ao-spawn-shape.mjs",
     "docs/migration_notes.md",
     "docs/orchestrator-recovery-runbook.md",
@@ -26,5 +27,20 @@
     "scripts/**",
     "tests/external-output-references/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:7a41a99f6c227499a6de5becbec6f89c3d340b9276d20fd7255845969ce57870",
+      "new_active_scope_hash": "sha256:513c685c8c26c2d4cfb97c4df2eb2f76901ae076a11663dbcb84ca24628db794",
+      "changed": {
+        "added": [
+          "docs/ao-spawn-shape.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "add ao-spawn-shape.d.mts for typecheck",
+      "actor": "opk-132",
+      "timestamp": "2026-07-04T16:06:11.769Z",
+      "applied": true
+    }
+  ]
 }
