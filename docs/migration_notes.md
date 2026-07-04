@@ -458,24 +458,6 @@ Operator adoption: follow the Issue #318 section above (shared marker + PATH shi
 Safe rollback: revert the whole boundary feature — do not leave autonomous orchestrator turns with
 `scripts/` on PATH but permissive real-binary env bypasses.
 
-
-## Autonomous slug resolver read-only git (Issue #599)
-
-Pack `gh` slug resolution on the autonomous orchestrator surface uses boundary-read-only
-`git config --get remote.origin.url` (not `git remote get-url`). When `GH_REPO` is unset,
-`scripts/autonomous-orchestrator-surface-bootstrap.sh` exports `GH_REPO` from the pack
-checkout origin by reading git config directly (no denied git argv).
-
-Operator adoption after merge:
-
-1. Confirm orchestrator `agentConfig.env` still sets `BASH_ENV` to
-   `scripts/autonomous-orchestrator-surface-bootstrap.sh` and prepends pack `scripts/` on `PATH`.
-2. From an orchestrator bash turn with `GH_REPO` unset, confirm a pack `gh` inventory read
-   (e.g. `gh repo view --json nameWithOwner`) no longer fails with
-   `could not resolve repository slug`.
-3. Optional: remove a machine-local interim `GH_REPO=` stopgap from operator env files once
-   slug resolution works; keep it if you prefer an explicit override.
-
 ## Autonomous orchestrator command-runtime bootstrap (Issue #532)
 
 Operator adoption after merge:
