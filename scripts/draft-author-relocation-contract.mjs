@@ -36,6 +36,7 @@ const REQUIRED_COMPLETION_FIELDS = [
   'selectionBasis',
   'tierResult',
   'reviewLoopOutcome',
+  'dispositionStatus',
   'disciplineChecks',
   'finalStatus',
 ];
@@ -55,15 +56,37 @@ function normalizeDraftPath(draftPath) {
 }
 
 /**
+ * Canonicalize a repo-relative draft path and reject traversals that escape
+ * docs/issues_drafts/.
+ * @param {string | undefined} draftPath
+ * @returns {string | null}
+ */
+function canonicalizeDraftPath(draftPath) {
+  const normalized = normalizeDraftPath(draftPath);
+  if (!normalized || path.isAbsolute(normalized)) {
+    return null;
+  }
+
+  const canonical = path.posix.normalize(normalized);
+  if (
+    canonical.startsWith('../') ||
+    canonical.includes('/../') ||
+    canonical === '..' ||
+    !canonical.startsWith(DRAFT_PATH_PREFIX) ||
+    canonical.length <= DRAFT_PATH_PREFIX.length ||
+    !canonical.endsWith('.md')
+  ) {
+    return null;
+  }
+
+  return canonical;
+}
+
+/**
  * @param {string | undefined} draftPath
  */
 function isExpectedDraftPath(draftPath) {
-  const normalized = normalizeDraftPath(draftPath);
-  return (
-    normalized.startsWith(DRAFT_PATH_PREFIX) &&
-    normalized.length > DRAFT_PATH_PREFIX.length &&
-    normalized.endsWith('.md')
-  );
+  return canonicalizeDraftPath(draftPath) !== null;
 }
 
 /**
@@ -127,10 +150,13 @@ export function validateDelegateResult(result, options = {}) {
   const draftPath = result?.draftPath;
   if (!draftPath) {
     errors.push('exit 0 but draftPath missing');
+  } else if (!isExpectedDraftPath(draftPath)) {
+    errors.push(
+      `exit 0 but draftPath must be an authored draft under ${DRAFT_PATH_PREFIX}*.md without path traversal`,
+    );
   } else {
-    const absolute = path.isAbsolute(draftPath)
-      ? draftPath
-      : path.join(options.repoRoot ?? process.cwd(), draftPath);
+    const canonical = canonicalizeDraftPath(draftPath);
+    const absolute = path.join(options.repoRoot ?? process.cwd(), canonical);
     const exists = result.draftExists ?? existsSync(absolute);
     if (!exists) {
       errors.push(`exit 0 but draft missing at ${draftPath}`);
@@ -145,9 +171,9 @@ export function validateDelegateResult(result, options = {}) {
   if (!completion.ok) {
     errors.push(...completion.errors.map((e) => `exit 0 but ${e}`));
   } else if (result.completionRecord?.draftPath) {
-    const delegatePath = normalizeDraftPath(draftPath);
-    const recordPath = normalizeDraftPath(result.completionRecord.draftPath);
-    if (delegatePath !== recordPath) {
+    const delegatePath = canonicalizeDraftPath(draftPath);
+    const recordPath = canonicalizeDraftPath(result.completionRecord.draftPath);
+    if (!delegatePath || !recordPath || delegatePath !== recordPath) {
       errors.push(
         `exit 0 but draftPath "${draftPath}" does not match completion record draftPath "${result.completionRecord.draftPath}"`,
       );

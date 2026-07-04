@@ -65,6 +65,22 @@ describe('validateCompletionRecord', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/docs\/issues_drafts/);
   });
+
+  it('rejects draft paths with traversal segments escaping the draft directory', () => {
+    const result = validateCompletionRecord({
+      ...valid,
+      draftPath: 'docs/issues_drafts/../outside.md',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/docs\/issues_drafts/);
+  });
+
+  it('rejects completion records missing dispositionStatus', () => {
+    const { dispositionStatus: _omit, ...withoutDisposition } = valid;
+    const result = validateCompletionRecord(withoutDisposition);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/dispositionStatus/);
+  });
 });
 
 describe('validateDelegateResult', () => {
@@ -119,6 +135,18 @@ describe('validateDelegateResult', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/does not match completion record draftPath/);
+  });
+
+  it('rejects exit 0 when delegate draftPath uses traversal to escape the draft directory', () => {
+    const result = validateDelegateResult({
+      exitCode: 0,
+      draftPath: 'docs/issues_drafts/../outside.md',
+      draftExists: true,
+      completionRecord,
+      disciplineChecksPass: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/path traversal|docs\/issues_drafts/);
   });
 });
 
