@@ -219,6 +219,8 @@ Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
    `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md` (GitHub #28).
    Never cite a bare draft prefix as if it were a GitHub Issue number.
 2. **Goal** — one paragraph. Outcome, not method.
+   - **`complexity-tier` fence** — machine-readable recomputed tier (Issue #576) or
+     `skip-line: true` for #237 below-ladder inputs after marker screen passes.
 3. **Binding surface** — what this issue commits the repository to. Concrete
    about contracts, deliberately vague about implementation.
    - **Operator adoption** (required when **Files in scope** include
@@ -397,9 +399,10 @@ capture still fails sync.
 
 ### Pre-sync mechanical checks
 
-Before `scripts/publish-issue-body-sync` create/edit/verify:
+Before `scripts/publish-issue-body-sync` create/edit:
 
 ```powershell
+pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
@@ -408,17 +411,99 @@ pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
   -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
 ```
 
+**Guard order (independent — either failing blocks sync):** tier-gate guard →
+contract-evidence / positive-outcome / parked-root → finding-ledger guard (when
+captures exist). `scripts/publish-issue-body-sync` also refuses create/edit without
+a passing tier-gate guard receipt (mechanical sync coupling, Issue #576).
+
 Fix failures before sync. Drafts without a `behavior-kind` fence are not
 checked for positive-outcome (additive guard only). The finding-ledger guard validates **every** `*.capture.txt` under the review
 directory against the ledger — not only the final pass — so protected findings
 from early competitive/architectural passes cannot be omitted when a later pass is
 `NO_FINDINGS`. Skip the guard only when the review directory has no capture files.
 
+
+## Tier gate (recompute authority and stage selection — Issue #576)
+
+Runs **before** per-tier review stages and **before** sync. The gate **recomputes**
+tier from the Issue #574 rubric over the brief text; the architect brief tier is an
+**advisory prior only** — the gate may override upward, never downward (#574
+monotonic rule). Write the recomputed tier to the draft and synced issue body as a
+machine-readable fence.
+
+### `complexity-tier` fence (mandatory unless on #237 skip line)
+
+Immediately after **Goal** (or after `behavior-kind` when present), declare exactly
+one fenced block:
+
+````markdown
+```complexity-tier
+tier: T1
+advisory-prior: T1
+```
+````
+
+For below-ladder skip-line inputs (#237: operator/config/one-line/typo), after the
+marker screen passes emit:
+
+````markdown
+```complexity-tier
+skip-line: true
+```
+````
+
+Skip-line inputs carry **no tier** and no design/adversarial ceremony. The marker
+screen still runs first — a danger-marked one-liner cannot use the skip line.
+
+### Recompute authority and blocking escalation
+
+1. **Intake:** recompute tier from brief text vs #574; brief tier is advisory only.
+2. **Marker screen (brief):** fail-closed red-flag screen using #574 marker vocabulary
+   via `scripts/lib/tier-marker-screen.mjs` (shared logic — same vocabulary future
+   consumers may call).
+3. **Stage selection** by recomputed tier:
+   - **T1:** skip #237 design-analysis gate and adversarial stage; one light
+     architectural (Codex) review per #575.
+   - **T2:** light design pass; architectural review only (no competitive stage).
+   - **T3:** full #237 design-analysis gate + #575 T3 pipeline (counts authoritative
+     in `prompts/agent_rules.md` — do not restate here).
+4. **Never-skipped floor (every tier):** worker-safety contract (Goal,
+   denylist/allowed-roots, Acceptance criteria, Verification), #366 contract-evidence,
+   #221 behavior-kind, #575 finding-ledger/carve-out guard — invoked, not rebuilt.
+   Only design-analysis and adversarial stages are tier-gated.
+5. **Fail-closed marker screen:** marker hit + below-T3 assignment, or marker hit +
+   skipped design/adversarial stages → **blocking escalation** to the architect.
+   Unparseable text → T3. Never pass by failing to parse.
+6. **Wrapper inheritance:** `adversarial-draft-review` and `discuss-with-gpt` route
+   through this gate. Explicit user invocation of an adversarial wrapper **floors
+   effective tier at ≥ T2** and preserves the requested adversarial stage even when
+   recompute yields T1.
+7. **Mid-flight upward recompute:** stop, raise fence, run skipped stages, resume.
+   Never sync below recomputed tier. If escalation happens after first sync, re-sync
+   the issue body with the raised fence before proceeding.
+8. **Post-review drift recompute:** on **final draft text** (not the brief), recompute
+   tier; upward drift escalates to the architect before publish (#188 drift hook).
+
+**T1 calibration assumption:** T1 fast path assumes #574 calibration sample merged
+consistent (#574 merge-blocking AC). No runtime calibration-state plumbing here.
+
+### Tier-gate guard (mechanical)
+
+```powershell
+pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath docs/issues_drafts/NN-<slug>.md
+```
+
+Fails closed (non-zero, blocks sync) when red-flag markers coincide with below-T3
+assignment or skipped design/adversarial stages. Emits a passing **tier-fence** or
+**no-tier (skip-line)** receipt on stdout when clean.
+
+
 ## Per-tier draft review (before sync)
 
-Classify intake tier per `prompts/agent_rules.md` (**Task complexity tier
-rubric**, Issue #574) before choosing stages. This section governs **spec review
-only** — worker PR-code review is unchanged.
+**Tier is gate authority, not brief say-so.** The tier gate (above) already
+recomputed tier and selected stages. This section governs **spec review only** —
+worker PR-code review is unchanged. Pipeline counts remain authoritative in
+`prompts/agent_rules.md` (**Per-tier draft-review flow**, Issue #575).
 
 **Roles:** the **draft author** (this Cursor session from the architect's brief)
 authors the spec, runs review stages, captures verbatim reviewer output per pass,
@@ -527,9 +612,10 @@ After review completes, recompute tier (Issue #189 / draft C). **Upward** drift 
 including scope growth from accepted findings — escalates to the architect before
 publish. Downward drift is impossible (#574 monotonic rule).
 
-**Sync gate:** do not run `scripts/publish-issue-body-sync` until review stages
-for the assigned tier complete (`NO_FINDINGS` or documented cap exit), the
-finding-ledger guard passes when captures exist, and other pre-sync checks pass.
+**Sync gate:** do not run `scripts/publish-issue-body-sync` create/edit until
+the tier-gate guard passes, review stages for the recomputed tier complete
+(`NO_FINDINGS` or documented cap exit), the finding-ledger guard passes when
+captures exist, and other pre-sync checks pass.
 
 Contract references: `docs/issues_drafts/06-codex-reviewer-scope-context.md`,
 `docs/issues_drafts/19-codex-review-finding-bar.md` (#51 carve-out),

@@ -16,6 +16,7 @@ import {
   syncPublishIssueBody,
   type GhInvocationResult,
   type MutationAuditRecord,
+  validateTierGateGuardReceipt,
 } from './lib/publish-issue-body-sync.js';
 
 const SAMPLE_DRAFT = `# Sample draft title
@@ -69,6 +70,9 @@ function makeDeps(overrides: {
     },
     emitAudit(record: MutationAuditRecord) {
       audits.push(record);
+    },
+    validateTierGateGuard() {
+      return { ok: true, message: 'tier-gate guard: PASS (test stub)' };
     },
   };
 
@@ -252,5 +256,46 @@ describe('publish issue-body sync (#542)', () => {
       expect(text).not.toMatch(/gh issue (create|edit)[^\n]*--body(?!-file)/);
       expect(text).not.toMatch(/gh api[^\n]*\/issues[^\n]*body=/);
     }
+  });
+
+  it('issue-body sync refuses when the tier-gate guard receipt is missing or failing and proceeds when it passes', () => {
+    const tierGateFixture = readFileSync(
+      'tests/fixtures/tier-gate/marker-free-t1-brief.md',
+      'utf8',
+    );
+    const failingDeps = makeDeps({
+      onRunGh: () => {
+        throw new Error('gh should not run when tier-gate guard fails');
+      },
+    });
+    failingDeps.deps.validateTierGateGuard = () => ({
+      ok: false,
+      message: 'tier-gate guard: red-flag marker hit (ci-review-gating) with tier T1 below T3',
+    });
+
+    const blocked = syncPublishIssueBody(failingDeps.deps, {
+      mode: 'edit',
+      draftPath: 'tests/fixtures/tier-gate/marker-free-t1-brief.md',
+      draftContent: tierGateFixture,
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 576,
+    });
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.message).toContain('tier-gate guard');
+    }
+    expect(failingDeps.mutationCalls).toEqual([]);
+
+    const passingDeps = makeDeps({ liveBody: tierGateFixture.replace(/^#[^\n]*\n\n/, '') });
+    passingDeps.deps.validateTierGateGuard = validateTierGateGuardReceipt;
+    const allowed = syncPublishIssueBody(passingDeps.deps, {
+      mode: 'edit',
+      draftPath: 'tests/fixtures/tier-gate/marker-free-t1-brief.md',
+      draftContent: tierGateFixture,
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 576,
+    });
+    expect(allowed.ok).toBe(true);
+    expect(passingDeps.mutationCalls.length).toBeGreaterThan(0);
   });
 });

@@ -1,4 +1,8 @@
 import { readFileSync } from 'node:fs';
+import {
+  checkTierGateGuard,
+  formatTierGatePassMessage,
+} from './tier-gate-core.mjs';
 
 export type IssueMutationSubcommand = 'issue create' | 'issue edit';
 
@@ -33,10 +37,16 @@ export interface GhInvocationResult {
   stderr: string;
 }
 
+export interface TierGateGuardValidationResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface PublishIssueBodySyncDeps {
   runGh(argv: string[]): GhInvocationResult;
   writeBodyFile(content: string): string;
   emitAudit(record: MutationAuditRecord): void;
+  validateTierGateGuard?: (draftContent: string) => TierGateGuardValidationResult;
 }
 
 export interface CreateIssueBodySyncInput {
@@ -257,6 +267,22 @@ export function readLiveIssueBodyViaRest(
   return deps.runGh(['gh', 'api', path, '--jq', '.body']);
 }
 
+export function validateTierGateGuardReceipt(
+  draftContent: string,
+): TierGateGuardValidationResult {
+  const result = checkTierGateGuard(draftContent);
+  if (!result.ok) {
+    return {
+      ok: false,
+      message: result.errors.map((error) => `tier-gate guard: ${error}`).join('\n'),
+    };
+  }
+  return {
+    ok: true,
+    message: formatTierGatePassMessage(result),
+  };
+}
+
 export function syncPublishIssueBody(
   deps: PublishIssueBodySyncDeps,
   input: PublishIssueBodySyncInput,
@@ -266,6 +292,16 @@ export function syncPublishIssueBody(
   let audit: MutationAuditRecord | undefined;
 
   if (input.mode !== 'verify') {
+    const validateTierGate = deps.validateTierGateGuard ?? validateTierGateGuardReceipt;
+    const tierGate = validateTierGate(input.draftContent);
+    if (!tierGate.ok) {
+      return {
+        ok: false,
+        issueNumber: issueNumber ?? null,
+        message: tierGate.message,
+      };
+    }
+
     const title = input.mode === 'create'
       ? (input.title ?? extractDraftTitle(input.draftContent))
       : undefined;
