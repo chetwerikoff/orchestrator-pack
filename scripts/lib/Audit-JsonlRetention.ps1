@@ -108,12 +108,25 @@ function Get-AuditJsonlRetentionEmbeddedDefaults {
     }
 }
 
+function Test-AuditJsonlStreamPolicyDefaults {
+    param($Defaults)
+
+    return ($null -ne $Defaults)
+        -and [int]$Defaults.maxActiveBytes -gt 0
+        -and [int]$Defaults.maxTotalBytes -gt 0
+        -and [int]$Defaults.maxAgeDays -gt 0
+}
+
 function Get-AuditJsonlRetentionPolicyDefaults {
     param([string]$StreamId)
 
     try {
         $raw = Get-Content -LiteralPath (Get-AuditJsonlRetentionPolicyFilePath) -Raw | ConvertFrom-Json
-        return $raw.$StreamId
+        $streamDefaults = $raw.$StreamId
+        if (-not (Test-AuditJsonlStreamPolicyDefaults -Defaults $streamDefaults)) {
+            return Get-AuditJsonlRetentionEmbeddedDefaults -StreamId $StreamId
+        }
+        return $streamDefaults
     }
     catch {
         return Get-AuditJsonlRetentionEmbeddedDefaults -StreamId $StreamId

@@ -61,6 +61,54 @@ describe('audit jsonl retention policy', () => {
     expect(malformed.maxActiveBytes).toBe(64 * 1024 * 1024);
     expect(malformed.maxTotalBytes).toBe(1024 * 1024 * 1024);
   });
+
+  it('falls back when policy JSON omits the requested stream', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-policy-omit-stream-'));
+    try {
+      const policyPath = join(root, 'policy.json');
+      writeFileSync(policyPath, JSON.stringify({
+        'github-fleet-cache': {
+          maxActiveBytes: 16777216,
+          maxTotalBytes: 209715200,
+          maxAgeDays: 7,
+        },
+      }));
+      const wrapper = resolveAuditJsonlPolicy('gh-wrapper', {
+        AUDIT_JSONL_RETENTION_POLICY_PATH: policyPath,
+      });
+      expect(wrapper.maxActiveBytes).toBe(64 * 1024 * 1024);
+      expect(wrapper.maxTotalBytes).toBe(1024 * 1024 * 1024);
+      expect(wrapper.maxAgeMs).toBe(7 * 24 * 60 * 60 * 1000);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back when PowerShell policy JSON omits the requested stream', () => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-policy-omit-stream-ps-'));
+    const policyPath = join(root, 'policy.json');
+    writeFileSync(policyPath, '{}');
+    const retentionLib = join(repoRoot, 'scripts/lib/Audit-JsonlRetention.ps1').replace(/'/g, "''");
+    try {
+      const script = `
+. '${retentionLib}'
+$env:AUDIT_JSONL_RETENTION_POLICY_PATH = '${policyPath.replace(/'/g, "''")}'
+$policy = Resolve-AuditJsonlRetentionPolicy -StreamId 'github-fleet-cache'
+$policy | ConvertTo-Json -Compress
+`;
+      const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(0);
+      const policy = JSON.parse(result.stdout.trim());
+      expect(policy.maxActiveBytes).toBe(16 * 1024 * 1024);
+      expect(policy.maxTotalBytes).toBe(200 * 1024 * 1024);
+      expect(policy.maxAgeMs).toBe(7 * 24 * 60 * 60 * 1000);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('gh-wrapper audit retention scenarios', () => {

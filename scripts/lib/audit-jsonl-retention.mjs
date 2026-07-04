@@ -26,10 +26,28 @@ const STREAM_ENV_PREFIX = {
   'github-fleet-cache': 'GH_FLEET_CACHE_AUDIT',
 };
 
+function isValidStreamPolicyDefaults(defaults) {
+  return Boolean(
+    defaults
+    && typeof defaults === 'object'
+    && Number.isFinite(Number(defaults.maxActiveBytes))
+    && Number(defaults.maxActiveBytes) > 0
+    && Number.isFinite(Number(defaults.maxTotalBytes))
+    && Number(defaults.maxTotalBytes) > 0
+    && Number.isFinite(Number(defaults.maxAgeDays))
+    && Number(defaults.maxAgeDays) > 0,
+  );
+}
+
 function loadPolicyDefaults(streamId, env = process.env) {
   try {
     const path = env.AUDIT_JSONL_RETENTION_POLICY_PATH?.trim() || POLICY_PATH;
-    return JSON.parse(readFileSync(path, 'utf8'))[streamId];
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    const streamDefaults = parsed?.[streamId];
+    if (!isValidStreamPolicyDefaults(streamDefaults)) {
+      return embeddedPolicyDefaults(streamId);
+    }
+    return streamDefaults;
   } catch {
     return embeddedPolicyDefaults(streamId);
   }
