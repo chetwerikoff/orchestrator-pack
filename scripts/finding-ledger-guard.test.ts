@@ -75,6 +75,13 @@ describe('finding-ledger guard fails when a protected finding is rejected or omi
     ).toBe(1);
   });
 
+  it('fails when a capture appends NO_FINDINGS but still emits a protected finding', () => {
+    const { capture, ledger } = loadFixturePair('no-findings-with-finding');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/sec-spawn-grant|security/);
+  });
+
   it('passes when every captured finding is recorded and protected ones are addressed', () => {
     const { capture, ledger } = loadFixturePair('complete');
     const result = checkFindingLedgerGuard(capture, ledger);

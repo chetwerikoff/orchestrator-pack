@@ -36,7 +36,9 @@
     "tests/fixtures/finding-ledger/protected-reclassified.ledger.json",
     "tests/fixtures/finding-ledger/multi-pass/pass-01-competitive.capture.txt",
     "tests/fixtures/finding-ledger/multi-pass/pass-02-final.capture.txt",
-    "tests/fixtures/finding-ledger/multi-pass/finding-disposition-ledger.json"
+    "tests/fixtures/finding-ledger/multi-pass/finding-disposition-ledger.json",
+    "tests/fixtures/finding-ledger/no-findings-with-finding.capture.txt",
+    "tests/fixtures/finding-ledger/no-findings-with-finding.ledger.json"
   ],
   "declared_globs": [],
   "amendments": []

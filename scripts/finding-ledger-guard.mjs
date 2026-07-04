@@ -28,7 +28,7 @@ const PROTECTED_SIGNAL_PATTERNS = [
 ];
 
 function isCleanNoFindings(capture) {
-  return /(?:^|\n)\s*NO_FINDINGS\s*(?:\n|$)/m.test(capture);
+  return capture.trim() === 'NO_FINDINGS';
 }
 
 export function parseLedger(ledgerText) {
