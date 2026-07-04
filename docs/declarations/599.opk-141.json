@@ -16,6 +16,7 @@
     "scripts/lib/derive-gh-repo-from-checkout.mjs",
     "scripts/lib/gh-repo-resolve.d.mts",
     "scripts/lib/gh-repo-resolve.mjs",
+    "scripts/lib/git-origin-slug.d.mts",
     "scripts/lib/git-origin-slug.mjs"
   ],
   "declared_globs": [],

@@ -16,5 +16,11 @@ export function resolveRepoContext(options: {
   realGh: string;
   hostname?: string | null;
 }): { slug: string; host: string };
+export function resolveNameWithOwner(options: {
+  cwd?: string;
+  repoFlag?: string | null;
+  realGh: string;
+  hostname?: string | null;
+}): string;
 export const RESOLVER_GIT_ARGV: readonly (readonly string[])[];
 export const REST_ERROR_MARKER: string;
