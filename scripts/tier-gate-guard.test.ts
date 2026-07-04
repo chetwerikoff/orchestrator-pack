@@ -9,7 +9,11 @@ import {
   selectAuthoringReviewStages,
 } from './lib/tier-gate-core.js';
 import { runCli } from './tier-gate-guard.js';
-import { screenRedFlagMarkers } from './lib/tier-marker-screen.js';
+import {
+  loadMarkerClasses,
+  MARKER_HEURISTICS,
+  screenRedFlagMarkers,
+} from './lib/tier-marker-screen.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -153,6 +157,75 @@ describe('floor on every tier', () => {
     expect(gate.ok).toBe(true);
     if (gate.receipt?.kind === 'tier-fence') {
       expect(gate.receipt.wrapperFloorApplied).toBe(true);
+    }
+  });
+});
+
+describe('red-flag marker vocabulary (#574 / #187 verbatim)', () => {
+  const calibration = JSON.parse(
+    readFileSync(
+      path.join(repoRoot, 'tests/fixtures/task-complexity-tier-calibration.json'),
+      'utf8',
+    ),
+  ) as {
+    markerClasses: string[];
+    samples: Array<{ id: string; task: string; markersPresent: string[]; tier: string }>;
+  };
+
+  it('maps every calibration marker class to heuristic patterns', () => {
+    for (const markerClass of loadMarkerClasses(repoRoot)) {
+      expect(MARKER_HEURISTICS[markerClass]?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('detects every #187 vocabulary phrase class before allowing lower tiers', () => {
+    const phrases: Record<string, string> = {
+      'trust-boundary': 'Task touches auth surfaces for merge authorization.',
+      'spawn-capability': 'Bind autonomous spawn grants to named worktree provenance.',
+      'concurrency-state-retry': 'Add shared-machine claim semantics and event-ordering.',
+      'ci-review-gating': 'Change required checks and branch protection for merge.',
+      'durable-state-evidence': 'Mutate operator-visible contract-evidence ledger rows.',
+      'test-harness-correctness': 'Fix fixtures touching live AO session state.',
+      'crash-recovery': 'Handle orphaned claims during crash/recovery restart mid-phase.',
+      'external-api-transport': 'Change external API timeout semantics for the REST wrapper.',
+      'shared-contract-dependency': 'Introduce a new contract ≥2 future issues will depend on.',
+      'multi-surface': 'Change spans multiple otherwise-independent surfaces at once.',
+      ambiguity: 'This draft leaves genuine ambiguity in what is being asked.',
+    };
+
+    for (const [markerClass, phrase] of Object.entries(phrases)) {
+      const screen = screenRedFlagMarkers(phrase, { repoRoot });
+      expect(screen.unparseable).toBe(false);
+      expect(screen.hits).toContain(markerClass);
+    }
+  });
+
+  it('flags external-api timeout semantics on a T1 fence', () => {
+    const text = loadFixture('marker-free-t1-brief').replace(
+      'Add a Usage subsection to a plugin README documenting existing CLI flags.',
+      'Change external API timeout semantics for the REST wrapper.',
+    );
+    const result = checkTierGateGuard(text, {
+      repoRoot,
+      draftPath: fixturePath('marker-free-t1-brief'),
+    });
+    expect(result.ok).toBe(false);
+    expect(screenRedFlagMarkers(text).hits).toContain('external-api-transport');
+  });
+
+  it('detects markersPresent on every calibration boundary row', () => {
+    for (const row of calibration.samples.filter((sample) => sample.markersPresent.length > 0)) {
+      const screen = screenRedFlagMarkers(row.task, { repoRoot });
+      for (const marker of row.markersPresent) {
+        expect(screen.hits, `${row.id} should hit ${marker}`).toContain(marker);
+      }
+    }
+  });
+
+  it('keeps T1/T2 calibration rows marker-silent', () => {
+    for (const row of calibration.samples.filter((sample) => sample.tier === 'T1' || sample.tier === 'T2')) {
+      const screen = screenRedFlagMarkers(row.task, { repoRoot });
+      expect(screen.hits, `${row.id} should stay marker-silent`).toEqual([]);
     }
   });
 });
