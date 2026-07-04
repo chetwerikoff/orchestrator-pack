@@ -46,6 +46,25 @@ describe('validateCompletionRecord', () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it('rejects unrecognized authoring engines', () => {
+    const result = validateCompletionRecord({
+      ...valid,
+      authoringEngine: 'claude',
+      selectionBasis: 'default',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/unrecognized authoringEngine/);
+  });
+
+  it('rejects draft paths outside docs/issues_drafts', () => {
+    const result = validateCompletionRecord({
+      ...valid,
+      draftPath: 'README.md',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/docs\/issues_drafts/);
+  });
 });
 
 describe('validateDelegateResult', () => {
@@ -88,6 +107,18 @@ describe('validateDelegateResult', () => {
       disciplineChecksPass: true,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('rejects exit 0 when delegate draftPath differs from completion record', () => {
+    const result = validateDelegateResult({
+      exitCode: 0,
+      draftPath: 'docs/issues_drafts/other-draft.md',
+      draftExists: true,
+      completionRecord,
+      disciplineChecksPass: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/does not match completion record draftPath/);
   });
 });
 

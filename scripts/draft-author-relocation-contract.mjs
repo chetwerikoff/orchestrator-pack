@@ -40,7 +40,31 @@ const REQUIRED_COMPLETION_FIELDS = [
   'finalStatus',
 ];
 
+const ALLOWED_ENGINES = new Set(['cursor', 'codex', 'sonnet-5', 'sonnet5']);
 const NON_CURSOR_ENGINES = new Set(['codex', 'sonnet-5', 'sonnet5']);
+const DRAFT_PATH_PREFIX = 'docs/issues_drafts/';
+
+/**
+ * @param {string | undefined} draftPath
+ */
+function normalizeDraftPath(draftPath) {
+  return String(draftPath ?? '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .trim();
+}
+
+/**
+ * @param {string | undefined} draftPath
+ */
+function isExpectedDraftPath(draftPath) {
+  const normalized = normalizeDraftPath(draftPath);
+  return (
+    normalized.startsWith(DRAFT_PATH_PREFIX) &&
+    normalized.length > DRAFT_PATH_PREFIX.length &&
+    normalized.endsWith('.md')
+  );
+}
 
 /**
  * @param {CompletionRecord | null | undefined} record
@@ -60,9 +84,19 @@ export function validateCompletionRecord(record) {
 
   const engine = String(record.authoringEngine ?? '').toLowerCase();
   const basis = String(record.selectionBasis ?? '').toLowerCase();
-  if (NON_CURSOR_ENGINES.has(engine) && basis !== 'explicit-request') {
+  if (!ALLOWED_ENGINES.has(engine)) {
+    errors.push(
+      `unrecognized authoringEngine "${record.authoringEngine}"; allowed: cursor, codex, sonnet-5`,
+    );
+  } else if (NON_CURSOR_ENGINES.has(engine) && basis !== 'explicit-request') {
     errors.push(
       `non-Cursor engine "${record.authoringEngine}" requires selectionBasis explicit-request`,
+    );
+  }
+
+  if (!isExpectedDraftPath(record.draftPath)) {
+    errors.push(
+      `draftPath must be an authored draft under ${DRAFT_PATH_PREFIX}*.md`,
     );
   }
 
@@ -110,6 +144,14 @@ export function validateDelegateResult(result, options = {}) {
   const completion = validateCompletionRecord(result.completionRecord);
   if (!completion.ok) {
     errors.push(...completion.errors.map((e) => `exit 0 but ${e}`));
+  } else if (result.completionRecord?.draftPath) {
+    const delegatePath = normalizeDraftPath(draftPath);
+    const recordPath = normalizeDraftPath(result.completionRecord.draftPath);
+    if (delegatePath !== recordPath) {
+      errors.push(
+        `exit 0 but draftPath "${draftPath}" does not match completion record draftPath "${result.completionRecord.draftPath}"`,
+      );
+    }
   }
 
   return { ok: errors.length === 0, errors };
