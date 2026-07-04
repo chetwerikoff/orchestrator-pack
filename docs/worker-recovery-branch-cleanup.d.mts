@@ -3,6 +3,8 @@ export declare const DEFAULT_BRANCH_OBSERVATION_TTL_SECONDS: number;
 
 export declare function normalizeWorkerBranchRef(branch: string): Record<string, unknown>;
 export declare function parseBranchDeleteForceArgv(argv: string[]): Record<string, unknown>;
+export declare function parseUpdateRefBranchDeleteArgv(argv: string[]): Record<string, unknown>;
+export declare function parseRecoveryBranchDeleteArgv(argv: string[]): Record<string, unknown>;
 export declare function evaluateBranchObservationFreshness(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateOpenPrTriState(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateBranchRemoteState(input: Record<string, unknown>): Record<string, unknown>;
