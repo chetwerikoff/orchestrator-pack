@@ -368,6 +368,24 @@ function writeExecutable(path: string, content: string) {
   chmodSync(path, 0o755);
 }
 
+describe('gh wrapper audit telemetry', () => {
+  it('logs successful completions with status and child id', () => {
+    const result = spawnSync(join(import.meta.dirname, 'gh'), ['auth', 'status'], {
+      env: {
+        ...process.env,
+        GH_REAL_BINARY: '/bin/true',
+        GH_WRAPPER_AUDIT: '1',
+        AO_SIDE_PROCESS_CHILD_ID: 'review-trigger-reconcile',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('gh-wrapper-audit: entry child=review-trigger-reconcile');
+    expect(result.stderr).toContain('gh-wrapper-audit: complete child=review-trigger-reconcile kind=passthrough route=passthrough status=0');
+  });
+});
+
 
 function graphqlExhaustedFakeGh(root: string) {
   const audit = join(root, 'audit.log');
@@ -1464,4 +1482,3 @@ tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={
     expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'HTTP 401 Bad credentials', stdout: '', exitCode: 1 })).toBe(false);
   });
 });
-

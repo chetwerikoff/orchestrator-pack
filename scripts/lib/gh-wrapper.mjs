@@ -49,7 +49,9 @@ function passthrough(argv) {
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
     stdio: 'inherit',
   });
-  process.exit(result.status ?? 1);
+  const status = result.status ?? 1;
+  writeWrapperAudit('complete', { kind: 'passthrough', route: 'passthrough', status });
+  process.exit(status);
 }
 
 function failRest(message) {
@@ -58,11 +60,26 @@ function failRest(message) {
   process.exit(1);
 }
 
+function formatAuditValue(value) {
+  return String(value).replace(/\s+/g, '_');
+}
+
+function writeWrapperAudit(event, fields = {}) {
+  if (process.env.GH_WRAPPER_AUDIT !== '1') {
+    return;
+  }
+  const childId = process.env.AO_SIDE_PROCESS_CHILD_ID;
+  const allFields = childId ? { child: childId, ...fields } : fields;
+  const suffix = Object.entries(allFields)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => `${key}=${formatAuditValue(value)}`)
+    .join(' ');
+  process.stderr.write(`gh-wrapper-audit: ${event}${suffix ? ` ${suffix}` : ''}\n`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
-  if (process.env.GH_WRAPPER_AUDIT === '1') {
-    process.stderr.write('gh-wrapper-audit: entry\n');
-  }
+  writeWrapperAudit('entry');
 
   const { parsed, route } = classifyArgv(argv);
   if (!route) {
@@ -75,12 +92,15 @@ function main() {
     const result = executeRestRoute(route.id, { realGh, parsed, route, cwd: process.cwd() });
     const out = formatStdout(result, parsed, route);
     process.stdout.write(out);
+    const status = route.id === 'pr-checks' ? exitCodeForPrChecks(result) : 0;
+    writeWrapperAudit('complete', { kind: 'rest', route: route.id, status });
     if (route.id === 'pr-checks') {
-      process.exit(exitCodeForPrChecks(result));
+      process.exit(status);
     }
     process.exit(0);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    writeWrapperAudit('complete', { kind: 'rest', route: route.id, status: 1 });
     if (message.startsWith('no checks reported')) {
       process.stderr.write(`${message}\n`);
       process.exit(1);
