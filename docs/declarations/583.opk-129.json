@@ -1,0 +1,28 @@
+{
+  "issue_number": 583,
+  "iteration_id": "opk-129",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-04T07:20:00.000Z",
+  "baseline": {
+    "commit_sha": "e2e66bb57c17a149d72017950447f13cb5d5389d",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:84857ba6f9d0e58a3e119ba49c4ec0bdce42c5a6b9e3c68da623b5ac127e50fa"
+  },
+  "declared_paths": [
+    "docs/declarations/583.opk-129.json",
+    "docs/migration_notes.md",
+    "scripts/check-github-fleet-cache-bypass.ps1",
+    "scripts/check-github-fleet-repo-tick-coverage.ps1",
+    "scripts/fixtures/github-fleet-cache/fake-gh.sh",
+    "scripts/fixtures/github-fleet-cache/open-pr-list-10.json",
+    "scripts/github-fleet-cache-test-harness.ts",
+    "scripts/github-fleet-repo-tick-snapshot.test.ts",
+    "scripts/lib/Gh-FleetInventoryCache.ps1",
+    "scripts/lib/Gh-FleetRepoTickSnapshot.ps1",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
