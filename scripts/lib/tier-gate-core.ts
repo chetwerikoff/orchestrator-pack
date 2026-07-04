@@ -199,9 +199,7 @@ export function checkTierGateGuard(
   }
 
   if (fence.kind === 'unparseable' && !skipLine) {
-    if (!tier || tier !== 'T3') {
-      errors.push(`unparseable complexity-tier fence — fail closed (${fence.reason})`);
-    }
+    errors.push(`unparseable complexity-tier fence — fail closed (${fence.reason})`);
   }
 
   if (screen.unparseable && (!tier || tier !== 'T3')) {

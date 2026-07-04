@@ -88,6 +88,36 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
       runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile]),
     ).toBe(0);
   });
+
+  it('fails when tier override cannot mask a missing complexity-tier fence', () => {
+    const text = loadFixture('marker-free-t1-brief').replace(
+      /```complexity-tier\s*\n[\s\S]*?```\n?/i,
+      '',
+    );
+    const result = checkTierGateGuard(text, {
+      tier: 'T3',
+      repoRoot,
+      draftPath: fixturePath('marker-free-t1-brief'),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/unparseable complexity-tier fence/);
+    expect(result.receipt).toBeNull();
+  });
+
+  it('fails when tier override cannot mask an invalid complexity-tier fence', () => {
+    const text = loadFixture('marker-free-t1-brief').replace(
+      'tier: T1',
+      'tier: T9',
+    );
+    const result = checkTierGateGuard(text, {
+      tier: 'T3',
+      repoRoot,
+      draftPath: fixturePath('marker-free-t1-brief'),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/unparseable complexity-tier fence/);
+    expect(result.receipt).toBeNull();
+  });
 });
 
 describe('floor on every tier', () => {
