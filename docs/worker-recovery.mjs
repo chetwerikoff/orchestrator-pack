@@ -13,7 +13,12 @@ import {
   isRuntimeFieldLive,
   normalizeRuntimeValue,
 } from './session-runtime-liveness.mjs';
-import { readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
+import {
+  asRecord,
+  runAsyncStdinJsonSubcommandCli,
+  scanArgvForceTarget,
+  toArray,
+} from './review-mechanical-cli.mjs';
 
 
 function normalizePathSegments(value) {
@@ -52,20 +57,6 @@ export const RECOVERY_FINAL_OUTCOMES = new Set([
   'escalated',
   'no_op',
 ]);
-
-/**
- * @param {unknown} value
- */
-function asRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? /** @type {Record<string, unknown>} */ (value) : null;
-}
-
-/**
- * @param {unknown} value
- */
-function toArray(value) {
-  return Array.isArray(value) ? value : [];
-}
 
 /**
  * @param {string} pathValue
@@ -454,22 +445,7 @@ export function parseWorktreeRemoveForceArgv(argv) {
   if (list[worktreeIndex + 1].toLowerCase() !== 'remove') {
     return { ok: false, reason: 'not_worktree_remove' };
   }
-  let cursor = worktreeIndex + 2;
-  let force = false;
-  let target = null;
-  while (cursor < list.length) {
-    const token = list[cursor];
-    if (token === '--force' || token === '-f') {
-      force = true;
-      cursor += 1;
-      continue;
-    }
-    if (!token.startsWith('-')) {
-      target = token;
-      break;
-    }
-    cursor += 1;
-  }
+  const { force, target } = scanArgvForceTarget(list, worktreeIndex + 2, ['--force', '-f']);
   if (!force || !target) {
     return { ok: false, reason: 'not_force_remove' };
   }
@@ -583,12 +559,6 @@ function handleCliSubcommand(subcommand, payload) {
   }
 }
 
-async function main() {
-  const subcommand = process.argv[2] ?? '';
-  const payload = await readStdinJson();
-  return handleCliSubcommand(subcommand, payload ?? {});
-}
-
-runAsyncStdinJsonCliMain('worker-recovery.mjs', main);
+runAsyncStdinJsonSubcommandCli('worker-recovery.mjs', handleCliSubcommand);
 
 export { AFFIRMATIVE_LIVE_RUNTIME, TERMINAL_RUNTIME_VALUES, classifyRuntimeField };

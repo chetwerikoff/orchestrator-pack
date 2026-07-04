@@ -2,26 +2,17 @@
  * Worker recovery orphan branch classification and cleanup (Issue #592).
  * Vitest: scripts/worker-recovery-branch-cleanup.test.ts
  */
-import { readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
+import {
+  asRecord,
+  runAsyncStdinJsonSubcommandCli,
+  scanArgvForceTarget,
+  toArray,
+} from './review-mechanical-cli.mjs';
 
 export const WORKER_RECOVERY_BRANCH_CLEANUP_VERSION = 'worker-recovery-branch-cleanup/v1';
 export const DEFAULT_BRANCH_OBSERVATION_TTL_SECONDS = 60;
 
 const OID_RE = /^[0-9a-f]{40}$/;
-
-/**
- * @param {unknown} value
- */
-function asRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? /** @type {Record<string, unknown>} */ (value) : null;
-}
-
-/**
- * @param {unknown} value
- */
-function toArray(value) {
-  return Array.isArray(value) ? value : [];
-}
 
 /**
  * @param {string} branch
@@ -50,22 +41,7 @@ export function parseBranchDeleteForceArgv(argv) {
   if (branchIndex < 0 || branchIndex + 1 >= list.length) {
     return { ok: false, reason: 'not_branch' };
   }
-  let cursor = branchIndex + 1;
-  let force = false;
-  let target = null;
-  while (cursor < list.length) {
-    const token = list[cursor];
-    if (token === '-D' || token === '--delete' || token === '-d') {
-      force = true;
-      cursor += 1;
-      continue;
-    }
-    if (!token.startsWith('-')) {
-      target = token;
-      break;
-    }
-    cursor += 1;
-  }
+  const { force, target } = scanArgvForceTarget(list, branchIndex + 1, ['-D', '--delete', '-d']);
   if (!force || !target) {
     return { ok: false, reason: 'not_force_delete' };
   }
@@ -535,10 +511,4 @@ function handleCliSubcommand(subcommand, payload) {
   }
 }
 
-async function main() {
-  const subcommand = process.argv[2] ?? '';
-  const payload = await readStdinJson();
-  return handleCliSubcommand(subcommand, payload ?? {});
-}
-
-runAsyncStdinJsonCliMain('worker-recovery-branch-cleanup.mjs', main);
+runAsyncStdinJsonSubcommandCli('worker-recovery-branch-cleanup.mjs', handleCliSubcommand);

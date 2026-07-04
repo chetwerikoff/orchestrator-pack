@@ -59,6 +59,60 @@ export function runAsyncStdinJsonCliMain(scriptBasename, mainFn) {
 }
 
 /**
+ * @param {unknown} value
+ */
+export function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? /** @type {Record<string, unknown>} */ (value)
+    : null;
+}
+
+/**
+ * @param {unknown} value
+ */
+export function toArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Scan argv tokens from cursor for force flags and the first non-flag target.
+ * @param {string[]} list
+ * @param {number} startIndex
+ * @param {readonly string[]} forceTokens
+ */
+export function scanArgvForceTarget(list, startIndex, forceTokens) {
+  let force = false;
+  let target = null;
+  let cursor = startIndex;
+  while (cursor < list.length) {
+    const token = list[cursor];
+    if (forceTokens.includes(token)) {
+      force = true;
+      cursor += 1;
+      continue;
+    }
+    if (!token.startsWith('-')) {
+      target = token;
+      break;
+    }
+    cursor += 1;
+  }
+  return { force, target };
+}
+
+/**
+ * @param {string} scriptBasename
+ * @param {(subcommand: string, payload: unknown) => unknown} handleCliSubcommand
+ */
+export function runAsyncStdinJsonSubcommandCli(scriptBasename, handleCliSubcommand) {
+  runAsyncStdinJsonCliMain(scriptBasename, async () => {
+    const subcommand = process.argv[2] ?? '';
+    const payload = await readStdinJson();
+    return handleCliSubcommand(subcommand, payload ?? {});
+  });
+}
+
+/**
  * @param {string} scriptBasename e.g. review-trigger-reconcile.mjs
  * @param {Record<string, () => unknown>} handlers
  */
