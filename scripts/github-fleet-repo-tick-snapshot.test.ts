@@ -101,6 +101,73 @@ try {
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate_failed\b/)).toBe(1);
   });
 
+  it('partial repo-tick populate failure records generation error before publishing caches', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-partial-');
+    const listFixture = multiPrList.replace(/'/g, "''");
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+case "$joined" in
+  *"pr list"*)
+    cat '${listFixture}'
+    ;;
+  *"pr view"*)
+    echo 'rate limited' >&2
+    exit 1
+    ;;
+  *"pr checks"*)
+    echo '[]'
+    ;;
+  *"repos/"*"/branches/"*"/protection"*)
+    echo '{"required_status_checks":{"contexts":["ci/test"]}}'
+    ;;
+  *)
+    echo "fake-gh: unhandled: $joined" >&2
+    exit 1
+    ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const failScript = `
+$ErrorActionPreference = 'Stop'
+. '${join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''")}'
+try {
+  $null = Invoke-GhOpenPrList -RepoRoot '${repoRoot.replace(/'/g, "''")}'
+  throw 'expected failure'
+} catch {
+  if ($_.Exception.Message -notmatch 'snapshot_populate_failed') { throw }
+  Write-Output 'failed-expected'
+}
+`;
+    const first = await spawnPwsh(failScript, repoRoot, harness.env);
+    expect(first.status).toBe(0);
+    const second = await spawnPwsh(failScript, repoRoot, harness.env);
+    expect(second.status).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(1);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate_failed\b/)).toBe(1);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(0);
+  });
+
+  it('review-ready-report-state-seed skips repo-tick warm-up with no tracked PRs', async () => {
+    harness = withMultiPrHarness('gh-repo-tick-seed-empty-');
+    const seedLib = join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1').replace(/'/g, "''");
+    const script = `
+$ErrorActionPreference = 'Stop'
+. '${seedLib}'
+$snapshot = New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot '${repoRoot.replace(/'/g, "''")}' -TrackedPrNumbers @() -NowMs $([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+if (@($snapshot.openPrs).Count -ne 0) { throw 'expected empty open prs' }
+Write-Output 'empty-ok'
+`;
+    const result = await spawnPwsh(script, repoRoot, harness.env);
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(0);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=repo_tick_populate\b/)).toBe(0);
+  });
+
   it('expired repo-tick error records allow a fresh populate retry', async () => {
     harness = withMultiPrHarness('gh-repo-tick-err-expiry-');
     const failGh = `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"\necho 'rate limited' >&2\nexit 1\n`;

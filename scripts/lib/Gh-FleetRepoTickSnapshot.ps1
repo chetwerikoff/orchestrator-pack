@@ -237,12 +237,6 @@ function Invoke-GhFleetRepoTickProducer {
         $openListKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|$queryId"
         $openListPaths = Get-GhFleetOpenPrListSnapshotPaths -CacheRoot (Get-GhFleetInventoryCacheRoot) -CacheKey $openListKey
         $openListExpires = (Get-Date).ToUniversalTime().AddSeconds($interval).ToString('o')
-        Write-GhFleetCacheEnvelopeAtomic -TargetPath $openListPaths.SnapshotPath -TempPath $openListPaths.TempPath -Envelope @{
-            storedAt           = $generation
-            expiresAt          = $openListExpires
-            repoTickGeneration = $generation
-            prs                = @($prs)
-        }
 
         $baseBranches = @{}
         $upstreamCounts = @{
@@ -251,6 +245,7 @@ function Invoke-GhFleetRepoTickProducer {
             prChecks   = 0
             protection = 0
         }
+        $datumWrites = [System.Collections.Generic.List[object]]::new()
 
         foreach ($pr in $prs) {
             $prNumber = [int]$pr.number
@@ -262,6 +257,7 @@ function Invoke-GhFleetRepoTickProducer {
             }
             catch {
                 $failureMessage = Format-GhFleetCacheFailure -Kind 'snapshot_populate_failed' -InnerMessage $_.Exception.Message
+                Write-GhFleetRepoTickGenerationError -Paths $paths -FailureMessage $failureMessage -IntervalSeconds $interval
                 Write-GhFleetRepoTickPopulateFailureAudit -AuditBase $auditBase -Route 'pr_view' -Extra @{ pr = $prNumber }
                 throw $failureMessage
             }
@@ -271,10 +267,11 @@ function Invoke-GhFleetRepoTickProducer {
             $upstreamCounts.prView++
 
             $viewKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|pr|$prNumber"
-            Write-GhFleetRepoTickDatumEnvelope -Paths $paths -Category 'pr-view' -CacheKey $viewKey -Payload @{
-                pr       = $view
-                negative = $false
-            } -Generation $generation -TtlSeconds $interval
+            $datumWrites.Add(@{
+                Category  = 'pr-view'
+                CacheKey  = $viewKey
+                Payload   = @{ pr = $view; negative = $false }
+            })
 
             $headSha = [string]$view.headRefOid
             if ($headSha) {
@@ -284,6 +281,7 @@ function Invoke-GhFleetRepoTickProducer {
                 }
                 catch {
                     $failureMessage = Format-GhFleetCacheFailure -Kind 'snapshot_populate_failed' -InnerMessage $_.Exception.Message
+                    Write-GhFleetRepoTickGenerationError -Paths $paths -FailureMessage $failureMessage -IntervalSeconds $interval
                     Write-GhFleetRepoTickPopulateFailureAudit -AuditBase $auditBase -Route 'ci_checks' -Extra @{ pr = $prNumber }
                     throw $failureMessage
                 }
@@ -293,11 +291,11 @@ function Invoke-GhFleetRepoTickProducer {
                 $upstreamCounts.prChecks++
 
                 $checksKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|checks|$headSha"
-                Write-GhFleetRepoTickDatumEnvelope -Paths $paths -Category 'ci-checks' -CacheKey $checksKey -Payload @{
-                    checks   = @($checks)
-                    headSha  = $headSha
-                    negative = $false
-                } -Generation $generation -TtlSeconds $interval
+                $datumWrites.Add(@{
+                    Category  = 'ci-checks'
+                    CacheKey  = $checksKey
+                    Payload   = @{ checks = @($checks); headSha = $headSha; negative = $false }
+                })
             }
 
             $baseRef = [string]$view.baseRefName
@@ -309,6 +307,7 @@ function Invoke-GhFleetRepoTickProducer {
                 }
                 catch {
                     $failureMessage = Format-GhFleetCacheFailure -Kind 'snapshot_populate_failed' -InnerMessage $_.Exception.Message
+                    Write-GhFleetRepoTickGenerationError -Paths $paths -FailureMessage $failureMessage -IntervalSeconds $interval
                     Write-GhFleetRepoTickPopulateFailureAudit -AuditBase $auditBase -Route 'branch_protection' -Extra @{ base = $baseRef }
                     throw $failureMessage
                 }
@@ -318,13 +317,27 @@ function Invoke-GhFleetRepoTickProducer {
                 $upstreamCounts.protection++
 
                 $protectionKey = Get-GhFleetCacheKeyHash -Text "$repoSlug|protection|$baseRef"
-                Write-GhFleetRepoTickDatumEnvelope -Paths $paths -Category 'branch-protection' -CacheKey $protectionKey -Payload @{
-                    lookupFailed = [bool]$protection.lookupFailed
-                    unprotected  = [bool]$protection.unprotected
-                    protection   = $protection.protection
-                    negative     = $false
-                } -Generation $generation -TtlSeconds $interval
+                $datumWrites.Add(@{
+                    Category  = 'branch-protection'
+                    CacheKey  = $protectionKey
+                    Payload   = @{
+                        lookupFailed = [bool]$protection.lookupFailed
+                        unprotected  = [bool]$protection.unprotected
+                        protection   = $protection.protection
+                        negative     = $false
+                    }
+                })
             }
+        }
+
+        Write-GhFleetCacheEnvelopeAtomic -TargetPath $openListPaths.SnapshotPath -TempPath $openListPaths.TempPath -Envelope @{
+            storedAt           = $generation
+            expiresAt          = $openListExpires
+            repoTickGeneration = $generation
+            prs                = @($prs)
+        }
+        foreach ($datumWrite in $datumWrites) {
+            Write-GhFleetRepoTickDatumEnvelope -Paths $paths -Category $datumWrite.Category -CacheKey $datumWrite.CacheKey -Payload $datumWrite.Payload -Generation $generation -TtlSeconds $interval
         }
 
         $generationEnvelope = @{
