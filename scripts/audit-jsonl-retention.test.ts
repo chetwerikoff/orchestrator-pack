@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   activeFileSize,
   appendAuditJsonlLine,
@@ -22,6 +22,8 @@ import {
   maybeMaintainAuditJsonl,
   releaseMaintenanceLock,
   resolveAuditJsonlPolicy,
+  resolveRotationSegmentPath,
+  rotateActiveFile,
   tryAcquireMaintenanceLock,
 } from './lib/audit-jsonl-retention.mjs';
 
@@ -83,6 +85,45 @@ describe('gh-wrapper audit retention scenarios', () => {
     appendAuditJsonlLine(activePath, makeLine(2), { policy });
     expect(parseJsonl(activePath)).toHaveLength(2);
     expect(listSegments(root, activePath)).toHaveLength(0);
+  });
+
+  it('uses collision-safe rotated segment names within the same second', () => {
+    const root = makeRoot();
+    const activePath = join(root, 'gh-wrapper-audit.jsonl');
+    const policy = {
+      ...resolveAuditJsonlPolicy('gh-wrapper', {}),
+      maxActiveBytes: 1,
+      maxTotalBytes: 1024 * 1024,
+      maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+    };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-04T14:13:00.123Z'));
+    try {
+      appendFileSync(activePath, `${makeLine(0)}\n`);
+      rotateActiveFile(activePath, policy);
+      appendFileSync(activePath, `${makeLine(1)}\n`);
+      rotateActiveFile(activePath, policy);
+      const segments = listSegments(root, activePath);
+      expect(segments).toHaveLength(2);
+      expect(new Set(segments.map((segment) => segment.name)).size).toBe(2);
+      const rows = segments.flatMap((segment) => parseJsonl(segment.path));
+      expect(rows.map((row) => row.index).sort((left, right) => left - right)).toEqual([0, 1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retries when a resolved rotation segment path already exists', () => {
+    const root = makeRoot();
+    const first = resolveRotationSegmentPath(root, 'gh-wrapper-audit');
+    const second = resolveRotationSegmentPath(root, 'gh-wrapper-audit');
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(first).not.toBe(second);
+    appendFileSync(first!, `${makeLine(0)}\n`);
+    const third = resolveRotationSegmentPath(root, 'gh-wrapper-audit');
+    expect(third).toBeTruthy();
+    expect(third).not.toBe(first);
   });
 
   it('rotates and prunes when active file exceeds size trigger', () => {

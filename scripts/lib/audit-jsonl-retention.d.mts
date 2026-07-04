@@ -45,5 +45,8 @@ export function rotateActiveFile(
   log?: (kind: string, fields?: Record<string, unknown>) => void,
 ): void;
 export function segmentNameRegex(activePath: string): RegExp;
+export function resolveRotationSegmentPath(dir: string, base: string): string | null;
+export function rotationStamp(): string;
+export function parseCompactRotationTimestamp(compact: string): number;
 export function tryAcquireMaintenanceLock(lockPath: string): boolean;
 export function releaseMaintenanceLock(lockPath: string): void;

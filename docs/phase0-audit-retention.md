@@ -43,7 +43,7 @@ same directory.
 - Segment enumeration and age/total-footprint pruning run only when a rotation trigger fires.
 - Rotation uses a nonblocking per-file advisory lock (`<active>.maintenance.lock`). Writers that
   cannot acquire the lock append and skip rotation for that call.
-- Active-file size triggers rotation to timestamped `*.YYYYMMDDTHHMMSSZ.jsonl` segments. Retention
+- Active-file size triggers rotation to timestamped JSONL segment(s) with millisecond stamp and random suffix (legacy second-precision segments remain readable). Retention
   age and total-footprint policy delete older segments; footprint is authoritative when pressures
   conflict.
 - Rotation/prune failures are logged on stderr (`*-audit-retention:` / `write_failed`) but never

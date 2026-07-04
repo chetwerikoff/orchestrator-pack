@@ -60,7 +60,27 @@ function Test-AuditJsonlSegmentName {
     )
 
     $base = [regex]::Escape((Get-AuditJsonlSegmentBaseName -ActivePath $ActivePath))
-    return $Name -match "^${base}\.\d{8}T\d{6}Z\.jsonl$"
+    return $Name -match "^${base}\.\d{8}T\d{6}(?:\d{3})?Z(?:-[a-f0-9]{8})?\.jsonl$"
+}
+
+function Get-AuditJsonlRotationStamp {
+    return (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmssfff'Z'")
+}
+
+function Resolve-AuditJsonlRotationSegmentPath {
+    param(
+        [string]$Dir,
+        [string]$Base
+    )
+
+    for ($attempt = 0; $attempt -lt 8; $attempt++) {
+        $suffix = ([guid]::NewGuid().ToString('n')).Substring(0, 8)
+        $segmentPath = Join-Path $Dir "$Base.$(Get-AuditJsonlRotationStamp)-$suffix.jsonl"
+        if (-not (Test-Path -LiteralPath $segmentPath)) {
+            return $segmentPath
+        }
+    }
+    return $null
 }
 
 function Get-AuditJsonlActiveFileSize {
@@ -117,11 +137,16 @@ function Get-AuditJsonlSegmentTimestamp {
     )
 
     $base = [regex]::Escape((Get-AuditJsonlSegmentBaseName -ActivePath $ActivePath))
-    if ($Name -notmatch "^${base}\.(\d{8}T\d{6}Z)\.jsonl$") {
+    if ($Name -notmatch "^${base}\.(\d{8}T\d{6}(?:\d{3})?Z)(?:-[a-f0-9]{8})?\.jsonl$") {
         return 0
     }
     $compact = $Matches[1]
-    $iso = "{0}-{1}-{2}T{3}:{4}:{5}Z" -f $compact.Substring(0, 4), $compact.Substring(4, 2), $compact.Substring(6, 2), $compact.Substring(9, 2), $compact.Substring(11, 2), $compact.Substring(13, 2)
+    if ($compact.Length -eq 16) {
+        $iso = "{0}-{1}-{2}T{3}:{4}:{5}Z" -f $compact.Substring(0, 4), $compact.Substring(4, 2), $compact.Substring(6, 2), $compact.Substring(9, 2), $compact.Substring(11, 2), $compact.Substring(13, 2)
+    }
+    else {
+        $iso = "{0}-{1}-{2}T{3}:{4}:{5}.{6}Z" -f $compact.Substring(0, 4), $compact.Substring(4, 2), $compact.Substring(6, 2), $compact.Substring(9, 2), $compact.Substring(11, 2), $compact.Substring(13, 2), $compact.Substring(15, 3)
+    }
     $parsed = [DateTimeOffset]::Parse($iso)
     return $parsed.ToUnixTimeMilliseconds()
 }
@@ -205,8 +230,11 @@ function Invoke-AuditJsonlActiveRotation {
 
     $dir = Split-Path -Parent $ActivePath
     $base = Get-AuditJsonlSegmentBaseName -ActivePath $ActivePath
-    $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
-    $segmentPath = Join-Path $dir "$base.$stamp.jsonl"
+    $segmentPath = Resolve-AuditJsonlRotationSegmentPath -Dir $dir -Base $base
+    if (-not $segmentPath) {
+        if ($LogWriter) { & $LogWriter 'rotate_failed' @{ reason = 'segment_name_collision' } }
+        return
+    }
     try {
         Move-Item -LiteralPath $ActivePath -Destination $segmentPath
         if ($LogWriter) { & $LogWriter 'rotate' @{ segment = (Split-Path -Leaf $segmentPath) } }

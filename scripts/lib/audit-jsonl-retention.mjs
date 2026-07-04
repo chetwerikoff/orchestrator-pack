@@ -1,6 +1,7 @@
 /**
  * Bounded best-effort JSONL audit retention for Phase-0 telemetry (Issue #588).
  */
+import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
@@ -62,19 +63,45 @@ function segmentBaseName(activePath) {
 
 function segmentNameRegex(activePath) {
   const base = escapeRegex(segmentBaseName(activePath));
-  return new RegExp(`^${base}\\.\\d{8}T\\d{6}Z\\.jsonl$`);
+  return new RegExp(`^${base}\\.\\d{8}T\\d{6}(?:\\d{3})?Z(?:-[a-f0-9]{8})?\\.jsonl$`);
+}
+
+function parseCompactRotationTimestamp(compact) {
+  if (compact.length === 16) {
+    const iso = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(9, 11)}:${compact.slice(11, 13)}:${compact.slice(13, 15)}Z`;
+    const parsed = Date.parse(iso);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (compact.length >= 19) {
+    const iso = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(9, 11)}:${compact.slice(11, 13)}:${compact.slice(13, 15)}.${compact.slice(15, 18)}Z`;
+    const parsed = Date.parse(iso);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function parseSegmentTimestamp(name, activePath) {
   const base = segmentBaseName(activePath);
-  const match = name.match(new RegExp(`^${escapeRegex(base)}\\.(\\d{8}T\\d{6}Z)\\.jsonl$`));
+  const match = name.match(new RegExp(`^${escapeRegex(base)}\\.(\\d{8}T\\d{6}(?:\\d{3})?Z)(?:-[a-f0-9]{8})?\\.jsonl$`));
   if (!match) {
     return 0;
   }
-  const compact = match[1];
-  const iso = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(9, 11)}:${compact.slice(11, 13)}:${compact.slice(13, 15)}Z`;
-  const parsed = Date.parse(iso);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return parseCompactRotationTimestamp(match[1]);
+}
+
+function rotationStamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.(\d{3})Z$/, '$1Z');
+}
+
+function resolveRotationSegmentPath(dir, base) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const suffix = randomBytes(4).toString('hex');
+    const segmentPath = join(dir, `${base}.${rotationStamp()}-${suffix}.jsonl`);
+    if (!existsSync(segmentPath)) {
+      return segmentPath;
+    }
+  }
+  return null;
 }
 
 function activeFileSize(activePath) {
@@ -165,8 +192,11 @@ function pruneSegments(dir, activePath, policy, log) {
 function rotateActiveFile(activePath, policy, log) {
   const dir = dirname(activePath);
   const base = segmentBaseName(activePath);
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const segmentPath = join(dir, `${base}.${stamp}.jsonl`);
+  const segmentPath = resolveRotationSegmentPath(dir, base);
+  if (!segmentPath) {
+    log?.('rotate_failed', { reason: 'segment_name_collision' });
+    return;
+  }
   try {
     renameSync(activePath, segmentPath);
     log?.('rotate', { segment: basename(segmentPath) });
@@ -221,8 +251,11 @@ export function maintenanceLockPath(activePath) {
 export {
   activeFileSize,
   listSegments,
+  parseCompactRotationTimestamp,
   pruneSegments,
+  resolveRotationSegmentPath,
   rotateActiveFile,
+  rotationStamp,
   segmentNameRegex,
   tryAcquireMaintenanceLock,
   releaseMaintenanceLock,
