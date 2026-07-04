@@ -25,7 +25,7 @@ describe('review-start scoped gh JSON capture (#566)', () => {
 
   it('static guard: scoped lookup does not merge stderr into JSON parse input', () => {
     expect(scopedBody).not.toMatch(/2>&1/);
-    expect(reviewStartBody).toMatch(/Invoke-GhPrViewStructuredCapture/);
+    expect(reviewStartBody).toMatch(/Invoke-ReviewStartPreflightGhPrView/);
     expect(captureBody).toMatch(/RedirectStandardOutput\s*=\s*\$true/);
     expect(captureBody).toMatch(/RedirectStandardError\s*=\s*\$true/);
     expect(captureBody).toMatch(/ReadToEndAsync/);

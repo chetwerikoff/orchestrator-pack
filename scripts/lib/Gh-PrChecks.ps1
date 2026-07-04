@@ -151,32 +151,12 @@ function Invoke-ReviewStartScopedGhPrView {
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
-        [int]$PrNumber
+        [int]$PrNumber,
+        [string]$AuditRoot = ''
     )
 
-    $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber
-    if ($capture.exitCode -ne 0) {
-        return @{
-            openPrs          = @()
-            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'gh_command_failed')
-        }
-    }
-    if (-not $capture.parse.ok) {
-        $reason = [string]$capture.parse.reason
-        if (-not $reason) { $reason = 'structured_output_polluted' }
-        return @{
-            openPrs          = @()
-            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason $reason)
-        }
-    }
-
-    $pr = $capture.parse.value
-    if (-not $pr -or [string]$pr.state -ne 'OPEN') {
-        return @{ openPrs = @(); transportFailure = $null }
-    }
-
-    Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
-    return @{ openPrs = @($pr); transportFailure = $null }
+    . (Join-Path $PSScriptRoot 'Review-StartPreflightShield.ps1')
+    return Invoke-ReviewStartPreflightGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -AuditRoot $AuditRoot
 }
 
 function Invoke-GhOpenPrListForNumbers {

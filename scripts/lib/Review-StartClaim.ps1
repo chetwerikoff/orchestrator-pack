@@ -932,7 +932,7 @@ function Get-ReviewStartSupervisedGhInfraTransportFailure {
         $failureClass = [string]$TransportFailure.classification.failureClass
     }
     $reason = [string]$TransportFailure.reason
-    $infraReason = $reason -match '^(structured_output_polluted|gh_command_failed|empty_child_output|malformed_child_output|scoped_gh_read_infrastructure_failure)'
+    $infraReason = $reason -match '^(structured_output_polluted|gh_command_failed|empty_child_output|malformed_child_output|scoped_gh_read_infrastructure_failure|preflight_transient_exhausted|preflight_timeout|claim_ownership_lost)'
     if ($failureClass -ne 'infra_transport' -and -not $infraReason) { return $null }
     return @{
         failureClass     = 'infra_transport'
