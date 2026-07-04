@@ -1,0 +1,13 @@
+P0 — Missing auth on spawn grant
+
+type: security
+id: sec-spawn-grant
+
+The draft binds spawn capability without verifying the grant token.
+
+P1 — Credential logging in debug path
+
+type: security
+id: sec-credential-log
+
+Reviewer output includes a path that logs raw tokens during spawn diagnostics.

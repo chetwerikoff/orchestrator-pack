@@ -1,0 +1,3 @@
+P2 - Missing verification
+
+Acceptance criteria lack an observable command or proof step.

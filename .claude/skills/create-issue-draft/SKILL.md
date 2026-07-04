@@ -403,71 +403,94 @@ Before `scripts/publish-issue-body-sync` create/edit/verify:
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
+  -CapturesDir docs/issues_drafts/.review/NN-<slug> `
+  -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
 ```
 
 Fix failures before sync. Drafts without a `behavior-kind` fence are not
-checked for positive-outcome (additive guard only).
+checked for positive-outcome (additive guard only). The finding-ledger guard validates **every** `*.capture.txt` under the review
+directory against the ledger — not only the final pass — so protected findings
+from early competitive/architectural passes cannot be omitted when a later pass is
+`NO_FINDINGS`. Skip the guard only when the review directory has no capture files.
 
-## Apply the 5-mode framework when
+## Per-tier draft review (before sync)
 
-Run `docs/first_principles_5_operational_framework.md` inline before
-finalising the draft if **any** of these hold:
+Classify intake tier per `prompts/agent_rules.md` (**Task complexity tier
+rubric**, Issue #574) before choosing stages. This section governs **spec review
+only** — worker PR-code review is unchanged.
 
-- The task introduces a contract ≥ 2 future issues will depend on
-  (finding format, declaration schema, ledger event keys).
-- Scope spans more than one of `_shared` / plugin code / scripts / CI.
-- The task is a response to a failure — start with **5 Whys**.
-- Two scripts or templates share a literal that this task touches —
-  apply **Mode 2 (Assumption Destruction)** before approving;
-  prefer one canonical source.
+**Roles:** the **draft author** (this Cursor session from the architect's brief)
+authors the spec, runs review stages, captures verbatim reviewer output per pass,
+normalizes findings into the disposition ledger, and owns accept/reject. The
+**architect** does not re-decide accepted findings; on T3 they run one lens pass
+over the reject partition only.
 
-Cost rule (from the framework): **don't ask which agent is best, ask which
-is the cheapest sufficient executor given tests + Codex review as safety net.**
+Full contract: `prompts/agent_rules.md` (**Per-tier draft-review flow**, Issue
+#575).
 
-## Planner-freedom checklist (must pass)
+### Review artifact layout
 
-Before syncing the draft to GitHub, confirm none of these is true:
+Per draft `docs/issues_drafts/NN-<slug>.md`:
 
-- [ ] Draft names a specific function signature or import path.
-- [ ] Draft prescribes a folder layout not derivable from existing conventions.
-- [ ] Draft pins a library version, file-internal structure, or comment style.
-- [ ] Acceptance criteria can only be checked by Claude reading the diff.
+```
+docs/issues_drafts/.review/NN-<slug>/
+  pass-01-competitive.capture.txt      # verbatim reviewer output
+  pass-02-architectural.capture.txt
+  finding-disposition-ledger.json      # normalized ledger (all passes)
+```
 
-Any "yes" → loosen, re-author. The planner's `ao-declare` produces
-`declared_paths`; you bound it via `denylist` + `allowed_roots`, you do not
-enumerate it.
+**Ledger JSON** (`finding-disposition-ledger.json`):
 
-## Codex review the draft (before sync, max 5 iterations)
+```json
+{
+  "version": 1,
+  "draft": "docs/issues_drafts/NN-<slug>.md",
+  "findings": [
+    {
+      "id": "stable-id",
+      "summary": "one-line summary",
+      "type": "security | scope-violation | spec | quality | test | ci",
+      "disposition": "addressed",
+      "rejectReason": "required when disposition is rejected"
+    }
+  ]
+}
+```
 
-Run a **critical architect** Codex pass on the draft markdown **before** issue-body sync (`scripts/publish-issue-body-sync`)
-. Architect role: `CLAUDE.md`.
+Normalization rules:
+
+- Capture **every** reviewer pass verbatim before editing the draft.
+- Every emitted finding (typed `type:` in capture) must appear in the ledger.
+- `type: security` and `type: scope-violation` (#51) → `disposition: addressed` only.
+- Re-worded findings keep the same `id` across passes.
+- `NO_FINDINGS` passes add no ledger rows.
+
+### Per-tier stages (ceilings — clean pass ends early)
+
+| Tier | Pipeline |
+|------|----------|
+| **T1** | One light architectural (Codex) pass. |
+| **T2** | Architectural (Codex) only, up to **3** passes; first `NO_FINDINGS` publishes. No competitive stage. |
+| **T3** | Competitive adversarial (**GPT** default; **Codex** when GPT unavailable — record substitution) ≤**3** → architectural (Codex) ≤**4** → **architect lens** ×**1** → final architectural (Codex) over architect edits ×**1**. |
+
+**T3-critical** (within-T3): when the task matches the **L4-condition list in
+Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
+(cite by reference), competitive **+Codex is mandatory** and the draft must carry
+rollback/migration note plus crash/race/stale-state test.
 
 **Command discipline (non-negotiable):**
 
 | Use | Do not use |
 |-----|------------|
-| `codex review` | `codex exec` |
-| `scripts/review-architect-artifact.ps1` | `codex exec review` (that is worker **PR** review, not draft spec review) |
+| `codex review` / `scripts/review-architect-artifact.ps1` | `codex exec` / `codex exec review` (worker **PR** path) |
+| `discuss-with-gpt` / `adversarial-draft-review` for competitive stage | Skipping disposition logging |
 
-Do **not** pipe stdout through `tail`, `head`, or `grep` — wait for the full answer
-(typically **10–60 s**; allow up to **3 min** before assuming a stall). Do **not**
-kill the process early to sync the issue.
+Do **not** pipe stdout through `tail`, `head`, or `grep` — wait for the full answer.
 
-**Focus areas for the reviewer:**
-
-- Planner-freedom (no prescribed signatures, paths, or library pins).
-- Observable acceptance criteria (provable without "looks good").
-- Command accuracy — real `ao` / `ao-declare` flags (`--declared-paths`,
-  `--declared-globs`, not `--paths`); **pwsh 7+** snippets on Linux/WSL2; session id
-  ≠ issue number (read from `ao status` / snapshot filename).
-- `denylist` + `allowed-roots` fence correctness.
-- Cross-draft consistency with `00-architecture-decisions.md` and related drafts.
-- **Contract grounding:** every field / event / state / CLI output the spec binds
-  to exists in its producer; corroborate each `contract-evidence` row against its
-  cited capture; flag unproven bindings or upstream references with no row
-  (completeness is reviewer judgment — the linter only grounds declared rows).
-
-**Preferred invocation (Linux / WSL2 / pwsh 7+):**
+**Architectural reviewer prompt:** `prompts/codex_draft_review_prompt.md` (finding
+bar, simplification lens, typed findings, #51 carve-out). Loaded by
+`scripts/review-architect-artifact.ps1` for issue drafts.
 
 ```powershell
 pwsh -NoProfile -File scripts/review-architect-artifact.ps1 `
@@ -477,65 +500,40 @@ pwsh -NoProfile -File scripts/review-architect-artifact.ps1 `
 
 Add `-FailOnFindings` to exit non-zero when the response is not `NO_FINDINGS`.
 
-**Manual equivalent (pwsh — no stdin `<` redirect):**
+### Finding disposition loop
 
-```powershell
-$draft = Get-Content -Raw docs/issues_drafts/NN-<slug>.md
-$prompt = @"
-You are the lead architect reviewer for orchestrator-pack (read-only issue-draft spec review).
-Review the DRAFT below for planner-freedom, observable acceptance criteria,
-command accuracy, denylist/allowed-roots fences, and cross-draft consistency.
-Do not suggest implementation file names unless the draft already violates planner freedom.
-Do NOT explore the repository unless the draft text is ambiguous.
+On competitive and architectural stages:
 
-Tag valid issues P0, P1, or P2.
-If no concrete issues remain, respond with exactly NO_FINDINGS on its own line.
+1. Run the stage reviewer; save verbatim output to `pass-NN-<stage>.capture.txt`.
+2. For each finding: **address** (revise draft) or **reject** with one-line reason.
+3. Update `finding-disposition-ledger.json` — completeness required.
+4. Re-run the stage until `NO_FINDINGS` or the tier cap.
 
---- DRAFT ---
-$draft
-"@
-codex review -c sandbox_mode=danger-full-access $prompt
-```
+Protected `security` / `scope-violation` findings cannot be rejected or omitted;
+escalate contested protected findings to the architect.
 
-Trusted architect review uses `sandbox_mode=danger-full-access` (no sandbox containment) so Codex can spawn `coworker` and reach the network during draft review.
+### Architect T3 lens pass
 
-**Bash equivalent (same contract):**
+After T3 architectural review converges:
 
-```bash
-draft_path="docs/issues_drafts/NN-<slug>.md"
-draft="$(cat "$draft_path")"
-codex review -c sandbox_mode=danger-full-access "$(cat <<EOF
-You are the lead architect reviewer for orchestrator-pack (read-only issue-draft spec review).
-Review the DRAFT below for planner-freedom, observable acceptance criteria,
-command accuracy, denylist/allowed-roots fences, and cross-draft consistency.
-Do not suggest implementation file names unless the draft already violates planner freedom.
+1. Architect reads the ledger **reject partition** only (does not re-open accepts).
+2. Apply simplification lens (what to cut / what is excess); may edit the draft.
+3. Run one final architectural (Codex) verification pass over architect edits; save
+   verbatim output to `pass-NN-final.capture.txt` like every other pass.
 
-Tag valid issues P0, P1, or P2.
-If no concrete issues remain, respond with exactly NO_FINDINGS on its own line.
+### Drift escalation
 
---- DRAFT ($draft_path) ---
-$draft
-EOF
-)"
-```
+After review completes, recompute tier (Issue #189 / draft C). **Upward** drift —
+including scope growth from accepted findings — escalates to the architect before
+publish. Downward drift is impossible (#574 monotonic rule).
 
-Alternative when the draft is already saved and you are iterating locally:
-`codex review --uncommitted` only if the draft is the sole staged change and
-the review prompt is passed as the `PROMPT` argument as above.
+**Sync gate:** do not run `scripts/publish-issue-body-sync` until review stages
+for the assigned tier complete (`NO_FINDINGS` or documented cap exit), the
+finding-ledger guard passes when captures exist, and other pre-sync checks pass.
 
-**Iteration discipline:**
-
-1. Revise the draft for valid P0/P1/P2 findings; rebut incorrect findings in
-   the draft or your notes.
-2. Re-run Codex (same prompt pattern).
-3. **Hard cap: 5 cycles.** After the fifth pass, sync only if clean (`NO_FINDINGS`)
-   or document remaining open questions in the draft **Prerequisite** or
-   **Verification** section before sync.
-
-**Sync gate:** do not run `scripts/publish-issue-body-sync` until Codex returns
-`NO_FINDINGS` or you have hit the 5-iteration cap and recorded open questions.
-
-Contract reference: `docs/issues_drafts/06-codex-reviewer-scope-context.md`.
+Contract references: `docs/issues_drafts/06-codex-reviewer-scope-context.md`,
+`docs/issues_drafts/19-codex-review-finding-bar.md` (#51 carve-out),
+`prompts/codex_draft_review_prompt.md`.
 
 ## Update the issue queue index
 

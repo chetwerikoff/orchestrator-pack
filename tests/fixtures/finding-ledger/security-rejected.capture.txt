@@ -1,0 +1,7 @@
+P1 — Missing auth check on spawn grant path
+
+type: security
+id: sec-spawn-grant
+
+The draft binds spawn capability without verifying the grant token is checked
+before worktree creation. An attacker with a stale session id could reuse it.

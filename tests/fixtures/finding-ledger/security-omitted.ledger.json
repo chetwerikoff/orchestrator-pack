@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "draft": "docs/issues_drafts/example.md",
+  "findings": [
+    {
+      "id": "qual-manual-ac",
+      "summary": "Acceptance criteria rely on manual inspection",
+      "type": "quality",
+      "disposition": "addressed"
+    }
+  ]
+}

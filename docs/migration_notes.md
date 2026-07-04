@@ -1904,3 +1904,21 @@ lock deferral for protected phases.
    new false `stalled` / `degraded backoff` entries during the window.
 
 Release gate: `npm test -- review-ready-seed-liveness`.
+
+## Issue #575 — per-tier draft-review flow and finding-ledger guard
+
+**What changed:** `prompts/agent_rules.md` documents per-tier draft/spec review
+(T1/T2/T3), draft-author finding ownership, disposition ledger normalization,
+protected security/scope carve-out, T3 architect lens, and drift escalation.
+`prompts/codex_draft_review_prompt.md` adds the draft reviewer finding bar plus
+simplification lens. `scripts/finding-ledger-guard.mjs` enforces ledger
+completeness and the carve-out pre-sync. `create-issue-draft` / publish skills
+wire the new guard and per-tier stages.
+
+**Operator adoption** — after merge:
+
+1. Restart AO from the operator terminal so workers load updated rules:
+   `ao stop` then `ao start`.
+2. Optional smoke: `npx vitest run scripts/finding-ledger-guard.test.ts` and
+   `pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 -CapturePath tests/fixtures/finding-ledger/complete.capture.txt -LedgerPath tests/fixtures/finding-ledger/complete.ledger.json`.
+

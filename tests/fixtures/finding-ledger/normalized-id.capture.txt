@@ -1,0 +1,6 @@
+P1 — Draft prescribes function signature in acceptance criteria
+
+type: scope-violation
+
+The draft names `checkFindingLedgerGuard(capturePath, ledgerPath)` which violates
+planner freedom.

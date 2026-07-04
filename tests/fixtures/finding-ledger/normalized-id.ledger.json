@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "draft": "docs/issues_drafts/example.md",
+  "findings": [
+    {
+      "id": "scope-signature",
+      "summary": "Draft prescribes function signature in acceptance criteria",
+      "type": "scope-violation",
+      "disposition": "addressed"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "draft": "docs/issues_drafts/example.md",
+  "findings": [
+    {
+      "id": "sec-spawn-grant",
+      "summary": "Missing auth on spawn grant",
+      "type": "quality",
+      "disposition": "rejected",
+      "rejectReason": "Reclassified as non-security"
+    }
+  ]
+}

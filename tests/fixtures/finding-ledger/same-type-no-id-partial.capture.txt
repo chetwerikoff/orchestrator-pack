@@ -1,0 +1,11 @@
+P0 — Missing auth on spawn grant
+
+type: security
+
+The draft binds spawn capability without verifying the grant token.
+
+P1 — Credential logging in debug path
+
+type: security
+
+Reviewer output includes a path that logs raw tokens during spawn diagnostics.
