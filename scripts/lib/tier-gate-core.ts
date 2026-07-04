@@ -66,8 +66,8 @@ export function checkWorkerSafetyFloor(draftText: string): { ok: boolean; errors
   if (!/```denylist\s*\n[\s\S]*?```/m.test(draftText)) {
     errors.push('worker-safety floor: missing ```denylist fence');
   }
-  if (!/```(?:allowed-roots|denylist)\s*\n[\s\S]*?```/m.test(draftText)) {
-    errors.push('worker-safety floor: missing allowed-roots or denylist fence');
+  if (!/```allowed-roots\s*\n[\s\S]*?```/m.test(draftText)) {
+    errors.push('worker-safety floor: missing ```allowed-roots fence');
   }
   if (!/^##\s+Acceptance criteria\b/m.test(draftText)) {
     errors.push('worker-safety floor: missing ## Acceptance criteria section');

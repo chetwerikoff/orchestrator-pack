@@ -90,6 +90,15 @@ describe('floor on every tier', () => {
     expect(gate.errors.join(' ')).toMatch(/denylist|allowed-roots|Verification/);
   });
 
+  it('fails when a draft has denylist but no allowed-roots fence', () => {
+    const text = loadFixture('denylist-only-missing-allowed-roots-brief');
+    const floor = checkWorkerSafetyFloor(text);
+    expect(floor.ok).toBe(false);
+    expect(floor.errors.join(' ')).toMatch(/allowed-roots/);
+    const gate = checkTierGateGuard(text);
+    expect(gate.ok).toBe(false);
+  });
+
   it('wrapper-invoked T1 recompute selects a path at least T2 with adversarial stage', () => {
     const text = loadFixture('marker-free-t1-brief');
     const stages = selectAuthoringReviewStages({

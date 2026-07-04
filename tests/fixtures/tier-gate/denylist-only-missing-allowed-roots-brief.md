@@ -1,14 +1,14 @@
-# Typo fix skip-line
+# Denylist only — missing allowed-roots
 
 GitHub Issue: TBD
 
 ```complexity-tier
-skip-line: true
+tier: T1
 ```
 
 ## Goal
 
-Fix a typo in README.
+Small docs tweak with denylist only.
 
 ## Denylist
 
@@ -17,14 +17,10 @@ vendor/**
 packages/core/**
 ```
 
-```allowed-roots
-docs/**
-```
-
 ## Acceptance criteria
 
-1. Typo fixed.
+1. Done.
 
 ## Verification
 
-1. Visual check.
+1. Manual check.
