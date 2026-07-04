@@ -31,6 +31,13 @@ describe('finding-ledger guard fails when a protected finding is rejected or omi
     expect(result.errors.join(' ')).toMatch(/scope-violation|protected signal/);
   });
 
+  it('fails when multiple findings share a type but only one has a ledger row', () => {
+    const { capture, ledger } = loadFixturePair('same-type-partial');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/sec-credential-log/);
+  });
+
   it('passes when every captured finding is recorded and protected ones are addressed', () => {
     const { capture, ledger } = loadFixturePair('complete');
     const result = checkFindingLedgerGuard(capture, ledger);

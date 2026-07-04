@@ -11,7 +11,8 @@ export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 const PROTECTED_TYPE_PATTERN =
   /\btype:\s*(security|scope-violation)\b/gi;
 const ANY_TYPE_PATTERN = /\btype:\s*([a-z][a-z0-9-]*)\b/gi;
-const FINDING_ID_PATTERN = /\bid:\s*([A-Za-z0-9._-]+)\b/g;
+const FINDING_ID_PATTERN = /\bid:\s*([A-Za-z0-9._-]+)\b/gi;
+const FINDING_ID_EXTRACT = /\bid:\s*([A-Za-z0-9._-]+)\b/i;
 
 const PROTECTED_SIGNAL_PATTERNS = [
   { type: 'security', pattern: /\btype:\s*security\b/i },
@@ -103,7 +104,7 @@ export function detectTypedFindingsInCapture(capture) {
     const windowEnd = Math.min(capture.length, match.index + 120);
     const before = capture.slice(windowStart, match.index);
     const after = capture.slice(match.index, windowEnd);
-    const idMatch = [...before.matchAll(FINDING_ID_PATTERN)].at(-1) ?? after.match(FINDING_ID_PATTERN);
+    const idMatch = after.match(FINDING_ID_EXTRACT) ?? [...before.matchAll(FINDING_ID_PATTERN)].at(-1);
     const id = idMatch ? idMatch[1] : `capture-${type}-${findings.length + 1}`;
 
     findings.push({
@@ -145,13 +146,7 @@ function ledgerHasProtectedRejection(ledger) {
 }
 
 function typedFindingCoveredInLedger(captureFinding, ledger) {
-  const byId = ledger.findings.find((row) => row.id === captureFinding.id);
-  if (byId) {
-    return true;
-  }
-  return ledger.findings.some(
-    (row) => row.type === captureFinding.type && row.summary.length > 0,
-  );
+  return ledger.findings.some((row) => row.id === captureFinding.id);
 }
 
 export function checkFindingLedgerGuard(capture, ledgerText) {
