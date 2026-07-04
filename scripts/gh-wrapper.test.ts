@@ -9,7 +9,16 @@ import {
 } from './lib/gh-pr-checks.mjs';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
 import * as repoResolve from './lib/gh-repo-resolve.mjs';
-const { applyListedJq, mapIssueStateReason, mapIssueToGhJson, mapPullState, mapPullToGhJson, resolveRepoContext } = repoResolve;
+const {
+  applyListedJq,
+  consumeGhApiRateLimitHeaders,
+  ghApiJson,
+  mapIssueStateReason,
+  mapIssueToGhJson,
+  mapPullState,
+  mapPullToGhJson,
+  resolveRepoContext,
+} = repoResolve;
 import { executeRestRoute, parsePullReference, routePrView } from './lib/gh-rest-routes.mjs';
 import {
   RATE_LIMIT_REFRESH_MS,
@@ -370,11 +379,14 @@ function writeExecutable(path: string, content: string) {
 
 describe('gh wrapper audit telemetry', () => {
   it('logs successful completions with status and child id', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-audit-'));
+    const auditPath = join(root, 'audit.jsonl');
     const result = spawnSync(join(import.meta.dirname, 'gh'), ['auth', 'status'], {
       env: {
         ...process.env,
         GH_REAL_BINARY: '/bin/true',
         GH_WRAPPER_AUDIT: '1',
+        GH_WRAPPER_AUDIT_FILE: auditPath,
         AO_SIDE_PROCESS_CHILD_ID: 'review-trigger-reconcile',
       },
       encoding: 'utf8',
@@ -382,7 +394,60 @@ describe('gh wrapper audit telemetry', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('gh-wrapper-audit: entry child=review-trigger-reconcile');
-    expect(result.stderr).toContain('gh-wrapper-audit: complete child=review-trigger-reconcile kind=passthrough route=passthrough status=0');
+    expect(result.stderr).toMatch(/gh-wrapper-audit: complete .*child=review-trigger-reconcile .*kind=passthrough route=passthrough status=0/);
+    const rows = readFileSync(auditPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      event: 'entry',
+      child: 'review-trigger-reconcile',
+      command: 'auth',
+      subcommand: 'status',
+    });
+    expect(rows[1]).toMatchObject({
+      event: 'complete',
+      child: 'review-trigger-reconcile',
+      kind: 'passthrough',
+      route: 'passthrough',
+      status: 0,
+    });
+    expect(rows[1].argvHash).toMatch(/^[0-9a-f]{16}$/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('captures rate-limit and retry headers from REST helper include output', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-wrapper-rate-headers-'));
+    try {
+      const fakeGh = join(root, 'fake-gh');
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != *"--include"* ]]; then
+  echo "missing include" >&2
+  exit 1
+fi
+cat <<'OUT'
+HTTP/2.0 403 Forbidden
+x-ratelimit-limit: 5000
+x-ratelimit-remaining: 0
+x-ratelimit-reset: 1783140000
+x-ratelimit-resource: core
+x-ratelimit-used: 5000
+retry-after: 60
+
+{"message":"secondary rate limit"}
+OUT
+`);
+      expect(ghApiJson(fakeGh, 'rate_limit')).toEqual({ message: 'secondary rate limit' });
+      expect(consumeGhApiRateLimitHeaders()).toEqual({
+        'retry-after': '60',
+        'x-ratelimit-limit': '5000',
+        'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': '1783140000',
+        'x-ratelimit-resource': 'core',
+        'x-ratelimit-used': '5000',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

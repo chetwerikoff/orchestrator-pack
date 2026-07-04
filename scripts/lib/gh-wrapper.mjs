@@ -2,13 +2,25 @@
 /**
  * Pack gh wrapper — known inventory reads always REST; unknown argv passthrough (Issue #431).
  */
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { classifyArgv } from './gh-inventory-match.mjs';
 import { exitCodeForPrChecks } from './gh-pr-checks.mjs';
 import { resolveRealGhBinary } from './gh-resolve-real-binary.mjs';
 import { tryGraphqlDegradedPassthrough } from './gh-graphql-degraded.mjs';
 import { executeRestRoute } from './gh-rest-routes.mjs';
-import { REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
+import { consumeGhApiRateLimitHeaders, REST_ERROR_MARKER } from './gh-repo-resolve.mjs';
+
+const RATE_LIMIT_HEADER_NAMES = [
+  'retry-after',
+  'x-ratelimit-limit',
+  'x-ratelimit-remaining',
+  'x-ratelimit-reset',
+  'x-ratelimit-resource',
+  'x-ratelimit-used',
+];
 
 function formatStdout(result, parsed, route) {
   if (route?.id === 'pr-diff-name-only') {
@@ -47,10 +59,22 @@ function passthrough(argv) {
   const result = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    stdio: 'inherit',
+    encoding: 'utf8',
+    maxBuffer: 50 * 1024 * 1024,
   });
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
   const status = result.status ?? 1;
-  writeWrapperAudit('complete', { kind: 'passthrough', route: 'passthrough', status });
+  writeWrapperAudit('complete', buildAuditFields(argv, {
+    kind: 'passthrough',
+    route: 'passthrough',
+    status,
+    rateLimit: extractRateLimitHeaders(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
+  }));
   process.exit(status);
 }
 
@@ -64,14 +88,103 @@ function formatAuditValue(value) {
   return String(value).replace(/\s+/g, '_');
 }
 
+function auditFilePath() {
+  if (process.env.GH_WRAPPER_AUDIT_FILE) {
+    return process.env.GH_WRAPPER_AUDIT_FILE;
+  }
+  if (process.env.AO_SIDE_PROCESS_STATE_DIR) {
+    return join(process.env.AO_SIDE_PROCESS_STATE_DIR, 'gh-wrapper-audit.jsonl');
+  }
+  if (process.env.GH_WRAPPER_AUDIT === '1') {
+    const stateHome = process.env.XDG_STATE_HOME || join(process.env.HOME || process.cwd(), '.local', 'state');
+    return join(stateHome, 'orchestrator-pack', 'gh-wrapper-audit.jsonl');
+  }
+  return null;
+}
+
+function argvHash(argv) {
+  return createHash('sha256').update(JSON.stringify(argv)).digest('hex').slice(0, 16);
+}
+
+function extractPrAndHead(argv, parsed = {}) {
+  const fields = {};
+  if (Number.isInteger(parsed.prNumber)) {
+    fields.prNumber = parsed.prNumber;
+  }
+  for (let i = 0; i < argv.length; i += 1) {
+    if ((argv[i] === 'pr' && (argv[i + 1] === 'view' || argv[i + 1] === 'checks' || argv[i + 1] === 'diff'))
+      && /^\d+$/.test(String(argv[i + 2] ?? ''))) {
+      fields.prNumber = Number(argv[i + 2]);
+    }
+    if (argv[i] === '--head' && argv[i + 1]) {
+      fields.headRef = String(argv[i + 1]);
+    }
+  }
+  return fields;
+}
+
+function buildAuditFields(argv, fields = {}, parsed = {}) {
+  return {
+    command: argv[0] ?? '',
+    subcommand: argv[1] ?? '',
+    argvHash: argvHash(argv),
+    ...extractPrAndHead(argv, parsed),
+    ...fields,
+  };
+}
+
+function extractRateLimitHeaders(text) {
+  const out = {};
+  const lines = String(text ?? '').split(/\r?\n/);
+  for (const line of lines) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) {
+      continue;
+    }
+    const name = line.slice(0, idx).trim().toLowerCase();
+    if (RATE_LIMIT_HEADER_NAMES.includes(name)) {
+      out[name] = line.slice(idx + 1).trim();
+    }
+  }
+  return out;
+}
+
+function rateLimitKind(headers = {}) {
+  if (headers['retry-after']) {
+    return 'secondary_or_abuse';
+  }
+  if (headers['x-ratelimit-remaining'] === '0') {
+    return 'primary';
+  }
+  if (Object.keys(headers).length > 0) {
+    return 'observed';
+  }
+  return undefined;
+}
+
 function writeWrapperAudit(event, fields = {}) {
+  const childId = process.env.AO_SIDE_PROCESS_CHILD_ID;
+  const rateLimit = fields.rateLimit && typeof fields.rateLimit === 'object' ? fields.rateLimit : {};
+  const allFields = {
+    ...(childId ? { child: childId } : {}),
+    ...fields,
+    ...(Object.keys(rateLimit).length > 0 ? { rateLimitKind: rateLimitKind(rateLimit) } : {}),
+  };
+  const filePath = auditFilePath();
+  if (filePath) {
+    mkdirSync(dirname(filePath), { recursive: true });
+    appendFileSync(filePath, `${JSON.stringify({
+      at: new Date().toISOString(),
+      event,
+      ...allFields,
+    })}\n`);
+  }
   if (process.env.GH_WRAPPER_AUDIT !== '1') {
     return;
   }
-  const childId = process.env.AO_SIDE_PROCESS_CHILD_ID;
-  const allFields = childId ? { child: childId, ...fields } : fields;
   const suffix = Object.entries(allFields)
     .filter(([, value]) => value !== undefined && value !== null)
+    .filter(([key]) => key !== 'rateLimit')
     .map(([key, value]) => `${key}=${formatAuditValue(value)}`)
     .join(' ');
   process.stderr.write(`gh-wrapper-audit: ${event}${suffix ? ` ${suffix}` : ''}\n`);
@@ -79,7 +192,7 @@ function writeWrapperAudit(event, fields = {}) {
 
 function main() {
   const argv = process.argv.slice(2);
-  writeWrapperAudit('entry');
+  writeWrapperAudit('entry', buildAuditFields(argv));
 
   const { parsed, route } = classifyArgv(argv);
   if (!route) {
@@ -93,14 +206,24 @@ function main() {
     const out = formatStdout(result, parsed, route);
     process.stdout.write(out);
     const status = route.id === 'pr-checks' ? exitCodeForPrChecks(result) : 0;
-    writeWrapperAudit('complete', { kind: 'rest', route: route.id, status });
+    writeWrapperAudit('complete', buildAuditFields(argv, {
+      kind: 'rest',
+      route: route.id,
+      status,
+      rateLimit: consumeGhApiRateLimitHeaders(),
+    }, parsed));
     if (route.id === 'pr-checks') {
       process.exit(status);
     }
     process.exit(0);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    writeWrapperAudit('complete', { kind: 'rest', route: route.id, status: 1 });
+    writeWrapperAudit('complete', buildAuditFields(argv, {
+      kind: 'rest',
+      route: route.id,
+      status: 1,
+      rateLimit: consumeGhApiRateLimitHeaders(),
+    }, parsed));
     if (message.startsWith('no checks reported')) {
       process.stderr.write(`${message}\n`);
       process.exit(1);
