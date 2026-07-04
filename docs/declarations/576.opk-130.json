@@ -7,13 +7,14 @@
   "baseline": {
     "commit_sha": "b50e1f64efae30047e868fe89784e7814daa6d3b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9bea75985f382aedc0d51b7fa9b7fa7f6b470fa4ca68434d3835f0c088edd81f"
+    "active_scope_hash": "sha256:a4b786014cf03737d895207b9b82e56a867f4c9278a13c828b79d9a8cb8f03aa"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "scripts/check-tier-gate-guard.ps1",
     "scripts/lib/tier-gate-core.ts",
     "scripts/lib/tier-marker-screen.ts",
+    "scripts/lib/tier-gate-floor.ts",
     "scripts/tier-gate-guard.ts",
     "scripts/tier-gate-guard.test.ts",
     "scripts/lib/publish-issue-body-sync.ts",
@@ -23,7 +24,9 @@
     "tests/fixtures/tier-gate/marker-hit-sub-t3-brief.md",
     "tests/fixtures/tier-gate/skip-line-brief.md",
     "tests/fixtures/tier-gate/t1-missing-floor-brief.md",
-    "tests/fixtures/tier-gate/denylist-only-missing-allowed-roots-brief.md"
+    "tests/fixtures/tier-gate/denylist-only-missing-allowed-roots-brief.md",
+    "tests/fixtures/tier-gate/t1-missing-behavior-kind-brief.md",
+    "tests/fixtures/tier-gate/t1-missing-contract-evidence-brief.md"
   ],
   "declared_globs": [],
   "amendments": [
@@ -39,6 +42,22 @@
       "reason": "add denylist-only floor regression fixture",
       "actor": "opk-130",
       "timestamp": "2026-07-04T10:29:55.647Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:9bea75985f382aedc0d51b7fa9b7fa7f6b470fa4ca68434d3835f0c088edd81f",
+      "new_active_scope_hash": "sha256:a4b786014cf03737d895207b9b82e56a867f4c9278a13c828b79d9a8cb8f03aa",
+      "changed": {
+        "added": [
+          "scripts/lib/tier-gate-floor.ts",
+          "tests/fixtures/tier-gate/t1-missing-behavior-kind-brief.md",
+          "tests/fixtures/tier-gate/t1-missing-contract-evidence-brief.md"
+        ],
+        "removed": []
+      },
+      "reason": "add never-skipped floor gates module and regression fixtures",
+      "actor": "opk-130",
+      "timestamp": "2026-07-04T10:52:00.000Z",
       "applied": true
     }
   ]
