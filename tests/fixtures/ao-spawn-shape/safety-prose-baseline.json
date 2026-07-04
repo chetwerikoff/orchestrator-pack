@@ -1,0 +1,11 @@
+{
+  "description": "Non-runnable ao spawn mentions accepted by the Issue #589 shape guard (safety prose / historical references).",
+  "allowedCommands": [
+    "ao spawn --claim-pr",
+    "ao spawn --claim-pr <PR>",
+    "ao spawn --claim-pr <n>",
+    "ao spawn --claim-pr <PR> (ping/respawn discipline below)",
+    "ao spawn <issue>",
+    "ao spawn or ao spawn --claim-pr"
+  ]
+}

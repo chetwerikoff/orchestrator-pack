@@ -505,6 +505,29 @@ Raw worker-send, raw review-run, mutating git, and `ao session kill` prose/proce
 unchanged.
 
 
+## AO 0.10.x runnable ao spawn shape (Issue #589)
+
+AO 0.10.x requires explicit `--project` and a non-empty `--name` display label (max 20 chars)
+on every runnable `ao spawn` instruction before the CLI reaches the daemon. Pack prompts,
+`agent-orchestrator.yaml.example`, and operator runbooks now teach the explicit shape; safety
+prose such as `never ao spawn` remains unchanged.
+
+**Operator adoption (live gitignored `agent-orchestrator.yaml`):**
+
+1. Merge updated `orchestratorRules` / respawn-discipline text from `agent-orchestrator.yaml.example`
+   into live yaml — especially the RESPAWN DISCIPLINE block that now reads
+   `ao spawn --project <project> --name "<label>" --claim-pr <PR>`.
+2. Copy matching operator runbook wording from `docs/orchestrator-recovery-runbook.md` when your
+   local recovery notes still teach bare `ao spawn --claim-pr`.
+3. Verify the guard:
+   `pwsh -NoProfile -File scripts/check-ao-spawn-shape.ps1` and
+   `npx vitest run scripts/ao-spawn-shape.test.ts`.
+4. After yaml edits, restart AO (`ao stop` / `ao start`) before upgrading the AO binary to 0.10.x.
+
+Spawn policy (#458), worktree grants (#470), and `PACK_REVIEWER` / `REVIEW_COMMAND` review driving
+are unchanged by this prerequisite.
+
+
 ## Autonomous spawn worktree provenance (Issue #470)
 
 When spawn policy allows `ao spawn` or `ao spawn --claim-pr`, the pack `ao` guard mints a

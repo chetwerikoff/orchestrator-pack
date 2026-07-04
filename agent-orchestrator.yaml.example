@@ -525,7 +525,7 @@ projects:
       waiting_worker_review_response with no addressing_reviews, no new commit, and
       a ping was already sent for this episode (visible in ao events list), run:
         ao session kill <session>
-        ao spawn --claim-pr <PR>
+        ao spawn --project <project> --name '<label>' --claim-pr <PR>
       Reset ping tracking for the new session.
 
       REVIEW-READY WORKER STUCK GUARD (Issue #174). On EVERY orchestrator turn,
