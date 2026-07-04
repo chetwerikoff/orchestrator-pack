@@ -19,6 +19,13 @@ export function detectTypedFindingsInCapture(capture: string): Array<{
 
 export function detectProtectedSignalsInCapture(capture: string): string[];
 
+export function detectUntypedFindingsInCapture(capture: string): Array<{
+  id: string;
+  type: string;
+  anchor: number;
+  summary: string;
+}>;
+
 export function mergeCaptureFindings(captures: string[]): {
   findings: ReturnType<typeof detectTypedFindingsInCapture>;
   errors: string[];

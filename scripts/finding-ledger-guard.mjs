@@ -13,6 +13,50 @@ const PROTECTED_TYPE_PATTERN =
 const ANY_TYPE_PATTERN = /\btype:\s*([a-z][a-z0-9-]*)\b/gi;
 const FINDING_ID_PATTERN = /\bid:\s*([A-Za-z0-9._-]+)\b/gi;
 const FINDING_ID_EXTRACT = /\bid:\s*([A-Za-z0-9._-]+)\b/i;
+const UNTYPED_FINDING_LINE =
+  /^(?:\s*)(?:\[(P[0-3])\]|(P[0-3]))\s*[-–—:]\s*(.+)$/;
+
+export function detectUntypedFindingsInCapture(capture) {
+  if (isCleanNoFindings(capture)) {
+    return [];
+  }
+
+  const findings = [];
+  const lines = capture.split('\n');
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const match = line.match(UNTYPED_FINDING_LINE);
+    if (!match) {
+      continue;
+    }
+
+    const blockLines = [line];
+    let next = index + 1;
+    while (next < lines.length && !UNTYPED_FINDING_LINE.test(lines[next])) {
+      blockLines.push(lines[next]);
+      next += 1;
+    }
+
+    const block = blockLines.join('\n');
+    if (/\btype:\s*[a-z][a-z0-9-]*\b/i.test(block)) {
+      index = next - 1;
+      continue;
+    }
+
+    const idMatch = block.match(FINDING_ID_EXTRACT);
+    const id = idMatch ? idMatch[1] : `untyped-${findings.length + 1}`;
+    findings.push({
+      id,
+      type: 'untyped',
+      anchor: index,
+      summary: match[3].trim().slice(0, 160),
+    });
+    index = next - 1;
+  }
+
+  return findings;
+}
 
 const PROTECTED_SIGNAL_PATTERNS = [
   { type: 'security', pattern: /\btype:\s*security\b/i },
@@ -152,12 +196,21 @@ function ledgerRowForCaptureFinding(captureFinding, ledger) {
 function validateCaptureFindingInLedger(captureFinding, ledger, errors) {
   const row = ledgerRowForCaptureFinding(captureFinding, ledger);
   if (!row) {
+    if (captureFinding.type === 'untyped') {
+      errors.push(
+        `untyped capture finding (id: ${captureFinding.id}) is missing from the ledger — add type: when normalizing`,
+      );
+      return;
+    }
     errors.push(
       `capture finding type: ${captureFinding.type} (id: ${captureFinding.id}) is missing from the ledger`,
     );
     return;
   }
 
+  if (captureFinding.type === 'untyped') {
+    return;
+  }
   if (PROTECTED_TYPES.has(captureFinding.type) && row.type !== captureFinding.type) {
     errors.push(
       `protected finding ${captureFinding.id} was reclassified in the ledger as type: ${row.type} (capture type: ${captureFinding.type})`,
@@ -177,9 +230,16 @@ export function mergeCaptureFindings(captures) {
   const errors = [];
 
   for (const capture of captures) {
-    for (const finding of detectTypedFindingsInCapture(capture)) {
+    for (const finding of [
+      ...detectTypedFindingsInCapture(capture),
+      ...detectUntypedFindingsInCapture(capture),
+    ]) {
       const existing = merged.get(finding.id);
       if (existing && existing.type !== finding.type) {
+        if (existing.type === 'untyped' || finding.type === 'untyped') {
+          merged.set(finding.id, finding.type === 'untyped' ? existing : finding);
+          continue;
+        }
         errors.push(
           `capture finding ${finding.id} has conflicting types across passes (${existing.type} vs ${finding.type})`,
         );

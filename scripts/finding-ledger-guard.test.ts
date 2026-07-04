@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { checkFindingLedgerGuard, runCli } from './finding-ledger-guard.mjs';
+import { checkFindingLedgerGuard, detectUntypedFindingsInCapture, runCli } from './finding-ledger-guard.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -80,6 +80,14 @@ describe('finding-ledger guard fails when a protected finding is rejected or omi
     const result = checkFindingLedgerGuard(capture, ledger);
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/sec-spawn-grant|security/);
+  });
+
+  it('fails when a capture contains an untyped priority finding', () => {
+    const { capture, ledger } = loadFixturePair('untyped-finding');
+    expect(detectUntypedFindingsInCapture(capture)).toHaveLength(1);
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/untyped capture finding/);
   });
 
   it('passes when every captured finding is recorded and protected ones are addressed', () => {
