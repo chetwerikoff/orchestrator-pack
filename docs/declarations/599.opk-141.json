@@ -18,7 +18,8 @@
     "scripts/lib/gh-repo-resolve.mjs",
     "scripts/lib/git-origin-slug.d.mts",
     "scripts/lib/git-origin-slug.mjs",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-message-submit-reconcile.test.ts"
   ],
   "declared_globs": [],
   "amendments": []

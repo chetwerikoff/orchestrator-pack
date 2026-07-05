@@ -46,6 +46,9 @@ import type {
   WorkerMessageSubmitAction,
 } from '../docs/worker-message-submit-reconcile.d.mts';
 
+type StateRootReSeatEligibilityArg = Parameters<
+  typeof evaluateStateRootReSeatEligibility
+>[0];
 
 
 const fixturesDir = path.join(
@@ -2817,7 +2820,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
       },
       nowMs,
-    });
+    } as StateRootReSeatEligibilityArg);
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
     expect(result.evidence).toContain('stateActiveDeliveryCount=0');
@@ -2841,7 +2844,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
       },
       nowMs,
-    });
+    } as StateRootReSeatEligibilityArg);
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
   });
@@ -2861,7 +2864,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS + 1,
       },
       nowMs,
-    });
+    } as StateRootReSeatEligibilityArg);
     expect(result.eligible).toBe(false);
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
@@ -2887,7 +2890,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         },
       },
       nowMs,
-    });
+    } as StateRootReSeatEligibilityArg);
     expect(result.eligible).toBe(false);
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
@@ -2952,7 +2955,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
       },
       nowMs,
-    });
+    } as StateRootReSeatEligibilityArg);
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
     expect(result.evidence).toContain('corroboratingJournalDeliveryCount=0');
