@@ -32,6 +32,7 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-OrchestratorYamlRules.ps1')
 
 $Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
 
@@ -78,28 +79,6 @@ function Get-AutonomousRespawnPolicy {
     return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
-function Get-OrchestratorRulesFromYaml {
-    param([string]$YamlPath)
-
-    if (-not $YamlPath -or -not (Test-Path -LiteralPath $YamlPath -PathType Leaf)) {
-        return ''
-    }
-    $lines = (Get-Content -LiteralPath $YamlPath -Raw) -split "`n"
-    $capture = $false
-    $out = New-Object System.Collections.Generic.List[string]
-    foreach ($line in $lines) {
-        if ($line -match '^\s+orchestratorRules:\s*(?:\||>)\s*$') {
-            $capture = $true
-            continue
-        }
-        if ($capture) {
-            if ($line -match '^\S') { break }
-            $out.Add($line)
-        }
-    }
-    return ($out -join "`n")
-}
-
 function Get-DeadWorkerResolvedBounds {
     param(
         [object]$RespawnPolicy,
@@ -124,7 +103,7 @@ function Get-DeadWorkerLivePlanGates {
     $respawnPolicy = Get-AutonomousRespawnPolicy
     $boundsResult = Get-DeadWorkerResolvedBounds -RespawnPolicy $respawnPolicy
     $yamlPath = Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot
-    $rules = Get-OrchestratorRulesFromYaml -YamlPath $yamlPath
+    $rules = Get-OrchestratorRulesFromYamlPath -YamlPath $yamlPath
     return @{
         respawnPolicy = $respawnPolicy
         bounds = if ($boundsResult.ok) { $boundsResult.bounds } else { @{ maxAttempts = 0; backoffMs = 0; concurrency = 0 } }
