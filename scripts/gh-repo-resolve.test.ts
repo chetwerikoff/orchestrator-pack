@@ -8,6 +8,7 @@ import {
   originSlugFromGitConfig,
   parseRemoteSlug,
   readOriginUrlFromGitConfig,
+  resolveGitCommonDir,
   RESOLVER_GIT_ARGV,
 } from './lib/git-origin-slug.mjs';
 import { resolveNameWithOwner, resolveRepoContext, RESOLVER_GIT_ARGV as exportedResolverArgv } from './lib/gh-repo-resolve.mjs';
@@ -44,6 +45,26 @@ function writeConfigOnlyCheckout(originUrl: string) {
     `[remote "origin"]\n\turl = ${originUrl}\n`,
   );
   return dir;
+}
+
+function writeWorktreePointerCheckout(originUrl: string) {
+  const root = mkdtempSync(path.join(tmpdir(), 'gh-repo-worktree-'));
+  const commonGitDir = path.join(root, 'main', '.git');
+  const worktreeName = 'opk-fixture';
+  const worktreeGitDir = path.join(commonGitDir, 'worktrees', worktreeName);
+  const checkoutDir = path.join(root, 'worktree-checkout');
+  mkdirSync(worktreeGitDir, { recursive: true });
+  mkdirSync(checkoutDir, { recursive: true });
+  writeFileSync(
+    path.join(commonGitDir, 'config'),
+    `[remote "origin"]\n\turl = ${originUrl}\n`,
+  );
+  writeFileSync(path.join(worktreeGitDir, 'commondir'), '../..\n');
+  writeFileSync(
+    path.join(checkoutDir, '.git'),
+    `gitdir: ${worktreeGitDir}\n`,
+  );
+  return { checkoutDir, commonGitDir, worktreeGitDir, cleanupRoot: root };
 }
 
 function autonomousSurfaceEnv(packScriptsDir: string, extra: Record<string, string | undefined> = {}) {
@@ -151,6 +172,26 @@ describe('git config origin slug reader (Issue #599)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('resolves origin slug from the common git dir for linked worktree checkouts', () => {
+    const fixture = writeWorktreePointerCheckout(FIXTURE_ORIGIN);
+    try {
+      expect(resolveGitCommonDir(fixture.checkoutDir)).toBe(fixture.commonGitDir);
+      expect(readOriginUrlFromGitConfig(fixture.checkoutDir)).toBe(FIXTURE_ORIGIN);
+      expect(originSlugFromGitConfig(fixture.checkoutDir)).toBe(FIXTURE_SLUG);
+    } finally {
+      rmSync(fixture.cleanupRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reads origin slug from live AO worktree checkout when present', () => {
+    const commonDir = resolveGitCommonDir(repoRoot);
+    if (!commonDir || !commonDir.endsWith(`${path.sep}.git`)) {
+      return;
+    }
+    expect(readOriginUrlFromGitConfig(repoRoot)).toMatch(/github\.com[/:][^/]+\/[^/]+/);
+    expect(originSlugFromGitConfig(repoRoot)).toMatch(/^[^/]+\/[^/]+$/);
   });
 });
 

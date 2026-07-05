@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 /** Git argv shapes issued by gh-repo-resolve — guard must keep these read-only. */
 export const RESOLVER_GIT_ARGV = Object.freeze([
@@ -39,7 +39,13 @@ export function resolveGitCommonDir(repoRoot) {
     const match = /^gitdir:\s*(.+)$/m.exec(pointer);
     if (match) {
       const gitdir = match[1].trim();
-      return gitdir.startsWith('/') ? gitdir : join(repoRoot, gitdir);
+      const resolvedGitDir = gitdir.startsWith('/') ? gitdir : join(repoRoot, gitdir);
+      const commonDirPointer = join(resolvedGitDir, 'commondir');
+      if (existsSync(commonDirPointer)) {
+        const commonRel = readFileSync(commonDirPointer, 'utf8').trim();
+        return commonRel.startsWith('/') ? commonRel : resolve(resolvedGitDir, commonRel);
+      }
+      return resolvedGitDir;
     }
   }
   return dotGit;
