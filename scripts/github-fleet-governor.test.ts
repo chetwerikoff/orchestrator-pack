@@ -62,7 +62,6 @@ function runGovernorCli(subcommand: string, payload: object, env: NodeJS.Process
 
 function spawnParallelAcquire(count: number, env: NodeJS.ProcessEnv, lane = 'background') {
   const script = `import { acquireGithubGovernorAdmission, releaseGithubGovernorAdmission } from './lib/gh-governor.mjs';
-import { resolvePartitionKey } from './lib/gh-graphql-degraded.mjs';
 const lane = ${JSON.stringify(lane)};
 const env = { ...process.env, GH_GOVERNOR_LANE: lane };
 const admission = acquireGithubGovernorAdmission({ env, argv: ['pr','list'], realGh: 'gh', partitionKey: ${JSON.stringify(partitionKey)} });
@@ -515,6 +514,14 @@ exit 0
     const defaultKey = resolvePartitionKey(fakeGh, ['pr', 'list'], env);
     expect(readFileSync(counter, 'utf8').trim()).toBe('1');
     expect(defaultKey).not.toBe(governedKey);
+  });
+
+  it('graphql passthrough onComplete preserves stderr for governor classification', () => {
+    const degraded = readFileSync(join(repoRoot, 'scripts/lib/gh-graphql-degraded.mjs'), 'utf8');
+    expect(degraded).toMatch(/buildPassthroughCompleteFields/);
+    expect(degraded).toMatch(/stderr: graphqlResult\.stderr \|\| PRIMARY_QUOTA_MARKER/);
+    const wrapper = readFileSync(wrapperPath, 'utf8');
+    expect(wrapper).toMatch(/stdout: fields\.stdout/);
   });
 
   it('governor release classifies passthrough rate-limit stderr as observed limit', () => {

@@ -619,6 +619,16 @@ function shouldRefreshRateLimit(cache, currentMs) {
   return currentMs - cache.lastRateLimitFetchMs >= RATE_LIMIT_REFRESH_MS;
 }
 
+
+function buildPassthroughCompleteFields(result, overrides = {}) {
+  return {
+    status: overrides.status ?? result.status ?? 1,
+    stderr: overrides.stderr ?? result.stderr ?? '',
+    stdout: overrides.stdout ?? result.stdout ?? '',
+    ...overrides,
+  };
+}
+
 function emitPassthroughResult(result, onComplete = null) {
   if (result.stdout) {
     process.stdout.write(result.stdout);
@@ -627,7 +637,7 @@ function emitPassthroughResult(result, onComplete = null) {
     process.stderr.write(result.stderr);
   }
   if (onComplete) {
-    onComplete({ status: result.status ?? 1 });
+    onComplete(buildPassthroughCompleteFields(result));
   }
   process.exit(result.status ?? 1);
 }
@@ -768,7 +778,7 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
       process.stderr.write(graphqlResult.stderr);
     }
     if (onComplete) {
-      onComplete({ status: 0 });
+      onComplete(buildPassthroughCompleteFields(graphqlResult, { status: 0 }));
     }
     process.exit(0);
   }
@@ -818,7 +828,10 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
       process.stderr.write(`${PRIMARY_QUOTA_MARKER}\n`);
     }
     if (onComplete) {
-      onComplete({ status: graphqlResult.status ?? SUPPRESSION_EXIT_CODE });
+      onComplete(buildPassthroughCompleteFields(graphqlResult, {
+        status: graphqlResult.status ?? SUPPRESSION_EXIT_CODE,
+        stderr: graphqlResult.stderr || PRIMARY_QUOTA_MARKER,
+      }));
     }
     process.exit(graphqlResult.status ?? SUPPRESSION_EXIT_CODE);
   }

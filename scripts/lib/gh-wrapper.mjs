@@ -126,6 +126,7 @@ function passthrough(argv) {
         exitCode: fields.status ?? 0,
         headers: fields.rateLimit,
         stderr: fields.stderr,
+        stdout: fields.stdout,
       });
       writeWrapperAudit('complete', buildAuditFields(argv, {
         kind: 'passthrough',
