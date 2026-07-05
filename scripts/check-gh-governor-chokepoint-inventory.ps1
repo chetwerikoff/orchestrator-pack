@@ -51,8 +51,8 @@ $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
 if ($wrapper -notmatch 'acquireGithubGovernorAdmission') {
     $failures += 'gh-wrapper.mjs does not consult github governor admission'
 }
-if ($wrapper -notmatch 'recordGithubGovernorObservedLimit') {
-    $failures += 'gh-wrapper.mjs does not record observed governor limits'
+if ($wrapper -notmatch 'withGovernorRelease' -or $wrapper -notmatch 'headers:\s*rateLimit') {
+    $failures += 'gh-wrapper.mjs does not record observed governor limits via admission release'
 }
 
 $fleetCache = Join-Path $Root 'scripts/lib/Gh-FleetInventoryCache.ps1'

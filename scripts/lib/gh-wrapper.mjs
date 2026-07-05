@@ -17,7 +17,6 @@ import {
   formatGovernorDenialMessage,
   GOVERNOR_DENIAL_EXIT_CODE,
   isGovernorEnabled,
-  recordGithubGovernorObservedLimit,
   resolveCallerLane,
 } from './gh-governor.mjs';
 
@@ -99,14 +98,6 @@ function passthrough(argv) {
         exitCode: fields.status ?? 0,
         headers: fields.rateLimit,
         stderr: fields.stderr,
-      });
-      recordGithubGovernorObservedLimit({
-        argv,
-        realGh,
-        headers: fields.rateLimit,
-        exitCode: fields.status ?? 0,
-        stderr: fields.stderr,
-        env: process.env,
       });
       writeWrapperAudit('complete', buildAuditFields(argv, {
         kind: 'passthrough',
@@ -270,13 +261,6 @@ function main() {
     const status = route.id === 'pr-checks' ? exitCodeForPrChecks(result) : 0;
     const rateLimit = consumeGhApiRateLimitHeaders();
     withGovernorRelease(admission, { exitCode: status, headers: rateLimit });
-    recordGithubGovernorObservedLimit({
-      argv,
-      realGh,
-      headers: rateLimit,
-      exitCode: status,
-      env: process.env,
-    });
     writeWrapperAudit('complete', buildAuditFields(argv, {
       kind: 'rest',
       route: route.id,
@@ -291,14 +275,6 @@ function main() {
     const message = err instanceof Error ? err.message : String(err);
     const rateLimit = consumeGhApiRateLimitHeaders();
     withGovernorRelease(admission, { exitCode: 1, stderr: message, headers: rateLimit });
-    recordGithubGovernorObservedLimit({
-      argv,
-      realGh,
-      headers: rateLimit,
-      exitCode: 1,
-      stderr: message,
-      env: process.env,
-    });
     writeWrapperAudit('complete', buildAuditFields(argv, {
       kind: 'rest',
       route: route.id,

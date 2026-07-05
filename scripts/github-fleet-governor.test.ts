@@ -10,6 +10,7 @@ import {
   governorStatePath,
   readGovernorStateForFixture,
   recordGithubGovernorObservedLimit,
+  releaseGithubGovernorAdmission,
   resolveCallerLane,
   resolveGovernorStateDir,
 } from './lib/gh-governor.mjs';
@@ -228,6 +229,67 @@ describe('github-fleet-governor (Issue #585)', () => {
     });
     expect(admission.admitted).toBe(true);
     expect(admission.emergency).toBe(true);
+    const state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.emergencyBudgetUsed).toBe(1);
+  });
+
+  it('persists emergency budget usage and exhausts after max admissions', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-emergency-'));
+    const env = governorEnv(root, {
+      GH_GOVERNOR_MAX_TOKENS: '0',
+      GH_GOVERNOR_RESERVED_TOKENS: '0',
+      GH_GOVERNOR_EMERGENCY_BUDGET_MAX: '1',
+      GH_GOVERNOR_EMERGENCY_PACE_MS: '1',
+    });
+    const laneEnv = { ...env, GH_GOVERNOR_LANE: 'interactive-preflight' };
+    const first = acquireGithubGovernorAdmission({
+      env: laneEnv,
+      argv: ['pr', 'view', '1', '--json', 'headRefOid'],
+      partitionKey,
+    });
+    expect(first.admitted).toBe(true);
+    expect(first.emergency).toBe(true);
+    const second = acquireGithubGovernorAdmission({
+      env: laneEnv,
+      argv: ['pr', 'view', '2', '--json', 'headRefOid'],
+      partitionKey,
+    });
+    expect(second.admitted).toBe(false);
+    expect(second.reason).toBe('governor-emergency-exhausted');
+  });
+
+  it('release records observed limit once per response', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-release-once-'));
+    const env = governorEnv(root);
+    const admission = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'background' },
+      argv: ['pr', 'list'],
+      partitionKey,
+    });
+    expect(admission.admitted).toBe(true);
+    admission.release?.({
+      exitCode: 503,
+      stderr: 'service unavailable',
+    });
+    const afterRelease = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(afterRelease?.cooldownStrike).toBe(1);
+    recordGithubGovernorObservedLimit({
+      env,
+      partitionKey,
+      exitCode: 503,
+      stderr: 'service unavailable',
+    });
+    const afterDuplicate = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(afterDuplicate?.cooldownStrike).toBe(2);
+    releaseGithubGovernorAdmission({
+      env,
+      partitionKey,
+      exitCode: 429,
+      headers: { 'retry-after': '10' },
+      stderr: 'rate limited',
+    });
+    const afterSecondEvent = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(afterSecondEvent?.cooldownStrike).toBe(3);
   });
 
   it('AC#6 terminal classes are not converted into cooldown transients', () => {

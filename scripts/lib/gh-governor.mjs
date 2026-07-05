@@ -454,7 +454,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
 
   if (!acquireLock(lockPath, now)) {
     if (isReservedLane(lane)) {
-      return admitEmergency(lane, budget, env, partitionKey, 'lock-timeout');
+      return admitEmergency(lane, budget, env, partitionKey, 'lock-timeout', { stateDir, statePath });
     }
     return denyAdmission(lane, 'governor-lock-timeout', partitionKey);
   }
@@ -465,7 +465,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
     if (stateExists && !state) {
       releaseLock(lockPath);
       if (isReservedLane(lane)) {
-        return admitEmergency(lane, budget, env, partitionKey, 'state-corrupt');
+        return admitEmergency(lane, budget, env, partitionKey, 'state-corrupt', { stateDir, statePath });
       }
       return denyAdmission(lane, 'governor-state-unavailable', partitionKey);
     }
@@ -477,7 +477,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
     if ((state.cooldownUntilMs ?? 0) > now) {
       if (isReservedLane(lane)) {
         releaseLock(lockPath);
-        return admitEmergency(lane, budget, env, partitionKey, 'cooldown-reserved');
+        return admitEmergency(lane, budget, env, partitionKey, 'cooldown-reserved', { stateDir, statePath });
       }
       releaseLock(lockPath);
       return denyAdmission(lane, 'governor-cooldown', partitionKey, {
@@ -489,7 +489,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
     if ((state.inFlight ?? 0) >= budget.maxInFlight) {
       if (isReservedLane(lane)) {
         releaseLock(lockPath);
-        return admitEmergency(lane, budget, env, partitionKey, 'inflight-reserved');
+        return admitEmergency(lane, budget, env, partitionKey, 'inflight-reserved', { stateDir, statePath });
       }
       releaseLock(lockPath);
       return denyAdmission(lane, 'governor-inflight-cap', partitionKey);
@@ -498,7 +498,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
     if (!canAffordAdmission(state, budget, lane)) {
       if (isReservedLane(lane)) {
         releaseLock(lockPath);
-        return admitEmergency(lane, budget, env, partitionKey, 'token-reserved');
+        return admitEmergency(lane, budget, env, partitionKey, 'token-reserved', { stateDir, statePath });
       }
       releaseLock(lockPath);
       return denyAdmission(lane, 'governor-token-budget', partitionKey);
@@ -538,7 +538,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
   } catch (err) {
     releaseLock(lockPath);
     if (isReservedLane(lane)) {
-      return admitEmergency(lane, budget, env, partitionKey, 'state-error');
+      return admitEmergency(lane, budget, env, partitionKey, 'state-error', { stateDir, statePath });
     }
     if (isSheddableLane(lane)) {
       return denyAdmission(lane, 'governor-state-unavailable', partitionKey);
@@ -547,25 +547,57 @@ export function acquireGithubGovernorAdmission(options = {}) {
   }
 }
 
-function admitEmergency(lane, budget, env, partitionKey, reason) {
-  const used = Number(env.GH_GOVERNOR_EMERGENCY_USED ?? 0);
-  if (used >= budget.emergencyBudgetMax) {
-    return denyAdmission(lane, 'governor-emergency-exhausted', partitionKey);
+function admitEmergency(lane, budget, env, partitionKey, reason, paths = {}) {
+  const { stateDir, statePath } = paths;
+  const now = nowMs(env);
+  const lockPath = governorLockPath(stateDir, partitionKey);
+  const envUsed = Number(env.GH_GOVERNOR_EMERGENCY_USED ?? 0);
+  if (!acquireLock(lockPath, now)) {
+    return denyAdmission(lane, 'governor-lock-timeout', partitionKey);
+  }
+  let persistedUsed = 0;
+  try {
+    let state = readStateFile(statePath) ?? defaultState(now, budget);
+    persistedUsed = state.emergencyBudgetUsed ?? 0;
+    if (persistedUsed + envUsed >= budget.emergencyBudgetMax) {
+      return denyAdmission(lane, 'governor-emergency-exhausted', partitionKey);
+    }
+    state = {
+      ...state,
+      emergencyBudgetUsed: persistedUsed + 1,
+    };
+    writeStateAtomic(statePath, state);
+    persistedUsed = state.emergencyBudgetUsed;
+  } finally {
+    releaseLock(lockPath);
   }
   sleepMs(budget.emergencyPaceMs);
   return {
     admitted: true,
     lane,
     partitionKey,
+    statePath,
     emergency: true,
     audit: {
       event: 'admit-emergency',
       lane,
       partitionKey,
       reason,
+      emergencyBudgetUsed: persistedUsed,
       placeholderBudget: true,
     },
-    release: () => {},
+    release: (releaseOptions = {}) => {
+      releaseGithubGovernorAdmission({
+        env,
+        partitionKey,
+        statePath,
+        outcome: releaseOptions.outcome,
+        headers: releaseOptions.headers,
+        exitCode: releaseOptions.exitCode,
+        stderr: releaseOptions.stderr,
+        stdout: releaseOptions.stdout,
+      });
+    },
   };
 }
 
