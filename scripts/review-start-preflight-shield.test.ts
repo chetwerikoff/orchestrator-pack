@@ -103,6 +103,19 @@ describe('review-start preflight transient shield (#584)', () => {
       });
       expect(exhausted.canRetry).toBe(false);
     });
+
+    it('allows the final configured capture when attempt equals maxAttempts', () => {
+      const finalCapture = evaluatePreflightRetryBudget({
+        attempt: 2,
+        maxAttempts: 2,
+        startedMonotonicMs: 0,
+        nowMonotonicMs: 1000,
+        wallClockBudgetMs: 60_000,
+      });
+      expect(finalCapture.canCapture).toBe(true);
+      expect(finalCapture.canRetry).toBe(false);
+      expect(finalCapture.attemptsRemaining).toBe(1);
+    });
   });
 
   describe('static wiring', () => {
@@ -201,6 +214,36 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(result.count).toBe(0);
       expect(result.reason).toBe('preflight_transient_exhausted');
       expect(result.failureClass).toBe('infra_transport');
+    });
+  });
+
+  describe('final configured attempt', () => {
+    it('runs the second capture when maxAttempts is 2 and first transient failure recovers', () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'preflight-shield-final-'));
+      const stateFile = path.join(dir, 'attempt.count');
+      try {
+        const result = runScopedPreflight(
+          `
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'primary_rate_limit_then_ok'
+        $env:AO_REVIEW_START_SCOPED_GH_STATE_FILE = ${psString(stateFile)}
+        $env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA = ${psString(stableHead)}
+        $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '2'
+        $env:AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS = '0'
+        $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
+        [pscustomobject]@{
+          transportFailure = [bool]$lookup.transportFailure
+          head = [string]$lookup.openPrs[0].headRefOid
+          attempts = [int](Get-Content -LiteralPath ${psString(stateFile)} -Raw)
+        } | ConvertTo-Json -Compress
+      `,
+        );
+        expect(result.transportFailure).toBe(false);
+        expect(result.head).toBe(stableHead);
+        expect(result.attempts).toBe(2);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 

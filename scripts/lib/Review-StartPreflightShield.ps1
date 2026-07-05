@@ -237,7 +237,7 @@ function Invoke-ReviewStartPreflightGhPrView {
             wallClockBudgetMs   = $wallBudgetMs
             remainingClaimMs    = (Get-ReviewStartPreflightShieldRemainingClaimMs -ClaimResult $ClaimResult)
         }
-        if ($attempt -gt 1 -and -not $budget.canRetry) {
+        if ($attempt -gt 1 -and -not $budget.canCapture) {
             break
         }
 

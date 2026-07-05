@@ -213,15 +213,18 @@ export function evaluatePreflightRetryBudget(input = {}) {
     ? Math.max(0, nowMonotonicMs - startedMonotonicMs)
     : 0;
   const remainingMs = Math.max(0, budgetMs - elapsedMs);
-  const attemptsRemaining = Math.max(0, maxAttempts - attempt);
+  const capturesRemaining = Math.max(0, maxAttempts - attempt + 1);
+  const canCapture = capturesRemaining > 0 && remainingMs > 0;
+  const canRetry = attempt < maxAttempts && remainingMs > 0;
 
   return {
-    canRetry: attemptsRemaining > 0 && remainingMs > 0,
-    attemptsRemaining,
+    canRetry,
+    canCapture,
+    attemptsRemaining: capturesRemaining,
     elapsedMs,
     remainingMs,
     budgetMs,
-    exhaustedReason: attemptsRemaining <= 0 ? 'attempt_budget_exhausted' : 'wall_clock_budget_exhausted',
+    exhaustedReason: remainingMs <= 0 ? 'wall_clock_budget_exhausted' : 'attempt_budget_exhausted',
   };
 }
 

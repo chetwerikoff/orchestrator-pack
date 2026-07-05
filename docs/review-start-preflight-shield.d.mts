@@ -31,6 +31,7 @@ export declare function evaluatePreflightRetryBudget(
   input?: Record<string, unknown>,
 ): {
   canRetry: boolean;
+  canCapture: boolean;
   attemptsRemaining: number;
   elapsedMs: number;
   remainingMs: number;
