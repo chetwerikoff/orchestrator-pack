@@ -16,7 +16,46 @@ export const DEFAULT_DEAD_WORKER_INTERVAL_MS = 60_000;
 export const DEFAULT_DEAD_WORKER_MAX_ATTEMPTS = 3;
 export const DEFAULT_DEAD_WORKER_BACKOFF_MS = 60_000;
 export const DEFAULT_DEAD_WORKER_CONCURRENCY = 1;
-export const OPERATOR_SHUTDOWN_SUPPRESSION_MS = 5 * 60_000;
+export const OPERATOR_SHUTDOWN_SUPPRESSION_MS = 120_000;
+export const DEFAULT_SHUTDOWN_SUPPRESSION_WINDOW_MS = 120_000;
+
+export function resolveShutdownSuppressionWindowMs(policy) {
+  const configured = numberOrZero(policy?.shutdownSuppressionWindowMs);
+  if (configured > 0) return configured;
+  return DEFAULT_SHUTDOWN_SUPPRESSION_WINDOW_MS;
+}
+
+export function resolveAttemptLeaseTtlMs(bounds = {}) {
+  const backoffMs = numberOrZero(bounds.backoffMs) || DEFAULT_DEAD_WORKER_BACKOFF_MS;
+  const maxAttempts = numberOrZero(bounds.maxAttempts) || DEFAULT_DEAD_WORKER_MAX_ATTEMPTS;
+  const configured = numberOrZero(bounds.attemptLeaseTtlMs);
+  if (configured > 0) return configured;
+  return Math.max(backoffMs * (2 ** Math.max(0, maxAttempts - 1)) + backoffMs, backoffMs * 2);
+}
+
+export function expireStaleAttemptLeases(tracking = {}, bounds = {}, nowMs = Date.now()) {
+  const leaseTtlMs = resolveAttemptLeaseTtlMs(bounds);
+  const leases = { ...(tracking.leases ?? {}) };
+  const audit = [...toArray(tracking.audit)];
+  let changed = false;
+  for (const [key, lease] of Object.entries(leases)) {
+    if (lease?.outcome !== 'attempt_started') continue;
+    const startedAtMs = numberOrZero(lease.startedAtMs);
+    if (startedAtMs > 0 && nowMs - startedAtMs >= leaseTtlMs) {
+      delete leases[key];
+      audit.push({
+        key,
+        outcome: 'lease_expired',
+        reason: 'stale_attempt_lease',
+        sessionId: lease.sessionId,
+        recordedAtMs: nowMs,
+        classifierVersion: DEAD_WORKER_RECONCILER_VERSION,
+      });
+      changed = true;
+    }
+  }
+  return changed ? { ...tracking, leases, audit } : tracking;
+}
 
 export function validateAutonomousRespawnPolicy(policy) {
   if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
@@ -116,7 +155,7 @@ function hasAssignedTask(session) {
   return getIssueNumber(session) > 0 || getPrNumber(session) > 0;
 }
 
-export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date.now()) {
+export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date.now(), options = {}) {
   const sessionId = getSessionId(session);
   const events = toArray(aoEvents);
   const matches = [];
@@ -171,10 +210,11 @@ export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date
   if (manualKill) {
     return { verdict: 'suppressed', reason: 'operator_kill', event: manualKill, matchedEvents: matches };
   }
-  if (operatorShutdown && nowMs - operatorShutdown.timestampMs <= OPERATOR_SHUTDOWN_SUPPRESSION_MS) {
+  const shutdownSuppressionWindowMs = resolveShutdownSuppressionWindowMs(options.respawnPolicy ?? options);
+  if (operatorShutdown && nowMs - operatorShutdown.timestampMs <= shutdownSuppressionWindowMs) {
     return { verdict: 'suppressed', reason: 'operator_shutdown_window', event: operatorShutdown, matchedEvents: matches };
   }
-  if (projectShutdown && nowMs - projectShutdown.timestampMs <= OPERATOR_SHUTDOWN_SUPPRESSION_MS) {
+  if (projectShutdown && nowMs - projectShutdown.timestampMs <= shutdownSuppressionWindowMs) {
     return { verdict: 'suppressed', reason: 'operator_shutdown_window', event: projectShutdown, matchedEvents: matches };
   }
   if (death) {
@@ -310,12 +350,21 @@ export function validateDeadWorkerGates(input = {}) {
   return { ok: true, bounds: { maxAttempts, backoffMs, concurrency } };
 }
 
+function countActiveAttemptLeases(leases, nowMs, leaseTtlMs) {
+  return Object.values(leases).filter((lease) => {
+    if (lease?.outcome !== 'attempt_started') return false;
+    const startedAtMs = numberOrZero(lease.startedAtMs);
+    return startedAtMs > 0 && nowMs - startedAtMs < leaseTtlMs;
+  }).length;
+}
+
 function evaluateRetryAndLease(key, tracking, bounds, nowMs) {
   const attempts = tracking.attempts ?? {};
   const leases = tracking.leases ?? {};
   const prior = attempts[key] ?? {};
-  const activeLeases = Object.values(leases).filter((lease) => lease?.outcome === 'attempt_started');
-  if (activeLeases.length >= bounds.concurrency) {
+  const leaseTtlMs = resolveAttemptLeaseTtlMs(bounds);
+  const activeLeases = countActiveAttemptLeases(leases, nowMs, leaseTtlMs);
+  if (activeLeases >= bounds.concurrency) {
     return { ok: false, outcome: 'suppressed', reason: 'concurrency_cap_reached' };
   }
   const attempt = numberOrZero(prior.attempt);
@@ -331,7 +380,15 @@ function evaluateRetryAndLease(key, tracking, bounds, nowMs) {
 
 export function planDeadWorkerReconcile(input = {}) {
   const nowMs = numberOrZero(input.nowMs) || Date.now();
-  const tracking = input.tracking ?? {};
+  const boundResolution = input.bounds
+    ? validateResolvedDeadWorkerBounds(input.bounds)
+    : resolveDeadWorkerBounds(input.respawnPolicy);
+  const bounds = boundResolution.ok ? boundResolution.bounds : {
+    maxAttempts: DEFAULT_DEAD_WORKER_MAX_ATTEMPTS,
+    backoffMs: DEFAULT_DEAD_WORKER_BACKOFF_MS,
+    concurrency: DEFAULT_DEAD_WORKER_CONCURRENCY,
+  };
+  let tracking = expireStaleAttemptLeases(input.tracking ?? {}, bounds, nowMs);
   const actions = [];
   const gates = validateDeadWorkerGates(input);
   const sessions = toArray(input.sessions);
@@ -341,7 +398,7 @@ export function planDeadWorkerReconcile(input = {}) {
     if (!sessionId || !hasAssignedTask(session)) {
       continue;
     }
-    const evidence = classifyWorkerDeathEvidence(session, input.aoEvents, nowMs);
+    const evidence = classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
     if (evidence.verdict === 'live_or_unknown') {
       continue;
     }
@@ -420,7 +477,7 @@ export function planDeadWorkerReconcile(input = {}) {
     });
   }
 
-  return { actions, gates };
+  return { actions, gates, tracking };
 }
 
 export function commitDeadWorkerAction(tracking = {}, action, nowMs = Date.now()) {

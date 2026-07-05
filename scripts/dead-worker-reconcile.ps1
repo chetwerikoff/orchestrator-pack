@@ -232,6 +232,12 @@ function Invoke-DeadWorkerTick {
     if (-not $payload.tracking) { $payload.tracking = $tracking }
 
     $plan = Invoke-DeadWorkerPlannerCli -Subcommand 'plan' -Payload $payload
+    if ($null -ne $plan.tracking) {
+        $tracking = $plan.tracking
+        if (-not $DryRunMode) {
+            Set-DeadWorkerState -Path $StatePath -State $tracking
+        }
+    }
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $attempted = 0
     foreach ($action in @($plan.actions)) {

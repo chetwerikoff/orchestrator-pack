@@ -12,11 +12,14 @@ import {
   commitDeadWorkerAction,
   evaluateDeadWorkerInterval,
   evaluateDeadWorkerRuntimeAdoption,
+  expireStaleAttemptLeases,
   loadAutonomousRespawnPolicy,
   planDeadWorkerReconcile,
   probeRecoveryChecks,
+  resolveAttemptLeaseTtlMs,
   resolveDeadWorkerBounds,
   resolveRecoveryRoute,
+  resolveShutdownSuppressionWindowMs,
   validateAutonomousRespawnPolicy,
   validateDeadWorkerGates,
 } from '../docs/dead-worker-reconciler.mjs';
@@ -69,6 +72,57 @@ describe('dead-worker-reconciler (Issue #593)', () => {
   it('enablement gate passes when toggle ON and prerequisites present', () => {
     const gate = validateDeadWorkerGates(enabledPlanInput());
     expect(gate.ok).toBe(true);
+  });
+
+  it('honors configured shutdown suppression window from policy JSON', () => {
+    const session = { name: 'opk-593', issueNumber: 593, status: 'terminated', runtime: 'exited' };
+    const shutdownMs = 1_780_000_000_000;
+    const events = [
+      { name: 'orchestrator.shutdown_started', timestampMs: shutdownMs },
+      { name: 'agent_process_exited', sessionId: 'opk-593', timestampMs: shutdownMs + 1_000 },
+    ];
+    const nowMs = shutdownMs + 150_000;
+    const shortWindow = classifyWorkerDeathEvidence(session, events, nowMs, {
+      respawnPolicy: { shutdownSuppressionWindowMs: 120_000 },
+    });
+    expect(shortWindow.verdict).toBe('dead');
+    const longWindow = classifyWorkerDeathEvidence(session, events, nowMs, {
+      respawnPolicy: { shutdownSuppressionWindowMs: 300_000 },
+    });
+    expect(longWindow.verdict).toBe('suppressed');
+    expect(resolveShutdownSuppressionWindowMs({ shutdownSuppressionWindowMs: 120_000 })).toBe(120_000);
+  });
+
+  it('expires stale attempt_started leases before concurrency gate', () => {
+    const fixture = readCapture('recoverable-crash.raw.json');
+    const nowMs = 1_780_000_105_500;
+    const bounds = { maxAttempts: 3, backoffMs: 60_000, concurrency: 1 };
+    const leaseTtlMs = resolveAttemptLeaseTtlMs(bounds);
+    const staleStartedAt = nowMs - leaseTtlMs - 1_000;
+    const enabled = enabledPlanInput({
+      sessions: [fixture.session],
+      aoEvents: fixture.events,
+      nowMs,
+    });
+    const baseline = planDeadWorkerReconcile(enabled);
+    const recoverKey = baseline.actions.find((a: { type: string }) => a.type === 'attempt_started')?.key as string;
+    expect(recoverKey).toBeTruthy();
+    const blocked = planDeadWorkerReconcile({
+      ...enabled,
+      tracking: {
+        attempts: { [recoverKey]: { attempt: 1, lastAttemptMs: staleStartedAt } },
+        leases: { [recoverKey]: { outcome: 'attempt_started', startedAtMs: staleStartedAt, sessionId: 'opk-593' } },
+        audit: [],
+      },
+    });
+    expect(blocked.actions.some((a: { reason?: string }) => a.reason === 'concurrency_cap_reached')).toBe(false);
+    expect(blocked.actions.some((a: { type: string }) => a.type === 'attempt_started')).toBe(true);
+    const pruned = expireStaleAttemptLeases(blocked.tracking ?? {}, bounds, nowMs) as {
+      leases?: Record<string, unknown>;
+      audit?: Array<{ outcome?: string }>;
+    };
+    expect(pruned.leases?.[recoverKey]).toBeUndefined();
+    expect(pruned.audit?.some((row: { outcome?: string }) => row.outcome === 'lease_expired')).toBe(true);
   });
 
   it('operator manual kill suppresses respawn (opk-128 shape)', () => {

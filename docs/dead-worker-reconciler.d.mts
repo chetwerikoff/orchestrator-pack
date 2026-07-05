@@ -5,6 +5,7 @@ export declare const DEFAULT_DEAD_WORKER_MAX_ATTEMPTS: number;
 export declare const DEFAULT_DEAD_WORKER_BACKOFF_MS: number;
 export declare const DEFAULT_DEAD_WORKER_CONCURRENCY: number;
 export declare const OPERATOR_SHUTDOWN_SUPPRESSION_MS: number;
+export declare const DEFAULT_SHUTDOWN_SUPPRESSION_WINDOW_MS: number;
 
 export interface DeathEvidence {
   verdict: 'suppressed' | 'dead' | 'audit_only' | 'live_or_unknown';
@@ -91,7 +92,20 @@ export declare function classifyWorkerDeathEvidence(
   session: Record<string, unknown>,
   aoEvents?: Array<Record<string, unknown>>,
   nowMs?: number,
+  options?: { respawnPolicy?: Record<string, unknown> },
 ): DeathEvidence;
+
+export declare function resolveShutdownSuppressionWindowMs(policy: unknown): number;
+
+export declare function resolveAttemptLeaseTtlMs(
+  bounds?: { maxAttempts?: number; backoffMs?: number; attemptLeaseTtlMs?: number },
+): number;
+
+export declare function expireStaleAttemptLeases(
+  tracking?: Record<string, unknown>,
+  bounds?: { maxAttempts?: number; backoffMs?: number; attemptLeaseTtlMs?: number },
+  nowMs?: number,
+): Record<string, unknown>;
 
 export declare function buildDeadWorkerReconcileKey(candidate: Record<string, unknown>): string;
 
@@ -121,7 +135,7 @@ export declare function evaluateDeadWorkerRuntimeAdoption(
 
 export declare function planDeadWorkerReconcile(
   input?: PlanDeadWorkerReconcileInput,
-): { actions: DeadWorkerReconcileAction[]; gates: DeadWorkerGateResult };
+): { actions: DeadWorkerReconcileAction[]; gates: DeadWorkerGateResult; tracking?: Record<string, unknown> };
 
 export declare function commitDeadWorkerAction(
   tracking?: Record<string, unknown>,
