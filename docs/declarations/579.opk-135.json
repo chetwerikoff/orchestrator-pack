@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "98ee65ede6ced6e350f534b29caa82738643c6c7",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:a7ea3928fa291dfc85fac9b87b3622eda3541e3f9cd755aad6c367e149947087"
+    "active_scope_hash": "sha256:661699b45e2c77742ef8427b17522c52ae8e2c993b8e35b6c867602d1c3c9536"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -21,8 +21,24 @@
     "scripts/draft-author-relocation-contract.test.ts",
     "scripts/draft-author-relocation-surfaces.json",
     "scripts/verify.ps1",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-message-submit-reconcile.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:a7ea3928fa291dfc85fac9b87b3622eda3541e3f9cd755aad6c367e149947087",
+      "new_active_scope_hash": "sha256:661699b45e2c77742ef8427b17522c52ae8e2c993b8e35b6c867602d1c3c9536",
+      "changed": {
+        "added": [
+          "scripts/worker-message-submit-reconcile.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Post-main-merge type-check fix: cast orphan-anchor re-seat test inputs",
+      "actor": "opk-137",
+      "timestamp": "2026-07-05T04:58:47.433Z",
+      "applied": true
+    }
+  ]
 }
