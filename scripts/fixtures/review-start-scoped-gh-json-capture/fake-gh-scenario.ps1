@@ -162,6 +162,17 @@ switch ($scenario) {
         Write-OpenPrJson -PrNumber $prNumber -HeadSha $headB
         exit 0
     }
+    'hang_then_ok' {
+        $attempt = Get-ScopedGhScenarioAttempt
+        if ($attempt -le 1) {
+            Start-Sleep -Seconds 30
+            exit 0
+        }
+        $head = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+        if (-not $head) { $head = '31fc8c6143c23e6db1b47fa8525aced110e2f84e' }
+        Write-OpenPrJson -PrNumber $prNumber -HeadSha $head
+        exit 0
+    }
     'gh_auth_failed' {
         Write-Err 'HTTP 401: Bad credentials'
         exit 1

@@ -87,7 +87,8 @@ function Invoke-GhPrViewStructuredCapture {
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
-        [int]$PrNumber
+        [int]$PrNumber,
+        [int]$TimeoutMs = 0
     )
 
     $command = Resolve-ReviewStartScopedGhCommand
@@ -114,18 +115,34 @@ function Invoke-GhPrViewStructuredCapture {
     $proc = [System.Diagnostics.Process]::Start($psi)
     $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
     $stderrDrain = $proc.StandardError.ReadToEndAsync()
-    $proc.WaitForExit() | Out-Null
+    $timedOut = $false
+    if ($TimeoutMs -gt 0) {
+        $timedOut = -not $proc.WaitForExit([Math]::Max(1, $TimeoutMs))
+        if ($timedOut) {
+            try { $proc.Kill($true) } catch { }
+            try { $proc.WaitForExit(2000) | Out-Null } catch { }
+        }
+    }
+    else {
+        $proc.WaitForExit() | Out-Null
+    }
     try { $stdoutDrain.Wait(5000) | Out-Null } catch { }
     try { $stderrDrain.Wait(5000) | Out-Null } catch { }
     $stdout = [string]$stdoutDrain.Result
     $stderr = [string]$stderrDrain.Result
-    $exitCode = $proc.ExitCode
+    $exitCode = if ($timedOut) { -1 } else { $proc.ExitCode }
 
-    $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $stdout -Stderr $stderr
+    $parse = if ($timedOut) {
+        @{ ok = $false; reason = 'preflight_timeout' }
+    }
+    else {
+        Invoke-CommandRuntimeParseStructuredOutput -Stdout $stdout -Stderr $stderr
+    }
     return @{
         exitCode = $exitCode
         stdout   = $stdout
         stderr   = $stderr
+        timedOut = $timedOut
         parse    = $parse
     }
 }

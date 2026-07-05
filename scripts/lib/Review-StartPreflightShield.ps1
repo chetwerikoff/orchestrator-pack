@@ -47,6 +47,15 @@ function Get-ReviewStartPreflightShieldInjectedJitterMs {
     return $null
 }
 
+function Get-ReviewStartPreflightShieldCaptureTimeoutMs {
+    $fromEnv = [string]$env:AO_REVIEW_START_PREFLIGHT_SHIELD_CAPTURE_TIMEOUT_MS
+    $parsed = 0
+    if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+    return 30_000
+}
+
 function Get-ReviewStartPreflightShieldRemainingClaimMs {
     param([hashtable]$ClaimResult)
 
@@ -84,12 +93,13 @@ function Invoke-ReviewStartPreflightGhSingleCapture {
         }
     }
 
-    $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber
+    $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber `
+        -TimeoutMs (Get-ReviewStartPreflightShieldCaptureTimeoutMs)
     return @{
         exitCode   = [int]$capture.exitCode
         stdout     = [string]$capture.stdout
         stderr     = [string]$capture.stderr
-        timedOut   = $false
+        timedOut   = [bool]$capture.timedOut
         parse      = $capture.parse
         supervised = $false
         ownershipLost = $false
