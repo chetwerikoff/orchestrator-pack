@@ -72,6 +72,15 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(result.reason).toBe('rate_limit');
     });
 
+    it('classifies missing gh binary as terminal', () => {
+      expect(
+        classifyPreflightGhOutcome({
+          exitCode: -1,
+          stderr: 'gh command not found: /nonexistent/review-start-gh-missing',
+        }).reason,
+      ).toBe('gh_binary_missing');
+    });
+
     it('classifies auth and parse pollution as terminal', () => {
       expect(classifyPreflightGhOutcome({ exitCode: 1, stderr: 'HTTP 401: Bad credentials' }).disposition).toBe(
         'terminal',
@@ -360,6 +369,24 @@ describe('review-start preflight transient shield (#584)', () => {
       } else {
         expect(result.reason).toBe(expectedReason);
       }
+      expect(result.transportFailure).toBe(true);
+    });
+
+    it('returns gh_binary_missing for a missing scoped gh adoption command', () => {
+      const missingGh = path.join(tmpdir(), `missing-gh-${Date.now()}.ps1`);
+      const result = runScopedPreflight(
+        `
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
+      $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
+      [pscustomobject]@{
+        reason = [string]$lookup.transportFailure.reason
+        count = @($lookup.openPrs).Count
+        transportFailure = [bool]$lookup.transportFailure
+      } | ConvertTo-Json -Compress
+    `,
+      );
+      expect(result.count).toBe(0);
+      expect(result.reason).toBe('gh_binary_missing');
       expect(result.transportFailure).toBe(true);
     });
   });

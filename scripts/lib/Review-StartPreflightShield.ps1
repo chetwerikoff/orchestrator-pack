@@ -97,7 +97,10 @@ function Invoke-ReviewStartPreflightGhSingleCapture {
             Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
         }
         else {
-            @{ ok = $false; reason = if ($transport.timedOut) { 'preflight_timeout' } else { '' } }
+            $reason = if ($transport.timedOut) { 'preflight_timeout' }
+            elseif ([string]$transport.reason) { [string]$transport.reason }
+            else { '' }
+            @{ ok = $false; reason = $reason }
         }
         return @{
             exitCode = [int]$transport.exitCode

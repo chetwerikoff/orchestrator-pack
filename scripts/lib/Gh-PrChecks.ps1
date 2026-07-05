@@ -82,6 +82,31 @@ function Resolve-ReviewStartScopedGhCommand {
     return 'gh'
 }
 
+
+function New-GhPrViewMissingBinaryCapture {
+    param([string]$Command)
+
+    $message = "gh command not found: $Command"
+    return @{
+        exitCode = -1
+        stdout   = ''
+        stderr   = $message
+        timedOut = $false
+        parse    = @{ ok = $false; reason = 'gh_binary_missing' }
+    }
+}
+
+function Test-ReviewStartGhCommandResolvable {
+    param([string]$Command)
+
+    if (-not $Command) { return $false }
+    if ($Command -eq 'gh') { return $true }
+    if ($Command -match '[/\\]' -or $Command -match '\.(ps1|exe|cmd|bat)$') {
+        return Test-Path -LiteralPath $Command
+    }
+    return $true
+}
+
 function Invoke-GhPrViewStructuredCapture {
     param(
         [Parameter(Mandatory = $true)]
@@ -92,6 +117,9 @@ function Invoke-GhPrViewStructuredCapture {
     )
 
     $command = Resolve-ReviewStartScopedGhCommand
+    if (-not (Test-ReviewStartGhCommandResolvable -Command $command)) {
+        return New-GhPrViewMissingBinaryCapture -Command $command
+    }
     $ghArgs = @('pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     if ($command -match '\.ps1$') {
@@ -112,7 +140,12 @@ function Invoke-GhPrViewStructuredCapture {
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = $RepoRoot
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+    }
+    catch {
+        return New-GhPrViewMissingBinaryCapture -Command $command
+    }
     $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
     $stderrDrain = $proc.StandardError.ReadToEndAsync()
     $timedOut = $false

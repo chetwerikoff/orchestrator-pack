@@ -5,6 +5,7 @@
 
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
 
 function Resolve-ReviewStartSupervisedGhCommand {
     $override = [string]$env:AO_REVIEW_START_SUPERVISED_GH_COMMAND
@@ -76,6 +77,17 @@ function Invoke-ReviewStartSupervisedGh {
 
     $resolvedDeadline = if ($DeadlineMs -gt 0) { $DeadlineMs } else { Get-ReviewStartSupervisedGhDeadlineMs -ClaimResult $ClaimResult }
     $command = Resolve-ReviewStartSupervisedGhCommand
+    if (-not (Test-ReviewStartGhCommandResolvable -Command $command)) {
+        return @{
+            ok           = $false
+            reason       = 'gh_binary_missing'
+            exitCode     = -1
+            stderr       = "gh command not found: $command"
+            stdout       = ''
+            timedOut     = $false
+            failureClass = 'infra_transport'
+        }
+    }
     $argString = ($GhArguments | ForEach-Object { [string]$_ }) -join ' '
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     if ($command -match '\.ps1$') {
@@ -105,7 +117,21 @@ function Invoke-ReviewStartSupervisedGh {
 
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
-    [void]$proc.Start()
+    try {
+        [void]$proc.Start()
+    }
+    catch {
+        Complete-ReviewStartClaimInfraPause -ClaimResult $ClaimResult -Stderr "gh command not found: $command" | Out-Null
+        return @{
+            ok           = $false
+            reason       = 'gh_binary_missing'
+            exitCode     = -1
+            stderr       = "gh command not found: $command"
+            stdout       = ''
+            timedOut     = $false
+            failureClass = 'infra_transport'
+        }
+    }
     $childPid = $proc.Id
     $delayMs = 0
     if ([string]$env:AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS) {
