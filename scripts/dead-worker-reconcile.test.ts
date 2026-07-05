@@ -18,6 +18,7 @@ import {
   probeRecoveryChecks,
   resolveAttemptLeaseTtlMs,
   resolveDeadWorkerBounds,
+  resolveIssueOnlyPrLookup,
   resolveRecoveryRoute,
   resolveShutdownSuppressionWindowMs,
   validateAutonomousRespawnPolicy,
@@ -184,6 +185,34 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     );
     expect(rateLimited.reason).toBe('blocked_rate_limit_pr_unknown');
     expect(rateLimited.escalate).toBe(true);
+  });
+
+  it('derives issue-only PR linkage from open PR list', () => {
+    const session = { name: 'opk-593', issue: 593, branch: 'feat/593', worktree: '/wt' };
+    const evidence = { verdict: 'dead', reason: 'probed_dead_event' } as const;
+
+    const spawnNew = resolveRecoveryRoute(session, evidence, { openPrs: [] });
+    expect(spawnNew.ok).toBe(true);
+    expect(spawnNew.spawnAction).toBe('spawn-new');
+
+    const claimPr = resolveRecoveryRoute(session, evidence, {
+      openPrs: [{ number: 605, headRefName: 'feat/593' }],
+    });
+    expect(claimPr.ok).toBe(true);
+    expect(claimPr.spawnAction).toBe('claim-pr-resume');
+    expect(claimPr.prNumber).toBe(605);
+
+    const ambiguous = resolveRecoveryRoute(session, evidence, {
+      openPrs: [
+        { number: 605, headRefName: 'feat/593' },
+        { number: 606, headRefName: 'feat/issue-593' },
+      ],
+    });
+    expect(ambiguous.ok).toBe(false);
+    expect(ambiguous.reason).toBe('issue_only_pr_ambiguity');
+
+    const lookup = resolveIssueOnlyPrLookup(session, { prLookupFailed: true });
+    expect(lookup.prLookupFailed).toBe(true);
   });
 
   it('retry budget exhausts and escalates', () => {

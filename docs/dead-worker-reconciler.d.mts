@@ -76,6 +76,7 @@ export interface PlanDeadWorkerReconcileInput {
   };
   tracking?: Record<string, unknown>;
   nowMs?: number;
+  openPrs?: Array<{ number?: number; headRefName?: string; head?: string }>;
   issueOnlyPrAmbiguous?: boolean;
   prLookupFailed?: boolean;
 }
@@ -108,6 +109,24 @@ export declare function expireStaleAttemptLeases(
 ): Record<string, unknown>;
 
 export declare function buildDeadWorkerReconcileKey(candidate: Record<string, unknown>): string;
+
+export declare function issueLinkedWorkerBranches(issueNumber: number): string[];
+
+export declare function issueLinkedOpenPrs(
+  issueNumber: number,
+  openPrs?: Array<{ number?: number; headRefName?: string; head?: string }>,
+  session?: Record<string, unknown> | null,
+): Array<{ number?: number; headRefName?: string; head?: string }>;
+
+export declare function resolveIssueOnlyPrLookup(
+  session: Record<string, unknown>,
+  input?: Record<string, unknown>,
+): {
+  prLookupFailed?: boolean;
+  issueOnlyPrAmbiguous?: boolean;
+  resolvedPrNumber?: number;
+  matchedPrNumbers?: number[];
+};
 
 export declare function resolveRecoveryRoute(
   session: Record<string, unknown>,

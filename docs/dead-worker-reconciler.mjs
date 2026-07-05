@@ -247,6 +247,58 @@ export function buildDeadWorkerReconcileKey(candidate) {
   return `dead-worker-${digest}`;
 }
 
+export function issueLinkedWorkerBranches(issueNumber) {
+  const issue = numberOrZero(issueNumber);
+  if (issue <= 0) {
+    return [];
+  }
+  return [`feat/${issue}`, `feat/issue-${issue}`, `opk-${issue}`];
+}
+
+export function issueLinkedOpenPrs(issueNumber, openPrs = [], session = null) {
+  const issue = numberOrZero(issueNumber);
+  if (issue <= 0) {
+    return [];
+  }
+  const authorized = new Set(issueLinkedWorkerBranches(issue));
+  const sessionBranch = getBranch(session);
+  return toArray(openPrs).filter((pr) => {
+    const head = normalizeString(pr?.headRefName ?? pr?.head);
+    if (!head) {
+      return false;
+    }
+    if (authorized.has(head)) {
+      return true;
+    }
+    return Boolean(sessionBranch && sessionBranch === head);
+  });
+}
+
+/**
+ * Derive issue-only PR linkage for live ticks (openPrs supplied). Fixtures without
+ * openPrs keep the explicit issueOnlyPrAmbiguous / prLookupFailed contract.
+ */
+export function resolveIssueOnlyPrLookup(session, input = {}) {
+  if (input.prLookupFailed) {
+    return { prLookupFailed: true };
+  }
+  if (input.openPrs === undefined) {
+    return { issueOnlyPrAmbiguous: input.issueOnlyPrAmbiguous !== false };
+  }
+  const issueNumber = getIssueNumber(session);
+  const matches = issueLinkedOpenPrs(issueNumber, input.openPrs, session);
+  if (matches.length > 1) {
+    return {
+      issueOnlyPrAmbiguous: true,
+      matchedPrNumbers: matches.map((pr) => numberOrZero(pr.number)).filter((n) => n > 0),
+    };
+  }
+  if (matches.length === 1) {
+    return { issueOnlyPrAmbiguous: false, resolvedPrNumber: numberOrZero(matches[0].number) };
+  }
+  return { issueOnlyPrAmbiguous: false, resolvedPrNumber: 0 };
+}
+
 export function resolveRecoveryRoute(session, evidence, input = {}) {
   const issueNumber = getIssueNumber(session);
   const prNumber = getPrNumber(session);
@@ -256,10 +308,15 @@ export function resolveRecoveryRoute(session, evidence, input = {}) {
   if (issueNumber <= 0) {
     return { ok: false, reason: 'missing_assigned_task' };
   }
-  if (input.prLookupFailed) {
+  const lookup = resolveIssueOnlyPrLookup(session, input);
+  if (lookup.prLookupFailed) {
     return { ok: false, reason: 'blocked_rate_limit_pr_unknown', escalate: true };
   }
-  if (input.issueOnlyPrAmbiguous !== false) {
+  const resolvedPr = numberOrZero(lookup.resolvedPrNumber);
+  if (resolvedPr > 0) {
+    return { ok: true, spawnAction: 'claim-pr-resume', prNumber: resolvedPr, issueNumber };
+  }
+  if (lookup.issueOnlyPrAmbiguous) {
     return { ok: false, reason: 'issue_only_pr_ambiguity' };
   }
   return { ok: true, spawnAction: 'spawn-new', issueNumber, prNumber: 0 };

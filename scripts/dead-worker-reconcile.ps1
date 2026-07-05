@@ -33,6 +33,7 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorYamlRules.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 $Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
 
@@ -186,6 +187,27 @@ function Invoke-DeadWorkerRecovery {
     return @{ ok = $true; outcome = 'recovered'; output = ($capture.output | Out-String).Trim() }
 }
 
+function Get-DeadWorkerOpenPrSnapshot {
+    try {
+        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'dead-worker-reconcile')
+        return @{
+            openPrs          = @($openPrs)
+            prLookupFailed   = $false
+        }
+    }
+    catch {
+        $message = $_.Exception.Message
+        if ($message -match 'gh pr list failed|snapshot_populate_failed|child_list_bypass') {
+            Write-DeadWorkerLog "open pr lookup failed: $message"
+            return @{
+                openPrs        = @()
+                prLookupFailed = $true
+            }
+        }
+        throw
+    }
+}
+
 function Commit-DeadWorkerAction {
     param(
         [object]$State,
@@ -216,6 +238,7 @@ function Invoke-DeadWorkerTick {
         $live = Get-DeadWorkerLivePayload
         $checks = Invoke-DeadWorkerPlannerCli -Subcommand 'probe-checks' -Payload @{ packRoot = $PackRoot }
         $gates = Get-DeadWorkerLivePlanGates
+        $prSnapshot = Get-DeadWorkerOpenPrSnapshot
         $payload = @{
             sessions = @($live.sessions)
             aoEvents = @($live.aoEvents)
@@ -225,8 +248,8 @@ function Invoke-DeadWorkerTick {
             effectiveRuntimePolicy = $gates.effectiveRuntimePolicy
             bounds = $gates.bounds
             nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            issueOnlyPrAmbiguous = $true
-            prLookupFailed = $false
+            openPrs = @($prSnapshot.openPrs)
+            prLookupFailed = [bool]$prSnapshot.prLookupFailed
         }
     }
     if (-not $payload.tracking) { $payload.tracking = $tracking }
