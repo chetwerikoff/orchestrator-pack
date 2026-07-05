@@ -433,9 +433,35 @@ process.stdout.write(String(result.status ?? 1));`;
       expect(consumers.length).toBeGreaterThanOrEqual(5);
       const fleetCache = readFileSync(join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1'), 'utf8');
       expect(fleetCache).toMatch(/Set-GhGovernorCallerContext/);
+      expect(fleetCache).toMatch(/Restore-GhGovernorCallerContext/);
+      expect(fleetCache).toMatch(/savedGovernorContext = Set-GhGovernorCallerContext/);
       expect(resolveCallerLane({ GH_GOVERNOR_CONSUMER: consumers[0].id })).toBe('background');
     } finally {
       harness.cleanup();
     }
+  });
+
+  it('passthrough forwards captured stderr into governor release', () => {
+    const wrapper = readFileSync(wrapperPath, 'utf8');
+    expect(wrapper).toMatch(/stdio:\s*\['inherit',\s*'pipe',\s*'pipe'\]/);
+    expect(wrapper).toMatch(/withGovernorRelease\(admission,\s*\{[\s\S]*stderr:\s*result\.stderr/);
+  });
+
+  it('governor release classifies passthrough rate-limit stderr as observed limit', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-passthrough-'));
+    const env = governorEnv(root);
+    const admission = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'background' },
+      argv: ['extension', 'list'],
+      partitionKey,
+    });
+    expect(admission.admitted).toBe(true);
+    admission.release?.({
+      exitCode: 1,
+      stderr: 'API rate limit exceeded',
+    });
+    const state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.cooldownStrike).toBe(1);
+    expect(state?.cooldownSource).toBe('fixed-backoff');
   });
 });

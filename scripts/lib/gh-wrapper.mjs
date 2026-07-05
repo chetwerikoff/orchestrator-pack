@@ -111,14 +111,29 @@ function passthrough(argv) {
   const result = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'pipe'],
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
   });
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
   const status = result.status ?? 1;
-  withGovernorRelease(admission, { exitCode: status });
+  const rateLimit = consumeGhApiRateLimitHeaders();
+  withGovernorRelease(admission, {
+    exitCode: status,
+    stderr: result.stderr ?? '',
+    stdout: result.stdout ?? '',
+    headers: rateLimit,
+  });
   writeWrapperAudit('complete', buildAuditFields(argv, {
     kind: 'passthrough',
     route: 'passthrough',
     status,
+    rateLimit,
   }));
   process.exit(status);
 }
