@@ -396,6 +396,7 @@ describe('review-start preflight transient shield (#584)', () => {
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
       [pscustomobject]@{
         reason = [string]$lookup.transportFailure.reason
+        failureClass = [string]$lookup.transportFailure.failureClass
         count = @($lookup.openPrs).Count
         transportFailure = [bool]$lookup.transportFailure
       } | ConvertTo-Json -Compress
@@ -403,7 +404,34 @@ describe('review-start preflight transient shield (#584)', () => {
       );
       expect(result.count).toBe(0);
       expect(result.reason).toBe('gh_binary_missing');
+      expect(result.failureClass).toBe('infra_transport');
       expect(result.transportFailure).toBe(true);
+    });
+  });
+
+  describe('missing gh infra classification', () => {
+    it('preserves infra_transport for gh_binary_missing recheck handling', () => {
+      const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+      const missingGh = path.join(tmpdir(), `missing-gh-recheck-${Date.now()}.ps1`);
+      const result = JSON.parse(runPwsh(
+        `
+        . ${psString(shieldHelperPath)}
+        . ${psString(claimHelperPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
+        $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
+        $denial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot @{
+          transportFailure = $lookup.transportFailure
+        }
+        [pscustomobject]@{
+          reason = [string]$lookup.transportFailure.reason
+          failureClass = [string]$lookup.transportFailure.failureClass
+          denial = ($null -ne $denial)
+        } | ConvertTo-Json -Compress
+      `,
+      ));
+      expect(result.reason).toBe('gh_binary_missing');
+      expect(result.failureClass).toBe('infra_transport');
+      expect(result.denial).toBe(true);
     });
   });
 

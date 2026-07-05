@@ -184,7 +184,7 @@ function Resolve-ReviewStartScopedGhTransportFailureClass {
     param([string]$Reason)
 
     switch -Regex ($Reason) {
-        '^(preflight_transient_exhausted|preflight_timeout|claim_ownership_lost)$' { return 'infra_transport' }
+        '^(preflight_transient_exhausted|preflight_timeout|claim_ownership_lost|gh_binary_missing)$' { return 'infra_transport' }
         default { return '' }
     }
 }
