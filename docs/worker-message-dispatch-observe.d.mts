@@ -54,6 +54,9 @@ export interface DeliveryRecord {
   prNumber?: number;
   headSha?: string;
   deliverySequence?: number;
+  consumptionObserved?: boolean;
+  consumedAfterFlushObserved?: boolean;
+  consumptionEvidence?: string;
 }
 
 export declare function classifyDeliveryPath(shape: {
