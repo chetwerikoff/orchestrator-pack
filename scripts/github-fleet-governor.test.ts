@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,7 @@ import {
   resolveCallerLane,
   resolveGovernorStateDir,
 } from './lib/gh-governor.mjs';
+import { resolvePartitionKey } from './lib/gh-graphql-degraded.mjs';
 import {
   buildGithubFleetWakeConsumers,
   createGithubFleetCacheHarness,
@@ -61,6 +62,7 @@ function runGovernorCli(subcommand: string, payload: object, env: NodeJS.Process
 
 function spawnParallelAcquire(count: number, env: NodeJS.ProcessEnv, lane = 'background') {
   const script = `import { acquireGithubGovernorAdmission, releaseGithubGovernorAdmission } from './lib/gh-governor.mjs';
+import { resolvePartitionKey } from './lib/gh-graphql-degraded.mjs';
 const lane = ${JSON.stringify(lane)};
 const env = { ...process.env, GH_GOVERNOR_LANE: lane };
 const admission = acquireGithubGovernorAdmission({ env, argv: ['pr','list'], realGh: 'gh', partitionKey: ${JSON.stringify(partitionKey)} });
@@ -480,10 +482,38 @@ process.stdout.write(String(result.status ?? 1));`;
     }
   });
 
-  it('passthrough forwards captured stderr into governor release', () => {
+  it('passthrough streams stderr when governor enabled and inherits when disabled', () => {
     const wrapper = readFileSync(wrapperPath, 'utf8');
-    expect(wrapper).toMatch(/stdio:\s*\['inherit',\s*'inherit',\s*'pipe'\]/);
-    expect(wrapper).toMatch(/withGovernorRelease\(admission,\s*\{[\s\S]*stderr:\s*result\.stderr/);
+    expect(wrapper).toMatch(/function runNativePassthrough/);
+    expect(wrapper).toMatch(/captureStderrForGovernor/);
+    expect(wrapper).toMatch(/stdio:\s*'inherit'/);
+    expect(wrapper).not.toMatch(/maxBuffer:\s*1024/);
+  });
+
+  it('governor partition key resolution skips gh api user probe', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-partition-'));
+    const counter = join(root, 'probe-count');
+    const fakeGh = join(root, 'probe-gh');
+    writeExecutable(fakeGh, `#!/usr/bin/env bash
+if [[ "$*" == *"api"* && "$*" == *"user"* ]]; then
+  echo 1 >> "${counter}"
+  echo login-from-api
+  exit 0
+fi
+if [[ "$1" == "auth" && "$2" == "token" ]]; then
+  exit 1
+fi
+exit 0
+`);
+    const env = { ...process.env };
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+    const governedKey = resolvePartitionKey(fakeGh, ['pr', 'list'], env, { skipApiIdentityProbe: true });
+    expect(existsSync(counter)).toBe(false);
+    expect(governedKey).toMatch(/^github\.com\|/);
+    const defaultKey = resolvePartitionKey(fakeGh, ['pr', 'list'], env);
+    expect(readFileSync(counter, 'utf8').trim()).toBe('1');
+    expect(defaultKey).not.toBe(governedKey);
   });
 
   it('governor release classifies passthrough rate-limit stderr as observed limit', () => {

@@ -3,7 +3,7 @@
  * Pack gh wrapper — known inventory reads always REST; unknown argv passthrough (Issue #431).
  */
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { appendAuditJsonlLine, resolveAuditJsonlPolicy } from './audit-jsonl-retention.mjs';
 import { classifyArgv } from './gh-inventory-match.mjs';
@@ -85,6 +85,50 @@ function beginGovernorAdmission(argv, realGh) {
   return admission;
 }
 
+const PASSTHROUGH_STDERR_CAPTURE_MAX = 64 * 1024;
+
+function appendPassthroughStderrCapture(chunks, chunk, maxBytes) {
+  const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  process.stderr.write(buf);
+  const combined = chunks.length === 0
+    ? buf
+    : Buffer.concat([chunks[0], buf]);
+  chunks[0] = combined.length > maxBytes
+    ? combined.subarray(combined.length - maxBytes)
+    : combined;
+}
+
+function runNativePassthrough(realGh, argv, captureStderrForGovernor) {
+  const childEnv = { ...process.env, GH_WRAPPER_ACTIVE: '1' };
+  const spawnOptions = { cwd: process.cwd(), env: childEnv };
+  if (!captureStderrForGovernor) {
+    const result = spawnSync(realGh, argv, { ...spawnOptions, stdio: 'inherit' });
+    return { status: result.status ?? 1, stderr: '' };
+  }
+
+  let status = 1;
+  const stderrChunks = [];
+  const done = new Int32Array(new SharedArrayBuffer(4));
+  const child = spawn(realGh, argv, { ...spawnOptions, stdio: ['inherit', 'inherit', 'pipe'] });
+  child.stderr.on('data', (chunk) => {
+    appendPassthroughStderrCapture(stderrChunks, chunk, PASSTHROUGH_STDERR_CAPTURE_MAX);
+  });
+  const settle = (code = 1) => {
+    status = code;
+    Atomics.store(done, 0, 1);
+    Atomics.notify(done, 0);
+  };
+  child.on('close', (code) => settle(code ?? 1));
+  child.on('error', () => settle(1));
+  while (Atomics.load(done, 0) === 0) {
+    Atomics.wait(done, 0, 0, 50);
+  }
+  return {
+    status,
+    stderr: stderrChunks[0]?.toString('utf8') ?? '',
+  };
+}
+
 function passthrough(argv) {
   const realGh = resolveRealGhBinary();
   const admission = beginGovernorAdmission(argv, realGh);
@@ -93,6 +137,7 @@ function passthrough(argv) {
     return;
   }
   if (tryGraphqlDegradedPassthrough(argv, realGh, {
+    partitionKey: admission.partitionKey,
     onComplete: (fields = {}) => {
       withGovernorRelease(admission, {
         exitCode: fields.status ?? 0,
@@ -108,21 +153,12 @@ function passthrough(argv) {
   })) {
     return;
   }
-  const result = spawnSync(realGh, argv, {
-    cwd: process.cwd(),
-    env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    stdio: ['inherit', 'inherit', 'pipe'],
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024,
-  });
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  const status = result.status ?? 1;
+  const captureStderrForGovernor = isGovernorEnabled() && !admission.skipped;
+  const { status, stderr } = runNativePassthrough(realGh, argv, captureStderrForGovernor);
   const rateLimit = consumeGhApiRateLimitHeaders();
   withGovernorRelease(admission, {
     exitCode: status,
-    stderr: result.stderr ?? '',
+    stderr,
     headers: rateLimit,
   });
   writeWrapperAudit('complete', buildAuditFields(argv, {

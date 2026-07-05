@@ -162,6 +162,7 @@ export function resolveCredentialFingerprint(
   env = process.env,
   hostname = DEFAULT_HOST,
   explicitHostname = false,
+  options = {},
 ) {
   const envToken = resolveEnvTokenForHost(env, hostname);
   if (envToken) {
@@ -181,14 +182,16 @@ export function resolveCredentialFingerprint(
     }
   }
 
-  const loginResult = spawnSync(realGh, ['api', ...hostArgs, 'user', '-q', '.login'], {
-    encoding: 'utf8',
-    env: { ...env, GH_WRAPPER_ACTIVE: '1' },
-  });
-  if (loginResult.status === 0) {
-    const login = (loginResult.stdout || '').trim();
-    if (login) {
-      return hashFingerprint(`gh-login:${login}`);
+  if (!options.skipApiIdentityProbe) {
+    const loginResult = spawnSync(realGh, ['api', ...hostArgs, 'user', '-q', '.login'], {
+      encoding: 'utf8',
+      env: { ...env, GH_WRAPPER_ACTIVE: '1' },
+    });
+    if (loginResult.status === 0) {
+      const login = (loginResult.stdout || '').trim();
+      if (login) {
+        return hashFingerprint(`gh-login:${login}`);
+      }
     }
   }
 
@@ -200,9 +203,9 @@ export function resolveCredentialFingerprint(
  * @param {string[]} argv
  * @param {NodeJS.ProcessEnv} [env]
  */
-export function resolvePartitionKey(realGh, argv, env = process.env) {
+export function resolvePartitionKey(realGh, argv, env = process.env, options = {}) {
   const { host, explicit } = extractApiHostnameInfo(argv, env);
-  const credential = resolveCredentialFingerprint(realGh, env, host, explicit);
+  const credential = resolveCredentialFingerprint(realGh, env, host, explicit, options);
   return `${host}|${credential}`;
 }
 
@@ -734,7 +737,7 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
 
   try {
     cacheDir = resolveCacheDir(env);
-    partitionKey = resolvePartitionKey(realGh, argv, env);
+    partitionKey = options.partitionKey ?? resolvePartitionKey(realGh, argv, env);
     ({ cache, refreshed } = applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs, onComplete));
   } catch (err) {
     emitCacheIoFailureDiagnostic(partitionKey, err);

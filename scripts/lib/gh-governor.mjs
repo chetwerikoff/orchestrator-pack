@@ -448,7 +448,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
   const now = nowMs(env);
   const stateDir = resolveGovernorStateDir(env);
   const partitionKey = options.partitionKey
-    ?? resolvePartitionKey(options.realGh ?? 'gh', options.argv ?? [], env);
+    ?? resolvePartitionKey(options.realGh ?? 'gh', options.argv ?? [], env, { skipApiIdentityProbe: true });
   const statePath = governorStatePath(stateDir, partitionKey);
   const lockPath = governorLockPath(stateDir, partitionKey);
 
@@ -670,7 +670,7 @@ export function recordGithubGovernorObservedLimit(options = {}) {
   if (!isGovernorEnabled(env)) return null;
 
   const partitionKey = options.partitionKey
-    ?? resolvePartitionKey(options.realGh ?? 'gh', options.argv ?? [], env);
+    ?? resolvePartitionKey(options.realGh ?? 'gh', options.argv ?? [], env, { skipApiIdentityProbe: true });
   const budget = resolveGovernorBudget(env);
   const now = nowMs(env);
   const stateDir = resolveGovernorStateDir(env);
