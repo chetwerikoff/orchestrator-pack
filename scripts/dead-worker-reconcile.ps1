@@ -145,6 +145,8 @@ function Get-DeadWorkerFixturePayload {
         nowMs = $nowMs
         issueOnlyPrAmbiguous = $issueOnlyPrAmbiguous
         prLookupFailed = [bool]$fixture.prLookupFailed
+        openPrs = @($fixture.openPrs)
+        terminalPrs = @($fixture.terminalPrs)
     }
 }
 
@@ -197,20 +199,45 @@ function Invoke-DeadWorkerRecovery {
     }
 }
 
-function Get-DeadWorkerOpenPrSnapshot {
+function Get-DeadWorkerPrSnapshot {
     try {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'dead-worker-reconcile')
+        $terminalPrs = @()
+        Push-Location -LiteralPath $RepoRoot
+        try {
+            $merged = @(ConvertFrom-GhJsonArrayOutput -RawOutput (gh pr list --state merged --json number,headRefName,state,mergedAt --limit 200 2>&1))
+            if ($LASTEXITCODE -ne 0) {
+                throw "gh pr list merged failed (exit $LASTEXITCODE)"
+            }
+            $closed = @(ConvertFrom-GhJsonArrayOutput -RawOutput (gh pr list --state closed --json number,headRefName,state,closedAt --limit 200 2>&1))
+            if ($LASTEXITCODE -ne 0) {
+                throw "gh pr list closed failed (exit $LASTEXITCODE)"
+            }
+            $byNumber = @{}
+            foreach ($pr in @($merged + $closed)) {
+                if ($null -eq $pr) { continue }
+                $n = [int]$pr.number
+                if ($n -le 0) { continue }
+                $byNumber[[string]$n] = $pr
+            }
+            $terminalPrs = @($byNumber.Values)
+        }
+        finally {
+            Pop-Location
+        }
         return @{
-            openPrs          = @($openPrs)
-            prLookupFailed   = $false
+            openPrs        = @($openPrs)
+            terminalPrs    = @($terminalPrs)
+            prLookupFailed = $false
         }
     }
     catch {
         $message = $_.Exception.Message
-        if ($message -match 'gh pr list failed|snapshot_populate_failed|child_list_bypass') {
-            Write-DeadWorkerLog "open pr lookup failed: $message"
+        if ($message -match 'gh pr list failed|gh pr list merged failed|gh pr list closed failed|snapshot_populate_failed|child_list_bypass') {
+            Write-DeadWorkerLog "pr lookup failed: $message"
             return @{
                 openPrs        = @()
+                terminalPrs    = @()
                 prLookupFailed = $true
             }
         }
@@ -248,7 +275,7 @@ function Invoke-DeadWorkerTick {
         $live = Get-DeadWorkerLivePayload
         $checks = Invoke-DeadWorkerPlannerCli -Subcommand 'probe-checks' -Payload @{ packRoot = $PackRoot }
         $gates = Get-DeadWorkerLivePlanGates
-        $prSnapshot = Get-DeadWorkerOpenPrSnapshot
+        $prSnapshot = Get-DeadWorkerPrSnapshot
         $payload = @{
             sessions = @($live.sessions)
             aoEvents = @($live.aoEvents)
@@ -259,6 +286,7 @@ function Invoke-DeadWorkerTick {
             bounds = $gates.bounds
             nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             openPrs = @($prSnapshot.openPrs)
+            terminalPrs = @($prSnapshot.terminalPrs)
             prLookupFailed = [bool]$prSnapshot.prLookupFailed
         }
     }

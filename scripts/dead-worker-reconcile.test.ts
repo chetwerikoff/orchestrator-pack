@@ -21,6 +21,7 @@ import {
   classifyDeadWorkerRecoveryInvokeResult,
   parseAndClassifyDeadWorkerRecoveryOutput,
   resolveIssueOnlyPrLookup,
+  issueLinkedTerminalPrs,
   resolveRecoveryRoute,
   resolveShutdownSuppressionWindowMs,
   validateAutonomousRespawnPolicy,
@@ -193,9 +194,29 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     const session = { name: 'opk-593', issue: 593, branch: 'feat/593', worktree: '/wt' };
     const evidence = { verdict: 'dead', reason: 'probed_dead_event' } as const;
 
-    const spawnNew = resolveRecoveryRoute(session, evidence, { openPrs: [] });
+    const spawnNew = resolveRecoveryRoute(session, evidence, { openPrs: [], terminalPrs: [] });
     expect(spawnNew.ok).toBe(true);
     expect(spawnNew.spawnAction).toBe('spawn-new');
+
+    const terminalBlocked = resolveRecoveryRoute(session, evidence, {
+      openPrs: [],
+      terminalPrs: [{ number: 604, headRefName: 'feat/593', state: 'MERGED' }],
+    });
+    expect(terminalBlocked.ok).toBe(false);
+    expect(terminalBlocked.reason).toBe('terminal_pr_state');
+
+    const terminalAmbiguous = resolveRecoveryRoute(session, evidence, {
+      openPrs: [],
+      terminalPrs: [
+        { number: 604, headRefName: 'feat/593', state: 'MERGED' },
+        { number: 605, headRefName: 'feat/issue-593', state: 'CLOSED' },
+      ],
+    });
+    expect(terminalAmbiguous.ok).toBe(false);
+    expect(terminalAmbiguous.reason).toBe('issue_only_pr_ambiguity');
+    expect(issueLinkedTerminalPrs(593, [
+      { number: 604, headRefName: 'feat/593', state: 'MERGED' },
+    ], session)).toHaveLength(1);
 
     const claimPr = resolveRecoveryRoute(session, evidence, {
       openPrs: [{ number: 605, headRefName: 'feat/593' }],

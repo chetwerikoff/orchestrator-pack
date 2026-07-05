@@ -77,6 +77,7 @@ export interface PlanDeadWorkerReconcileInput {
   tracking?: Record<string, unknown>;
   nowMs?: number;
   openPrs?: Array<{ number?: number; headRefName?: string; head?: string }>;
+  terminalPrs?: Array<{ number?: number; headRefName?: string; head?: string; state?: string }>;
   issueOnlyPrAmbiguous?: boolean;
   prLookupFailed?: boolean;
 }
@@ -134,14 +135,25 @@ export declare function issueLinkedOpenPrs(
   session?: Record<string, unknown> | null,
 ): Array<{ number?: number; headRefName?: string; head?: string }>;
 
+export declare function isTerminalPrState(state: unknown): boolean;
+
+export declare function issueLinkedTerminalPrs(
+  issueNumber: number,
+  terminalPrs?: Array<{ number?: number; headRefName?: string; head?: string; state?: string }>,
+  session?: Record<string, unknown> | null,
+): Array<{ number?: number; headRefName?: string; head?: string; state?: string }>;
+
 export declare function resolveIssueOnlyPrLookup(
   session: Record<string, unknown>,
   input?: Record<string, unknown>,
 ): {
   prLookupFailed?: boolean;
   issueOnlyPrAmbiguous?: boolean;
+  terminalPrBlocksRespawn?: boolean;
   resolvedPrNumber?: number;
   matchedPrNumbers?: number[];
+  matchedTerminalPrNumber?: number;
+  matchedTerminalPrNumbers?: number[];
 };
 
 export declare function resolveRecoveryRoute(

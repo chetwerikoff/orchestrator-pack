@@ -255,14 +255,19 @@ export function issueLinkedWorkerBranches(issueNumber) {
   return [`feat/${issue}`, `feat/issue-${issue}`, `opk-${issue}`];
 }
 
-export function issueLinkedOpenPrs(issueNumber, openPrs = [], session = null) {
+function issueLinkedPrsForSession(issueNumber, prs = [], session = null, options = {}) {
   const issue = numberOrZero(issueNumber);
   if (issue <= 0) {
     return [];
   }
+  const requireTerminalState = Boolean(options.requireTerminalState);
   const authorized = new Set(issueLinkedWorkerBranches(issue));
   const sessionBranch = getBranch(session);
-  return toArray(openPrs).filter((pr) => {
+  return toArray(prs).filter((pr) => {
+    const state = normalizeString(pr?.state);
+    if (requireTerminalState && state && !isTerminalPrState(state)) {
+      return false;
+    }
     const head = normalizeString(pr?.headRefName ?? pr?.head);
     if (!head) {
       return false;
@@ -272,6 +277,19 @@ export function issueLinkedOpenPrs(issueNumber, openPrs = [], session = null) {
     }
     return Boolean(sessionBranch && sessionBranch === head);
   });
+}
+
+export function isTerminalPrState(state) {
+  const normalized = normalizeLower(state);
+  return normalized === 'merged' || normalized === 'closed';
+}
+
+export function issueLinkedOpenPrs(issueNumber, openPrs = [], session = null) {
+  return issueLinkedPrsForSession(issueNumber, openPrs, session);
+}
+
+export function issueLinkedTerminalPrs(issueNumber, terminalPrs = [], session = null) {
+  return issueLinkedPrsForSession(issueNumber, terminalPrs, session, { requireTerminalState: true });
 }
 
 /**
@@ -296,6 +314,22 @@ export function resolveIssueOnlyPrLookup(session, input = {}) {
   if (matches.length === 1) {
     return { issueOnlyPrAmbiguous: false, resolvedPrNumber: numberOrZero(matches[0].number) };
   }
+  if (input.terminalPrs !== undefined) {
+    const terminalMatches = issueLinkedTerminalPrs(issueNumber, input.terminalPrs, session);
+    if (terminalMatches.length > 1) {
+      return {
+        issueOnlyPrAmbiguous: true,
+        matchedTerminalPrNumbers: terminalMatches.map((pr) => numberOrZero(pr.number)).filter((n) => n > 0),
+      };
+    }
+    if (terminalMatches.length === 1) {
+      return {
+        issueOnlyPrAmbiguous: false,
+        terminalPrBlocksRespawn: true,
+        matchedTerminalPrNumber: numberOrZero(terminalMatches[0].number),
+      };
+    }
+  }
   return { issueOnlyPrAmbiguous: false, resolvedPrNumber: 0 };
 }
 
@@ -315,6 +349,9 @@ export function resolveRecoveryRoute(session, evidence, input = {}) {
   const resolvedPr = numberOrZero(lookup.resolvedPrNumber);
   if (resolvedPr > 0) {
     return { ok: true, spawnAction: 'claim-pr-resume', prNumber: resolvedPr, issueNumber };
+  }
+  if (lookup.terminalPrBlocksRespawn) {
+    return { ok: false, reason: 'terminal_pr_state' };
   }
   if (lookup.issueOnlyPrAmbiguous) {
     return { ok: false, reason: 'issue_only_pr_ambiguity' };
