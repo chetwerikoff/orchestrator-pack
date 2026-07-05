@@ -443,7 +443,6 @@ describe('review-start preflight transient shield (#584)', () => {
         `
         . ${psString(shieldHelperPath)}
         . ${psString(claimHelperPath)}
-        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
         $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
         $denial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot @{
           transportFailure = $lookup.transportFailure
@@ -456,6 +455,7 @@ describe('review-start preflight transient shield (#584)', () => {
           denial = ($null -ne $denial)
         } | ConvertTo-Json -Compress
       `,
+        { AO_REVIEW_START_SCOPED_GH_COMMAND: missingGh },
       ));
       expect(result.reason).toBe('gh_binary_missing');
       expect(result.failureClass).toBe('infra_transport');
