@@ -84,6 +84,19 @@ function Get-GhFleetInventoryCacheRoot {
     return ''
 }
 
+function Set-GhGovernorCallerContext {
+    param(
+        [string]$Consumer = '',
+        [string]$Lane = ''
+    )
+    if ($Consumer) {
+        $env:GH_GOVERNOR_CONSUMER = $Consumer
+    }
+    if ($Lane) {
+        $env:GH_GOVERNOR_LANE = $Lane
+    }
+}
+
 function Get-GhFleetInventoryCacheTtlSeconds {
     param([string]$Name)
 
@@ -806,6 +819,7 @@ function Invoke-GhFleetCachedDatum {
     )
 
     $cacheRoot = Get-GhFleetInventoryCacheRoot
+    Set-GhGovernorCallerContext -Consumer $Consumer -Lane 'background'
     if (-not $cacheRoot) {
         Push-Location -LiteralPath $RepoRoot
         try {
