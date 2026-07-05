@@ -146,6 +146,7 @@ scripts/**
 docs/**
 tests/**
 agent-orchestrator.yaml.example
+# issue-585-governor-scope
 ```
 
 ## Acceptance criteria

@@ -1,5 +1,5 @@
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -88,7 +88,7 @@ describe('github-fleet-governor (Issue #585)', () => {
     }
   });
 
-  it('AC#1 shared admission enforces token budget and in-flight cap across processes', async () => {
+  it('AC#1 shared admission enforces token budget and in-flight cap across processes', () => {
     root = mkdtempSync(join(tmpdir(), 'gh-governor-ac1-'));
     const env = governorEnv(root, { GH_GOVERNOR_MAX_IN_FLIGHT: '3', GH_GOVERNOR_RESERVED_TOKENS: '0' });
     const first = acquireGithubGovernorAdmission({
@@ -109,32 +109,24 @@ describe('github-fleet-governor (Issue #585)', () => {
     expect(first.admitted).toBe(true);
     expect(second.admitted).toBe(true);
     expect(third.admitted).toBe(false);
+    first.release?.();
+    second.release?.();
 
-    const inflightEnv = governorEnv(root, { GH_GOVERNOR_MAX_TOKENS: '5', GH_GOVERNOR_MAX_IN_FLIGHT: '1' });
-    const holdScript = `import { acquireGithubGovernorAdmission } from './lib/gh-governor.mjs';
-const env = process.env;
-const admission = acquireGithubGovernorAdmission({ env, argv: ['pr','list'], partitionKey: ${JSON.stringify(partitionKey)} });
-if (!admission.admitted) process.exit(2);
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
-admission.release?.();
-process.exit(0);`;
-    const holder = spawn(process.execPath, ['--input-type=module', '-e', holdScript], {
-      cwd: join(repoRoot, 'scripts'),
-      env: inflightEnv,
-      stdio: 'ignore',
+    const inflightRoot = mkdtempSync(join(tmpdir(), 'gh-governor-ac1-inflight-'));
+    const inflightEnv = governorEnv(inflightRoot, { GH_GOVERNOR_MAX_TOKENS: '5', GH_GOVERNOR_MAX_IN_FLIGHT: '1' });
+    const hold = acquireGithubGovernorAdmission({
+      env: { ...inflightEnv, GH_GOVERNOR_LANE: 'background' },
+      argv: ['pr', 'list'],
+      partitionKey,
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(hold.admitted).toBe(true);
     const blocked = acquireGithubGovernorAdmission({
       env: { ...inflightEnv, GH_GOVERNOR_LANE: 'background' },
       argv: ['pr', 'list'],
       partitionKey,
     });
     expect(blocked.admitted).toBe(false);
-    await new Promise((resolve) => {
-      holder.on('close', () => resolve(undefined));
-    });
-    first.release?.();
-    second.release?.();
+    hold.release?.();
   });
 
   it('AC#3 reserved-lane preflight admits while background is denied under contention', () => {

@@ -4,16 +4,7 @@
  * File-backed token bucket + in-flight cap + observed-limit cooldown.
  */
 import { createHash } from 'node:crypto';
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolvePartitionKey } from './gh-graphql-degraded.mjs';
@@ -204,7 +195,7 @@ function defaultState(now, budget) {
 
 function readStateFile(path) {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    return JSON.parse(fs.readFileSync(path, 'utf8'));
   } catch {
     return null;
   }
@@ -212,36 +203,36 @@ function readStateFile(path) {
 
 function writeStateAtomic(path, state) {
   const dir = join(path, '..');
-  mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
   const temp = `${path}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
-  writeFileSync(temp, `${JSON.stringify(state)}\n`, 'utf8');
-  renameSync(temp, path);
+  fs.writeFileSync(temp, `${JSON.stringify(state)}\n`, 'utf8');
+  fs.renameSync(temp, path);
 }
 
 function acquireLock(lockPath, now) {
-  mkdirSync(join(lockPath, '..'), { recursive: true });
+  fs.mkdirSync(join(lockPath, '..'), { recursive: true });
   const deadline = now + LOCK_WAIT_MS;
   while (now <= deadline) {
     try {
-      const fd = openSync(lockPath, 'wx');
-      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredMs: now })}\n`, 'utf8');
-      closeSync(fd);
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredMs: now })}\n`, 'utf8');
+      fs.closeSync(fd);
       return true;
     } catch (err) {
       if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'EEXIST') {
         throw err;
       }
       try {
-        const existing = JSON.parse(readFileSync(lockPath, 'utf8'));
+        const existing = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
         if (
           typeof existing.acquiredMs === 'number'
           && now - existing.acquiredMs > LOCK_STALE_MS
         ) {
-          rmSync(lockPath, { force: true });
+          fs.rmSync(lockPath, { force: true });
           continue;
         }
       } catch {
-        rmSync(lockPath, { force: true });
+        fs.rmSync(lockPath, { force: true });
         continue;
       }
       sleepMs(LOCK_POLL_MS);
@@ -252,7 +243,7 @@ function acquireLock(lockPath, now) {
 }
 
 function releaseLock(lockPath) {
-  rmSync(lockPath, { force: true });
+  fs.rmSync(lockPath, { force: true });
 }
 
 function effectiveMaxTokens(state, budget, now) {
@@ -469,7 +460,7 @@ export function acquireGithubGovernorAdmission(options = {}) {
   }
 
   try {
-    const stateExists = existsSync(statePath);
+    const stateExists = fs.existsSync(statePath);
     let state = stateExists ? readStateFile(statePath) : null;
     if (stateExists && !state) {
       releaseLock(lockPath);
