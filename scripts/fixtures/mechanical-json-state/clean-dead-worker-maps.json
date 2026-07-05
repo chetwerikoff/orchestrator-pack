@@ -1,0 +1,17 @@
+{
+  "attempts": {
+    "dead-worker-abc123": {
+      "attempt": 1,
+      "lastAttemptMs": 1000
+    }
+  },
+  "leases": {
+    "dead-worker-abc123": {
+      "outcome": "attempt_started",
+      "startedAtMs": 1000,
+      "sessionId": "opk-dead-593"
+    }
+  },
+  "audit": [],
+  "lastTickMs": 2000
+}

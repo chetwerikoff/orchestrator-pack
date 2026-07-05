@@ -1,0 +1,20 @@
+{
+  "id": "operator-manual-kill-opk-128",
+  "presentFields": ["sessionId", "name", "reason", "ts", "data.reason"],
+  "absentFields": ["agent_process_exited"],
+  "session": {
+    "name": "opk-128",
+    "role": "worker",
+    "status": "terminated",
+    "runtime": "exited",
+    "issue": "593",
+    "branch": "feat/issue-593",
+    "worktree": "/home/operator/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-128"
+  },
+  "events": [
+    { "name": "session.spawned", "sessionId": "opk-128", "tsEpoch": 1780000000000 },
+    { "name": "session.kill_started", "sessionId": "opk-128", "tsEpoch": 1780000001000, "data": { "reason": "manually_killed" } },
+    { "name": "ui.terminal_pty_lost", "sessionId": "opk-128", "tsEpoch": 1780000001100 },
+    { "name": "session.killed", "sessionId": "opk-128", "tsEpoch": 1780000001200, "data": { "reason": "manually_killed" } }
+  ]
+}

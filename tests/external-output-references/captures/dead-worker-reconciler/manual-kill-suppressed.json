@@ -1,0 +1,23 @@
+{
+  "sessions": [
+    {
+      "sessionId": "opk-593",
+      "runtime": "exited",
+      "status": "terminated",
+      "issueNumber": 593,
+      "prNumber": 593,
+      "branch": "feat/593",
+      "worktree": "/tmp/orchestrator-pack/worktrees/opk-593"
+    }
+  ],
+  "aoEvents": [
+    {
+      "id": "kill-1",
+      "type": "session.kill_started",
+      "sessionId": "opk-593",
+      "reason": "manually_killed",
+      "timestampMs": 10000
+    }
+  ],
+  "nowMs": 20000
+}

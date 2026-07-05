@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao events list + ao status --include-terminated (scrubbed crash)",
+  "toolVersion": "0.9.x",
+  "capturedAt": "2026-07-04T12:05:00.000Z",
+  "context": "Recoverable crash with unfinished assigned issue",
+  "scrubLog": ["No operator kill markers; positive abnormal death evidence"]
+}

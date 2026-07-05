@@ -1,0 +1,253 @@
+#requires -Version 5.1
+<#
+.SYNOPSIS
+  Autonomous dead-worker reconciliation loop (Issue #593).
+
+.DESCRIPTION
+  Detects assigned workers with capture-backed dead evidence and invokes
+  invoke-worker-recovery.ps1 -Trigger reconcile_dead_worker exactly once per
+  recoverable durable key. Operator kills and shutdown windows are suppressed.
+#>
+[CmdletBinding()]
+param(
+    [string]$ProjectId = 'orchestrator-pack',
+    [string]$RepoRoot = '',
+    [int]$IntervalMinutes = 1,
+    [int]$PollSeconds = 60,
+    [string]$StateFile = '',
+    [switch]$DryRun,
+    [switch]$Once,
+    [string]$FixturePath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+$Script:ReconcileLogPrefix = 'dead-worker-reconcile'
+
+$PackRoot = Split-Path -Parent $PSScriptRoot
+if (-not $RepoRoot) { $RepoRoot = $PackRoot }
+$PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
+
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+
+$Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
+
+function Write-DeadWorkerLog {
+    param([string]$Message)
+    $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
+}
+
+function Get-DeadWorkerStatePath {
+    param([string]$CliPath)
+    if ($CliPath) { return $CliPath }
+    if ($env:AO_DEAD_WORKER_RECONCILE_STATE) { return $env:AO_DEAD_WORKER_RECONCILE_STATE }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-dead-worker-reconcile-state.json'
+}
+
+function Get-DeadWorkerState {
+    param([string]$Path)
+    return Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:DeadWorkerDefaultState -ActionTracking
+}
+
+function Set-DeadWorkerState {
+    param(
+        [string]$Path,
+        [object]$State
+    )
+    Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:DeadWorkerDefaultState -JsonDepth 40
+}
+
+function Invoke-DeadWorkerPlannerCli {
+    param(
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $PlannerCli -Subcommand $Subcommand `
+        -Payload $Payload -Label $Script:ReconcileLogPrefix -JsonDepth 40
+}
+
+function Get-AutonomousRespawnPolicy {
+    $path = Join-Path $PackRoot 'docs/autonomous-respawn-policy.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return @{ version = 'autonomous-respawn-policy/v1'; allowReconcileDeadWorkerRespawn = $false }
+    }
+    return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+}
+
+function Get-DeadWorkerLivePayload {
+    return @{
+        sessions = @(Get-AoStatusSessionsIncludingTerminated)
+        aoEvents = @(Get-AoEventsSince -SinceMinutes 60)
+    }
+}
+
+function Get-DeadWorkerFixturePayload {
+    param([string]$Path)
+    $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $respawnPolicy = Get-AutonomousRespawnPolicy
+    if ($fixture.respawnPolicy) { $respawnPolicy = $fixture.respawnPolicy }
+    $effectiveRuntimePolicy = 'allow'
+    if ($fixture.effectiveRuntimePolicy) { $effectiveRuntimePolicy = [string]$fixture.effectiveRuntimePolicy }
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if ($fixture.nowMs) { $nowMs = [long]$fixture.nowMs }
+    $issueOnlyPrAmbiguous = $true
+    if ($null -ne $fixture.issueOnlyPrAmbiguous) { $issueOnlyPrAmbiguous = [bool]$fixture.issueOnlyPrAmbiguous }
+    return @{
+        sessions = @($fixture.sessions)
+        aoEvents = @($fixture.aoEvents)
+        respawnPolicy = $respawnPolicy
+        tracking = $fixture.tracking
+        recoveryChecks = $fixture.recoveryChecks
+        effectiveRuntimePolicy = $effectiveRuntimePolicy
+        bounds = $fixture.bounds
+        nowMs = $nowMs
+        issueOnlyPrAmbiguous = $issueOnlyPrAmbiguous
+        prLookupFailed = [bool]$fixture.prLookupFailed
+    }
+}
+
+function Invoke-DeadWorkerRecovery {
+    param(
+        [object]$Action,
+        [switch]$DryRunMode
+    )
+    if ($DryRunMode) {
+        Write-DeadWorkerLog "dry-run would recover session=$($Action.sessionId) pr=$($Action.prNumber) issue=$($Action.issueNumber) key=$($Action.key)"
+        return @{ ok = $true; outcome = 'dry_run'; dryRun = $true }
+    }
+
+    $args = @(
+        '-NoProfile', '-File', (Join-Path $PSScriptRoot 'invoke-worker-recovery.ps1'),
+        '-Trigger', 'reconcile_dead_worker',
+        '-ProbedDeadEvidence',
+        '-SessionId', [string]$Action.sessionId,
+        '-WorktreePath', [string]$Action.worktree,
+        '-ProjectId', $ProjectId,
+        '-RepoRoot', $RepoRoot,
+        '-SpawnAction', [string]$Action.spawnAction
+    )
+    if ([int]$Action.issueNumber -gt 0) { $args += @('-IssueNumber', [string]$Action.issueNumber) }
+    if ([int]$Action.prNumber -gt 0) { $args += @('-PrNumber', [string]$Action.prNumber) }
+
+    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'dead-worker-reconcile-side-effect.lock'
+    Write-OrchestratorSideProcessProgress -ChildId 'dead-worker-reconcile' -Phase 'side_effect'
+    $capture = @{ output = $null; exitCode = 0 }
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
+        $capture.output = & pwsh @args 2>&1
+        $capture.exitCode = $LASTEXITCODE
+    }
+    if (-not $fenced.ok) {
+        return @{ ok = $false; outcome = 'escalated'; reason = 'side_effect_busy' }
+    }
+    if ([int]$capture.exitCode -ne 0) {
+        return @{ ok = $false; outcome = 'escalated'; reason = "worker_recovery_exit_$($capture.exitCode)"; output = ($capture.output | Out-String).Trim() }
+    }
+    return @{ ok = $true; outcome = 'recovered'; output = ($capture.output | Out-String).Trim() }
+}
+
+function Commit-DeadWorkerAction {
+    param(
+        [object]$State,
+        [object]$Action,
+        [long]$NowMs
+    )
+    $commit = Invoke-DeadWorkerPlannerCli -Subcommand 'commit' -Payload @{
+        tracking = $State
+        action = $Action
+        nowMs = $NowMs
+    }
+    return $commit.tracking
+}
+
+function Invoke-DeadWorkerTick {
+    param(
+        [string]$StatePath,
+        [switch]$DryRunMode,
+        [string]$Fixture
+    )
+    $tracking = Get-DeadWorkerState -Path $StatePath
+    Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'dead-worker side effects'
+
+    if ($Fixture) {
+        $payload = Get-DeadWorkerFixturePayload -Path $Fixture
+    }
+    else {
+        $live = Get-DeadWorkerLivePayload
+        $checks = Invoke-DeadWorkerPlannerCli -Subcommand 'probe-checks' -Payload @{ packRoot = $PackRoot }
+        $payload = @{
+            sessions = @($live.sessions)
+            aoEvents = @($live.aoEvents)
+            respawnPolicy = Get-AutonomousRespawnPolicy
+            tracking = $tracking
+            recoveryChecks = $checks
+            effectiveRuntimePolicy = 'allow'
+            bounds = @{ maxAttempts = 3; backoffMs = 60000; concurrency = 1 }
+            nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            issueOnlyPrAmbiguous = $true
+            prLookupFailed = $false
+        }
+    }
+    if (-not $payload.tracking) { $payload.tracking = $tracking }
+
+    $plan = Invoke-DeadWorkerPlannerCli -Subcommand 'plan' -Payload $payload
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $attempted = 0
+    foreach ($action in @($plan.actions)) {
+        Write-DeadWorkerLog "action=$($action.type) session=$($action.sessionId) reason=$($action.reason) key=$($action.key)"
+        $tracking = Commit-DeadWorkerAction -State $tracking -Action $action -NowMs $nowMs
+        if ($action.type -ne 'attempt_started') { continue }
+        $attempted++
+        $result = Invoke-DeadWorkerRecovery -Action $action -DryRunMode:$DryRunMode
+        $finalAction = [ordered]@{}
+        foreach ($prop in $action.PSObject.Properties) { $finalAction[$prop.Name] = $prop.Value }
+        $finalAction.type = if ($result.ok) { 'recovered' } else { 'escalated' }
+        $finalAction.outcome = $finalAction.type
+        $finalAction.reason = if ($result.reason) { [string]$result.reason } else { [string]$result.outcome }
+        $tracking = Commit-DeadWorkerAction -State $tracking -Action $finalAction -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+    }
+    $tracking.lastTickMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if (-not $DryRunMode) { Set-DeadWorkerState -Path $StatePath -State $tracking }
+    return $attempted
+}
+
+$intervalMs = [Math]::Max(1, $IntervalMinutes) * 60 * 1000
+$pollMs = [Math]::Max(5, $PollSeconds) * 1000
+$statePath = Get-DeadWorkerStatePath -CliPath $StateFile
+
+Write-DeadWorkerLog "starting (project=$ProjectId, interval=${IntervalMinutes}m, state=$statePath, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
+
+try {
+    do {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $state = Get-DeadWorkerState -Path $statePath
+        $lastTickMs = if ($state.lastTickMs) { [long]$state.lastTickMs } else { $null }
+        $gate = Invoke-DeadWorkerPlannerCli -Subcommand 'interval' -Payload @{
+            nowMs = $nowMs
+            lastTickMs = $lastTickMs
+            intervalMs = $intervalMs
+        }
+        Write-OrchestratorSideProcessProgress -ChildId 'dead-worker-reconcile' -Phase 'poll'
+        if ($FixturePath -or $gate.ok) {
+            try {
+                $count = Invoke-DeadWorkerTick -StatePath $statePath -DryRunMode:$DryRun -Fixture $FixturePath
+                Write-DeadWorkerLog "tick complete (attempted=$count)"
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'dead-worker-reconcile'
+            }
+            catch {
+                Write-DeadWorkerLog "tick error: $_"
+                Write-OrchestratorSideProcessTickError -ChildId 'dead-worker-reconcile' -ErrorMessage "$_"
+            }
+        }
+        else {
+            Write-DeadWorkerLog "tick skipped: $($gate.reason)"
+        }
+        if ($Once) { break }
+        Start-Sleep -Milliseconds $pollMs
+    } while ($true)
+}
+finally {
+    Write-DeadWorkerLog 'stopped'
+}

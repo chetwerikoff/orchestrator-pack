@@ -210,6 +210,46 @@
       "path": "captures/ao-worker-report/working.raw.json",
       "contentHash": "sha256:8f97b7e395f0c2abe53cfb8ab24a2109e47267f7ef836d8512e0ed0cc8dd9710"
     },
+    "dead-worker-reconciler/clean-exit-terminal": {
+      "id": "dead-worker-reconciler/clean-exit-terminal",
+      "producer": "dead-worker-reconciler",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/dead-worker-reconciler/clean-exit-terminal.raw.json",
+      "contentHash": "sha256:962b819e0df3309ac70d0e6e16be52b4c192fedf433d976bf9e07c1c5101a45d"
+    },
+    "dead-worker-reconciler/operator-manual-kill": {
+      "id": "dead-worker-reconciler/operator-manual-kill",
+      "producer": "dead-worker-reconciler",
+      "sourceCommand": "ao events list (scrubbed operator kill sequence)",
+      "kind": "structured",
+      "path": "captures/dead-worker-reconciler/operator-manual-kill.raw.json",
+      "contentHash": "sha256:170e718fcbef858d7c72d365a27690fcd45aae9253cdfe2893d072d50b377719"
+    },
+    "dead-worker-reconciler/project-shutdown": {
+      "id": "dead-worker-reconciler/project-shutdown",
+      "producer": "dead-worker-reconciler",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/dead-worker-reconciler/project-shutdown.raw.json",
+      "contentHash": "sha256:3a45c5096e12cdbd5dccbe4126d631467e9a1080600ce9575ae7d6d8f9fa8c16"
+    },
+    "dead-worker-reconciler/pty-lost-only": {
+      "id": "dead-worker-reconciler/pty-lost-only",
+      "producer": "dead-worker-reconciler",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/dead-worker-reconciler/pty-lost-only.raw.json",
+      "contentHash": "sha256:14d2c308ea0f3d89fccc682b53590c748438d59d15032158b64d024412448f68"
+    },
+    "dead-worker-reconciler/recoverable-crash": {
+      "id": "dead-worker-reconciler/recoverable-crash",
+      "producer": "dead-worker-reconciler",
+      "sourceCommand": "ao events list + ao status --include-terminated (scrubbed crash)",
+      "kind": "structured",
+      "path": "captures/dead-worker-reconciler/recoverable-crash.raw.json",
+      "contentHash": "sha256:1cd50a2634416523adbc0d2f0c0926c7e33577871358375182f707962556c88e"
+    },
     "gh-issue-view-closedAt/closed-issue": {
       "id": "gh-issue-view-closedAt/closed-issue",
       "producer": "gh-issue-view-closedAt",

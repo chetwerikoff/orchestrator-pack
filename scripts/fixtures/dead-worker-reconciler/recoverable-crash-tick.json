@@ -1,0 +1,30 @@
+{
+  "sessions": [
+    {
+      "name": "opk-dead-593",
+      "role": "worker",
+      "status": "terminated",
+      "runtime": "exited",
+      "issue": 593,
+      "branch": "feat/593",
+      "worktree": "/tmp/opk dead 593/worktree path"
+    }
+  ],
+  "aoEvents": [
+    { "name": "session.spawned", "sessionId": "opk-dead-593", "timestampMs": 1780000100000 },
+    { "name": "agent_process_exited", "sessionId": "opk-dead-593", "timestampMs": 1780000105000, "data": { "exitCode": 1 } }
+  ],
+  "respawnPolicy": {
+    "version": "autonomous-respawn-policy/v1",
+    "allowReconcileDeadWorkerRespawn": true
+  },
+  "recoveryChecks": {
+    "workerRecoveryAvailable": true,
+    "branchSafeRecoveryAvailable": true
+  },
+  "effectiveRuntimePolicy": "allow",
+  "bounds": { "maxAttempts": 3, "backoffMs": 60000, "concurrency": 1 },
+  "issueOnlyPrAmbiguous": false,
+  "prLookupFailed": false,
+  "nowMs": 1780000106000
+}

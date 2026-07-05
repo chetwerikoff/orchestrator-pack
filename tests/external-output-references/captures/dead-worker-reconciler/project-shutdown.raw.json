@@ -1,0 +1,17 @@
+{
+  "id": "project-shutdown-window",
+  "presentFields": ["project.shutdown_started"],
+  "absentFields": [],
+  "session": {
+    "name": "opk-shutdown-worker",
+    "role": "worker",
+    "status": "terminated",
+    "runtime": "exited",
+    "issue": "593",
+    "worktree": "/home/operator/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-shutdown-worker"
+  },
+  "events": [
+    { "name": "project.shutdown_started", "tsEpoch": 1780000300000 },
+    { "name": "agent_process_exited", "sessionId": "opk-shutdown-worker", "tsEpoch": 1780000300100 }
+  ]
+}
