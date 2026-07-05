@@ -96,6 +96,66 @@ function Invoke-ReviewStartPreflightGhSingleCapture {
     }
 }
 
+function Get-ReviewStartPreflightCaptureHeadSha {
+    param(
+        [hashtable]$Capture,
+        [string]$LastKnownHeadSha = ''
+    )
+
+    if ($Capture.parse -and $Capture.parse.ok -and $Capture.parse.value) {
+        $fromParse = [string]$Capture.parse.value.headRefOid
+        if ($fromParse) { return $fromParse }
+    }
+
+    $stdout = [string]$Capture.stdout
+    if ($stdout.Trim()) {
+        try {
+            $loose = $stdout.Trim() | ConvertFrom-Json
+            $fromLoose = [string]$loose.headRefOid
+            if ($fromLoose) { return $fromLoose }
+        }
+        catch {
+        }
+    }
+
+    if ($LastKnownHeadSha) { return $LastKnownHeadSha }
+    return ''
+}
+
+function Resolve-ReviewStartPreflightShieldAuditHeadSha {
+    param(
+        [hashtable]$Capture,
+        [string]$LastKnownHeadSha = '',
+        [string]$RepoRoot = '',
+        [int]$PrNumber = 0,
+        [hashtable]$ClaimResult = $null
+    )
+
+    $headSha = Get-ReviewStartPreflightCaptureHeadSha -Capture $Capture -LastKnownHeadSha $LastKnownHeadSha
+    if ($headSha) { return $headSha }
+
+    if ($ClaimResult -and $ClaimResult.acquired -and $ClaimResult.claim) {
+        $fromClaim = [string]$ClaimResult.claim.headSha
+        if ($fromClaim) { return $fromClaim }
+    }
+
+    $fromHarness = [string]$env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA
+    if ($fromHarness) { return $fromHarness }
+
+    if ($RepoRoot -and $PrNumber -gt 0) {
+        try {
+            $cached = Invoke-GhFleetCachedPrView -RepoRoot $RepoRoot -PrNumber $PrNumber `
+                -Consumer 'review-start-preflight-shield-audit'
+            $fromFleet = [string]$cached.headRefOid
+            if ($fromFleet) { return $fromFleet }
+        }
+        catch {
+        }
+    }
+
+    return ''
+}
+
 function Invoke-ReviewStartPreflightShieldBackoffPause {
     param(
         [hashtable]$ClaimResult,
@@ -148,6 +208,7 @@ function Invoke-ReviewStartPreflightGhPrView {
     $attempt = 0
     $lastCapture = $null
     $lastClassification = $null
+    $lastKnownHeadSha = ''
 
     while ($true) {
         $attempt++
@@ -214,15 +275,21 @@ function Invoke-ReviewStartPreflightGhPrView {
         }
         $lastClassification = $classification
 
-        $headSha = ''
-        if ($parseOk -and $capture.parse.value) {
-            $headSha = [string]$capture.parse.value.headRefOid
-        }
+        $headSha = Resolve-ReviewStartPreflightShieldAuditHeadSha -Capture $capture `
+            -LastKnownHeadSha $lastKnownHeadSha -RepoRoot $RepoRoot -PrNumber $PrNumber `
+            -ClaimResult $ClaimResult
+        if ($headSha) { $lastKnownHeadSha = $headSha }
 
         if ([string]$classification.disposition -eq 'success') {
             $pr = $capture.parse.value
             if (-not $pr -or [string]$pr.state -ne 'OPEN') {
-                return @{ openPrs = @(); transportFailure = $null }
+                Write-ReviewStartPreflightShieldAudit -AuditRoot $AuditRoot -PrNumber $PrNumber -HeadSha $headSha `
+                    -Attempt $attempt -Disposition 'terminal' -Reason 'pr_not_open' `
+                    -BackoffMs 0 -HeaderDegraded $false | Out-Null
+                return @{
+                    openPrs          = @()
+                    transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'pr_not_open')
+                }
             }
             Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
             return @{ openPrs = @($pr); transportFailure = $null }
@@ -296,7 +363,10 @@ function Invoke-ReviewStartPreflightGhPrView {
     }
 
     $terminalReason = if ($lastClassification) { [string]$lastClassification.reason } else { 'preflight_transient_exhausted' }
-    Write-ReviewStartPreflightShieldAudit -AuditRoot $AuditRoot -PrNumber $PrNumber -HeadSha '' `
+    $exhaustedHeadSha = Resolve-ReviewStartPreflightShieldAuditHeadSha -Capture $lastCapture `
+        -LastKnownHeadSha $lastKnownHeadSha -RepoRoot $RepoRoot -PrNumber $PrNumber `
+        -ClaimResult $ClaimResult
+    Write-ReviewStartPreflightShieldAudit -AuditRoot $AuditRoot -PrNumber $PrNumber -HeadSha $exhaustedHeadSha `
         -Attempt $attempt -Disposition 'exhausted' -Reason 'preflight_transient_exhausted' `
         -BackoffMs 0 -HeaderDegraded $false -TransientClass $terminalReason | Out-Null
 

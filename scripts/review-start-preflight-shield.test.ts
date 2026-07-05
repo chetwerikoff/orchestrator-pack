@@ -131,6 +131,11 @@ describe('review-start preflight transient shield (#584)', () => {
         const audits = listShieldAuditRecords(auditRoot);
         expect(audits.some((row) => row.disposition === 'transient_retry' && row.prNumber === 584)).toBe(true);
         expect(audits.every((row) => Object.prototype.hasOwnProperty.call(row, 'prNumber'))).toBe(true);
+        expect(
+          audits
+            .filter((row) => row.disposition === 'transient_retry' || row.disposition === 'exhausted')
+            .every((row) => typeof row.headSha === 'string' && row.headSha.length === 40),
+        ).toBe(true);
       } finally {
         rmSync(dir, { recursive: true, force: true });
         rmSync(auditRoot, { recursive: true, force: true });
@@ -227,6 +232,7 @@ describe('review-start preflight transient shield (#584)', () => {
       ['policy_denied', 'policy_denied'],
       ['malformed_stdout', 'structured_output_polluted'],
       ['gh_command_failed', 'gh_command_failed'],
+      ['closed_pr', 'pr_not_open'],
     ])('scenario %s stays terminal (%s)', (scenario, expectedReason) => {
       const result = runScopedPreflight(
         `
@@ -236,6 +242,7 @@ describe('review-start preflight transient shield (#584)', () => {
       [pscustomobject]@{
         reason = [string]$lookup.transportFailure.reason
         count = @($lookup.openPrs).Count
+        transportFailure = [bool]$lookup.transportFailure
       } | ConvertTo-Json -Compress
     `,
       );
@@ -244,6 +251,35 @@ describe('review-start preflight transient shield (#584)', () => {
         expect(result.reason).toMatch(/malformed_child_output|structured_output_polluted/);
       } else {
         expect(result.reason).toBe(expectedReason);
+      }
+      expect(result.transportFailure).toBe(true);
+    });
+  });
+
+  describe('AC8 audit head keying', () => {
+    it('keys exhausted transient audits with PR number and head SHA', () => {
+      const auditRoot = mkdtempSync(path.join(tmpdir(), 'preflight-shield-audit-ac8-'));
+      try {
+        runPwsh(
+          `
+        . ${psString(shieldHelperPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'always_rate_limit'
+        $env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA = ${psString(stableHead)}
+        $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '1'
+        $null = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584 -AuditRoot ${psString(auditRoot)}
+        'done'
+      `,
+        );
+        const audits = listShieldAuditRecords(auditRoot);
+        expect(audits.some((row) => row.disposition === 'exhausted' && row.prNumber === 584)).toBe(true);
+        expect(
+          audits
+            .filter((row) => row.disposition === 'exhausted')
+            .every((row) => row.headSha === stableHead),
+        ).toBe(true);
+      } finally {
+        rmSync(auditRoot, { recursive: true, force: true });
       }
     });
   });
