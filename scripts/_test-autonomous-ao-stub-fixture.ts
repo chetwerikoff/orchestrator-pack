@@ -25,6 +25,16 @@ export const repoHeadOid = execFileSync(resolveTrustedSystemGit(), ['-C', repoRo
 /** Reserved synthetic spawn target — safe for pack-layer refuse / obvious test isolation. */
 export const SPAWN_GATE_FIXTURE_SESSION_ID = 'opk-probe' as const;
 
+/** AO 0.10.x runnable spawn shape for live-armed spawn-gate probes (Issue #589). */
+export const SPAWN_GATE_FIXTURE_SPAWN_COMMAND =
+  'ao spawn --project orchestrator-pack --name "Gate probe" opk-probe';
+
+export function spawnGateFixtureCommand(
+  sessionId: string = SPAWN_GATE_FIXTURE_SESSION_ID,
+): string {
+  return `ao spawn --project orchestrator-pack --name "Gate probe" ${sessionId}`;
+}
+
 export const AO_SPAWN_NONLIVE_RECEIPT_ENV = 'AO_SPAWN_NONLIVE_RECEIPT_FILE';
 
 const HERMETIC_SYSTEM_PATH = '/usr/bin:/bin';
