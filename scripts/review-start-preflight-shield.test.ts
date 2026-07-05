@@ -449,7 +449,8 @@ describe('review-start preflight transient shield (#584)', () => {
           transportFailure = $lookup.transportFailure
         }
         [pscustomobject]@{
-          reason = [string]$lookup.targetStateDenial.reason
+          reason = [string]$lookup.transportFailure.reason
+          failureClass = [string]$lookup.transportFailure.failureClass
           transportFailure = [bool]$lookup.transportFailure
           targetStateDenial = [bool]$lookup.targetStateDenial
           denial = ($null -ne $denial)
@@ -458,6 +459,8 @@ describe('review-start preflight transient shield (#584)', () => {
       ));
       expect(result.reason).toBe('gh_binary_missing');
       expect(result.failureClass).toBe('infra_transport');
+      expect(result.transportFailure).toBe(true);
+      expect(result.targetStateDenial).toBe(false);
       expect(result.denial).toBe(true);
     });
   });

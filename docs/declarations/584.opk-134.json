@@ -7,10 +7,11 @@
   "baseline": {
     "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9dd7313389b15bd7ce69d469cf8abdcc2d6b9ec5feef1dd9d7f785b811148e59"
+    "active_scope_hash": "sha256:2cc9c6a8b14b28fac7aa616f0bb5009fa6d4ef479a686fb3d34a778034f5e8f0"
   },
   "declared_paths": [
     "docs/declarations/584.opk-134.json",
+    "docs/orchestrator-claimed-review-run.d.mts",
     "docs/orchestrator-claimed-review-run.mjs",
     "docs/review-start-preflight-shield.d.mts",
     "docs/review-start-preflight-shield.mjs",
