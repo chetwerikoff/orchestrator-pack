@@ -601,6 +601,80 @@ export function evaluateDeadWorkerInterval({ nowMs, lastTickMs, intervalMs }) {
   return { ok: false, reason: 'interval_not_elapsed', intervalMs: interval };
 }
 
+export const DEAD_WORKER_RECOVERY_SUCCESS_OUTCOMES = new Set([
+  'removed_terminated_session',
+  'removed_dangling_gitdir',
+  'orphan_branch_pending',
+]);
+
+export function parseWorkerRecoveryInvokeOutput(rawOutput) {
+  const text = String(rawOutput ?? '').trim();
+  if (!text) {
+    return { ok: false, reason: 'empty_recovery_output' };
+  }
+  const start = text.lastIndexOf('{');
+  if (start < 0) {
+    return { ok: false, reason: 'recovery_output_not_json' };
+  }
+  try {
+    return { ok: true, result: JSON.parse(text.slice(start)) };
+  } catch {
+    return { ok: false, reason: 'recovery_output_parse_failed' };
+  }
+}
+
+export function classifyDeadWorkerRecoveryInvokeResult(result) {
+  if (!result || typeof result !== 'object') {
+    return { ok: false, deadWorkerOutcome: 'escalated', reason: 'recovery_result_missing' };
+  }
+  if (result.ok === false) {
+    const outcome = normalizeString(result.outcome);
+    return {
+      ok: false,
+      deadWorkerOutcome: 'escalated',
+      reason: outcome || 'recovery_failed',
+      recoveryOutcome: outcome,
+    };
+  }
+  const outcome = normalizeString(result.outcome);
+  const spawn = normalizeString(result.spawn);
+  const spawnStarted = spawn === 'spawn_started';
+  const cleanupSucceeded = DEAD_WORKER_RECOVERY_SUCCESS_OUTCOMES.has(outcome);
+  if (spawnStarted || cleanupSucceeded) {
+    return {
+      ok: true,
+      deadWorkerOutcome: 'recovered',
+      reason: spawnStarted ? spawn : outcome,
+      recoveryOutcome: outcome,
+      spawn,
+    };
+  }
+  if (outcome === 'claim_lost' || outcome === 'no_op') {
+    return {
+      ok: true,
+      deadWorkerOutcome: 'suppressed',
+      reason: outcome,
+      recoveryOutcome: outcome,
+      spawn,
+    };
+  }
+  return {
+    ok: true,
+    deadWorkerOutcome: 'audit_only',
+    reason: outcome || 'recovery_non_terminal',
+    recoveryOutcome: outcome,
+    spawn,
+  };
+}
+
+export function parseAndClassifyDeadWorkerRecoveryOutput(rawOutput) {
+  const parsed = parseWorkerRecoveryInvokeOutput(rawOutput);
+  if (!parsed.ok) {
+    return { ok: false, deadWorkerOutcome: 'escalated', reason: parsed.reason };
+  }
+  return classifyDeadWorkerRecoveryInvokeResult(parsed.result);
+}
+
 export function probeRecoveryChecks(packRoot) {
   const root = normalizeString(packRoot) || process.cwd();
   const workerRecoveryAvailable = existsSync(`${root}/scripts/invoke-worker-recovery.ps1`)
@@ -635,4 +709,5 @@ runStdinJsonCli('dead-worker-reconciler.mjs', {
     return resolveDeadWorkerBounds(payload.policy, payload.bounds ?? null);
   },
   'evaluate-adoption': () => evaluateDeadWorkerRuntimeAdoption(readStdinJson()),
+  'parse-recovery-output': () => parseAndClassifyDeadWorkerRecoveryOutput(readStdinJson().output),
 });

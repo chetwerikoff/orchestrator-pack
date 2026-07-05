@@ -81,6 +81,22 @@ export interface PlanDeadWorkerReconcileInput {
   prLookupFailed?: boolean;
 }
 
+export declare function parseAndClassifyDeadWorkerRecoveryOutput(rawOutput: unknown): {
+  ok: boolean;
+  deadWorkerOutcome: string;
+  reason: string;
+  recoveryOutcome?: string;
+  spawn?: string;
+};
+
+export declare function classifyDeadWorkerRecoveryInvokeResult(result: unknown): {
+  ok: boolean;
+  deadWorkerOutcome: string;
+  reason: string;
+  recoveryOutcome?: string;
+  spawn?: string;
+};
+
 export declare function validateAutonomousRespawnPolicy(
   policy: unknown,
 ): { ok: boolean; reason?: string; policy?: { allowReconcileDeadWorkerRespawn: boolean } };

@@ -155,7 +155,7 @@ function Invoke-DeadWorkerRecovery {
     )
     if ($DryRunMode) {
         Write-DeadWorkerLog "dry-run would recover session=$($Action.sessionId) pr=$($Action.prNumber) issue=$($Action.issueNumber) key=$($Action.key)"
-        return @{ ok = $true; outcome = 'dry_run'; dryRun = $true }
+        return @{ ok = $true; deadWorkerOutcome = 'dry_run'; outcome = 'dry_run'; dryRun = $true }
     }
 
     $recoveryArgv = @(
@@ -179,12 +179,22 @@ function Invoke-DeadWorkerRecovery {
         $capture.exitCode = $LASTEXITCODE
     }
     if (-not $fenced.ok) {
-        return @{ ok = $false; outcome = 'escalated'; reason = 'side_effect_busy' }
+        return @{ ok = $false; deadWorkerOutcome = 'escalated'; outcome = 'escalated'; reason = 'side_effect_busy' }
     }
+    $output = ($capture.output | Out-String).Trim()
     if ([int]$capture.exitCode -ne 0) {
-        return @{ ok = $false; outcome = 'escalated'; reason = "worker_recovery_exit_$($capture.exitCode)"; output = ($capture.output | Out-String).Trim() }
+        return @{ ok = $false; deadWorkerOutcome = 'escalated'; outcome = 'escalated'; reason = "worker_recovery_exit_$($capture.exitCode)"; output = $output }
     }
-    return @{ ok = $true; outcome = 'recovered'; output = ($capture.output | Out-String).Trim() }
+    $classified = Invoke-DeadWorkerPlannerCli -Subcommand 'parse-recovery-output' -Payload @{ output = $output }
+    return @{
+        ok                = [bool]$classified.ok
+        deadWorkerOutcome = [string]$classified.deadWorkerOutcome
+        outcome           = [string]$classified.deadWorkerOutcome
+        reason            = [string]$classified.reason
+        recoveryOutcome   = [string]$classified.recoveryOutcome
+        spawn             = [string]$classified.spawn
+        output            = $output
+    }
 }
 
 function Get-DeadWorkerOpenPrSnapshot {
@@ -274,9 +284,12 @@ function Invoke-DeadWorkerTick {
         $result = Invoke-DeadWorkerRecovery -Action $action -DryRunMode:$DryRunMode
         $finalAction = [ordered]@{}
         foreach ($prop in $action.PSObject.Properties) { $finalAction[$prop.Name] = $prop.Value }
-        $finalAction.type = if ($result.ok) { 'recovered' } else { 'escalated' }
+        $finalAction.type = [string]$result.deadWorkerOutcome
+        if (-not $finalAction.type) {
+            $finalAction.type = if ($result.ok) { 'recovered' } else { 'escalated' }
+        }
         $finalAction.outcome = $finalAction.type
-        $finalAction.reason = if ($result.reason) { [string]$result.reason } else { [string]$result.outcome }
+        $finalAction.reason = if ($result.reason) { [string]$result.reason } else { [string]$finalAction.type }
         $tracking = Commit-DeadWorkerAction -State $tracking -Action $finalAction -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     }
     $tracking.lastTickMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

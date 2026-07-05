@@ -18,6 +18,8 @@ import {
   probeRecoveryChecks,
   resolveAttemptLeaseTtlMs,
   resolveDeadWorkerBounds,
+  classifyDeadWorkerRecoveryInvokeResult,
+  parseAndClassifyDeadWorkerRecoveryOutput,
   resolveIssueOnlyPrLookup,
   resolveRecoveryRoute,
   resolveShutdownSuppressionWindowMs,
@@ -256,6 +258,63 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       },
     }));
     expect(plan.actions.some((a: { type: string; reason?: string }) => a.type === 'escalated' || a.reason === 'retry_budget_exhausted')).toBe(true);
+  });
+
+  it('classifies worker recovery child JSON before recording recovered', () => {
+    const recovered = classifyDeadWorkerRecoveryInvokeResult({
+      ok: true,
+      outcome: 'removed_terminated_session',
+      spawn: 'spawn_started',
+    });
+    expect(recovered.deadWorkerOutcome).toBe('recovered');
+
+    const claimLost = classifyDeadWorkerRecoveryInvokeResult({
+      ok: true,
+      outcome: 'claim_lost',
+      reason: 'holder_mismatch',
+    });
+    expect(claimLost.deadWorkerOutcome).toBe('suppressed');
+    expect(claimLost.reason).toBe('claim_lost');
+
+    const noOp = classifyDeadWorkerRecoveryInvokeResult({ ok: true, outcome: 'no_op', reason: 'backoff_not_elapsed' });
+    expect(noOp.deadWorkerOutcome).toBe('suppressed');
+
+    const parsed = parseAndClassifyDeadWorkerRecoveryOutput(
+      'noise\n{"ok":true,"outcome":"claim_lost","spawn":"not_attempted"}',
+    );
+    expect(parsed.deadWorkerOutcome).toBe('suppressed');
+  });
+
+  it('does not treat claim_lost as already recovered on a later tick', () => {
+    const fixture = readCapture('recoverable-crash.raw.json');
+    const pre = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [fixture.session],
+      aoEvents: fixture.events,
+    }));
+    const recover = pre.actions.find((a: { type: string }) => a.type === 'attempt_started');
+    expect(recover).toBeTruthy();
+    const tracking = commitDeadWorkerAction(
+      {
+        attempts: { [recover!.key]: { attempt: 1, lastAttemptMs: 1_780_000_105_000 } },
+        leases: {},
+        audit: [],
+      },
+      {
+        ...recover,
+        type: 'suppressed',
+        outcome: 'suppressed',
+        reason: 'claim_lost',
+      },
+      1_780_000_106_000,
+    );
+    const plan = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [fixture.session],
+      aoEvents: fixture.events,
+      tracking,
+      nowMs: 1_780_000_200_000,
+    }));
+    expect(plan.actions.some((a: { type: string }) => a.type === 'attempt_started')).toBe(true);
+    expect(plan.actions.some((a: { reason?: string }) => a.reason === 'already_recovered')).toBe(false);
   });
 
   it('does not retry keys that already recovered', () => {
