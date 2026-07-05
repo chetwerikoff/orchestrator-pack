@@ -2820,8 +2820,30 @@ describe('issue #373 state-root quarantine re-seat', () => {
     });
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
-    expect(result.evidence).toContain('stateDeliveryCount=0');
-    expect(result.evidence).toContain('journalDeliveryCount=0');
+    expect(result.evidence).toContain('stateActiveDeliveryCount=0');
+    expect(result.evidence).toContain('corroboratingJournalDeliveryCount=0');
+  });
+
+  it('reclaims stale orphan-anchor when only terminal state deliveries remain', () => {
+    const nowMs = 1717603000000;
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {
+          terminal: { deliveryId: 'terminal', sessionId: 'opk-terminal', terminalState: 'submitted' },
+        },
+        failedDeliveries: {},
+      },
+      journal: {},
+      anchor: {
+        activeDeliveryCount: 2,
+        stateRootIdentity: 'stale-anchor',
+        updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
+      },
+      nowMs,
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('orphan_anchor_quarantine');
   });
 
   it('blocks re-seat for fresh orphan-looking anchor until the backstop expires', () => {
@@ -2910,7 +2932,8 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
 
-  it('blocks re-seat when unrelated completed journal entry is the only evidence', () => {
+  it('reclaims stale orphan-anchor when completed journal entries are the only journal records', () => {
+    const nowMs = 1717603000000;
     const result = evaluateStateRootReSeatEligibility({
       state: {
         _recovery: recoveryLatch,
@@ -2923,11 +2946,16 @@ describe('issue #373 state-root quarantine re-seat', () => {
           dispatchOutcome: 'dispatched',
         },
       },
-      anchor: { activeDeliveryCount: 1, stateRootIdentity: 'stale-anchor' },
+      anchor: {
+        activeDeliveryCount: 1,
+        stateRootIdentity: 'stale-anchor',
+        updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
+      },
+      nowMs,
     });
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
-    expect(result.evidence).toContain('completedMatchingJournalCount=0');
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('orphan_anchor_quarantine');
+    expect(result.evidence).toContain('corroboratingJournalDeliveryCount=0');
   });
 
   it('is eligible for persisted wrong-root recovery when deliveries are empty and anchor is absent', () => {

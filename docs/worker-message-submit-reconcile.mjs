@@ -1843,10 +1843,13 @@ function countCompletedMatchingJournalEvidence(journal, stateDeliveries) {
   return count;
 }
 
-function countDispatchJournalDeliveryRecords(journal) {
+function countCorroboratingDispatchJournalDeliveryRecords(journal) {
   let count = 0;
-  for (const [deliveryId] of Object.entries(journal ?? {})) {
+  for (const [deliveryId, record] of Object.entries(journal ?? {})) {
     if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (interpretDispatchFenceLifecycle(record) === FENCE_LIFECYCLE_COMPLETED) {
       continue;
     }
     count += 1;
@@ -1929,9 +1932,7 @@ export function evaluateStateRootReSeatEligibility({
 
   const anchorActive = Number(anchor?.activeDeliveryCount ?? 0);
   const stateDeliveries = state?.deliveries ?? {};
-  const stateDeliveryCount = Object.entries(stateDeliveries).filter(
-    ([deliveryId]) => deliveryId && !deliveryId.startsWith('_'),
-  ).length;
+  const stateActiveDeliveryCount = countActiveStateDeliveries(state ?? {});
   const terminalStateDeliveryCount = Object.entries(stateDeliveries).filter(
     ([deliveryId, record]) =>
       deliveryId &&
@@ -1951,13 +1952,13 @@ export function evaluateStateRootReSeatEligibility({
       journal ?? {},
       stateDeliveries,
     );
-    const journalDeliveryCount = countDispatchJournalDeliveryRecords(journal ?? {});
+    const corroboratingJournalDeliveryCount = countCorroboratingDispatchJournalDeliveryRecords(journal ?? {});
     const anchorBackingActiveDeliveryCount = countActiveStateDeliveries(anchorState ?? {});
     const anchorUpdatedAtMs = Number(anchor?.updatedAtMs ?? 0);
     const ageMs = Number(nowMs ?? Date.now()) - anchorUpdatedAtMs;
     if (
-      stateDeliveryCount === 0 &&
-      journalDeliveryCount === 0 &&
+      stateActiveDeliveryCount === 0 &&
+      corroboratingJournalDeliveryCount === 0 &&
       anchorBackingActiveDeliveryCount === 0 &&
       anchorUpdatedAtMs > 0 &&
       ageMs >= DEFAULT_DELIVERY_BACKSTOP_MS
@@ -1966,7 +1967,7 @@ export function evaluateStateRootReSeatEligibility({
         eligible: true,
         reason: 'orphan_anchor_quarantine',
         priorRecoveryReason,
-        evidence: `anchorActiveDeliveryCount=${anchorActive};anchorAgeMs=${ageMs};stateDeliveryCount=0;journalDeliveryCount=0;anchorBackingActiveDeliveryCount=0`,
+        evidence: `anchorActiveDeliveryCount=${anchorActive};anchorAgeMs=${ageMs};stateActiveDeliveryCount=0;corroboratingJournalDeliveryCount=0;anchorBackingActiveDeliveryCount=0`,
       };
     }
     const totalEvidenceCount = terminalStateDeliveryCount;
