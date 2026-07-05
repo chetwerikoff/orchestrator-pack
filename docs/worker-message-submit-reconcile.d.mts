@@ -312,6 +312,8 @@ export declare function evaluateStateRootReSeatEligibility(input: {
   state?: Record<string, unknown>;
   journal?: Record<string, Record<string, unknown>>;
   anchor?: Record<string, unknown> | null;
+  anchorState?: Record<string, unknown> | null;
+  nowMs?: number;
 }): {
   eligible: boolean;
   reason: string;
