@@ -944,7 +944,7 @@ describe('issue #293 busy dispatch, retry, and backstops', () => {
     expect(failedStatus.unresolved.some((r) => r.deliveryId === 'failed-1')).toBe(true);
 
     const second = planWorkerMessageSubmitActions({
-      sessions: [{ sessionId: 'opk-failed', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 1000, reports: [{ report_state: 'working', reportedAt: new Date(21000).toISOString(), note: 'consumed later' }] }],
+      sessions: [{ sessionId: 'opk-failed', role: 'worker', runtime: 'alive', status: 'working', activity: 'idle', activityChangedAtMs: 1000, reports: [{ report_state: 'working', reportedAt: new Date(21000).toISOString(), note: 'consumed failed-1' }] }],
       dispatchJournal: {
         'failed-1': {
           deliveryId: 'failed-1',
@@ -1630,11 +1630,48 @@ describe('issue #281 journaled worker-send delivery accounting', () => {
     expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
   });
 
+  it('does not mark a submitted delivery consumed without positive consumption evidence', () => {
+    const id = 'opk-plain-send:1717601000000:ao-send:submitted-no-evidence';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{ ...baseSession, reports: [{ report_state: 'working', reportedAt: new Date(1717601020000).toISOString(), note: 'generic progress' }] }],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-plain-send',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-plain-send',
+            firstObservedAtMs: 1717601000000,
+            deliveredAtMs: 1717601000000,
+            submitAttempts: 1,
+            firstDispatchAtMs: 1717601005000,
+            lastSubmitAtMs: 1717601005000,
+            terminalState: 'submitted',
+          },
+        },
+        audit: [],
+      },
+      nowMs: 1717601025000,
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.deliveryId === id)).toBe(false);
+  });
+
   it('does not make a dispatched draft ambiguous because a later send failed before reaching the pane', () => {
     const id1 = 'opk-plain-send:1717601000000:ao-send:first';
     const id2 = 'opk-plain-send:1717601010000:ao-send:failed';
     const { actions } = planWorkerMessageSubmitActions({
-      sessions: [{ ...baseSession, reports: [{ report_state: 'working', reportedAt: new Date(1717601020000).toISOString(), note: 'generic progress' }] }],
+      sessions: [{ ...baseSession, reports: [{ report_state: 'working', reportedAt: new Date(1717601020000).toISOString(), note: `consumed ${id1}` }] }],
       dispatchJournal: {
         [id1]: { deliveryId: id1, sessionId: 'opk-plain-send', deliveredAtMs: 1717601000000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'dispatched', draftState: 'draft_present', messageShape: { charLength: 240, lineCount: 3 } },
         [id2]: { deliveryId: id2, sessionId: 'opk-plain-send', deliveredAtMs: 1717601010000, source: DISPATCH_SOURCE_AO_SEND, deliveryPath: DELIVERY_PATH_PENDING_DRAFT, dispatchOutcome: 'send_failed', draftState: 'unknown', messageShape: { charLength: 240, lineCount: 3 } },
@@ -2440,7 +2477,7 @@ describe('issue #373 supervised adoption preflight', () => {
     expect(second.stdout).toContain('tick complete');
   });
 
-  it('still reconciles review-send deliveries when adoption is red', () => {
+  it('blocks Enter for review-send deliveries when adoption is red', () => {
     const id = 'opk-review:1717601000000:review-send:run-1';
     const { actions } = planWorkerMessageSubmitActions({
       sessions: [{ sessionId: 'opk-review', name: 'opk-review', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
@@ -2463,8 +2500,13 @@ describe('issue #373 supervised adoption preflight', () => {
       },
       nowMs: 1717601010000,
     });
-    expect(submitActions(actions)).toHaveLength(1);
-    expect(submitActions(actions)[0]?.deliveryId).toBe(id);
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(
+      actions.some(
+        (a: WorkerMessageSubmitAction) =>
+          a.type === 'noop' && a.deliveryId === id && a.reason === 'wrapper_not_adopted',
+      ),
+    ).toBe(true);
   });
 });
 
@@ -3314,3 +3356,351 @@ ${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTR
     expect(persisted.lastTickMs).toBeGreaterThan(0);
   });
 });
+
+
+describe('issue #602 adoption and consumption proof (S1-S7)', () => {
+  const baseSession = {
+    sessionId: 'opk-scenario',
+    name: 'opk-scenario',
+    role: 'worker',
+    status: 'working',
+    runtime: 'alive',
+    activity: 'idle',
+    activityChangedAtMs: 1717601005000,
+    reports: [],
+  };
+  const busyMarker = {
+    backendKey: 'codex',
+    dispatchSignature: 'tmux-enter-v1',
+    runtimeFingerprint: 'codex-cli@1.0.0',
+    tmuxFingerprint: 'tmux@3.4:default',
+    smokedAt: '2026-06-13T12:00:00.000Z',
+    runId: 'opk-602',
+    busy_enter_enqueued_observed: true,
+    consumed_after_flush_observed: true,
+    no_manual_enter: true,
+  } as const;
+
+  it('S1: observed consumption after Enter may mark consumed', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s1';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{
+        ...baseSession,
+        reports: [{ report_state: 'fixing_ci', reportedAt: new Date(1717601015000).toISOString(), note: `progress ${id}` }],
+      }],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-scenario',
+            firstObservedAtMs: 1717601000000,
+            submitAttempts: 1,
+            firstDispatchAtMs: 1717601008000,
+            lastSubmitAtMs: 1717601008000,
+          },
+        },
+        audit: [],
+        adoptionStatus: 'adopted',
+      },
+      nowMs: 1717601020000,
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed' && a.deliveryId === id)).toBe(true);
+  });
+
+  it('S2: wrapper_not_adopted blocks Enter', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s2';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [], adoptionStatus: 'wrapper_not_adopted' },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'wrapper_not_adopted')).toBe(true);
+  });
+
+  it('S3: busy_dispatch_environment_unknown never marks consumed', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s3';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{
+        ...baseSession,
+        activity: 'active',
+        backendKey: 'codex',
+        reports: [{ report_state: 'working', reportedAt: new Date(1717601015000).toISOString(), note: 'generic' }],
+      }],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-scenario',
+            firstObservedAtMs: 1717601000000,
+            submitAttempts: 1,
+            firstDispatchAtMs: 1717601008000,
+            lastSubmitAtMs: 1717601008000,
+            busyDispatchReason: 'busy_dispatch_environment_unknown',
+          },
+        },
+        audit: [],
+        adoptionStatus: 'adopted',
+      },
+      nowMs: 1717601020000,
+      config: { observabilitySettleMs: 1000, postDispatchLeaseMs: 60000 },
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
+  });
+
+  it('S4: idle backstop sends one bounded Enter then waits for consumption proof', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s4';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [], adoptionStatus: 'adopted' },
+      nowMs: 1717601010000,
+    });
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
+  });
+
+  it('S5: stale or changed draft identity refuses Enter', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s5';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          draftIdentityStatus: 'changed',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [], adoptionStatus: 'adopted' },
+      nowMs: 1717601010000,
+      config: { deliveryBudgetMs: 1000 },
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.reason === 'draft_absent_or_changed')).toBe(true);
+  });
+
+  it('S6: busy-safe dispatch marks consumed only after observed consumption', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s6';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [{
+        ...baseSession,
+        activity: 'active',
+        backendKey: 'codex',
+        dispatchSignature: 'tmux-enter-v1',
+        runtimeFingerprint: 'codex-cli@1.0.0',
+        tmuxFingerprint: 'tmux@3.4:default',
+        reports: [{ report_state: 'ready_for_review', reportedAt: new Date(1717601015000).toISOString() }],
+      }],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {
+          [id]: {
+            deliveryId: id,
+            sessionId: 'opk-scenario',
+            firstObservedAtMs: 1717601000000,
+            submitAttempts: 1,
+            firstDispatchAtMs: 1717601008000,
+            lastSubmitAtMs: 1717601008000,
+            busyDispatchAllowed: true,
+            busyDispatchReason: 'busy_dispatch_marker_match',
+          },
+        },
+        audit: [],
+        adoptionStatus: 'adopted',
+      },
+      nowMs: 1717601020000,
+      config: { busyDispatch: { markers: [busyMarker] }, observabilitySettleMs: 1000, postDispatchLeaseMs: 60000 },
+    });
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed' && a.deliveryId === id)).toBe(true);
+  });
+
+  it('S7: absent draft never blind-enters', () => {
+    const id = 'opk-scenario:1717601000000:ao-send:s7';
+    const { actions } = planWorkerMessageSubmitActions({
+      sessions: [baseSession],
+      dispatchJournal: {
+        [id]: {
+          deliveryId: id,
+          sessionId: 'opk-scenario',
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'absent',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: { deliveries: {}, audit: [], adoptionStatus: 'adopted' },
+      nowMs: 1717601010000,
+      config: { deliveryBudgetMs: 1000 },
+    });
+    expect(submitActions(actions)).toHaveLength(0);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'escalate' && a.reason === 'draft_absent_or_changed')).toBe(true);
+  });
+
+  it('reproduces sanitized opk-134 / review-run-9754242b false-consumption class', () => {
+    const sessionId = 'opk-134-sanitized';
+    const deliveryId = `${sessionId}:1717601000000:review-send:review-run-9754242b`;
+    const first = planWorkerMessageSubmitActions({
+      sessions: [{
+        sessionId,
+        role: 'worker',
+        status: 'working',
+        runtime: 'alive',
+        activity: 'active',
+        reports: [],
+      }],
+      dispatchJournal: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId,
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_REVIEW_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {},
+        audit: [],
+        adoptionStatus: 'wrapper_not_adopted',
+      },
+      nowMs: 1717601005000,
+      config: { busyDispatch: { markers: [] } },
+    });
+    expect(submitActions(first.actions)).toHaveLength(0);
+    expect(first.actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
+
+    const masked = planWorkerMessageSubmitActions({
+      sessions: [{
+        sessionId,
+        role: 'worker',
+        status: 'working',
+        runtime: 'alive',
+        activity: 'idle',
+        activityChangedAtMs: 1717601010000,
+        reports: [{ report_state: 'working', reportedAt: new Date(1717601015000).toISOString(), note: 'unrelated progress' }],
+      }],
+      dispatchJournal: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId,
+          deliveredAtMs: 1717601000000,
+          source: DISPATCH_SOURCE_REVIEW_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'absent',
+          observability: 'indeterminate',
+          messageShape: { charLength: 240, lineCount: 3 },
+        },
+      },
+      tracking: {
+        deliveries: {
+          [deliveryId]: {
+            deliveryId,
+            sessionId,
+            firstObservedAtMs: 1717601000000,
+            submitAttempts: 1,
+            firstDispatchAtMs: 1717601008000,
+            lastSubmitAtMs: 1717601008000,
+            terminalState: 'submitted',
+            busyDispatchReason: 'busy_dispatch_environment_unknown',
+          },
+        },
+        audit: [],
+        adoptionStatus: 'wrapper_not_adopted',
+      },
+      nowMs: 1717601020000,
+    });
+    expect(masked.actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
+    expect(submitActions(masked.actions)).toHaveLength(0);
+  });
+});
+
+describe('issue #602 delivery source audit', () => {
+  it('documents journaled transport for worker-message delivery sources', () => {
+    const audit = JSON.parse(readFileSync('docs/submit-reconcile-delivery-source-audit.json', 'utf8')) as {
+      sources: Array<{ source: string; transport: string; outOfScope?: boolean }>;
+    };
+    const workerSources = audit.sources.filter((row) => !row.outOfScope);
+    expect(workerSources.length).toBeGreaterThanOrEqual(4);
+    for (const row of workerSources) {
+      expect(['journaled-worker-send', 'ao-review-send', 'draft-submit']).toContain(row.transport);
+    }
+    const bySource = Object.fromEntries(audit.sources.map((row) => [row.source, row.transport]));
+    expect(bySource['review-send']).toBe('ao-review-send');
+    expect(bySource['reaction-routed']).toBe('journaled-worker-send');
+    expect(bySource['ci-failure-nudge']).toBe('journaled-worker-send');
+    expect(bySource['ci-green-nudge']).toBe('journaled-worker-send');
+    expect(bySource['orchestrator-turn-nudge']).toBe('journaled-worker-send');
+    expect(bySource['submit-reconcile-backstop']).toBe('draft-submit');
+  });
+});
+

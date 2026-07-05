@@ -1537,6 +1537,11 @@ while the worker is busy/streaming; retries are gated by settled consumption obs
 draft freshness rather than by a pre-dispatch wall-clock budget; and failed terminals persist as
 durable failed-delivery records with late-consume reconciliation.
 
+Issue #602 tightens the same contract: `wrapper_not_adopted` is an Enter-blocking state,
+including review-send deliveries; `submitted` is not treated as consumed without positive
+consumption evidence; and idle backstop Enter is only eligible for the current live pending
+draft with authoritative journal/observation state.
+
 **New supervised child** under `orchestrator-wake-supervisor.ps1` (#205).
 
 To adopt after merge:
@@ -1550,9 +1555,16 @@ To adopt after merge:
 5. Busy dispatch remains **default-off** until the operator records a valid smoke marker in
    `docs/worker-message-submit-busy-dispatch-smoke-markers.json`. A missing / stale / mismatched
    marker keeps busy dispatch disabled without affecting idle delivery.
+6. Verify journaled-send adoption before relying on automatic Enter:
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -WriteProbeEntries`.
+   If the preflight reports `wrapper_not_adopted`, reconcile may still observe deliveries but will
+   not press Enter until the live routing rule is fixed and AO is restarted.
 
 Audit signal: submit reconcile state file `audit` array, durable `failedDeliveries`, and log
-lines `[worker-message-submit-reconcile]` with submit/no-op/escalation reasons.
+lines `[worker-message-submit-reconcile]` with submit/no-op/escalation reasons. A delivery is
+marked consumed only after positive consumption evidence such as a delivery-correlated worker
+report, a review-round report state for review-send, or explicit `consumed_after_flush_observed`
+journal evidence.
 
 See `docs/orchestrator-recovery-runbook.md` (Submit stuck paste draft).
 
@@ -1749,6 +1761,12 @@ outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome),
 
 Current AO versions that do not advertise `--file` ingestion for `ao send` remain a hard
 gate: the wrapper exits fail-closed rather than binding to unsupported transport forms.
+
+Issue #602 adoption check: after restart, run the adoption preflight and confirm the live
+dispatch journal contains both required probe branches (`plain-ao-send:pending-draft` and
+`plain-ao-send:self-submitted`) via the wrapper. Until that passes, submit reconcile reports
+`wrapper_not_adopted` once per AO epoch/config and blocks Enter rather than consuming or
+submitting uncertain deliveries.
 
 ## Review run recovery side-process (Issue #287)
 
@@ -2017,4 +2035,3 @@ their next respawn. For documentation only:
    never block wrapped `gh` calls or fleet cache populate paths.
 
 No operator adoption required for live yaml — bounds are script defaults.
-

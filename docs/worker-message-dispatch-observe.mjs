@@ -431,20 +431,62 @@ export function getSessionActivity(session) {
   return String(session?.activity ?? '').trim().toLowerCase();
 }
 
+const NON_WORKING_CONSUMPTION_REPORT_STATES = new Set([
+  'fixing_ci',
+  'ready_for_review',
+  'addressing_reviews',
+  'completed',
+]);
+
+function trimObservationString(value) {
+  return String(value ?? '').trim();
+}
+
+function reportCorrelatesToDelivery(report, deliveryId) {
+  const note = String(report?.note ?? '');
+  return Boolean(deliveryId) && note.includes(deliveryId);
+}
+
 /**
+ * Positive, per-delivery consumption evidence (Issue #602).
+ * Submitted/busy-unknown/absent draft/generic progress alone are not receipt.
+ *
  * @param {Record<string, unknown>} session
  * @param {Record<string, unknown>} delivery
  * @param {number} deliveredAtMs
+ * @param {Record<string, unknown>} [record]
  */
-export function isDeliveryConsumed(session, delivery, deliveredAtMs) {
+export function hasPositiveConsumptionEvidence(session, delivery, deliveredAtMs, record = {}) {
+  const deliveryId = trimObservationString(delivery?.deliveryId);
+  const draftState = trimObservationString(delivery?.draftState);
+
+  if (delivery?.corruptObservation) {
+    return false;
+  }
+  if (
+    draftState === 'absent' ||
+    draftState === 'changed' ||
+    draftState === DRAFT_STATE_UNKNOWN
+  ) {
+    return false;
+  }
+
+  if (
+    delivery?.consumptionObserved === true ||
+    delivery?.consumedAfterFlushObserved === true ||
+    trimObservationString(delivery?.consumptionEvidence) === 'consumed_after_flush_observed'
+  ) {
+    return true;
+  }
+
   if (delivery?.ambiguousSessionInflight) {
-    const id = String(delivery?.deliveryId ?? '');
     const reports = toArray(session?.reports);
     return reports.some((report) => {
       const ts = getReportTimestampMs(report);
-      return ts && ts > deliveredAtMs && id && String(report?.note ?? '').includes(id);
+      return ts && ts > deliveredAtMs && reportCorrelatesToDelivery(report, deliveryId);
     });
   }
+
   const reports = toArray(session?.reports);
   for (const report of reports) {
     const ts = getReportTimestampMs(report);
@@ -458,19 +500,26 @@ export function isDeliveryConsumed(session, delivery, deliveredAtMs) {
     ) {
       return true;
     }
-    if (
-      ['working', 'fixing_ci', 'ready_for_review', 'addressing_reviews', 'completed'].includes(
-        state,
-      ) &&
-      delivery.source !== DISPATCH_SOURCE_REVIEW_SEND
-    ) {
-      const note = String(report?.note ?? '');
-      if (note.length > 0 || state !== 'working') {
+    if (delivery.source !== DISPATCH_SOURCE_REVIEW_SEND) {
+      if (NON_WORKING_CONSUMPTION_REPORT_STATES.has(state)) {
+        return true;
+      }
+      if (state === 'working' && reportCorrelatesToDelivery(report, deliveryId)) {
         return true;
       }
     }
   }
   return false;
+}
+
+/**
+ * @param {Record<string, unknown>} session
+ * @param {Record<string, unknown>} delivery
+ * @param {number} deliveredAtMs
+ * @param {Record<string, unknown>} [record]
+ */
+export function isDeliveryConsumed(session, delivery, deliveredAtMs, record = {}) {
+  return hasPositiveConsumptionEvidence(session, delivery, deliveredAtMs, record);
 }
 
 /**

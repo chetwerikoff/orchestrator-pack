@@ -76,6 +76,9 @@ export const STATE_ROOT_RECOVERY_REASON = 'wrong_state_root_active_deliveries';
 export const FAILED_DELIVERY_RESOLVED = 'resolved';
 export const FAILED_DELIVERY_AUDITED_CLOSED = 'audited_closed';
 
+export const ADOPTION_STATUS_ADOPTED = 'adopted';
+export const ADOPTION_STATUS_WRAPPER_NOT_ADOPTED = 'wrapper_not_adopted';
+
 function trimString(value) {
   return String(value ?? '').trim();
 }
@@ -686,6 +689,9 @@ function classifyFailureTerminalReason(reason) {
     'draft_state_unknown',
     'draft_state_unknown',
     'dispatch_unknown',
+    'wrapper_not_adopted',
+    'adoption_unavailable',
+    'observation_unavailable',
   ]);
   return hardFailures.has(reason) ? reason : 'delivery_backstop_exhausted';
 }
@@ -767,6 +773,27 @@ export function applySubmitOutcomes(tracking, outcomes, nowMs) {
     audit,
   };
   return compactWorkerMessageSubmitTracking(draft, nowMs).tracking;
+}
+
+
+export function isSubmitEnterAuthorizedByAdoption(tracking) {
+  const status = trimString(tracking?.adoptionStatus);
+  if (!status) {
+    return true;
+  }
+  return status !== ADOPTION_STATUS_WRAPPER_NOT_ADOPTED;
+}
+
+function buildAdoptionBlockedDecision(deliveryId, sessionId, deliveryBackstopExpired) {
+  if (deliveryBackstopExpired) {
+    return buildBackstopEscalation(
+      deliveryId,
+      sessionId,
+      'wrapper_not_adopted',
+      `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} cannot be Enter-submitted because orchestrator worker-send routing is not adopted (wrapper_not_adopted).`,
+    );
+  }
+  return { action: 'noop', reason: 'wrapper_not_adopted', deliveryId, sessionId };
 }
 
 function buildBackstopEscalation(deliveryId, sessionId, reason, diagnosis) {
@@ -885,7 +912,7 @@ export function evaluateSubmitDecision({
     );
   }
 
-  if (session && isDeliveryConsumed(session, delivery, observationAnchorMs)) {
+  if (session && isDeliveryConsumed(session, delivery, observationAnchorMs, record)) {
     if (terminalState === SUBMIT_STATE_ESCALATED) {
       return buildConsumptionAction(deliveryId, sessionId, 'late_consumed_after_terminal');
     }
@@ -998,6 +1025,10 @@ export function evaluateSubmitDecision({
   const isBusy = isSessionStreaming(session);
   const priorDispatchExists = submitAttempts > 0 || Number(record.lastSubmitAtMs ?? 0) > 0;
 
+  if (!isSubmitEnterAuthorizedByAdoption(tracking)) {
+    return buildAdoptionBlockedDecision(deliveryId, sessionId, deliveryBackstopExpired);
+  }
+
   if (!priorDispatchExists) {
     if (isBusy && !busyDispatch.allowed) {
       if (deliveryBackstopExpired) {
@@ -1094,6 +1125,10 @@ export function evaluateSubmitDecision({
       deliveryId,
       sessionId,
     };
+  }
+
+  if (!isSubmitEnterAuthorizedByAdoption(tracking)) {
+    return buildAdoptionBlockedDecision(deliveryId, sessionId, deliveryBackstopExpired);
   }
 
   if (submitAttempts >= maxSubmitAttempts) {
@@ -1452,7 +1487,7 @@ export function planWorkerMessageSubmitActions(input) {
       if ((paneCompetingBySession.get(sessionId) ?? []).length > 1) {
         lost.ambiguousSessionInflight = true;
       }
-      if (session && isDeliveryConsumed(session, lost, Number(lost.deliveredAtMs ?? 0))) {
+      if (session && isDeliveryConsumed(session, lost, Number(lost.deliveredAtMs ?? 0), existing)) {
         nextDeliveries[lostId] = recordConsumptionResolution({ record: existing, nowMs });
         resolveFailedDeliveryState(nextFailedDeliveries, lostId, nowMs, 'consumed');
         actions.push({
@@ -1554,7 +1589,11 @@ export function planWorkerMessageSubmitActions(input) {
     const decision = evaluateSubmitDecision({
       delivery: surviving,
       session,
-      tracking: { deliveries: nextDeliveries, failedDeliveries: nextFailedDeliveries },
+      tracking: {
+        ...baseTracking,
+        deliveries: nextDeliveries,
+        failedDeliveries: nextFailedDeliveries,
+      },
       aoEvents,
       floodActiveSessions,
       nowMs,
