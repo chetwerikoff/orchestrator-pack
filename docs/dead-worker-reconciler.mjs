@@ -415,6 +415,12 @@ function countActiveAttemptLeases(leases, nowMs, leaseTtlMs) {
   }).length;
 }
 
+function reservePlanAttemptLease(tracking, key, sessionId, nowMs) {
+  const leases = { ...(tracking.leases ?? {}) };
+  leases[key] = { outcome: 'attempt_started', startedAtMs: nowMs, sessionId };
+  return { ...tracking, leases };
+}
+
 function evaluateRetryAndLease(key, tracking, bounds, nowMs) {
   const attempts = tracking.attempts ?? {};
   const leases = tracking.leases ?? {};
@@ -445,7 +451,8 @@ export function planDeadWorkerReconcile(input = {}) {
     backoffMs: DEFAULT_DEAD_WORKER_BACKOFF_MS,
     concurrency: DEFAULT_DEAD_WORKER_CONCURRENCY,
   };
-  let tracking = expireStaleAttemptLeases(input.tracking ?? {}, bounds, nowMs);
+  const tracking = expireStaleAttemptLeases(input.tracking ?? {}, bounds, nowMs);
+  let planningTracking = tracking;
   const actions = [];
   const gates = validateDeadWorkerGates(input);
   const sessions = toArray(input.sessions);
@@ -507,13 +514,13 @@ export function planDeadWorkerReconcile(input = {}) {
       continue;
     }
 
-    const retry = evaluateRetryAndLease(key, tracking, gates.bounds, nowMs);
+    const retry = evaluateRetryAndLease(key, planningTracking, gates.bounds, nowMs);
     if (!retry.ok) {
       actions.push({ ...base, type: retry.outcome, outcome: retry.outcome, reason: retry.reason, attempt: retry.attempt });
       continue;
     }
 
-    actions.push({
+    const attemptAction = {
       ...base,
       type: 'attempt_started',
       outcome: 'attempt_started',
@@ -531,7 +538,9 @@ export function planDeadWorkerReconcile(input = {}) {
         issueNumber: route.issueNumber,
         prNumber: route.prNumber,
       },
-    });
+    };
+    actions.push(attemptAction);
+    planningTracking = reservePlanAttemptLease(planningTracking, key, sessionId, nowMs);
   }
 
   return { actions, gates, tracking };

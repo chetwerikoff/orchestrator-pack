@@ -215,6 +215,29 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(lookup.prLookupFailed).toBe(true);
   });
 
+  it('enforces concurrency cap within a single plan tick', () => {
+    const fixture = readCapture('recoverable-crash.raw.json');
+    const session2 = {
+      ...fixture.session,
+      name: 'opk-dead-594',
+      issue: 594,
+      branch: 'feat/594',
+      worktree: '/home/operator/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-dead-594',
+    };
+    const events2 = fixture.events.map((event: Record<string, unknown>) => ({
+      ...event,
+      sessionId: 'opk-dead-594',
+    }));
+    const plan = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [fixture.session, session2],
+      aoEvents: [...fixture.events, ...events2],
+      bounds: { maxAttempts: 3, backoffMs: 60_000, concurrency: 1 },
+    }));
+    const attempts = plan.actions.filter((a: { type: string }) => a.type === 'attempt_started');
+    expect(attempts).toHaveLength(1);
+    expect(plan.actions.some((a: { reason?: string }) => a.reason === 'concurrency_cap_reached')).toBe(true);
+  });
+
   it('retry budget exhausts and escalates', () => {
     const fixture = readCapture('recoverable-crash.raw.json');
     const pre = planDeadWorkerReconcile(enabledPlanInput({
