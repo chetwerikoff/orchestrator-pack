@@ -62,6 +62,16 @@ describe('review-start preflight transient shield (#584)', () => {
       );
     });
 
+    it('classifies abuse-detection 403 as transient', () => {
+      const result = classifyPreflightGhOutcome({
+        exitCode: 1,
+        stderr:
+          'retry-after: 1\nHTTP 403: You have triggered an abuse detection mechanism. Please wait before retrying.',
+      });
+      expect(result.disposition).toBe('transient');
+      expect(result.reason).toBe('rate_limit');
+    });
+
     it('classifies auth and parse pollution as terminal', () => {
       expect(classifyPreflightGhOutcome({ exitCode: 1, stderr: 'HTTP 401: Bad credentials' }).disposition).toBe(
         'terminal',
@@ -349,6 +359,7 @@ describe('review-start preflight transient shield (#584)', () => {
     }> = [
       { name: 'ok stable', scenario: 'bashdb_stderr_valid_json', expectRun: true },
       { name: '429 then ok', scenario: 'http_429_then_ok', env: { AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS: '0' }, expectRun: true },
+      { name: 'secondary abuse 403 then ok', scenario: 'secondary_403_then_ok', env: { AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS: '0' }, expectRun: true },
       { name: '502 then ok', scenario: 'upstream_502_then_ok', env: { AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS: '0' }, expectRun: true },
       { name: 'exhausted transient', scenario: 'always_rate_limit', env: { AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS: '2', AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS: '0' }, expectRun: false, expectReason: 'preflight_transient_exhausted' },
       { name: 'terminal auth', scenario: 'gh_auth_failed', expectRun: false, expectReason: 'gh_auth_failed' },

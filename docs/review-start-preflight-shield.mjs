@@ -83,6 +83,7 @@ export function classifyPreflightGhOutcome(input = {}) {
     text.includes('429')
     || text.includes('secondary rate limit')
     || text.includes('abuse rate limit')
+    || text.includes('abuse detection')
     || text.includes('api rate limit exceeded')
     || (text.includes('rate limit') && !text.includes('graphql_rate_limit'))
   ) {
