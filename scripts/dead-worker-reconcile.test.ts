@@ -115,7 +115,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
   it('issue-only PR ambiguity fails closed', () => {
     const route = resolveRecoveryRoute(
       { name: 'opk-593', issue: 593, branch: 'feat/593', worktree: '/wt' },
-      { verdict: 'dead' },
+      { verdict: 'dead', reason: 'probed_dead_event' },
       { issueOnlyPrAmbiguous: true },
     );
     expect(route.ok).toBe(false);
@@ -123,7 +123,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
 
     const rateLimited = resolveRecoveryRoute(
       { name: 'opk-593', issue: 593, branch: 'feat/593', worktree: '/wt' },
-      { verdict: 'dead' },
+      { verdict: 'dead', reason: 'probed_dead_event' },
       { prLookupFailed: true },
     );
     expect(rateLimited.reason).toBe('blocked_rate_limit_pr_unknown');
@@ -179,7 +179,10 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       sessionId: 'opk-593',
       attempt: 1,
     };
-    const tracking = commitDeadWorkerAction({}, action, Date.now());
+    const tracking = commitDeadWorkerAction({}, action, Date.now()) as {
+      leases: Record<string, { outcome?: string }>;
+      attempts: Record<string, { attempt?: number }>;
+    };
     expect(tracking.leases['dead-worker-test']?.outcome).toBe('attempt_started');
     expect(tracking.attempts['dead-worker-test']?.attempt).toBe(1);
   });
