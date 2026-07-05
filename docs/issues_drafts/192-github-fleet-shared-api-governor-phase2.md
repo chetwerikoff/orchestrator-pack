@@ -135,6 +135,7 @@ evidence: NEW(produced-by AC#6)
 ```denylist
 # scope: github-fleet-governor phase2 (issue #585)
 vendor/**
+# no composio core / vendored AO forks
 packages/core/**
 .ao/**
 .agent-orchestrator/**
