@@ -431,13 +431,6 @@ export function getSessionActivity(session) {
   return String(session?.activity ?? '').trim().toLowerCase();
 }
 
-const NON_WORKING_CONSUMPTION_REPORT_STATES = new Set([
-  'fixing_ci',
-  'ready_for_review',
-  'addressing_reviews',
-  'completed',
-]);
-
 function trimObservationString(value) {
   return String(value ?? '').trim();
 }
@@ -501,10 +494,7 @@ export function hasPositiveConsumptionEvidence(session, delivery, deliveredAtMs,
       return true;
     }
     if (delivery.source !== DISPATCH_SOURCE_REVIEW_SEND) {
-      if (NON_WORKING_CONSUMPTION_REPORT_STATES.has(state)) {
-        return true;
-      }
-      if (state === 'working' && reportCorrelatesToDelivery(report, deliveryId)) {
+      if (reportCorrelatesToDelivery(report, deliveryId)) {
         return true;
       }
     }

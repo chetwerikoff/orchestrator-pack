@@ -225,8 +225,50 @@ describe('dispatch observation helpers (review)', () => {
       ).toBe(true);
     }
   });
-});
 
+  it('does not treat unrelated non-review report states as ao-send consumption', () => {
+    const deliveryId = 'opk-plain-send:1717601000000:ao-send:uncorrelated';
+    const deliveredAtMs = 1717601000000;
+    expect(
+      isDeliveryConsumed(
+        {
+          reports: [
+            {
+              report_state: 'ready_for_review',
+              reportedAt: new Date(1717601015000).toISOString(),
+              note: 'unrelated progress',
+            },
+          ],
+        },
+        {
+          deliveryId,
+          source: DISPATCH_SOURCE_AO_SEND,
+          draftState: 'draft_present',
+        },
+        deliveredAtMs,
+      ),
+    ).toBe(false);
+    expect(
+      isDeliveryConsumed(
+        {
+          reports: [
+            {
+              report_state: 'ready_for_review',
+              reportedAt: new Date(1717601015000).toISOString(),
+              note: `handoff ${deliveryId}`,
+            },
+          ],
+        },
+        {
+          deliveryId,
+          source: DISPATCH_SOURCE_AO_SEND,
+          draftState: 'draft_present',
+        },
+        deliveredAtMs,
+      ),
+    ).toBe(true);
+  });
+});
 describe('stale input guard (review)', () => {
   it('refuses submit after intervening input-affecting activity', () => {
     const { actions } = planFixture('stale-input-after-activity.json');
@@ -3543,7 +3585,7 @@ describe('issue #602 adoption and consumption proof (S1-S7)', () => {
         dispatchSignature: 'tmux-enter-v1',
         runtimeFingerprint: 'codex-cli@1.0.0',
         tmuxFingerprint: 'tmux@3.4:default',
-        reports: [{ report_state: 'ready_for_review', reportedAt: new Date(1717601015000).toISOString() }],
+        reports: [{ report_state: 'ready_for_review', reportedAt: new Date(1717601015000).toISOString(), note: `consumed ${id}` }],
       }],
       dispatchJournal: {
         [id]: {
