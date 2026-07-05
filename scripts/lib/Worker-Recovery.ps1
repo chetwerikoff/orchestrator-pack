@@ -5,6 +5,7 @@
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Worker-RecoveryClaim.ps1')
+. (Join-Path $PSScriptRoot 'Worker-RecoveryBranchCleanup.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousSpawnGate.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 
@@ -18,6 +19,17 @@ function Invoke-WorkerRecoveryCli {
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoveryCli `
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
 }
+
+
+function Invoke-WorkerRecoveryCli {
+    param(
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoveryCli `
+        -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
+}
+
 
 function Get-WorkerRecoveryAoSessionById {
     param([string]$SessionId)
@@ -323,8 +335,16 @@ function Invoke-WorkerRecovery {
         [int]$IssueNumber = 0,
         [int]$PrNumber = 0,
         [hashtable]$SpawnPolicy = $null,
+        [hashtable]$FixtureGrantRecord = $null,
+        [hashtable]$FixtureBranchObservation = $null,
+        [hashtable]$FixtureBranchState = $null,
+        [array]$FixtureWorktreeRecords = $null,
         [switch]$FixtureMode,
-        [switch]$SkipSpawn
+        [switch]$SkipSpawn,
+        [switch]$TaskClosed,
+        [switch]$TaskCancelled,
+        [switch]$TaskSuperseded,
+        [hashtable]$FixtureTaskEligibility = $null
     )
 
     if (-not $PackRoot) {
@@ -488,13 +508,43 @@ function Invoke-WorkerRecovery {
         $cleanupDone = $true
     }
 
-    $spawnDecision = 'not_attempted'
-    $spawnOutcome = 'spawn_denied'
+
     $resolvedIssueNumber = $IssueNumber
     if ($resolvedIssueNumber -le 0 -and $Session -and $Session.issue) {
         [void][int]::TryParse([string]$Session.issue, [ref]$resolvedIssueNumber)
     }
-    if (-not $SkipSpawn -and $SpawnAction -and -not ($cleanupAttempted -and -not $cleanupDone)) {
+
+    $branchCleanupOutcome = $null
+    $branchCleanupBlocked = $false
+    $taskEligibility = Get-WorkerRecoveryTaskEligibilityFlags -IssueNumber $resolvedIssueNumber `
+        -PackRoot $PackRoot -RepoRoot $RepoRoot -FixtureMode:$FixtureMode `
+        -FixtureTaskEligibility $FixtureTaskEligibility
+    if ($claim.acquired -and (-not $cleanupAttempted -or $cleanupDone)) {
+        $liveOwnerCheckForBranch = Get-WorkerRecoveryLiveDifferentOwner -RecoverySessionId $SessionId `
+            -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode
+        $branchCleanupOutcome = Invoke-WorkerRecoveryBranchCleanup -SessionId $SessionId `
+            -CanonicalPath $pathCanon.canonical -PackRoot $PackRoot -RepoRoot $RepoRoot -ProjectId $ProjectId `
+            -Namespace $claim.namespace -AttemptId $claim.record.attemptId `
+            -ClaimPath $claim.path -ClaimRecord $claim.record `
+            -GrantRecord $FixtureGrantRecord -FixtureObservation $FixtureBranchObservation `
+            -FixtureBranchState $FixtureBranchState -FixtureWorktreeRecords $FixtureWorktreeRecords `
+            -FixtureMode:$FixtureMode -DryRun:$DryRun `
+            -LiveDifferentOwner:([bool]$liveOwnerCheckForBranch.liveDifferentOwner) `
+            -IssueNumber $resolvedIssueNumber -TaskClosed:([bool]$taskEligibility.taskClosed) `
+            -TaskCancelled:([bool]$taskEligibility.taskCancelled) -TaskSuperseded:([bool]$taskEligibility.taskSuperseded) `
+            -TaskStateUnknown:([bool]$taskEligibility.taskStateUnknown)
+        if ($branchCleanupOutcome.escalation) {
+            $branchCleanupBlocked = $true
+        }
+        elseif (-not $branchCleanupOutcome.ok -and -not $branchCleanupOutcome.skipped) {
+            $branchCleanupBlocked = $true
+        }
+    }
+
+
+    $spawnDecision = 'not_attempted'
+    $spawnOutcome = 'spawn_denied'
+    if (-not $SkipSpawn -and $SpawnAction -and -not ($cleanupAttempted -and -not $cleanupDone) -and -not $branchCleanupBlocked) {
         $policy = if ($FixtureMode -and $SpawnPolicy) {
             @{ ok = $true; policy = $SpawnPolicy; reason = 'spawn_policy_ok' }
         }
@@ -554,10 +604,14 @@ function Invoke-WorkerRecovery {
     if ($cleanupAttempted -and -not $cleanupDone) {
         $finalState = 'partial_failure'
     }
+    elseif ($branchCleanupBlocked) {
+        $finalState = 'escalated'
+    }
     elseif ($cleanupDone -and $spawnDecision -eq 'spawn_denied' -and $SpawnAction) {
         $finalState = 'partial_failure'
     }
     $recoveryOk = -not ($cleanupAttempted -and -not $cleanupDone)
+    if ($branchCleanupBlocked) { $recoveryOk = $false }
     if ($SpawnAction -and $spawnDecision -eq 'spawn_denied') { $recoveryOk = $false }
     $audit = @{
         schemaVersion   = 'worker-recovery/v1'
@@ -571,6 +625,7 @@ function Invoke-WorkerRecovery {
         claimOutcome    = 'claim_acquired'
         cleanupDecision = if ($cleanupAttempted -and -not $cleanupDone) { 'failed' } elseif ($cleanupDone) { $eligibility.outcome } else { 'skipped' }
         spawnDecision   = $spawnDecision
+        branchCleanup   = if ($branchCleanupOutcome) { $branchCleanupOutcome.reason } else { 'not_attempted' }
         finalState      = $finalState
         recordedAtUtc   = (Get-Date).ToUniversalTime().ToString('o')
     }
@@ -580,6 +635,7 @@ function Invoke-WorkerRecovery {
         ok        = $recoveryOk
         outcome   = $finalState
         cleanup   = $cleanupDone
+        branch    = if ($branchCleanupOutcome) { $branchCleanupOutcome } else { $null }
         spawn     = $spawnDecision
         audit     = $audit
         packRoot  = $PackRoot
