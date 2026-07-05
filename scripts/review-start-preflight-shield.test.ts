@@ -125,7 +125,8 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(functionBody(ghSrc, 'Invoke-ReviewStartScopedGhPrView')).toMatch(/Invoke-ReviewStartPreflightGhPrView/);
       expect(snapshotSrc).toMatch(/Invoke-ReviewStartPreflightGhPrView/);
       const shieldSrc = readFileSync(shieldHelperPath, 'utf8');
-      expect(functionBody(shieldSrc, 'Invoke-ReviewStartPreflightGhSingleCapture')).toMatch(/TimeoutMs/);
+      expect(functionBody(shieldSrc, 'Invoke-ReviewStartPreflightGhSingleCapture')).toMatch(/CaptureTimeoutMs/);
+      expect(functionBody(shieldSrc, 'Invoke-ReviewStartPreflightGhPrView')).toMatch(/Resolve-ReviewStartPreflightShieldCaptureTimeoutMs/);
     });
   });
 
@@ -246,6 +247,27 @@ describe('review-start preflight transient shield (#584)', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('remaining budget capture cap', () => {
+    it('resolves capture timeout as the minimum of configured and remaining budget', () => {
+      const result = JSON.parse(runPwsh(
+        `
+        . ${psString(path.join(repoRoot, 'scripts/lib/Review-StartPreflightShield.ps1'))}
+        $env:AO_REVIEW_START_PREFLIGHT_SHIELD_CAPTURE_TIMEOUT_MS = '800'
+        [pscustomobject]@{
+          configured = Resolve-ReviewStartPreflightShieldCaptureTimeoutMs -RemainingBudgetMs 900
+          capped = Resolve-ReviewStartPreflightShieldCaptureTimeoutMs -RemainingBudgetMs 200
+          floored = Resolve-ReviewStartPreflightShieldCaptureTimeoutMs -RemainingBudgetMs 1
+          zero = Resolve-ReviewStartPreflightShieldCaptureTimeoutMs -RemainingBudgetMs 0
+        } | ConvertTo-Json -Compress
+      `,
+      ));
+      expect(result.configured).toBe(800);
+      expect(result.capped).toBe(200);
+      expect(result.floored).toBe(1);
+      expect(result.zero).toBe(0);
     });
   });
 

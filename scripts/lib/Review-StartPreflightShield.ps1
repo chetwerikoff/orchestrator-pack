@@ -35,7 +35,7 @@ function Get-ReviewStartPreflightShieldWallClockBudgetMs {
     if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$parsed) -and $parsed -gt 0) {
         return $parsed
     }
-    return 60_000
+    return 60000
 }
 
 function Get-ReviewStartPreflightShieldInjectedJitterMs {
@@ -53,7 +53,15 @@ function Get-ReviewStartPreflightShieldCaptureTimeoutMs {
     if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$parsed) -and $parsed -gt 0) {
         return $parsed
     }
-    return 30_000
+    return 30000
+}
+
+function Resolve-ReviewStartPreflightShieldCaptureTimeoutMs {
+    param([int]$RemainingBudgetMs)
+
+    $configured = Get-ReviewStartPreflightShieldCaptureTimeoutMs
+    if ($RemainingBudgetMs -le 0) { return 0 }
+    return [Math]::Min($configured, [Math]::Max(1, $RemainingBudgetMs))
 }
 
 function Get-ReviewStartPreflightShieldRemainingClaimMs {
@@ -68,12 +76,21 @@ function Invoke-ReviewStartPreflightGhSingleCapture {
     param(
         [string]$RepoRoot,
         [int]$PrNumber,
-        [hashtable]$ClaimResult = $null
+        [hashtable]$ClaimResult = $null,
+        [int]$CaptureTimeoutMs = 0
     )
+
+    $timeoutMs = if ($CaptureTimeoutMs -gt 0) {
+        $CaptureTimeoutMs
+    }
+    else {
+        Get-ReviewStartPreflightShieldCaptureTimeoutMs
+    }
 
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
-        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $ClaimResult -RepoRoot $RepoRoot -GhArguments @(
+        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $ClaimResult -RepoRoot $RepoRoot `
+            -DeadlineMs $timeoutMs -GhArguments @(
             'pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state'
         )
         $parse = if ($transport.ok) {
@@ -94,7 +111,7 @@ function Invoke-ReviewStartPreflightGhSingleCapture {
     }
 
     $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber `
-        -TimeoutMs (Get-ReviewStartPreflightShieldCaptureTimeoutMs)
+        -TimeoutMs $timeoutMs
     return @{
         exitCode   = [int]$capture.exitCode
         stdout     = [string]$capture.stdout
@@ -250,8 +267,14 @@ function Invoke-ReviewStartPreflightGhPrView {
         if ($attempt -gt 1 -and -not $budget.canCapture) {
             break
         }
+        $captureTimeoutMs = Resolve-ReviewStartPreflightShieldCaptureTimeoutMs `
+            -RemainingBudgetMs ([int]$budget.remainingMs)
+        if ($captureTimeoutMs -le 0) {
+            break
+        }
 
-        $capture = Invoke-ReviewStartPreflightGhSingleCapture -RepoRoot $RepoRoot -PrNumber $PrNumber -ClaimResult $ClaimResult
+        $capture = Invoke-ReviewStartPreflightGhSingleCapture -RepoRoot $RepoRoot -PrNumber $PrNumber `
+            -ClaimResult $ClaimResult -CaptureTimeoutMs $captureTimeoutMs
         $lastCapture = $capture
 
         if ($capture.ownershipLost) {
@@ -349,7 +372,6 @@ function Invoke-ReviewStartPreflightGhPrView {
         if (-not $retryBudget.canRetry) {
             break
         }
-
         if ($backoffMs -gt $retryBudget.remainingMs) {
             break
         }
