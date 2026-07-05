@@ -4,7 +4,7 @@ export declare const SPAWN_ARGV_OPTIONS_WITH_VALUE: readonly string[];
 export interface RunnableSpawnMatch {
   line: number;
   command: string;
-  kind: 'line' | 'backtick';
+  kind: 'line' | 'backtick' | 'inline';
 }
 
 export interface SpawnShapeFlags {
@@ -25,6 +25,8 @@ export declare function isNonRunnableSpawnMention(
 ): boolean;
 
 export declare function hasSpawnDirectedNegation(text: string, spawnIndex: number): boolean;
+
+export declare function extractInlineSpawnCommand(line: string, spawnIndex: number): string;
 
 export declare function findRunnableSpawnCommands(text: string): RunnableSpawnMatch[];
 

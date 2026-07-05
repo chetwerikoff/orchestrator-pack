@@ -139,6 +139,16 @@ describe('findRunnableSpawnCommands', () => {
     const backtickSafety = 'prose such as `never ao spawn` remains unchanged.';
     expect(findRunnableSpawnCommands(backtickSafety)).toEqual([]);
   });
+
+  it('detects inline runnable spawn commands in prose', () => {
+    const inline =
+      'respawned via ao spawn --claim-pr <PR> (ping/respawn discipline below).';
+    const matches = findRunnableSpawnCommands(inline);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.kind).toBe('inline');
+    expect(matches[0]?.command).toBe('ao spawn --claim-pr <PR>');
+    expect(scanSpawnShapeViolations(inline)).toHaveLength(1);
+  });
 });
 
 describe('scanSpawnShapeCorpus', () => {

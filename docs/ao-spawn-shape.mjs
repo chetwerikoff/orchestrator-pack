@@ -4,7 +4,7 @@
  * non-empty --name display label (max 20 chars).
  */
 
-/** @typedef {{ line: number; command: string; kind: 'line' | 'backtick' }} RunnableSpawnMatch */
+/** @typedef {{ line: number; command: string; kind: 'line' | 'backtick' | 'inline' }} RunnableSpawnMatch */
 
 export const AO_SPAWN_DISPLAY_NAME_MAX_LENGTH = 20;
 
@@ -45,6 +45,26 @@ export function hasSpawnDirectedNegation(text, spawnIndex) {
   }
 
   return false;
+}
+
+/**
+ * Extract an inline `ao spawn ...` command from prose that does not start with it.
+ * @param {string} line
+ * @param {number} spawnIndex
+ */
+export function extractInlineSpawnCommand(line, spawnIndex) {
+  let rest = line.slice(spawnIndex).trim();
+  const parenIdx = rest.search(/\s+\(/);
+  if (parenIdx > 0) {
+    rest = rest.slice(0, parenIdx).trim();
+  }
+  rest = rest.replace(/[.,]\s*$/, '').trim();
+  rest = rest.replace(/\s+for\s+[\w#-]+(?:\s+[\w#-]+)*\s*$/i, '').trim();
+  const commaIdx = rest.indexOf(',');
+  if (commaIdx > 0) {
+    rest = rest.slice(0, commaIdx).trim();
+  }
+  return rest;
 }
 
 /**
@@ -91,6 +111,18 @@ export function findRunnableSpawnCommands(text) {
     if (RUNNABLE_LINE.test(trimmed) && !isNonRunnableSpawnMention(line, previousLine)) {
       matches.push({ line: index + 1, command: trimmed, kind: 'line' });
       continue;
+    }
+
+    const inlineSpawnIdx = line.search(/\bao spawn\b/i);
+    if (
+      inlineSpawnIdx >= 0 &&
+      !isNonRunnableSpawnMention(line, previousLine) &&
+      !line.includes('`')
+    ) {
+      const command = extractInlineSpawnCommand(line, inlineSpawnIdx);
+      if (command && /^ao spawn\s+--/i.test(command)) {
+        matches.push({ line: index + 1, command, kind: 'inline' });
+      }
     }
 
     const backtickPattern = /`([^`]*\bao spawn\b[^`]*)`/gi;
