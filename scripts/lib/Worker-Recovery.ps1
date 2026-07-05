@@ -38,14 +38,24 @@ function Get-WorkerRecoveryTaskEligibilityFlags {
         [switch]$FixtureMode
     )
 
-    if ($FixtureMode -and $FixtureTaskEligibility) {
+    if ($FixtureMode) {
+        if ($FixtureTaskEligibility) {
+            return @{
+                ok               = $true
+                taskClosed       = [bool]$FixtureTaskEligibility.taskClosed
+                taskCancelled    = [bool]$FixtureTaskEligibility.taskCancelled
+                taskSuperseded   = [bool]$FixtureTaskEligibility.taskSuperseded
+                taskStateUnknown = [bool]$FixtureTaskEligibility.taskStateUnknown
+                reason           = [string]$FixtureTaskEligibility.reason
+            }
+        }
         return @{
             ok               = $true
-            taskClosed       = [bool]$FixtureTaskEligibility.taskClosed
-            taskCancelled    = [bool]$FixtureTaskEligibility.taskCancelled
-            taskSuperseded   = [bool]$FixtureTaskEligibility.taskSuperseded
-            taskStateUnknown = [bool]$FixtureTaskEligibility.taskStateUnknown
-            reason           = [string]$FixtureTaskEligibility.reason
+            taskClosed       = $false
+            taskCancelled    = $false
+            taskSuperseded   = $false
+            taskStateUnknown = $false
+            reason           = 'fixture_default_eligible'
         }
     }
     if ($IssueNumber -le 0) {

@@ -290,6 +290,36 @@ describe('worker recovery branch cleanup classification (#592)', () => {
 });
 
 describe('worker recovery branch cleanup integration (#592)', () => {
+  it('FixtureMode recovery does not require live gh issue view', () => {
+    setupSpawnWorktreeRepo(({ repo, baseRef }) => {
+      const issueNumber = 592;
+      const sessionId = 'opk-592';
+      const branch = `feat/issue-${issueNumber}`;
+      const worktreePath = path.join(repo, 'worktrees', sessionId);
+      const grantStartOid = headOidSpawnWorktreeRepo(repo);
+      gitIn(repo, ['branch', branch, baseRef]);
+      const grant = buildConsumedGrant(issueNumber, repo, baseRef, sessionId, worktreePath);
+      const ns = tempNs();
+      const fakeGhDir = mkdtempSync(path.join(tmpdir(), 'worker-recovery-fake-gh-'));
+      writeFileSync(path.join(fakeGhDir, 'gh'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const script = `
+        $ErrorActionPreference = 'Stop'
+        . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+        $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+        $env:AO_SPAWN_WORKTREE_STATE_ROOT = ${psString(path.join(ns, 'spawn-grants'))}
+        $env:PATH = ${psString(fakeGhDir)} + ':' + $env:PATH
+        ${grantPs(grant, sessionId, worktreePath, grantStartOid)}
+        $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -CanonicalPath ${psString(worktreePath)} -PackRoot ${psString(repo)} -RepoRoot ${psString(repo)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(worktreePath)}; issue='${issueNumber}' } -WorktreeRecord @{ sessionId=${psString(sessionId)}; projectId='orchestrator-pack' } -WorktreePresent:$false -DryRun -SpawnAction 'spawn-new' -IssueNumber ${issueNumber} -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureGrantRecord $grant -FixtureBranchObservation @{ observedAtUtc=(Get-Date).ToUniversalTime().ToString('o'); openPrByHeadRefName=@{}; fetchFailed=$false; rateLimited=$false } -FixtureBranchState @{ ok=$true; exists=$true; branch=${psString(branch)}; branchHeadOid=${psString(grantStartOid)}; localAheadCount=0; remoteAheadCount=0; diverged=$false; reflogEntries=@(); danglingReachableCount=0 } -FixtureWorktreeRecords @()
+        [pscustomobject]@{ spawn = [string]$result.spawn; branchReason = [string]$result.branch.reason; ok = [bool]$result.ok } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.spawn).toBe('spawn_started');
+      expect(result.branchReason).toBe('branch_deleted');
+      expect(result.ok).toBe(true);
+      rmSync(fakeGhDir, { recursive: true, force: true });
+    });
+  });
+
   it('deletes orphan branch under recovery claim and routes respawn in dry-run', () => {
     setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const issueNumber = 592;

@@ -113,7 +113,7 @@ function Get-WorkerRecoveryWorktreeRecords {
         [array]$FixtureWorktreeRecords = $null
     )
 
-    if ($FixtureMode -and $null -ne $FixtureWorktreeRecords) {
+    if ($FixtureMode -and $FixtureWorktreeRecords -and $FixtureWorktreeRecords.Count -gt 0) {
         return @($FixtureWorktreeRecords)
     }
     $raw = & git -C $RepoRoot worktree list --porcelain 2>$null
