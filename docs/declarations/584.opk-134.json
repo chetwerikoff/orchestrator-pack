@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:2cc9c6a8b14b28fac7aa616f0bb5009fa6d4ef479a686fb3d34a778034f5e8f0"
+    "active_scope_hash": "sha256:6520d1e308d0a8cb2ff8a9cb18546432fe888cf6277a471e99ea4395fbc25c55"
   },
   "declared_paths": [
     "docs/declarations/584.opk-134.json",
@@ -20,10 +20,12 @@
     "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
     "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
     "scripts/github-fleet-shared-read-model.test.ts",
+    "scripts/invoke-manual-review-run.ps1",
     "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
     "scripts/lib/Gh-PrChecks.ps1",
     "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
     "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+    "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
     "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
     "scripts/lib/Review-StartClaim.ps1",
     "scripts/lib/Review-StartClaimLifecycle.ps1",
@@ -33,6 +35,7 @@
     "scripts/review-start-envelope-ledger.test.ts",
     "scripts/review-start-preflight-shield.test.ts",
     "scripts/review-start-scoped-gh-json-capture.test.ts",
+    "scripts/review-trigger-reconcile.ps1",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],

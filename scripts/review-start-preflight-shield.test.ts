@@ -465,6 +465,34 @@ describe('review-start preflight transient shield (#584)', () => {
     });
   });
 
+  describe('manual review-start shield routing', () => {
+    it('resolves manual head through scoped preflight shield', () => {
+      const src = readFileSync(path.join(repoRoot, 'scripts/invoke-manual-review-run.ps1'), 'utf8');
+      expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
+      expect(src).not.toMatch(/Invoke-GhOpenPrList/);
+    });
+
+    it('manual closed PR fixture denies before ao review run', () => {
+      const result = JSON.parse(runPwsh(
+        `
+        . ${psString(path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1'))}
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'closed_pr'
+        $message = 'started'
+        try {
+          & ${psString(path.join(repoRoot, 'scripts/invoke-manual-review-run.ps1'))} -SessionId opk-134 -PrNumber 584
+          if ($LASTEXITCODE -ne 0) { $message = "exit:$LASTEXITCODE" }
+        }
+        catch {
+          $message = [string]$_.Exception.Message
+        }
+        [pscustomobject]@{ message = $message } | ConvertTo-Json -Compress
+      `,
+      ));
+      expect(result.message).toMatch(/pr_not_open/);
+    });
+  });
+
   describe('closed PR recheck denial', () => {
     it('treats pr_not_open snapshot transport as target-state not infra retry', () => {
       const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
@@ -504,6 +532,35 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(gate.launch).toBe(false);
       expect(gate.reason).toBe('pr_not_open');
       expect(gate.auditShape).toBe('per_start_denial');
+    });
+
+    it('claimed pre-recheck preserves pr_not_open target-state denial', () => {
+      const invokeHelperPath = path.join(repoRoot, 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
+      const result = JSON.parse(runPwsh(
+        `
+        . ${psString(invokeHelperPath)}
+        $recheck = Invoke-OrchestratorClaimedReviewRunPreRecheck -PlannedAction @{
+          prNumber = 584
+          headSha = 'abc3180000000000000000000000000000000000'
+          sessionId = 'opk-134'
+          startReason = 'test'
+        } -Snapshot @{
+          targetStateDenial = @{ ok = $false; reason = 'pr_not_open' }
+          openPrs = @()
+          reviewRuns = @()
+          sessions = @()
+          ciChecksByPr = @{}
+          requiredCheckNamesByPr = @{}
+          requiredCheckLookupFailedByPr = @{}
+        }
+        [pscustomobject]@{
+          emit = [bool]$recheck.emitReviewRun
+          reason = [string]$recheck.reason
+        } | ConvertTo-Json -Compress
+      `,
+      ));
+      expect(result.emit).toBe(false);
+      expect(result.reason).toBe('pr_not_open');
     });
 
     it('evaluateTurnGate still infrastructure-denies gh_binary_missing transport', () => {

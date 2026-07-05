@@ -40,6 +40,11 @@ function Invoke-OrchestratorClaimedReviewRunPreRecheck {
         [hashtable]$Snapshot
     )
 
+    $targetStateDenial = Get-ReviewStartTargetStateRecheckDenial -Snapshot $Snapshot
+    if ($targetStateDenial) {
+        return $targetStateDenial
+    }
+
     $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $Snapshot
     if ($transportDenial) {
         return $transportDenial

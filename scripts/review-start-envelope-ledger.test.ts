@@ -105,6 +105,12 @@ describe('review-start-envelope-ledger unit', () => {
     ).toBe(false);
   });
 
+  it('pre-run-recheck snapshot forwards target-state denial', () => {
+    const reconcileSrc = readFileSync(path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1'), 'utf8');
+    expect(reconcileSrc).toMatch(/targetStateDenial\s*=\s*\$claimed\.targetStateDenial/);
+    expect(reconcileSrc).toMatch(/Get-ReviewStartTargetStateRecheckDenial -Snapshot \$fresh/);
+  });
+
   it('pre-run-recheck-snapshot-forwards-transport-failure', () => {
     const reconcileSrc = readFileSync(path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1'), 'utf8');
     expect(reconcileSrc).toMatch(/transportFailure\s*=\s*\$claimed\.transportFailure/);

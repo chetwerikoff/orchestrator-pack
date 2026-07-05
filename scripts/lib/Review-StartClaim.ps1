@@ -940,6 +940,20 @@ function Get-ReviewStartSupervisedGhInfraTransportFailure {
     }
 }
 
+function Get-ReviewStartTargetStateRecheckDenial {
+    param([hashtable]$Snapshot)
+
+    $denial = $Snapshot.targetStateDenial
+    if (-not $denial -or $denial.ok -eq $true) { return $null }
+    $reason = [string]$denial.reason
+    if (-not $reason) { return $null }
+    return @{
+        emitReviewRun       = $false
+        reason              = $reason
+        targetStateDenial   = $denial
+    }
+}
+
 function Get-ReviewStartSupervisedGhInfraTransportRecheckDenial {
     param([hashtable]$Snapshot)
 
