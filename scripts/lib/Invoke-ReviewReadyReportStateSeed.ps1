@@ -471,6 +471,19 @@ function Invoke-ReviewReadyReportStateSeedTick {
                 }
                 else {
                     $lookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $prNumber
+                    if ($lookup.targetStateDenial) {
+                        return @{
+                            openPrs                       = @()
+                            reviewRuns                    = @()
+                            sessions                      = @()
+                            ciChecksByPr                  = @{}
+                            requiredCheckNamesByPr        = @{}
+                            requiredCheckLookupFailedByPr = @{}
+                            nowMs                         = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                            transportFailure              = $null
+                            targetStateDenial             = $lookup.targetStateDenial
+                        }
+                    }
                     if ($lookup.transportFailure) {
                         return @{
                             openPrs                       = @()

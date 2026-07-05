@@ -24,9 +24,19 @@ function Get-OrchestratorReviewStartPreflightDir {
     return (Join-Path $AuditRoot 'preflight')
 }
 
+function Get-ReviewStartPreflightShieldAuditDir {
+    param([string]$AuditRoot)
+    return (Join-Path $AuditRoot 'preflight-shield')
+}
+
 function Initialize-OrchestratorReviewStartAuditRoot {
     param([string]$AuditRoot)
-    foreach ($dir in @($AuditRoot, (Get-OrchestratorReviewStartDenialDir -AuditRoot $AuditRoot), (Get-OrchestratorReviewStartPreflightDir -AuditRoot $AuditRoot))) {
+    foreach ($dir in @(
+        $AuditRoot,
+        (Get-OrchestratorReviewStartDenialDir -AuditRoot $AuditRoot),
+        (Get-OrchestratorReviewStartPreflightDir -AuditRoot $AuditRoot),
+        (Get-ReviewStartPreflightShieldAuditDir -AuditRoot $AuditRoot)
+    )) {
         if (-not (Test-Path -LiteralPath $dir)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
@@ -120,6 +130,38 @@ function Write-OrchestratorReviewStartPreflightRefusal {
         reason      = $Reason
         markerState = $MarkerState
         atUtc       = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    ($record | ConvertTo-Json -Compress) | Set-Content -LiteralPath $path -Encoding UTF8
+    return @{ path = $path; record = $record }
+}
+
+function Write-ReviewStartPreflightShieldAudit {
+    param(
+        [string]$AuditRoot,
+        [int]$PrNumber,
+        [string]$HeadSha,
+        [int]$Attempt,
+        [string]$Disposition,
+        [string]$Reason,
+        [int]$BackoffMs = 0,
+        [bool]$HeaderDegraded = $false,
+        [string]$TransientClass = ''
+    )
+
+    Initialize-OrchestratorReviewStartAuditRoot -AuditRoot $AuditRoot
+    $path = Join-Path (Get-ReviewStartPreflightShieldAuditDir -AuditRoot $AuditRoot) ("$([guid]::NewGuid().ToString('n')).json")
+    $record = @{
+        kind            = 'preflight_shield'
+        producer        = 'review-start-preflight-shield'
+        prNumber        = $PrNumber
+        headSha         = ([string]$HeadSha).Trim().ToLowerInvariant()
+        attempt         = $Attempt
+        disposition     = $Disposition
+        reason          = $Reason
+        backoffMs       = $BackoffMs
+        headerDegraded  = [bool]$HeaderDegraded
+        transientClass  = $TransientClass
+        atUtc           = (Get-Date).ToUniversalTime().ToString('o')
     }
     ($record | ConvertTo-Json -Compress) | Set-Content -LiteralPath $path -Encoding UTF8
     return @{ path = $path; record = $record }

@@ -99,6 +99,7 @@
     "scripts/review-start-claim.test.ts": "heavy",
     "scripts/review-start-envelope-external-io.test.ts": "heavy",
     "scripts/review-start-envelope-ledger.test.ts": "heavy",
+    "scripts/review-start-preflight-shield.test.ts": "heavy",
     "scripts/review-start-repeat-classifier.test.ts": "light",
     "scripts/review-start-scoped-gh-json-capture.test.ts": "heavy",
     "scripts/review-start-supervised-gh-pid.test.ts": "heavy",

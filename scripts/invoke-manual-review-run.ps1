@@ -30,7 +30,20 @@ if (-not $ReviewCommand) {
     $ReviewCommand = Get-PackReviewCommandFromYaml -YamlPath $config
 }
 
-$openPrs = Invoke-GhOpenPrList -RepoRoot $PackRoot
+$scopedLookup = Invoke-ReviewStartScopedGhPrView -RepoRoot $PackRoot -PrNumber $PrNumber
+if ($scopedLookup.targetStateDenial) {
+    $auditRoot = Get-OrchestratorReviewStartAuditRoot -ProjectId $ProjectId
+    Write-OrchestratorReviewStartDenialAudit -AuditRoot $auditRoot -PrNumber $PrNumber -HeadSha $HeadSha `
+        -Reason ([string]$scopedLookup.targetStateDenial.reason) -ClaimOutcome 'manual_denied' -Provenance 'manual-operator' | Out-Null
+    throw "manual review start denied: $([string]$scopedLookup.targetStateDenial.reason)"
+}
+if ($scopedLookup.transportFailure) {
+    $auditRoot = Get-OrchestratorReviewStartAuditRoot -ProjectId $ProjectId
+    Write-OrchestratorReviewStartDenialAudit -AuditRoot $auditRoot -PrNumber $PrNumber -HeadSha $HeadSha `
+        -Reason ([string]$scopedLookup.transportFailure.reason) -ClaimOutcome 'manual_denied' -Provenance 'manual-operator' | Out-Null
+    throw "manual review start infrastructure denial: $([string]$scopedLookup.transportFailure.reason)"
+}
+$openPrs = @($scopedLookup.openPrs)
 if (-not $HeadSha) {
     foreach ($pr in @($openPrs)) {
         if ([int]$pr.number -eq $PrNumber) {
@@ -38,6 +51,9 @@ if (-not $HeadSha) {
             break
         }
     }
+}
+if (-not $HeadSha) {
+    throw "manual review start denied: head_resolution_failed"
 }
 
 $runs = @(Get-EnrichedAoReviewRuns -Project $ProjectId -RepoRoot $PackRoot)
