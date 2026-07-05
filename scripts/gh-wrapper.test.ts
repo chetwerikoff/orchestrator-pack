@@ -517,6 +517,8 @@ tryGraphqlDegradedPassthrough(['api', 'graphql', '-f', 'query={viewer{login}}'],
       const rows = readFileSync(auditPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
       expect(rows).toEqual([{
         status: 0,
+        stderr: '',
+        stdout: '{"data":{"viewer":{"login":"fixture"}}}\n',
       }]);
     } finally {
       rmSync(root, { recursive: true, force: true });

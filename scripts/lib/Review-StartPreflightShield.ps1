@@ -113,8 +113,18 @@ function Invoke-ReviewStartPreflightGhSingleCapture {
         }
     }
 
-    $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber `
-        -TimeoutMs $timeoutMs
+    $priorLane = [string]$env:GH_GOVERNOR_LANE
+    $priorConsumer = [string]$env:GH_GOVERNOR_CONSUMER
+    $env:GH_GOVERNOR_LANE = 'interactive-preflight'
+    $env:GH_GOVERNOR_CONSUMER = 'review-start-preflight-shield'
+    try {
+        $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber `
+            -TimeoutMs $timeoutMs
+    }
+    finally {
+        if ($priorLane) { $env:GH_GOVERNOR_LANE = $priorLane } else { Remove-Item Env:GH_GOVERNOR_LANE -ErrorAction SilentlyContinue }
+        if ($priorConsumer) { $env:GH_GOVERNOR_CONSUMER = $priorConsumer } else { Remove-Item Env:GH_GOVERNOR_CONSUMER -ErrorAction SilentlyContinue }
+    }
     return @{
         exitCode   = [int]$capture.exitCode
         stdout     = [string]$capture.stdout

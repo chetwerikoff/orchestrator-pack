@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "inventoryVersion": "github-fleet-governor-chokepoint/v1",
+  "rows": [
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchOpenPrListUpstream",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "background",
+      "notes": "gh pr list inventory route via pack scripts/gh"
+    },
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchPrViewUpstream",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchChecksUpstream",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchBranchProtectionUpstream",
+      "transport": "REST gh api repos/...",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchCommitDateUpstream",
+      "transport": "REST gh api repos/...",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchPrListByHeadUpstream",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-FleetInventoryCache.Invoke-GhFleetFetchReviewFreshnessUpstream",
+      "transport": "REST gh api repos/...",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-PrChecks.Invoke-GhOpenPrList",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-PrChecks.Invoke-GhPrChecks",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "background"
+    },
+    {
+      "surface": "Gh-PrChecks.Invoke-GhPrViewStructuredCapture",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "interactive-preflight"
+    },
+    {
+      "surface": "Review-StartPreflightShield.Invoke-ReviewStartPreflightGhPrView",
+      "transport": "REST-inventory",
+      "participation": "wrapper-covered",
+      "lane": "interactive-preflight"
+    },
+    {
+      "surface": "review-trigger-reconcile.ps1",
+      "transport": "non-GitHub",
+      "participation": "intentionally-terminal/non-GitHub",
+      "lane": "background"
+    },
+    {
+      "surface": "ci-green-wake-reconcile.ps1",
+      "transport": "non-GitHub",
+      "participation": "intentionally-terminal/non-GitHub",
+      "lane": "background"
+    },
+    {
+      "surface": "orchestrator-command-runtime-bootstrap",
+      "transport": "non-GitHub",
+      "participation": "intentionally-terminal/non-GitHub",
+      "lane": "interactive"
+    },
+    {
+      "surface": "AO daemon scm-github poll (PATH-mediated)",
+      "transport": "native-passthrough",
+      "participation": "wrapper-covered",
+      "lane": "background",
+      "probe": "wrapper-audit-daemon-participation",
+      "notes": "Requires live participation probe with GH_WRAPPER_AUDIT=1 before broad enablement"
+    },
+    {
+      "surface": "AO daemon direct octokit residual",
+      "transport": "GraphQL-backed passthrough",
+      "participation": "broker-only residual",
+      "lane": "background",
+      "notes": "Blocks broad governor enablement until broker follow-up; not proven in this checkout"
+    }
+  ]
+}

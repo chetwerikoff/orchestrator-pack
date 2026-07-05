@@ -371,6 +371,29 @@ Operator adoption after merge:
    `pwsh -NoProfile -File scripts/check-github-fleet-cache-bypass.ps1`.
 
 
+
+
+## GitHub fleet shared API governor (Issue #585)
+
+Adds a file-backed, identity-keyed admission governor in `scripts/lib/gh-governor.mjs`,
+consulted by pack `scripts/gh` / `gh-wrapper.mjs` before upstream GitHub reads. State lives
+under `$AO_SIDE_PROCESS_STATE_DIR/github-governor/`. Conservative placeholder budgets ship
+until Phase-0/1 telemetry tunes limits.
+
+Operator adoption after merge:
+
+1. Run `pwsh -NoProfile -File scripts/check-gh-governor-chokepoint-inventory.ps1` **without** `-AllowWrapperOnlySlice` (must exit 0 only after broker residuals are cleared) and complete
+   the daemon participation probe (`GH_WRAPPER_AUDIT=1`) before broad enablement.
+2. To enable on supervisor children: `export GH_GOVERNOR_ENABLED=1` in the wake-supervisor
+   environment (or per-child overrides). Rollback: `unset GH_GOVERNOR_ENABLED` and restart
+   supervisor — state files are inert when disabled.
+3. Optional tuning env (placeholder defaults): `GH_GOVERNOR_MAX_TOKENS`,
+   `GH_GOVERNOR_MAX_IN_FLIGHT`, `GH_GOVERNOR_RESERVED_TOKENS`.
+4. Restart wake supervisor after env changes:
+   `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then `Start`.
+5. Verification: `npm test -- github-fleet-governor` and
+   `pwsh -NoProfile -File scripts/check-gh-governor-chokepoint-inventory.ps1`.
+
 ## GitHub fleet repo-tick inventory snapshot (Issue #583)
 
 Adds `Gh-FleetRepoTickSnapshot.ps1` on top of the #453/#569 cache family. Covered

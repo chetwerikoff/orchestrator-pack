@@ -84,6 +84,45 @@ function Get-GhFleetInventoryCacheRoot {
     return ''
 }
 
+function Set-GhGovernorCallerContext {
+    param(
+        [string]$Consumer = '',
+        [string]$Lane = ''
+    )
+    $saved = @{
+        Lane = $env:GH_GOVERNOR_LANE
+        Consumer = $env:GH_GOVERNOR_CONSUMER
+    }
+    if ($Consumer) {
+        $env:GH_GOVERNOR_CONSUMER = $Consumer
+    }
+    if ($Lane) {
+        $env:GH_GOVERNOR_LANE = $Lane
+    }
+    return $saved
+}
+
+function Restore-GhGovernorCallerContext {
+    param(
+        [hashtable]$Saved
+    )
+    if (-not $Saved) {
+        return
+    }
+    if ($Saved.Lane) {
+        $env:GH_GOVERNOR_LANE = [string]$Saved.Lane
+    }
+    else {
+        Remove-Item -LiteralPath Env:GH_GOVERNOR_LANE -ErrorAction SilentlyContinue
+    }
+    if ($Saved.Consumer) {
+        $env:GH_GOVERNOR_CONSUMER = [string]$Saved.Consumer
+    }
+    else {
+        Remove-Item -LiteralPath Env:GH_GOVERNOR_CONSUMER -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-GhFleetInventoryCacheTtlSeconds {
     param([string]$Name)
 
@@ -806,6 +845,8 @@ function Invoke-GhFleetCachedDatum {
     )
 
     $cacheRoot = Get-GhFleetInventoryCacheRoot
+    $savedGovernorContext = Set-GhGovernorCallerContext -Consumer $Consumer -Lane 'background'
+    try {
     if (-not $cacheRoot) {
         Push-Location -LiteralPath $RepoRoot
         try {
@@ -896,6 +937,10 @@ function Invoke-GhFleetCachedDatum {
 
     Write-GhFleetCacheAuditLine -Event $AuditEvents.bypass -Fields $auditBase
     throw (Format-GhFleetCacheFailure -Kind $BypassKind -InnerMessage "shared snapshot bypass (key=$CacheKey)")
+    }
+    finally {
+        Restore-GhGovernorCallerContext -Saved $savedGovernorContext
+    }
 }
 
 function Invoke-GhFleetFetchPrViewUpstream {
