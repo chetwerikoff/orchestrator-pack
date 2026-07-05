@@ -180,6 +180,15 @@ function Invoke-GhPrViewStructuredCapture {
     }
 }
 
+function Resolve-ReviewStartScopedGhTransportFailureClass {
+    param([string]$Reason)
+
+    switch -Regex ($Reason) {
+        '^(preflight_transient_exhausted|preflight_timeout|claim_ownership_lost)$' { return 'infra_transport' }
+        default { return '' }
+    }
+}
+
 function New-ReviewStartScopedGhTransportFailure {
     param(
         [hashtable]$Capture,
@@ -192,7 +201,7 @@ function New-ReviewStartScopedGhTransportFailure {
         exitCode     = [int]$Capture.exitCode
         stderr       = [string]$Capture.stderr
         stdout       = [string]$Capture.stdout
-        failureClass = 'infra_transport'
+        failureClass = (Resolve-ReviewStartScopedGhTransportFailureClass -Reason $Reason)
     }
 }
 

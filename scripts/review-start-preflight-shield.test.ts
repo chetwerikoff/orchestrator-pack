@@ -372,6 +372,22 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(result.transportFailure).toBe(true);
     });
 
+    it('does not stamp closed PR denials as infra_transport', () => {
+      const result = runScopedPreflight(
+        `
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'closed_pr'
+      $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
+      [pscustomobject]@{
+        reason = [string]$lookup.transportFailure.reason
+        failureClass = [string]$lookup.transportFailure.failureClass
+      } | ConvertTo-Json -Compress
+    `,
+      );
+      expect(result.reason).toBe('pr_not_open');
+      expect(result.failureClass).not.toBe('infra_transport');
+    });
+
     it('returns gh_binary_missing for a missing scoped gh adoption command', () => {
       const missingGh = path.join(tmpdir(), `missing-gh-${Date.now()}.ps1`);
       const result = runScopedPreflight(
@@ -388,6 +404,32 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(result.count).toBe(0);
       expect(result.reason).toBe('gh_binary_missing');
       expect(result.transportFailure).toBe(true);
+    });
+  });
+
+  describe('closed PR recheck denial', () => {
+    it('treats pr_not_open snapshot transport as target-state not infra retry', () => {
+      const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+      const result = JSON.parse(runPwsh(
+        `
+        . ${psString(shieldHelperPath)}
+        . ${psString(claimHelperPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'closed_pr'
+        $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
+        $denial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot @{
+          transportFailure = $lookup.transportFailure
+        }
+        [pscustomobject]@{
+          reason = [string]$lookup.transportFailure.reason
+          failureClass = [string]$lookup.transportFailure.failureClass
+          denial = ($null -ne $denial)
+        } | ConvertTo-Json -Compress
+      `,
+      ));
+      expect(result.reason).toBe('pr_not_open');
+      expect(result.failureClass).not.toBe('infra_transport');
+      expect(result.denial).toBe(false);
     });
   });
 
