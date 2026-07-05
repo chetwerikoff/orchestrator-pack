@@ -2861,6 +2861,36 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(result.evidence).toContain('completedMatchingJournalCount=0');
   });
 
+  it('is eligible for persisted wrong-root recovery when deliveries are empty and anchor is absent', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+        failedDeliveries: {},
+      },
+      journal: {},
+      anchor: null,
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('empty_root_quarantine');
+    expect(result.evidence).toBe('anchor_absent');
+  });
+
+  it('is eligible for persisted wrong-root recovery when anchor reports no active deliveries', () => {
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+        failedDeliveries: {},
+      },
+      journal: {},
+      anchor: { activeDeliveryCount: 0, stateRootIdentity: 'stale-anchor' },
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('empty_root_quarantine');
+    expect(result.evidence).toBe('anchor_active_delivery_count_zero');
+  });
+
   it('clears latched recovery and stamps identity with an audit record', () => {
     const nowMs = 1717603000000;
     const result = evaluateStateRootReSeat({
@@ -2948,6 +2978,48 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect((persisted.audit ?? []).some((row) => row.action === 'state_root_reseat')).toBe(true);
     expect(`${result.stdout}
 ${result.stderr}`).toMatch(/state-root re-seat/i);
+  });
+
+  it('self-heals persisted empty-root quarantine without pressing Enter', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-empty-latch-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      _recovery: {
+        fenceTrusted: false,
+        reason: 'wrong_state_root_active_deliveries',
+        quarantined: state,
+      },
+      adoptionStatus: 'wrapper_not_adopted',
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      lastTickMs: null,
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as SubmitTrackingState & { _recovery?: unknown };
+    expect(persisted._recovery).toBeUndefined();
+    expect(persisted.stateRootIdentity).toBeTruthy();
+    expect(persisted.lastTickMs).toBeGreaterThan(0);
+    expect((persisted.audit ?? []).some((row) => row.action === 'state_root_reseat' && row.reason === 'empty_root_quarantine')).toBe(true);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/state-root re-seat/i);
+    expect(`${result.stdout}
+${result.stderr}`).not.toMatch(/submitted:/i);
   });
 
   it('re-seats a persisted latch after terminal orphan escalation (opk-25 class)', () => {
@@ -3046,5 +3118,41 @@ ${result.stderr}`).toMatch(/wrong_state_root_active_deliveries|STATE FENCES UNTR
     const persisted = JSON.parse(readFileSync(state, 'utf8')) as { _recovery?: { reason?: string } };
     expect(persisted._recovery?.reason).toBe('wrong_state_root_active_deliveries');
   });
-});
 
+  it('heartbeats legitimate fail-closed ticks without clearing active-delivery quarantine', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-heartbeat-failclosed-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(state, JSON.stringify({
+      stateRootIdentity: 'stale-identity-hash',
+      _recovery: {
+        fenceTrusted: false,
+        reason: 'wrong_state_root_active_deliveries',
+        quarantined: state,
+      },
+      deliveries: {
+        live: { deliveryId: 'live', sessionId: 'opk-live', firstObservedAtMs: 1717601000000 },
+      },
+      audit: [],
+      lastTickMs: null,
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).not.toBe(0);
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as SubmitTrackingState & { _recovery?: { reason?: string } };
+    expect(persisted._recovery?.reason).toBe('wrong_state_root_active_deliveries');
+    expect(persisted.lastTickMs).toBeGreaterThan(0);
+  });
+});

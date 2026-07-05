@@ -396,6 +396,23 @@ function Set-SubmitReconcileState {
     Write-SubmitReconcileStateRootAnchor -Path (Get-SubmitReconcileStateRootAnchorPath -JournalPath $JournalPath) -StatePath $Path -State $State
 }
 
+function Set-SubmitReconcileHeartbeat {
+    param(
+        [string]$Path,
+        [string]$JournalPath = '',
+        [long]$NowMs = 0
+    )
+
+    if ($NowMs -le 0) {
+        $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
+    $state = Get-SubmitReconcileState -Path $Path -JournalPath $JournalPath
+    if (-not $state) { return $null }
+    $state.lastTickMs = $NowMs
+    Set-MechanicalJsonStateFile -Path $Path -State $state -DefaultState $Script:SubmitReconcileDefaultState -JsonDepth 30
+    return $state
+}
+
 function Get-FixtureSubmitPayload {
     param([string]$Path)
 
@@ -669,6 +686,9 @@ try {
     do {
         $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $state = Get-SubmitReconcileState -Path $statePath -JournalPath $journalPath
+        if (-not $DryRun) {
+            Set-SubmitReconcileState -Path $statePath -State $state -JournalPath $journalPath
+        }
         $lastTickMs = $null
         if ($state.lastTickMs) {
             $lastTickMs = [long]$state.lastTickMs
@@ -718,6 +738,9 @@ try {
             catch {
                 $tickFailed = $true
                 Write-SubmitReconcileLog "tick failed: $_"
+                if (-not $DryRun) {
+                    Set-SubmitReconcileHeartbeat -Path $statePath -JournalPath $journalPath -NowMs $nowMs | Out-Null
+                }
                 $tickError = if ($adoptionTickError) { $adoptionTickError } else { "$_" }
                 Write-OrchestratorSideProcessTickError -ChildId 'worker-message-submit-reconcile' -ErrorMessage $tickError
                 if ($Once) { throw }

@@ -166,6 +166,18 @@ if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePat
     Write-Host 'worker-message-submit-reconcile.ps1 must pass -DryRunMode on fixture ticks (no live submit side effects)'
     exit 1
 }
+if ($ps1 -notmatch 'Set-SubmitReconcileHeartbeat' -or
+    $ps1 -notmatch '\$state\.lastTickMs = \$NowMs' -or
+    $ps1 -notmatch 'catch \{[\s\S]*Set-SubmitReconcileHeartbeat') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must heartbeat fail-closed ticks so the supervisor does not restart a live child'
+    exit 1
+}
+if ($mjs -notmatch 'empty_root_quarantine' -or
+    $mjs -notmatch 'anchor_active_delivery_count_zero' -or
+    $mjs -notmatch 'anchor_absent') {
+    Write-Host 'worker-message-submit-reconcile stateRootReseat must self-heal empty latched wrong-root quarantine'
+    exit 1
+}
 
 $reviewSendPs1 = Join-Path $Root 'scripts/review-send-reconcile.ps1'
 if (-not (Test-Path -LiteralPath $reviewSendPs1 -PathType Leaf)) {

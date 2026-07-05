@@ -1902,14 +1902,22 @@ export function evaluateStateRootReSeatEligibility({
   }
 
   const anchorActive = Number(anchor?.activeDeliveryCount ?? 0);
+  const stateDeliveries = state?.deliveries ?? {};
+  const terminalStateDeliveryCount = Object.entries(stateDeliveries).filter(
+    ([deliveryId, record]) =>
+      deliveryId &&
+      !deliveryId.startsWith('_') &&
+      isSubmitTrackingDeliveryTerminal(record),
+  ).length;
+  if (anchorActive <= 0 && terminalStateDeliveryCount === 0) {
+    return {
+      eligible: true,
+      reason: 'empty_root_quarantine',
+      priorRecoveryReason,
+      evidence: anchor ? 'anchor_active_delivery_count_zero' : 'anchor_absent',
+    };
+  }
   if (anchorActive > 0) {
-    const stateDeliveries = state?.deliveries ?? {};
-    const terminalStateDeliveryCount = Object.entries(stateDeliveries).filter(
-      ([deliveryId, record]) =>
-        deliveryId &&
-        !deliveryId.startsWith('_') &&
-        isSubmitTrackingDeliveryTerminal(record),
-    ).length;
     const completedMatchingJournalCount = countCompletedMatchingJournalEvidence(
       journal ?? {},
       stateDeliveries,
