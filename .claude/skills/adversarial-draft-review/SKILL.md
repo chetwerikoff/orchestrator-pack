@@ -31,6 +31,13 @@ Skip if Codex CLI / companion runtime unavailable — fall back to
 
 ### 1. Author the draft
 
+After relocation (Issue #579), the **Cursor draft-author session** owns this step
+and the adversarial loop below — not the architect's live session. Delegate to
+an isolated draft-author session running `create-issue-draft` from the
+architect's brief. Explicit wrapper invocation still floors the effective tier
+at least to **T2** per #189. When relocation is inactive or the delegate returns
+incomplete, fall back to architect-as-author per `create-issue-draft`.
+
 Follow `create-issue-draft`'s structure and framework triggers →
 `docs/issues_drafts/NN-<slug>.md`. **Stop before** "Codex review the draft" + sync.
 

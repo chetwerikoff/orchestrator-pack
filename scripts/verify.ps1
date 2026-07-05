@@ -1099,6 +1099,22 @@ else {
     Add-Failure 'Missing draft discipline check or fixtures (Issue #221)'
 }
 
+$draftAuthorRelocationCheck = Join-Path $Root 'scripts/check-draft-author-relocation-contract.ps1'
+if (Test-Path -LiteralPath $draftAuthorRelocationCheck -PathType Leaf) {
+    & $draftAuthorRelocationCheck -RepoRoot $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-draft-author-relocation-contract.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-draft-author-relocation-contract.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Draft-author relocation contract surface guard failed (Issue #579)'
+    }
+}
+else {
+    Write-Check 'scripts/check-draft-author-relocation-contract.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing draft-author relocation contract guard (Issue #579)'
+}
+
 Write-Host ''
 Write-Host '== External-output fixture shape guard (Issue #223) =='
 $externalOutputShapeGuard = Join-Path $Root 'scripts/check-external-output-shape-guard.ps1'
