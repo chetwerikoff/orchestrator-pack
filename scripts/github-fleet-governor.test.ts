@@ -203,6 +203,34 @@ describe('github-fleet-governor (Issue #585)', () => {
     expect(state?.cooldownKind).toBe('transient');
   });
 
+  it('AC#4 GraphQL primary quota stderr publishes shared cooldown without headers', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-ac4-graphql-'));
+    const env = governorEnv(root);
+    const outcome = classifyGovernorTransportOutcome({
+      exitCode: 1,
+      stderr: 'GraphQL primary quota exhausted',
+    });
+    expect(outcome.disposition).toBe('observed-limit');
+    expect(outcome.limitKind).toBe('primary');
+    recordGithubGovernorObservedLimit({
+      env,
+      partitionKey,
+      exitCode: 1,
+      stderr: 'GraphQL primary quota exhausted',
+    });
+    const state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.cooldownUntilMs).toBeGreaterThan(1000);
+    expect(state?.cooldownSource).toBe('fixed-backoff');
+    expect(state?.cooldownKind).toBe('primary');
+    const denied = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'background' },
+      argv: ['api', 'graphql', '-f', 'query={viewer{login}}'],
+      partitionKey,
+    });
+    expect(denied.admitted).toBe(false);
+    expect(denied.reason).toBe('governor-cooldown');
+  });
+
   it('AC#5 background lane fails closed on corrupt governor state', () => {
     root = mkdtempSync(join(tmpdir(), 'gh-governor-ac5-'));
     const env = governorEnv(root);

@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { resolvePartitionKey } from './gh-graphql-degraded.mjs';
+import { PRIMARY_QUOTA_MARKER, resolvePartitionKey } from './gh-graphql-degraded.mjs';
 
 export const GOVERNOR_VERSION = 'github-fleet-governor/v1';
 export const GOVERNOR_DENIAL_EXIT_CODE = 75;
@@ -356,6 +356,15 @@ export function classifyGovernorTransportOutcome(input = {}) {
       limitKind: 'primary',
       resetAtSec: reset,
       source: 'x-ratelimit-reset',
+    };
+  }
+
+  if (text.includes(PRIMARY_QUOTA_MARKER.toLowerCase())) {
+    return {
+      disposition: 'observed-limit',
+      reason: 'graphql-primary-quota',
+      limitKind: 'primary',
+      source: 'body-heuristic',
     };
   }
 
