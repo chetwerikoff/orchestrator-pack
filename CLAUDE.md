@@ -31,15 +31,19 @@ what gets built, in what order, with what boundaries. The planner
 
 ## Do
 
-- Author task drafts at `docs/issues_drafts/NN-<slug>.md` and sync them as
- GitHub Issues. Invoke the **`create-issue-draft`** skill — it owns the
- draft structure, framework triggers, sync procedure, and decision logging.
- For a **non-trivial build** (new component/contract/service), run that skill's
- **pre-draft design-analysis gate first** — critical mechanics, world practices,
- architecture sketch, and ≥3 cost/risk-judged options — before proposing or
- writing the draft. Then invoke **`publish-issue-draft`** (default **sync-only:**
- the Issue is the queue, the draft stays local) — commit, PR, and merge the spec
- to `main` only when the user explicitly asks to publish/ship the draft.
+- Author task **briefs** for new specs: problem/goal, advisory tier prior,
+  constraints/out-of-scope, and verified grounding pointers. Delegate spec
+  authoring to the **Cursor draft-author session** when relocation is active
+  (Issue #579) — it runs the full **`create-issue-draft`** procedure in an
+  isolated workspace and returns the draft plus completion proof. **Codex or
+  Sonnet 5** may author only on explicit user request; default engine is Cursor.
+  You own the T3 architect lens pass, tier-gate escalations, and pre-sync review
+  before any issue sync. Until relocation is active, or when the
+  draft-author session is unavailable/incomplete, run **`create-issue-draft`**
+  directly as architect-as-author fallback. Invoke **`publish-issue-draft`**
+  (default **sync-only:** the Issue is the queue, the draft stays local) —
+  commit, PR, and merge the spec to `main` only when the user explicitly asks
+  to publish/ship the draft.
 - **Before proposing a non-trivial build at all — even verbally, with no draft
   yet** (a new component/contract/service) — answer the same design questions
   first: critical mechanics (patterns, data structures, integrations, boundary
