@@ -79,6 +79,10 @@ if ($ps1 -notmatch 'ProbedDeadEvidence') {
     Write-Host 'dead-worker-reconcile.ps1 must pass -ProbedDeadEvidence to invoke-worker-recovery.ps1'
     exit 1
 }
+if ($ps1 -notmatch '@recoveryArgv' -or $ps1 -match '&\s*pwsh\s+@args') {
+    Write-Host 'dead-worker-reconcile.ps1 must invoke recovery with @recoveryArgv (not scriptblock-shadowed @args)'
+    exit 1
+}
 
 Write-Host '[PASS] dead-worker reconcile entrypoint and example wiring (Issue #593)'
 exit 0

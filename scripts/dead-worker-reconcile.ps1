@@ -157,7 +157,7 @@ function Invoke-DeadWorkerRecovery {
         return @{ ok = $true; outcome = 'dry_run'; dryRun = $true }
     }
 
-    $args = @(
+    $recoveryArgv = @(
         '-NoProfile', '-File', (Join-Path $PSScriptRoot 'invoke-worker-recovery.ps1'),
         '-Trigger', 'reconcile_dead_worker',
         '-ProbedDeadEvidence',
@@ -167,14 +167,14 @@ function Invoke-DeadWorkerRecovery {
         '-RepoRoot', $RepoRoot,
         '-SpawnAction', [string]$Action.spawnAction
     )
-    if ([int]$Action.issueNumber -gt 0) { $args += @('-IssueNumber', [string]$Action.issueNumber) }
-    if ([int]$Action.prNumber -gt 0) { $args += @('-PrNumber', [string]$Action.prNumber) }
+    if ([int]$Action.issueNumber -gt 0) { $recoveryArgv += @('-IssueNumber', [string]$Action.issueNumber) }
+    if ([int]$Action.prNumber -gt 0) { $recoveryArgv += @('-PrNumber', [string]$Action.prNumber) }
 
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'dead-worker-reconcile-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'dead-worker-reconcile' -Phase 'side_effect'
     $capture = @{ output = $null; exitCode = 0 }
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        $capture.output = & pwsh @args 2>&1
+        $capture.output = & pwsh @recoveryArgv 2>&1
         $capture.exitCode = $LASTEXITCODE
     }
     if (-not $fenced.ok) {
