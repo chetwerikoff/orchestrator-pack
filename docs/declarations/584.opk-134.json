@@ -7,14 +7,16 @@
   "baseline": {
     "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ec81596ebfa58f7db5bb7b750882a8e41b001237449a1ef1f3062ffb9174df99"
+    "active_scope_hash": "sha256:b19e4d0f4236404a03230281b0b030bbb162182d92e7172439d196bb5ea695da"
   },
   "declared_paths": [
+    "docs/declarations/584.opk-134.json",
     "docs/review-start-preflight-shield.d.mts",
     "docs/review-start-preflight-shield.mjs",
     "scripts/check-orchestrator-claimed-review-run.ps1",
     "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
     "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+    "scripts/github-fleet-shared-read-model.test.ts",
     "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
     "scripts/lib/Gh-PrChecks.ps1",
     "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
@@ -26,17 +28,17 @@
     "scripts/review-start-envelope-ledger.test.ts",
     "scripts/review-start-preflight-shield.test.ts",
     "scripts/review-start-scoped-gh-json-capture.test.ts",
-    "scripts/vitest-ci-lanes.config.json",
-    "docs/declarations/584.opk-134.json"
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:3026b1e73e4fd87d9d905fc847b7e02e28b3d61c57e1b30e7db7fdec9304b24e",
-      "new_active_scope_hash": "sha256:ec81596ebfa58f7db5bb7b750882a8e41b001237449a1ef1f3062ffb9174df99",
+      "new_active_scope_hash": "sha256:b19e4d0f4236404a03230281b0b030bbb162182d92e7172439d196bb5ea695da",
       "changed": {
         "added": [
           "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+          "scripts/github-fleet-shared-read-model.test.ts",
           "scripts/lib/Review-StartSupervisedGh.ps1"
         ],
         "removed": []
