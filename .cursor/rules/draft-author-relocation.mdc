@@ -1,0 +1,45 @@
+---
+description: Draft-author relocation — brief handoff, isolation, completion proof, engine selection
+alwaysApply: true
+---
+
+# Draft-author relocation (Issue #579)
+
+Standalone Cursor sessions do not read `.claude/skills/**` natively — this rule
+surfaces the binding contract for the default (Cursor) draft-author engine.
+
+Canonical skill: [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Draft-author relocation** section.
+
+## Role split (when relocation is active)
+
+- **Architect:** brief, advisory tier prior, T3 lens pass, tier-gate escalation, contested protected findings, **pre-sync review**. Does not author the full spec in the live session.
+- **Draft-author session (you, when delegated):** full `create-issue-draft` from the brief — recon, decomposition, tier gate (#189), design analysis when required, review loop (#188), disposition ledger, discipline checks, Codex draft review.
+
+## Brief handoff (minimum)
+
+Problem/goal; advisory tier prior; constraints and out-of-scope; grounding pointers the architect verified. No prescribed brief file path.
+
+## Isolation (mandatory)
+
+Work in an **isolated checkout or scratch workspace** — never git operations in the architect's live working tree. **Forbidden:** shared-index authoring, dirty-tree delegation, force checkout/reset recovery, force-push semantics.
+
+## Engine selection
+
+- Default: **Cursor** — never auto-switched.
+- **Codex or Sonnet 5** only on explicit user request.
+- Completion record must name `authoringEngine` and `selectionBasis` (`default` | `explicit-request`). Non-Cursor with `default` = invalid run.
+- When author engine equals wrapper adversary engine, adversarial pass runs as an **independent instance** (author ≠ adversary).
+
+## Completion proof (not exit code)
+
+Complete only when: draft exists at expected path; discipline checks pass; review-loop outcome recorded; completion record links brief, draft path, engine, selection basis, tier, review outcome, disposition status, discipline results, final status. Exit 0 without proof = incomplete.
+
+Mechanical guard: `scripts/check-draft-author-relocation-contract.ps1`.
+
+## Fallback
+
+Until relocation is active, or delegate unavailable/incomplete: architect-as-author `create-issue-draft` in architect session; record fallback reason.
+
+## Sync boundary
+
+No issue sync or publish from draft-author session before architect pre-sync review and existing gates pass.

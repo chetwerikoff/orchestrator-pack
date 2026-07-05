@@ -5,10 +5,17 @@ description: Use when authoring a new task draft for `orchestrator-pack` — add
 
 # create-issue-draft
 
-You are authoring a task spec that will be picked up by Cursor (planner+worker)
-under AO orchestration and reviewed by Codex. Your output goes through GitHub
-Issues. The planner picks file names, function shapes, library choices — you
-set boundaries and acceptance criteria. **Over-specification is a bug.**
+Task specs are picked up by Cursor (planner+worker) under AO orchestration and
+reviewed by Codex. Output goes through GitHub Issues. The planner picks file
+names, function shapes, library choices — the spec sets boundaries and
+acceptance criteria. **Over-specification is a bug.**
+
+**Authoring party (Issue #579).** When relocation is active, the **architect**
+authors the task **brief** and reviews the finished draft before sync; the
+**draft-author session** (Cursor by default) authors the spec from that brief.
+Until relocation is active, or when the draft-author session is unavailable or
+returns an incomplete run, the architect runs this skill directly as
+**architect-as-author** fallback. See **Draft-author relocation** below.
 
 ## When to invoke
 
@@ -17,6 +24,121 @@ set boundaries and acceptance criteria. **Over-specification is a bug.**
 - Splitting / merging issues during pre-implementation alignment.
 
 Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks.
+
+## Draft-author relocation (Issue #579)
+
+**Role split when relocation is active.** The **architect** authors the task
+**brief** (not the full spec), assigns an advisory tier prior, runs the T3
+architect lens pass, handles tier-gate escalations and contested protected
+findings, and **reviews the authored draft before any sync**. The
+**draft-author session** — **Cursor by default**; **Codex or Sonnet 5 only on
+explicit user request** — works from that brief in an **isolated workspace**,
+executes this skill's full procedure, and returns the draft plus **completion
+proof**.
+
+### Brief handoff contract
+
+The architect's brief is the input artifact and role boundary. It binds required
+content, not a file path, directory, or UI workflow. Minimum required contents:
+
+- Problem / goal
+- Advisory tier prior (intake suggestion per #574; recomputed by draft author
+  per #189)
+- Constraints and out-of-scope
+- Grounding pointers the architect has already verified
+
+### Draft-author session contract
+
+From the brief, the draft-author session runs the full `create-issue-draft`
+procedure:
+
+- Prior-art reconnaissance (below)
+- Task decomposition gate
+- Tier gate per #189
+- Pre-draft design analysis when tier requires
+- Per-tier review loop per #188
+- Finding disposition ledger and carve-out handling
+- Discipline checks (`check-draft-discipline.ps1`)
+- Codex draft review
+
+Output: draft file at `docs/issues_drafts/NN-<slug>.md` plus a **completion
+record** (below).
+
+### Engine selection (default + explicit-request override)
+
+- Default authoring engine: **Cursor** — never auto-switched.
+- **Codex or Sonnet 5** may author only when the user explicitly requests that
+  engine for the run.
+- The completion record must name **authoring engine** and **selection basis**
+  (`default` | `explicit-request`). A non-Cursor engine recorded with basis
+  `default` (or with no recorded explicit request) is an **invalid run**.
+- Engine choice does not relax isolation, completion proof, disposition
+  ownership, fallback, or pre-sync architect review.
+- When the adversarial-wrapper reviewer engine would coincide with the chosen
+  authoring engine (e.g. Codex author + Codex adversarial), the adversarial
+  pass must run as an **independent instance/thread** so the author is never
+  its own adversary.
+
+### Isolation from the architect's live tree
+
+The draft-author session — Cursor, Codex, or Sonnet 5 alike — **must not** run
+git operations in the architect's live working tree. It works in an isolated
+checkout, scratch tree, or equivalently isolated workspace, receiving only the
+brief and intentionally included context.
+
+**Forbidden in draft authoring:** shared-index authoring, dirty-tree delegation,
+force checkout/reset recovery, and force-push semantics. After the session
+returns, the caller verifies the authored artifact and local worktree state —
+**do not trust exit code alone**.
+
+### Completion proof (not exit-code trust)
+
+Exit status alone is insufficient. A run is **complete** only when all hold:
+
+- Authored draft exists at the expected path
+- Required discipline checks pass
+- Required review-loop outcome is recorded (`NO_FINDINGS` or capped outcome with
+  open questions recorded)
+- Completion record links: brief identity, draft path, **authoring engine**,
+  **selection basis**, selected/recomputed tier, review passes, disposition
+  outcome where applicable, discipline-check results, final status
+
+Missing draft, missing checks, missing ledger/review state, or half-written
+output = **failed/incomplete** even if the delegate exits 0.
+
+Illustrative completion-record fields (implementing planner chooses concrete
+storage — not prescribed here):
+
+```json
+{
+  "briefIdentity": "<stable brief reference>",
+  "draftPath": "docs/issues_drafts/NN-<slug>.md",
+  "authoringEngine": "cursor | codex | sonnet-5",
+  "selectionBasis": "default | explicit-request",
+  "tierResult": "T1 | T2 | T3 | below-ladder",
+  "reviewLoopOutcome": "NO_FINDINGS | capped-with-open-questions",
+  "dispositionStatus": "...",
+  "disciplineChecks": "pass",
+  "finalStatus": "complete | incomplete"
+}
+```
+
+Mechanical guard: `scripts/check-draft-author-relocation-contract.ps1`.
+
+### Pre-sync architect review (unchanged boundary)
+
+No issue sync or publish occurs before the architect reviews the authored local
+draft and existing discipline/review gates pass. The draft-author session does
+not sync or publish unless the existing `create-issue-draft` / publish gates
+allow it — architect still owns pre-sync review.
+
+### Fallback and activation boundary
+
+Until relocation is active on the authoring surface, or when the draft-author
+session is unavailable, refuses the handoff, or returns a failed/incomplete run:
+use the **architect-as-author** path (this skill run directly in the architect
+session), **record the fallback reason**, and do not create an authoring
+outage.
 
 ## Prior-art reconnaissance gate (run FIRST — before any design analysis)
 
@@ -505,11 +627,12 @@ recomputed tier and selected stages. This section governs **spec review only** �
 worker PR-code review is unchanged. Pipeline counts remain authoritative in
 `prompts/agent_rules.md` (**Per-tier draft-review flow**, Issue #575).
 
-**Roles:** the **draft author** (this Cursor session from the architect's brief)
-authors the spec, runs review stages, captures verbatim reviewer output per pass,
-normalizes findings into the disposition ledger, and owns accept/reject. The
-**architect** does not re-decide accepted findings; on T3 they run one lens pass
-over the reject partition only.
+**Roles (per #579 relocation):** the **draft-author session** (Cursor default;
+Codex or Sonnet 5 on explicit user request only) authors the spec from the
+architect's brief, runs review stages, captures verbatim reviewer output per
+pass, normalizes findings into the disposition ledger, and owns accept/reject.
+The **architect** does not re-decide accepted findings; on T3 they run one lens
+pass over the reject partition only, then review the draft before sync.
 
 Full contract: `prompts/agent_rules.md` (**Per-tier draft-review flow**, Issue
 #575).
@@ -638,6 +761,11 @@ Do not add open/closed/shipped columns to the registry — live state stays in
 GitHub (`gh issue view`).
 
 ## Publish (default: delegate to deepseek via OpenCode; direct as fallback)
+
+**Pre-sync gate (Issue #579).** Whether the spec was authored by the
+draft-author session or architect-as-author fallback, the **architect reviews
+the local authored draft** and discipline/review gates must pass before any sync
+or publish step below runs.
 
 > **Self-delegation guard — am I already inside OpenCode?** The `opencode run`
 > delegation in this section is **only** for an architect surface (Claude Code,
@@ -827,6 +955,12 @@ in the test-harness code.
 
 ## Don't (draft Codex review)
 
+- Run draft authoring in the architect's live working tree, on a dirty shared
+  checkout, or via shared-index delegation — draft-author sessions must be
+  isolated (#579).
+- Trust a delegate's exit code without verifying draft path, completion record,
+  discipline checks, and review-loop outcome (#579).
+- Record a non-Cursor authoring engine with selection basis `default` (#579).
 - Use `codex exec` or `codex exec review` for draft review — those are worker/PR paths.
 - Pipe `codex review` through `tail`, `head`, or `grep` (hides in-progress output).
 - Kill a running draft review to rush issue-body sync — wait for `NO_FINDINGS` or cap.

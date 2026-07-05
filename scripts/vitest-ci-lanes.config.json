@@ -50,6 +50,7 @@
     "scripts/contract-evidence-reverify.test.ts": "heavy",
     "scripts/contract-evidence.test.ts": "light",
     "scripts/draft-discipline.test.ts": "light",
+    "scripts/draft-author-relocation-contract.test.ts": "light",
     "scripts/finding-ledger-guard.test.ts": "light",
     "scripts/external-output-shape-guard.test.ts": "light",
     "scripts/gh-inventory-static-guard.test.ts": "light",
