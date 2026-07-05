@@ -482,12 +482,13 @@ process.stdout.write(String(result.status ?? 1));`;
     }
   });
 
-  it('passthrough streams stderr when governor enabled and inherits when disabled', () => {
+  it('passthrough uses spawnSync without blocking Atomics.wait', () => {
     const wrapper = readFileSync(wrapperPath, 'utf8');
     expect(wrapper).toMatch(/function runNativePassthrough/);
     expect(wrapper).toMatch(/captureStderrForGovernor/);
-    expect(wrapper).toMatch(/stdio:\s*'inherit'/);
-    expect(wrapper).not.toMatch(/maxBuffer:\s*1024/);
+    expect(wrapper).toMatch(/spawnSync\(realGh, argv/);
+    expect(wrapper).not.toMatch(/Atomics\.wait/);
+    expect(wrapper).not.toMatch(/child_process.*spawn[^S]/);
   });
 
   it('governor partition key resolution skips gh api user probe', () => {
