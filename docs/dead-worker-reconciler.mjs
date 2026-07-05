@@ -421,7 +421,24 @@ function reservePlanAttemptLease(tracking, key, sessionId, nowMs) {
   return { ...tracking, leases };
 }
 
+function hasRecoveredReconcileKey(tracking, key) {
+  const normalizedKey = normalizeString(key);
+  if (!normalizedKey) {
+    return false;
+  }
+  return toArray(tracking.audit).some((row) => {
+    if (normalizeString(row?.key) !== normalizedKey) {
+      return false;
+    }
+    const outcome = normalizeString(row?.outcome ?? row?.type);
+    return outcome === 'recovered';
+  });
+}
+
 function evaluateRetryAndLease(key, tracking, bounds, nowMs) {
+  if (hasRecoveredReconcileKey(tracking, key)) {
+    return { ok: false, outcome: 'suppressed', reason: 'already_recovered' };
+  }
   const attempts = tracking.attempts ?? {};
   const leases = tracking.leases ?? {};
   const prior = attempts[key] ?? {};

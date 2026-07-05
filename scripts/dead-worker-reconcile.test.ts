@@ -258,6 +258,38 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(plan.actions.some((a: { type: string; reason?: string }) => a.type === 'escalated' || a.reason === 'retry_budget_exhausted')).toBe(true);
   });
 
+  it('does not retry keys that already recovered', () => {
+    const fixture = readCapture('recoverable-crash.raw.json');
+    const pre = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [fixture.session],
+      aoEvents: fixture.events,
+    }));
+    const recover = pre.actions.find((a: { type: string }) => a.type === 'attempt_started');
+    expect(recover).toBeTruthy();
+    const tracking = commitDeadWorkerAction(
+      {
+        attempts: { [recover!.key]: { attempt: 1, lastAttemptMs: 1_780_000_105_000 } },
+        leases: {},
+        audit: [],
+      },
+      {
+        ...recover,
+        type: 'recovered',
+        outcome: 'recovered',
+        reason: 'recovered',
+      },
+      1_780_000_106_000,
+    );
+    const plan = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [fixture.session],
+      aoEvents: fixture.events,
+      tracking,
+      nowMs: 1_780_000_200_000,
+    }));
+    expect(plan.actions.some((a: { type: string }) => a.type === 'attempt_started')).toBe(false);
+    expect(plan.actions.some((a: { reason?: string }) => a.reason === 'already_recovered')).toBe(true);
+  });
+
   it('reconciliation key is stable and versioned', () => {
     const key = buildDeadWorkerReconcileKey({
       sessionId: 'opk-593',
