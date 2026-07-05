@@ -481,13 +481,42 @@ process.stdout.write(String(result.status ?? 1));`;
     }
   });
 
-  it('passthrough uses spawnSync without blocking Atomics.wait', () => {
+  it('passthrough streams governed stderr without spawnSync maxBuffer', () => {
     const wrapper = readFileSync(wrapperPath, 'utf8');
     expect(wrapper).toMatch(/function runNativePassthrough/);
     expect(wrapper).toMatch(/captureStderrForGovernor/);
-    expect(wrapper).toMatch(/spawnSync\(realGh, argv/);
+    expect(wrapper).toMatch(/spawn\(realGh, argv/);
+    expect(wrapper).not.toMatch(/maxBuffer:\s*PASSTHROUGH_STDERR_CAPTURE_MAX/);
     expect(wrapper).not.toMatch(/Atomics\.wait/);
-    expect(wrapper).not.toMatch(/child_process.*spawn[^S]/);
+  });
+
+  it('governor CLI release forwards emergency flag', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-cli-emergency-'));
+    const env = governorEnv(root, {
+      GH_GOVERNOR_MAX_IN_FLIGHT: '1',
+      GH_GOVERNOR_MAX_TOKENS: '10',
+      GH_GOVERNOR_RESERVED_TOKENS: '0',
+    });
+    const hold = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'background' },
+      argv: ['pr', 'list'],
+      partitionKey,
+    });
+    expect(hold.admitted).toBe(true);
+    const acquired = runGovernorCli('acquire', {
+      argv: ['pr', 'view', '1', '--json', 'headRefOid'],
+      partitionKey,
+    }, {
+      ...env,
+      GH_GOVERNOR_LANE: 'interactive-preflight',
+      GH_GOVERNOR_MAX_TOKENS: '0',
+      GH_GOVERNOR_RESERVED_TOKENS: '0',
+    });
+    expect(acquired.emergency).toBe(true);
+    runGovernorCli('release', { partitionKey, emergency: true }, env);
+    const state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.inFlight).toBe(1);
+    hold.release?.();
   });
 
   it('governor partition key resolution skips gh api user probe', () => {

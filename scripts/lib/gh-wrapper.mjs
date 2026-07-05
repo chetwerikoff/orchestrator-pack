@@ -3,7 +3,7 @@
  * Pack gh wrapper — known inventory reads always REST; unknown argv passthrough (Issue #431).
  */
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { appendAuditJsonlLine, resolveAuditJsonlPolicy } from './audit-jsonl-retention.mjs';
 import { classifyArgv } from './gh-inventory-match.mjs';
@@ -94,25 +94,37 @@ function runNativePassthrough(realGh, argv, captureStderrForGovernor) {
   };
   if (!captureStderrForGovernor) {
     const result = spawnSync(realGh, argv, { ...spawnOptions, stdio: 'inherit' });
-    return { status: result.status ?? 1, stderr: '' };
+    return Promise.resolve({ status: result.status ?? 1, stderr: '' });
   }
 
-  const result = spawnSync(realGh, argv, {
-    ...spawnOptions,
-    stdio: ['inherit', 'inherit', 'pipe'],
-    encoding: 'utf8',
-    maxBuffer: PASSTHROUGH_STDERR_CAPTURE_MAX,
+  return new Promise((resolve) => {
+    const stderrParts = [];
+    const child = spawn(realGh, argv, {
+      ...spawnOptions,
+      stdio: ['inherit', 'inherit', 'pipe'],
+    });
+    child.stderr.on('data', (chunk) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      process.stderr.write(buf);
+      stderrParts.push(buf);
+      const combined = Buffer.concat(stderrParts);
+      if (combined.length > PASSTHROUGH_STDERR_CAPTURE_MAX) {
+        stderrParts.length = 0;
+        stderrParts.push(combined.subarray(combined.length - PASSTHROUGH_STDERR_CAPTURE_MAX));
+      }
+    });
+    const finish = (status) => {
+      const stderr = stderrParts.length > 0
+        ? Buffer.concat(stderrParts).toString('utf8')
+        : '';
+      resolve({ status, stderr });
+    };
+    child.on('close', (code) => finish(code ?? 1));
+    child.on('error', () => finish(1));
   });
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  return {
-    status: result.status ?? 1,
-    stderr: result.stderr ?? '',
-  };
 }
 
-function passthrough(argv) {
+async function passthrough(argv) {
   const realGh = resolveRealGhBinary();
   const admission = beginGovernorAdmission(argv, realGh);
   if (!admission.admitted) {
@@ -138,7 +150,7 @@ function passthrough(argv) {
     return;
   }
   const captureStderrForGovernor = isGovernorEnabled() && !admission.skipped;
-  const { status, stderr } = runNativePassthrough(realGh, argv, captureStderrForGovernor);
+  const { status, stderr } = await runNativePassthrough(realGh, argv, captureStderrForGovernor);
   const rateLimit = consumeGhApiRateLimitHeaders();
   withGovernorRelease(admission, {
     exitCode: status,
@@ -275,7 +287,11 @@ function main() {
 
   const { parsed, route } = classifyArgv(argv);
   if (!route) {
-    passthrough(argv);
+    passthrough(argv).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`${message}\n`);
+      process.exit(1);
+    });
     return;
   }
 

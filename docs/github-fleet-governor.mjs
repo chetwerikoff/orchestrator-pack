@@ -33,6 +33,7 @@ export async function runGithubFleetGovernorCli(argv = process.argv.slice(2)) {
       releaseGithubGovernorAdmission({
         env: process.env,
         partitionKey: payload.partitionKey,
+        emergency: payload.emergency === true,
         exitCode: payload.exitCode,
         stderr: payload.stderr,
         stdout: payload.stdout,
