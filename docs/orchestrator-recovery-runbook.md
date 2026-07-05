@@ -141,7 +141,7 @@ then ready_for_review only when required CI is green. Do not treat the task as d
 ```
 
 4. If the worker stays idle after ping, use review-loop respawn discipline in
-   `orchestratorRules` or `ao spawn --claim-pr <n>` per runbook #40.
+   `orchestratorRules` or `ao spawn --project orchestrator-pack --name "Claim PR" --claim-pr <n>` per runbook #40.
 
 Upstream note: first lifecycle `ci_failed` transition may show `recoveryAction: null` —
 that is AO core behaviour; this pack closes the gap on **orchestrator turns**, not on
@@ -382,7 +382,7 @@ ao review list --json
 - Review runs unchanged in `ao review list` (`needs_triage` / `waiting_update`
   still present until the new orchestrator acts).
 - No worker left without a session while PR still open (if one vanished, use
-  `ao spawn --claim-pr <n>` per `orchestratorRules`).
+  `ao spawn --project orchestrator-pack --name "Claim PR" --claim-pr <n>` per `orchestratorRules`).
 
 Then send one recovery nudge (step 1 message) if the new session does not
 auto-run within a minute.
