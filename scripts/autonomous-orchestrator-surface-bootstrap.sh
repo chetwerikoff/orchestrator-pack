@@ -65,3 +65,16 @@ elif __ao_surface_bootstrap_is_orchestrator_tmux && [[ "${__AO_COMMAND_RUNTIME_P
   fi
   export __AO_COMMAND_RUNTIME_PREFLIGHT_OK=1
 fi
+
+if [[ -z "${GH_REPO:-}" ]]; then
+  _ao_gh_repo_derive="${PACK_SCRIPTS}/lib/derive-gh-repo-from-checkout.mjs"
+  if command -v node >/dev/null 2>&1 && [[ -r "${_ao_gh_repo_derive}" ]]; then
+    _ao_pack_root="$(cd "${PACK_SCRIPTS}/.." && pwd)"
+    _ao_derived_gh_repo="$(node "${_ao_gh_repo_derive}" --pack-root "${_ao_pack_root}" 2>/dev/null || true)"
+    if [[ -n "${_ao_derived_gh_repo}" ]]; then
+      export GH_REPO="${_ao_derived_gh_repo}"
+    fi
+    unset _ao_pack_root _ao_derived_gh_repo
+  fi
+  unset _ao_gh_repo_derive
+fi

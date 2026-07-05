@@ -1,7 +1,9 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseRemoteSlug, RESOLVER_GIT_ARGV } from './git-origin-slug.mjs';
+
+export { RESOLVER_GIT_ARGV };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RATE_LIMIT_HEADER_NAMES = new Set([
@@ -38,23 +40,6 @@ function readGhHostname(realGh, hostname) {
 }
 
 /**
- * @param {string} url
- */
-function parseRemoteSlug(url) {
-  const trimmed = url.trim();
-  const ssh = /^git@[^:]+:([^/]+\/[^/]+?)(?:\.git)?$/i.exec(trimmed);
-  if (ssh) {
-    return ssh[1];
-  }
-  const https = /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/i.exec(trimmed);
-  if (https) {
-    return https[1];
-  }
-  const generic = /[/:]([^/]+\/[^/]+?)(?:\.git)?$/.exec(trimmed);
-  return generic ? generic[1] : null;
-}
-
-/**
  * @param {string} cwd
  */
 function gitToplevel(cwd) {
@@ -74,7 +59,7 @@ function gitToplevel(cwd) {
  */
 function gitOriginSlug(repoRoot) {
   try {
-    const url = execFileSync('git', ['remote', 'get-url', 'origin'], {
+    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],

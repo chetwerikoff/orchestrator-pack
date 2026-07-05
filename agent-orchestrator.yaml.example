@@ -67,6 +67,9 @@ projects:
           # and sources scripts/autonomous-bash-env.sh for bash-turn absolute-git interposition.
           # Do not set POSIXLY_CORRECT or SHELLOPTS=posix here — bash disables BASH_ENV when either is active.
           BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-orchestrator-surface-bootstrap.sh
+          # Optional explicit slug for pack gh reads (--repo / GH_REPO beat git-derived slug).
+          # When unset, surface bootstrap exports GH_REPO from the checkout origin (Issue #599).
+          # GH_REPO: chetwerikoff/orchestrator-pack
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
     worker:
       agent: cursor
