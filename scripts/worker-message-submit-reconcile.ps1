@@ -179,6 +179,31 @@ function Read-SubmitReconcileStateRootAnchor {
     }
 }
 
+function Read-SubmitReconcileStateRootBackingState {
+    param(
+        [object]$Anchor,
+        [string]$CurrentStatePath
+    )
+
+    if (-not $Anchor) { return $null }
+    $anchorStatePath = [string]$Anchor.statePath
+    if (-not $anchorStatePath) { return $null }
+    $resolvedAnchorPath = Resolve-SubmitReconcileStatePathLiteral -Path $anchorStatePath
+    $resolvedCurrentPath = Resolve-SubmitReconcileStatePathLiteral -Path $CurrentStatePath
+    if ($resolvedAnchorPath -and $resolvedCurrentPath -and $resolvedAnchorPath -eq $resolvedCurrentPath) {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $anchorStatePath -PathType Leaf)) {
+        return $null
+    }
+    try {
+        return Get-Content -LiteralPath $anchorStatePath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
 function Write-SubmitReconcileStateRootAnchor {
     param(
         [string]$Path,
@@ -218,15 +243,17 @@ function Invoke-SubmitReconcileStateRootReSeatIfEligible {
         $journal = Get-WorkerMessageDispatchJournal -Path $JournalPath
     }
     $anchor = Read-SubmitReconcileStateRootAnchor -Path (Get-SubmitReconcileStateRootAnchorPath -JournalPath $JournalPath)
+    $anchorState = Read-SubmitReconcileStateRootBackingState -Anchor $anchor -CurrentStatePath $Path
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
     $result = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'stateRootReseat' `
         -Payload @{
-            state    = $State
-            journal  = $journal
-            anchor   = $anchor
-            identity = $Identity
-            nowMs    = $nowMs
+            state       = $State
+            journal     = $journal
+            anchor      = $anchor
+            anchorState = $anchorState
+            identity    = $Identity
+            nowMs       = $nowMs
         } -Label $Script:ReconcileLogPrefix -JsonDepth 30
 
     if (-not $result.eligible) {
@@ -296,9 +323,6 @@ function Get-SubmitReconcileState {
                     fenceTrusted = $false
                     reason       = 'wrong_state_root_active_deliveries'
                     quarantined  = $Path
-                }
-                if (-not (Test-SubmitReconcileHasTerminalDeliveryEvidence -State $state)) {
-                    return $state
                 }
             }
             else {

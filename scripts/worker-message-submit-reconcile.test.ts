@@ -39,6 +39,7 @@ import {
   evaluateStateRootReSeatEligibility,
   evaluateStateRootReSeat,
   STATE_ROOT_RECOVERY_REASON,
+  DEFAULT_DELIVERY_BACKSTOP_MS,
 } from '../docs/worker-message-submit-reconcile.mjs';
 import type {
   SubmitTrackingState,
@@ -2801,6 +2802,74 @@ describe('issue #373 state-root quarantine re-seat', () => {
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
 
+  it('reclaims stale orphan-anchor when no state or journal deliveries corroborate active work', () => {
+    const nowMs = 1717603000000;
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+        failedDeliveries: {},
+      },
+      journal: {},
+      anchor: {
+        activeDeliveryCount: 1,
+        stateRootIdentity: 'stale-anchor',
+        updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
+      },
+      nowMs,
+    });
+    expect(result.eligible).toBe(true);
+    expect(result.reason).toBe('orphan_anchor_quarantine');
+    expect(result.evidence).toContain('stateDeliveryCount=0');
+    expect(result.evidence).toContain('journalDeliveryCount=0');
+  });
+
+  it('blocks re-seat for fresh orphan-looking anchor until the backstop expires', () => {
+    const nowMs = 1717603000000;
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+        failedDeliveries: {},
+      },
+      journal: {},
+      anchor: {
+        activeDeliveryCount: 1,
+        stateRootIdentity: 'fresh-anchor',
+        updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS + 1,
+      },
+      nowMs,
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
+  });
+
+  it('blocks stale anchor reclaim when the anchor backing state still has an active delivery', () => {
+    const nowMs = 1717603000000;
+    const result = evaluateStateRootReSeatEligibility({
+      state: {
+        _recovery: recoveryLatch,
+        deliveries: {},
+        failedDeliveries: {},
+      },
+      journal: {},
+      anchor: {
+        activeDeliveryCount: 1,
+        stateRootIdentity: 'stale-anchor',
+        statePath: '/tmp/old-state.json',
+        updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
+      },
+      anchorState: {
+        deliveries: {
+          live: { deliveryId: 'live', sessionId: 'opk-live' },
+        },
+      },
+      nowMs,
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('anchor_active_without_terminal_evidence');
+  });
+
   it('blocks re-seat when anchor active count exceeds terminal delivery evidence', () => {
     const result = evaluateStateRootReSeatEligibility({
       state: {
@@ -3020,6 +3089,57 @@ ${result.stderr}`).toMatch(/state-root re-seat/i);
 ${result.stderr}`).toMatch(/state-root re-seat/i);
     expect(`${result.stdout}
 ${result.stderr}`).not.toMatch(/submitted:/i);
+  });
+
+  it('self-heals live orphan-anchor latch from AO side-process state dir', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-live-orphan-anchor-'));
+    const state = path.join(dir, 'state.json');
+    const journal = path.join(dir, 'journal.json');
+    const sideProcessStateDir = path.join(dir, 'side-process');
+    const anchor = path.join(sideProcessStateDir, 'worker-message-submit-state-root.anchor.json');
+    mkdirSync(sideProcessStateDir);
+    writeFileSync(journal, JSON.stringify({}));
+    writeFileSync(anchor, JSON.stringify({
+      stateRootIdentity: 'stale-anchor-identity',
+      statePath: state,
+      activeDeliveryCount: 1,
+      updatedAtMs: 1717603000000 - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
+    }));
+    writeFileSync(state, JSON.stringify({
+      _recovery: {
+        fenceTrusted: false,
+        reason: 'wrong_state_root_active_deliveries',
+        quarantined: state,
+      },
+      deliveries: {},
+      failedDeliveries: {},
+      audit: [],
+      lastTickMs: null,
+    }));
+    const fakeAoDir = writeFakeAoCli(dir);
+    const result = spawnSync('pwsh', [
+      '-NoProfile', '-File', 'scripts/worker-message-submit-reconcile.ps1',
+      '-Once', '-StateFile', state, '-DispatchJournalPath', journal,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeAoDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        AO_SIDE_PROCESS_STATE_DIR: sideProcessStateDir,
+        AO_WORKER_MESSAGE_ADOPTION_EPOCH: 'epoch-new',
+        AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH: '/cfg/new.yaml',
+      },
+    });
+    expect(result.status).toBe(0);
+    const persisted = JSON.parse(readFileSync(state, 'utf8')) as SubmitTrackingState & { _recovery?: unknown };
+    const persistedAnchor = JSON.parse(readFileSync(anchor, 'utf8')) as { activeDeliveryCount?: number; stateRootIdentity?: string };
+    expect(persisted._recovery).toBeUndefined();
+    expect(persisted.stateRootIdentity).toBeTruthy();
+    expect(persistedAnchor.activeDeliveryCount).toBe(0);
+    expect(persistedAnchor.stateRootIdentity).toBe(persisted.stateRootIdentity);
+    expect((persisted.audit ?? []).some((row) => row.action === 'state_root_reseat' && row.reason === 'orphan_anchor_quarantine')).toBe(true);
+    expect(`${result.stdout}
+${result.stderr}`).toMatch(/state-root re-seat/i);
   });
 
   it('re-seats a persisted latch after terminal orphan escalation (opk-25 class)', () => {

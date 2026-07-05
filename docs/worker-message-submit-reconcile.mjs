@@ -1843,6 +1843,30 @@ function countCompletedMatchingJournalEvidence(journal, stateDeliveries) {
   return count;
 }
 
+function countDispatchJournalDeliveryRecords(journal) {
+  let count = 0;
+  for (const [deliveryId] of Object.entries(journal ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function countActiveStateDeliveries(state) {
+  let count = 0;
+  for (const [deliveryId, record] of Object.entries(state?.deliveries ?? {})) {
+    if (!deliveryId || deliveryId.startsWith('_')) {
+      continue;
+    }
+    if (!isSubmitTrackingDeliveryTerminal(record)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /**
  * @param {object} input
  */
@@ -1850,6 +1874,8 @@ export function evaluateStateRootReSeatEligibility({
   state,
   journal,
   anchor,
+  anchorState,
+  nowMs,
 }) {
   const recovery = state?._recovery;
   if (!recovery || recovery.fenceTrusted !== false) {
@@ -1903,6 +1929,9 @@ export function evaluateStateRootReSeatEligibility({
 
   const anchorActive = Number(anchor?.activeDeliveryCount ?? 0);
   const stateDeliveries = state?.deliveries ?? {};
+  const stateDeliveryCount = Object.entries(stateDeliveries).filter(
+    ([deliveryId]) => deliveryId && !deliveryId.startsWith('_'),
+  ).length;
   const terminalStateDeliveryCount = Object.entries(stateDeliveries).filter(
     ([deliveryId, record]) =>
       deliveryId &&
@@ -1922,6 +1951,24 @@ export function evaluateStateRootReSeatEligibility({
       journal ?? {},
       stateDeliveries,
     );
+    const journalDeliveryCount = countDispatchJournalDeliveryRecords(journal ?? {});
+    const anchorBackingActiveDeliveryCount = countActiveStateDeliveries(anchorState ?? {});
+    const anchorUpdatedAtMs = Number(anchor?.updatedAtMs ?? 0);
+    const ageMs = Number(nowMs ?? Date.now()) - anchorUpdatedAtMs;
+    if (
+      stateDeliveryCount === 0 &&
+      journalDeliveryCount === 0 &&
+      anchorBackingActiveDeliveryCount === 0 &&
+      anchorUpdatedAtMs > 0 &&
+      ageMs >= DEFAULT_DELIVERY_BACKSTOP_MS
+    ) {
+      return {
+        eligible: true,
+        reason: 'orphan_anchor_quarantine',
+        priorRecoveryReason,
+        evidence: `anchorActiveDeliveryCount=${anchorActive};anchorAgeMs=${ageMs};stateDeliveryCount=0;journalDeliveryCount=0;anchorBackingActiveDeliveryCount=0`,
+      };
+    }
     const totalEvidenceCount = terminalStateDeliveryCount;
     if (totalEvidenceCount < anchorActive) {
       return {
@@ -1974,6 +2021,8 @@ export function evaluateStateRootReSeat(input) {
     state: input?.state ?? {},
     journal: input?.journal ?? {},
     anchor: input?.anchor ?? null,
+    anchorState: input?.anchorState ?? null,
+    nowMs: Number(input?.nowMs ?? Date.now()),
   });
   if (!eligibility.eligible) {
     return { ...eligibility, state: input?.state ?? {} };
