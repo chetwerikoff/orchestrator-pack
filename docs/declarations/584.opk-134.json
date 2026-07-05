@@ -7,12 +7,13 @@
   "baseline": {
     "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:b19e4d0f4236404a03230281b0b030bbb162182d92e7172439d196bb5ea695da"
+    "active_scope_hash": "sha256:ad04a596c7049471031311222b10e8f507d138adf1cd3677f00712401c5ce7e4"
   },
   "declared_paths": [
     "docs/declarations/584.opk-134.json",
     "docs/review-start-preflight-shield.d.mts",
     "docs/review-start-preflight-shield.mjs",
+    "docs/worker-message-submit-reconcile.d.mts",
     "scripts/check-orchestrator-claimed-review-run.ps1",
     "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
     "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
