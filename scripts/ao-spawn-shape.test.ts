@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import {
   AO_SPAWN_DISPLAY_NAME_MAX_LENGTH,
   findRunnableSpawnCommands,
-  isDocumentationSpawnTemplate,
   scanSpawnShapeCorpus,
   scanSpawnShapeViolations,
   tokenizeSpawnArgv,
@@ -185,15 +184,11 @@ describe('scanSpawnShapeCorpus', () => {
     expect(scanSpawnShapeViolations(badRunnableLine)).toHaveLength(1);
   });
 
-  it('skips backtick documentation templates with placeholders', () => {
+  it('validates placeholder respawn templates in backticks', () => {
     const prose = 'Use `ao spawn --claim-pr <PR>` for recovery\n';
-    expect(scanSpawnShapeViolations(prose)).toEqual([]);
-    expect(
-      isDocumentationSpawnTemplate({
-        line: 1,
-        command: 'ao spawn --claim-pr <PR>',
-        kind: 'backtick',
-      }),
-    ).toBe(true);
+    expect(scanSpawnShapeViolations(prose)).toHaveLength(1);
+    const valid =
+      'Use `ao spawn --project <project> --name "<label>" --claim-pr <PR>` for recovery\n';
+    expect(scanSpawnShapeViolations(valid)).toEqual([]);
   });
 });

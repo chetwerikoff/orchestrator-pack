@@ -483,7 +483,7 @@ improvise alternate recovery from the command runtime.
 Committed spawn policy lives in `docs/autonomous-spawn-policy.json` with explicit default-on toggles
 `allowSpawnNew` and `allowClaimPrResume`. The autonomous `ao` guard reads that file on every spawn
 invocation; missing, malformed, or non-boolean policy denies protected spawn with exit 93.
-`ao spawn --claim-pr <PR>` additionally requires claim-pr resume safety (no live PR owner;
+`ao spawn --project <project> --name "<label>" --claim-pr <PR>` additionally requires claim-pr resume safety (no live PR owner;
 single-flight mutex) before reaching real AO.
 
 **Operator adoption (live gitignored `agent-orchestrator.yaml`):**
@@ -1100,7 +1100,7 @@ worktree hygiene; inspect separately.
 
 ### Dead orchestrator vs `ao spawn` (operator)
 
-`ao spawn <issue>` starts or revives **worker** sessions only. It does **not**
+`ao spawn --project <project> --name "<label>" <issue>` starts or revives **worker** sessions only. It does **not**
 restart a dead orchestrator. If `op-orchestrator` is already `detecting` /
 `exited` / `stuck` with `runtime=exited` or `process_missing`, repeated
 `ao spawn` only bumps probe counters against a corpse — it is not a recovery step.

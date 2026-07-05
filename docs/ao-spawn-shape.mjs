@@ -294,15 +294,6 @@ export function validateRunnableSpawnCommand(command) {
 }
 
 /**
- * Backtick documentation templates with angle-bracket placeholders are not runnable.
- * Runnable line matches are always validated — no global command allowlist.
- * @param {RunnableSpawnMatch} match
- */
-export function isDocumentationSpawnTemplate(match) {
-  return match.kind === 'backtick' && /<[A-Za-z][\w-]*>/.test(match.command);
-}
-
-/**
  * @param {string} text
  * @param {{ relPath?: string }} [options]
  */
@@ -311,9 +302,6 @@ export function scanSpawnShapeViolations(text, options = {}) {
   const violations = [];
 
   for (const match of findRunnableSpawnCommands(text)) {
-    if (isDocumentationSpawnTemplate(match)) {
-      continue;
-    }
     const matchViolations = validateRunnableSpawnCommand(match.command);
     if (matchViolations.length > 0) {
       violations.push({
