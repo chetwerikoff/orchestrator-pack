@@ -167,6 +167,76 @@ if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePat
     exit 1
 }
 
+function Invoke-StateRootReseatGuard {
+    param([hashtable]$Payload)
+
+    $json = $Payload | ConvertTo-Json -Depth 30 -Compress
+    $raw = $json | & node $mjsPath stateRootReseat 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "stateRootReseat guard failed to execute: $raw"
+        exit 1
+    }
+    try {
+        return ($raw | ConvertFrom-Json)
+    }
+    catch {
+        Write-Host "stateRootReseat guard returned non-JSON: $raw"
+        exit 1
+    }
+}
+
+$nowMs = 1717603000000
+$staleOrphan = Invoke-StateRootReseatGuard @{
+    state    = @{
+        _recovery       = @{ fenceTrusted = $false; reason = 'wrong_state_root_active_deliveries'; quarantined = '/tmp/state.json' }
+        deliveries      = @{}
+        failedDeliveries = @{}
+        audit           = @()
+    }
+    journal  = @{}
+    anchor   = @{ activeDeliveryCount = 1; stateRootIdentity = 'stale-anchor'; updatedAtMs = ($nowMs - (31 * 60 * 1000)) }
+    identity = 'fresh-identity'
+    nowMs    = $nowMs
+}
+if (-not $staleOrphan.eligible -or $staleOrphan.reason -ne 'orphan_anchor_quarantine' -or $staleOrphan.state._recovery) {
+    Write-Host 'worker-message-submit-reconcile stateRootReseat must self-heal stale orphan-anchor quarantine'
+    exit 1
+}
+$freshOrphan = Invoke-StateRootReseatGuard @{
+    state    = @{
+        _recovery       = @{ fenceTrusted = $false; reason = 'wrong_state_root_active_deliveries'; quarantined = '/tmp/state.json' }
+        deliveries      = @{}
+        failedDeliveries = @{}
+        audit           = @()
+    }
+    journal  = @{}
+    anchor   = @{ activeDeliveryCount = 1; stateRootIdentity = 'fresh-anchor'; updatedAtMs = ($nowMs - (29 * 60 * 1000)) }
+    identity = 'fresh-identity'
+    nowMs    = $nowMs
+}
+if ($freshOrphan.eligible -or $freshOrphan.reason -ne 'anchor_active_without_terminal_evidence') {
+    Write-Host 'worker-message-submit-reconcile stateRootReseat must keep fresh active-anchor quarantine'
+    exit 1
+}
+$pendingJournal = Invoke-StateRootReseatGuard @{
+    state    = @{
+        _recovery       = @{ fenceTrusted = $false; reason = 'wrong_state_root_active_deliveries'; quarantined = '/tmp/state.json' }
+        deliveries      = @{}
+        failedDeliveries = @{}
+        audit           = @()
+    }
+    journal  = @{
+        'pending-delivery' = @{ deliveryId = 'pending-delivery'; deliveryPath = 'pending-draft'; fenceLifecycle = 'pending'; dispatchOutcome = 'dispatched' }
+    }
+    anchor   = @{ activeDeliveryCount = 1; stateRootIdentity = 'stale-anchor'; updatedAtMs = ($nowMs - (31 * 60 * 1000)) }
+    identity = 'fresh-identity'
+    nowMs    = $nowMs
+}
+if ($pendingJournal.eligible -or $pendingJournal.reason -ne 'unresolved_journal_entry') {
+    Write-Host 'worker-message-submit-reconcile stateRootReseat must keep quarantine when journal corroborates active work'
+    exit 1
+}
+
 $reviewSendPs1 = Join-Path $Root 'scripts/review-send-reconcile.ps1'
 if (-not (Test-Path -LiteralPath $reviewSendPs1 -PathType Leaf)) {
     Write-Host 'Missing scripts/review-send-reconcile.ps1'
