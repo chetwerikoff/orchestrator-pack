@@ -5,6 +5,7 @@
     "scripts/ci-failure-notification-reaction.ps1",
     "scripts/ci-failure-notification-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
+    "scripts/dead-worker-reconcile.ps1",
     "scripts/orchestrator-wake-heartbeat.ps1",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-finding-delivery-confirm.ps1",

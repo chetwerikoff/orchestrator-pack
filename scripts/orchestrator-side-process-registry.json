@@ -13,7 +13,8 @@
     "review-run-recovery",
     "review-start-claim-reaper",
     "ci-failure-notification-reconcile",
-    "ci-failure-notification-reaction"
+    "ci-failure-notification-reaction",
+    "dead-worker-reconcile"
   ],
   "children": [
     {
@@ -82,6 +83,16 @@
       "script": "ci-green-wake-reconcile.ps1",
       "sideEffecting": true,
       "sideEffectLockFile": "ci-green-wake-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 60,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "dead-worker-reconcile",
+      "script": "dead-worker-reconcile.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "dead-worker-reconcile-side-effect.lock",
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 60,

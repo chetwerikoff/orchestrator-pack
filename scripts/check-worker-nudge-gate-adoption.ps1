@@ -7,23 +7,7 @@ if (-not (Test-Path -LiteralPath $liveYaml -PathType Leaf)) {
     exit 0
 }
 
-function Get-YamlOrchestratorRules {
-    param([string]$Raw)
-    $lines = $Raw -split "`n"
-    $capture = $false
-    $out = New-Object System.Collections.Generic.List[string]
-    foreach ($line in $lines) {
-        if ($line -match '^\s+orchestratorRules:\s*(?:\||>)\s*$') {
-            $capture = $true
-            continue
-        }
-        if ($capture) {
-            if ($line -match '^\S') { break }
-            $out.Add($line)
-        }
-    }
-    return ($out -join "`n")
-}
+. (Join-Path $PSScriptRoot 'lib/Get-OrchestratorYamlRules.ps1')
 
 $raw = Get-Content -LiteralPath $liveYaml -Raw
 $rules = Get-YamlOrchestratorRules -Raw $raw

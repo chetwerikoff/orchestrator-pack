@@ -535,6 +535,27 @@ invariant, seeds scoped #235 watches, and may start review with
 `startReason=report_state_seed` — not `handoff_wake`, `completion_wake`, or
 `periodic=reconcile`.
 
+
+## Autonomous dead-worker respawn (Option C; Issue #593)
+
+**Narrow rule:** background reconcilers may recover a **dead worker that was already
+assigned unfinished work** via the sanctioned `invoke-worker-recovery.ps1` path when
+capture-backed death evidence is present, operator kill/shutdown suppression does not
+apply, enablement gates pass, and retry/storm bounds allow. They **never** plan new
+work from open issues or the GitHub queue.
+
+- Default-OFF toggle: `docs/autonomous-respawn-policy.json` (`allowReconcileDeadWorkerRespawn`).
+  Operator adoption explicitly enables action-producing respawn only after #194/#522
+  checks, fixtures, and runtime policy are verified.
+- Operator `ao stop` / `session.kill_started` + `session.killed` with
+  `reason: manually_killed` suppress autonomous respawn. `ui.terminal_pty_lost` alone
+  is insufficient.
+- When gates fail or shapes are uncaptured, the reconciler **audits only** — no recovery
+  invocation.
+- Mechanical entrypoint: `scripts/dead-worker-reconcile.ps1` (registered side process).
+  Operator must apply `agent-orchestrator.yaml.example` deltas and restart AO
+  (`ao stop` / `ao start`) for daemon-cached rules.
+
 ## CI-green orchestrator nudge (fast path; Issue #191)
 
 **Self-drive is primary;** the orchestrator CI-green nudge is recovery when you have gone

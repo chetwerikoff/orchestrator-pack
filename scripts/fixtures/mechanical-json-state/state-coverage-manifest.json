@@ -138,6 +138,18 @@
         "deferredScanKeys"
       ],
       "actionTracking": true
+    },
+    {
+      "id": "dead-worker-reconcile",
+      "stateFile": "orchestrator-dead-worker-reconcile-state.json",
+      "callerScripts": [
+        "scripts/dead-worker-reconcile.ps1"
+      ],
+      "mapFields": [
+        "attempts",
+        "leases"
+      ],
+      "actionTracking": true
     }
   ]
 }

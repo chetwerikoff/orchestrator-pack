@@ -131,6 +131,7 @@
     "scripts/worker-recovery-branch-cleanup.test.ts": "heavy",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "scripts/ao-spawn-shape.test.ts": "light",
+    "scripts/dead-worker-reconcile.test.ts": "heavy",
     "scripts/github-fleet-governor.test.ts": "heavy"
   }
 }

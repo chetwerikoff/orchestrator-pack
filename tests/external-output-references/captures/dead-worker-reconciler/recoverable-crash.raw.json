@@ -1,0 +1,19 @@
+{
+  "id": "recoverable-crash-runtime-lost",
+  "presentFields": ["sessionId", "runtime", "status", "issue", "branch", "worktree"],
+  "absentFields": ["session.kill_started", "session.killed"],
+  "session": {
+    "name": "opk-dead-593",
+    "role": "worker",
+    "status": "terminated",
+    "runtime": "exited",
+    "issue": "593",
+    "branch": "feat/593",
+    "worktree": "/home/operator/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-dead-593"
+  },
+  "events": [
+    { "name": "session.spawned", "sessionId": "opk-dead-593", "tsEpoch": 1780000100000 },
+    { "name": "agent_process_exited", "sessionId": "opk-dead-593", "tsEpoch": 1780000105000, "data": { "exitCode": 1 } },
+    { "name": "ui.terminal_pty_lost", "sessionId": "opk-dead-593", "tsEpoch": 1780000105100 }
+  ]
+}

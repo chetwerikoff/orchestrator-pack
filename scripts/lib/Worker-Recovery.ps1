@@ -344,7 +344,8 @@ function Invoke-WorkerRecovery {
         [switch]$TaskClosed,
         [switch]$TaskCancelled,
         [switch]$TaskSuperseded,
-        [hashtable]$FixtureTaskEligibility = $null
+        [hashtable]$FixtureTaskEligibility = $null,
+        [switch]$ProbedDeadEvidence
     )
 
     if (-not $PackRoot) {
@@ -354,7 +355,7 @@ function Invoke-WorkerRecovery {
 
     $triggerAdmission = Invoke-WorkerRecoveryCli -Subcommand 'evaluateTrigger' -Payload @{
         trigger            = $Trigger
-        probedDeadEvidence = ($Trigger -eq 'reconcile_dead_worker')
+        probedDeadEvidence = [bool]$ProbedDeadEvidence
         liveOwnerPresent   = $false
     }
     if (-not $triggerAdmission.admitted) {

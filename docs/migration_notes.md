@@ -2035,3 +2035,22 @@ their next respawn. For documentation only:
    never block wrapped `gh` calls or fleet cache populate paths.
 
 No operator adoption required for live yaml — bounds are script defaults.
+
+## Autonomous dead-worker respawn (Issue #593)
+
+Ships a supervised `dead-worker-reconcile` side process and `docs/autonomous-respawn-policy.json`
+with **default-OFF** `allowReconcileDeadWorkerRespawn`. Until operator adoption enables the
+toggle and restarts AO, the reconciler audits only.
+
+Operator adoption after merge:
+
+1. Merge PR and pull `main` in the operator checkout.
+2. Confirm `docs/autonomous-respawn-policy.json` defaults remain `allowReconcileDeadWorkerRespawn: false`.
+3. Mirror `agent-orchestrator.yaml.example` **DEAD WORKER RECONCILE** block into live
+   `agent-orchestrator.yaml` / `orchestratorRules` if not already present.
+4. Restart AO (`ao stop` / `ao start`) so daemon-cached rules and worker prompts reload.
+5. Start or verify the wake supervisor registers `dead-worker-reconcile` (see
+   `scripts/orchestrator-side-process-registry.json`).
+6. Only after #194 branch-safe recovery and capture fixtures are verified in your environment,
+   set `allowReconcileDeadWorkerRespawn: true` in `docs/autonomous-respawn-policy.json` and
+   restart AO again.

@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao events list (scrubbed operator kill sequence)",
+  "toolVersion": "0.9.x",
+  "capturedAt": "2026-07-04T12:00:00.000Z",
+  "context": "opk-128 manual kill — suppress respawn",
+  "scrubLog": ["Synthetic ids; path-shape class preserved; reason values preserved"]
+}
