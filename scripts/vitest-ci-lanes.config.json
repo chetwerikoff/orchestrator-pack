@@ -128,6 +128,7 @@
     "scripts/worker-nudge-task-continuation-pr-facet.test.ts": "light",
     "scripts/worker-nudge-task-continuation-tuple.test.ts": "light",
     "scripts/worker-recovery.test.ts": "heavy",
+    "scripts/worker-recovery-branch-cleanup.test.ts": "heavy",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "scripts/ao-spawn-shape.test.ts": "light"
   }

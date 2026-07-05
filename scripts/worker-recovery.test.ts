@@ -389,7 +389,7 @@ describe('worker recovery cleanup failure', () => {
       'utf8',
     );
     expect(recoveryText).toMatch(
-      /if \(-not \$SkipSpawn -and \$SpawnAction -and -not \(\$cleanupAttempted -and -not \$cleanupDone\)\)/,
+      /if \(-not \$SkipSpawn -and \$SpawnAction -and -not \(\$cleanupAttempted -and -not \$cleanupDone\) -and -not \$branchCleanupBlocked\)/,
     );
   });
 });
@@ -677,7 +677,7 @@ describe('worker recovery repository identity / pack-root spawn path (#522 AC#12
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
       $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
-      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreeRecord @{ sessionId='opk-522'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
       [pscustomobject]@{ packRootMatch = ($result.packRoot -eq $result.repoRoot); outcome = $result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
     const result = JSON.parse(runPwsh(script));
