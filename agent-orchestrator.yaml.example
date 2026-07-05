@@ -492,7 +492,7 @@ projects:
         3. Worker reports terminal failure with a reason (completed with failure note
            or ao send to orchestrator explaining the blocker).
         4. Orchestrator observed the worker session is unavailable, killed it, and
-           respawned via ao spawn --claim-pr <PR> (ping/respawn discipline below).
+           respawned via ao spawn --project <project> --name '<label>' --claim-pr <PR> (ping/respawn discipline below).
         5. The linked worker PR is merged on GitHub (MERGED PR — REVIEW LOOP TERMINAL
            above; verify via gh pr view, not session status alone).
 
@@ -525,7 +525,7 @@ projects:
       waiting_worker_review_response with no addressing_reviews, no new commit, and
       a ping was already sent for this episode (visible in ao events list), run:
         ao session kill <session>
-        ao spawn --claim-pr <PR>
+        ao spawn --project <project> --name '<label>' --claim-pr <PR>
       Reset ping tracking for the new session.
 
       REVIEW-READY WORKER STUCK GUARD (Issue #174). On EVERY orchestrator turn,

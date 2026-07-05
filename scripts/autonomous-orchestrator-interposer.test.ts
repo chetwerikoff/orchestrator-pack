@@ -19,6 +19,7 @@ import {
   assertSpawnGateIsolationPreflight,
   assertSpawnGateOutcome,
   SPAWN_GATE_FIXTURE_SESSION_ID,
+  spawnGateFixtureCommand,
   spawnHermeticEvalHidden,
   spawnHermeticIsolatedOrchestratorBash,
   spawnHermeticLiveArmedBash,
@@ -111,7 +112,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
       withTempGitRepo((dir) => {
         const onlyTmux = spawnHermeticLiveArmedBash(
           ctx,
-          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          spawnGateFixtureCommand(),
           {
             AO_TMUX_NAME: 'opk-orchestrator',
             AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
@@ -128,7 +129,7 @@ describe('autonomous orchestrator interposer (#406)', () => {
       withTempGitRepo((dir) => {
         const deny = spawnHermeticLiveArmedBash(
           ctx,
-          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          spawnGateFixtureCommand(),
           {},
           dir,
         );
@@ -368,7 +369,7 @@ exec "$REAL_GIT" checkout -- ${readme}
         withTempGitRepo((dir) => {
           const denySpawn = spawnHermeticEvalHidden(
             ctx,
-            `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+            spawnGateFixtureCommand(),
             {
               PATH: `${wrapDir}:${hostPath}`,
             },
@@ -464,7 +465,7 @@ exit 0
         withTempGitRepo((dir) => {
           const result = spawnHermeticEvalHidden(
             ctx,
-            `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+            spawnGateFixtureCommand(),
             {
               PATH: `${fakePwshDir}:${process.env.PATH ?? ''}`,
             },
@@ -497,7 +498,7 @@ exit 0
         withTempGitRepo((dir) => {
           const result = spawnHermeticEvalHidden(
             ctx,
-            `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+            spawnGateFixtureCommand(),
             {
               AO_PWSH_BINARY: fakePwsh,
             },
@@ -556,7 +557,7 @@ exit 0
 
         const flatSpawn = spawnHermeticLiveArmedBash(
           ctx,
-          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          spawnGateFixtureCommand(),
           {},
           dir,
         );
@@ -564,7 +565,7 @@ exit 0
 
         const hiddenSpawn = spawnHermeticEvalHidden(
           ctx,
-          `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`,
+          spawnGateFixtureCommand(),
           {},
           dir,
         );
@@ -588,14 +589,21 @@ exit 0
   it('allow matrix: worker surface allows spawn; gated send is not raw-denied', () => {
     withHermeticSpawnGatePack('read-receipt', (ctx) => {
       const { pack, probeFile, aoStub } = ctx;
-      const workerSpawn = spawnHermeticEvalHidden(ctx, `ao spawn ${SPAWN_GATE_FIXTURE_SESSION_ID}`, {
+      const workerSpawn = spawnHermeticEvalHidden(ctx, spawnGateFixtureCommand(), {
         AO_TMUX_NAME: 'opk-worker',
         AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
         AO_REAL_BINARY: aoStub,
         AO_SPAWN_PROBE_FILE: probeFile,
       });
       assertSpawnGateOutcome('worker-surface-allow-stub-receipt', workerSpawn, ctx);
-      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', SPAWN_GATE_FIXTURE_SESSION_ID]);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual([
+        'spawn',
+        '--project',
+        'orchestrator-pack',
+        '--name',
+        'Gate probe',
+        SPAWN_GATE_FIXTURE_SESSION_ID,
+      ]);
       expect(`${workerSpawn.stderr}${workerSpawn.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
 
       const gated = spawnSync(

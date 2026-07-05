@@ -1365,6 +1365,25 @@ else {
 Write-Check 'verify-runtime/autonomous-spawn-policy-vitest' 'SKIP' 'owned by check-autonomous-spawn-policy.ps1 + full Vitest lane (Issue #488)'
 
 
+$aoSpawnShapeCheck = Join-Path $Root 'scripts/check-ao-spawn-shape.ps1'
+if (Test-Path -LiteralPath $aoSpawnShapeCheck -PathType Leaf) {
+    & $aoSpawnShapeCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-ao-spawn-shape.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-ao-spawn-shape.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10.x runnable ao spawn shape guard failed (Issue #589)'
+    }
+}
+else {
+    Write-Check 'scripts/check-ao-spawn-shape.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10.x runnable ao spawn shape check (Issue #589)'
+}
+
+Write-Check 'verify-runtime/ao-spawn-shape-vitest' 'SKIP' 'owned by check-ao-spawn-shape.ps1 + full Vitest lane (Issue #488)'
+
+
 Write-Check 'verify-runtime/autonomous-spawn-worktree-vitest' 'SKIP' 'owned by full Vitest lane (Issue #488)'
 
 
