@@ -82,15 +82,44 @@ function Resolve-ReviewStartScopedGhCommand {
     return 'gh'
 }
 
+
+function New-GhPrViewMissingBinaryCapture {
+    param([string]$Command)
+
+    $message = "gh command not found: $Command"
+    return @{
+        exitCode = -1
+        stdout   = ''
+        stderr   = $message
+        timedOut = $false
+        parse    = @{ ok = $false; reason = 'gh_binary_missing' }
+    }
+}
+
+function Test-ReviewStartGhCommandResolvable {
+    param([string]$Command)
+
+    if (-not $Command) { return $false }
+    if ($Command -eq 'gh') { return $true }
+    if ($Command -match '[/\\]' -or $Command -match '\.(ps1|exe|cmd|bat)$') {
+        return Test-Path -LiteralPath $Command
+    }
+    return $true
+}
+
 function Invoke-GhPrViewStructuredCapture {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
-        [int]$PrNumber
+        [int]$PrNumber,
+        [int]$TimeoutMs = 0
     )
 
     $command = Resolve-ReviewStartScopedGhCommand
+    if (-not (Test-ReviewStartGhCommandResolvable -Command $command)) {
+        return New-GhPrViewMissingBinaryCapture -Command $command
+    }
     $ghArgs = @('pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     if ($command -match '\.ps1$') {
@@ -111,22 +140,52 @@ function Invoke-GhPrViewStructuredCapture {
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = $RepoRoot
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+    }
+    catch {
+        return New-GhPrViewMissingBinaryCapture -Command $command
+    }
     $stdoutDrain = $proc.StandardOutput.ReadToEndAsync()
     $stderrDrain = $proc.StandardError.ReadToEndAsync()
-    $proc.WaitForExit() | Out-Null
+    $timedOut = $false
+    if ($TimeoutMs -gt 0) {
+        $timedOut = -not $proc.WaitForExit([Math]::Max(1, $TimeoutMs))
+        if ($timedOut) {
+            try { $proc.Kill($true) } catch { }
+            try { $proc.WaitForExit(2000) | Out-Null } catch { }
+        }
+    }
+    else {
+        $proc.WaitForExit() | Out-Null
+    }
     try { $stdoutDrain.Wait(5000) | Out-Null } catch { }
     try { $stderrDrain.Wait(5000) | Out-Null } catch { }
     $stdout = [string]$stdoutDrain.Result
     $stderr = [string]$stderrDrain.Result
-    $exitCode = $proc.ExitCode
+    $exitCode = if ($timedOut) { -1 } else { $proc.ExitCode }
 
-    $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $stdout -Stderr $stderr
+    $parse = if ($timedOut) {
+        @{ ok = $false; reason = 'preflight_timeout' }
+    }
+    else {
+        Invoke-CommandRuntimeParseStructuredOutput -Stdout $stdout -Stderr $stderr
+    }
     return @{
         exitCode = $exitCode
         stdout   = $stdout
         stderr   = $stderr
+        timedOut = $timedOut
         parse    = $parse
+    }
+}
+
+function Resolve-ReviewStartScopedGhTransportFailureClass {
+    param([string]$Reason)
+
+    switch -Regex ($Reason) {
+        '^(preflight_transient_exhausted|preflight_timeout|claim_ownership_lost|gh_binary_missing)$' { return 'infra_transport' }
+        default { return '' }
     }
 }
 
@@ -142,7 +201,16 @@ function New-ReviewStartScopedGhTransportFailure {
         exitCode     = [int]$Capture.exitCode
         stderr       = [string]$Capture.stderr
         stdout       = [string]$Capture.stdout
-        failureClass = 'infra_transport'
+        failureClass = (Resolve-ReviewStartScopedGhTransportFailureClass -Reason $Reason)
+    }
+}
+
+function New-ReviewStartTargetStateDenial {
+    param([string]$Reason)
+
+    return @{
+        ok     = $false
+        reason = $Reason
     }
 }
 
@@ -151,32 +219,12 @@ function Invoke-ReviewStartScopedGhPrView {
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
-        [int]$PrNumber
+        [int]$PrNumber,
+        [string]$AuditRoot = ''
     )
 
-    $capture = Invoke-GhPrViewStructuredCapture -RepoRoot $RepoRoot -PrNumber $PrNumber
-    if ($capture.exitCode -ne 0) {
-        return @{
-            openPrs          = @()
-            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'gh_command_failed')
-        }
-    }
-    if (-not $capture.parse.ok) {
-        $reason = [string]$capture.parse.reason
-        if (-not $reason) { $reason = 'structured_output_polluted' }
-        return @{
-            openPrs          = @()
-            transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason $reason)
-        }
-    }
-
-    $pr = $capture.parse.value
-    if (-not $pr -or [string]$pr.state -ne 'OPEN') {
-        return @{ openPrs = @(); transportFailure = $null }
-    }
-
-    Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
-    return @{ openPrs = @($pr); transportFailure = $null }
+    . (Join-Path $PSScriptRoot 'Review-StartPreflightShield.ps1')
+    return Invoke-ReviewStartPreflightGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -AuditRoot $AuditRoot
 }
 
 function Invoke-GhOpenPrListForNumbers {

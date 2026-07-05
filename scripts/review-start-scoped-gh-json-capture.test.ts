@@ -25,7 +25,7 @@ describe('review-start scoped gh JSON capture (#566)', () => {
 
   it('static guard: scoped lookup does not merge stderr into JSON parse input', () => {
     expect(scopedBody).not.toMatch(/2>&1/);
-    expect(reviewStartBody).toMatch(/Invoke-GhPrViewStructuredCapture/);
+    expect(reviewStartBody).toMatch(/Invoke-ReviewStartPreflightGhPrView/);
     expect(captureBody).toMatch(/RedirectStandardOutput\s*=\s*\$true/);
     expect(captureBody).toMatch(/RedirectStandardError\s*=\s*\$true/);
     expect(captureBody).toMatch(/ReadToEndAsync/);
@@ -236,11 +236,15 @@ describe('review-start scoped gh JSON capture (#566)', () => {
       [pscustomobject]@{
         count = @($lookup.openPrs).Count
         transportFailure = [bool]$lookup.transportFailure
+        targetStateDenial = [bool]$lookup.targetStateDenial
+        reason = [string]$lookup.targetStateDenial.reason
       } | ConvertTo-Json -Compress
     `;
     const closed = JSON.parse(runPwsh(closedScript));
     expect(closed.count).toBe(0);
     expect(closed.transportFailure).toBe(false);
+    expect(closed.targetStateDenial).toBe(true);
+    expect(closed.reason).toBe('pr_not_open');
   });
 
   it('AC3b: pre-claim scoped transport failure short-circuits before live AO reads', () => {

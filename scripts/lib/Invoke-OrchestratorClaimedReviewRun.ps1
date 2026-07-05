@@ -40,6 +40,11 @@ function Invoke-OrchestratorClaimedReviewRunPreRecheck {
         [hashtable]$Snapshot
     )
 
+    $targetStateDenial = Get-ReviewStartTargetStateRecheckDenial -Snapshot $Snapshot
+    if ($targetStateDenial) {
+        return $targetStateDenial
+    }
+
     $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $Snapshot
     if ($transportDenial) {
         return $transportDenial
@@ -112,6 +117,9 @@ function Invoke-OrchestratorClaimedReviewRun {
         sessionId                   = $SessionId
         claimWindow                 = 'free'
         provenanceAutonomous        = $true
+    }
+    if ($snapshot.targetStateDenial) {
+        $gatePayload.targetStateDenial = $snapshot.targetStateDenial
     }
     if ($snapshot.transportFailure) {
         $gatePayload.transportFailure = $snapshot.transportFailure

@@ -700,18 +700,23 @@ function Complete-ReviewStartClaimInfraPause {
     param(
         [hashtable]$ClaimResult,
         [string]$Stderr = '',
-        [switch]$TimedOut
+        [switch]$TimedOut,
+        [hashtable]$Classification = $null
     )
     if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
     $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
     if (-not $read.ok) { return @{ ok = $false; reason = 'unreadable' } }
     $mono = Get-ReviewStartMonotonicNowMs
-    $closed = Invoke-ReviewStartEnvelopeExternalIoCli -Subcommand 'close-pause' -Payload @{
+    $closePayload = @{
         claim          = $read.record
         nowMonotonicMs = $mono
         stderr         = $Stderr
         timedOut       = [bool]$TimedOut
     }
+    if ($Classification) {
+        $closePayload.classification = $Classification
+    }
+    $closed = Invoke-ReviewStartEnvelopeExternalIoCli -Subcommand 'close-pause' -Payload $closePayload
     if (-not $closed.closed) { return @{ ok = $false; reason = [string]$closed.reason } }
     $clear = @()
     if ($closed.clearActiveInfraPause) { $clear += 'activeInfraPause' }

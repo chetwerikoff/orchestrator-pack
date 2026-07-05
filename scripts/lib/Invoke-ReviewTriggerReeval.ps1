@@ -100,8 +100,11 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
 
         $prKey = [string]$planned.prNumber
-        $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh
-        if ($transportDenial) {
+        $targetStateDenial = Get-ReviewStartTargetStateRecheckDenial -Snapshot $fresh
+        if ($targetStateDenial) {
+            $recheck = $targetStateDenial
+        }
+        elseif (($transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh)) {
             $recheck = $transportDenial
         }
         else {

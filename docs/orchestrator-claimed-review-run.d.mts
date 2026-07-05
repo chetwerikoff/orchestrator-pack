@@ -80,6 +80,7 @@ export declare function evaluateOrchestratorTurnGate(input: {
   claimWindow?: 'free' | 'held_by_other' | 'prior_terminal';
   provenanceAutonomous?: boolean;
   transportFailure?: Record<string, unknown>;
+  targetStateDenial?: Record<string, unknown>;
 }): TurnGateResult;
 export declare function containsRawReviewRunInvocation(commandLine: string): boolean;
 export declare function isClaimedReviewRunParentCommandLine(commandLine: string): boolean;

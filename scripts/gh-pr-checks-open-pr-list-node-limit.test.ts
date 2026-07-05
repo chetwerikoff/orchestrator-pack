@@ -66,6 +66,11 @@ describe('Invoke-GhPrViewStructuredCapture review-start path (#566)', () => {
     expect(captureBody).not.toMatch(/2>&1/);
   });
 
+  it('returns a terminal missing-binary capture instead of throwing', () => {
+    expect(captureBody).toMatch(/New-GhPrViewMissingBinaryCapture/);
+    expect(captureBody).toMatch(/Test-ReviewStartGhCommandResolvable/);
+  });
+
   it('requests PR state in scoped review-start json fields', () => {
     expect(captureBody).toMatch(/--json[^\n]*state/);
   });
