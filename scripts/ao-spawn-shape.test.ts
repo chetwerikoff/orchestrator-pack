@@ -122,6 +122,23 @@ describe('findRunnableSpawnCommands', () => {
     expect(commands.some((command) => command.includes('--project'))).toBe(true);
     expect(commands.some((command) => command === 'ao spawn --claim-pr')).toBe(false);
   });
+
+  it('does not skip conditional runnable backtick spawn examples', () => {
+    const conditional =
+      'If no worker is alive, run `ao spawn --claim-pr 123`.';
+    const matches = findRunnableSpawnCommands(conditional);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.command).toBe('ao spawn --claim-pr 123');
+    expect(scanSpawnShapeViolations(conditional)).toHaveLength(1);
+  });
+
+  it('still skips never-ao-spawn safety prose with incidental "not" wording', () => {
+    const safety =
+      'not a replacement. Safety: never ao spawn, never --claim-pr';
+    expect(findRunnableSpawnCommands(safety)).toEqual([]);
+    const backtickSafety = 'prose such as `never ao spawn` remains unchanged.';
+    expect(findRunnableSpawnCommands(backtickSafety)).toEqual([]);
+  });
 });
 
 describe('scanSpawnShapeCorpus', () => {

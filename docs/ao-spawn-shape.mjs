@@ -17,10 +17,35 @@ export const SPAWN_ARGV_OPTIONS_WITH_VALUE = [
   '--prompt',
 ];
 
-const NON_RUNNABLE_NEGATION =
-  /\b(?:never|not|no|without|forbid(?:den|s|s)?|must\s+not|do\s+not|don'?t|cannot|can'?t|refuse(?:d|s)?|den(?:y|ies|ied)|blind)\b/i;
-
 const RUNNABLE_LINE = /^ao spawn(?:\s|$)/i;
+
+/**
+ * Negation that applies to ao spawn, not incidental words like "no worker" or "not a replacement".
+ * @param {string} text
+ * @param {number} spawnIndex index of the `ao spawn` match within text
+ */
+export function hasSpawnDirectedNegation(text, spawnIndex) {
+  const before = text.slice(0, spawnIndex);
+  const tail = before.slice(-100);
+
+  if (/\bMUST\s+NOT\b/i.test(before) && /\b(?:or|and)\s*$/i.test(tail)) {
+    return true;
+  }
+
+  if (/\b(?:never|must\s+not|do\s+not|don'?t|cannot|can'?t)\s+(?:[\w-]+\s+){0,5}$/i.test(tail)) {
+    return true;
+  }
+
+  if (/\bnot\s+blind\s+$/i.test(tail) || /\bblind\s+$/i.test(tail)) {
+    return true;
+  }
+
+  if (/\b(?:without|forbid(?:den|s)?|refuse(?:d|s)?|den(?:y|ies|ied))\s+(?:[\w-]+\s+){0,3}$/i.test(tail)) {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * @param {string} line
@@ -31,8 +56,7 @@ export function isNonRunnableSpawnMention(line, previousLine = '') {
   if (spawnIdx < 0) {
     return true;
   }
-  const prefix = line.slice(0, spawnIdx);
-  if (NON_RUNNABLE_NEGATION.test(prefix)) {
+  if (hasSpawnDirectedNegation(line, spawnIdx)) {
     return true;
   }
   if (/\b(?:must\s+not|never|do\s+not|don'?t)\s*$/i.test(String(previousLine).trim())) {
@@ -77,11 +101,13 @@ export function findRunnableSpawnCommands(text) {
       const isSlashList = /\/\s*`?\s*$/.test(prefix);
       const isBareCategory = /^ao spawn$/i.test(command);
       const isClaimPrCategory = /^ao spawn --claim-pr$/i.test(command);
+      const spawnIdxInLine =
+        match.index + Math.max(0, command.search(/\bao spawn\b/i));
       if (
         !isSlashList &&
         !isBareCategory &&
         !isClaimPrCategory &&
-        !NON_RUNNABLE_NEGATION.test(prefix) &&
+        !hasSpawnDirectedNegation(line, spawnIdxInLine) &&
         !isNonRunnableSpawnMention(`${prefix}${command}`, previousLine)
       ) {
         matches.push({ line: index + 1, command, kind: 'backtick' });

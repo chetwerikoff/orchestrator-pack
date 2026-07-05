@@ -24,6 +24,8 @@ export declare function isNonRunnableSpawnMention(
   previousLine?: string,
 ): boolean;
 
+export declare function hasSpawnDirectedNegation(text: string, spawnIndex: number): boolean;
+
 export declare function findRunnableSpawnCommands(text: string): RunnableSpawnMatch[];
 
 export declare function parseSpawnShapeFlags(command: string): SpawnShapeFlags;
