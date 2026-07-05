@@ -66,3 +66,4 @@ Thumbs.db
 # Claude Code session state (keep skills, ignore everything else).
 .claude/*
 !.claude/skills/
+.vitest-runtime-report-*.json
