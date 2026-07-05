@@ -113,6 +113,9 @@ function Invoke-OrchestratorClaimedReviewRun {
         claimWindow                 = 'free'
         provenanceAutonomous        = $true
     }
+    if ($snapshot.targetStateDenial) {
+        $gatePayload.targetStateDenial = $snapshot.targetStateDenial
+    }
     if ($snapshot.transportFailure) {
         $gatePayload.transportFailure = $snapshot.transportFailure
     }

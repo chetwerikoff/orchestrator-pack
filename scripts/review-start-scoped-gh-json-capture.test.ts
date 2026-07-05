@@ -236,12 +236,14 @@ describe('review-start scoped gh JSON capture (#566)', () => {
       [pscustomobject]@{
         count = @($lookup.openPrs).Count
         transportFailure = [bool]$lookup.transportFailure
-        reason = [string]$lookup.transportFailure.reason
+        targetStateDenial = [bool]$lookup.targetStateDenial
+        reason = [string]$lookup.targetStateDenial.reason
       } | ConvertTo-Json -Compress
     `;
     const closed = JSON.parse(runPwsh(closedScript));
     expect(closed.count).toBe(0);
-    expect(closed.transportFailure).toBe(true);
+    expect(closed.transportFailure).toBe(false);
+    expect(closed.targetStateDenial).toBe(true);
     expect(closed.reason).toBe('pr_not_open');
   });
 

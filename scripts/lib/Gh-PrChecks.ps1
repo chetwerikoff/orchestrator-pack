@@ -205,6 +205,15 @@ function New-ReviewStartScopedGhTransportFailure {
     }
 }
 
+function New-ReviewStartTargetStateDenial {
+    param([string]$Reason)
+
+    return @{
+        ok     = $false
+        reason = $Reason
+    }
+}
+
 function Invoke-ReviewStartScopedGhPrView {
     param(
         [Parameter(Mandatory = $true)]

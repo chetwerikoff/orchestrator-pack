@@ -374,9 +374,10 @@ describe('review-start preflight transient shield (#584)', () => {
       $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = ${psString(scenario)}
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
       [pscustomobject]@{
-        reason = [string]$lookup.transportFailure.reason
+        reason = if ($lookup.targetStateDenial) { [string]$lookup.targetStateDenial.reason } else { [string]$lookup.transportFailure.reason }
         count = @($lookup.openPrs).Count
         transportFailure = [bool]$lookup.transportFailure
+        targetStateDenial = [bool]$lookup.targetStateDenial
       } | ConvertTo-Json -Compress
     `,
       );
@@ -386,7 +387,13 @@ describe('review-start preflight transient shield (#584)', () => {
       } else {
         expect(result.reason).toBe(expectedReason);
       }
-      expect(result.transportFailure).toBe(true);
+      if (scenario === 'closed_pr') {
+        expect(result.transportFailure).toBe(false);
+        expect(result.targetStateDenial).toBe(true);
+      } else {
+        expect(result.transportFailure).toBe(true);
+        expect(result.targetStateDenial).toBe(false);
+      }
     });
 
     it('does not stamp closed PR denials as infra_transport', () => {
@@ -396,13 +403,15 @@ describe('review-start preflight transient shield (#584)', () => {
       $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'closed_pr'
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
       [pscustomobject]@{
-        reason = [string]$lookup.transportFailure.reason
-        failureClass = [string]$lookup.transportFailure.failureClass
+        reason = [string]$lookup.targetStateDenial.reason
+        transportFailure = [bool]$lookup.transportFailure
+        targetStateDenial = [bool]$lookup.targetStateDenial
       } | ConvertTo-Json -Compress
     `,
       );
       expect(result.reason).toBe('pr_not_open');
-      expect(result.failureClass).not.toBe('infra_transport');
+      expect(result.transportFailure).toBe(false);
+      expect(result.targetStateDenial).toBe(true);
     });
 
     it('returns gh_binary_missing for a missing scoped gh adoption command', () => {
@@ -440,8 +449,9 @@ describe('review-start preflight transient shield (#584)', () => {
           transportFailure = $lookup.transportFailure
         }
         [pscustomobject]@{
-          reason = [string]$lookup.transportFailure.reason
-          failureClass = [string]$lookup.transportFailure.failureClass
+          reason = [string]$lookup.targetStateDenial.reason
+          transportFailure = [bool]$lookup.transportFailure
+          targetStateDenial = [bool]$lookup.targetStateDenial
           denial = ($null -ne $denial)
         } | ConvertTo-Json -Compress
       `,
@@ -466,25 +476,27 @@ describe('review-start preflight transient shield (#584)', () => {
           transportFailure = $lookup.transportFailure
         }
         [pscustomobject]@{
-          reason = [string]$lookup.transportFailure.reason
-          failureClass = [string]$lookup.transportFailure.failureClass
+          reason = [string]$lookup.targetStateDenial.reason
+          transportFailure = [bool]$lookup.transportFailure
+          targetStateDenial = [bool]$lookup.targetStateDenial
           denial = ($null -ne $denial)
         } | ConvertTo-Json -Compress
       `,
       ));
       expect(result.reason).toBe('pr_not_open');
-      expect(result.failureClass).not.toBe('infra_transport');
+      expect(result.transportFailure).toBe(false);
+      expect(result.targetStateDenial).toBe(true);
       expect(result.denial).toBe(false);
     });
 
-    it('evaluateTurnGate treats pr_not_open transport as per_start_denial not infrastructure', () => {
+    it('evaluateTurnGate treats pr_not_open target-state denial as per_start_denial not infrastructure', () => {
       const gate = evaluateOrchestratorTurnGate({
         prNumber: 584,
         provenanceAutonomous: true,
         openPrs: [],
         reviewRuns: [],
         sessions: [],
-        transportFailure: { ok: false, reason: 'pr_not_open', failureClass: '' },
+        targetStateDenial: { ok: false, reason: 'pr_not_open' },
       });
       expect(gate.launch).toBe(false);
       expect(gate.reason).toBe('pr_not_open');

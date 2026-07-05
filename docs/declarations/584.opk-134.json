@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:5818d3981e8c2be3b86a9462a6d18d6c3aa1567cd2dacc47ac872d7d926f62c0"
+    "active_scope_hash": "sha256:9dd7313389b15bd7ce69d469cf8abdcc2d6b9ec5feef1dd9d7f785b811148e59"
   },
   "declared_paths": [
     "docs/declarations/584.opk-134.json",
@@ -21,6 +21,8 @@
     "scripts/github-fleet-shared-read-model.test.ts",
     "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
     "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
+    "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
     "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
     "scripts/lib/Review-StartClaim.ps1",
     "scripts/lib/Review-StartClaimLifecycle.ps1",

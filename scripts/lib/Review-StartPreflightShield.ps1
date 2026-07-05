@@ -323,8 +323,9 @@ function Invoke-ReviewStartPreflightGhPrView {
                     -Attempt $attempt -Disposition 'terminal' -Reason 'pr_not_open' `
                     -BackoffMs 0 -HeaderDegraded $false | Out-Null
                 return @{
-                    openPrs          = @()
-                    transportFailure = (New-ReviewStartScopedGhTransportFailure -Capture $capture -Reason 'pr_not_open')
+                    openPrs           = @()
+                    transportFailure  = $null
+                    targetStateDenial = (New-ReviewStartTargetStateDenial -Reason 'pr_not_open')
                 }
             }
             Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr

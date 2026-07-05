@@ -112,6 +112,18 @@ describe('review-start-envelope-ledger unit', () => {
     expect(reconcileSrc).toMatch(/Complete-ReviewStartClaimPreRunRecheckDenied/);
   });
 
+  it('claimed-snapshot-target-state-denial-skips-live-ao-reads', () => {
+    const src = readFileSync(snapshotHelperPath, 'utf8');
+    const denialBlock = src.match(/if \(\$preflight\.targetStateDenial\) \{([\s\S]*?)\n        \}/);
+    expect(denialBlock).not.toBeNull();
+    const block = denialBlock![1];
+    expect(block).not.toMatch(/@\(Get-AoReviewRuns\)/);
+    expect(block).not.toMatch(/@\(Get-AoStatusSessions\)/);
+    expect(block).toMatch(/reviewRuns\s*=\s*@\(\)/);
+    expect(block).toMatch(/sessions\s*=\s*@\(\)/);
+    expect(block).toMatch(/transportFailure\s*=\s*\$null/);
+  });
+
   it('claimed-snapshot-transport-failure-skips-live-ao-reads', () => {
     const src = readFileSync(snapshotHelperPath, 'utf8');
     const transportBlock = src.match(/if \(\$preflight\.transportFailure\) \{([\s\S]*?)\n        \}/);

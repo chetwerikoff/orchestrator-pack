@@ -23,6 +23,18 @@ function Get-ClaimedReviewStartSnapshot {
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'Review-StartPreflightShield.ps1')
         $preflight = Invoke-ReviewStartPreflightGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -ClaimResult $ClaimResult
+        if ($preflight.targetStateDenial) {
+            return @{
+                targetStateDenial             = $preflight.targetStateDenial
+                transportFailure              = $null
+                openPrs                       = @()
+                reviewRuns                    = @()
+                sessions                      = @()
+                ciChecksByPr                  = @{}
+                requiredCheckNamesByPr        = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
         if ($preflight.transportFailure) {
             return @{
                 transportFailure            = $preflight.transportFailure
@@ -39,6 +51,18 @@ function Get-ClaimedReviewStartSnapshot {
     else {
         $scoped = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber
         $openPrs = @($scoped.openPrs)
+        if ($scoped.targetStateDenial) {
+            return @{
+                targetStateDenial             = $scoped.targetStateDenial
+                transportFailure              = $null
+                openPrs                       = @()
+                reviewRuns                    = @()
+                sessions                      = @()
+                ciChecksByPr                  = @{}
+                requiredCheckNamesByPr        = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
         if ($scoped.transportFailure) {
             # Transport denial must short-circuit before live AO reads — same as acquired-claim path.
             return @{
@@ -73,6 +97,7 @@ function Get-ClaimedReviewStartSnapshot {
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
         transportFailure              = $null
+        targetStateDenial             = $null
     }
 }
 

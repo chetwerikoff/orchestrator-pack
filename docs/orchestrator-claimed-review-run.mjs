@@ -239,6 +239,16 @@ export function evaluateOrchestratorTurnGate(input) {
     };
   }
 
+  const targetStateDenial = /** @type {Record<string, unknown>} */ (input.targetStateDenial ?? null);
+  if (targetStateDenial && targetStateDenial.ok === false) {
+    return {
+      launch: false,
+      reason: String(targetStateDenial.reason ?? 'pr_not_open'),
+      stage: 'head_resolution',
+      auditShape: 'per_start_denial',
+    };
+  }
+
   const transportFailure = /** @type {Record<string, unknown>} */ (input.transportFailure ?? null);
   if (transportFailure && transportFailure.ok === false) {
     const reason = String(transportFailure.reason ?? 'scoped_gh_read_infrastructure_failure');
