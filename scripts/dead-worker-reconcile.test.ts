@@ -22,6 +22,7 @@ import {
   parseAndClassifyDeadWorkerRecoveryOutput,
   resolveIssueOnlyPrLookup,
   issueLinkedTerminalPrs,
+  isAoWorkerIterationBranch,
   resolveRecoveryRoute,
   resolveShutdownSuppressionWindowMs,
   validateAutonomousRespawnPolicy,
@@ -217,6 +218,16 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(issueLinkedTerminalPrs(593, [
       { number: 604, headRefName: 'feat/593', state: 'MERGED' },
     ], session)).toHaveLength(1);
+
+    const iterationSession = { name: 'opk-143', issue: 593, branch: 'opk-143', worktree: '/wt' };
+    const claimIteration = resolveRecoveryRoute(iterationSession, evidence, {
+      openPrs: [{ number: 605, headRefName: 'opk-143' }],
+      terminalPrs: [],
+    });
+    expect(isAoWorkerIterationBranch('opk-143')).toBe(true);
+    expect(claimIteration.ok).toBe(true);
+    expect(claimIteration.spawnAction).toBe('claim-pr-resume');
+    expect(claimIteration.prNumber).toBe(605);
 
     const staleBranchSession = { name: 'opk-593', issue: 593, branch: 'feat/999-stale', worktree: '/wt' };
     const unrelatedPr = resolveRecoveryRoute(staleBranchSession, evidence, {

@@ -129,6 +129,10 @@ export declare function buildDeadWorkerReconcileKey(candidate: Record<string, un
 
 export declare function issueLinkedWorkerBranches(issueNumber: number): string[];
 
+export declare const AO_WORKER_ITERATION_BRANCH_PATTERN: RegExp;
+
+export declare function isAoWorkerIterationBranch(branch: unknown): boolean;
+
 export declare function issueLinkedOpenPrs(
   issueNumber: number,
   openPrs?: Array<{ number?: number; headRefName?: string; head?: string }>,

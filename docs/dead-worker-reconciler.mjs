@@ -255,6 +255,23 @@ export function issueLinkedWorkerBranches(issueNumber) {
   return [`feat/${issue}`, `feat/issue-${issue}`, `opk-${issue}`];
 }
 
+export const AO_WORKER_ITERATION_BRANCH_PATTERN = /^opk-\d+$/i;
+
+export function isAoWorkerIterationBranch(branch) {
+  return AO_WORKER_ITERATION_BRANCH_PATTERN.test(normalizeString(branch));
+}
+
+function isAuthorizedIssueOnlyPrHead(head, authorized, session) {
+  if (authorized.has(head)) {
+    return true;
+  }
+  const sessionBranch = getBranch(session);
+  if (!sessionBranch || sessionBranch !== head) {
+    return false;
+  }
+  return isAoWorkerIterationBranch(sessionBranch);
+}
+
 function issueLinkedPrsForSession(issueNumber, prs = [], session = null, options = {}) {
   const issue = numberOrZero(issueNumber);
   if (issue <= 0) {
@@ -271,7 +288,7 @@ function issueLinkedPrsForSession(issueNumber, prs = [], session = null, options
     if (!head) {
       return false;
     }
-    return authorized.has(head);
+    return isAuthorizedIssueOnlyPrHead(head, authorized, session);
   });
 }
 
