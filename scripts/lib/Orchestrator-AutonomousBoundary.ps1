@@ -757,10 +757,15 @@ function Test-GitArgvIsUpdateRefBranchDeleteForce {
     if ([string]$Argv[$index] -notmatch '^(?i)update-ref$') { return $false }
     for ($i = $index + 1; $i -lt $Argv.Count; $i++) {
         if ([string]$Argv[$i] -match '^(?i)-d$') {
-            if (($i + 2) -lt $Argv.Count) {
+            if (($i + 1) -lt $Argv.Count) {
                 $ref = [string]$Argv[$i + 1]
-                $oid = [string]$Argv[$i + 2]
-                if ($ref -match '^refs/heads/' -and $oid -match '^[0-9a-f]{40}$') {
+                if ($ref -match '^refs/heads/') {
+                    if (($i + 2) -lt $Argv.Count) {
+                        $maybeOid = [string]$Argv[$i + 2]
+                        if ($maybeOid -match '^[0-9a-f]{40}$') {
+                            return $true
+                        }
+                    }
                     return $true
                 }
             }

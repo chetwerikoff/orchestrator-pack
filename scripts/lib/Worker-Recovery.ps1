@@ -21,84 +21,15 @@ function Invoke-WorkerRecoveryCli {
 }
 
 
-function Resolve-WorkerRecoveryPackGhCommand {
-    param([string]$PackRoot)
-
-    $packGh = Join-Path $PackRoot 'scripts/gh'
-    if (Test-Path -LiteralPath $packGh) { return $packGh }
-    return 'gh'
-}
-
-function Get-WorkerRecoveryTaskEligibilityFlags {
+function Invoke-WorkerRecoveryCli {
     param(
-        [int]$IssueNumber = 0,
-        [string]$PackRoot = '',
-        [string]$RepoRoot = '',
-        [hashtable]$FixtureTaskEligibility = $null,
-        [switch]$FixtureMode
+        [string]$Subcommand,
+        [hashtable]$Payload
     )
-
-    if ($FixtureMode) {
-        if ($FixtureTaskEligibility) {
-            return @{
-                ok               = $true
-                taskClosed       = [bool]$FixtureTaskEligibility.taskClosed
-                taskCancelled    = [bool]$FixtureTaskEligibility.taskCancelled
-                taskSuperseded   = [bool]$FixtureTaskEligibility.taskSuperseded
-                taskStateUnknown = [bool]$FixtureTaskEligibility.taskStateUnknown
-                reason           = [string]$FixtureTaskEligibility.reason
-            }
-        }
-        return @{
-            ok               = $true
-            taskClosed       = $false
-            taskCancelled    = $false
-            taskSuperseded   = $false
-            taskStateUnknown = $false
-            reason           = 'fixture_default_eligible'
-        }
-    }
-    if ($IssueNumber -le 0) {
-        return @{
-            ok               = $true
-            taskClosed       = $false
-            taskCancelled    = $false
-            taskSuperseded   = $false
-            taskStateUnknown = $false
-            reason           = 'issue_not_bound'
-        }
-    }
-
-    $fetchFailed = $false
-    $state = ''
-    $stateReason = ''
-    $ghCmd = Resolve-WorkerRecoveryPackGhCommand -PackRoot $PackRoot
-    Push-Location $RepoRoot
-    try {
-        $json = & $ghCmd issue view $IssueNumber --json state,stateReason 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $json) {
-            $fetchFailed = $true
-        }
-        else {
-            $parsed = $json | ConvertFrom-Json
-            $state = [string]$parsed.state
-            $stateReason = [string]$parsed.stateReason
-        }
-    }
-    catch {
-        $fetchFailed = $true
-    }
-    finally {
-        Pop-Location
-    }
-
-    return Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'evaluateIssueTaskEligibility' -Payload @{
-        issueNumber = $IssueNumber
-        state       = $state
-        stateReason = $stateReason
-        fetchFailed = $fetchFailed
-    }
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoveryCli `
+        -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
 }
+
 
 function Get-WorkerRecoveryAoSessionById {
     param([string]$SessionId)
@@ -592,7 +523,7 @@ function Invoke-WorkerRecovery {
         $liveOwnerCheckForBranch = Get-WorkerRecoveryLiveDifferentOwner -RecoverySessionId $SessionId `
             -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode
         $branchCleanupOutcome = Invoke-WorkerRecoveryBranchCleanup -SessionId $SessionId `
-            -CanonicalPath $pathCanon.canonical -RepoRoot $RepoRoot -ProjectId $ProjectId `
+            -CanonicalPath $pathCanon.canonical -PackRoot $PackRoot -RepoRoot $RepoRoot -ProjectId $ProjectId `
             -Namespace $claim.namespace -AttemptId $claim.record.attemptId `
             -ClaimPath $claim.path -ClaimRecord $claim.record `
             -GrantRecord $FixtureGrantRecord -FixtureObservation $FixtureBranchObservation `

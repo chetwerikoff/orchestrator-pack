@@ -61,14 +61,13 @@ export function parseUpdateRefBranchDeleteArgv(argv) {
     if (token.toLowerCase() !== 'update-ref') return false;
     return index === 0 || !list[index - 1].startsWith('-');
   });
-  if (updateRefIndex < 0 || updateRefIndex + 3 >= list.length) {
+  if (updateRefIndex < 0 || updateRefIndex + 2 >= list.length) {
     return { ok: false, reason: 'not_update_ref_branch_delete' };
   }
   if (list[updateRefIndex + 1] !== '-d') {
     return { ok: false, reason: 'not_update_ref_delete' };
   }
   const ref = String(list[updateRefIndex + 2] ?? '');
-  const oid = normalizeOid(list[updateRefIndex + 3]);
   if (!ref.startsWith('refs/heads/')) {
     return { ok: false, reason: 'not_branch_ref' };
   }
@@ -76,7 +75,9 @@ export function parseUpdateRefBranchDeleteArgv(argv) {
   if (!normalized.ok) {
     return { ok: false, reason: normalized.reason };
   }
-  if (!oid) {
+  const maybeOidToken = list[updateRefIndex + 3];
+  const oid = maybeOidToken === undefined ? '' : normalizeOid(maybeOidToken);
+  if (maybeOidToken !== undefined && !oid) {
     return { ok: false, reason: 'invalid_expected_oid' };
   }
   return {
@@ -84,7 +85,7 @@ export function parseUpdateRefBranchDeleteArgv(argv) {
     branch: normalized.branch,
     expectedOid: oid,
     force: true,
-    mechanism: 'update_ref_expected_oid',
+    mechanism: oid ? 'update_ref_expected_oid' : 'update_ref_branch_delete',
   };
 }
 

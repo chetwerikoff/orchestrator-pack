@@ -229,6 +229,70 @@ function Get-WorkerRecoveryBranchRemotePrObservation {
     }
 }
 
+
+function Resolve-WorkerRecoveryBranchDeleteObservation {
+    param(
+        [string]$RepoRoot,
+        [string]$Branch,
+        [switch]$FixtureMode,
+        [hashtable]$FixtureObservation = $null,
+        [hashtable]$FixtureFinalObservation = $null
+    )
+
+    $fixture = $null
+    $useFixture = $false
+    if ($FixtureMode) {
+        if ($FixtureFinalObservation) {
+            $fixture = $FixtureFinalObservation
+            $useFixture = $true
+        }
+        elseif ($FixtureObservation) {
+            $fixture = $FixtureObservation
+            $useFixture = $true
+        }
+    }
+    return Get-WorkerRecoveryBranchRemotePrObservation -RepoRoot $RepoRoot -Branch $Branch `
+        -FixtureObservation $fixture -FixtureMode:($useFixture)
+}
+
+function Resolve-WorkerRecoveryBranchDeleteTaskFlags {
+    param(
+        [int]$IssueNumber = 0,
+        [string]$PackRoot = '',
+        [string]$RepoRoot = '',
+        [switch]$FixtureMode,
+        [hashtable]$FixtureFinalTaskEligibility = $null,
+        [switch]$TaskClosed,
+        [switch]$TaskCancelled,
+        [switch]$TaskSuperseded,
+        [switch]$TaskStateUnknown
+    )
+
+    if ($FixtureMode -and $FixtureFinalTaskEligibility) {
+        return @{
+            taskClosed       = [bool]$FixtureFinalTaskEligibility.taskClosed
+            taskCancelled    = [bool]$FixtureFinalTaskEligibility.taskCancelled
+            taskSuperseded   = [bool]$FixtureFinalTaskEligibility.taskSuperseded
+            taskStateUnknown = [bool]$FixtureFinalTaskEligibility.taskStateUnknown
+        }
+    }
+    if ($IssueNumber -gt 0 -and -not $FixtureMode) {
+        $eligibility = Get-WorkerRecoveryTaskEligibilityFlags -IssueNumber $IssueNumber -PackRoot $PackRoot -RepoRoot $RepoRoot
+        return @{
+            taskClosed       = [bool]$eligibility.taskClosed
+            taskCancelled    = [bool]$eligibility.taskCancelled
+            taskSuperseded   = [bool]$eligibility.taskSuperseded
+            taskStateUnknown = [bool]$eligibility.taskStateUnknown
+        }
+    }
+    return @{
+        taskClosed       = [bool]$TaskClosed
+        taskCancelled    = [bool]$TaskCancelled
+        taskSuperseded   = [bool]$TaskSuperseded
+        taskStateUnknown = [bool]$TaskStateUnknown
+    }
+}
+
 function Invoke-WorkerRecoveryBranchCleanup {
     param(
         [string]$SessionId,
@@ -250,9 +314,13 @@ function Invoke-WorkerRecoveryBranchCleanup {
         [switch]$TaskClosed,
         [switch]$TaskCancelled,
         [switch]$TaskSuperseded,
-        [switch]$TaskStateUnknown
+        [switch]$TaskStateUnknown,
+        [string]$PackRoot = '',
+        [hashtable]$FixtureFinalObservation = $null,
+        [hashtable]$FixtureFinalTaskEligibility = $null
     )
 
+    $resolvedPackRoot = if ($PackRoot) { $PackRoot } else { $RepoRoot }
     $ns = Resolve-WorkerRecoveryNamespace -ProjectId $ProjectId -Namespace $Namespace
     $grant = $null
     if ($FixtureMode -and $GrantRecord) {
@@ -451,6 +519,11 @@ function Invoke-WorkerRecoveryBranchCleanup {
         else {
             $freshWorktreeRecords = Get-WorkerRecoveryWorktreeRecords -RepoRoot $RepoRoot -FixtureMode:$FixtureMode `
                 -FixtureWorktreeRecords $(if ($FixtureMode -and $PSBoundParameters.ContainsKey('FixtureWorktreeRecords')) { $FixtureWorktreeRecords } else { $null })
+            $deleteObservation = Resolve-WorkerRecoveryBranchDeleteObservation -RepoRoot $RepoRoot -Branch $branchName `
+                -FixtureMode:$FixtureMode -FixtureObservation $FixtureObservation -FixtureFinalObservation $FixtureFinalObservation
+            $deleteTaskFlags = Resolve-WorkerRecoveryBranchDeleteTaskFlags -IssueNumber $IssueNumber -PackRoot $resolvedPackRoot `
+                -RepoRoot $RepoRoot -FixtureMode:$FixtureMode -FixtureFinalTaskEligibility $FixtureFinalTaskEligibility `
+                -TaskClosed:$TaskClosed -TaskCancelled:$TaskCancelled -TaskSuperseded:$TaskSuperseded -TaskStateUnknown:$TaskStateUnknown
             $finalRevalidation = Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'evaluateDeletionRevalidation' -Payload @{
                 branch                         = $branchName
                 branchHeadOid                  = [string]$freshBranchState.branchHeadOid
@@ -463,17 +536,17 @@ function Invoke-WorkerRecoveryBranchCleanup {
                 diverged                       = [bool]$freshBranchState.diverged
                 reflogEntries                  = @($freshBranchState.reflogEntries)
                 danglingReachableCount         = [int]$freshBranchState.danglingReachableCount
-                openPrByHeadRefName            = $observation.openPrByHeadRefName
-                observedAtUtc                  = [string]$observation.observedAtUtc
+                openPrByHeadRefName            = $deleteObservation.openPrByHeadRefName
+                observedAtUtc                  = [string]$deleteObservation.observedAtUtc
                 ttlSeconds                     = $ttl
-                fetchFailed                    = [bool]$observation.fetchFailed
-                rateLimited                    = [bool]$observation.rateLimited
-                remoteAdvancedAfterObservation = [bool]$observation.remoteAdvancedAfterObservation
+                fetchFailed                    = [bool]$deleteObservation.fetchFailed
+                rateLimited                    = [bool]$deleteObservation.rateLimited
+                remoteAdvancedAfterObservation = [bool]$deleteObservation.remoteAdvancedAfterObservation
                 liveDifferentOwner             = [bool]$LiveDifferentOwner
-                taskClosed                     = [bool]$TaskClosed
-                taskCancelled                  = [bool]$TaskCancelled
-                taskSuperseded                 = [bool]$TaskSuperseded
-                taskStateUnknown               = [bool]$TaskStateUnknown
+                taskClosed                     = [bool]$deleteTaskFlags.taskClosed
+                taskCancelled                  = [bool]$deleteTaskFlags.taskCancelled
+                taskSuperseded                 = [bool]$deleteTaskFlags.taskSuperseded
+                taskStateUnknown               = [bool]$deleteTaskFlags.taskStateUnknown
                 expectedDeleteOid              = $expectedDeleteOid
             }
             if (-not $finalRevalidation.ok) {
@@ -486,7 +559,7 @@ function Invoke-WorkerRecoveryBranchCleanup {
                     branch        = $branchName
                     repoIdentity  = $RepoRoot
                     predicates    = @{ revalidation = $finalRevalidation }
-                    observation   = $observation
+                    observation   = $deleteObservation
                     escalation    = $escalation
                 }
                 Write-WorkerRecoveryAudit -Namespace $ns -Record (ConvertTo-WorkerRecoveryBranchAuditHashtable $audit)
@@ -554,3 +627,83 @@ function Invoke-WorkerRecoveryBranchCleanup {
         escalation = $null
     }
 }
+
+function Resolve-WorkerRecoveryPackGhCommand {
+    param([string]$PackRoot)
+
+    $packGh = Join-Path $PackRoot 'scripts/gh'
+    if (Test-Path -LiteralPath $packGh) { return $packGh }
+    return 'gh'
+}
+
+function Get-WorkerRecoveryTaskEligibilityFlags {
+    param(
+        [int]$IssueNumber = 0,
+        [string]$PackRoot = '',
+        [string]$RepoRoot = '',
+        [hashtable]$FixtureTaskEligibility = $null,
+        [switch]$FixtureMode
+    )
+
+    if ($FixtureMode) {
+        if ($FixtureTaskEligibility) {
+            return @{
+                ok               = $true
+                taskClosed       = [bool]$FixtureTaskEligibility.taskClosed
+                taskCancelled    = [bool]$FixtureTaskEligibility.taskCancelled
+                taskSuperseded   = [bool]$FixtureTaskEligibility.taskSuperseded
+                taskStateUnknown = [bool]$FixtureTaskEligibility.taskStateUnknown
+                reason           = [string]$FixtureTaskEligibility.reason
+            }
+        }
+        return @{
+            ok               = $true
+            taskClosed       = $false
+            taskCancelled    = $false
+            taskSuperseded   = $false
+            taskStateUnknown = $false
+            reason           = 'fixture_default_eligible'
+        }
+    }
+    if ($IssueNumber -le 0) {
+        return @{
+            ok               = $true
+            taskClosed       = $false
+            taskCancelled    = $false
+            taskSuperseded   = $false
+            taskStateUnknown = $false
+            reason           = 'issue_not_bound'
+        }
+    }
+
+    $fetchFailed = $false
+    $state = ''
+    $stateReason = ''
+    $ghCmd = Resolve-WorkerRecoveryPackGhCommand -PackRoot $PackRoot
+    Push-Location $RepoRoot
+    try {
+        $json = & $ghCmd issue view $IssueNumber --json state,stateReason 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $json) {
+            $fetchFailed = $true
+        }
+        else {
+            $parsed = $json | ConvertFrom-Json
+            $state = [string]$parsed.state
+            $stateReason = [string]$parsed.stateReason
+        }
+    }
+    catch {
+        $fetchFailed = $true
+    }
+    finally {
+        Pop-Location
+    }
+
+    return Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'evaluateIssueTaskEligibility' -Payload @{
+        issueNumber = $IssueNumber
+        state       = $state
+        stateReason = $stateReason
+        fetchFailed = $fetchFailed
+    }
+}
+
