@@ -7,19 +7,21 @@
   "baseline": {
     "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:3026b1e73e4fd87d9d905fc847b7e02e28b3d61c57e1b30e7db7fdec9304b24e"
+    "active_scope_hash": "sha256:ec81596ebfa58f7db5bb7b750882a8e41b001237449a1ef1f3062ffb9174df99"
   },
   "declared_paths": [
     "docs/review-start-preflight-shield.d.mts",
     "docs/review-start-preflight-shield.mjs",
     "scripts/check-orchestrator-claimed-review-run.ps1",
     "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
+    "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
     "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
     "scripts/lib/Gh-PrChecks.ps1",
     "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
     "scripts/lib/Review-StartClaim.ps1",
     "scripts/lib/Review-StartClaimLifecycle.ps1",
     "scripts/lib/Review-StartPreflightShield.ps1",
+    "scripts/lib/Review-StartSupervisedGh.ps1",
     "scripts/orchestrator-claimed-review-run.test.ts",
     "scripts/review-start-envelope-ledger.test.ts",
     "scripts/review-start-preflight-shield.test.ts",
@@ -28,5 +30,21 @@
     "docs/declarations/584.opk-134.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:3026b1e73e4fd87d9d905fc847b7e02e28b3d61c57e1b30e7db7fdec9304b24e",
+      "new_active_scope_hash": "sha256:ec81596ebfa58f7db5bb7b750882a8e41b001237449a1ef1f3062ffb9174df99",
+      "changed": {
+        "added": [
+          "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts",
+          "scripts/lib/Review-StartSupervisedGh.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Include supervised gh touchpoint and gh-pr-checks tests in declared scope",
+      "actor": "opk-134",
+      "timestamp": "2026-07-05T02:50:38.759Z",
+      "applied": true
+    }
+  ]
 }
