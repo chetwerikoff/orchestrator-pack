@@ -634,7 +634,7 @@ describe('claimed review-start scoped PR lookup (#557)', () => {
     const elseIdx = src.indexOf('else {', acquiredIdx);
     expect(elseIdx).toBeGreaterThan(acquiredIdx);
     const block = src.slice(acquiredIdx, elseIdx);
-    expect(block).toMatch(/'pr',\s*'view'/);
+    expect(block).toMatch(/Invoke-ReviewStartPreflightGhPrView/);
     expect(block).not.toMatch(/'pr',\s*'list'/);
     expect(block).not.toMatch(/(?<!ForNumbers)Invoke-GhOpenPrList\b/);
   });

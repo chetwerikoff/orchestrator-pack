@@ -343,6 +343,7 @@ function Get-PreRunRecheckSnapshot {
     )
 
     $transportFailure = $null
+    $targetStateDenial = $null
     if ($ClaimResult -and $ClaimResult.acquired) {
         . (Join-Path $PSScriptRoot 'lib/Get-ClaimedReviewStartSnapshot.ps1')
         $claimed = Get-ClaimedReviewStartSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot `
@@ -351,6 +352,7 @@ function Get-PreRunRecheckSnapshot {
             Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs @($openPrs)
         }
         $transportFailure = $claimed.transportFailure
+        $targetStateDenial = $claimed.targetStateDenial
         $openPrs = @($claimed.openPrs)
         $reviewRuns = @($claimed.reviewRuns)
         $sessions = @($claimed.sessions)
@@ -383,6 +385,7 @@ function Get-PreRunRecheckSnapshot {
         reactionMessages                = $deliveryPayload.reactionMessages
         reactionConfigUnavailable       = [bool]$deliveryPayload.reactionConfigUnavailable
         transportFailure                = $transportFailure
+        targetStateDenial               = $targetStateDenial
     }
 }
 
@@ -419,6 +422,11 @@ function Test-PreRunHeadReadyRecheck {
             emitReviewRun = $false
             reason        = 'reaction_config_unavailable'
         }
+    }
+
+    $targetStateDenial = Get-ReviewStartTargetStateRecheckDenial -Snapshot $fresh
+    if ($targetStateDenial) {
+        return $targetStateDenial
     }
 
     $transportDenial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot $fresh

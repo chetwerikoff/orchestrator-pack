@@ -77,7 +77,7 @@ if ($snapshotText -match "'pr',\s*'list'|gh pr list --state open") {
     Write-Host 'Get-ClaimedReviewStartSnapshot must use scoped PR lookup, not full open-PR list (#557)'
     exit 1
 }
-if ($snapshotText -notmatch 'Invoke-ReviewStartScopedGhPrView|Invoke-GhOpenPrListForNumbers' -or $snapshotText -notmatch "'pr',\s*'view'|Invoke-GhPrViewStructuredCapture") {
+if ($snapshotText -notmatch 'Invoke-ReviewStartScopedGhPrView|Invoke-GhOpenPrListForNumbers' -or $snapshotText -notmatch "'pr',\s*'view'|Invoke-GhPrViewStructuredCapture|Invoke-ReviewStartPreflightGhPrView") {
     Write-Host 'Get-ClaimedReviewStartSnapshot must resolve known PR numbers via scoped stderr-safe lookup (#557/#566)'
     exit 1
 }

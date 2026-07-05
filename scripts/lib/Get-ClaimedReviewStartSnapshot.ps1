@@ -21,16 +21,23 @@ function Get-ClaimedReviewStartSnapshot {
 
     $openPrs = @()
     if ($ClaimResult -and $ClaimResult.acquired) {
-        . (Join-Path $PSScriptRoot 'Review-StartSupervisedGh.ps1')
-        $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $ClaimResult -RepoRoot $RepoRoot -GhArguments @(
-            'pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state'
-        )
-        if (-not $transport.ok) {
-            # Transport denial must short-circuit before live AO reads — Get-AoReviewRuns /
-            # Get-AoStatusSessions can fail in clean checkouts without agent-orchestrator.yaml
-            # and would mask supervised gh infra failures needed for ledger counting (#516).
+        . (Join-Path $PSScriptRoot 'Review-StartPreflightShield.ps1')
+        $preflight = Invoke-ReviewStartPreflightGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber -ClaimResult $ClaimResult
+        if ($preflight.targetStateDenial) {
             return @{
-                transportFailure            = $transport
+                targetStateDenial             = $preflight.targetStateDenial
+                transportFailure              = $null
+                openPrs                       = @()
+                reviewRuns                    = @()
+                sessions                      = @()
+                ciChecksByPr                  = @{}
+                requiredCheckNamesByPr        = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
+        if ($preflight.transportFailure) {
+            return @{
+                transportFailure            = $preflight.transportFailure
                 openPrs                     = @()
                 reviewRuns                  = @()
                 sessions                    = @()
@@ -39,36 +46,23 @@ function Get-ClaimedReviewStartSnapshot {
                 requiredCheckLookupFailedByPr = @{}
             }
         }
-        $parse = Invoke-CommandRuntimeParseStructuredOutput -Stdout $transport.stdout -Stderr $transport.stderr
-        if (-not $parse.ok) {
-            $reason = [string]$parse.reason
-            if (-not $reason) { $reason = 'structured_output_polluted' }
-            return @{
-                transportFailure            = @{
-                    ok           = $false
-                    reason       = $reason
-                    exitCode     = [int]$transport.exitCode
-                    stderr       = [string]$transport.stderr
-                    stdout       = [string]$transport.stdout
-                    failureClass = 'infra_transport'
-                }
-                openPrs                     = @()
-                reviewRuns                  = @()
-                sessions                    = @()
-                ciChecksByPr                = @{}
-                requiredCheckNamesByPr      = @{}
-                requiredCheckLookupFailedByPr = @{}
-            }
-        }
-        $pr = $parse.value
-        if ($pr -and [string]$pr.state -eq 'OPEN') {
-            Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
-            $openPrs = @($pr)
-        }
+        $openPrs = @($preflight.openPrs)
     }
     else {
         $scoped = Invoke-ReviewStartScopedGhPrView -RepoRoot $RepoRoot -PrNumber $PrNumber
         $openPrs = @($scoped.openPrs)
+        if ($scoped.targetStateDenial) {
+            return @{
+                targetStateDenial             = $scoped.targetStateDenial
+                transportFailure              = $null
+                openPrs                       = @()
+                reviewRuns                    = @()
+                sessions                      = @()
+                ciChecksByPr                  = @{}
+                requiredCheckNamesByPr        = @{}
+                requiredCheckLookupFailedByPr = @{}
+            }
+        }
         if ($scoped.transportFailure) {
             # Transport denial must short-circuit before live AO reads — same as acquired-claim path.
             return @{
@@ -103,6 +97,7 @@ function Get-ClaimedReviewStartSnapshot {
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
         transportFailure              = $null
+        targetStateDenial             = $null
     }
 }
 

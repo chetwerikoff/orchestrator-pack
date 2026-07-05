@@ -149,14 +149,14 @@ Write-Output 'fenced'
 
   it('AC#5 branch protection TTL warm hit and expiry repopulate', () => {
     harness = createGithubFleetCacheHarness('gh-fleet-shared-protection-');
-    harness.env.GH_FLEET_BRANCH_PROTECTION_TTL_SECONDS = '1';
+    harness.env.GH_FLEET_BRANCH_PROTECTION_TTL_SECONDS = '2';
     const script = `
 $ErrorActionPreference = 'Stop'
 . '${fleetCache}'
 $p1 = Invoke-GhFleetCachedBranchProtection -RepoRoot '${packRootEscaped}' -BaseBranch 'main' -Consumer 'warm-a'
 $p2 = Invoke-GhFleetCachedBranchProtection -RepoRoot '${packRootEscaped}' -BaseBranch 'main' -Consumer 'warm-b'
 if (-not $p1.protection -or -not $p2.protection) { throw 'expected protection payload' }
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 $p3 = Invoke-GhFleetCachedBranchProtection -RepoRoot '${packRootEscaped}' -BaseBranch 'main' -Consumer 'after-ttl'
 if (-not $p3.protection) { throw 'expected repopulated protection' }
 Write-Output 'ok'
