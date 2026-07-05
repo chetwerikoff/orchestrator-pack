@@ -133,6 +133,7 @@ evidence: NEW(produced-by AC#6)
 - Local runtime state, credentials, or machine-specific config.
 
 ```denylist
+# scope: github-fleet-governor phase2 (issue #585)
 vendor/**
 packages/core/**
 .ao/**
@@ -143,10 +144,12 @@ agent-orchestrator.yaml
 
 ```allowed-roots
 scripts/**
+plugins/**
+prompts/**
 docs/**
 tests/**
+tests/external-output-references/**
 agent-orchestrator.yaml.example
-# issue-585-governor-scope
 ```
 
 ## Acceptance criteria
