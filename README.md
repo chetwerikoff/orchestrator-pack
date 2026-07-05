@@ -67,11 +67,17 @@ supported runtime — use WSL2 and keep repos on the Linux filesystem (`/home/..
 ext4), never `/mnt/c`. See
 [`docs/ubuntu-setup-runbook.md`](docs/ubuntu-setup-runbook.md).
 
-Recommended install:
+Recommended install (when npm publishes your target version):
 
 ```bash
 npm install -g @aoagents/ao
 ```
+
+When npm lags behind the stable GitHub release (for example **0.10.2** while npm
+still exposes **0.10.0**), use the GitHub release asset path documented in
+[`docs/ao-0-10-operator-upgrade-runbook.md`](docs/ao-0-10-operator-upgrade-runbook.md).
+Treat GitHub releases, not npm `latest`, as the source for **0.10.1+** adoption
+until platform packages catch up.
 
 Linux baseline:
 
