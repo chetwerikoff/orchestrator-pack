@@ -551,6 +551,35 @@ Spawn policy (#458), worktree grants (#470), and `PACK_REVIEWER` / `REVIEW_COMMA
 are unchanged by this prerequisite.
 
 
+## AO 0.10.x operator binary upgrade (Issue #590)
+
+Repo-side runbook for moving the **live** AO install from **0.9.5** to stable
+**0.10.2** (or newer stable when captured at upgrade time). npm still tops out
+at `0.10.0` for `@aoagents/ao` / `@aoagents/ao-linux-x64` while GitHub ships
+`v0.10.2` — use GitHub release assets for the live path.
+
+Canonical doc: [`docs/ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrade-runbook.md).
+Implementation-time release facts:
+[`scripts/fixtures/ao-operator-upgrade/v0.10.2-release-facts.json`](../scripts/fixtures/ao-operator-upgrade/v0.10.2-release-facts.json).
+
+**Operator adoption (live install — not CI):**
+
+1. Complete Issue #589 adoption above (spawn `--project` / `--name` on live yaml).
+2. Run repo-side preflight:
+   `pwsh -NoProfile -File scripts/check-ao-operator-upgrade-preflight.ps1`.
+3. Install target AO from GitHub release (`.deb` or AppImage on Linux/WSL2 amd64).
+   Acknowledge absent upstream checksum/signature on `.deb`/`.rpm` before install.
+4. Verify `ao --version`, spawn `--help` on the target binary, and `PACK_REVIEWER` / `REVIEW_COMMAND`
+   through the pack-resolved command path.
+5. Run the output-shape sweep (#223) against the target binary; block upgrade on
+   drift until fixtures/checks adopt or file a follow-up issue.
+6. Operator restart AO (`ao stop` / `ao start`) and run bounded stale-session smoke
+   (upstream PR #2320 / #2350 class).
+7. `pwsh -NoProfile -File scripts/verify.ps1` on the operator pack checkout.
+
+Do **not** run the live binary upgrade from an AO-managed worker session.
+
+
 ## Autonomous spawn worktree provenance (Issue #470)
 
 When spawn policy allows `ao spawn` or `ao spawn --claim-pr`, the pack `ao` guard mints a

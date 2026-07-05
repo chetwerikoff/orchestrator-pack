@@ -1,0 +1,60 @@
+{
+  "capturedAt": "2026-07-05T08:10:00Z",
+  "issue": 590,
+  "upstreamRepository": "AgentWrapper/agent-orchestrator",
+  "selectedRelease": {
+    "tag": "v0.10.2",
+    "name": "v0.10.2",
+    "publishedAt": "2026-07-03T20:39:51Z",
+    "selectionBasis": "latest_stable_non_prerelease",
+    "newerNonStableObserved": ["v0.10.3-nightly.202607041403"]
+  },
+  "npmInstallability": {
+    "package": "@aoagents/ao",
+    "latestPublished": "0.10.0",
+    "targetVersionAvailable": false,
+    "platformPackage": "@aoagents/ao-linux-x64",
+    "platformLatestPublished": "0.10.0",
+    "platformTargetAvailable": false,
+    "installPath": "github_release_asset",
+    "reason": "npm view @aoagents/ao@0.10.2 returns E404; platform package stops at 0.10.0"
+  },
+  "linuxAmd64Assets": [
+    {
+      "name": "agent-orchestrator_0.10.2_amd64.deb",
+      "url": "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator_0.10.2_amd64.deb",
+      "architecture": "amd64",
+      "format": "deb",
+      "sizeBytes": 93231416,
+      "checksumPublished": false,
+      "signaturePublished": false
+    },
+    {
+      "name": "Agent.Orchestrator-0.10.2.AppImage",
+      "url": "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/Agent.Orchestrator-0.10.2.AppImage",
+      "architecture": "x86_64",
+      "format": "appimage",
+      "sizeBytes": 120483726,
+      "checksumPublished": true,
+      "checksumSource": "latest-linux.yml",
+      "checksumAlgorithm": "sha512",
+      "checksumValue": "I5FUlUuOPfEPvEfKXcqfP3SHrUj2XMH/0hL+g5KgDBnXCc3Es1YlFwG8WP7VSKZ4kRbdo8XqP53NNTfKnTSSXg==",
+      "notes": "latest-linux.yml names this asset; agent-orchestrator-linux-x64.AppImage is also on the release but has no published checksum entry"
+    },
+    {
+      "name": "agent-orchestrator-0.10.2-1.x86_64.rpm",
+      "url": "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator-0.10.2-1.x86_64.rpm",
+      "architecture": "x86_64",
+      "format": "rpm",
+      "sizeBytes": 91955233,
+      "checksumPublished": false,
+      "signaturePublished": false
+    }
+  ],
+  "verificationCommands": [
+    "which gh",
+    "gh api repos/AgentWrapper/agent-orchestrator/releases --paginate --jq '.[].tag_name'",
+    "npm view @aoagents/ao versions --json",
+    "npm view @aoagents/ao-linux-x64 versions --json"
+  ]
+}

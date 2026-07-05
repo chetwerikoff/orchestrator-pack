@@ -173,5 +173,6 @@ ao start
 
 - [`README.md`](../README.md) — pack overview and Linux baseline
 - [`docs/migration_notes.md`](migration_notes.md) — live yaml merge and adoption
+- [`docs/ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrade-runbook.md) — live AO 0.10.x upgrade (GitHub assets when npm lags)
 - [`docs/target_repo_setup.md`](target_repo_setup.md) — target repo checklist
 - [`docs/issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md) §P — port decision
