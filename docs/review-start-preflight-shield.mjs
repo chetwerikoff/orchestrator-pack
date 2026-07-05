@@ -149,7 +149,7 @@ export function computePreflightBackoffMs(input = {}) {
   const config = input.config ?? {};
   const baseBackoffMs = Number(config.baseBackoffMs) > 0 ? Number(config.baseBackoffMs) : DEFAULT_BASE_BACKOFF_MS;
   const maxBackoffMs = Number(config.maxBackoffMs) > 0 ? Number(config.maxBackoffMs) : DEFAULT_MAX_BACKOFF_MS;
-  const injectedJitterMs = Number(input.injectedJitterMs);
+  const rawInjectedJitterMs = input.injectedJitterMs;
 
   const retryAfterRaw = headers['retry-after'];
   if (retryAfterRaw) {
@@ -181,9 +181,9 @@ export function computePreflightBackoffMs(input = {}) {
 
   const exponent = Math.min(10, attempt - 1);
   const scaled = Math.min(maxBackoffMs, baseBackoffMs * (2 ** exponent));
-  const jitter = Number.isFinite(injectedJitterMs)
-    ? Math.max(0, injectedJitterMs)
-    : Math.floor(scaled * 0.2 * Math.random());
+  const jitter = rawInjectedJitterMs === null || rawInjectedJitterMs === undefined
+    ? Math.floor(scaled * 0.2 * Math.random())
+    : Math.max(0, Number(rawInjectedJitterMs));
   return {
     backoffMs: Math.min(maxBackoffMs, scaled + jitter),
     headerDegraded: !hasRateLimitHeaders(headers),

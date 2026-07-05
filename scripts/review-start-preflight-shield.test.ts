@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyPreflightGhOutcome,
   computePreflightBackoffMs,
@@ -100,6 +100,23 @@ describe('review-start preflight transient shield (#584)', () => {
       const withoutHeaders = computePreflightBackoffMs({ attempt: 1, headers: {}, injectedJitterMs: 50 });
       expect(withoutHeaders.headerDegraded).toBe(true);
       expect(withoutHeaders.backoffMs).toBeGreaterThanOrEqual(1050);
+    });
+
+    it('uses random jitter when injectedJitterMs is null', () => {
+      const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+      try {
+        const result = computePreflightBackoffMs({ attempt: 1, headers: {}, injectedJitterMs: null });
+        expect(result.backoffMs).toBe(1100);
+        expect(result.headerDegraded).toBe(true);
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
+
+    it('honors explicit zero injected jitter override', () => {
+      const result = computePreflightBackoffMs({ attempt: 1, headers: {}, injectedJitterMs: 0 });
+      expect(result.backoffMs).toBe(1000);
+      expect(result.headerDegraded).toBe(true);
     });
 
     it('evaluates retry budget exhaustion', () => {
