@@ -382,7 +382,7 @@ until Phase-0/1 telemetry tunes limits.
 
 Operator adoption after merge:
 
-1. Run `pwsh -NoProfile -File scripts/check-gh-governor-chokepoint-inventory.ps1` and complete
+1. Run `pwsh -NoProfile -File scripts/check-gh-governor-chokepoint-inventory.ps1` **without** `-AllowWrapperOnlySlice` (must exit 0 only after broker residuals are cleared) and complete
    the daemon participation probe (`GH_WRAPPER_AUDIT=1`) before broad enablement.
 2. To enable on supervisor children: `export GH_GOVERNOR_ENABLED=1` in the wake-supervisor
    environment (or per-child overrides). Rollback: `unset GH_GOVERNOR_ENABLED` and restart

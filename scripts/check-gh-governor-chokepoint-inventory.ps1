@@ -1,6 +1,10 @@
 #!/usr/bin/env pwsh
 # Validates GitHub fleet governor chokepoint inventory completeness (Issue #585).
 #Requires -Version 5.1
+param(
+    [switch]$AllowWrapperOnlySlice
+)
+
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -66,8 +70,16 @@ if ((Get-Content -LiteralPath $preflight -Raw) -notmatch "GH_GOVERNOR_LANE = 'in
 }
 
 $brokerResidual = @($inventory.rows | Where-Object { $_.participation -eq 'broker-only residual' })
+$allowWrapperOnlySlice = $AllowWrapperOnlySlice.IsPresent -or $env:GH_GOVERNOR_CHOKEPOINT_ALLOW_WRAPPER_ONLY_SLICE -eq '1'
 if ($brokerResidual.Count -gt 0) {
-    Write-Host "note: broker-only residual rows present ($($brokerResidual.Count)); broad enablement remains gated"
+    if ($allowWrapperOnlySlice) {
+        Write-Host "note: broker-only residual rows present ($($brokerResidual.Count)); wrapper-only slice mode — broad enablement remains gated"
+    }
+    else {
+        foreach ($row in $brokerResidual) {
+            $failures += "broker-only residual blocks broad governor enablement: $($row.surface)"
+        }
+    }
 }
 
 if ($failures.Count -gt 0) {

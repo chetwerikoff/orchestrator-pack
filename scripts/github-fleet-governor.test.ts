@@ -423,6 +423,23 @@ describe('github-fleet-governor (Issue #585)', () => {
     }
   });
 
+  it('AC#2 chokepoint guard fails on broker-only residuals unless wrapper-only slice mode', () => {
+    const guard = join(repoRoot, 'scripts/check-gh-governor-chokepoint-inventory.ps1');
+    expect(readFileSync(guard, 'utf8')).toMatch(/AllowWrapperOnlySlice/);
+    const strict = spawnSync('pwsh', ['-NoProfile', '-File', guard], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(strict.status).toBe(1);
+    expect(strict.stdout ?? '').toMatch(/broker-only residual blocks broad governor enablement/);
+    const slice = spawnSync('pwsh', ['-NoProfile', '-File', guard, '-AllowWrapperOnlySlice'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(slice.status).toBe(0);
+    expect(slice.stdout ?? '').toMatch(/wrapper-only slice mode/);
+  });
+
   it('AC#10 placeholder budget telemetry is recorded in governor state', () => {
     root = mkdtempSync(join(tmpdir(), 'gh-governor-ac10-'));
     const env = governorEnv(root);
