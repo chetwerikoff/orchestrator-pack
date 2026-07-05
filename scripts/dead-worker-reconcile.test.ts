@@ -218,6 +218,15 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       { number: 604, headRefName: 'feat/593', state: 'MERGED' },
     ], session)).toHaveLength(1);
 
+    const staleBranchSession = { name: 'opk-593', issue: 593, branch: 'feat/999-stale', worktree: '/wt' };
+    const unrelatedPr = resolveRecoveryRoute(staleBranchSession, evidence, {
+      openPrs: [{ number: 999, headRefName: 'feat/999-stale' }],
+      terminalPrs: [],
+    });
+    expect(unrelatedPr.ok).toBe(true);
+    expect(unrelatedPr.spawnAction).toBe('spawn-new');
+    expect(unrelatedPr.prNumber).toBe(0);
+
     const claimPr = resolveRecoveryRoute(session, evidence, {
       openPrs: [{ number: 605, headRefName: 'feat/593' }],
     });

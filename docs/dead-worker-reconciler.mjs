@@ -262,7 +262,6 @@ function issueLinkedPrsForSession(issueNumber, prs = [], session = null, options
   }
   const requireTerminalState = Boolean(options.requireTerminalState);
   const authorized = new Set(issueLinkedWorkerBranches(issue));
-  const sessionBranch = getBranch(session);
   return toArray(prs).filter((pr) => {
     const state = normalizeString(pr?.state);
     if (requireTerminalState && state && !isTerminalPrState(state)) {
@@ -272,10 +271,7 @@ function issueLinkedPrsForSession(issueNumber, prs = [], session = null, options
     if (!head) {
       return false;
     }
-    if (authorized.has(head)) {
-      return true;
-    }
-    return Boolean(sessionBranch && sessionBranch === head);
+    return authorized.has(head);
   });
 }
 
