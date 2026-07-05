@@ -283,6 +283,17 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       'noise\n{"ok":true,"outcome":"claim_lost","spawn":"not_attempted"}',
     );
     expect(parsed.deadWorkerOutcome).toBe('suppressed');
+
+    const nested = JSON.stringify({
+      ok: true,
+      outcome: 'removed_terminated_session',
+      spawn: 'spawn_started',
+      audit: { finalState: 'removed_terminated_session', schemaVersion: 'worker-recovery/v1' },
+      branch: { ok: true, reason: 'not_attempted' },
+    });
+    const nestedParsed = parseAndClassifyDeadWorkerRecoveryOutput(`worker-recovery log\n${nested}`);
+    expect(nestedParsed.deadWorkerOutcome).toBe('recovered');
+    expect(nestedParsed.reason).toBe('spawn_started');
   });
 
   it('does not treat claim_lost as already recovered on a later tick', () => {

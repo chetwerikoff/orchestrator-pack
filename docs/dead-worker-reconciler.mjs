@@ -607,20 +607,86 @@ export const DEAD_WORKER_RECOVERY_SUCCESS_OUTCOMES = new Set([
   'orphan_branch_pending',
 ]);
 
+function extractBalancedJsonObject(text, startIndex) {
+  if (text[startIndex] !== '{') {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = startIndex; index < text.length; index++) {
+    const ch = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function isWorkerRecoveryInvokeResult(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value)
+    && ('ok' in value || 'outcome' in value));
+}
+
 export function parseWorkerRecoveryInvokeOutput(rawOutput) {
   const text = String(rawOutput ?? '').trim();
   if (!text) {
     return { ok: false, reason: 'empty_recovery_output' };
   }
-  const start = text.lastIndexOf('{');
-  if (start < 0) {
+
+  try {
+    const direct = JSON.parse(text);
+    if (isWorkerRecoveryInvokeResult(direct)) {
+      return { ok: true, result: direct };
+    }
+  } catch {
+    // fall through to balanced-object scan
+  }
+
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const start = text.indexOf('{', searchFrom);
+    if (start < 0) {
+      break;
+    }
+    const candidate = extractBalancedJsonObject(text, start);
+    searchFrom = start + 1;
+    if (!candidate) {
+      continue;
+    }
+    try {
+      const result = JSON.parse(candidate);
+      if (isWorkerRecoveryInvokeResult(result)) {
+        return { ok: true, result };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  if (!text.includes('{')) {
     return { ok: false, reason: 'recovery_output_not_json' };
   }
-  try {
-    return { ok: true, result: JSON.parse(text.slice(start)) };
-  } catch {
-    return { ok: false, reason: 'recovery_output_parse_failed' };
-  }
+  return { ok: false, reason: 'recovery_output_parse_failed' };
 }
 
 export function classifyDeadWorkerRecoveryInvokeResult(result) {
