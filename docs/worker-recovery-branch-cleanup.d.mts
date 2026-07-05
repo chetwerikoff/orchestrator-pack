@@ -12,6 +12,7 @@ export declare function evaluateReflogSurvivingWork(input: Record<string, unknow
 export declare function evaluateConsumedGrantLineage(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateBranchWorktreeOccupancy(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateRecoveryTaskEligibility(input: Record<string, unknown>): Record<string, unknown>;
+export declare function evaluateIssueTaskEligibility(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateDisposableWorkerBranch(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateBranchDeletionRevalidation(input: Record<string, unknown>): Record<string, unknown>;
 export declare function evaluateBranchPreexistsClassification(input: Record<string, unknown>): Record<string, unknown>;

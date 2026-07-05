@@ -20,6 +20,76 @@ function Invoke-WorkerRecoveryCli {
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
 }
 
+
+function Resolve-WorkerRecoveryPackGhCommand {
+    param([string]$PackRoot)
+
+    $packGh = Join-Path $PackRoot 'scripts/gh'
+    if (Test-Path -LiteralPath $packGh) { return $packGh }
+    return 'gh'
+}
+
+function Get-WorkerRecoveryTaskEligibilityFlags {
+    param(
+        [int]$IssueNumber = 0,
+        [string]$PackRoot = '',
+        [string]$RepoRoot = '',
+        [hashtable]$FixtureTaskEligibility = $null,
+        [switch]$FixtureMode
+    )
+
+    if ($FixtureMode -and $FixtureTaskEligibility) {
+        return @{
+            ok               = $true
+            taskClosed       = [bool]$FixtureTaskEligibility.taskClosed
+            taskCancelled    = [bool]$FixtureTaskEligibility.taskCancelled
+            taskSuperseded   = [bool]$FixtureTaskEligibility.taskSuperseded
+            taskStateUnknown = [bool]$FixtureTaskEligibility.taskStateUnknown
+            reason           = [string]$FixtureTaskEligibility.reason
+        }
+    }
+    if ($IssueNumber -le 0) {
+        return @{
+            ok               = $true
+            taskClosed       = $false
+            taskCancelled    = $false
+            taskSuperseded   = $false
+            taskStateUnknown = $false
+            reason           = 'issue_not_bound'
+        }
+    }
+
+    $fetchFailed = $false
+    $state = ''
+    $stateReason = ''
+    $ghCmd = Resolve-WorkerRecoveryPackGhCommand -PackRoot $PackRoot
+    Push-Location $RepoRoot
+    try {
+        $json = & $ghCmd issue view $IssueNumber --json state,stateReason 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $json) {
+            $fetchFailed = $true
+        }
+        else {
+            $parsed = $json | ConvertFrom-Json
+            $state = [string]$parsed.state
+            $stateReason = [string]$parsed.stateReason
+        }
+    }
+    catch {
+        $fetchFailed = $true
+    }
+    finally {
+        Pop-Location
+    }
+
+    return Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'evaluateIssueTaskEligibility' -Payload @{
+        issueNumber = $IssueNumber
+        state       = $state
+        stateReason = $stateReason
+        fetchFailed = $fetchFailed
+    }
+}
+
 function Get-WorkerRecoveryAoSessionById {
     param([string]$SessionId)
 
@@ -332,7 +402,8 @@ function Invoke-WorkerRecovery {
         [switch]$SkipSpawn,
         [switch]$TaskClosed,
         [switch]$TaskCancelled,
-        [switch]$TaskSuperseded
+        [switch]$TaskSuperseded,
+        [hashtable]$FixtureTaskEligibility = $null
     )
 
     if (-not $PackRoot) {
@@ -504,6 +575,9 @@ function Invoke-WorkerRecovery {
 
     $branchCleanupOutcome = $null
     $branchCleanupBlocked = $false
+    $taskEligibility = Get-WorkerRecoveryTaskEligibilityFlags -IssueNumber $resolvedIssueNumber `
+        -PackRoot $PackRoot -RepoRoot $RepoRoot -FixtureMode:$FixtureMode `
+        -FixtureTaskEligibility $FixtureTaskEligibility
     if ($claim.acquired -and (-not $cleanupAttempted -or $cleanupDone)) {
         $liveOwnerCheckForBranch = Get-WorkerRecoveryLiveDifferentOwner -RecoverySessionId $SessionId `
             -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode
@@ -515,8 +589,9 @@ function Invoke-WorkerRecovery {
             -FixtureBranchState $FixtureBranchState -FixtureWorktreeRecords $FixtureWorktreeRecords `
             -FixtureMode:$FixtureMode -DryRun:$DryRun `
             -LiveDifferentOwner:([bool]$liveOwnerCheckForBranch.liveDifferentOwner) `
-            -IssueNumber $resolvedIssueNumber -TaskClosed:$TaskClosed `
-            -TaskCancelled:$TaskCancelled -TaskSuperseded:$TaskSuperseded
+            -IssueNumber $resolvedIssueNumber -TaskClosed:([bool]$taskEligibility.taskClosed) `
+            -TaskCancelled:([bool]$taskEligibility.taskCancelled) -TaskSuperseded:([bool]$taskEligibility.taskSuperseded) `
+            -TaskStateUnknown:([bool]$taskEligibility.taskStateUnknown)
         if ($branchCleanupOutcome.escalation) {
             $branchCleanupBlocked = $true
         }

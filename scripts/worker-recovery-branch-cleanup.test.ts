@@ -8,6 +8,7 @@ import {
   DEFAULT_BRANCH_OBSERVATION_TTL_SECONDS,
   evaluateBranchDeletionRevalidation,
   evaluateBranchPreexistsClassification,
+  evaluateIssueTaskEligibility,
   evaluateDisposableWorkerBranch,
   evaluateOpenPrTriState,
   evaluateWorkerRecoveryBranchGitAllow,
@@ -212,6 +213,31 @@ describe('worker recovery branch cleanup classification (#592)', () => {
     expect(preserved.escalation).toBe('blocked_grant_absent');
   });
 
+  it('maps issue view state to task eligibility flags', () => {
+    expect(evaluateIssueTaskEligibility({ issueNumber: 0 })).toMatchObject({
+      ok: true,
+      taskClosed: false,
+      taskCancelled: false,
+      taskSuperseded: false,
+      taskStateUnknown: false,
+    });
+    expect(evaluateIssueTaskEligibility({ issueNumber: 592, state: 'CLOSED', stateReason: 'COMPLETED' })).toMatchObject({
+      ok: true,
+      taskClosed: true,
+      taskCancelled: false,
+      taskSuperseded: false,
+    });
+    expect(evaluateIssueTaskEligibility({ issueNumber: 592, state: 'CLOSED', stateReason: 'NOT_PLANNED' })).toMatchObject({
+      taskCancelled: true,
+    });
+    expect(evaluateIssueTaskEligibility({ issueNumber: 592, state: 'CLOSED', stateReason: 'DUPLICATE' })).toMatchObject({
+      taskSuperseded: true,
+    });
+    expect(evaluateIssueTaskEligibility({ issueNumber: 592, fetchFailed: true }).reason).toBe(
+      'blocked_task_state_unknown',
+    );
+  });
+
   it('revalidation blocks OID race and worktree occupancy', () => {
     const base = disposableInput();
     const grantStartOid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -374,6 +400,7 @@ describe('worker recovery branch cleanup integration (#592)', () => {
       writeFileSync(path.join(repo, 'advance.txt'), 'advance\n', 'utf8');
       gitIn(repo, ['add', 'advance.txt']);
       gitIn(repo, ['commit', '-m', 'advance']);
+      gitIn(repo, ['checkout', 'main']);
       const ns = tempNs();
       const worktreePath = path.join(repo, 'worktrees', 'opk-592');
       const grant = buildConsumedGrant(592, repo, 'refs/heads/main', 'opk-592', worktreePath);
@@ -388,6 +415,55 @@ describe('worker recovery branch cleanup integration (#592)', () => {
       const result = JSON.parse(runPwsh(script));
       expect(result.deleted).toBe(false);
       expect(result.escalation).toBe('blocked_oid_race');
+      expect(execFileSync(git, ['-C', repo, 'show-ref', branch], { encoding: 'utf8' }).trim()).toContain(branch);
+    });
+  });
+
+  it('preserves branch when linked task is closed', () => {
+    withTempGitRepo((repo) => {
+      const branch = 'feat/issue-592';
+      const baseOid = execFileSync(git, ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      gitIn(repo, ['branch', branch]);
+      const ns = tempNs();
+      const worktreePath = path.join(repo, 'worktrees', 'opk-592');
+      const grant = buildConsumedGrant(592, repo, 'refs/heads/main', 'opk-592', worktreePath);
+      const script = `
+        $ErrorActionPreference = 'Stop'
+        . '${path.join(repoRoot, 'scripts/lib/Worker-RecoveryBranchCleanup.ps1').replace(/'/g, "''")}'
+        $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+        ${grantPs(grant, 'opk-592', worktreePath, baseOid)}
+        $result = Invoke-WorkerRecoveryBranchCleanup -SessionId 'opk-592' -CanonicalPath ${psString(worktreePath)} -RepoRoot ${psString(repo)} -Namespace ${psString(ns)} -AttemptId 'attempt-task-closed' -FixtureMode -GrantRecord $grant -FixtureObservation @{ observedAtUtc=(Get-Date).ToUniversalTime().ToString('o'); openPrByHeadRefName=@{}; fetchFailed=$false; rateLimited=$false } -FixtureBranchState @{ ok=$true; exists=$true; branch=${psString(branch)}; branchHeadOid=${psString(baseOid)}; localAheadCount=0; remoteAheadCount=0; diverged=$false; reflogEntries=@(); danglingReachableCount=0 } -FixtureWorktreeRecords @() -IssueNumber 592 -TaskClosed
+        [pscustomobject]@{ deleted = [bool]$result.deleted; escalation = [string]$result.escalation; reason = [string]$result.reason } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.deleted).toBe(false);
+      expect(result.escalation).toBe('blocked_task_ineligible');
+      expect(execFileSync(git, ['-C', repo, 'show-ref', branch], { encoding: 'utf8' }).trim()).toContain(branch);
+    });
+  });
+
+  it('blocks deletion when branch is checked out in a new worktree after initial snapshot', () => {
+    withTempGitRepo((repo) => {
+      const branch = 'feat/issue-592';
+      const baseOid = execFileSync(git, ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      gitIn(repo, ['branch', branch]);
+      const otherWorktree = path.join(repo, 'worktrees', 'opk-other');
+      execFileSync('mkdir', ['-p', path.dirname(otherWorktree)]);
+      gitIn(repo, ['worktree', 'add', otherWorktree, branch]);
+      const ns = tempNs();
+      const worktreePath = path.join(repo, 'worktrees', 'opk-592');
+      const grant = buildConsumedGrant(592, repo, 'refs/heads/main', 'opk-592', worktreePath);
+      const script = `
+        $ErrorActionPreference = 'Stop'
+        . '${path.join(repoRoot, 'scripts/lib/Worker-RecoveryBranchCleanup.ps1').replace(/'/g, "''")}'
+        $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+        ${grantPs(grant, 'opk-592', worktreePath, baseOid)}
+        $result = Invoke-WorkerRecoveryBranchCleanup -SessionId 'opk-592' -CanonicalPath ${psString(worktreePath)} -RepoRoot ${psString(repo)} -Namespace ${psString(ns)} -AttemptId 'attempt-worktree-race' -FixtureMode -GrantRecord $grant -FixtureObservation @{ observedAtUtc=(Get-Date).ToUniversalTime().ToString('o'); openPrByHeadRefName=@{}; fetchFailed=$false; rateLimited=$false } -FixtureBranchState @{ ok=$true; exists=$true; branch=${psString(branch)}; branchHeadOid=${psString(baseOid)}; localAheadCount=0; remoteAheadCount=0; diverged=$false; reflogEntries=@(); danglingReachableCount=0 } -FixtureWorktreeRecords @() -IssueNumber 592
+        [pscustomobject]@{ deleted = [bool]$result.deleted; escalation = [string]$result.escalation; reason = [string]$result.reason } | ConvertTo-Json -Compress
+      `;
+      const result = JSON.parse(runPwsh(script));
+      expect(result.deleted).toBe(false);
+      expect(result.escalation).toBe('blocked_worktree_occupied');
       expect(execFileSync(git, ['-C', repo, 'show-ref', branch], { encoding: 'utf8' }).trim()).toContain(branch);
     });
   });

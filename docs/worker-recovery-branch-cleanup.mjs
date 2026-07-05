@@ -289,10 +289,53 @@ export function evaluateRecoveryTaskEligibility(input) {
   if (input.liveDifferentOwner) {
     return { eligible: false, reason: 'blocked_live_different_owner' };
   }
+  if (input.taskStateUnknown) {
+    return { eligible: false, reason: 'blocked_task_state_unknown' };
+  }
   if (input.taskClosed || input.taskCancelled || input.taskSuperseded) {
     return { eligible: false, reason: 'blocked_task_ineligible' };
   }
   return { eligible: true, reason: 'task_eligible' };
+}
+
+/**
+ * @param {object} input
+ */
+export function evaluateIssueTaskEligibility(input) {
+  const issueNumber = Number(input.issueNumber ?? 0);
+  if (!issueNumber) {
+    return {
+      ok: true,
+      taskClosed: false,
+      taskCancelled: false,
+      taskSuperseded: false,
+      taskStateUnknown: false,
+      reason: 'issue_not_bound',
+    };
+  }
+  if (input.fetchFailed) {
+    return {
+      ok: false,
+      taskClosed: false,
+      taskCancelled: false,
+      taskSuperseded: false,
+      taskStateUnknown: true,
+      reason: 'blocked_task_state_unknown',
+    };
+  }
+  const state = String(input.state ?? '').toUpperCase();
+  const stateReason = String(input.stateReason ?? '').toUpperCase();
+  const taskClosed = state === 'CLOSED';
+  const taskCancelled = taskClosed && stateReason === 'NOT_PLANNED';
+  const taskSuperseded = taskClosed && stateReason === 'DUPLICATE';
+  return {
+    ok: true,
+    taskClosed,
+    taskCancelled,
+    taskSuperseded,
+    taskStateUnknown: false,
+    reason: 'task_state_observed',
+  };
 }
 
 /**
@@ -547,6 +590,8 @@ function handleCliSubcommand(subcommand, payload) {
       return evaluateBranchWorktreeOccupancy(payload);
     case 'evaluateTaskEligibility':
       return evaluateRecoveryTaskEligibility(payload);
+    case 'evaluateIssueTaskEligibility':
+      return evaluateIssueTaskEligibility(payload);
     case 'evaluateDisposableBranch':
       return evaluateDisposableWorkerBranch(payload);
     case 'evaluateDeletionRevalidation':

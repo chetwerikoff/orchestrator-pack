@@ -105,6 +105,23 @@ function Get-WorkerRecoveryBranchDeletedAudit {
     return $null
 }
 
+
+function Get-WorkerRecoveryWorktreeRecords {
+    param(
+        [string]$RepoRoot,
+        [switch]$FixtureMode,
+        [array]$FixtureWorktreeRecords = $null
+    )
+
+    if ($FixtureMode -and $null -ne $FixtureWorktreeRecords) {
+        return @($FixtureWorktreeRecords)
+    }
+    $raw = & git -C $RepoRoot worktree list --porcelain 2>$null
+    $parsed = Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs') `
+        -Subcommand 'parseWorktreeList' -Payload @{ porcelain = (($raw | ForEach-Object { $_ }) -join "`n") } -Label 'worker-recovery' -JsonDepth 30
+    return @($parsed.records)
+}
+
 function Get-WorkerRecoveryBranchGitState {
     param(
         [string]$RepoRoot,
@@ -232,7 +249,8 @@ function Invoke-WorkerRecoveryBranchCleanup {
         [int]$IssueNumber = 0,
         [switch]$TaskClosed,
         [switch]$TaskCancelled,
-        [switch]$TaskSuperseded
+        [switch]$TaskSuperseded,
+        [switch]$TaskStateUnknown
     )
 
     $ns = Resolve-WorkerRecoveryNamespace -ProjectId $ProjectId -Namespace $Namespace
@@ -294,15 +312,8 @@ function Invoke-WorkerRecoveryBranchCleanup {
         }
     }
 
-    $porcelain = if ($FixtureMode -and $PSBoundParameters.ContainsKey('FixtureWorktreeRecords')) {
-        @($FixtureWorktreeRecords)
-    }
-    else {
-        $raw = & git -C $RepoRoot worktree list --porcelain 2>$null
-        $parsed = Invoke-MechanicalNodeFilterCli -FilterCliPath (Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs') `
-            -Subcommand 'parseWorktreeList' -Payload @{ porcelain = (($raw | ForEach-Object { $_ }) -join "`n") } -Label 'worker-recovery' -JsonDepth 30
-        @($parsed.records)
-    }
+    $porcelain = Get-WorkerRecoveryWorktreeRecords -RepoRoot $RepoRoot -FixtureMode:$FixtureMode `
+        -FixtureWorktreeRecords $(if ($FixtureMode -and $PSBoundParameters.ContainsKey('FixtureWorktreeRecords')) { $FixtureWorktreeRecords } else { $null })
 
     $observation = Get-WorkerRecoveryBranchRemotePrObservation -RepoRoot $RepoRoot -Branch $branchName `
         -FixtureObservation $FixtureObservation -FixtureMode:$FixtureMode
@@ -330,6 +341,7 @@ function Invoke-WorkerRecoveryBranchCleanup {
         taskClosed                     = [bool]$TaskClosed
         taskCancelled                  = [bool]$TaskCancelled
         taskSuperseded                 = [bool]$TaskSuperseded
+        taskStateUnknown               = [bool]$TaskStateUnknown
     }
 
     if ($classification.action -eq 'preserve') {
@@ -377,6 +389,10 @@ function Invoke-WorkerRecoveryBranchCleanup {
         rateLimited                    = [bool]$observation.rateLimited
         remoteAdvancedAfterObservation = [bool]$observation.remoteAdvancedAfterObservation
         liveDifferentOwner             = [bool]$LiveDifferentOwner
+        taskClosed                     = [bool]$TaskClosed
+        taskCancelled                  = [bool]$TaskCancelled
+        taskSuperseded                 = [bool]$TaskSuperseded
+        taskStateUnknown               = [bool]$TaskStateUnknown
         expectedDeleteOid              = [string]$branchState.branchHeadOid
     }
     if (-not $revalidation.ok) {
@@ -433,13 +449,15 @@ function Invoke-WorkerRecoveryBranchCleanup {
             $deleted = $true
         }
         else {
+            $freshWorktreeRecords = Get-WorkerRecoveryWorktreeRecords -RepoRoot $RepoRoot -FixtureMode:$FixtureMode `
+                -FixtureWorktreeRecords $(if ($FixtureMode -and $PSBoundParameters.ContainsKey('FixtureWorktreeRecords')) { $FixtureWorktreeRecords } else { $null })
             $finalRevalidation = Invoke-WorkerRecoveryBranchCleanupCli -Subcommand 'evaluateDeletionRevalidation' -Payload @{
                 branch                         = $branchName
                 branchHeadOid                  = [string]$freshBranchState.branchHeadOid
                 sessionId                      = $SessionId
                 canonicalPath                  = $CanonicalPath
                 grant                          = if ($grant.ok) { $grant.record } else { $null }
-                worktreeRecords                = @($porcelain)
+                worktreeRecords                = @($freshWorktreeRecords)
                 localAheadCount                = [int]$freshBranchState.localAheadCount
                 remoteAheadCount               = [int]$freshBranchState.remoteAheadCount
                 diverged                       = [bool]$freshBranchState.diverged
@@ -452,6 +470,10 @@ function Invoke-WorkerRecoveryBranchCleanup {
                 rateLimited                    = [bool]$observation.rateLimited
                 remoteAdvancedAfterObservation = [bool]$observation.remoteAdvancedAfterObservation
                 liveDifferentOwner             = [bool]$LiveDifferentOwner
+                taskClosed                     = [bool]$TaskClosed
+                taskCancelled                  = [bool]$TaskCancelled
+                taskSuperseded                 = [bool]$TaskSuperseded
+                taskStateUnknown               = [bool]$TaskStateUnknown
                 expectedDeleteOid              = $expectedDeleteOid
             }
             if (-not $finalRevalidation.ok) {
