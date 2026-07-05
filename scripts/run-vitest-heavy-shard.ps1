@@ -41,7 +41,9 @@ try {
         $fileArgs += $file
     }
 
-    $output = & npm test -- @fileArgs --reporter=default --reporter=json --outputFile=$RuntimeReportPath 2>&1
+    # forks pool + long subprocess suites (e.g. review-start-preflight-shield from #597)
+    # starve vitest-worker onTaskUpdate RPC; threads stays serial via maxWorkers=1 in config.
+    $output = & npm test -- @fileArgs --pool=threads --reporter=default --reporter=json --outputFile=$RuntimeReportPath 2>&1
     $exitCode = $LASTEXITCODE
     $text = ($output | Out-String)
     Write-Host $text
