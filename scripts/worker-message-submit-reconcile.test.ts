@@ -226,6 +226,55 @@ describe('dispatch observation helpers (review)', () => {
     }
   });
 
+  it('forwards journal consumption evidence into merged deliveries', () => {
+    const deliveryId = 'opk-journal:1717601000000:ao-send:flush';
+    const deliveredAtMs = 1717601000000;
+    const [fromBooleanFlag] = mergeDeliveryRecords({
+      dispatchJournal: {
+        [deliveryId]: {
+          deliveryId,
+          sessionId: 'opk-journal',
+          deliveredAtMs,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          consumedAfterFlushObserved: true,
+        },
+      },
+      aoEvents: [],
+      reviewRuns: [],
+      nowMs: deliveredAtMs + 20_000,
+    });
+    expect(fromBooleanFlag?.consumedAfterFlushObserved).toBe(true);
+    expect(
+      isDeliveryConsumed({ reports: [] }, fromBooleanFlag, deliveredAtMs),
+    ).toBe(true);
+
+    const evidenceId = 'opk-journal:1717601010000:ao-send:evidence';
+    const [fromEvidenceString] = mergeDeliveryRecords({
+      dispatchJournal: {
+        [evidenceId]: {
+          deliveryId: evidenceId,
+          sessionId: 'opk-journal',
+          deliveredAtMs: deliveredAtMs + 10_000,
+          source: DISPATCH_SOURCE_AO_SEND,
+          deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+          dispatchOutcome: 'dispatched',
+          draftState: 'draft_present',
+          consumptionEvidence: 'consumed_after_flush_observed',
+        },
+      },
+      aoEvents: [],
+      reviewRuns: [],
+      nowMs: deliveredAtMs + 30_000,
+    });
+    expect(fromEvidenceString?.consumptionEvidence).toBe('consumed_after_flush_observed');
+    expect(
+      isDeliveryConsumed({ reports: [] }, fromEvidenceString, deliveredAtMs + 10_000),
+    ).toBe(true);
+  });
+
   it('does not treat unrelated non-review report states as ao-send consumption', () => {
     const deliveryId = 'opk-plain-send:1717601000000:ao-send:uncorrelated';
     const deliveredAtMs = 1717601000000;

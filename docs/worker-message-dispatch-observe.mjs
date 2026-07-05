@@ -289,6 +289,16 @@ export function extractJournalDeliveries(journal) {
       ...(Number(record.deliverySequence ?? 0) > 0
         ? { deliverySequence: Number(record.deliverySequence) }
         : {}),
+      ...(record.consumptionObserved === true ? { consumptionObserved: true } : {}),
+      ...(record.consumedAfterFlushObserved === true ||
+      record.consumed_after_flush_observed === true
+        ? { consumedAfterFlushObserved: true }
+        : {}),
+      ...(trimObservationString(record.consumptionEvidence)
+        ? { consumptionEvidence: trimObservationString(record.consumptionEvidence) }
+        : record.consumed_after_flush_observed === true
+          ? { consumptionEvidence: 'consumed_after_flush_observed' }
+          : {}),
     });
   }
   return deliveries;
