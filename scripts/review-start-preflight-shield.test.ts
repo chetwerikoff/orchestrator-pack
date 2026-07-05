@@ -476,6 +476,34 @@ describe('review-start preflight transient shield (#584)', () => {
       expect(result.failureClass).not.toBe('infra_transport');
       expect(result.denial).toBe(false);
     });
+
+    it('evaluateTurnGate treats pr_not_open transport as per_start_denial not infrastructure', () => {
+      const gate = evaluateOrchestratorTurnGate({
+        prNumber: 584,
+        provenanceAutonomous: true,
+        openPrs: [],
+        reviewRuns: [],
+        sessions: [],
+        transportFailure: { ok: false, reason: 'pr_not_open', failureClass: '' },
+      });
+      expect(gate.launch).toBe(false);
+      expect(gate.reason).toBe('pr_not_open');
+      expect(gate.auditShape).toBe('per_start_denial');
+    });
+
+    it('evaluateTurnGate still infrastructure-denies gh_binary_missing transport', () => {
+      const gate = evaluateOrchestratorTurnGate({
+        prNumber: 584,
+        provenanceAutonomous: true,
+        openPrs: [],
+        reviewRuns: [],
+        sessions: [],
+        transportFailure: { ok: false, reason: 'gh_binary_missing', failureClass: 'infra_transport' },
+      });
+      expect(gate.launch).toBe(false);
+      expect(gate.reason).toBe('gh_binary_missing');
+      expect(gate.auditShape).toBe('infrastructure_denial');
+    });
   });
 
   describe('AC8 audit head keying', () => {

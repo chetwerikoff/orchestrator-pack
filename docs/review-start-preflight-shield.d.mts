@@ -45,3 +45,9 @@ export declare function shieldBackoffInfraClassification(
   failureClass: string;
   shape: string;
 };
+
+export declare function resolveScopedGhTransportFailureClass(reason?: string): string;
+
+export declare function isScopedGhInfraTransportFailure(
+  transportFailure?: Record<string, unknown> | null,
+): boolean;

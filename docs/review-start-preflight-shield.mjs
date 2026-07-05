@@ -140,6 +140,43 @@ export function classifyPreflightGhOutcome(input = {}) {
   return { disposition: 'terminal', reason: 'gh_command_failed', terminalClass: 'unknown' };
 }
 
+const SCOPED_GH_INFRA_TRANSPORT_REASON_RE =
+  /^(structured_output_polluted|gh_command_failed|empty_child_output|malformed_child_output|scoped_gh_read_infrastructure_failure|preflight_transient_exhausted|preflight_timeout|claim_ownership_lost)$/;
+
+const SCOPED_GH_INFRA_TRANSPORT_FAILURE_CLASS_REASON_RE =
+  /^(preflight_transient_exhausted|preflight_timeout|claim_ownership_lost|gh_binary_missing)$/;
+
+/**
+ * Mirrors Resolve-ReviewStartScopedGhTransportFailureClass in Gh-PrChecks.ps1.
+ * @param {string} [reason]
+ */
+export function resolveScopedGhTransportFailureClass(reason = '') {
+  const normalized = String(reason ?? '').trim();
+  if (SCOPED_GH_INFRA_TRANSPORT_FAILURE_CLASS_REASON_RE.test(normalized)) {
+    return INFRA_TRANSPORT_FAILURE_CLASS;
+  }
+  return '';
+}
+
+/**
+ * Mirrors Get-ReviewStartSupervisedGhInfraTransportFailure in Review-StartClaim.ps1.
+ * @param {Record<string, unknown> | null | undefined} transportFailure
+ */
+export function isScopedGhInfraTransportFailure(transportFailure) {
+  if (!transportFailure || transportFailure.ok !== false) {
+    return false;
+  }
+  const nestedClass = /** @type {Record<string, unknown>} */ (
+    transportFailure.classification ?? {}
+  ).failureClass;
+  const failureClass = String(transportFailure.failureClass ?? nestedClass ?? '').trim();
+  if (failureClass === INFRA_TRANSPORT_FAILURE_CLASS) {
+    return true;
+  }
+  const reason = String(transportFailure.reason ?? '').trim();
+  return SCOPED_GH_INFRA_TRANSPORT_REASON_RE.test(reason);
+}
+
 /**
  * @param {object} input
  */
