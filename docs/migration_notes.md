@@ -371,6 +371,29 @@ Operator adoption after merge:
    `pwsh -NoProfile -File scripts/check-github-fleet-cache-bypass.ps1`.
 
 
+
+
+## GitHub fleet shared API governor (Issue #585)
+
+Adds a file-backed, identity-keyed admission governor in `scripts/lib/gh-governor.mjs`,
+consulted by pack `scripts/gh` / `gh-wrapper.mjs` before upstream GitHub reads. State lives
+under `$AO_SIDE_PROCESS_STATE_DIR/github-governor/`. Conservative placeholder budgets ship
+until Phase-0/1 telemetry tunes limits.
+
+Operator adoption after merge:
+
+1. Run `pwsh -NoProfile -File scripts/check-gh-governor-chokepoint-inventory.ps1` **without** `-AllowWrapperOnlySlice` (must exit 0 only after broker residuals are cleared) and complete
+   the daemon participation probe (`GH_WRAPPER_AUDIT=1`) before broad enablement.
+2. To enable on supervisor children: `export GH_GOVERNOR_ENABLED=1` in the wake-supervisor
+   environment (or per-child overrides). Rollback: `unset GH_GOVERNOR_ENABLED` and restart
+   supervisor — state files are inert when disabled.
+3. Optional tuning env (placeholder defaults): `GH_GOVERNOR_MAX_TOKENS`,
+   `GH_GOVERNOR_MAX_IN_FLIGHT`, `GH_GOVERNOR_RESERVED_TOKENS`.
+4. Restart wake supervisor after env changes:
+   `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then `Start`.
+5. Verification: `npm test -- github-fleet-governor` and
+   `pwsh -NoProfile -File scripts/check-gh-governor-chokepoint-inventory.ps1`.
+
 ## GitHub fleet repo-tick inventory snapshot (Issue #583)
 
 Adds `Gh-FleetRepoTickSnapshot.ps1` on top of the #453/#569 cache family. Covered
@@ -1543,6 +1566,11 @@ while the worker is busy/streaming; retries are gated by settled consumption obs
 draft freshness rather than by a pre-dispatch wall-clock budget; and failed terminals persist as
 durable failed-delivery records with late-consume reconciliation.
 
+Issue #602 tightens the same contract: `wrapper_not_adopted` is an Enter-blocking state,
+including review-send deliveries; `submitted` is not treated as consumed without positive
+consumption evidence; and idle backstop Enter is only eligible for the current live pending
+draft with authoritative journal/observation state.
+
 **New supervised child** under `orchestrator-wake-supervisor.ps1` (#205).
 
 To adopt after merge:
@@ -1556,9 +1584,16 @@ To adopt after merge:
 5. Busy dispatch remains **default-off** until the operator records a valid smoke marker in
    `docs/worker-message-submit-busy-dispatch-smoke-markers.json`. A missing / stale / mismatched
    marker keeps busy dispatch disabled without affecting idle delivery.
+6. Verify journaled-send adoption before relying on automatic Enter:
+   `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -WriteProbeEntries`.
+   If the preflight reports `wrapper_not_adopted`, reconcile may still observe deliveries but will
+   not press Enter until the live routing rule is fixed and AO is restarted.
 
 Audit signal: submit reconcile state file `audit` array, durable `failedDeliveries`, and log
-lines `[worker-message-submit-reconcile]` with submit/no-op/escalation reasons.
+lines `[worker-message-submit-reconcile]` with submit/no-op/escalation reasons. A delivery is
+marked consumed only after positive consumption evidence such as a delivery-correlated worker
+report, a review-round report state for review-send, or explicit `consumed_after_flush_observed`
+journal evidence.
 
 See `docs/orchestrator-recovery-runbook.md` (Submit stuck paste draft).
 
@@ -1755,6 +1790,12 @@ outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome),
 
 Current AO versions that do not advertise `--file` ingestion for `ao send` remain a hard
 gate: the wrapper exits fail-closed rather than binding to unsupported transport forms.
+
+Issue #602 adoption check: after restart, run the adoption preflight and confirm the live
+dispatch journal contains both required probe branches (`plain-ao-send:pending-draft` and
+`plain-ao-send:self-submitted`) via the wrapper. Until that passes, submit reconcile reports
+`wrapper_not_adopted` once per AO epoch/config and blocks Enter rather than consuming or
+submitting uncertain deliveries.
 
 ## Review run recovery side-process (Issue #287)
 
@@ -2024,3 +2065,21 @@ their next respawn. For documentation only:
 
 No operator adoption required for live yaml — bounds are script defaults.
 
+## Autonomous dead-worker respawn (Issue #593)
+
+Ships a supervised `dead-worker-reconcile` side process and `docs/autonomous-respawn-policy.json`
+with **default-OFF** `allowReconcileDeadWorkerRespawn`. Until operator adoption enables the
+toggle and restarts AO, the reconciler audits only.
+
+Operator adoption after merge:
+
+1. Merge PR and pull `main` in the operator checkout.
+2. Confirm `docs/autonomous-respawn-policy.json` defaults remain `allowReconcileDeadWorkerRespawn: false`.
+3. Mirror `agent-orchestrator.yaml.example` **DEAD WORKER RECONCILE** block into live
+   `agent-orchestrator.yaml` / `orchestratorRules` if not already present.
+4. Restart AO (`ao stop` / `ao start`) so daemon-cached rules and worker prompts reload.
+5. Start or verify the wake supervisor registers `dead-worker-reconcile` (see
+   `scripts/orchestrator-side-process-registry.json`).
+6. Only after #194 branch-safe recovery and capture fixtures are verified in your environment,
+   set `allowReconcileDeadWorkerRespawn: true` in `docs/autonomous-respawn-policy.json` and
+   restart AO again.

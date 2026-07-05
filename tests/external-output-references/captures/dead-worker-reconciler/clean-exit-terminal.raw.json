@@ -1,0 +1,17 @@
+{
+  "id": "clean-exit-terminal-pr-merged",
+  "presentFields": ["runtime", "pr"],
+  "absentFields": ["agent_process_exited"],
+  "session": {
+    "name": "opk-merged",
+    "role": "worker",
+    "status": "terminated",
+    "runtime": "exited",
+    "pr": "600",
+    "branch": "feat/600",
+    "worktree": "/home/operator/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-merged"
+  },
+  "events": [
+    { "name": "session.terminated", "sessionId": "opk-merged", "tsEpoch": 1780000400000, "data": { "exitCode": 0 } }
+  ]
+}

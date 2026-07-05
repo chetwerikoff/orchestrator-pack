@@ -89,6 +89,24 @@ Get-Content -LiteralPath $result.path -Raw
     }
   });
 
+  it('fails closed under test context when AO_BASE_DIR is not isolated', () => {
+    const script = `
+. '${auditLib}'
+Get-OrchestratorReviewStartAuditRoot -ProjectId 'orchestrator-pack'
+`;
+    const env = { ...process.env, VITEST_WORKER_ID: 'guard-check' } as Record<string, string>;
+    delete env.AO_BASE_DIR;
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env,
+    });
+    expect(result.status).not.toBe(0);
+    const combined = `${result.stdout}\n${result.stderr}`;
+    expect(combined).toMatch(/requires AO_BASE_DIR/i);
+    expect(combined).toMatch(/agent-orchestrator audit path/i);
+  });
+
   it('keys claimed-run head_unresolved preflight refusals from event head identity', () => {
     const root = mkdtempSync(join(tmpdir(), 'review-start-claimed-preflight-'));
     const auditRoot = join(root, 'audit');

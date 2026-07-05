@@ -1,0 +1,38 @@
+{
+  "sessions": [
+    {
+      "sessionId": "opk-593",
+      "runtime": "exited",
+      "status": "terminated",
+      "issueNumber": 593,
+      "prNumber": 593,
+      "branch": "feat/593",
+      "worktree": "/tmp/orchestrator-pack/worktrees/opk-593"
+    }
+  ],
+  "aoEvents": [
+    {
+      "id": "death-1",
+      "type": "session.killed",
+      "sessionId": "opk-593",
+      "reason": "process_exit",
+      "timestampMs": 10000
+    }
+  ],
+  "respawnPolicy": {
+    "version": "autonomous-respawn-policy/v1",
+    "allowReconcileDeadWorkerRespawn": true
+  },
+  "recoveryChecks": {
+    "workerRecoveryAvailable": true,
+    "branchSafeRecoveryAvailable": true
+  },
+  "effectiveRuntimePolicy": "allow",
+  "bounds": {
+    "maxAttempts": 3,
+    "backoffMs": 60000,
+    "concurrency": 1
+  },
+  "issueOnlyPrAmbiguous": false,
+  "nowMs": 120000
+}

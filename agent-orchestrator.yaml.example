@@ -71,6 +71,8 @@ projects:
           # When unset, surface bootstrap exports GH_REPO from the checkout origin (Issue #599).
           # GH_REPO: chetwerikoff/orchestrator-pack
           PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
+          # Optional shared GitHub API governor (Issue #585). Off by default until participation probe passes.
+          # GH_GOVERNOR_ENABLED: "1"
     worker:
       agent: cursor
       agentConfig:
@@ -235,6 +237,25 @@ projects:
       reactions.ci-failed remain upstream backstops (additive fast path, not a replacement).
       Verification:
         pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -Once -DryRun
+
+      DEAD WORKER RECONCILE (Issue #593 — assigned-task recovery only, default-OFF).
+      Detects capture-backed death evidence for workers with unfinished bound issue/PR
+      and may invoke scripts/invoke-worker-recovery.ps1 -Trigger reconcile_dead_worker
+      when allowReconcileDeadWorkerRespawn is explicitly enabled in docs/autonomous-respawn-policy.json
+      and all enablement gates pass. Never plans new work from open issues or the GitHub queue (assigned-task only). operator kill/
+      shutdown and project-level shutdown windows suppress respawn. Uncaptured event shapes
+      and ambiguous task state fail closed to audit-only. Storm bounds: per-key retry with
+      suggested defaults 3 attempts, 60s initial exponential backoff with jitter, concurrency
+      cap 1 (operator-tunable in policy JSON).
+        pwsh -NoProfile -File scripts/dead-worker-reconcile.ps1
+      State file: AO_DEAD_WORKER_RECONCILE_STATE or
+      %TEMP%\orchestrator-dead-worker-reconcile-state.json.
+      Safety: invokes only the #522 recovery entrypoint with caller-proved
+      -ProbedDeadEvidence; never raw ao spawn from this loop.
+      Verification:
+        pwsh -NoProfile -File scripts/dead-worker-reconcile.ps1 -Once -DryRun
+
+
       See docs/orchestrator-autoloop-go-live.md and docs/migration_notes.md.
 
       MERGED PR — REVIEW LOOP TERMINAL (Issue #54). On EVERY orchestrator turn,

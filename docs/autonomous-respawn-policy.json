@@ -1,0 +1,9 @@
+{
+  "version": "autonomous-respawn-policy/v1",
+  "sharedCapabilitiesPath": "docs/autonomous-shared-capabilities.json",
+  "allowReconcileDeadWorkerRespawn": false,
+  "maxAttempts": 3,
+  "backoffMs": 60000,
+  "concurrency": 1,
+  "shutdownSuppressionWindowMs": 120000
+}

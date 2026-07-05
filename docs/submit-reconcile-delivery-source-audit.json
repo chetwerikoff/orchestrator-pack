@@ -1,0 +1,55 @@
+{
+  "issue": 602,
+  "summary": "Worker-message delivery sources audited against docs/orchestrator-message-map.md and scripts/orchestrator-message-catalog.json.",
+  "sources": [
+    {
+      "source": "review-send",
+      "messageClass": "review-findings-first-send",
+      "transport": "ao-review-send",
+      "evidence": "scripts/review-send-reconcile.ps1 registers pending-draft journal records; not plain ao send"
+    },
+    {
+      "source": "review-findings-redelivery",
+      "messageClass": "review-findings-redelivery",
+      "transport": "ao-review-send",
+      "evidence": "scripts/review-finding-delivery-confirm.ps1"
+    },
+    {
+      "source": "reaction-routed",
+      "messageClass": "ci-failure-reaction-routed",
+      "transport": "journaled-worker-send",
+      "evidence": "agent-orchestrator.yaml.example routes ci-failed through journaled-worker-send.ps1"
+    },
+    {
+      "source": "ci-failure-nudge",
+      "messageClass": "ci-failure-reconcile-ping",
+      "transport": "journaled-worker-send",
+      "evidence": "scripts/ci-failure-notification-reconcile.ps1 gated send path"
+    },
+    {
+      "source": "ci-green-nudge",
+      "messageClass": "ci-green-worker-nudge",
+      "transport": "journaled-worker-send",
+      "evidence": "scripts/ci-green-wake-reconcile.ps1 gated send path"
+    },
+    {
+      "source": "orchestrator-turn-nudge",
+      "messageClass": "ci-failure-orchestrator-turn",
+      "transport": "journaled-worker-send",
+      "evidence": "orchestratorRules worker nudge command uses journaled-worker-send when configured"
+    },
+    {
+      "source": "plain-worker-send-routed",
+      "messageClass": "plain-worker-send-routed",
+      "transport": "journaled-worker-send",
+      "evidence": "scripts/journaled-worker-send.ps1 adoption probe branches"
+    },
+    {
+      "source": "submit-reconcile-backstop",
+      "messageClass": "worker-input-draft-submit",
+      "transport": "draft-submit",
+      "outOfScope": true,
+      "reason": "Enter/backstop is consumption-side draft submit, not an ao send transport"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "pty-lost-only-insufficient",
+  "presentFields": ["ui.terminal_pty_lost"],
+  "absentFields": ["agent_process_exited", "session.kill_started"],
+  "session": {
+    "name": "opk-pty-only",
+    "role": "worker",
+    "status": "working",
+    "issue": "593",
+    "worktree": "/home/operator/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-pty-only"
+  },
+  "events": [
+    { "name": "ui.terminal_pty_lost", "sessionId": "opk-pty-only", "tsEpoch": 1780000200000 }
+  ]
+}

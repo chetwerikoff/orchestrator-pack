@@ -24,7 +24,8 @@ param(
     [switch]$DryRun,
     [switch]$Probe,
     [string]$FixtureSessionJson = '',
-    [string]$FixturePolicyJson = ''
+    [string]$FixturePolicyJson = '',
+    [switch]$ProbedDeadEvidence
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,6 +82,7 @@ $recoveryParams = @{
     SpawnPolicy  = $spawnPolicy
     FixtureMode  = [bool]$spawnPolicy
     SkipSpawn    = (-not $SpawnAction)
+    ProbedDeadEvidence = [bool]$ProbedDeadEvidence
 }
 if ($PSBoundParameters.ContainsKey('WorktreePresent') -or $Probe) {
     $result = Invoke-WorkerRecovery @recoveryParams -WorktreePresent:$WorktreePresent
