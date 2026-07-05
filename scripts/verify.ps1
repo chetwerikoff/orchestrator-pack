@@ -974,6 +974,23 @@ else {
 
 Write-Check 'verify-runtime/github-fleet-cache-vitest' 'SKIP' 'owned by check-github-fleet-cache-bypass.ps1 + full Vitest lane (Issue #488)'
 
+Write-Host '== github fleet shared API governor (Issue #585) =='
+$governorChokepointCheck = Join-Path $Root 'scripts/check-gh-governor-chokepoint-inventory.ps1'
+if (Test-Path -LiteralPath $governorChokepointCheck -PathType Leaf) {
+    & $governorChokepointCheck -AllowWrapperOnlySlice
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-gh-governor-chokepoint-inventory.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'github fleet governor chokepoint inventory guard failed (Issue #585)'
+    }
+    else {
+        Write-Check 'scripts/check-gh-governor-chokepoint-inventory.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-gh-governor-chokepoint-inventory.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing github fleet governor chokepoint inventory guard (Issue #585)'
+}
+
 Write-Host '== github fleet repo-tick snapshot (Issue #583) =='
 $repoTickCoverageCheck = Join-Path $Root 'scripts/check-github-fleet-repo-tick-coverage.ps1'
 if (Test-Path -LiteralPath $repoTickCoverageCheck -PathType Leaf) {

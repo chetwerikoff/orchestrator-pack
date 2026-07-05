@@ -162,6 +162,7 @@ export function resolveCredentialFingerprint(
   env = process.env,
   hostname = DEFAULT_HOST,
   explicitHostname = false,
+  options = {},
 ) {
   const envToken = resolveEnvTokenForHost(env, hostname);
   if (envToken) {
@@ -181,14 +182,16 @@ export function resolveCredentialFingerprint(
     }
   }
 
-  const loginResult = spawnSync(realGh, ['api', ...hostArgs, 'user', '-q', '.login'], {
-    encoding: 'utf8',
-    env: { ...env, GH_WRAPPER_ACTIVE: '1' },
-  });
-  if (loginResult.status === 0) {
-    const login = (loginResult.stdout || '').trim();
-    if (login) {
-      return hashFingerprint(`gh-login:${login}`);
+  if (!options.skipApiIdentityProbe) {
+    const loginResult = spawnSync(realGh, ['api', ...hostArgs, 'user', '-q', '.login'], {
+      encoding: 'utf8',
+      env: { ...env, GH_WRAPPER_ACTIVE: '1' },
+    });
+    if (loginResult.status === 0) {
+      const login = (loginResult.stdout || '').trim();
+      if (login) {
+        return hashFingerprint(`gh-login:${login}`);
+      }
     }
   }
 
@@ -200,9 +203,9 @@ export function resolveCredentialFingerprint(
  * @param {string[]} argv
  * @param {NodeJS.ProcessEnv} [env]
  */
-export function resolvePartitionKey(realGh, argv, env = process.env) {
+export function resolvePartitionKey(realGh, argv, env = process.env, options = {}) {
   const { host, explicit } = extractApiHostnameInfo(argv, env);
-  const credential = resolveCredentialFingerprint(realGh, env, host, explicit);
+  const credential = resolveCredentialFingerprint(realGh, env, host, explicit, options);
   return `${host}|${credential}`;
 }
 
@@ -616,6 +619,16 @@ function shouldRefreshRateLimit(cache, currentMs) {
   return currentMs - cache.lastRateLimitFetchMs >= RATE_LIMIT_REFRESH_MS;
 }
 
+
+function buildPassthroughCompleteFields(result, overrides = {}) {
+  return {
+    status: overrides.status ?? result.status ?? 1,
+    stderr: overrides.stderr ?? result.stderr ?? '',
+    stdout: overrides.stdout ?? result.stdout ?? '',
+    ...overrides,
+  };
+}
+
 function emitPassthroughResult(result, onComplete = null) {
   if (result.stdout) {
     process.stdout.write(result.stdout);
@@ -624,7 +637,7 @@ function emitPassthroughResult(result, onComplete = null) {
     process.stderr.write(result.stderr);
   }
   if (onComplete) {
-    onComplete({ status: result.status ?? 1 });
+    onComplete(buildPassthroughCompleteFields(result));
   }
   process.exit(result.status ?? 1);
 }
@@ -734,7 +747,7 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
 
   try {
     cacheDir = resolveCacheDir(env);
-    partitionKey = resolvePartitionKey(realGh, argv, env);
+    partitionKey = options.partitionKey ?? resolvePartitionKey(realGh, argv, env);
     ({ cache, refreshed } = applyDegradedGate(cacheDir, partitionKey, realGh, argv, env, currentMs, onComplete));
   } catch (err) {
     emitCacheIoFailureDiagnostic(partitionKey, err);
@@ -765,7 +778,7 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
       process.stderr.write(graphqlResult.stderr);
     }
     if (onComplete) {
-      onComplete({ status: 0 });
+      onComplete(buildPassthroughCompleteFields(graphqlResult, { status: 0 }));
     }
     process.exit(0);
   }
@@ -815,7 +828,10 @@ export function tryGraphqlDegradedPassthrough(argv, realGh, options = {}) {
       process.stderr.write(`${PRIMARY_QUOTA_MARKER}\n`);
     }
     if (onComplete) {
-      onComplete({ status: graphqlResult.status ?? SUPPRESSION_EXIT_CODE });
+      onComplete(buildPassthroughCompleteFields(graphqlResult, {
+        status: graphqlResult.status ?? SUPPRESSION_EXIT_CODE,
+        stderr: graphqlResult.stderr || PRIMARY_QUOTA_MARKER,
+      }));
     }
     process.exit(graphqlResult.status ?? SUPPRESSION_EXIT_CODE);
   }

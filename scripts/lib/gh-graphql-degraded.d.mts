@@ -14,9 +14,15 @@ export function resolveCredentialFingerprint(
   env?: NodeJS.ProcessEnv,
   hostname?: string,
   explicitHostname?: boolean,
+  options?: { skipApiIdentityProbe?: boolean },
 ): string;
 export function resolveEnvTokenForHost(env: NodeJS.ProcessEnv, hostname: string): string | null;
-export function resolvePartitionKey(realGh: string, argv: string[], env?: NodeJS.ProcessEnv): string;
+export function resolvePartitionKey(
+  realGh: string,
+  argv: string[],
+  env?: NodeJS.ProcessEnv,
+  options?: { skipApiIdentityProbe?: boolean },
+): string;
 export function resolveCacheDir(env?: NodeJS.ProcessEnv): string;
 export function cacheFilePath(cacheDir: string, partitionKey: string): string;
 export function rateLimitRefreshLockPath(cacheDir: string, partitionKey: string): string;
