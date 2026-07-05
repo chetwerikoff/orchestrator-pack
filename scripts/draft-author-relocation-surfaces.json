@@ -1,0 +1,76 @@
+{
+  "description": "Required contract markers and forbidden permissive patterns for draft-author relocation (Issue #579).",
+  "surfaces": [
+    {
+      "id": "create-issue-draft",
+      "path": ".claude/skills/create-issue-draft/SKILL.md",
+      "requiredMarkers": [
+        "Brief handoff contract",
+        "Draft-author session contract",
+        "Isolation from the architect's live tree",
+        "Completion proof",
+        "selection basis",
+        "explicit-request",
+        "architect-as-author",
+        "pre-sync architect review",
+        "shared-index authoring",
+        "dirty-tree delegation",
+        "do not trust exit code"
+      ]
+    },
+    {
+      "id": "adversarial-draft-review",
+      "path": ".claude/skills/adversarial-draft-review/SKILL.md",
+      "requiredMarkers": [
+        "Cursor draft-author session",
+        "at least to **T2**"
+      ]
+    },
+    {
+      "id": "discuss-with-gpt",
+      "path": ".claude/skills/discuss-with-gpt/SKILL.md",
+      "requiredMarkers": [
+        "Cursor draft-author session",
+        "at least to **T2**"
+      ]
+    },
+    {
+      "id": "claude-md",
+      "path": "CLAUDE.md",
+      "requiredMarkers": [
+        "draft-author session",
+        "pre-sync review",
+        "explicit user request",
+        "architect-as-author"
+      ]
+    },
+    {
+      "id": "cursor-rule",
+      "path": ".cursor/rules/draft-author-relocation.mdc",
+      "requiredMarkers": [
+        "Brief handoff",
+        "Isolation",
+        "Completion proof",
+        "selectionBasis",
+        "architect-as-author"
+      ]
+    }
+  ],
+  "forbiddenPermissivePatterns": [
+    {
+      "id": "permits-live-tree-authoring",
+      "pattern": "may author in the architect's live",
+      "surfaces": [".claude/skills/create-issue-draft/SKILL.md", ".cursor/rules/draft-author-relocation.mdc"]
+    },
+    {
+      "id": "permits-dirty-shared-checkout",
+      "pattern": "dirty shared checkout is (allowed|permitted|ok)",
+      "surfaces": [".claude/skills/create-issue-draft/SKILL.md", ".cursor/rules/draft-author-relocation.mdc"]
+    },
+    {
+      "id": "trusts-exit-code-alone",
+      "pattern": "exit code (alone )?is sufficient",
+      "surfaces": [".claude/skills/create-issue-draft/SKILL.md", ".cursor/rules/draft-author-relocation.mdc"]
+    }
+  ]
+}

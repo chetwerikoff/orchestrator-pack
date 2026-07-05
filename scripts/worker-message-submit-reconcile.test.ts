@@ -46,9 +46,16 @@ import type {
   WorkerMessageSubmitAction,
 } from '../docs/worker-message-submit-reconcile.d.mts';
 
-type StateRootReSeatEligibilityArg = Parameters<
-  typeof evaluateStateRootReSeatEligibility
->[0];
+type ReSeatEligibilityInput = Parameters<typeof evaluateStateRootReSeatEligibility>[0] & {
+  anchorState?: Record<string, unknown> | null;
+  nowMs?: number;
+};
+
+function callReSeatEligibility(input: ReSeatEligibilityInput) {
+  return evaluateStateRootReSeatEligibility(
+    input as Parameters<typeof evaluateStateRootReSeatEligibility>[0],
+  );
+}
 
 
 const fixturesDir = path.join(
@@ -2807,7 +2814,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
 
   it('reclaims stale orphan-anchor when no state or journal deliveries corroborate active work', () => {
     const nowMs = 1717603000000;
-    const result = evaluateStateRootReSeatEligibility({
+    const result = callReSeatEligibility({
       state: {
         _recovery: recoveryLatch,
         deliveries: {},
@@ -2820,7 +2827,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
       },
       nowMs,
-    } as StateRootReSeatEligibilityArg);
+    });
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
     expect(result.evidence).toContain('stateActiveDeliveryCount=0');
@@ -2829,7 +2836,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
 
   it('reclaims stale orphan-anchor when only terminal state deliveries remain', () => {
     const nowMs = 1717603000000;
-    const result = evaluateStateRootReSeatEligibility({
+    const result = callReSeatEligibility({
       state: {
         _recovery: recoveryLatch,
         deliveries: {
@@ -2844,14 +2851,14 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
       },
       nowMs,
-    } as StateRootReSeatEligibilityArg);
+    });
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
   });
 
   it('blocks re-seat for fresh orphan-looking anchor until the backstop expires', () => {
     const nowMs = 1717603000000;
-    const result = evaluateStateRootReSeatEligibility({
+    const result = callReSeatEligibility({
       state: {
         _recovery: recoveryLatch,
         deliveries: {},
@@ -2864,14 +2871,14 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS + 1,
       },
       nowMs,
-    } as StateRootReSeatEligibilityArg);
+    });
     expect(result.eligible).toBe(false);
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
 
   it('blocks stale anchor reclaim when the anchor backing state still has an active delivery', () => {
     const nowMs = 1717603000000;
-    const result = evaluateStateRootReSeatEligibility({
+    const result = callReSeatEligibility({
       state: {
         _recovery: recoveryLatch,
         deliveries: {},
@@ -2890,7 +2897,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         },
       },
       nowMs,
-    } as StateRootReSeatEligibilityArg);
+    });
     expect(result.eligible).toBe(false);
     expect(result.reason).toBe('anchor_active_without_terminal_evidence');
   });
@@ -2937,7 +2944,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
 
   it('reclaims stale orphan-anchor when completed journal entries are the only journal records', () => {
     const nowMs = 1717603000000;
-    const result = evaluateStateRootReSeatEligibility({
+    const result = callReSeatEligibility({
       state: {
         _recovery: recoveryLatch,
         deliveries: {},
@@ -2955,7 +2962,7 @@ describe('issue #373 state-root quarantine re-seat', () => {
         updatedAtMs: nowMs - DEFAULT_DELIVERY_BACKSTOP_MS - 1,
       },
       nowMs,
-    } as StateRootReSeatEligibilityArg);
+    });
     expect(result.eligible).toBe(true);
     expect(result.reason).toBe('orphan_anchor_quarantine');
     expect(result.evidence).toContain('corroboratingJournalDeliveryCount=0');
