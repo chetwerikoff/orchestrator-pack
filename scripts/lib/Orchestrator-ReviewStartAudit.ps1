@@ -10,6 +10,12 @@ function Get-OrchestratorReviewStartAuditRoot {
 
     $project = ([string]$ProjectId).Trim()
     if (-not $project) { $project = 'orchestrator-pack' }
+    $isTestContext = -not [string]::IsNullOrWhiteSpace($env:VITEST) -or `
+        -not [string]::IsNullOrWhiteSpace($env:VITEST_WORKER_ID) -or `
+        [string]$env:NODE_ENV -eq 'test'
+    if (-not $env:AO_BASE_DIR -and $isTestContext) {
+        throw 'Get-OrchestratorReviewStartAuditRoot requires AO_BASE_DIR under test context; refusing to resolve live $HOME/.agent-orchestrator audit path.'
+    }
     $base = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $HOME '.agent-orchestrator' }
     return (Join-Path (Join-Path (Join-Path $base 'projects') $project) 'orchestrator-review-start-audit')
 }

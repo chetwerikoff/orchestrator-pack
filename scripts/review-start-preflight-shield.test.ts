@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -153,6 +153,39 @@ describe('review-start preflight transient shield (#584)', () => {
       const shieldSrc = readFileSync(shieldHelperPath, 'utf8');
       expect(functionBody(shieldSrc, 'Invoke-ReviewStartPreflightGhSingleCapture')).toMatch(/CaptureTimeoutMs/);
       expect(functionBody(shieldSrc, 'Invoke-ReviewStartPreflightGhPrView')).toMatch(/Resolve-ReviewStartPreflightShieldCaptureTimeoutMs/);
+    });
+
+    it('allocates and cleans a fresh implicit AO_BASE_DIR per PowerShell run', () => {
+      const firstAoBase = runPwsh('$env:AO_BASE_DIR');
+      const secondAoBase = runPwsh('$env:AO_BASE_DIR');
+      expect(firstAoBase).toBeTruthy();
+      expect(secondAoBase).toBeTruthy();
+      expect(secondAoBase).not.toBe(firstAoBase);
+      expect(existsSync(firstAoBase)).toBe(false);
+      expect(existsSync(secondAoBase)).toBe(false);
+    });
+
+    it('resolves the implicit shield audit root under test-scoped AO_BASE_DIR', () => {
+      const result = runScopedPreflight(
+        `
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
+      $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'always_rate_limit'
+      $env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA = ${psString(stableHead)}
+      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '1'
+      $null = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
+      $auditRoot = Get-OrchestratorReviewStartAuditRoot
+      [pscustomobject]@{
+        aoBase = [string]$env:AO_BASE_DIR
+        auditRoot = [string]$auditRoot
+        shieldAuditCount = @(
+          Get-ChildItem -LiteralPath (Join-Path $auditRoot 'preflight-shield') -File -ErrorAction Stop
+        ).Count
+      } | ConvertTo-Json -Compress
+    `,
+      );
+      expect(result.aoBase).toBeTruthy();
+      expect(result.auditRoot.startsWith(result.aoBase)).toBe(true);
+      expect(result.shieldAuditCount).toBeGreaterThan(0);
     });
   });
 
