@@ -49,3 +49,5 @@ export declare function scanSpawnShapeCorpus(
 ): Promise<SpawnShapeViolation[]>;
 
 export declare function collectDefaultCorpusRelPaths(rootDir: string): Promise<string[]>;
+
+export declare const SPAWN_GATE_CORPUS_REL_PATHS: readonly string[];

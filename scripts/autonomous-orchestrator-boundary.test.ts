@@ -132,9 +132,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
 
   it('policy-aware spawn boundary allows default-on autonomous spawn', () => {
     for (const commandLine of [
-      'ao spawn opk-1',
-      'ao spawn --claim-pr 322',
-      '/usr/local/bin/ao spawn opk-1',
+      'ao spawn --project orchestrator-pack --name "Boundary probe" opk-1',
+      'ao spawn --project orchestrator-pack --name "Claim PR" --claim-pr 322',
+      '/usr/local/bin/ao spawn --project orchestrator-pack --name "Boundary probe" opk-1',
     ]) {
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: true }).allowed).toBe(true);
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: false }).allowed).toBe(true);
@@ -722,7 +722,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       );
 
       const aoScript = path.join(dir, 'mutate-ao.sh');
-      writeFileSync(aoScript, '#!/usr/bin/env bash\nao spawn opk-1\n');
+      writeFileSync(aoScript, '#!/usr/bin/env bash\nao spawn --project orchestrator-pack --name "Boundary probe" opk-1\n');
       chmodSync(aoScript, 0o755);
       const allowAoScript = spawnHermeticBoundaryBash(
         pack,

@@ -120,8 +120,8 @@ export function findRunnableSpawnCommands(text) {
       !line.includes('`')
     ) {
       const command = extractInlineSpawnCommand(line, inlineSpawnIdx);
-      if (command && /^ao spawn\s+--/i.test(command)) {
-        matches.push({ line: index + 1, command, kind: 'inline' });
+      if (command && isRunnableInlineSpawnCommand(command)) {
+        matches.push({ line: index + 1, command: normalizeExtractedCommand(command), kind: 'inline' });
       }
     }
 
@@ -357,6 +357,41 @@ function isCorpusMarkdown(entry) {
 /**
  * @param {string} rootDir
  */
+
+/** Spawn-gate fixture suites referenced by Issue #589 / #163. */
+export const SPAWN_GATE_CORPUS_REL_PATHS = [
+  'scripts/_test-autonomous-ao-stub-fixture.ts',
+  'scripts/autonomous-orchestrator-boundary.test.ts',
+  'scripts/autonomous-orchestrator-interposer.test.ts',
+  'scripts/autonomous-spawn-policy.test.ts',
+  'scripts/autonomous-spawn-worktree-gate.test.ts',
+];
+
+/**
+ * @param {string} command
+ */
+function normalizeExtractedCommand(command) {
+  let normalized = String(command).trim();
+  if (
+    (normalized.startsWith("'") && normalized.endsWith("'")) ||
+    (normalized.startsWith('"') && normalized.endsWith('"'))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized.replace(/['"]$/, '').trim();
+}
+
+/**
+ * @param {string} command
+ */
+function isRunnableInlineSpawnCommand(command) {
+  const normalized = normalizeExtractedCommand(command);
+  if (/^ao spawn\s+--/i.test(normalized)) {
+    return true;
+  }
+  return /^ao spawn\s+(?:opk-[\w-]+|\d+|<[A-Za-z][\w-]*>|\$\{)/i.test(normalized);
+}
+
 export async function collectDefaultCorpusRelPaths(rootDir) {
   const { readdir } = await import('node:fs/promises');
   const { join, relative } = await import('node:path');
@@ -390,7 +425,9 @@ export async function collectDefaultCorpusRelPaths(rootDir) {
   }
   await walkDocs(docsDir);
 
-  return relPaths.sort();
+  relPaths.push(...SPAWN_GATE_CORPUS_REL_PATHS);
+
+  return [...new Set(relPaths)].sort();
 }
 
 async function runCli() {

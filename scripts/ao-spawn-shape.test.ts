@@ -153,8 +153,13 @@ describe('findRunnableSpawnCommands', () => {
 
 describe('scanSpawnShapeCorpus', () => {
   it('passes on the repository corpus and baseline', async () => {
-    const { collectDefaultCorpusRelPaths } = await import('../docs/ao-spawn-shape.mjs');
+    const { collectDefaultCorpusRelPaths, SPAWN_GATE_CORPUS_REL_PATHS } = await import(
+      '../docs/ao-spawn-shape.mjs'
+    );
     const corpusRelPaths = await collectDefaultCorpusRelPaths(rootDir);
+    for (const relPath of SPAWN_GATE_CORPUS_REL_PATHS) {
+      expect(corpusRelPaths).toContain(relPath);
+    }
     const violations = await scanSpawnShapeCorpus(rootDir, {
       corpusRelPaths,
       baselineRelPath: 'scripts/fixtures/ao-spawn-shape/safety-prose-baseline.json',
