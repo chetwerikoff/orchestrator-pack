@@ -105,6 +105,20 @@ export declare function validateDeadWorkerGates(
   input?: Record<string, unknown>,
 ): DeadWorkerGateResult;
 
+export declare function resolveDeadWorkerBounds(
+  policy: unknown,
+  overrideBounds?: Record<string, unknown> | null,
+): DeadWorkerGateResult;
+
+export declare function evaluateDeadWorkerRuntimeAdoption(
+  input?: { orchestratorRules?: string },
+): {
+  ok: boolean;
+  effectiveRuntimePolicy: string;
+  reason?: string;
+  missing?: string[];
+};
+
 export declare function planDeadWorkerReconcile(
   input?: PlanDeadWorkerReconcileInput,
 ): { actions: DeadWorkerReconcileAction[]; gates: DeadWorkerGateResult };

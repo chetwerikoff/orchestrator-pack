@@ -11,9 +11,11 @@ import {
   classifyWorkerDeathEvidence,
   commitDeadWorkerAction,
   evaluateDeadWorkerInterval,
+  evaluateDeadWorkerRuntimeAdoption,
   loadAutonomousRespawnPolicy,
   planDeadWorkerReconcile,
   probeRecoveryChecks,
+  resolveDeadWorkerBounds,
   resolveRecoveryRoute,
   validateAutonomousRespawnPolicy,
   validateDeadWorkerGates,
@@ -191,6 +193,44 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     const checks = probeRecoveryChecks(repoRoot);
     expect(checks.workerRecoveryAvailable).toBe(true);
     expect(checks.branchSafeRecoveryAvailable).toBe(true);
+  });
+
+  it('resolves retry bounds from autonomous respawn policy JSON', () => {
+    const resolved = resolveDeadWorkerBounds({
+      version: AUTONOMOUS_RESPAWN_POLICY_VERSION,
+      allowReconcileDeadWorkerRespawn: false,
+      maxAttempts: 3,
+      backoffMs: 120000,
+      concurrency: 1,
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.bounds?.backoffMs).toBe(120000);
+  });
+
+  it('requires adopted orchestratorRules before allowing runtime policy', () => {
+    const denied = evaluateDeadWorkerRuntimeAdoption({ orchestratorRules: '' });
+    expect(denied.ok).toBe(false);
+    expect(denied.effectiveRuntimePolicy).toBe('deny');
+
+    const exampleRules = readFileSync(join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
+    const adopted = evaluateDeadWorkerRuntimeAdoption({ orchestratorRules: exampleRules });
+    expect(adopted.ok).toBe(true);
+    expect(adopted.effectiveRuntimePolicy).toBe('allow');
+  });
+
+  it('audit-only when runtime policy is not adopted even with toggle enabled', () => {
+    const fixture = readCapture('recoverable-crash.raw.json');
+    const plan = planDeadWorkerReconcile({
+      sessions: [fixture.session],
+      aoEvents: fixture.events,
+      respawnPolicy: { version: AUTONOMOUS_RESPAWN_POLICY_VERSION, allowReconcileDeadWorkerRespawn: true },
+      recoveryChecks: { workerRecoveryAvailable: true, branchSafeRecoveryAvailable: true },
+      effectiveRuntimePolicy: 'deny',
+      tracking: { attempts: {}, leases: {}, audit: [] },
+      nowMs: 1_780_000_105_500,
+    });
+    expect(plan.actions.every((a: { type: string }) => a.type !== 'attempt_started')).toBe(true);
+    expect(plan.gates.reason).toBe('runtime_policy_not_allow');
   });
 
   it('invokes recovery script with spaces in worktree path via Linux pwsh', () => {

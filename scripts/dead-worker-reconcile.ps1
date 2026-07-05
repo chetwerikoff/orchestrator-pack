@@ -31,6 +31,7 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 
 $Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
 
@@ -77,6 +78,60 @@ function Get-AutonomousRespawnPolicy {
     return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
+function Get-OrchestratorRulesFromYaml {
+    param([string]$YamlPath)
+
+    if (-not $YamlPath -or -not (Test-Path -LiteralPath $YamlPath -PathType Leaf)) {
+        return ''
+    }
+    $lines = (Get-Content -LiteralPath $YamlPath -Raw) -split "`n"
+    $capture = $false
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $lines) {
+        if ($line -match '^\s+orchestratorRules:\s*(?:\||>)\s*$') {
+            $capture = $true
+            continue
+        }
+        if ($capture) {
+            if ($line -match '^\S') { break }
+            $out.Add($line)
+        }
+    }
+    return ($out -join "`n")
+}
+
+function Get-DeadWorkerResolvedBounds {
+    param(
+        [object]$RespawnPolicy,
+        [object]$OverrideBounds = $null
+    )
+
+    $payload = @{ policy = $RespawnPolicy }
+    if ($null -ne $OverrideBounds) { $payload.bounds = $OverrideBounds }
+    return Invoke-DeadWorkerPlannerCli -Subcommand 'resolve-bounds' -Payload $payload
+}
+
+function Get-DeadWorkerEffectiveRuntimePolicy {
+    param([string]$OrchestratorRules)
+
+    $adoption = Invoke-DeadWorkerPlannerCli -Subcommand 'evaluate-adoption' -Payload @{
+        orchestratorRules = [string]$OrchestratorRules
+    }
+    return [string]$adoption.effectiveRuntimePolicy
+}
+
+function Get-DeadWorkerLivePlanGates {
+    $respawnPolicy = Get-AutonomousRespawnPolicy
+    $boundsResult = Get-DeadWorkerResolvedBounds -RespawnPolicy $respawnPolicy
+    $yamlPath = Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot
+    $rules = Get-OrchestratorRulesFromYaml -YamlPath $yamlPath
+    return @{
+        respawnPolicy = $respawnPolicy
+        bounds = if ($boundsResult.ok) { $boundsResult.bounds } else { @{ maxAttempts = 0; backoffMs = 0; concurrency = 0 } }
+        effectiveRuntimePolicy = (Get-DeadWorkerEffectiveRuntimePolicy -OrchestratorRules $rules)
+    }
+}
+
 function Get-DeadWorkerLivePayload {
     return @{
         sessions = @(Get-AoStatusSessionsIncludingTerminated)
@@ -89,8 +144,12 @@ function Get-DeadWorkerFixturePayload {
     $fixture = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $respawnPolicy = Get-AutonomousRespawnPolicy
     if ($fixture.respawnPolicy) { $respawnPolicy = $fixture.respawnPolicy }
-    $effectiveRuntimePolicy = 'allow'
-    if ($fixture.effectiveRuntimePolicy) { $effectiveRuntimePolicy = [string]$fixture.effectiveRuntimePolicy }
+    $effectiveRuntimePolicy = 'deny'
+    if ($fixture.effectiveRuntimePolicy) {
+        $effectiveRuntimePolicy = [string]$fixture.effectiveRuntimePolicy
+    }
+    $boundsResult = Get-DeadWorkerResolvedBounds -RespawnPolicy $respawnPolicy -OverrideBounds $fixture.bounds
+    $bounds = if ($boundsResult.ok) { $boundsResult.bounds } else { @{ maxAttempts = 0; backoffMs = 0; concurrency = 0 } }
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     if ($fixture.nowMs) { $nowMs = [long]$fixture.nowMs }
     $issueOnlyPrAmbiguous = $true
@@ -102,7 +161,7 @@ function Get-DeadWorkerFixturePayload {
         tracking = $fixture.tracking
         recoveryChecks = $fixture.recoveryChecks
         effectiveRuntimePolicy = $effectiveRuntimePolicy
-        bounds = $fixture.bounds
+        bounds = $bounds
         nowMs = $nowMs
         issueOnlyPrAmbiguous = $issueOnlyPrAmbiguous
         prLookupFailed = [bool]$fixture.prLookupFailed
@@ -177,14 +236,15 @@ function Invoke-DeadWorkerTick {
     else {
         $live = Get-DeadWorkerLivePayload
         $checks = Invoke-DeadWorkerPlannerCli -Subcommand 'probe-checks' -Payload @{ packRoot = $PackRoot }
+        $gates = Get-DeadWorkerLivePlanGates
         $payload = @{
             sessions = @($live.sessions)
             aoEvents = @($live.aoEvents)
-            respawnPolicy = Get-AutonomousRespawnPolicy
+            respawnPolicy = $gates.respawnPolicy
             tracking = $tracking
             recoveryChecks = $checks
-            effectiveRuntimePolicy = 'allow'
-            bounds = @{ maxAttempts = 3; backoffMs = 60000; concurrency = 1 }
+            effectiveRuntimePolicy = $gates.effectiveRuntimePolicy
+            bounds = $gates.bounds
             nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             issueOnlyPrAmbiguous = $true
             prLookupFailed = $false
@@ -198,6 +258,9 @@ function Invoke-DeadWorkerTick {
     foreach ($action in @($plan.actions)) {
         Write-DeadWorkerLog "action=$($action.type) session=$($action.sessionId) reason=$($action.reason) key=$($action.key)"
         $tracking = Commit-DeadWorkerAction -State $tracking -Action $action -NowMs $nowMs
+        if (-not $DryRunMode) {
+            Set-DeadWorkerState -Path $StatePath -State $tracking
+        }
         if ($action.type -ne 'attempt_started') { continue }
         $attempted++
         $result = Invoke-DeadWorkerRecovery -Action $action -DryRunMode:$DryRunMode

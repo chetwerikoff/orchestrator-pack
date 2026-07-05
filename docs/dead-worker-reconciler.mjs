@@ -225,17 +225,17 @@ export function resolveRecoveryRoute(session, evidence, input = {}) {
   return { ok: true, spawnAction: 'spawn-new', issueNumber, prNumber: 0 };
 }
 
-export function validateDeadWorkerGates(input = {}) {
-  const policy = validateAutonomousRespawnPolicy(input.respawnPolicy);
-  if (!policy.ok) return { ok: false, reason: policy.reason };
-  if (!policy.policy.allowReconcileDeadWorkerRespawn) {
-    return { ok: false, reason: 'respawn_policy_off' };
-  }
+export const DEAD_WORKER_RUNTIME_ADOPTION_MARKERS = [
+  'DEAD WORKER RECONCILE',
+  'dead-worker-reconcile.ps1',
+  'allowReconcileDeadWorkerRespawn',
+  '-ProbedDeadEvidence',
+];
 
-  const bounds = input.bounds ?? {};
-  const maxAttempts = numberOrZero(bounds.maxAttempts || DEFAULT_DEAD_WORKER_MAX_ATTEMPTS);
-  const backoffMs = numberOrZero(bounds.backoffMs || DEFAULT_DEAD_WORKER_BACKOFF_MS);
-  const concurrency = numberOrZero(bounds.concurrency || DEFAULT_DEAD_WORKER_CONCURRENCY);
+function validateResolvedDeadWorkerBounds(bounds) {
+  const maxAttempts = numberOrZero(bounds.maxAttempts);
+  const backoffMs = numberOrZero(bounds.backoffMs);
+  const concurrency = numberOrZero(bounds.concurrency);
   if (maxAttempts < 1 || maxAttempts > DEFAULT_DEAD_WORKER_MAX_ATTEMPTS) {
     return { ok: false, reason: 'invalid_retry_bound' };
   }
@@ -245,6 +245,57 @@ export function validateDeadWorkerGates(input = {}) {
   if (concurrency < 1 || concurrency > DEFAULT_DEAD_WORKER_CONCURRENCY) {
     return { ok: false, reason: 'invalid_concurrency_bound' };
   }
+  return { ok: true, bounds: { maxAttempts, backoffMs, concurrency } };
+}
+
+export function resolveDeadWorkerBounds(policy, overrideBounds = null) {
+  const validated = validateAutonomousRespawnPolicy(policy);
+  if (!validated.ok) {
+    return { ok: false, reason: validated.reason };
+  }
+  const source = overrideBounds && typeof overrideBounds === 'object' && !Array.isArray(overrideBounds)
+    ? overrideBounds
+    : policy;
+  return validateResolvedDeadWorkerBounds({
+    maxAttempts: source?.maxAttempts ?? DEFAULT_DEAD_WORKER_MAX_ATTEMPTS,
+    backoffMs: source?.backoffMs ?? DEFAULT_DEAD_WORKER_BACKOFF_MS,
+    concurrency: source?.concurrency ?? DEFAULT_DEAD_WORKER_CONCURRENCY,
+  });
+}
+
+export function evaluateDeadWorkerRuntimeAdoption(input = {}) {
+  const rules = normalizeString(input.orchestratorRules);
+  const missing = DEAD_WORKER_RUNTIME_ADOPTION_MARKERS.filter((phrase) => !rules.includes(phrase));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      effectiveRuntimePolicy: 'deny',
+      reason: 'runtime_policy_not_adopted',
+      missing,
+    };
+  }
+  return {
+    ok: true,
+    effectiveRuntimePolicy: 'allow',
+    reason: 'runtime_policy_adopted',
+    missing: [],
+  };
+}
+
+export function validateDeadWorkerGates(input = {}) {
+  const policy = validateAutonomousRespawnPolicy(input.respawnPolicy);
+  if (!policy.ok) return { ok: false, reason: policy.reason };
+  if (!policy.policy.allowReconcileDeadWorkerRespawn) {
+    return { ok: false, reason: 'respawn_policy_off' };
+  }
+
+  const boundResolution = input.bounds
+    ? validateResolvedDeadWorkerBounds(input.bounds)
+    : resolveDeadWorkerBounds(input.respawnPolicy);
+  if (!boundResolution.ok) {
+    return { ok: false, reason: boundResolution.reason };
+  }
+  const { maxAttempts, backoffMs, concurrency } = boundResolution.bounds;
 
   const checks = input.recoveryChecks ?? {};
   if (checks.workerRecoveryAvailable !== true) {
@@ -439,4 +490,9 @@ runStdinJsonCli('dead-worker-reconciler.mjs', {
   },
   'probe-checks': () => probeRecoveryChecks(readStdinJson().packRoot),
   'validate-policy': () => validateAutonomousRespawnPolicy(readStdinJson().policy),
+  'resolve-bounds': () => {
+    const payload = readStdinJson();
+    return resolveDeadWorkerBounds(payload.policy, payload.bounds ?? null);
+  },
+  'evaluate-adoption': () => evaluateDeadWorkerRuntimeAdoption(readStdinJson()),
 });
