@@ -187,6 +187,14 @@ describe('github-fleet-governor (Issue #585)', () => {
     });
     expect(denied.admitted).toBe(false);
     expect(denied.reason).toBe('governor-cooldown');
+    const preflightDenied = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'interactive-preflight' },
+      argv: ['pr', 'view', '1', '--json', 'headRefOid'],
+      partitionKey,
+    });
+    expect(preflightDenied.admitted).toBe(false);
+    expect(preflightDenied.reason).toBe('governor-cooldown');
+    expect(preflightDenied.emergency).not.toBe(true);
   });
 
   it('AC#4 without headers uses conservative fixed backoff classification', () => {
@@ -229,6 +237,14 @@ describe('github-fleet-governor (Issue #585)', () => {
     });
     expect(denied.admitted).toBe(false);
     expect(denied.reason).toBe('governor-cooldown');
+    const preflightDenied = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'interactive-preflight' },
+      argv: ['api', 'graphql', '-f', 'query={viewer{login}}'],
+      partitionKey,
+    });
+    expect(preflightDenied.admitted).toBe(false);
+    expect(preflightDenied.reason).toBe('governor-cooldown');
+    expect(preflightDenied.emergency).not.toBe(true);
   });
 
   it('AC#5 background lane fails closed on corrupt governor state', () => {

@@ -484,10 +484,6 @@ export function acquireGithubGovernorAdmission(options = {}) {
     state = refillTokens(state, budget, now);
 
     if ((state.cooldownUntilMs ?? 0) > now) {
-      if (isReservedLane(lane)) {
-        releaseLock(lockPath);
-        return admitEmergency(lane, budget, env, partitionKey, 'cooldown-reserved', { stateDir, statePath });
-      }
       releaseLock(lockPath);
       return denyAdmission(lane, 'governor-cooldown', partitionKey, {
         cooldownUntilMs: state.cooldownUntilMs,
