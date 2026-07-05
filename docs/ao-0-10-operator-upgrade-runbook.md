@@ -71,14 +71,20 @@ Primary assets for Ubuntu 22.04+ / WSL2 on **amd64**:
 | Asset | URL | Size (bytes) | Checksum / signature on release |
 |-------|-----|--------------|--------------------------------|
 | `.deb` | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator_0.10.2_amd64.deb | 93 231 416 | **None published** — operator acknowledgement required |
-| AppImage | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator-linux-x64.AppImage | 120 483 726 | **sha512** in `latest-linux.yml` (see below) |
+| AppImage (checksum-backed) | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/Agent.Orchestrator-0.10.2.AppImage | 120 483 726 | **sha512** in `latest-linux.yml` (see below) |
 | `.rpm` | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator-0.10.2-1.x86_64.rpm | 91 955 233 | **None published** — operator acknowledgement required |
 
 ### AppImage integrity (upstream-published)
 
+Use the asset named in `latest-linux.yml` — **`Agent.Orchestrator-0.10.2.AppImage`**
+(not the lowercase `agent-orchestrator-linux-x64.AppImage` alias, which has no
+published checksum on the release).
+
 ```bash
 curl -fsSL -o /tmp/latest-linux.yml \
   "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/latest-linux.yml"
+curl -fL -o /tmp/Agent.Orchestrator-0.10.2.AppImage \
+  "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/Agent.Orchestrator-0.10.2.AppImage"
 # Expect sha512 for Agent.Orchestrator-0.10.2.AppImage:
 # I5FUlUuOPfEPvEfKXcqfP3SHrUj2XMH/0hL+g5KgDBnXCc3Es1YlFwG8WP7VSKZ4kRbdo8XqP53NNTfKnTSSXg==
 ```

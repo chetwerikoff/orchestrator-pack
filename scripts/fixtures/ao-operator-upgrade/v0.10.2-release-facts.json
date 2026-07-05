@@ -30,15 +30,16 @@
       "signaturePublished": false
     },
     {
-      "name": "agent-orchestrator-linux-x64.AppImage",
-      "url": "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator-linux-x64.AppImage",
+      "name": "Agent.Orchestrator-0.10.2.AppImage",
+      "url": "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/Agent.Orchestrator-0.10.2.AppImage",
       "architecture": "x86_64",
       "format": "appimage",
       "sizeBytes": 120483726,
       "checksumPublished": true,
       "checksumSource": "latest-linux.yml",
       "checksumAlgorithm": "sha512",
-      "checksumValue": "I5FUlUuOPfEPvEfKXcqfP3SHrUj2XMH/0hL+g5KgDBnXCc3Es1YlFwG8WP7VSKZ4kRbdo8XqP53NNTfKnTSSXg=="
+      "checksumValue": "I5FUlUuOPfEPvEfKXcqfP3SHrUj2XMH/0hL+g5KgDBnXCc3Es1YlFwG8WP7VSKZ4kRbdo8XqP53NNTfKnTSSXg==",
+      "notes": "latest-linux.yml names this asset; agent-orchestrator-linux-x64.AppImage is also on the release but has no published checksum entry"
     },
     {
       "name": "agent-orchestrator-0.10.2-1.x86_64.rpm",
