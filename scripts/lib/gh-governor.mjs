@@ -591,6 +591,7 @@ function admitEmergency(lane, budget, env, partitionKey, reason, paths = {}) {
         env,
         partitionKey,
         statePath,
+        emergency: true,
         outcome: releaseOptions.outcome,
         headers: releaseOptions.headers,
         exitCode: releaseOptions.exitCode,
@@ -640,10 +641,12 @@ export function releaseGithubGovernorAdmission(options = {}) {
   try {
     let state = readStateFile(statePath);
     if (!state) return;
-    state = {
-      ...state,
-      inFlight: Math.max(0, (state.inFlight ?? 1) - 1),
-    };
+    if (!options.emergency) {
+      state = {
+        ...state,
+        inFlight: Math.max(0, (state.inFlight ?? 1) - 1),
+      };
+    }
     const outcome = classifyGovernorTransportOutcome({
       exitCode: options.exitCode,
       stderr: options.stderr,

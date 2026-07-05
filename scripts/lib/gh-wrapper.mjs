@@ -111,13 +111,10 @@ function passthrough(argv) {
   const result = spawnSync(realGh, argv, {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
-    stdio: ['inherit', 'pipe', 'pipe'],
+    stdio: ['inherit', 'inherit', 'pipe'],
     encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: 1024 * 1024,
   });
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
   if (result.stderr) {
     process.stderr.write(result.stderr);
   }
@@ -126,7 +123,6 @@ function passthrough(argv) {
   withGovernorRelease(admission, {
     exitCode: status,
     stderr: result.stderr ?? '',
-    stdout: result.stdout ?? '',
     headers: rateLimit,
   });
   writeWrapperAudit('complete', buildAuditFields(argv, {

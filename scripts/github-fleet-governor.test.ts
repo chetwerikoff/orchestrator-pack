@@ -233,6 +233,45 @@ describe('github-fleet-governor (Issue #585)', () => {
     expect(state?.emergencyBudgetUsed).toBe(1);
   });
 
+  it('emergency release does not decrement unrelated in-flight count', () => {
+    root = mkdtempSync(join(tmpdir(), 'gh-governor-emergency-inflight-'));
+    const env = governorEnv(root, {
+      GH_GOVERNOR_MAX_IN_FLIGHT: '1',
+      GH_GOVERNOR_MAX_TOKENS: '10',
+      GH_GOVERNOR_RESERVED_TOKENS: '0',
+    });
+    const hold = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'background' },
+      argv: ['pr', 'list'],
+      partitionKey,
+    });
+    expect(hold.admitted).toBe(true);
+    let state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.inFlight).toBe(1);
+
+    const emergency = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'interactive-preflight' },
+      argv: ['pr', 'view', '1', '--json', 'headRefOid'],
+      partitionKey,
+    });
+    expect(emergency.admitted).toBe(true);
+    expect(emergency.emergency).toBe(true);
+    state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.inFlight).toBe(1);
+
+    emergency.release?.();
+    state = readGovernorStateForFixture(env.GH_GOVERNOR_STATE_DIR!, partitionKey);
+    expect(state?.inFlight).toBe(1);
+
+    const blocked = acquireGithubGovernorAdmission({
+      env: { ...env, GH_GOVERNOR_LANE: 'background' },
+      argv: ['pr', 'list'],
+      partitionKey,
+    });
+    expect(blocked.admitted).toBe(false);
+    hold.release?.();
+  });
+
   it('persists emergency budget usage and exhausts after max admissions', () => {
     root = mkdtempSync(join(tmpdir(), 'gh-governor-emergency-'));
     const env = governorEnv(root, {
@@ -443,7 +482,7 @@ process.stdout.write(String(result.status ?? 1));`;
 
   it('passthrough forwards captured stderr into governor release', () => {
     const wrapper = readFileSync(wrapperPath, 'utf8');
-    expect(wrapper).toMatch(/stdio:\s*\['inherit',\s*'pipe',\s*'pipe'\]/);
+    expect(wrapper).toMatch(/stdio:\s*\['inherit',\s*'inherit',\s*'pipe'\]/);
     expect(wrapper).toMatch(/withGovernorRelease\(admission,\s*\{[\s\S]*stderr:\s*result\.stderr/);
   });
 
