@@ -1,0 +1,32 @@
+{
+  "issue_number": 584,
+  "iteration_id": "opk-134",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-04T23:58:36.556Z",
+  "baseline": {
+    "commit_sha": "420b4e28f94cb67a92c644900edf749ebe27df82",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:3026b1e73e4fd87d9d905fc847b7e02e28b3d61c57e1b30e7db7fdec9304b24e"
+  },
+  "declared_paths": [
+    "docs/review-start-preflight-shield.d.mts",
+    "docs/review-start-preflight-shield.mjs",
+    "scripts/check-orchestrator-claimed-review-run.ps1",
+    "scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1",
+    "scripts/lib/Get-ClaimedReviewStartSnapshot.ps1",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Orchestrator-ReviewStartAudit.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/Review-StartClaimLifecycle.ps1",
+    "scripts/lib/Review-StartPreflightShield.ps1",
+    "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/review-start-envelope-ledger.test.ts",
+    "scripts/review-start-preflight-shield.test.ts",
+    "scripts/review-start-scoped-gh-json-capture.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "docs/declarations/584.opk-134.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
