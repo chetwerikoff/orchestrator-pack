@@ -46,6 +46,12 @@ if ($mjs -notmatch 'validateBusyDispatchMarker' -or $mjs -notmatch 'resolveBusyD
     Write-Host 'worker-message-submit-reconcile.mjs must validate and gate busy dispatch on smoke markers'
     exit 1
 }
+if ($mjs -notmatch 'isSubmitEnterAuthorizedByAdoption' -or
+    $mjs -notmatch 'ADOPTION_STATUS_WRAPPER_NOT_ADOPTED' -or
+    $mjs -notmatch 'buildAdoptionBlockedDecision') {
+    Write-Host 'worker-message-submit-reconcile.mjs must block Enter while wrapper_not_adopted is active'
+    exit 1
+}
 if ($mjs -notmatch 'DEFAULT_DELIVERY_BACKSTOP_MS' -or $mjs -notmatch 'DEFAULT_POST_DISPATCH_LEASE_MS') {
     Write-Host 'worker-message-submit-reconcile.mjs must define delivery/backstop lease defaults for issue #293'
     exit 1
@@ -54,6 +60,12 @@ if ($mjs -notmatch 'DEFAULT_DELIVERY_BACKSTOP_MS' -or $mjs -notmatch 'DEFAULT_PO
 $observe = Get-Content -LiteralPath $observeMjs -Raw
 if ($observe -notmatch 'AO_PASTE_CHAR_THRESHOLD = 200') {
     Write-Host 'worker-message-dispatch-observe.mjs must anchor paste threshold at 200 chars'
+    exit 1
+}
+if ($observe -notmatch 'hasPositiveConsumptionEvidence' -or
+    $observe -notmatch 'consumedAfterFlushObserved' -or
+    $observe -notmatch 'reportCorrelatesToDelivery') {
+    Write-Host 'worker-message-dispatch-observe.mjs must require positive consumption evidence before marking consumed'
     exit 1
 }
 
@@ -261,6 +273,44 @@ if (-not (Test-Path -LiteralPath $migration -PathType Leaf)) {
 $migrationText = Get-Content -LiteralPath $migration -Raw
 if ($migrationText -notlike '*worker-message-submit-reconcile*') {
     Write-Host 'docs/migration_notes.md must document worker-message-submit-reconcile operator adoption'
+    exit 1
+}
+if ($migrationText -notlike '*wrapper_not_adopted*' -or $migrationText -notlike '*positive consumption evidence*') {
+    Write-Host 'docs/migration_notes.md must document wrapper_not_adopted and positive consumption evidence adoption checks'
+    exit 1
+}
+
+$auditPath = Join-Path $Root 'docs/submit-reconcile-delivery-source-audit.json'
+if (-not (Test-Path -LiteralPath $auditPath -PathType Leaf)) {
+    Write-Host 'Missing docs/submit-reconcile-delivery-source-audit.json (Issue #602 source audit)'
+    exit 1
+}
+$auditJson = Get-Content -LiteralPath $auditPath -Raw | ConvertFrom-Json
+if ($null -eq $auditJson.sources) {
+    Write-Host 'submit-reconcile-delivery-source-audit.json must expose a sources array'
+    exit 1
+}
+$requiredSources = @('review-send', 'reaction-routed', 'ci-failure-nudge', 'ci-green-nudge', 'orchestrator-turn-nudge')
+foreach ($source in $requiredSources) {
+    $row = @($auditJson.sources | Where-Object { $_.source -eq $source })
+    if ($row.Count -ne 1) {
+        Write-Host "submit-reconcile-delivery-source-audit.json must include source=$source"
+        exit 1
+    }
+}
+
+if ($mjs -notmatch 'hasPositiveConsumptionEvidence' -and $observe -notmatch 'hasPositiveConsumptionEvidence') {
+    Write-Host 'worker-message dispatch/submit reconcile must implement hasPositiveConsumptionEvidence (Issue #602)'
+    exit 1
+}
+
+if ($mjs -notmatch 'isSubmitEnterAuthorizedByAdoption' -or $mjs -notmatch 'wrapper_not_adopted') {
+    Write-Host 'worker-message-submit-reconcile.mjs must gate Enter on adoption status (Issue #602)'
+    exit 1
+}
+
+if ($ps1 -notmatch 'Invoke-SubmitAdoptionPreflightObservation') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must run adoption preflight observation (Issue #602)'
     exit 1
 }
 

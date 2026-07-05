@@ -54,6 +54,9 @@ export interface DeliveryRecord {
   prNumber?: number;
   headSha?: string;
   deliverySequence?: number;
+  consumptionObserved?: boolean;
+  consumedAfterFlushObserved?: boolean;
+  consumptionEvidence?: string;
 }
 
 export declare function classifyDeliveryPath(shape: {
@@ -126,10 +129,18 @@ export declare function observeReactionDeliveries(input: {
 
 export declare function getSessionActivity(session: Record<string, unknown>): string;
 
+export declare function hasPositiveConsumptionEvidence(
+  session: Record<string, unknown>,
+  delivery: DeliveryRecord,
+  deliveredAtMs: number,
+  record?: Record<string, unknown>,
+): boolean;
+
 export declare function isDeliveryConsumed(
   session: Record<string, unknown>,
   delivery: DeliveryRecord,
   deliveredAtMs: number,
+  record?: Record<string, unknown>,
 ): boolean;
 
 export declare function isSessionStreaming(session: Record<string, unknown>): boolean;

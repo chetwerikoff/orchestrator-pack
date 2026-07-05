@@ -17,6 +17,8 @@ export declare const OPERATOR_ESCALATION_PREFIX: string;
 export declare const FAILED_DELIVERY_UNRESOLVED: string;
 export declare const FAILED_DELIVERY_RESOLVED: string;
 export declare const FAILED_DELIVERY_AUDITED_CLOSED: string;
+export declare const ADOPTION_STATUS_ADOPTED: string;
+export declare const ADOPTION_STATUS_WRAPPER_NOT_ADOPTED: string;
 
 export interface BusyDispatchMarker {
   backendKey: string;
@@ -259,6 +261,10 @@ export declare function applySubmitOutcomes(
   }>,
   nowMs: number,
 ): SubmitTrackingState;
+
+export declare function isSubmitEnterAuthorizedByAdoption(
+  tracking?: SubmitTrackingState | Record<string, unknown>,
+): boolean;
 
 export declare function evaluateSubmitDecision(input: {
   delivery: DeliveryRecord;
