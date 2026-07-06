@@ -1,0 +1,37 @@
+{
+  "data": [
+    {
+      "id": "orchestrator-pack-1",
+      "projectId": "orchestrator-pack",
+      "role": "orchestrator",
+      "status": "terminated",
+      "harness": "opencode",
+      "isTerminated": true,
+      "lastActivityAt": "2026-07-06T01:57:30.05309249Z",
+      "createdAt": "2026-07-05T16:25:48.506012752Z",
+      "updatedAt": "2026-07-06T01:57:30.05309249Z"
+    },
+    {
+      "id": "orchestrator-pack-5",
+      "projectId": "orchestrator-pack",
+      "role": "orchestrator",
+      "status": "idle",
+      "harness": "cursor",
+      "isTerminated": false,
+      "lastActivityAt": "2026-07-06T02:10:30.609029394Z",
+      "createdAt": "2026-07-06T02:02:25.255749109Z",
+      "updatedAt": "2026-07-06T02:10:30.609029394Z"
+    },
+    {
+      "id": "orchestrator-pack-foreign",
+      "projectId": "other-project",
+      "role": "orchestrator",
+      "status": "idle",
+      "harness": "cursor",
+      "isTerminated": false,
+      "lastActivityAt": "2026-07-06T02:10:30.609029394Z",
+      "createdAt": "2026-07-06T02:02:25.255749109Z",
+      "updatedAt": "2026-07-06T02:10:30.609029394Z"
+    }
+  ]
+}

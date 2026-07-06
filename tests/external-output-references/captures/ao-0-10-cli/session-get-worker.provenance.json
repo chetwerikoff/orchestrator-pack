@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao session get orchestrator-pack-7 --json -p orchestrator-pack",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-06T05:30:00.000Z",
+  "context": "Single-session detail envelope; reports field must remain absent on AO 0.10.",
+  "scrubLog": ["Synthetic session ids; no machine-local paths"]
+}

@@ -1,0 +1,6 @@
+{
+  "allowedFields": ["data", "meta"],
+  "forbiddenFields": ["sessions", "reports", "state", "pid"],
+  "captureRef": "captures/ao-0-10-cli/session-ls.raw.json",
+  "provenanceRef": "captures/ao-0-10-cli/session-ls.provenance.json"
+}

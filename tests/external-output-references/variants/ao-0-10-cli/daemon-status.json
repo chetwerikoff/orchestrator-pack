@@ -1,0 +1,17 @@
+{
+  "extends": "_shared-row.json",
+  "allowedFields": [
+    "state",
+    "pid",
+    "port",
+    "startedAt",
+    "uptime",
+    "runFile",
+    "dataDir",
+    "health",
+    "ready"
+  ],
+  "forbiddenFields": ["data", "sessions", "reports"],
+  "captureRef": "captures/ao-0-10-cli/daemon-status.raw.json",
+  "provenanceRef": "captures/ao-0-10-cli/daemon-status.provenance.json"
+}

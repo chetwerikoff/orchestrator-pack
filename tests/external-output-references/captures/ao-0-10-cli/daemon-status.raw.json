@@ -1,0 +1,11 @@
+{
+  "state": "ready",
+  "pid": 10001,
+  "port": 3001,
+  "startedAt": "2026-07-06T05:25:15.062388936Z",
+  "uptime": "4m42s",
+  "runFile": "RUN_FILE_PLACEHOLDER",
+  "dataDir": "DATA_DIR_PLACEHOLDER",
+  "health": "ok",
+  "ready": "ready"
+}

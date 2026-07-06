@@ -1,0 +1,6 @@
+{
+  "allowedFields": ["data"],
+  "forbiddenFields": ["sessions", "reports", "meta"],
+  "captureRef": "captures/ao-0-10-cli/orchestrator-ls.raw.json",
+  "provenanceRef": "captures/ao-0-10-cli/orchestrator-ls.provenance.json"
+}

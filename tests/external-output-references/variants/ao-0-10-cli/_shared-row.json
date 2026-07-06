@@ -1,0 +1,15 @@
+{
+  "allowedFields": [
+    "id",
+    "projectId",
+    "role",
+    "status",
+    "issueId",
+    "harness",
+    "isTerminated",
+    "lastActivityAt",
+    "createdAt",
+    "updatedAt"
+  ],
+  "forbiddenFields": ["reports", "sessions", "name", "sessionId", "project"]
+}

@@ -17,33 +17,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorLaunchHealth.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 
 $orchId = $OrchestratorSessionId
 if (-not $orchId) {
     $orchId = if ($env:AO_ORCHESTRATOR_SESSION_ID) { $env:AO_ORCHESTRATOR_SESSION_ID.Trim() } else { 'op-orchestrator' }
 }
 
-function Get-OrchestratorFromStatus {
+function Get-OrchestratorFromAdapter {
     param([string]$Id, [string]$Proj)
 
-    $args = @('status', '--json', '--reports', 'full')
-    if ($Proj) { $args += @('-p', $Proj) }
-    $raw = & ao @args 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw "ao status failed: $raw"
+    if ($Id) {
+        $rows = @(Get-AoOrchestratorSessions -Project $Proj -IncludeTerminated)
+        $orch = $rows | Where-Object { $_.id -eq $Id -or $_.name -eq $Id -or $_.sessionId -eq $Id } | Select-Object -First 1
+        if ($orch) { return $orch }
     }
-    $payload = ($raw | Out-String).Trim() | ConvertFrom-Json
-    $sessions = @($payload.data)
-    if (-not $sessions -and $payload.sessions) { $sessions = @($payload.sessions) }
-    $orch = $sessions | Where-Object { $_.name -eq $Id -or $_.sessionId -eq $Id } | Select-Object -First 1
-    if (-not $orch) {
-        $orch = $sessions | Where-Object { $_.role -eq 'orchestrator' } | Select-Object -First 1
-    }
-    return $orch
+    return @(Get-AoOrchestratorSessions -Project $Proj) | Select-Object -First 1
 }
 
 for ($i = 1; $i -le $PollCount; $i++) {
-    $orch = Get-OrchestratorFromStatus -Id $orchId -Proj $ProjectId
+    $orch = Get-OrchestratorFromAdapter -Id $orchId -Proj $ProjectId
     $healthy = Test-OrchestratorSessionLaunchHealthy -Session $orch
     $label = if ($orch) { "$($orch.status)/$($orch.activity)" } else { 'missing' }
     Write-Host ("[{0}/{1}] orchestrator {2}: {3}" -f $i, $PollCount, $orchId, $(if ($healthy) { 'healthy' } else { "not healthy ($label)" }))

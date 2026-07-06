@@ -2,6 +2,46 @@
   "version": 1,
   "corpusRoot": "tests/external-output-references",
   "entries": {
+    "ao-0-10-cli/daemon-status": {
+      "id": "ao-0-10-cli/daemon-status",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao status --json",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/daemon-status.raw.json",
+      "contentHash": "sha256:8ea233c60df13d65c497f74452b45645179d188bcc7e50db46358667d1a0dbf2"
+    },
+    "ao-0-10-cli/orchestrator-ls": {
+      "id": "ao-0-10-cli/orchestrator-ls",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao orchestrator ls --json",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/orchestrator-ls.raw.json",
+      "contentHash": "sha256:e650fa284be8a6ef4da700512f7219e7347bacce7941463ddfb3f27062cb9f9e"
+    },
+    "ao-0-10-cli/session-get-worker": {
+      "id": "ao-0-10-cli/session-get-worker",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao session get orchestrator-pack-7 --json -p orchestrator-pack",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/session-get-worker.raw.json",
+      "contentHash": "sha256:5ce6f86872eec9086d67581cf3f40311529144b5fe8925bcf812d235e9b1e11d"
+    },
+    "ao-0-10-cli/session-ls": {
+      "id": "ao-0-10-cli/session-ls",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao session ls --json -p orchestrator-pack",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/session-ls.raw.json",
+      "contentHash": "sha256:7d72c7b6a70cabb92d34829ecf310da6f26a8004b4da719282ede49334615c8d"
+    },
+    "ao-0-10-cli/session-ls-terminated": {
+      "id": "ao-0-10-cli/session-ls-terminated",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao session ls --json -p orchestrator-pack --include-terminated",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/session-ls-terminated.raw.json",
+      "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c"
+    },
     "ao-review-run/cancelled": {
       "id": "ao-review-run/cancelled",
       "producer": "ao",

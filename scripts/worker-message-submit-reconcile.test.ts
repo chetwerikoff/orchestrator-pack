@@ -105,6 +105,8 @@ function writeFakeAoCli(dir: string): string {
     aoPath,
     `#!/usr/bin/env bash
 if [[ "$1" == "status" ]]; then echo '{"data":[]}'; exit 0; fi
+if [[ "$1" == "session" && "$2" == "ls" && "$3" == "--json" ]]; then echo '{"data":[]}'; exit 0; fi
+if [[ "$1" == "orchestrator" && "$2" == "ls" && "$3" == "--json" ]]; then echo '{"data":[]}'; exit 0; fi
 if [[ "$1" == "events" && "$2" == "list" ]]; then echo '{"events":[]}'; exit 0; fi
 if [[ "$1" == "review" && "$2" == "list" ]]; then echo '{"runs":[]}'; exit 0; fi
 echo "unsupported: $*" >&2; exit 99

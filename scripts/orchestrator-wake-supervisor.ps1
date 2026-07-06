@@ -6,7 +6,7 @@
 .DESCRIPTION
   Single operator entry point to start, monitor, and stop
   orchestrator-wake-listener.ps1 and orchestrator-wake-heartbeat.ps1.
-  Resolves AO_ORCHESTRATOR_SESSION_ID (override or ao status), restarts children
+  Resolves AO_ORCHESTRATOR_SESSION_ID (override or orchestrator-list adapter), restarts children
   on exit, and re-targets both when the orchestrator session id changes.
 
   See docs/orchestrator-wake-runbook.md and docs/orchestrator-autoloop-go-live.md.
