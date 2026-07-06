@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "id": "orchestrator-pack",
+      "name": "orchestrator-pack",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-07-06T08:00:00.000Z"
+    }
+  ]
+}

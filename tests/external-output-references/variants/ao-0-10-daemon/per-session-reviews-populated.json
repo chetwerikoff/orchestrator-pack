@@ -1,0 +1,8 @@
+{
+  "id": "ao-0-10-daemon/per-session-reviews-populated",
+  "command": "ao-0-10-daemon",
+  "variant": "per-session-reviews-populated",
+  "extends": "_shared.json",
+  "captureRef": "captures/ao-0-10-daemon/per-session-reviews-populated.raw.json",
+  "provenanceRef": "captures/ao-0-10-daemon/per-session-reviews-populated.provenance.json"
+}

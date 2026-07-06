@@ -31,6 +31,11 @@
       "source": "AO 0.10 daemon health, session ls, orchestrator ls, session get",
       "variantDir": "variants/ao-0-10-cli",
       "defaultVariant": "daemon-status"
+    },
+    "ao-0-10-daemon": {
+      "source": "AO 0.10 daemon HTTP fan-out: GET /api/v1/sessions, /projects, per-session /reviews",
+      "variantDir": "variants/ao-0-10-daemon",
+      "defaultVariant": "per-session-reviews-populated"
     }
   }
 }

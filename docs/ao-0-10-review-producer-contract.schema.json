@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestrator-pack/ao-0-10-review-producer-contract.schema.json",
+  "title": "ReviewBoardRun",
+  "description": "Producer row emitted from AO 0.10 daemon HTTP fan-out (Issue #626).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sessionId", "status", "workerHasRuntime"],
+  "properties": {
+    "id": { "type": ["string", "null"], "description": "latestRun.id; null when queued (no latestRun)" },
+    "sessionId": { "type": "string" },
+    "projectId": { "type": ["string", "null"] },
+    "prUrl": { "type": ["string", "null"] },
+    "targetSha": { "type": ["string", "null"] },
+    "prReviewStatus": { "type": ["string", "null"] },
+    "latestRunStatus": { "type": ["string", "null"] },
+    "verdict": { "type": ["string", "null"] },
+    "body": { "type": ["string", "null"] },
+    "githubReviewId": { "type": ["number", "string", "null"] },
+    "deliveredAt": { "type": ["string", "null"], "format": "date-time" },
+    "batchId": { "type": ["string", "null"] },
+    "projectName": { "type": ["string", "null"] },
+    "workerBranch": { "type": ["string", "null"] },
+    "workerPrUrl": { "type": ["string", "null"] },
+    "workerStatus": { "type": ["string", "null"] },
+    "workerActivity": {},
+    "workerHasRuntime": { "type": "boolean" },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "reviewing", "triage", "waiting", "clean", "failed", "outdated"]
+    }
+  }
+}

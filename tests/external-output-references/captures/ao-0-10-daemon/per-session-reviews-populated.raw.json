@@ -1,0 +1,85 @@
+{
+  "reviewerHandleId": "review-orchestrator-pack-7",
+  "reviews": [
+    {
+      "prNumber": 626,
+      "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/626",
+      "headSha": "abc123def4567890abcdef1234567890abcdef12",
+      "targetSha": "abc123def4567890abcdef1234567890abcdef12",
+      "status": "running",
+      "latestRun": {
+        "id": "rr-626-running-1",
+        "batchId": "batch-626-a",
+        "status": "running",
+        "targetSha": "abc123def4567890abcdef1234567890abcdef12",
+        "verdict": null,
+        "body": null,
+        "githubReviewId": null,
+        "deliveredAt": null,
+        "linkedSessionId": "orchestrator-pack-7"
+      }
+    },
+    {
+      "prNumber": 625,
+      "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/625",
+      "headSha": "def456abc789012345678901234567890abcdef34",
+      "targetSha": "def456abc789012345678901234567890abcdef34",
+      "status": "changes_requested",
+      "latestRun": {
+        "id": "rr-625-triage-1",
+        "batchId": "batch-625-b",
+        "status": "completed",
+        "targetSha": "def456abc789012345678901234567890abcdef34",
+        "verdict": "changes_requested",
+        "body": "Address vocabulary migration gaps.",
+        "githubReviewId": 210987654,
+        "deliveredAt": "2026-07-06T08:15:00.000Z",
+        "linkedSessionId": "orchestrator-pack-7"
+      }
+    },
+    {
+      "prNumber": 624,
+      "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/624",
+      "headSha": "fedcba9876543210fedcba9876543210fedcba98",
+      "targetSha": "fedcba9876543210fedcba9876543210fedcba98",
+      "status": "changes_requested",
+      "latestRun": {
+        "id": "rr-624-waiting-1",
+        "batchId": "batch-624-c",
+        "status": "completed",
+        "targetSha": "fedcba9876543210fedcba9876543210fedcba98",
+        "verdict": "changes_requested",
+        "body": "Pending auto-delivery.",
+        "githubReviewId": null,
+        "deliveredAt": null,
+        "linkedSessionId": "orchestrator-pack-7"
+      }
+    },
+    {
+      "prNumber": 623,
+      "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/623",
+      "headSha": "0123456789abcdef0123456789abcdef01234567",
+      "targetSha": "0123456789abcdef0123456789abcdef01234567",
+      "status": "up_to_date",
+      "latestRun": {
+        "id": "rr-623-clean-1",
+        "batchId": "batch-623-d",
+        "status": "completed",
+        "targetSha": "0123456789abcdef0123456789abcdef01234567",
+        "verdict": "approved",
+        "body": "LGTM",
+        "githubReviewId": 210987001,
+        "deliveredAt": "2026-07-06T07:45:00.000Z",
+        "linkedSessionId": "orchestrator-pack-7"
+      }
+    },
+    {
+      "prNumber": 622,
+      "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/622",
+      "headSha": "1111222233334444555566667777888899990000",
+      "targetSha": "1111222233334444555566667777888899990000",
+      "status": "needs_review",
+      "latestRun": null
+    }
+  ]
+}

@@ -594,6 +594,24 @@ else {
     Add-Failure 'Missing AO 0.10 review harness + trigger loop check script (Issue #623)'
 }
 
+
+Write-Host ''
+Write-Host '== AO 0.10 review producer data contract (Issue #626) =='
+$ao010ReviewProducerCheck = Join-Path $Root 'scripts/check-review-producer-contract.ps1'
+if (Test-Path -LiteralPath $ao010ReviewProducerCheck -PathType Leaf) {
+    & $ao010ReviewProducerCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-producer-contract.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-producer-contract.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 review producer data contract checks failed (Issue #626)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-producer-contract.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 review producer data contract check script (Issue #626)'
+}
 Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
 $reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
