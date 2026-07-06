@@ -683,7 +683,7 @@ Normalization rules:
 |------|----------|
 | **T1** | One light architectural (Codex) pass. |
 | **T2** | Architectural (Codex) only, up to **3** passes; first `NO_FINDINGS` publishes. No competitive stage. |
-| **T3** | Competitive adversarial (**GPT** default; **Codex** when GPT unavailable — record substitution) ≤**3** → architectural (Codex) ≤**4** → **architect lens** ×**1** → final architectural (Codex) over architect edits ×**1**. |
+| **T3** | Competitive adversarial (**GPT** default; **Codex** when GPT unavailable — record substitution) ≤**3** → architectural (Codex) ≤**4** → **architect lens (4-axis)** ×**1** → final architectural (Codex) over architect edits ×**1**. |
 
 **T3-critical** (within-T3): when the task matches the **L4-condition list in
 Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
@@ -728,8 +728,18 @@ escalate contested protected findings to the architect.
 After T3 architectural review converges:
 
 1. Architect reads the ledger **reject partition** only (does not re-open accepts).
-2. Apply simplification lens (what to cut / what is excess); may edit the draft.
-3. Run one final architectural (Codex) verification pass over architect edits; save
+2. Apply the full four-axis lens; may edit the draft:
+   - **упростить** — what to cut or simplify;
+   - **не упрощать** — substance the draft must keep (brief requirements or
+     accepted findings watered down or dropped);
+   - **излишне** — excess beyond the brief: scope creep, over-specification
+     that eats planner freedom;
+   - **пропустили** — what was missed: gaps, unverified or synthesized
+     evidence, unsettled conditionals (settle them with live probes, not
+     assumptions).
+3. Record the per-axis verdicts in the draft's `.review/NN-<slug>/` directory
+   (e.g. `presync-architect-lens.md`) before accepting the draft.
+4. Run one final architectural (Codex) verification pass over architect edits; save
    verbatim output to `pass-NN-final.capture.txt` like every other pass.
 
 ### Drift escalation
