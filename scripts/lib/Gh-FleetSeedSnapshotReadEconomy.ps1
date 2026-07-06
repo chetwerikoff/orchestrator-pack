@@ -47,9 +47,10 @@ function Get-GhFleetSeedSnapshotRepairPaths {
     $repoKey = Get-GhFleetCacheKeyHash -Text $repoSlug
     $dir = Join-Path $cacheRoot "seed-snapshot-repair/$repoKey"
     return @{
-        Dir      = $dir
+        Dir       = $dir
         StatePath = Join-Path $dir 'repair-state.json'
         TempPath  = Join-Path $dir 'repair-state.tmp'
+        LockPath  = Join-Path $dir 'repair-state.reserve.lock'
         RepoSlug  = $repoSlug
         RepoKey   = $repoKey
     }
@@ -176,6 +177,101 @@ function Test-GhFleetSeedSnapshotRepairAllowed {
     }
 }
 
+function Reserve-GhFleetSeedSnapshotRepairRead {
+    param(
+        [string]$RepoRoot,
+        [long]$NowMs,
+        [int]$RequestedReads = 1
+    )
+
+    $paths = Get-GhFleetSeedSnapshotRepairPaths -RepoRoot $RepoRoot
+    if (-not $paths) {
+        return @{ allowed = $true; reason = 'no_cache_root'; reserved = $false; state = $null; paths = $null }
+    }
+
+    if (-not (Enter-GhFleetPopulateLock -LockPath $paths.LockPath)) {
+        return @{ allowed = $false; reason = 'repair_lock_busy'; reserved = $false; state = $null; paths = $paths }
+    }
+
+    try {
+        $state = Read-GhFleetSeedSnapshotRepairState -StatePath $paths.StatePath
+        if ($state.cooldownUntilMs -gt $NowMs) {
+            return @{ allowed = $false; reason = 'cooldown'; reserved = $false; state = $state; paths = $paths }
+        }
+
+        $windowMs = (Get-GhFleetSeedSnapshotRepairWindowSeconds) * 1000
+        $hourlyBudget = Get-GhFleetSeedSnapshotHourlyReadBudget
+        $windowStart = [long]$state.hourlyWindowStart
+        $readCount = [int]$state.hourlyReadCount
+        if ($windowStart -le 0 -or ($NowMs - $windowStart) -ge $windowMs) {
+            $windowStart = $NowMs
+            $readCount = 0
+        }
+        if (($readCount + $RequestedReads) -gt $hourlyBudget) {
+            return @{ allowed = $false; reason = 'hourly_budget'; reserved = $false; state = $state; paths = $paths }
+        }
+
+        $readCount += [Math]::Max(1, $RequestedReads)
+        $reservedState = @{
+            cooldownUntilMs   = [long]$state.cooldownUntilMs
+            hourlyWindowStart = $windowStart
+            hourlyReadCount   = $readCount
+            lastOutcome       = [string]$state.lastOutcome
+            lastAttemptMs     = $NowMs
+        }
+        Write-GhFleetSeedSnapshotRepairState -Paths $paths -State $reservedState
+
+        return @{
+            allowed  = $true
+            reason   = 'reserved'
+            reserved = $true
+            state    = $reservedState
+            paths    = $paths
+        }
+    }
+    finally {
+        Exit-GhFleetPopulateLock -LockPath $paths.LockPath
+    }
+}
+
+function Set-GhFleetSeedSnapshotRepairOutcome {
+    param(
+        [hashtable]$Paths,
+        [long]$NowMs,
+        [string]$Outcome,
+        [string]$FailureMessage = ''
+    )
+
+    if (-not $Paths) { return }
+
+    if (-not (Enter-GhFleetPopulateLock -LockPath $Paths.LockPath)) {
+        return
+    }
+
+    try {
+        $state = Read-GhFleetSeedSnapshotRepairState -StatePath $Paths.StatePath
+        $cooldownUntilMs = [long]$state.cooldownUntilMs
+        $rateCooldown = Resolve-GhFleetSeedSnapshotRateLimitCooldownMs -Message $FailureMessage
+        if ($rateCooldown -gt $cooldownUntilMs) {
+            $cooldownUntilMs = $rateCooldown
+        }
+        elseif ($Outcome -match 'populate_failed|rate_limited|transport') {
+            $cooldownUntilMs = [Math]::Max($cooldownUntilMs, $NowMs + (60 * 1000))
+        }
+
+        Write-GhFleetSeedSnapshotRepairState -Paths $Paths -State @{
+            cooldownUntilMs   = $cooldownUntilMs
+            hourlyWindowStart = [long]$state.hourlyWindowStart
+            hourlyReadCount   = [int]$state.hourlyReadCount
+            lastOutcome       = $Outcome
+            lastAttemptMs     = $NowMs
+        }
+    }
+    finally {
+        Exit-GhFleetPopulateLock -LockPath $Paths.LockPath
+    }
+}
+
 function Record-GhFleetSeedSnapshotRepairAttempt {
     param(
         [hashtable]$Paths,
@@ -187,32 +283,7 @@ function Record-GhFleetSeedSnapshotRepairAttempt {
     )
 
     if (-not $Paths) { return }
-
-    $windowMs = (Get-GhFleetSeedSnapshotRepairWindowSeconds) * 1000
-    $windowStart = [long]$State.hourlyWindowStart
-    $hourlyReadCount = [int]$State.hourlyReadCount
-    if ($windowStart -le 0 -or ($NowMs - $windowStart) -ge $windowMs) {
-        $windowStart = $NowMs
-        $hourlyReadCount = 0
-    }
-    $hourlyReadCount += [Math]::Max(1, $ReadCount)
-
-    $cooldownUntilMs = [long]$State.cooldownUntilMs
-    $rateCooldown = Resolve-GhFleetSeedSnapshotRateLimitCooldownMs -Message $FailureMessage
-    if ($rateCooldown -gt $cooldownUntilMs) {
-        $cooldownUntilMs = $rateCooldown
-    }
-    elseif ($Outcome -match 'populate_failed|rate_limited|transport') {
-        $cooldownUntilMs = [Math]::Max($cooldownUntilMs, $NowMs + (60 * 1000))
-    }
-
-    Write-GhFleetSeedSnapshotRepairState -Paths $Paths -State @{
-        cooldownUntilMs   = $cooldownUntilMs
-        hourlyWindowStart = $windowStart
-        hourlyReadCount   = $hourlyReadCount
-        lastOutcome       = $Outcome
-        lastAttemptMs     = $NowMs
-    }
+    Set-GhFleetSeedSnapshotRepairOutcome -Paths $Paths -NowMs $NowMs -Outcome $Outcome -FailureMessage $FailureMessage
 }
 
 function Read-GhFleetOpenPrListEnvelopeWithStaleServe {
@@ -490,7 +561,7 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
             return @($staleRows)
         }
 
-        $repairGate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
+        $repairGate = Reserve-GhFleetSeedSnapshotRepairRead -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
         if ($repairGate.allowed) {
             try {
                 $repaired = @(Repair-ReviewReadyReportStateSeedOpenPrListSnapshot `
@@ -498,11 +569,11 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
                     -TrackedPrNumbers $tracked `
                     -Consumer $Consumer `
                     -ProgressWriter $ProgressWriter)
-                Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome 'stale_repair_ok' -ReadCount 1
+                Set-GhFleetSeedSnapshotRepairOutcome -Paths $repairGate.paths -NowMs $NowMs -Outcome 'stale_repair_ok' -ReadCount 1
                 return $repaired
             }
             catch {
-                Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome 'stale_repair_failed' -ReadCount 1 -FailureMessage $_.Exception.Message
+                Set-GhFleetSeedSnapshotRepairOutcome -Paths $repairGate.paths -NowMs $NowMs -Outcome 'stale_repair_failed' -ReadCount 1 -FailureMessage $_.Exception.Message
             }
         }
         else {
@@ -521,7 +592,7 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
         return @()
     }
 
-    $repairGate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
+    $repairGate = Reserve-GhFleetSeedSnapshotRepairRead -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
     if ($repairGate.allowed) {
         try {
             $repaired = @(Repair-ReviewReadyReportStateSeedOpenPrListSnapshot `
@@ -529,11 +600,11 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
                 -TrackedPrNumbers $tracked `
                 -Consumer $Consumer `
                 -ProgressWriter $ProgressWriter)
-            Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome "${state}_repair_ok" -ReadCount 1
+            Set-GhFleetSeedSnapshotRepairOutcome -Paths $repairGate.paths -NowMs $NowMs -Outcome "${state}_repair_ok" -ReadCount 1
             return $repaired
         }
         catch {
-            Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome "${state}_repair_failed" -ReadCount 1 -FailureMessage $_.Exception.Message
+            Set-GhFleetSeedSnapshotRepairOutcome -Paths $repairGate.paths -NowMs $NowMs -Outcome "${state}_repair_failed" -ReadCount 1 -FailureMessage $_.Exception.Message
             Write-GhFleetCacheAuditLine -Event 'seed_snapshot_degraded_serve' -Fields @{
                 consumer = $Consumer
                 state    = $state

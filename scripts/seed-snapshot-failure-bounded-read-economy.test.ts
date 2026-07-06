@@ -6,6 +6,7 @@ import {
   countGithubFleetGhRoute,
   createGithubFleetCacheHarness,
   spawnPwsh,
+  spawnPwshParallel,
   type FleetHarness,
 } from './github-fleet-cache-test-harness.js';
 
@@ -354,9 +355,9 @@ $allowed = 0
 $deniedHourly = 0
 for ($worker = 0; $worker -lt $workerCount; $worker++) {
   $nowMs = $baseNow + ($worker * ${tickCadenceMs})
-  $gate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $repo -NowMs $nowMs -RequestedReads 1
+  $gate = Reserve-GhFleetSeedSnapshotRepairRead -RepoRoot $repo -NowMs $nowMs -RequestedReads 1
   if ($gate.allowed) {
-    Record-GhFleetSeedSnapshotRepairAttempt -Paths $gate.paths -State $gate.state -NowMs $nowMs -Outcome 'budget_probe_ok' -ReadCount 1
+    Set-GhFleetSeedSnapshotRepairOutcome -Paths $gate.paths -NowMs $nowMs -Outcome 'budget_probe_ok'
     $allowed++
   }
   elseif ($gate.reason -eq 'hourly_budget') {
@@ -365,9 +366,9 @@ for ($worker = 0; $worker -lt $workerCount; $worker++) {
 }
 for ($i = 0; $i -lt ${probeBudget + 3}; $i++) {
   $nowMs = $baseNow + (($workerCount + $i) * ${tickCadenceMs})
-  $gate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $repo -NowMs $nowMs -RequestedReads 1
+  $gate = Reserve-GhFleetSeedSnapshotRepairRead -RepoRoot $repo -NowMs $nowMs -RequestedReads 1
   if ($gate.allowed) {
-    Record-GhFleetSeedSnapshotRepairAttempt -Paths $gate.paths -State $gate.state -NowMs $nowMs -Outcome 'budget_probe_ok' -ReadCount 1
+    Set-GhFleetSeedSnapshotRepairOutcome -Paths $gate.paths -NowMs $nowMs -Outcome 'budget_probe_ok'
     $allowed++
   }
   elseif ($gate.reason -eq 'hourly_budget') {
@@ -402,5 +403,31 @@ $ErrorActionPreference = 'Stop'
     expect(trackedMeta.trackedPrNumbers.length).toBe(CANDIDATE_HEAD_COUNT);
     expect(SEED_WORKER_COUNT * Math.ceil(3_600_000 / tickCadenceMs)).toBeGreaterThan(PRODUCTION_HOURLY_BUDGET);
   });
+
+  it('concurrent workers cannot oversubscribe shared hourly repair budget', async () => {
+    harness = withSeedHarness('seed-econ-budget-race-');
+    const probeBudget = 12;
+    harness.env.GH_FLEET_SEED_SNAPSHOT_HOURLY_READ_BUDGET = String(probeBudget);
+    const baseNowMs = 1_700_000_000_000;
+    const workerScript = `
+$ErrorActionPreference = 'Stop'
+. '${fleetCache}'
+. '${economyLib}'
+$repo = '${repoRoot.replace(/'/g, "''")}'
+$allowed = 0
+for ($i = 0; $i -lt 20; $i++) {
+  $gate = Reserve-GhFleetSeedSnapshotRepairRead -RepoRoot $repo -NowMs ${baseNowMs} -RequestedReads 1
+  if ($gate.allowed) { $allowed++ }
+}
+Write-Output $allowed
+`;
+    const parallel = await spawnPwshParallel(SEED_WORKER_COUNT, workerScript, repoRoot, harness.env);
+    for (const result of parallel) {
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+    }
+    const totalReserved = parallel.reduce((sum, result) => sum + Number(result.stdout.trim()), 0);
+    expect(totalReserved).toBe(probeBudget);
+  });
+
 
 });

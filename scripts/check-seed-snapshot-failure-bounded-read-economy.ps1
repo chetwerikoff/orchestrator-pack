@@ -25,6 +25,8 @@ foreach ($needle in @(
         'function Resolve-ReviewReadyReportStateSeedOpenPrs',
         'function Invoke-GhOpenPrListForTrackedNumbersListShaped',
         'function Test-GhFleetSeedSnapshotRepairAllowed',
+        'function Reserve-GhFleetSeedSnapshotRepairRead',
+        'repair-state.reserve.lock',
         'function Repair-ReviewReadyReportStateSeedOpenPrListSnapshot',
         'BoundedListOnly',
         'function Read-GhFleetOpenPrListEnvelopeWithStaleServe',
@@ -101,7 +103,8 @@ foreach ($needle in @(
         'non-JSON',
         '95-head',
         'five workers',
-        'AC#7'
+        'AC#7',
+        'concurrent'
     )) {
     if ($testText -notlike "*$needle*") {
         Write-Host "seed-snapshot-failure-bounded-read-economy.test.ts missing coverage marker: $needle"
