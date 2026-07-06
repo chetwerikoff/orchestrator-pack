@@ -438,11 +438,11 @@ function Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache {
         return @()
     }
 
-    $rows = @($entry.envelope.prs)
+    $rows = @(Select-GhOpenPrRowsForTrackedNumbers -OpenPrs @($entry.envelope.prs) -TrackedPrNumbers $TrackedPrNumbers)
     foreach ($pr in @($rows)) {
         Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
     }
-    return @(Select-GhOpenPrRowsForTrackedNumbers -OpenPrs $rows -TrackedPrNumbers $TrackedPrNumbers)
+    return $rows
 }
 
 function Resolve-ReviewReadyReportStateSeedOpenPrs {

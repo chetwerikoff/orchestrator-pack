@@ -116,6 +116,55 @@ esac
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_state\b.*state=stale/)).toBeGreaterThan(0);
   });
 
+  it('stale cache issues commit lookups only for tracked PRs', async () => {
+    harness = withSeedHarness('seed-econ-stale-commit-');
+    harness.env.GH_FLEET_OPEN_PR_LIST_TTL_SECONDS = '2';
+    harness.env.GH_FLEET_SEED_SNAPSHOT_OPEN_PR_LIST_STALE_SERVE_SECONDS = '30';
+    const warm = await spawnPwsh(openPrsScript('@(1)'), repoRoot, harness.env);
+    expect(warm.status, warm.stderr || warm.stdout).toBe(0);
+
+    const clearMemoScript = `
+$ErrorActionPreference = 'Stop'
+. '${fleetCache}'
+$cacheRoot = Get-GhFleetInventoryCacheRoot
+if ($cacheRoot) {
+  $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot '${repoRoot.replace(/'/g, "''")}'
+  $repoKey = Get-GhFleetCacheKeyHash -Text $repoSlug
+  $memoDir = Join-Path (Join-Path $cacheRoot 'commit-memo') $repoKey
+  if (Test-Path -LiteralPath $memoDir) { Remove-Item -LiteralPath $memoDir -Recurse -Force }
+}
+Write-Output 'cleared-memo'
+`;
+    const cleared = await spawnPwsh(clearMemoScript, repoRoot, harness.env);
+    expect(cleared.status, cleared.stderr || cleared.stdout).toBe(0);
+    const commitsBeforeStale = countGithubFleetGhRoute(harness.auditFile, /commits\//);
+
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+case "$joined" in
+  *"pr list"*) echo 'rate limited' >&2; exit 1 ;;
+  *"pr view"*) echo 'rate limited' >&2; exit 1 ;;
+  *"commits/"*) echo '2024-06-03T12:00:00Z' ;;
+  *) exit 0 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const stale = await spawnPwsh(openPrsScript('@(1,2)', 1_700_000_120_000), repoRoot, harness.env);
+    expect(stale.status, stale.stderr || stale.stdout).toBe(0);
+    const commitDelta =
+      countGithubFleetGhRoute(harness.auditFile, /commits\//) - commitsBeforeStale;
+    expect(commitDelta).toBeLessThanOrEqual(2);
+    expect(commitDelta).toBeLessThan(10);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBeLessThanOrEqual(2);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
+  });
+
   it('absent snapshot defers to shared repair window without per-head fan-out', async () => {
     harness = withSeedHarness('seed-econ-absent-');
     const inventoryCache = join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");
