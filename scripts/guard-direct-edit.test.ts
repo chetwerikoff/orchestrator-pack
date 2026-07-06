@@ -20,17 +20,13 @@ function stdinFor(filePath: string) {
 function envState(
   state: 'none' | 'draft-fallback' | 'direct-edit',
 ): Record<string, string | undefined> {
-  const base = {
-    AO_DRAFT_AUTHOR_FALLBACK_REASON: undefined,
-    AO_DIRECT_EDIT_REASON: undefined,
-  };
   if (state === 'draft-fallback') {
-    base.AO_DRAFT_AUTHOR_FALLBACK_REASON = 'architect-as-author fallback per #579';
+    return { AO_DRAFT_AUTHOR_FALLBACK_REASON: 'architect-as-author fallback per #579' };
   }
   if (state === 'direct-edit') {
-    base.AO_DIRECT_EDIT_REASON = 'user authorized direct fix for probe';
+    return { AO_DIRECT_EDIT_REASON: 'user authorized direct fix for probe' };
   }
-  return base;
+  return {};
 }
 
 function expectAllow(result: ReturnType<typeof evaluateDirectEditGuard>) {
