@@ -1184,6 +1184,53 @@ else {
 }
 
 Write-Host ''
+Write-Host ''
+Write-Host '== AO 0.10 session/status adapter guards (Issue #619) =='
+$aoArgvShapeCheck = Join-Path $Root 'scripts/check-ao-cli-argv-shape.ps1'
+if (Test-Path -LiteralPath $aoArgvShapeCheck -PathType Leaf) {
+    & $aoArgvShapeCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-ao-cli-argv-shape.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 argv-shape guard failed (Issue #619)'
+    }
+    else {
+        & $aoArgvShapeCheck -SelfTest
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check 'scripts/check-ao-cli-argv-shape.ps1' 'FAIL' "self-test exit=$LASTEXITCODE"
+            Add-Failure 'AO 0.10 argv-shape guard self-test failed (Issue #619)'
+        }
+        else {
+            Write-Check 'scripts/check-ao-cli-argv-shape.ps1' 'PASS' 'completed'
+        }
+    }
+}
+else {
+    Write-Check 'scripts/check-ao-cli-argv-shape.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 argv-shape guard (Issue #619)'
+}
+
+foreach ($check in @(
+        @{ Path = 'scripts/check-ao-dead-argv-bypass.ps1'; Label = 'dead-argv bypass scan (Issue #619)' },
+        @{ Path = 'scripts/check-ao-session-adapter-project-filter.ps1'; Label = 'session adapter project filter (Issue #619)' },
+        @{ Path = 'scripts/check-ao-0-10-cli-capture-redaction.ps1'; Label = 'AO 0.10 capture redaction gate (Issue #619)' }
+    )) {
+    $checkPath = Join-Path $Root $check.Path
+    if (Test-Path -LiteralPath $checkPath -PathType Leaf) {
+        & $checkPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check $check.Path 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure ($check.Label + ' failed')
+        }
+        else {
+            Write-Check $check.Path 'PASS' 'completed'
+        }
+    }
+    else {
+        Write-Check $check.Path 'FAIL' 'missing'
+        Add-Failure ('Missing ' + $check.Label)
+    }
+}
+
 Write-Host '== External-output fixture shape guard (Issue #223) =='
 $externalOutputShapeGuard = Join-Path $Root 'scripts/check-external-output-shape-guard.ps1'
 if (Test-Path -LiteralPath $externalOutputShapeGuard -PathType Leaf) {

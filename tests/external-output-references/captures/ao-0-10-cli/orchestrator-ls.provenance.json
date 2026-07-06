@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao orchestrator ls --json",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-06T05:30:00.000Z",
+  "context": "Default orchestrator listing includes terminated rows (isTerminated true) without --include-terminated.",
+  "scrubLog": ["Synthetic session ids; foreign project row is fixture-only"]
+}

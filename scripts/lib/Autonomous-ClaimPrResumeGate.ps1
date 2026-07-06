@@ -5,6 +5,8 @@
 
 $Script:AutonomousClaimPrResumeMutexStaleSeconds = 5
 
+. (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
+
 function Get-AutonomousClaimPrResumeNamespace {
     param([string]$ProjectId = 'orchestrator-pack')
 
@@ -183,16 +185,10 @@ function Invoke-AutonomousGateResolvedAoCliJson {
 function Get-AutonomousGateStatusSessions {
     param([switch]$IncludeTerminated)
 
-    $args = @('status', '--json', '--reports', 'full')
     if ($IncludeTerminated) {
-        $args += '--include-terminated'
+        return @(Get-AoStatusSessionsIncludingTerminated)
     }
-    $payload = Invoke-AutonomousGateResolvedAoCliJson -AoArgs $args -FailureLabel 'autonomous gate ao status'
-    $sessions = @($payload.data)
-    if (-not $sessions -and $payload.sessions) {
-        $sessions = @($payload.sessions)
-    }
-    return $sessions
+    return @(Get-AoStatusSessions)
 }
 
 function Get-AutonomousGateSessionPrNumber {

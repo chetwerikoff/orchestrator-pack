@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao session ls --json -p orchestrator-pack --include-terminated",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-06T05:30:00.000Z",
+  "context": "Terminated-inclusive worker listing for adapter merge tests.",
+  "scrubLog": ["Synthetic session ids; no machine-local paths"]
+}

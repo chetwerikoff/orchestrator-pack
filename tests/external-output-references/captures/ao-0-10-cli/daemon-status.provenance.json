@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao status --json",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-06T05:30:00.000Z",
+  "context": "Daemon health only on AO 0.10 — no session rows or -p flag.",
+  "scrubLog": ["pid, runFile, and dataDir normalized to operator placeholders"]
+}

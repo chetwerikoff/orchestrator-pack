@@ -64,7 +64,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(result.status).toBe(0);
   });
 
-  it('resolves orchestrator session id from ao status when override unset', async () => {
+  it('resolves orchestrator session id from orchestrator ls when override unset', async () => {
     const stateDir = makeStateDir();
     const statusFixture = path.join(fixtureDir, 'status-orchestrator-op-old.json');
     const child = startSupervisorBackground(stateDir, ['-FixturePath', statusFixture]);
@@ -257,7 +257,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(run.status).not.toBe(0);
     const combined = `${run.stdout}\n${run.stderr}`;
     expect(combined).toContain('orchestrator-pack');
-    expect(combined).toMatch(/start.*ao/i);
+    expect(combined).toMatch(/orchestrator session exists/i);
   });
 
   it('restarts both children when orchestrator session id changes', async () => {

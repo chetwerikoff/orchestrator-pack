@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "captures": [
+    {
+      "id": "daemon-status",
+      "command": "ao status --json",
+      "raw": "daemon-status.raw.json",
+      "provenance": "daemon-status.provenance.json"
+    },
+    {
+      "id": "session-ls",
+      "command": "ao session ls --json -p orchestrator-pack",
+      "raw": "session-ls.raw.json",
+      "provenance": "session-ls.provenance.json"
+    },
+    {
+      "id": "session-ls-terminated",
+      "command": "ao session ls --json -p orchestrator-pack --include-terminated",
+      "raw": "session-ls-terminated.raw.json",
+      "provenance": "session-ls-terminated.provenance.json"
+    },
+    {
+      "id": "orchestrator-ls",
+      "command": "ao orchestrator ls --json",
+      "raw": "orchestrator-ls.raw.json",
+      "provenance": "orchestrator-ls.provenance.json"
+    },
+    {
+      "id": "session-get-worker",
+      "command": "ao session get orchestrator-pack-7 --json -p orchestrator-pack",
+      "raw": "session-get-worker.raw.json",
+      "provenance": "session-get-worker.provenance.json"
+    }
+  ]
+}

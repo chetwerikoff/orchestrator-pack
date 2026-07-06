@@ -41,7 +41,7 @@ $reconcileRaw = if (Test-Path -LiteralPath $reconcileScript -PathType Leaf) {
     Get-Content -LiteralPath $reconcileScript -Raw
 } else { '' }
 $workerStateOk = ($registry.requiredChildIds -contains 'ci-failure-notification-reconcile') -and
-    ($reconcileRaw -match 'Get-AoStatusSessions|ao status --json --reports full')
+    ($reconcileRaw -match 'Get-AoStatusSessions')
 $dispatchOk = ($reconcileRaw -match 'Register-WorkerMessageDispatch') -and
     (Test-Path -LiteralPath (Join-Path $Root 'scripts/lib/Record-WorkerMessageDispatch.ps1') -PathType Leaf)
 $reactionRecordOk = (Test-Path -LiteralPath $reactionScript -PathType Leaf) -and

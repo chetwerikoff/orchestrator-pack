@@ -10,6 +10,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessHealth.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgressEvidence.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessCrashBackoff.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessDegradedBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 
@@ -308,54 +309,12 @@ function Get-OrchestratorWakeSupervisorSessionOverride {
     return ''
 }
 
-function Invoke-OrchestratorWakeSupervisorAoStatus {
-    param(
-        [string]$ProjectId,
-        [string]$FixturePath = '',
-        [string]$AoCommand = ''
-    )
+function Get-OrchestratorWakeSupervisorOrchestratorListFixture {
+    param([string]$FixturePath = '')
 
-    if ($FixturePath) {
-        $resolved = (Resolve-Path -LiteralPath $FixturePath).Path
-        return Get-Content -LiteralPath $resolved -Raw | ConvertFrom-Json
-    }
-
-    $ao = if ($AoCommand) { $AoCommand } else { 'ao' }
-    $args = @('status', '--json')
-    if ($ProjectId) { $args += @('-p', $ProjectId) }
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $ao @args 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            return $null
-        }
-        $text = ($raw | ForEach-Object {
-                if ($_ -is [string]) { $_ }
-                elseif ($null -ne $_) { $_.ToString() }
-            }) -join "`n"
-        $start = $text.IndexOf('{')
-        if ($start -lt 0) { return $null }
-        return $text.Substring($start) | ConvertFrom-Json
-    }
-    finally {
-        $ErrorActionPreference = $prevEap
-    }
-}
-
-function Get-OrchestratorSessionFromStatusPayload {
-    param($Payload)
-
-    if (-not $Payload) { return $null }
-    $sessions = @($Payload.data)
-    if (-not $sessions -and $Payload.sessions) {
-        $sessions = @($Payload.sessions)
-    }
-    $orch = $sessions | Where-Object { $_.role -eq 'orchestrator' } | Select-Object -First 1
-    if (-not $orch) { return $null }
-    if ($orch.sessionId) { return [string]$orch.sessionId }
-    if ($orch.name) { return [string]$orch.name }
-    return $null
+    if (-not $FixturePath) { return $null }
+    $resolved = (Resolve-Path -LiteralPath $FixturePath).Path
+    return Get-Content -LiteralPath $resolved -Raw | ConvertFrom-Json
 }
 
 function Resolve-OrchestratorWakeSupervisorSessionId {
@@ -371,10 +330,17 @@ function Resolve-OrchestratorWakeSupervisorSessionId {
         return @{ Id = $explicit; Source = 'override' }
     }
 
-    $payload = Invoke-OrchestratorWakeSupervisorAoStatus -ProjectId $ProjectId -FixturePath $FixturePath -AoCommand $AoCommand
-    $resolved = Get-OrchestratorSessionFromStatusPayload -Payload $payload
+    $fixturePayload = Get-OrchestratorWakeSupervisorOrchestratorListFixture -FixturePath $FixturePath
+    $ao = if ($AoCommand) { $AoCommand } else { 'ao' }
+    try {
+        $resolved = Resolve-AoOrchestratorSessionId -Project $ProjectId `
+            -OrchestratorListPayload $fixturePayload -AoCommand $ao
+    }
+    catch {
+        return $null
+    }
     if ($resolved) {
-        return @{ Id = $resolved; Source = 'ao_status' }
+        return $resolved
     }
     return $null
 }
@@ -1154,7 +1120,7 @@ function Wait-OrchestratorWakeSupervisorSession {
 
 function Format-OrchestratorWakeSupervisorNoSessionMessage {
     param([string]$ProjectId)
-    return "No orchestrator session for project '$ProjectId' within the wait window. Start AO first: ao start $ProjectId"
+    return "No orchestrator session for project '$ProjectId' within the wait window. Ensure the AO desktop daemon is running and an orchestrator session exists (ao orchestrator ls --json)."
 }
 
 function Invoke-OrchestratorWakeSupervisorLoop {

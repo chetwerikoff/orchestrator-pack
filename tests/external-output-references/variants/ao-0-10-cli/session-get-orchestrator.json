@@ -1,0 +1,6 @@
+{
+  "allowedFields": ["session"],
+  "forbiddenFields": ["data", "sessions", "reports"],
+  "captureRef": "captures/ao-0-10-cli/session-get-worker.raw.json",
+  "provenanceRef": "captures/ao-0-10-cli/session-get-worker.provenance.json"
+}

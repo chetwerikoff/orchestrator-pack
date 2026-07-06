@@ -1,9 +1,12 @@
 {
   "data": [
     {
+      "id": "opk-worker",
       "name": "opk-worker",
+      "projectId": "orchestrator-pack",
       "role": "worker",
-      "project": "orchestrator-pack"
+      "status": "working",
+      "isTerminated": false
     }
   ]
 }

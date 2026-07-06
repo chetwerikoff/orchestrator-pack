@@ -1,9 +1,12 @@
 {
   "data": [
     {
+      "id": "op-orchestrator-old",
       "name": "op-orchestrator-old",
+      "projectId": "orchestrator-pack",
       "role": "orchestrator",
-      "project": "orchestrator-pack"
+      "status": "working",
+      "isTerminated": false
     }
   ]
 }

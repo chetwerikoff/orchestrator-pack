@@ -26,6 +26,11 @@
       "source": "ao status --json --reports full (session row from data[])",
       "variantDir": "variants/ao-status-session",
       "defaultVariant": "working-no-runtime"
+    },
+    "ao-0-10-cli": {
+      "source": "AO 0.10 daemon health, session ls, orchestrator ls, session get",
+      "variantDir": "variants/ao-0-10-cli",
+      "defaultVariant": "daemon-status"
     }
   }
 }
