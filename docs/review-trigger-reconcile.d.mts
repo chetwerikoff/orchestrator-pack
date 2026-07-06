@@ -323,5 +323,7 @@ export declare function findForbiddenLifecycleCommands(
 
 export declare function buildReviewRunArgv(
   sessionId: string,
-  reviewCommand: string,
+  reviewCommand?: string,
 ): string[];
+
+export declare function buildReviewTriggerPath(sessionId: string): string;

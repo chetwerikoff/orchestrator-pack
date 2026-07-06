@@ -3,8 +3,7 @@
  * Capture-backed shapes: tests/external-output-references/variants/ao-0-10-review-api/
  */
 
-import { readFileSync } from 'node:fs';
-import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { readStdinJson, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
 
 /** @typedef {{ id?: string, runId?: string, status?: string, targetSha?: string, prNumber?: number, linkedSessionId?: string, createdAt?: string, updatedAt?: string }} ReviewRun */
 /** @typedef {{ prNumber?: number, headSha?: string, prUrl?: string, latestRun?: ReviewRun | null }} PRReviewState */
@@ -57,13 +56,6 @@ export function buildReviewTriggerInvocation(sessionId) {
     path: buildReviewTriggerPath(sessionId),
     shimArgv: ['ao-review', 'run', sessionId],
   };
-}
-
-/**
- * @param {unknown} value
- */
-export function toArray(value) {
-  return Array.isArray(value) ? value : [];
 }
 
 /**

@@ -580,6 +580,31 @@ Implementation-time release facts:
 Do **not** run the live binary upgrade from an AO-managed worker session.
 
 
+
+## AO 0.10.x review harness and trigger loop (Issue #623)
+
+After AO **0.10.x** is live, pack-driven review uses typed `ProjectConfig.reviewers`
+and daemon `POST /api/v1/sessions/{workerId}/reviews/trigger` — not `ao review run
+--command` or `REVIEW_COMMAND` on the removed CLI path.
+
+Canonical doc: [`docs/ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md).
+
+**Operator adoption (live install — not CI):**
+
+1. Complete Issues #589 and #590 adoption (spawn shape + binary upgrade).
+2. Set reviewer harness on the project:
+   `ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'`
+3. Verify `GET /api/v1/projects/orchestrator-pack/config` includes `reviewers[0].harness`.
+4. Restart wake-supervisor children (`orchestrator-wake-supervisor.ps1`,
+   `review-trigger-reconcile.ps1`, `review-trigger-reeval.ps1`) so they use the trigger path.
+5. Smoke: `pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>` against a
+   review-ready worker PR; confirm HTTP 201/200 and a minted `latestRun`.
+
+`agent-orchestrator.yaml.example` adds a pointer only — do **not** edit live
+`agent-orchestrator.yaml` from worker PRs. `PACK_REVIEWER` / `REVIEW_COMMAND` remain
+documented for 0.9.x; on 0.10 the harness API is authoritative for reviewer selection.
+
+
 ## Autonomous spawn worktree provenance (Issue #470)
 
 When spawn policy allows `ao spawn` or `ao spawn --claim-pr`, the pack `ao` guard mints a

@@ -32,6 +32,7 @@
     "scripts/audit-jsonl-retention.test.ts": "light",
     "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",
     "scripts/ao-session-adapter.test.ts": "light",
+    "scripts/ao-0-10-review-trigger.test.ts": "light",
     "scripts/autonomous-orchestrator-interposer.test.ts": "heavy",
     "scripts/autonomous-review-retry.test.ts": "heavy",
     "scripts/autonomous-review-worktree-e2e-smoke.test.ts": "heavy",
