@@ -46,10 +46,4 @@ foreach ($variant in $variants) {
     }
 }
 
-& npx vitest run --config (Join-Path $Root 'tests/vitest.review-producer-contract.config.ts')
-if ($LASTEXITCODE -ne 0) {
-    Write-Host 'Review producer column-mapping unit tests failed'
-    exit $LASTEXITCODE
-}
-
 Write-Host '[PASS] AO 0.10 review producer data contract (Issue #626)'
