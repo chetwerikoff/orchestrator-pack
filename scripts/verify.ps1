@@ -579,6 +579,22 @@ else {
 Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
 $reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
+$seedSnapshotEconomyCheck = Join-Path $Root 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1'
+if (Test-Path -LiteralPath $seedSnapshotEconomyCheck -PathType Leaf) {
+    & $seedSnapshotEconomyCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        $script:VerifyFailed = $true
+    }
+    else {
+        Write-Check 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1' 'FAIL' 'missing'
+    $script:VerifyFailed = $true
+}
+
 if (Test-Path -LiteralPath $reviewReadyReportStateSeedCheck -PathType Leaf) {
     & $reviewReadyReportStateSeedCheck
     if ($LASTEXITCODE -ne 0) {
