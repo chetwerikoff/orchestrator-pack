@@ -65,7 +65,7 @@ describe('stage-completeness final ordering', () => {
   it('fails when final architectural pass index is not after lens maximum', () => {
     const result = check('final-ordering');
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing final architectural stage/);
+    expect(result.errors.join(' ')).toMatch(/final architectural stage out of order/);
   });
 });
 

@@ -252,11 +252,13 @@ export function checkStageCompletenessGuard(
       : finalCaptures.filter((capture) => capture.passIndex > lensMax);
 
   if (countedFinals.length === 0) {
-    errors.push('missing final architectural stage');
+    if (finalCaptures.length > 0 && lensMax !== null) {
+      errors.push('final architectural stage out of order (must be strictly after architect-lens)');
+    } else {
+      errors.push('missing final architectural stage');
+    }
   } else if (countedFinals.length > 1) {
     errors.push('final architectural stage ceiling exceeded (exactly one pass allowed after lens)');
-  } else if (lensMax !== null && countedFinals[0]!.passIndex <= lensMax) {
-    errors.push('final architectural stage out of order (must be strictly after architect-lens)');
   }
 
   if (errors.length > 0) {
