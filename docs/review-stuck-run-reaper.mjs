@@ -5,6 +5,7 @@
 
 import { isRuntimeFieldLive } from './session-runtime-liveness.mjs';
 import { normalizeSha } from './ao-0-10-review-api.mjs';
+import { spawnSync } from 'node:child_process';
 import { readStdinJson, runAsyncStdinJsonCliMain, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
 
 export const DEFAULT_STUCK_AGE_FLOOR_SECONDS = 600;
@@ -18,6 +19,48 @@ export function buildFailStalePath(sessionId, runId) {
   if (!sid || !rid) throw new Error('sessionId and runId are required for fail-stale path');
   return `/api/v1/sessions/${encodeURIComponent(sid)}/reviews/runs/${encodeURIComponent(rid)}/fail-stale`;
 }
+
+
+export function buildSessionReviewsListPath(sessionId) {
+  const id = String(sessionId ?? '').trim();
+  if (!id) throw new Error('session id is required for review list');
+  return `/api/v1/sessions/${encodeURIComponent(id)}/reviews`;
+}
+
+export async function fetchSessionReviewsList(baseUrl, sessionId) {
+  const base = String(baseUrl ?? '').replace(/\/$/, '');
+  if (!base) throw new Error('baseUrl is required to fetch session reviews');
+  const response = await fetch(`${base}${buildSessionReviewsListPath(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(`session reviews fetch failed (HTTP ${response.status})`);
+  }
+  return response.json();
+}
+
+export function defaultTmuxExists(handleId) {
+  const handle = String(handleId ?? '').trim();
+  if (!handle) return 'unavailable';
+  try {
+    const result = spawnSync('tmux', ['has-session', '-t', handle], { encoding: 'utf8' });
+    if (result.error) return 'unavailable';
+    return result.status === 0 ? 'exists' : 'missing';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+export function createJitPaneProbe({ sessions = [], tmuxExists = defaultTmuxExists, refreshSessions = null } = {}) {
+  return async ({ reviewerHandleId }) => {
+    const freshSessions =
+      typeof refreshSessions === 'function' ? await refreshSessions() : sessions;
+    return probeReviewerPaneLiveness({
+      reviewerHandleId,
+      sessions: toArray(freshSessions),
+      tmuxExists,
+    });
+  };
+}
+
 
 export function parseTimestampMs(value) {
   const text = String(value ?? '').trim();
@@ -128,8 +171,18 @@ export function formatClassifiedAlertLine(action) {
   ].join(' ');
 }
 
-export function justInTimeRevalidate({ prior, listPayload, headSha, paneProbe }) {
-  const reviews = toArray(listPayload?.reviews);
+export async function justInTimeRevalidate({
+  prior,
+  headSha,
+  listPayload = null,
+  refreshListPayload = null,
+  paneProbe,
+}) {
+  const payload =
+    typeof refreshListPayload === 'function' ? await refreshListPayload() : listPayload;
+  if (!payload) return { ok: false, reason: 'list_payload_unavailable' };
+
+  const reviews = toArray(payload?.reviews);
   const prNumber = Number(prior.prNumber ?? 0);
   const head = normalizeSha(headSha);
   let entry = null;
@@ -146,7 +199,9 @@ export function justInTimeRevalidate({ prior, listPayload, headSha, paneProbe })
   if (status !== 'running') return { ok: false, reason: 'run_no_longer_running', status };
   const targetSha = String(latest.targetSha ?? entry.headSha ?? '');
   if (normalizeSha(targetSha) !== head) return { ok: false, reason: 'head_changed' };
-  const pane = paneProbe({ reviewerHandleId: String(listPayload?.reviewerHandleId ?? '') });
+  const pane = await Promise.resolve(
+    paneProbe({ reviewerHandleId: String(payload?.reviewerHandleId ?? '') }),
+  );
   if (pane.paneLiveness === 'healthy') return { ok: false, reason: 'pane_became_healthy' };
   if (pane.paneLiveness === 'unknown') return { ok: false, reason: 'pane_liveness_unknown' };
   return {
@@ -193,6 +248,9 @@ export async function runStuckRunReaperTick({
   config = {},
   nowMs = Date.now(),
   paneProbe = null,
+  refreshListPayload = null,
+  refreshSessionsList = null,
+  refreshPaneProbe = null,
   failStaleInvoker = null,
   baseUrl = '',
   failStaleSurfaceAvailable = false,
@@ -244,11 +302,25 @@ export async function runStuckRunReaperTick({
         }
         inFlightRecoveries.add(recoveryKey);
         try {
-          const jit = justInTimeRevalidate({
+          const refreshReviews =
+            typeof refreshListPayload === 'function'
+              ? () => refreshListPayload(sessionId)
+              : baseUrl
+                ? () => fetchSessionReviewsList(baseUrl, sessionId)
+                : async () => listPayload;
+          const jitPaneProbe = createJitPaneProbe({
+            sessions,
+            refreshSessions: refreshSessionsList,
+            tmuxExists: defaultTmuxExists,
+          });
+          const jit = await justInTimeRevalidate({
             prior: classified,
-            listPayload,
             headSha,
-            paneProbe: (ctx) => resolvePaneLiveness(probeCtx, ctx.reviewerHandleId),
+            refreshListPayload: refreshReviews,
+            paneProbe:
+              typeof refreshPaneProbe === 'function'
+                ? (ctx) => refreshPaneProbe({ ...ctx, sessionId })
+                : jitPaneProbe,
           });
           if (!jit.ok) {
             action.recovery = { invoke: false, reason: 'jit_abort', detail: jit.reason };
@@ -305,6 +377,6 @@ if (isReaperCli && process.argv[2] === 'tick') {
     },
     classify: () => classifyStuckSameHeadCandidate(readStdinJson()),
     'format-alert': () => ({ line: formatClassifiedAlertLine(readStdinJson()) }),
-    'jit-revalidate': () => justInTimeRevalidate(readStdinJson()),
+    'jit-revalidate': async () => justInTimeRevalidate(readStdinJson()),
   });
 }

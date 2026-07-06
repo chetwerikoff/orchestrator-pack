@@ -146,6 +146,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
   it('invokes fail-stale-run after JIT revalidation when surface exists', async () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
     const invocations: Array<Record<string, unknown>> = [];
+    let refreshCalls = 0;
     const tick = await runStuckRunReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
@@ -153,11 +154,17 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
       config: { ageFloorSeconds: 600 },
       nowMs,
       failStaleSurfaceAvailable: true,
+      refreshListPayload: async () => {
+        refreshCalls += 1;
+        return listPayload;
+      },
+      refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
       failStaleInvoker: async (ctx) => {
         invocations.push(ctx);
         return { ok: true, reason: '200' };
       },
     });
+    expect(refreshCalls).toBeGreaterThanOrEqual(1);
     expect(invocations).toHaveLength(1);
     expect(invocations[0]).toMatchObject({
       sessionId,
@@ -167,16 +174,70 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     expect(tick.actions[0]?.recovery).toMatchObject({ invoked: true, ok: true });
   });
 
-  it('aborts recovery when JIT revalidation finds a healthy pane', () => {
+  it('aborts recovery when JIT revalidation finds a healthy pane', async () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
-    const jit = justInTimeRevalidate({
+    const jit = await justInTimeRevalidate({
       prior: { prNumber: 624, runId: 'rr-624-stuck-1' },
-      listPayload,
       headSha,
-      paneProbe: () => ({ paneLiveness: 'healthy' }),
+      refreshListPayload: async () => listPayload,
+      paneProbe: async () => ({ paneLiveness: 'healthy' }),
     });
     expect(jit.ok).toBe(false);
     expect(jit.reason).toBe('pane_became_healthy');
+  });
+
+  it('aborts fail-stale when JIT refresh shows run already terminal (TOCTOU)', async () => {
+    const stalePayload = loadFixture('stuck-same-head-absent-pane.json');
+    const freshPayload = JSON.parse(JSON.stringify(stalePayload)) as {
+      reviews: Array<{ latestRun: Record<string, unknown> }>;
+    };
+    freshPayload.reviews[0].latestRun.status = 'complete';
+    const invocations: unknown[] = [];
+    const tick = await runStuckRunReaperTick({
+      workerSessions: [{ id: sessionId, role: 'worker' }],
+      listPayloads: { [sessionId]: stalePayload },
+      paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
+      config: { ageFloorSeconds: 600 },
+      nowMs,
+      failStaleSurfaceAvailable: true,
+      refreshListPayload: async () => freshPayload,
+      refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
+      failStaleInvoker: async (ctx) => {
+        invocations.push(ctx);
+        return { ok: true };
+      },
+    });
+    expect(invocations).toHaveLength(0);
+    expect(tick.actions[0]?.recovery).toMatchObject({
+      invoke: false,
+      reason: 'jit_abort',
+      detail: 'run_no_longer_running',
+    });
+  });
+
+  it('aborts fail-stale when JIT pane re-probe returns healthy despite stale scan map', async () => {
+    const listPayload = loadFixture('stuck-same-head-absent-pane.json');
+    const invocations: unknown[] = [];
+    const tick = await runStuckRunReaperTick({
+      workerSessions: [{ id: sessionId, role: 'worker' }],
+      listPayloads: { [sessionId]: listPayload },
+      paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
+      config: { ageFloorSeconds: 600 },
+      nowMs,
+      failStaleSurfaceAvailable: true,
+      refreshListPayload: async () => listPayload,
+      refreshPaneProbe: async () => ({ paneLiveness: 'healthy' }),
+      failStaleInvoker: async (ctx) => {
+        invocations.push(ctx);
+        return { ok: true };
+      },
+    });
+    expect(invocations).toHaveLength(0);
+    expect(tick.actions[0]?.recovery).toMatchObject({
+      invoke: false,
+      reason: 'jit_abort',
+      detail: 'pane_became_healthy',
+    });
   });
 
   it('prevents duplicate recovery for the same run when single-flight is busy', async () => {

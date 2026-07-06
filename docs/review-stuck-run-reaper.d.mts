@@ -43,12 +43,26 @@ export declare function classifyStuckSameHeadCandidate(input: {
   nowMs?: number;
 }): StuckRunClassification;
 export declare function formatClassifiedAlertLine(action: Record<string, unknown>): string;
+export declare function buildSessionReviewsListPath(sessionId: string): string;
+export declare function fetchSessionReviewsList(
+  baseUrl: string,
+  sessionId: string,
+): Promise<Record<string, unknown>>;
+export declare function defaultTmuxExists(
+  handleId: string,
+): 'exists' | 'missing' | 'unavailable';
+export declare function createJitPaneProbe(input?: {
+  sessions?: Array<Record<string, unknown>>;
+  tmuxExists?: (handleId: string) => 'exists' | 'missing' | 'unavailable';
+  refreshSessions?: (() => Promise<Array<Record<string, unknown>>>) | null;
+}): (ctx: { reviewerHandleId: string }) => Promise<PaneProbeResult>;
 export declare function justInTimeRevalidate(input: {
   prior: Record<string, unknown>;
-  listPayload: unknown;
   headSha: string;
-  paneProbe: (ctx: { reviewerHandleId: string }) => PaneProbeResult;
-}): { ok: boolean; reason?: string; runId?: string; targetSha?: string; status?: string };
+  listPayload?: unknown;
+  refreshListPayload?: (() => Promise<unknown>) | null;
+  paneProbe: (ctx: { reviewerHandleId: string }) => PaneProbeResult | Promise<PaneProbeResult>;
+}): Promise<{ ok: boolean; reason?: string; runId?: string; targetSha?: string; status?: string }>;
 export declare function detectFailStaleSurfaceFromProbe(probeResult: unknown): boolean;
 export declare function evaluateFailStaleInvocation(input: {
   classification: string;
