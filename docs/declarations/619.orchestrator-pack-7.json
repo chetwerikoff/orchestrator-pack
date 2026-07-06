@@ -1,0 +1,20 @@
+{
+  "issue_number": 619,
+  "iteration_id": "orchestrator-pack-7",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T06:19:57.733Z",
+  "baseline": {
+    "commit_sha": "6d671a44c5187f1b1d3fd2766133c1e745812cbb",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:58e15af3e1f8f134707fb9e1ae89e772d1af799ebb7d3303fd3c91e9c71c9549"
+  },
+  "declared_paths": [
+    "docs/orchestrator-message-registry.mjs"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**"
+  ],
+  "amendments": []
+}
