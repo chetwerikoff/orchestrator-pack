@@ -2083,3 +2083,51 @@ Operator adoption after merge:
 6. Only after #194 branch-safe recovery and capture fixtures are verified in your environment,
    set `allowReconcileDeadWorkerRespawn: true` in `docs/autonomous-respawn-policy.json` and
    restart AO again.
+
+## Pack-owned architect edit guard (Issue #618)
+
+Ships tracked PreToolUse hook source at `scripts/guard-direct-edit.mjs` with a
+draft-file gate: architect-session Write/Edit of `docs/issues_drafts/<draft>.md` denies
+unless `AO_DRAFT_AUTHOR_FALLBACK_REASON` is set. Cursor draft-author sessions are
+unaffected (different runtime).
+
+**Operator adoption** — after merge:
+
+1. Pull `main` in the operator checkout that hosts the architect Claude Code session.
+2. Point machine-local Claude Code PreToolUse `Edit` and `Write` matchers at the
+   **tracked** hook source — preferred: symlink
+   `.claude/hooks/guard-direct-edit.mjs` → `<pack-root>/scripts/guard-direct-edit.mjs`.
+   Alternative: a tiny wrapper under `.claude/hooks/` that `import`s or `exec`s the
+   tracked file. Avoid a one-time copy; if you must copy, re-copy or hash-check against
+   `scripts/guard-direct-edit.mjs` after every pack pull that touches the hook.
+3. Example `.claude/settings.json` hook entry (adjust pack root):
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Edit|Write",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node scripts/guard-direct-edit.mjs"
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   When the symlink lives under `.claude/hooks/`, use
+   `node .claude/hooks/guard-direct-edit.mjs` (symlink target resolves to tracked source).
+4. Restart the architect Claude Code session so settings reload.
+5. **Verification probe** (architect session):
+   - Without `AO_DRAFT_AUTHOR_FALLBACK_REASON`, attempt Write/Edit on
+     `docs/issues_drafts/618-adoption-probe.md` — must **deny** with a message naming
+     draft-author delegation and `AO_DRAFT_AUTHOR_FALLBACK_REASON`.
+   - Set `AO_DRAFT_AUTHOR_FALLBACK_REASON` to a short audit reason, retry the same path —
+     must **allow**.
+   - Write/Edit under `docs/issues_drafts/.review/618-probe/` must **allow** without either
+     override env var.
