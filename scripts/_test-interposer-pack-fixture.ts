@@ -61,6 +61,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     path.join(packRoot, 'docs/autonomous-spawn-policy.json'),
   );
   for (const doc of [
+    'ao-0-10-review-api.mjs',
     'autonomous-gate-preflight.mjs',
     'autonomous-orchestrator-boundary.mjs',
     'autonomous-review-retry.mjs',
