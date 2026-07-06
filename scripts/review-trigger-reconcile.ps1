@@ -542,12 +542,12 @@ function Invoke-PlannedReviewRun {
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'side_effect'
-    $triggerSkipReason = ''
+    $script:ReconcileTriggerSkipReason = ''
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
         $triggerResult = Invoke-AoReviewTriggerForWorker -SessionId $SessionId
         if (-not $triggerResult.ok) {
             if ($triggerResult.httpStatus -eq 422) {
-                $triggerSkipReason = 'review_trigger_invalid'
+                $script:ReconcileTriggerSkipReason = 'review_trigger_invalid'
                 return
             }
             $failure = "review trigger failed (http $($triggerResult.httpStatus)) for PR #$PrNumber"
@@ -556,10 +556,10 @@ function Invoke-PlannedReviewRun {
             throw $failure
         }
     }
-    if ($triggerSkipReason) {
+    if ($script:ReconcileTriggerSkipReason) {
         Write-ReconcileLog "review trigger skipped (422 invalid/terminated) PR #$PrNumber session=$SessionId"
-        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = $triggerSkipReason } | Out-Null
-        return @{ started = $false; reason = $triggerSkipReason }
+        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = $script:ReconcileTriggerSkipReason } | Out-Null
+        return @{ started = $false; reason = $script:ReconcileTriggerSkipReason }
     }
     if (-not $fenced.ok) {
         Write-ReconcileLog "review run skipped (side-effect busy) PR #$PrNumber"
