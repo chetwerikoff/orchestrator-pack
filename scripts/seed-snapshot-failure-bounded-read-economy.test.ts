@@ -16,6 +16,9 @@ const fleetCache = join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').repl
 const multiPrList = join(repoRoot, 'scripts/fixtures/github-fleet-cache/open-pr-list-10.json');
 const tracked95Fixture = join(repoRoot, 'scripts/fixtures/seed-snapshot-failure/tracked-95.json');
 const openPrList95 = join(repoRoot, 'scripts/fixtures/seed-snapshot-failure/open-pr-list-95.json');
+const SEED_WORKER_COUNT = 5;
+const PRODUCTION_HOURLY_BUDGET = 150;
+const CANDIDATE_HEAD_COUNT = 95;
 
 function withSeedHarness(prefix: string): FleetHarness {
   const harness = createGithubFleetCacheHarness(prefix);
@@ -334,17 +337,70 @@ finally {
     expect(viewCalls).toBe(0);
   });
 
-  it('hourly budget contract states 150 reads/hour for 5 workers', async () => {
-    harness = withSeedHarness('seed-econ-budget-');
-    const script = `
+  it('shared hourly repair budget caps aggregate reads across five workers (AC#7)', async () => {
+    harness = withSeedHarness('seed-econ-budget-prove-');
+    const probeBudget = 12;
+    const tickCadenceMs = 5_000;
+    harness.env.GH_FLEET_SEED_SNAPSHOT_HOURLY_READ_BUDGET = String(probeBudget);
+    const baseNowMs = 1_700_000_000_000;
+    const budgetProbeScript = `
+$ErrorActionPreference = 'Stop'
+. '${fleetCache}'
+. '${economyLib}'
+$repo = '${repoRoot.replace(/'/g, "''")}'
+$baseNow = ${baseNowMs}
+$workerCount = ${SEED_WORKER_COUNT}
+$allowed = 0
+$deniedHourly = 0
+for ($worker = 0; $worker -lt $workerCount; $worker++) {
+  $nowMs = $baseNow + ($worker * ${tickCadenceMs})
+  $gate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $repo -NowMs $nowMs -RequestedReads 1
+  if ($gate.allowed) {
+    Record-GhFleetSeedSnapshotRepairAttempt -Paths $gate.paths -State $gate.state -NowMs $nowMs -Outcome 'budget_probe_ok' -ReadCount 1
+    $allowed++
+  }
+  elseif ($gate.reason -eq 'hourly_budget') {
+    $deniedHourly++
+  }
+}
+for ($i = 0; $i -lt ${probeBudget + 3}; $i++) {
+  $nowMs = $baseNow + (($workerCount + $i) * ${tickCadenceMs})
+  $gate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $repo -NowMs $nowMs -RequestedReads 1
+  if ($gate.allowed) {
+    Record-GhFleetSeedSnapshotRepairAttempt -Paths $gate.paths -State $gate.state -NowMs $nowMs -Outcome 'budget_probe_ok' -ReadCount 1
+    $allowed++
+  }
+  elseif ($gate.reason -eq 'hourly_budget') {
+    $deniedHourly++
+  }
+}
+Write-Output ("$allowed|$deniedHourly")
+`;
+    const probe = await spawnPwsh(budgetProbeScript, repoRoot, harness.env);
+    expect(probe.status, probe.stderr || probe.stdout).toBe(0);
+    const [allowedReads, deniedHourly] = probe.stdout.trim().split('|').map(Number);
+    expect(allowedReads).toBe(probeBudget);
+    expect(deniedHourly).toBeGreaterThan(0);
+    expect(allowedReads).toBeLessThanOrEqual(PRODUCTION_HOURLY_BUDGET);
+
+    const contractScript = `
 $ErrorActionPreference = 'Stop'
 . '${economyLib}'
-$contract = Get-GhFleetSeedSnapshotReadEconomyContract
-[pscustomobject]$contract | ConvertTo-Json -Compress
+[pscustomobject](Get-GhFleetSeedSnapshotReadEconomyContract) | ConvertTo-Json -Compress
 `;
-    const result = await spawnPwsh(script, repoRoot, harness.env);
-    expect(result.status).toBe(0);
-    const contract = JSON.parse(result.stdout.trim()) as { hourlyReadBudget: number };
-    expect(contract.hourlyReadBudget).toBe(150);
+    const contractResult = await spawnPwsh(contractScript, repoRoot, {
+      ...harness.env,
+      GH_FLEET_SEED_SNAPSHOT_HOURLY_READ_BUDGET: String(PRODUCTION_HOURLY_BUDGET),
+    });
+    expect(contractResult.status).toBe(0);
+    const contract = JSON.parse(contractResult.stdout.trim()) as { hourlyReadBudget: number };
+    expect(contract.hourlyReadBudget).toBe(PRODUCTION_HOURLY_BUDGET);
+
+    const trackedMeta = JSON.parse(readFileSync(tracked95Fixture, 'utf8')) as {
+      trackedPrNumbers: number[];
+    };
+    expect(trackedMeta.trackedPrNumbers.length).toBe(CANDIDATE_HEAD_COUNT);
+    expect(SEED_WORKER_COUNT * Math.ceil(3_600_000 / tickCadenceMs)).toBeGreaterThan(PRODUCTION_HOURLY_BUDGET);
   });
+
 });

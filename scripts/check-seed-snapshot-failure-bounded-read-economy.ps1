@@ -69,6 +69,27 @@ if ($fleetText -notmatch 'function Invoke-GhFleetFetchOpenPrListUpstream[\s\S]*C
     exit 1
 }
 
+$repoTickCoveragePath = Join-Path $Root 'scripts/check-github-fleet-repo-tick-coverage.ps1'
+$submitReconcilePath = Join-Path $Root 'scripts/worker-message-submit-reconcile.ps1'
+foreach ($path in @($repoTickCoveragePath, $submitReconcilePath)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Host "Missing required file: $path"
+        exit 1
+    }
+}
+
+$repoTickCoverageText = Get-Content -LiteralPath $repoTickCoveragePath -Raw
+if ($repoTickCoverageText -notmatch "id\s*=\s*'worker-message-submit-reconcile'[\s\S]{0,120}classification\s*=\s*'out of coverage'") {
+    Write-Host 'check-github-fleet-repo-tick-coverage.ps1 must classify worker-message-submit-reconcile as out of coverage (Issue #609 AC#9)'
+    exit 1
+}
+
+$submitReconcileText = Get-Content -LiteralPath $submitReconcilePath -Raw
+if ($submitReconcileText -match 'Invoke-GhOpenPrList|Invoke-GhOpenPrListForNumbers|gh\s+pr\s+list|gh\s+pr\s+view') {
+    Write-Host 'worker-message-submit-reconcile.ps1 must not use shared per-head GitHub lookup helpers (Issue #609 AC#9)'
+    exit 1
+}
+
 $testText = Get-Content -LiteralPath $economyTest -Raw
 foreach ($needle in @(
         'fresh shared snapshot',
@@ -79,7 +100,8 @@ foreach ($needle in @(
         'rate-limit',
         'non-JSON',
         '95-head',
-        '150'
+        'five workers',
+        'AC#7'
     )) {
     if ($testText -notlike "*$needle*") {
         Write-Host "seed-snapshot-failure-bounded-read-economy.test.ts missing coverage marker: $needle"

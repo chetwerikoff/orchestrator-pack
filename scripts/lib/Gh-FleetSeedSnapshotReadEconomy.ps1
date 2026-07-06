@@ -150,7 +150,7 @@ function Test-GhFleetSeedSnapshotRepairAllowed {
         return @{ allowed = $false; reason = 'cooldown'; state = $state; paths = $paths }
     }
 
-    $windowMs = Get-GhFleetSeedSnapshotRepairWindowSeconds * 1000
+    $windowMs = (Get-GhFleetSeedSnapshotRepairWindowSeconds) * 1000
     $hourlyBudget = Get-GhFleetSeedSnapshotHourlyReadBudget
     $windowStart = [long]$state.hourlyWindowStart
     $readCount = [int]$state.hourlyReadCount
@@ -188,7 +188,7 @@ function Record-GhFleetSeedSnapshotRepairAttempt {
 
     if (-not $Paths) { return }
 
-    $windowMs = Get-GhFleetSeedSnapshotRepairWindowSeconds * 1000
+    $windowMs = (Get-GhFleetSeedSnapshotRepairWindowSeconds) * 1000
     $windowStart = [long]$State.hourlyWindowStart
     $hourlyReadCount = [int]$State.hourlyReadCount
     if ($windowStart -le 0 -or ($NowMs - $windowStart) -ge $windowMs) {
