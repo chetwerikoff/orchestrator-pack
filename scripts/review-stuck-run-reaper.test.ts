@@ -290,6 +290,21 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     expect(result).toMatchObject({ paneLiveness: 'absent', reason: 'tmux_session_missing' });
   });
 
+  it('awaits async pane probes before scan classification', async () => {
+    const listPayload = loadFixture('stuck-same-head-absent-pane.json');
+    const tick = await runStuckRunReaperTick({
+      workerSessions: [{ id: sessionId, role: 'worker' }],
+      listPayloads: { [sessionId]: listPayload },
+      paneByHandle: {},
+      paneProbe: async () => ({ paneLiveness: 'absent' }),
+      config: { ageFloorSeconds: 600 },
+      nowMs,
+      failStaleSurfaceAvailable: false,
+    });
+    expect(tick.actions[0]?.classification).toBe('stuck_same_head');
+    expect(tick.actions[0]?.paneLiveness).toBe('absent');
+  });
+
   it('aborts JIT recovery when a new same-head run id superseded the scanned run', async () => {
     const stalePayload = loadFixture('stuck-same-head-absent-pane.json');
     const freshPayload = JSON.parse(JSON.stringify(stalePayload)) as {

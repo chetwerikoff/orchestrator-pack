@@ -121,13 +121,15 @@ export function probeReviewerPaneLiveness({ reviewerHandleId, sessions = [], tmu
   return { paneLiveness: 'unknown', reason: 'probe_inconclusive' };
 }
 
-function resolvePaneLiveness(ctx, reviewerHandleId) {
+async function resolvePaneLiveness(ctx, reviewerHandleId) {
   const handle = String(reviewerHandleId ?? '').trim();
   const mapped = ctx.paneByHandle?.[handle];
   if (mapped === 'healthy' || mapped === 'absent' || mapped === 'unknown') {
     return { paneLiveness: mapped, reason: 'precomputed' };
   }
-  if (typeof ctx.paneProbe === 'function') return ctx.paneProbe({ reviewerHandleId: handle });
+  if (typeof ctx.paneProbe === 'function') {
+    return Promise.resolve(ctx.paneProbe({ reviewerHandleId: handle }));
+  }
   return { paneLiveness: 'unknown', reason: 'no_probe' };
 }
 
@@ -294,7 +296,7 @@ export async function runStuckRunReaperTick({
       if (!latestRun || typeof latestRun !== 'object') continue;
       const headSha = String(entry?.headSha ?? latestRun.targetSha ?? '');
       const run = { ...latestRun, linkedSessionId: sessionId, prNumber: entry?.prNumber ?? latestRun.prNumber };
-      const pane = resolvePaneLiveness(probeCtx, reviewerHandleId);
+      const pane = await resolvePaneLiveness(probeCtx, reviewerHandleId);
       const classified = classifyStuckSameHeadCandidate({
         run,
         headSha,
