@@ -1,0 +1,21 @@
+{
+  "issue_number": 618,
+  "iteration_id": "orchestrator-pack-8",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T07:23:02.008Z",
+  "baseline": {
+    "commit_sha": "290f4f274f4e5cbf5bb57f856875d80c861ac05e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:a4bb58637d67503f30ba3e1c5cc95cefdff5a8519788b8a601b3b1a59a9596a6"
+  },
+  "declared_paths": [
+    "scripts/guard-direct-edit.mjs",
+    "scripts/guard-direct-edit.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "docs/migration_notes.md",
+    "docs/issues_drafts/207-pack-owned-architect-edit-guard-draft-author-gate.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
