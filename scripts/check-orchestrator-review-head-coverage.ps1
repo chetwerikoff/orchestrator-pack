@@ -31,7 +31,12 @@ $requiredExample = @(
     'PRE-RUN COVERAGE RE-CHECK',
     'Runs with no prNumber',
     'linkedSessionId',
-    'fail closed to inaction'
+    'fail closed to inaction',
+    'SCRIPT-OWNED ROUTINE REVIEW',
+    'review-trigger-reconcile.ps1',
+    'review-trigger-reeval.ps1',
+    'orchestrator-wake-listener.ps1',
+    'issue #641'
 )
 
 $missingExample = @($requiredExample | Where-Object { $exampleText -notlike "*$_*" })
@@ -49,7 +54,14 @@ $requiredRules = @(
     'covered terminal',
     'PRE-RUN COVERAGE RE-CHECK',
     'prNumber-less',
-    'fail closed to'
+    'fail closed to',
+    'Orchestrator LLM role vs script-owned review',
+    'review-trigger-reconcile.ps1',
+    'review-trigger-reeval.ps1',
+    'orchestrator-wake-listener.ps1',
+    'does **not** start or drive routine',
+    'issue #641',
+    'Script-owned procedure'
 )
 
 $missingRules = @($requiredRules | Where-Object { $rulesText -notlike "*$_*" })

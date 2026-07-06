@@ -47,8 +47,28 @@ use **REVIEW_COMMAND**, **PACK_REVIEWER**, and the scripts above, not invented Y
 The retired `ao review send` / `ao review execute` CLI paths are **REMOVED** on AO 0.10;
 delivery is automatic on submit.
 
-See also: [`README.md`](../README.md#local-codex-review-active),
-[`docs/architecture.md`](../docs/architecture.md#review-paths).
+## Orchestrator LLM role vs script-owned review (Issue #625)
+
+**The LLM orchestrator turn does not start or drive routine review rounds.** Routine
+`ao-review run` is owned by supervised side-process scripts — by name:
+
+- `scripts/review-trigger-reconcile.ps1` — periodic open-PR backstop (#163)
+- `scripts/review-trigger-reeval.ps1` — deferred-head re-evaluation (#235)
+- `scripts/orchestrator-wake-listener.ps1` — completion-wake fast path (#207)
+
+Those starters apply covered-head dedupe (#189), HEAD READY FOR REVIEW (#195), and the
+shared review-start claim (#267) before any automated `ao-review run`. Predicate
+implementation lives in `docs/review-orchestrator-loop.mjs`, `docs/review-head-ready.mjs`,
+and `docs/review-reconcile-primitives.mjs` — not as an LLM turn checklist.
+
+**Manual operator path:** operator-invoked `ao-review run` remains available and stays
+outside the automated claim.
+
+**Exception-only LLM handling:** contested protected findings (**E7**) and escalation
+wakes are handled per **issue #641** — read that contract; do not duplicate its
+procedure here.
+
+See also: [`README.md`](../README.md#local-codex-review-active), [`docs/architecture.md`](../docs/architecture.md#review-paths).
 
 ## Tracker and role policy
 
@@ -485,9 +505,10 @@ has gone idle — not a substitute for fixing CI yourself.
 
 ## Event-driven review trigger (Issue #207)
 
-**Orchestrator LLM turns remain a valid first-review path;** the wake listener's
-`merge.ready` completion-wake handler is the low-latency trigger when a worker hands off
-a review-ready head (AO 0.9.x emits no dedicated `ready_for_review` webhook).
+**Script-owned routine path:** `scripts/orchestrator-wake-listener.ps1` handles the
+`merge.ready` completion-wake low-latency trigger when a worker hands off a review-ready head
+(AO 0.9.x emits no dedicated `ready_for_review` webhook). LLM orchestrator turns do **not**
+start or drive routine review rounds.
 
 On `merge.ready` (approved-and-green), `scripts/orchestrator-wake-listener.ps1` evaluates
 HEAD READY FOR REVIEW (#195) and covered-head dedupe (#189), acquires the shared
@@ -506,8 +527,9 @@ stale approved-and-green snapshot while review is in-flight / undelivered `chang
 
 ## Deferred-head review re-evaluation (Issue #235)
 
-**Orchestrator LLM turns and the periodic reconcile remain valid paths;**
-`scripts/review-trigger-reeval.ps1` closes the wake-before-readiness ordering race.
+**Script-owned routine path:** `scripts/review-trigger-reeval.ps1` closes the
+wake-before-readiness ordering race (backstop: `review-trigger-reconcile.ps1`). LLM
+orchestrator turns do **not** run this watch.
 
 When a completion wake defers a head as `uncovered_not_ready` / `no_ready_for_review`
 (#212), a **scoped** supervised child watches that small deferred-head set and may
@@ -652,7 +674,7 @@ submit, or the `report-stale` backstop), the worker MUST NOT go idle silently.
 2. `ao report fixing_ci` — optional, while fixing CI triggered by review fixes.
 3. `ao report ready_for_review` — after pushing fixes and local verification,
    when required CI for the PR head is green (see **Required CI**) and the PR is ready
-   for the next orchestrator-driven review round.
+   for the next review round (started script-side when the head is ready).
 
 Use underscore state names (`addressing_reviews`, `fixing_ci`, `ready_for_review`)
 so `ao status --reports full` matches what orchestratorRules watches; hyphenated
@@ -713,9 +735,10 @@ Managed sessions — both orchestrator and workers — MUST NOT:
 
 ## Orchestrator review-run coverage (Issue #189)
 
-Orchestrator sessions (not workers) follow this file plus
-`agent-orchestrator.yaml.example` (legacy-import reference). Before any
-`ao-review run`, a head SHA is **covered** — start nothing — when `Get-AoReviewRuns`
+**Script-owned procedure (not an LLM turn checklist).** Before any automated
+`ao-review run`, the starters `scripts/review-trigger-reconcile.ps1`,
+`scripts/review-trigger-reeval.ps1`, and `scripts/orchestrator-wake-listener.ps1`
+apply this predicate. A head SHA is **covered** — start nothing — when `Get-AoReviewRuns`
 fan-out shows any run with the **same PR linkage** (`prNumber`) **and** the **exact normalized
 head SHA** (`targetSha`) that is in-flight (`queued` / `preparing` / `running` /
 `reviewing`) or covered terminal (`up_to_date` / `changes_requested`). Same SHA
@@ -742,9 +765,11 @@ mechanical reconciler (`review-trigger-reconcile.ps1`) uses the same predicate; 
 
 ## Head ready for review (Issue #195)
 
-Orchestrator sessions (not workers) must apply **one** shared predicate before any
-`ao-review run` — report-driven triggers, `ROUND PROGRESSION`, and the #163 reconciler
-all consume `docs/review-head-ready.mjs` (no independent trigger conditions).
+The same automated starters (`review-trigger-reconcile.ps1`,
+`review-trigger-reeval.ps1`, `orchestrator-wake-listener.ps1`) apply **one** shared
+predicate before any automated `ao-review run` — implemented in
+`docs/review-head-ready.mjs` (no independent trigger conditions). LLM orchestrator
+turns do **not** apply this gate for routine rounds.
 
 Evaluate **failed/cancelled on the current head first** (EMPTY REVIEW TRAP — never the
 plain uncovered-ready path). Then a PR head SHA is **ready for review** only when ALL hold
@@ -782,10 +807,10 @@ the run for the operator.
 
 ## AO review command and failed runs (workers)
 
-- Workers MUST NOT invent alternate review trigger or `--command` strings. Only the
-  orchestrator drives review with the canonical **REVIEW_COMMAND** from project
-  config (`agent-orchestrator.yaml` / `agent-orchestrator.yaml.example`) via
-  `ao-review run` / side-process scripts.
+- Workers MUST NOT invent alternate review trigger or `--command` strings. Review
+  starts are driven by the script-owned starters above, manual operator `ao-review run`,
+  or the canonical **REVIEW_COMMAND** from project config — not by worker-initiated
+  triggers.
 - Workers MUST NOT treat a failed or cancelled review run as review completion,
   even when `findingCount` is 0 or findings text is empty.
 - Workers MUST NOT report that Codex review passed when `Get-AoReviewRuns` /

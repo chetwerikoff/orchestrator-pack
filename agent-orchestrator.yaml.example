@@ -324,6 +324,13 @@ projects:
       findingCount 0 on failed or cancelled runs is NOT up_to_date. Never read or
       pattern-match finding body prose (NO_FINDINGS contract).
 
+      SCRIPT-OWNED ROUTINE REVIEW (Issue #625 — operator reference). On AO 0.10 the LLM
+      orchestrator turn does NOT start or drive routine ao-review run rounds. Covered-head,
+      head-ready, and claim procedures belong to review-trigger-reconcile.ps1,
+      review-trigger-reeval.ps1, and orchestrator-wake-listener.ps1. Exception-only LLM
+      handling (contested protected finding E7, escalation wakes): issue #641 — pointer only.
+      Manual operator ao-review run remains outside the automated claim.
+
       REVIEW RUN IDEMPOTENCY (Issue #98, widened Issue #189 — additive to EMPTY REVIEW TRAP).
       Before calling ao-review run for a worker session, read Get-AoReviewRuns and the
       current PR head sha (from gh pr view or the worker PR ref). A head SHA is covered —
@@ -344,8 +351,8 @@ projects:
       AUTOMATED REVIEW-START CLAIM (Issue #267, closes the #189/#207/#235 concurrent
       window). Every automated starter surface must acquire the shared machine-local
       review-start claim keyed by (prNumber, full normalized head SHA) before ao-review run:
-      periodic reconcile (including quiescent-worker fallback), wake listener, deferred-head
-      re-eval, and future noninteractive starters. The claim is an atomic cross-process
+      review-trigger-reconcile.ps1, orchestrator-wake-listener.ps1, review-trigger-reeval.ps1,
+      and future noninteractive starters. The claim is an atomic cross-process
       test-and-set and stays effective until a covering run record is visible or a terminal
       outcome is recorded. Claim storage failure, unreadable/partial records, short SHAs,
       divergent SHA normalization, anomalous timestamps, or unknowable registration state
@@ -363,8 +370,9 @@ projects:
       stale recovery must abort at the final ownership fence instead of starting.
 
       HEAD READY FOR REVIEW (Issue #195 — one predicate for all review-trigger paths).
-      Before any ao-review run (report-driven trigger, ROUND PROGRESSION, or the #163
-      reconciler), evaluate failed/cancelled on the current head FIRST (EMPTY REVIEW TRAP —
+      Before any automated ao-review run (review-trigger-reconcile.ps1,
+      review-trigger-reeval.ps1, orchestrator-wake-listener.ps1 — not LLM turns), evaluate
+      failed/cancelled on the current head FIRST (EMPTY REVIEW TRAP —
       never the plain uncovered-ready path). Then a PR head SHA is ready for review only when
       ALL hold on one consistent snapshot:
         - latest accepted worker report for that exact current head SHA is ready_for_review
@@ -395,11 +403,11 @@ projects:
       That removes an orphan code-reviews/workspaces path so AO git worktree add can succeed.
       See docs/orchestrator-recovery-runbook.md (Orphan review run after worker respawn).
 
-      TRIGGER REVIEW WITHOUT HUMAN PROMPT (report-driven on orchestrator turns). Whenever
-      a worker reports pr_created or ready_for_review on an open PR (visible in
-      ao status --reports full), apply HEAD READY FOR REVIEW (#195) and the mechanical
-      claimed review-start gate (Issue #318) — never bare ao-review run from autonomous
-      orchestrator turns:
+      ROUTINE REVIEW TRIGGER (script-owned — operator reference prose; NOT an LLM turn
+      checklist on AO 0.10). Routine review rounds are started by side-process scripts
+      named above — the LLM orchestrator turn does not start or drive them. The block
+      below documents legacy import / operator reference only. Historical claimed entry
+      point (non-routine — not the 0.10 default path):
         pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 `
           -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
       Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
@@ -421,9 +429,9 @@ projects:
       (emits advisory warning on covered/pending heads; does not acquire the autonomous gate).
       Prose REVIEW RUN IDEMPOTENCY below remains guidance; Issue #318 gate is authoritative
       for autonomous starts. Do not wait for operator words review or loop.
-      Report-driven triggering is not the only path — the low-frequency reconcile process
-      below converges from GitHub + review list state even when reports are missing or the
-      orchestrator is stuck.
+      Script-owned starters remain authoritative — review-trigger-reconcile.ps1 converges
+      from GitHub + review list state even when reports are missing and the LLM orchestrator
+      session is idle.
 
       EVENT-DRIVEN REVIEW TRIGGER (Issue #207 — wake listener, review-run only). On
       merge.ready (approved-and-green completion wake), orchestrator-wake-listener.ps1

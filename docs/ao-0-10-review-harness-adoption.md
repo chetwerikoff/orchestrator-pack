@@ -81,9 +81,10 @@ pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
 
 ## 5. Smoke proof (operator terminal)
 
-1. Ensure one worker PR is review-ready (#195 predicate).
-2. `pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>`
-3. Confirm HTTP 201 or 200 and a `running` / `queued` latestRun via `ao-review list <session> --json`.
+1. Ensure one worker PR is review-ready (#195 predicate) and the orchestrator LLM session is **idle** (no turn driving review).
+2. Trigger script-side: `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once` (or completion wake via wake-listener on a ready head).
+3. Confirm HTTP 201/200 and a `running` / `queued` latestRun via `ao-review list <session> --json`.
+4. Manual operator fallback remains: `pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>`.
 
 Do **not** edit live `agent-orchestrator.yaml` from automation — harness adoption is operator-only.
 

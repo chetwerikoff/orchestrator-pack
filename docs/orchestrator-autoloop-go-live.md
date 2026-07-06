@@ -169,7 +169,7 @@ when a worker spawns.
 ```text
 worker: pr_created / ready_for_review (+ CI green)
     → AO notification (action) → webhook → listener → ao send orchestrator
-    → orchestrator turn / reconcile: Get-AoReviewRuns, ao status --reports full
+    → script-side reconcile (review-trigger-reconcile.ps1): Get-AoReviewRuns, ao status --reports full
     → ao-review run <worker>  (POST .../reviews/trigger)
     → changes_requested + auto-delivery → worker addressing_reviews → …
 ```
@@ -178,7 +178,7 @@ worker: pr_created / ready_for_review (+ CI green)
 
 - `ao report ready_for_review` updates metadata only — it does **not** POST a
   wake webhook by itself. You need mergeable/merge.ready routing (above) or an
-  orchestrator turn from wake / recovery ping / heartbeat backstop.
+  script-side starters from wake / reconcile / heartbeat backstop — not LLM turns.
 - Orchestrator `stuck` / `probe_failure` — no shell actions run; use
   [recovery runbook](orchestrator-recovery-runbook.md) step 1 before kill/restart.
 
