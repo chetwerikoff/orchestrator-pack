@@ -36,7 +36,10 @@ elseif (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
 else {
     Join-Path $userHome '.local' 'state'
 }
-$WorktreesRoot = Join-Path $userHome '.agent-orchestrator' 'projects' $ProjectId 'worktrees'
+$WorktreesRoots = @(
+    (Join-Path $userHome '.ao' 'data' 'worktrees' $ProjectId),
+    (Join-Path $userHome '.agent-orchestrator' 'projects' $ProjectId 'worktrees')
+)
 $StateFile = Join-Path $stateBase 'orchestrator-pack-trusted-worktrees.txt'
 $known = @{}
 
@@ -72,22 +75,24 @@ catch {
     Write-WatcherLog "worktrees root trust skipped: $_"
 }
 
-Write-WatcherLog "starting (project=$ProjectId, poll=${PollSeconds}s, root=$WorktreesRoot)"
+Write-WatcherLog "starting (project=$ProjectId, poll=${PollSeconds}s, roots=$($WorktreesRoots -join ';'))"
 
 while ($true) {
-    if (Test-Path -LiteralPath $WorktreesRoot -PathType Container) {
-        Get-ChildItem -LiteralPath $WorktreesRoot -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                $full = $_.FullName
-                if (-not $known[$full]) {
-                    try {
-                        Register-TrustedPath -Path $full
-                    }
-                    catch {
-                        Write-WatcherLog "failed $full : $_"
+    foreach ($worktreesRoot in $WorktreesRoots) {
+        if (Test-Path -LiteralPath $worktreesRoot -PathType Container) {
+            Get-ChildItem -LiteralPath $worktreesRoot -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $full = $_.FullName
+                    if (-not $known[$full]) {
+                        try {
+                            Register-TrustedPath -Path $full
+                        }
+                        catch {
+                            Write-WatcherLog "failed $full : $_"
+                        }
                     }
                 }
-            }
+        }
     }
     Start-Sleep -Seconds ([Math]::Max(3, $PollSeconds))
 }
