@@ -13,12 +13,23 @@ $Script:ReviewStartClaimSafeFloorMinutes = 2
 $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'changes_requested')
-$Script:ReviewStartClaimInFlightRunStatuses = @('queued', 'preparing', 'running', 'reviewing')
+$Script:ReviewStartClaimInFlightRunStatuses = @('needs_review', 'queued', 'preparing', 'running', 'reviewing')
 
 function ConvertTo-ReviewStartClaimNormalizedRunStatus {
-    param([object]$Run)
+    param(
+        [object]$Run,
+        [string]$Status = ''
+    )
 
-    $raw = if ($null -ne $Run.prReviewStatus) { [string]$Run.prReviewStatus } else { [string]$Run.status }
+    $raw = if ($Status) {
+        [string]$Status
+    }
+    elseif ($null -ne $Run) {
+        if ($null -ne $Run.prReviewStatus) { [string]$Run.prReviewStatus } else { [string]$Run.status }
+    }
+    else {
+        ''
+    }
     $status = $raw.Trim().ToLowerInvariant()
     switch ($status) {
         'clean' { return 'up_to_date' }
@@ -29,6 +40,12 @@ function ConvertTo-ReviewStartClaimNormalizedRunStatus {
         'sent_to_agent' { return 'changes_requested' }
         default { return $status }
     }
+}
+
+function Test-ReviewStartClaimStatusInFlight {
+    param([string]$Status)
+
+    return ($Status -in $Script:ReviewStartClaimInFlightRunStatuses)
 }
 
 
@@ -348,6 +365,21 @@ function Test-ReviewStartClaimRunIsCovering {
     param([object]$Run)
 
     $status = ConvertTo-ReviewStartClaimNormalizedRunStatus -Run $Run
+    if ($status -in @('ineligible', 'outdated')) {
+        return $false
+    }
+    if (Test-ReviewStartClaimStatusInFlight -Status $status) {
+        return $true
+    }
+
+    $latestRaw = [string]$Run.latestRunStatus
+    if (-not [string]::IsNullOrWhiteSpace($latestRaw)) {
+        $latestStatus = ConvertTo-ReviewStartClaimNormalizedRunStatus -Status $latestRaw.Trim()
+        if (Test-ReviewStartClaimStatusInFlight -Status $latestStatus) {
+            return $true
+        }
+    }
+
     return ($status -in $Script:ReviewStartClaimCoveredRunStatuses)
 }
 
