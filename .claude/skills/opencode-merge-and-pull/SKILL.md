@@ -127,6 +127,11 @@ Stop without merging if:
 - `mergeable` is not `MERGEABLE` (offer `gh pr update-branch P` first if behind)
 - Required checks are failing
 
+When CI is red and/or the branch is behind base, **do not** patch the PR from this
+OpenCode session. Follow **Step 3b** in
+[`.claude/skills/merge-with-local-adoption/SKILL.md`](../merge-with-local-adoption/SKILL.md)
+(`ao send` to the PR worker, wait for green CI, then resume at Step 3 here).
+
 ---
 
 ## Step 4 — Collect local adoption instructions
