@@ -972,10 +972,10 @@ describe('wake trigger integration', () => {
     expect(fenceBlockStart).toBeGreaterThan(-1);
     const handoffIdx = src.indexOf('if ($isHandoffWake) {', fenceBlockStart);
     const ledgerIdx = src.indexOf('Register-PostRunAutonomousRetryAttemptFromClaim', fenceBlockStart);
-    const aoIdx = src.indexOf('& ao @runArgs', fenceBlockStart);
+    const triggerIdx = src.indexOf('Invoke-AoReviewTriggerForWorker', fenceBlockStart);
     expect(handoffIdx).toBeGreaterThan(-1);
     expect(ledgerIdx).toBeGreaterThan(handoffIdx);
-    expect(aoIdx).toBeGreaterThan(ledgerIdx);
+    expect(triggerIdx).toBeGreaterThan(ledgerIdx);
   });
 
   it('completion wake keeps 5s processing bound', () => {

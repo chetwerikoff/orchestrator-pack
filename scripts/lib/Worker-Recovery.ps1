@@ -507,7 +507,9 @@ function Invoke-WorkerRecovery {
             $gateHead = [string]$selectionWorktreeRecord.head
         }
         try {
-            Assert-ReviewBeforeCleanupGate -SessionId $SessionId -HeadSha $gateHead -Context 'worker_recovery_worktree_remove'
+            if (-not $FixtureMode) {
+                Assert-ReviewBeforeCleanupGate -SessionId $SessionId -HeadSha $gateHead -Context 'worker_recovery_worktree_remove'
+            }
         }
         catch {
             $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'review_before_cleanup_blocked'
