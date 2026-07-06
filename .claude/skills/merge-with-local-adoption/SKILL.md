@@ -3,8 +3,8 @@ name: merge-with-local-adoption
 description: >-
   Merge a ready PR, safely pull main in the live checkout, and apply documented
   local operator adoption. After every merge, verify the AO orchestrator runtime
-  worktree contains the merge commit (Step 6e); for runtime-sensitive merges, also restart AO
-  and confirm adoption surfaces (Step 8). After merge, kill the merged PR's
+  worktree contains the merge commit (Step 6e); for runtime-sensitive merges, recycle
+  affected AO sessions and confirm adoption surfaces (Step 8). After merge, kill the merged PR's
   worker AO session and run ao session cleanup -p orchestrator-pack. Use when the user asks to merge
   a finished task — e.g. «мерж», «мерж 385», «мерж и пул», «смерж», «merge»,
   «merge and pull» — or clearly wants a ready PR merged after review/CI. When CI is red and/or the branch is behind base,
@@ -21,8 +21,8 @@ When the user asks to merge a **ready** task/PR, run this workflow end-to-end in
 to `opencode run`, `opencode-publish.sh`, or DeepSeek.
 
 Goal: merge the PR → update local `main` when needed → apply post-merge local steps
-from the issue/PR → for runtime-sensitive merges, restart AO from the **operator
-terminal** and confirm the orchestrator runtime worktree is on the merged commit →
+from the issue/PR → for runtime-sensitive merges, update AO ProjectConfig / recycle the
+affected AO session from the **operator terminal** and confirm the orchestrator runtime worktree is on the merged commit →
 kill the merged PR's worker session and run project session cleanup → **always**
 probe the orchestrator runtime worktree commit after merge (Step 6e) → report exactly what changed.
 
@@ -30,8 +30,8 @@ probe the orchestrator runtime worktree commit after merge (Step 6e) → report 
 [`.claude/skills/opencode-merge-and-pull/SKILL.md`](../opencode-merge-and-pull/SKILL.md)
 instead (same safety rules, different entrypoint).
 
-**Managed-session guard:** run `ao stop` / `ao start` and worktree probes only from
-the **operator terminal** (this Cursor skill). AO-managed worker sessions MUST NOT
+**Managed-session guard:** run AO session lifecycle commands and worktree probes only
+from the **operator terminal** (this Cursor skill). AO-managed worker sessions MUST NOT
 run lifecycle or git commands inside AO worktrees (`prompts/agent_rules.md`).
 
 ---
@@ -252,13 +252,19 @@ Read **all** of these before merging:
 
 **Operator-facing surfaces** (any change ⇒ likely local work):
 
-- `agent-orchestrator.yaml.example` — merge blocks into live `agent-orchestrator.yaml`
-- `orchestratorRules`, `reactions`, `notifiers`, `notificationRouting`
+- `agent-orchestrator.yaml.example` / `agent-orchestrator.yaml` — AO 0.10.2 does **not**
+  read these as live runtime config after legacy import; YAML rules/reactions/notifiers are
+  documentation or migration inputs only unless a current adoption note names a supported
+  `ao project set-config` change.
+- `orchestratorRules`, `reactions`, `notifiers`, `notificationRouting` — legacy YAML surfaces
+  on AO 0.10.2; do **not** classify as runtime-sensitive by themselves.
 - New/changed long-running scripts: `orchestrator-wake-listener.ps1`, trust watcher, heartbeat
-- Documented env vars: `PACK_REVIEWER`, `AO_ORCHESTRATOR_SESSION_ID`, webhook URL/port
+- Documented env/PATH wiring: `PACK_REVIEWER`, PATH prepend, worker/orchestrator agent config,
+  webhook URL/port. On AO 0.10.2 these live in per-project ProjectConfig via
+  `ao project set-config`; changes apply when a session is spawned/restored, not on daemon restart.
 - Machine-local CLI config (`~/.cursor/cli-config.json`) called out in docs
 - Runbook/go-live changes: `docs/orchestrator-autoloop-go-live.md`, `docs/orchestrator-wake-runbook.md`, `docs/orchestrator-recovery-runbook.md`, `docs/reviewer-switch-runbook.md`
-- Anything requiring `ao stop` / `ao start` to reload
+- Anything requiring long-running pack processes or AO sessions to be respawned
 
 ### Runtime-sensitive classification
 
@@ -266,22 +272,28 @@ Set **Runtime-sensitive: yes** when the PR diff (or adoption text) touches any o
 
 | Signal | Examples |
 |--------|------------|
-| Worker/orchestrator prompts | `prompts/**` |
+| Worker/orchestrator prompts | `prompts/**` — pack prompt delivery on AO 0.10 is under migration in Issue #625; do not invent a delivery mechanism |
 | Autonomous bash surface | `scripts/autonomous-*` |
 | Orchestrator side processes | wake listener, heartbeat, trust watcher, `orchestrator-wake-supervisor.ps1`, `wait-orchestrator-launch.ps1` |
-| Live yaml template | `agent-orchestrator.yaml.example` |
-| Runtime rules / wiring | `orchestratorRules`, `reactions`, `BASH_ENV`, `PATH` prepend, `agentConfig.env` |
-| Explicit restart | adoption or `migration_notes.md` requires `ao stop` / `ao start` |
+| AO ProjectConfig wiring | `PACK_REVIEWER`, PATH prepend, `--env`, `--worker-agent`, `--orchestrator-agent`, `agentConfig.env` adoption mapped to `ao project set-config` |
+| Long-running pack processes | wake listener, heartbeat, trust watcher, supervised children whose process command/env must change |
+| Explicit session recycle | adoption or `migration_notes.md` requires respawning an AO session or supervised process |
+
+**Legacy YAML-only changes are not runtime-sensitive on AO 0.10.2 by themselves:**
+`agent-orchestrator.yaml.example`, live `agent-orchestrator.yaml`, `orchestratorRules`,
+`reactions`, `notifiers`, and `notificationRouting` are ignored by the AO 0.10 runtime
+unless the adoption text maps them to a supported ProjectConfig/process change.
 
 **Runtime-sensitive: no** (skip Step 8) when **all** of:
 
 - Diff is docs / tests / `plugins/**` only, **and**
-- No operator-process, `.example`, `prompts/**`, `scripts/autonomous-*`, or
-  `orchestratorRules` / env-wiring changes, **and**
+- No operator-process, `prompts/**`, `scripts/autonomous-*`, ProjectConfig/env/PATH wiring,
+  or long-running process changes, **and**
 - PR body says `No operator adoption required` or equivalent, **and**
-- Nothing in adoption text requires restart or live yaml merge
+- Nothing in adoption text requires session respawn, process restart, or ProjectConfig update
 
-When unsure, treat as runtime-sensitive — under-adoption is worse than a restart.
+When unsure, treat as runtime-sensitive — under-adoption is worse than an unnecessary
+session/process recycle.
 
 Contract reference: Issue #101 (`docs/issues_drafts/35-operator-adoption-handoff-contract.md`).
 
@@ -292,7 +304,7 @@ after pull (Russian or English matching the user). If no adoption: one line —
 
 > Локальных настроек для этой задачи нет — мержу без post-merge шагов.
 
-If runtime-sensitive, mention that Step 8 will restart AO and verify the orchestrator
+If runtime-sensitive, mention that Step 8 will apply supported AO 0.10 runtime adoption and verify the orchestrator
 worktree commit after adoption.
 
 ---
@@ -404,44 +416,69 @@ Step 6 updates only the **operator live checkout**. The AO **orchestrator runtim
 clone — it does **not** auto-sync on `git pull` in the pack root. After every successful
 merge, probe it even when Step 8 is skipped (non-runtime-sensitive PRs).
 
-**Skip only when:** `ao status --project orchestrator-pack` has no `role: orchestrator` row
-**and** no orchestrator session json exists under
-`~/.agent-orchestrator/projects/orchestrator-pack/sessions/`.
+**Skip only when:** `ao orchestrator ls --json` has no non-terminated
+`projectId == "orchestrator-pack"` row and `ao session ls --json -p orchestrator-pack --all`
+has no non-terminated `role/kind == "orchestrator"` row.
 
 #### Resolve orchestrator session id and worktree (Steps 6e / 8)
 
-Fail closed — resolve from env or live `ao status` only; **never** guess a default id.
+Fail closed — resolve from env or live AO 0.10 session/orchestrator lists only; **never**
+guess a default id. `ao status --json` is daemon health only on AO 0.10.2 and must not
+be parsed for sessions.
 
 ```bash
 P=orchestrator-pack
-AO="$HOME/.agent-orchestrator/projects/$P"
+AO_DATA="${AO_DATA:-$HOME/.ao/data}"
+WT_BASE="$AO_DATA/worktrees/$P"
 
 resolve_orchestrator_session_id() {
   if [ -n "${AO_ORCHESTRATOR_SESSION_ID:-}" ]; then
     printf '%s\n' "${AO_ORCHESTRATOR_SESSION_ID}"
     return 0
   fi
-  local status_json status_err
-  status_err="$(mktemp)"
-  if ! status_json="$(ao status --project orchestrator-pack --json 2>"$status_err")"; then
-    echo "Step 6e aborted: ao status failed: $(cat "$status_err")" >&2
-    rm -f "$status_err"
+  local orch_json session_json err
+  err="$(mktemp)"
+  if ! orch_json="$(ao orchestrator ls --json 2>"$err")"; then
+    echo "Step 6e aborted: ao orchestrator ls failed: $(cat "$err")" >&2
+    rm -f "$err"
     return 1
   fi
-  rm -f "$status_err"
-  printf '%s' "$status_json" | node -e '
+  rm -f "$err"
+  if printf '%s' "$orch_json" | node -e '
 let input = "";
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   let payload;
   try { payload = JSON.parse(input); } catch { process.exit(2); }
   const rows = Array.isArray(payload.data) ? payload.data : [];
-  const orch = rows.find((row) => row && row.role === "orchestrator");
-  if (!orch || !orch.name) process.exit(2);
-  process.stdout.write(String(orch.name));
+  const orch = rows.find((row) => row && row.projectId === "orchestrator-pack" && !row.isTerminated);
+  if (!orch || !orch.id) process.exit(2);
+  process.stdout.write(String(orch.id));
+});
+'; then
+    return 0
+  fi
+
+  err="$(mktemp)"
+  if ! session_json="$(ao session ls --json -p orchestrator-pack --all 2>"$err")"; then
+    echo "Step 6e aborted: ao session ls failed: $(cat "$err")" >&2
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
+  printf '%s' "$session_json" | node -e '
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let payload;
+  try { payload = JSON.parse(input); } catch { process.exit(2); }
+  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const orch = rows.find((row) => row && (row.role === "orchestrator" || row.kind === "orchestrator") && !row.isTerminated);
+  if (!orch || !orch.id) process.exit(2);
+  process.stdout.write(String(orch.id));
 });
 ' || {
-    echo "Step 6e aborted: orchestrator session id not found in ao status .data[]" >&2
+    echo "Step 6e aborted: orchestrator session id not found in ao orchestrator/session lists" >&2
     return 1
   }
 }
@@ -455,7 +492,10 @@ ORIGIN_MAIN="$(git rev-parse origin/main)"
 MERGE_SHA="<from Step 5 mergeCommit.oid>"
 
 S="$(resolve_orchestrator_session_id)" || { echo "Step 6e: no orchestrator session — skipped"; exit 0; }
-WT="$AO/worktrees/$S"
+WT="$WT_BASE/orchestrator"
+if [ ! -d "$WT/.git" ] && [ -d "$WT_BASE/$S/.git" ]; then
+  WT="$WT_BASE/$S"
+fi
 WT_HEAD="$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo MISSING)"
 WT_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSING)"
 
@@ -487,14 +527,14 @@ git merge-base --is-ancestor "$MERGE_SHA" "$WT_HEAD"
 **If worktree is dirty, pull fails, or still stale after fast-forward:**
 
 - **Do not** `reset`, `checkout`, or `clean` inside `$WT`.
-- Classify the merge as **runtime-sensitive retroactively** and run **Step 8** (restart +
+- Classify the merge as **runtime-sensitive retroactively** and run **Step 8** (session recycle +
   `orchestrator-worktree-preflight.ps1`), or escalate
-  `docs/orchestrator-recovery-runbook.md` Step 2b → Step 4.
+  `docs/orchestrator-recovery-runbook.md` Step 2b → Step 3.
 - Record expected (`MERGE_SHA`, `ORIGIN_MAIN`) vs actual (`WT_HEAD`) in the final report.
 
-**Optional after successful sync:** when `ao status` shows orchestrator `stuck` / non-working
-runtime but `$WT` is current, run `env -u BASH_ENV ao stop orchestrator-pack` then
-`env -u BASH_ENV ao start orchestrator-pack` and
+**Optional after successful sync:** when `ao orchestrator ls --json` shows a non-working
+orchestrator but `$WT` is current, run `ao session kill "$S" -p orchestrator-pack`, then
+`ao session restore "$S" -p orchestrator-pack`, and
 `pwsh -NoProfile -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId "$S"`.
 This is **not** a substitute for Step 8 when the merge was runtime-sensitive.
 
@@ -507,14 +547,15 @@ Step 10 — even when Step 8 is skipped.
 Execute only steps documented in Step 4. Rules:
 
 1. **Surgical edits** — change only files and keys the adoption section names.
-2. **`agent-orchestrator.yaml`** — copy/merge the listed YAML blocks from
-   `agent-orchestrator.yaml.example` or the PR description; preserve all
-   unrelated keys and comments. Say **merge, do not replace** for live yaml.
+2. **`agent-orchestrator.yaml` / `.example`** — AO 0.10.2 does not reload these as live
+   runtime config. Do not edit live YAML for runtime adoption unless the PR explicitly
+   asks for a documentation/legacy-import update; map live env/PATH/agent changes to
+   `ao project set-config` instead.
 3. **Do not commit** live yaml, secrets, or machine-local config unless the user
    explicitly asked to commit in the same message.
-4. **`ao stop` / `ao start`**, listener scripts, `PACK_REVIEWER` changes: defer
-   lifecycle restarts to Step 8 when the merge is runtime-sensitive; otherwise run
-   only when the adoption section requires them outside Step 8.
+4. **Listener scripts, supervised children, `PACK_REVIEWER` / PATH changes:** defer
+   process/session recycling to Step 8 when the merge is runtime-sensitive; otherwise run
+   only when the adoption section requires it outside Step 8.
 5. Call out separate terminals (AO, wake listener, trust watcher) when docs
    require them.
 6. Do not invent secrets or ports — copy defaults from the PR/docs.
@@ -535,23 +576,36 @@ Confirm pre-existing dirty files are still present.
 
 Skip when Step 4 classified **Runtime-sensitive: no**.
 
+AO 0.10.2 facts this step relies on:
+
+- `agent-orchestrator.yaml` is not a live runtime config. AO 0.10 reads per-project
+  ProjectConfig from the daemon store (`ao project get/set-config`); YAML
+  `orchestratorRules`, `reactions`, `notifiers`, and `notificationRouting` are ignored
+  after legacy import.
+- Project operands to `ao stop` / `ao start` are invalid. `ao start` has no project
+  operand and opens the desktop app; it is not the pack's headless
+  session-reload primitive.
+- Env/PATH/agent changes apply when AO creates/restores a tmux/session. Apply supported
+  config with `ao project set-config`, then recycle the affected session(s).
+- Pack prompt delivery on AO 0.10 is under migration in Issue #625. For `prompts/**`,
+  verify only that the runtime worktree contains the merged prompt files; do not claim
+  AO prompt injection is proven until #625 defines the delivery mechanism.
+
 Canonical references — do **not** invent parallel worktree/git procedures:
 
 | Need | Canonical doc / script |
 |------|------------------------|
-| Normal post-merge daemon restart | `docs/migration_notes.md` (operator adoption sections); `docs/orchestrator-recovery-runbook.md` — **Step 4 — Full `ao stop` / `ao start`** |
-| Stale `orchestrator/*` branch / worktree before restart | `docs/orchestrator-recovery-runbook.md` — **Step 2b — Orchestrator worktree hygiene**; `scripts/orchestrator-worktree-preflight.ps1` |
-| Launch health after orchestrator respawn | `scripts/wait-orchestrator-launch.ps1` (recovery runbook Step 3) |
-| Fresh spawn when session metadata keeps stale prompts/rules | [`.claude/skills/change-orchestrator-runtime/SKILL.md`](../change-orchestrator-runtime/SKILL.md) — **APPLY PROCEDURE** (operator terminal only) |
+| ProjectConfig/env/PATH adoption | `ao project set-config orchestrator-pack --env KEY=VALUE ... --json`; config resolves when sessions spawn/restore |
+| Stale `orchestrator/*` branch / worktree before recycle | `docs/orchestrator-recovery-runbook.md` — **Step 2b — Orchestrator worktree hygiene**; `scripts/orchestrator-worktree-preflight.ps1` |
+| Launch health after orchestrator restore | `scripts/wait-orchestrator-launch.ps1` (recovery runbook Step 3) |
+| Fresh runtime/prompt delivery semantics | [`.claude/skills/change-orchestrator-runtime/SKILL.md`](../change-orchestrator-runtime/SKILL.md) and Issue #625; do not improvise |
 | Merged PR review-loop policy (not worktree repair) | `docs/orchestrator-recovery-runbook.md` — **After manual PR merge** |
-| Journaled worker-send adoption after AO restart | `docs/migration_notes.md` — **Journaled worker-send wrapper adoption (Issue #281)**; `docs/orchestrator-recovery-runbook.md` — worker message stuck / adoption; Step **8e** below |
+| Journaled worker-send adoption | Currently fail-closed on AO 0.10.2 because `ao send` requires `--session`/`--message` and removed `--file`; see Step **8e** |
 
-**Journaled worker-send adoption (Step 8e):** run **only** after a factual AO
-restart/reload in Step 8c (or `change-orchestrator-runtime` APPLY PROCEDURE). Skip when
-Step 8 is skipped, when no restart occurred, or when the merge did not require runtime
-reload and live worker-send routing was unchanged. Adoption binding is keyed to the
-**AO epoch** and the **hash of the config path string** (resolved live
-`agent-orchestrator.yaml` path) — not to a hash of YAML file contents.
+**Journaled worker-send adoption (Step 8e):** do not require the old adoption proof on
+AO 0.10.2. The transport is intentionally fail-closed until the separate send-transport
+migration lands; record the skip instead of blocking the merge on an impossible
+`ao send --file` verification.
 
 ### 8a — Resolve orchestrator session id and worktree path
 
@@ -561,15 +615,18 @@ Step 4 required runtime-sensitive adoption.
 
 ```bash
 S="$(resolve_orchestrator_session_id)" || exit 1
-WT="$AO/worktrees/$S"
+WT="$WT_BASE/orchestrator"
+if [ ! -d "$WT/.git" ] && [ -d "$WT_BASE/$S/.git" ]; then
+  WT="$WT_BASE/$S"
+fi
 ```
 
-Record `S` and `WT`. Re-run `resolve_orchestrator_session_id` in Step 8d when the id may
-have changed after restart — still fail closed; do not substitute a guessed id.
+Record `S` and `WT`. Re-run `resolve_orchestrator_session_id` in Step 8d after restore
+when the id may have changed — still fail closed; do not substitute a guessed id.
 
-### 8b — Pre-restart baseline (mandatory)
+### 8b — Pre-recycle baseline (mandatory)
 
-Run and **save output** before any restart:
+Run and **save output** before any session recycle:
 
 ```bash
 git fetch origin
@@ -577,172 +634,92 @@ ORIGIN_MAIN="$(git rev-parse origin/main)"
 MERGE_SHA="<from Step 5 mergeCommit.oid>"
 WT_BEFORE_HEAD="$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo MISSING)"
 WT_BEFORE_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSING)"
-ao status --project orchestrator-pack --reports full
+ao status --json
+ao orchestrator ls --json
+ao session get "$S" --json -p orchestrator-pack
 ```
 
-### 8c — Operator restart (documented sequence)
+### 8c — Apply supported runtime config and recycle affected sessions
 
-Default post-merge reload (`docs/migration_notes.md`, recovery runbook Step 4):
+If adoption requires env/PATH/agent changes, apply them to ProjectConfig first. Preserve
+existing values by using the exact adoption instructions; do not clear unrelated config.
+Examples of supported AO 0.10.2 shapes:
 
 ```bash
-env -u BASH_ENV ao stop orchestrator-pack
-env -u BASH_ENV ao start orchestrator-pack
+ao project set-config orchestrator-pack --env PACK_REVIEWER=codex --json
+ao project set-config orchestrator-pack --orchestrator-agent cursor --json
+ao project set-config orchestrator-pack --worker-agent cursor --json
 ```
 
-Use `env -u BASH_ENV` only when the autonomous bash interposer would block or
-rewrite operator lifecycle commands; otherwise plain `ao stop` / `ao start` is fine.
+Only run `ao project set-config` when Step 4 found an actual ProjectConfig adoption
+requirement. If the runtime-sensitive change is only a long-running pack process, restart
+that process per its runbook and skip ProjectConfig mutation.
 
-If spawn logs show `workspace.branch_collision` or preflight reports stale items,
-follow recovery runbook **Step 2b** first (read-only check, then `-Apply` only as
-documented there — not ad-hoc `git worktree remove`):
+If preflight reports stale orchestrator worktree/branch items, follow recovery runbook
+**Step 2b** first (read-only check, then `-Apply` only as documented there — not ad-hoc
+`git worktree remove`):
 
 ```bash
 pwsh -NoProfile -File scripts/orchestrator-worktree-preflight.ps1 -OrchestratorSessionId "$S"
 # If findings and runbook says apply:
 pwsh -NoProfile -File scripts/orchestrator-worktree-preflight.ps1 -OrchestratorSessionId "$S" -Apply
-env -u BASH_ENV ao start orchestrator-pack
 ```
 
-Optional post-start health wait (recovery runbook Step 3):
+Recycle the orchestrator session when the adopted runtime surface affects the
+orchestrator session, ProjectConfig env/PATH/agent, or `prompts/**` worktree content:
 
 ```bash
+ao session kill "$S" -p orchestrator-pack
+ao session restore "$S" -p orchestrator-pack
 pwsh -NoProfile -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId "$S" -ProjectId orchestrator-pack
 ```
 
-When adoption explicitly requires a **fresh orchestrator spawn** (model/runtime/rules
-that restore will not regenerate — see `change-orchestrator-runtime` traps), run that
-skill's **APPLY PROCEDURE** instead of only Step 4 above, then continue to 8d.
+For worker-only env/PATH changes, do not kill unrelated active workers just to prove
+adoption. Record that ProjectConfig is updated and will apply to newly spawned/restored
+workers; recycle only the specific worker if the adoption text requires it and the
+operator confirms it is safe.
 
-### 8d — Post-restart worktree re-probe
+When adoption explicitly requires a runtime path that `set-config`/restore cannot cover,
+stop and report a contract gap or defer to `change-orchestrator-runtime`; do not use
+`ao stop` / `ao start <project>` as a substitute.
+
+### 8d — Post-recycle worktree re-probe
 
 Re-run `resolve_orchestrator_session_id` (Step 8a) if the orchestrator id may have
-changed after restart — **stop Step 8** on failure; then:
+changed after restore — **stop Step 8** on failure; then:
 
 ```bash
 S="$(resolve_orchestrator_session_id)" || exit 1
-WT="$AO/worktrees/$S"
+WT="$WT_BASE/orchestrator"
+if [ ! -d "$WT/.git" ] && [ -d "$WT_BASE/$S/.git" ]; then
+  WT="$WT_BASE/$S"
+fi
 WT_AFTER_HEAD="$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo MISSING)"
 WT_AFTER_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSING)"
-ao status --project orchestrator-pack --reports full
+ao status --json
+ao orchestrator ls --json
+ao session get "$S" --json -p orchestrator-pack
 ```
 
-### 8e — Journaled worker-send adoption (mandatory after AO restart in Step 8)
+### 8e — Journaled worker-send adoption (AO 0.10.2 fail-closed)
 
-Run this block **after** Step 8c restart (and optional 8d worktree re-probe). Skip when
-Step 8 was skipped or when no AO restart/reload occurred in this merge flow.
-
-From the operator pack checkout (`orchestrator-pack` repo root):
+Do **not** run the old canonical preflight on AO 0.10.2. It depends on
+`ao send --file` / YAML `orchestratorRules` routing, while live AO 0.10.2 exposes only:
 
 ```bash
-cd /path/to/orchestrator-pack   # live checkout, not the AO orchestrator worktree
-
-pwsh -NoProfile -Command '
-. ./scripts/lib/Get-WorkerMessageAdoptionBinding.ps1
-$b = Get-WorkerMessageAdoptionBinding -PackRoot (Get-Location).Path
-& ./scripts/worker-message-send-adoption-preflight.ps1 `
-  -AoEpoch $b.AoEpoch `
-  -ConfigPath $b.ConfigPath `
-  -WriteProbeEntries
-exit $LASTEXITCODE
-'
+ao send --session <session-id> --message "<message>"
 ```
 
-**Binding:** `Get-WorkerMessageAdoptionBinding` resolves the running AO epoch and the
-loaded config path; preflight validates probe journal entries for that epoch plus the
-**path-string hash** (not YAML content).
+Record:
 
-**Canonical preflight (`-WriteProbeEntries`):** invokes `ao send` into session
-`synthetic-adoption-probe`. The live `orchestratorRules` routing rule must pipe through
-`scripts/journaled-worker-send.ps1`. Success stdout includes
-`[worker-message-send-adoption-preflight] effective routing adopted`.
+- **Journaled worker-send (8e): skipped — AO 0.10.2 send transport migration pending; old
+  `--file`/YAML-routing proof is impossible and must fail closed.**
+- If the merge itself changes send transport code, note that verification belongs to the
+  separate transport-migration task; do not mark runtime adoption confirmed based on it.
 
-**Outcome A — canonical preflight OK (adoption confirmed):**
-
-- Command above exits 0.
-- Stdout includes `[worker-message-send-adoption-preflight] effective routing adopted`.
-- Live YAML routing through `ao send` → `journaled-worker-send.ps1` is **verified**.
-- Record Step 9 journaled worker-send as **canonical preflight OK**.
-
-**If canonical preflight fails with `Session 'synthetic-adoption-probe' does not exist` or
-`probe_route_failed`:**
-
-- **Do not** treat live YAML routing as verified.
-- Tell the operator that session `synthetic-adoption-probe` must exist (or be created and
-  kept) and canonical preflight must be re-run before **runtime adoption confirmed**.
-- **Outcome B — wrapper/journal fallback only** (routing **not** confirmed): use only to
-  validate wrapper/journal health and clear the adoption escalation when canonical routing
-  proof is unavailable.
-  `docs/migration_notes.md` Issue #281 and the recovery runbook describe canonical
-  `-WriteProbeEntries` adoption only — they do **not** document this direct-wrapper path.
-
-```bash
-cd /path/to/orchestrator-pack
-
-pwsh -NoProfile -Command '
-$ErrorActionPreference = "Stop"
-. ./scripts/lib/Get-WorkerMessageAdoptionBinding.ps1
-. ./scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1
-. ./scripts/lib/Record-WorkerMessageDispatch.ps1
-$root = (Get-Location).Path
-$b = Get-WorkerMessageAdoptionBinding -PackRoot $root
-$epoch = [string]$b.AoEpoch
-$config = [string]$b.ConfigPath
-$epochHash = ConvertTo-WorkerMessageSafeHashText $epoch
-$configHash = ConvertTo-WorkerMessageSafeHashText $config
-$runId = ConvertTo-WorkerMessageSafeHashText ([guid]::NewGuid().ToString("n"))
-$journal = if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
-  $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
-} else {
-  Join-Path ([IO.Path]::GetTempPath()) "orchestrator-worker-message-dispatch-journal.json"
-}
-$wrapper = Join-Path $root "scripts/journaled-worker-send.ps1"
-foreach ($branch in @("plain-ao-send:pending-draft", "plain-ao-send:self-submitted")) {
-  $payload = New-WorkerMessageAdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash -RunIdHash $runId
-  $env:AO_WORKER_MESSAGE_ADOPTION_PROBE = "1"
-  $env:AO_WORKER_MESSAGE_ADOPTION_BRANCH = $branch
-  $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH = $epoch
-  $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH = $config
-  $env:AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH = $epochHash
-  $env:AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH = $configHash
-  $env:AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH = $runId
-  $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL = $journal
-  $payload | & $wrapper -SessionId synthetic-adoption-probe -AdoptionProbe `
-    -JournalPath $journal -AoEpoch $epoch -ConfigPath $config `
-    -AoEpochHash $epochHash -ConfigPathHash $configHash -AdoptionProbeRunIdHash $runId
-  if ($LASTEXITCODE -ne 0) { throw "wrapper probe failed branch=$branch exit=$LASTEXITCODE" }
-}
-$r = Test-WorkerMessageSendAdoptionPreflight -JournalPath $journal -AoEpoch $epoch -ConfigPath $config -PersistState
-if (-not $r.ok) { Write-Host $r.diagnosis; exit 46 }
-Write-Host "[merge-8e-fallback] wrapper/journal probes validated; live YAML routing not verified"
-exit 0
-'
-```
-
-- Outcome B validates wrapper + journal for the current binding only.
-- Even if journal validation prints `effective routing adopted`, **do not** equate that with
-  Outcome A — no `-WriteProbeEntries` / no `ao send` routing proof.
-- Record Step 9 journaled worker-send as **fallback wrapper only (routing не доказан)**.
-- **Do not** report **runtime adoption confirmed** on Outcome B alone; list operator follow-up:
-  create/keep `synthetic-adoption-probe`, rerun canonical preflight (command above).
-
-**Post-8e checks** (health only — not adoption source of truth):
-
-```bash
-pwsh -NoProfile -File scripts/worker-message-submit-reconcile.ps1 -Once -DryRun
-pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
-```
-
-Do **not** claim adoption passed based on reconcile `-DryRun` alone — dry-run skips live
-adoption-preflight side effects.
-
-**Health expected after Outcome A or B:**
-
-- `worker-message-submit-reconcile` shows **working** in supervisor Status.
-- No `STATE FENCES UNTRUSTED` / `wrong_state_root_active_deliveries` on that child.
-
-If health checks fail, stop and escalate via `docs/orchestrator-recovery-runbook.md`
-worker-message section. Outcome B additionally leaves **runtime adoption unconfirmed** until
-canonical preflight succeeds.
+You may still run non-send health checks that do not use removed AO flags/verbs, such as
+`pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status`, but these
+are health checks only and do not prove worker-send adoption.
 
 ### 8f — Success criteria
 
@@ -756,24 +733,19 @@ Report **runtime adoption confirmed** only when **all** hold:
      `git merge-base --is-ancestor "$MERGE_SHA" "$ORIGIN_MAIN"` (exit 0).
    A pre-merge `WT_AFTER_HEAD` fails the first check even when it is an ancestor of
    `ORIGIN_MAIN` — stale heads before `MERGE_SHA` must **not** pass.
-2. **Orchestrator alive:** `ao status --project orchestrator-pack` shows an
-   orchestrator session with working/alive runtime (or
-   `wait-orchestrator-launch.ps1` exited 0).
+2. **Orchestrator alive:** `ao orchestrator ls --json` shows a non-terminated
+   `projectId == "orchestrator-pack"` orchestrator session with healthy status, or
+   `wait-orchestrator-launch.ps1` exited 0.
 3. **Surfaces:** at least one runtime-sensitive path from Step 4 is present in the
    worktree at the expected content (spot-check: `git -C "$WT" show HEAD:<path>` or
    `test -f "$WT/<path>"` for a changed prompt/script named in the PR).
-4. **Journaled worker-send (when Step 8c restart ran):**
-   - **Outcome A (canonical `-WriteProbeEntries`):** required for **runtime adoption
-     confirmed** — preflight `effective routing adopted`; `worker-message-submit-reconcile`
-     **working**; no `STATE FENCES UNTRUSTED`.
-   - **Outcome B (wrapper fallback only):** may satisfy health checks above, but **does
-     not** satisfy this criterion — record **runtime adoption: routing не подтверждён**
-     and operator follow-up to rerun canonical preflight.
-   - If restart did not run, note **8e skipped (no restart)**.
+4. **Journaled worker-send:** record **8e skipped / fail-closed on AO 0.10.2** unless a
+   later issue has migrated the send transport and updated this skill. This no longer
+   blocks confirmation for unrelated runtime-sensitive merges.
 
-Do **not** claim restart succeeded without recording `WT_AFTER_HEAD`.
+Do **not** claim session recycle/adoption succeeded without recording `WT_AFTER_HEAD`.
 
-### 8g — Stale worktree after restart — stop and escalate
+### 8g — Stale worktree after recycle — stop and escalate
 
 If `WT_AFTER_HEAD` is `MISSING`, or either commit check in 8f fails (worktree does not
 contain `MERGE_SHA`, or `origin/main` does not contain `MERGE_SHA`):
@@ -782,8 +754,8 @@ contain `MERGE_SHA`, or `origin/main` does not contain `MERGE_SHA`):
 - **Stop** Step 8; record **expected** (`MERGE_SHA` / `ORIGIN_MAIN`) vs **actual**
   (`WT_AFTER_HEAD`).
 - Direct the operator to the documented recovery path:
-  1. `docs/orchestrator-recovery-runbook.md` — Step 2b → Step 3 or Step 4
-  2. If prompts/rules remain stale after that: `change-orchestrator-runtime` APPLY PROCEDURE
+  1. `docs/orchestrator-recovery-runbook.md` — Step 2b → Step 3
+  2. If prompt delivery remains stale after that: Issue #625 / `change-orchestrator-runtime`
 - If no safe automated recreate path covers this scenario, note **contract gap** in the
   final report (do not improvise worktree deletion).
 
@@ -804,10 +776,11 @@ Read from live AO state only — **never** infer a session id from the issue num
 branch name, or PR title.
 
 ```bash
-WORKER_SESSIONS="$(ao status --project orchestrator-pack --json | jq -r --argjson pr "$P" '
+WORKER_SESSIONS="$(ao session ls --json -p orchestrator-pack --include-terminated | jq -r --argjson pr "$P" '
   [.data[]
-   | select((.role == "worker" or .role == "coding") and .prNumber == $pr)
-   | .name] | unique | .[]')"
+   | select((.role == "worker" or .role == "coding") and (.prNumber == $pr or .issueId == ($pr|tostring)))
+   | select(.isTerminated != true)
+   | .id] | unique | .[]')"
 ```
 
 Interpretation:
@@ -818,43 +791,34 @@ Interpretation:
 | Zero ids | Record **worker session: not found**; skip 9b kill; still run 9c cleanup |
 | Multiple ids | **Stop** — list candidates, ask operator once; do not guess |
 
-**Hard guard:** `W` MUST NOT be an orchestrator session (`role: orchestrator` in
-`ao status`). If the only match is orchestrator-shaped, stop and report.
+**Hard guard:** `W` MUST NOT be an orchestrator session (`role/kind: orchestrator` in
+`ao session get "$W" --json -p orchestrator-pack`). If the only match is
+orchestrator-shaped, stop and report.
 
 ### 9b — Kill the worker session
 
 When `W` is set:
 
 ```bash
-ao session kill "$W"
+ao session kill "$W" -p orchestrator-pack
 ```
 
 Verify the session is gone:
 
 ```bash
-ao status --project orchestrator-pack --json | jq -r --arg w "$W" '
-  [.data[] | select(.name == $w)] | length'
+ao session ls --json -p orchestrator-pack --include-terminated | jq -r --arg w "$W" '
+  [.data[] | select(.id == $w and .isTerminated != true)] | length'
 ```
 
 Expect **0**. If the session still appears, record the failure and continue to 9c
 (do not retry kill in a loop).
-
-Optional when OpenCode mapping must be purged with the session (rare after merge):
-`ao session kill --purge-session "$W"` — use only when adoption docs or stderr
-call for it.
 
 ### 9c — Project session cleanup
 
 Remove other cleanup-eligible dead/closed-work sessions for this project:
 
 ```bash
-ao session cleanup -p orchestrator-pack
-```
-
-Preview only when diagnosing before the real run:
-
-```bash
-ao session cleanup -p orchestrator-pack --dry-run
+ao session cleanup -p orchestrator-pack -y
 ```
 
 Record stdout (which sessions were cleaned). **Do not** kill the orchestrator
@@ -863,9 +827,9 @@ session manually — cleanup targets eligible workers/reviewers only.
 ### 9d — Post-teardown check
 
 ```bash
-ao status --project orchestrator-pack --json | jq -r '
+ao session ls --json -p orchestrator-pack | jq -r '
   [.data[] | select(.role == "worker" or .role == "coding")
-   | "\(.name)\tpr=\(.prNumber // "—")\t\(.status)"] | .[]"'
+   | "\(.id)\tpr=\(.prNumber // .issueId // "-")\t\(.status)"] | .[]"'
 ```
 
 Confirm no worker row still lists `prNumber == P`. Orchestrator row should remain.
@@ -904,7 +868,7 @@ Reply in the user’s language (Russian if they wrote Russian):
 
 ### Локальное adoption
 - Выполнено: <нумерованный список конкретных действий и файлов>
-- Требует оператора вручную: <если осталось — restarts, секреты, отдельные терминалы>
+- Требует оператора вручную: <если осталось — process/session recycle, секреты, отдельные терминалы>
 - Не требовалось: <если No operator adoption>
 
 ### Runtime adoption (Step 8)
@@ -913,11 +877,11 @@ Reply in the user’s language (Russian if they wrote Russian):
 - **merge SHA:** <MERGE_SHA>
 - **Orchestrator session id:** <S>
 - **Runtime worktree before:** <WT> @ <WT_BEFORE_HEAD> (<WT_BEFORE_BRANCH>)
-- **Restart:** выполнен / не требовался / не удался (<команды>)
+- **ProjectConfig:** обновлён (`ao project set-config ...`) / не требовался / не удался (<stderr>)
+- **Session/process recycle:** выполнен / не требовался / не удался (<команды>)
 - **Runtime worktree after:** <WT> @ <WT_AFTER_HEAD> (<WT_AFTER_BRANCH>)
-- **Journaled worker-send (8e):** пропущен (без рестарта) / Outcome A canonical OK / Outcome B fallback only (routing не доказан) / failed (<причина>)
-- **worker-message-submit-reconcile:** working / degraded (<причина>)
-- **Runtime adoption:** подтверждён (только Outcome A) / routing не подтверждён (Outcome B) / stale / пропущен (не runtime-sensitive)
+- **Journaled worker-send (8e):** skipped fail-closed on AO 0.10.2 / migrated proof run (<issue>) / not relevant
+- **Runtime adoption:** подтверждён / prompt delivery pending #625 / stale / пропущен (не runtime-sensitive)
 - **Escalation:** <recovery runbook step / change-orchestrator-runtime / contract gap / —>
 
 ### Worker handoff (Step 3b)
@@ -928,15 +892,15 @@ Reply in the user’s language (Russian if they wrote Russian):
 ### Worker session (Step 9)
 - **Worker session id:** <W / not found / multiple — stopped>
 - **Kill:** выполнен / пропущен (нет сессии) / не удался (<stderr>)
-- **Cleanup:** `ao session cleanup -p orchestrator-pack` — <краткий итог stdout>
-- **Post-check:** нет worker с prNumber=P / остался <id> (<статус>)
+- **Cleanup:** `ao session cleanup -p orchestrator-pack -y` — <краткий итог stdout>
+- **Post-check:** нет worker с prNumber/issueId=P / остался <id> (<статус>)
 
 ### Проверка
 - `git status --short`: …
 - `git log -1 --oneline`: …
 ```
 
-Do not claim CI/adoption/restart succeeded without the commands you actually ran.
+Do not claim CI/adoption/session recycle succeeded without the commands you actually ran.
 
 ---
 
@@ -953,13 +917,13 @@ Do not claim CI/adoption/restart succeeded without the commands you actually ran
 - Replace the user’s entire live yaml from example
 - Drop a stash after a failed `stash pop`
 - “Fix” a failed pull by discarding local changes
-- Run `ao stop` / `ao start` from an AO-managed worker session
-- `ao session kill` on the orchestrator session (`role: orchestrator`) — only the
-  merged PR's worker (`role: worker` / `coding`) in Step 9
+- Run AO lifecycle/session recycle commands from an AO-managed worker session
+- `ao session kill` on the orchestrator session (`role: orchestrator`) outside Step 8
+  runtime adoption / recovery runbook; Step 9 may kill only the merged PR's worker
+  (`role: worker` / `coding`)
 - Skip Step 9 worker teardown after a successful merge (kill + cleanup are mandatory)
 - Destructive git (`reset`, `checkout`, `switch`, `clean`) or hand-edits inside the AO
   orchestrator worktree — **except** Step 6e sanctioned fast-forward when clean and behind
-- Delete AO worktrees manually or claim restart succeeded without post-start HEAD check
-- Claim journaled worker-send adoption from `worker-message-submit-reconcile -DryRun` alone
-  (dry-run skips adoption preflight; use `worker-message-send-adoption-preflight.ps1`)
-- Treat direct wrapper probe fallback as proof that live YAML routing rule works
+- Delete AO worktrees manually or claim session recycle succeeded without post-recycle HEAD check
+- Require journaled worker-send adoption proof on AO 0.10.2 before the send-transport
+  migration lands; record Step 8e as fail-closed instead
