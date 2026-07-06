@@ -9,6 +9,7 @@ import {
   readStdinJson,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
+import { buildReviewTriggerInvocation } from './ao-0-10-review-api.mjs';
 import {
   COVERED_TERMINAL_REVIEW_STATUSES,
   collectSessionIdentifiers,
@@ -1037,8 +1038,13 @@ export function findForbiddenLifecycleCommands(commandLines) {
  * @param {string} sessionId
  * @param {string} reviewCommand
  */
-export function buildReviewRunArgv(sessionId, reviewCommand) {
-  return ['review', 'run', sessionId, '--execute', '--command', reviewCommand];
+export function buildReviewRunArgv(sessionId, reviewCommand = '') {
+  void reviewCommand;
+  return buildReviewTriggerInvocation(sessionId).shimArgv;
+}
+
+export function buildReviewTriggerPath(sessionId) {
+  return buildReviewTriggerInvocation(sessionId).path;
 }
 
 runStdinJsonCli('review-trigger-reconcile.mjs', {

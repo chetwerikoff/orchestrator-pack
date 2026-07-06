@@ -48,6 +48,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 
@@ -479,8 +480,7 @@ function Invoke-PlannedReviewRun {
         [string]$ConfigYaml = ''
     )
 
-    $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
-    $commandLine = "ao $($runArgs -join ' ')"
+    $commandLine = Get-ReviewTriggerInvocationLine -SessionId $SessionId
     Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
 
     if ($DryRunMode) {
@@ -542,14 +542,24 @@ function Invoke-PlannedReviewRun {
     Write-ReconcileLog "starting review: PR #$PrNumber head=$HeadSha session=$SessionId"
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'review-trigger-side-effect.lock'
     Write-OrchestratorSideProcessProgress -ChildId 'review-trigger-reconcile' -Phase 'side_effect'
+    $script:ReconcileTriggerSkipReason = ''
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        & ao @runArgs
-        if ($LASTEXITCODE -ne 0) {
-            $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
+        $triggerResult = Invoke-AoReviewTriggerForWorker -SessionId $SessionId
+        if (-not $triggerResult.ok) {
+            if ($triggerResult.httpStatus -eq 422) {
+                $script:ReconcileTriggerSkipReason = 'review_trigger_invalid'
+                return
+            }
+            $failure = "review trigger failed (http $($triggerResult.httpStatus)) for PR #$PrNumber"
             $postFailureRuns = @(Get-AoReviewRuns -Project $Project)
             Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
             throw $failure
         }
+    }
+    if ($script:ReconcileTriggerSkipReason) {
+        Write-ReconcileLog "review trigger skipped (422 invalid/terminated) PR #$PrNumber session=$SessionId"
+        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = $script:ReconcileTriggerSkipReason } | Out-Null
+        return @{ started = $false; reason = $script:ReconcileTriggerSkipReason }
     }
     if (-not $fenced.ok) {
         Write-ReconcileLog "review run skipped (side-effect busy) PR #$PrNumber"

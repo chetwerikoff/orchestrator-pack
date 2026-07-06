@@ -24,6 +24,7 @@ import {
 import { nonEmptyString } from './orchestrator-wake-filter.mjs';
 import {
   buildReviewRunArgv,
+  buildReviewTriggerPath,
   findSessionById,
   hasFailedOrCancelledOnHead,
   IN_FLIGHT_REVIEW_STATUSES,
@@ -493,7 +494,7 @@ export function findForbiddenReviewWakeCommands(commandLines) {
   return findForbiddenCommandPatterns(commandLines, MECHANICAL_FORBIDDEN_REVIEW_WAKE);
 }
 
-export { buildReviewRunArgv };
+export { buildReviewRunArgv, buildReviewTriggerPath };
 
 runStdinJsonCli('review-wake-trigger.mjs', {
   evaluate: () => evaluateWakeReviewTrigger(readStdinJson()),

@@ -1,0 +1,18 @@
+{
+  "reviewerHandleId": "review-orchestrator-pack-7",
+  "reviews": [
+    {
+      "prNumber": 623,
+      "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/623",
+      "headSha": "abc123def4567890abcdef1234567890abcdef12",
+      "latestRun": {
+        "id": "rr-623-created-1",
+        "runId": "rr-623-created-1",
+        "status": "running",
+        "targetSha": "abc123def4567890abcdef1234567890abcdef12",
+        "prNumber": 623,
+        "linkedSessionId": "orchestrator-pack-7"
+      }
+    }
+  ]
+}

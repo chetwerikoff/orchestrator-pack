@@ -1,0 +1,8 @@
+{
+  "defaultBranch": "main",
+  "reviewers": [
+    {
+      "harness": "codex"
+    }
+  ]
+}

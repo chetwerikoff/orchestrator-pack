@@ -668,3 +668,10 @@ reactions:
 #   AO plugin slots, wrappers, hooks, external state, and CI.
 # - Do not patch Composio AO packages/core.
 # - PR CI scope validation is the second line of defense; runtime guard is first.
+
+# AO 0.10 review harness (Issue #623)
+# On AO 0.10.x, configure reviewers via project config API — not REVIEW_COMMAND/--command:
+#   ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'
+# Pack trigger loop uses POST /api/v1/sessions/{workerId}/reviews/trigger (scripts/ao-review.ps1 shim).
+# Operator adoption: docs/ao-0-10-review-harness-adoption.md
+

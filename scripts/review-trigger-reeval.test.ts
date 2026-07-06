@@ -255,10 +255,13 @@ describe('Issue #235 acceptance criteria', () => {
     expect(violations.length).toBeGreaterThan(0);
     expect(findForbiddenReviewReevalCommands(['gh pr merge 1'])).toHaveLength(1);
     expect(
+      findForbiddenReviewReevalCommands(['ao-review run opk-1']),
+    ).toHaveLength(0);
+    expect(
       findForbiddenReviewReevalCommands([
         'ao review run opk-1 --execute --command codex',
       ]),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it('(9) restart-durable watch survives and triggers on readiness', () => {

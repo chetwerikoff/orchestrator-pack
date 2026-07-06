@@ -670,7 +670,8 @@ describe('planReconcileActions', () => {
     const reviewCommand =
       'powershell.exe -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main';
     const argv = buildReviewRunArgv(starts[0]!.sessionId, reviewCommand);
-    const commandLine = `ao ${argv.join(' ')}`;
+    expect(argv).toEqual(['ao-review', 'run', starts[0]!.sessionId]);
+    const commandLine = argv.join(' ');
     expect(findForbiddenLifecycleCommands([commandLine])).toEqual([]);
   });
 });
@@ -970,7 +971,7 @@ describe('findForbiddenLifecycleCommands', () => {
       'ao send op-2 hello',
       'ao review run op-3 --execute --command foo',
     ]);
-    expect(violations.length).toBeGreaterThanOrEqual(4);
+    expect(violations.length).toBeGreaterThanOrEqual(5);
   });
 });
 

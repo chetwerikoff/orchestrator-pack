@@ -11,7 +11,8 @@ function Test-ReviewMechanicalForbiddenCommand {
         'ao spawn',
         '--claim-pr',
         'ao session kill',
-        'ao send'
+        'ao send',
+        'ao review run'
     )
     foreach ($frag in $blocked) {
         if ($CommandLine -match [regex]::Escape($frag)) {

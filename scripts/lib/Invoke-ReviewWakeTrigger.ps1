@@ -11,6 +11,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewHandoffWakeAdmission.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
     param([string]$CommandLine)
@@ -289,8 +290,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     $planned = $evaluation.planned
-    $runArgs = @('review', 'run', $planned.sessionId, '--execute', '--command', $ReviewCommand)
-    $commandLine = "ao $($runArgs -join ' ')"
+    $commandLine = Get-ReviewTriggerInvocationLine -SessionId $planned.sessionId
     Test-ReviewWakeTriggerForbiddenCommand -CommandLine $commandLine
 
     $lockPath = if ($SideEffectLockPath) { $SideEffectLockPath } else { Get-ReviewWakeTriggerSideEffectLockPath }
@@ -513,9 +513,18 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
             if (-not $handoffReceiptAbort) {
                 Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
                 & $LogWriter "review-wake-trigger: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
-                & ao @runArgs
-                if ($LASTEXITCODE -ne 0) {
-                    $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+                $triggerResult = Invoke-AoReviewTriggerForWorker -SessionId $planned.sessionId
+                if (-not $triggerResult.ok) {
+                    $failure = "review trigger failed (http $($triggerResult.httpStatus)) for PR #$($planned.prNumber)"
+                    if ($triggerResult.httpStatus -eq 422) {
+                        & $LogWriter "review-wake-trigger: skip terminated/invalid worker PR #$($planned.prNumber) session=$($planned.sessionId)"
+                        Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = 'review_trigger_invalid' } | Out-Null
+                        return @{
+                            triggered = $false
+                            reason    = 'review_trigger_invalid'
+                            mergeEval = Get-ReviewWakeTriggerMergeEval -PrNumber $planned.prNumber -Snapshot $fresh
+                        }
+                    }
                     $postFailureRuns = @(Get-AoReviewRuns -Project $ProjectId)
                     Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
                     throw $failure

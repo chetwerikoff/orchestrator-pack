@@ -1,0 +1,22 @@
+{
+  "listPayload": {
+    "reviews": [
+      {
+        "prNumber": 623,
+        "headSha": "abc123def4567890abcdef1234567890abcdef12",
+        "latestRun": {
+          "id": "rr-running",
+          "status": "running",
+          "targetSha": "abc123def4567890abcdef1234567890abcdef12"
+        }
+      }
+    ]
+  },
+  "headSha": "abc123def4567890abcdef1234567890abcdef12",
+  "prNumber": 623,
+  "expect": {
+    "proceed": false,
+    "blocked": true,
+    "reason": "review_running_for_current_head"
+  }
+}

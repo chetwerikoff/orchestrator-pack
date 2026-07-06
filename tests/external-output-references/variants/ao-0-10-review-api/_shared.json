@@ -1,0 +1,10 @@
+{
+  "forbiddenFields": ["session", "reports", "data"],
+  "allowedFields": [
+    "reviewerHandleId",
+    "reviews",
+    "defaultBranch",
+    "reviewers",
+    "httpStatus"
+  ]
+}
