@@ -61,8 +61,8 @@ if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'Resolve-ReviewReadyRep
     exit 1
 }
 
-if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'Invoke-GhOpenPrListForNumbers') {
-    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must scope GitHub open-PR lookups to tracked PR numbers'
+if ((Get-Content -LiteralPath $invokeLib -Raw) -notmatch 'Resolve-ReviewReadyReportStateSeedOpenPrs') {
+    Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must resolve tracked open PRs via bounded read economy'
     exit 1
 }
 

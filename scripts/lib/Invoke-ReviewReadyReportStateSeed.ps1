@@ -11,6 +11,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-ReviewTriggerReeval.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'Gh-FleetSeedSnapshotReadEconomy.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Get-SupervisedRepoSlug.ps1')
@@ -155,8 +156,12 @@ function New-ReviewReadyReportStateSeedGitHubSnapshot {
     & $refreshProgress 'start'
     $openPrs = if (@($TrackedPrNumbers).Count -gt 0) {
         & $refreshProgress 'repo_tick'
-        $null = Get-GhFleetRepoTickSnapshotIfConsumable -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed' -DataClass 'github_snapshot'
-        @(Invoke-GhOpenPrListForNumbers -RepoRoot $RepoRoot -PrNumbers @($TrackedPrNumbers) -Consumer 'review-ready-report-state-seed' -ProgressWriter $refreshProgress)
+        @(Resolve-ReviewReadyReportStateSeedOpenPrs `
+            -RepoRoot $RepoRoot `
+            -TrackedPrNumbers @($TrackedPrNumbers) `
+            -Consumer 'review-ready-report-state-seed' `
+            -ProgressWriter $refreshProgress `
+            -NowMs $NowMs)
     }
     else {
         @()
@@ -193,7 +198,19 @@ function Resolve-ReviewReadyReportStateSeedGitHubSnapshot {
     $trackedPrNumbers = @(Get-ReviewReadyReportStateSeedTrackedPrNumbers -Sessions $Sessions -SupervisedProject $SupervisedProject)
     $refreshIntervalMs = Get-ReviewReadyReportStateSeedGitHubRefreshIntervalMs
     if (Test-ReviewReadyReportStateSeedGitHubSnapshotStale -Snapshot $CachedSnapshot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs -RefreshIntervalMs $refreshIntervalMs) {
-        return (New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot $RepoRoot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs -ProgressWriter $ProgressWriter)
+        try {
+            return (New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot $RepoRoot -TrackedPrNumbers $trackedPrNumbers -NowMs $NowMs -ProgressWriter $ProgressWriter)
+        }
+        catch {
+            if ($CachedSnapshot) {
+                Write-GhFleetCacheAuditLine -Event 'seed_snapshot_degraded_refresh_skipped' -Fields @{
+                    consumer = 'review-ready-report-state-seed'
+                    reason   = [string]$_.Exception.Message
+                }
+                return $CachedSnapshot
+            }
+            throw
+        }
     }
 
     return $CachedSnapshot

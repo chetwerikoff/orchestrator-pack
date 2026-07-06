@@ -422,7 +422,8 @@ function Invoke-GhFleetCachedOpenPrListRaw {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
-        [string]$Consumer = ''
+        [string]$Consumer = '',
+        [switch]$BoundedListOnly
     )
 
     $cacheRoot = Get-GhFleetInventoryCacheRoot
@@ -451,7 +452,7 @@ function Invoke-GhFleetCachedOpenPrListRaw {
         return @($warm.envelope.prs)
     }
 
-    if ((Get-Command Test-GhFleetRepoTickEnabled -ErrorAction SilentlyContinue) -and (Test-GhFleetRepoTickEnabled)) {
+    if (-not $BoundedListOnly -and (Get-Command Test-GhFleetRepoTickEnabled -ErrorAction SilentlyContinue) -and (Test-GhFleetRepoTickEnabled)) {
         $null = Ensure-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer $Consumer -DataClass 'open_pr_list'
         $warmAfterTick = Read-GhFleetCacheEnvelope -Path $paths.SnapshotPath -TtlSeconds $ttl
         if ($warmAfterTick) {
@@ -546,7 +547,15 @@ function Invoke-GhFleetFetchOpenPrListUpstream {
         return @()
     }
 
-    return @($raw | ConvertFrom-Json)
+    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
+    if ($null -eq $parsed) {
+        $detail = "gh pr list failed (exit 0): no parseable JSON array in output: $raw"
+        if ($FailureKind -eq 'snapshot_populate_failed') {
+            throw (Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage $detail)
+        }
+        throw $detail
+    }
+    return @($parsed)
 }
 
 function Invoke-GhFleetResolveCommitDate {
