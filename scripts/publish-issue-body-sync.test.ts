@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertSanctionedGhIssueMutation,
   bodiesMatchForParity,
@@ -16,6 +17,7 @@ import {
   syncPublishIssueBody,
   type GhInvocationResult,
   type MutationAuditRecord,
+  validateStageCompletenessGuardReceipt,
   validateTierGateGuardReceipt,
 } from './lib/publish-issue-body-sync.js';
 
@@ -41,6 +43,7 @@ function makeDeps(overrides: {
   liveReadResult?: GhInvocationResult;
   onRunGh?: (argv: string[]) => GhInvocationResult;
   validateTierGateGuard?: (draftContent: string) => { ok: boolean; message: string };
+  validateStageCompletenessGuard?: (draftContent: string) => { ok: boolean; message: string };
 } = {}) {
   const audits: MutationAuditRecord[] = [];
   const mutationCalls: string[][] = [];
@@ -75,6 +78,10 @@ function makeDeps(overrides: {
     validateTierGateGuard: overrides.validateTierGateGuard ?? (() => ({
       ok: true,
       message: 'tier-gate guard: PASS (test stub)',
+    })),
+    validateStageCompletenessGuard: overrides.validateStageCompletenessGuard ?? (() => ({
+      ok: true,
+      message: 'stage-completeness guard: PASS (test stub)',
     })),
   };
 
@@ -296,6 +303,51 @@ describe('publish issue-body sync (#542)', () => {
       draftContent: tierGateFixture,
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 576,
+    });
+    expect(allowed.ok).toBe(true);
+    expect(passingDeps.mutationCalls.length).toBeGreaterThan(0);
+  });
+
+  it('issue-body sync refuses when stage-completeness guard receipt is missing or failing and proceeds when it passes', () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../tests/fixtures/stage-completeness/worktree');
+    const draftPath = join(repoRoot, 'docs/issues_drafts/conforming.md');
+    const draftContent = readFileSync(draftPath, 'utf8');
+
+    const failingDeps = makeDeps({
+      onRunGh: () => {
+        throw new Error('gh should not run when stage-completeness guard fails');
+      },
+    });
+    failingDeps.deps.validateStageCompletenessGuard = () => ({
+      ok: false,
+      message: 'stage-completeness guard: missing competitive stage',
+    });
+
+    const blocked = syncPublishIssueBody(failingDeps.deps, {
+      mode: 'edit',
+      draftPath,
+      draftContent,
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 620,
+    });
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.message).toContain('stage-completeness guard');
+    }
+    expect(failingDeps.mutationCalls).toEqual([]);
+
+    const passingDeps = makeDeps({ liveBody: draftContent.replace(/^#[^\n]*\n\n/, '') });
+    passingDeps.deps.validateTierGateGuard = () => ({
+      ok: true,
+      message: 'tier-gate guard: PASS (test stub)',
+    });
+    passingDeps.deps.validateStageCompletenessGuard = validateStageCompletenessGuardReceipt;
+    const allowed = syncPublishIssueBody(passingDeps.deps, {
+      mode: 'edit',
+      draftPath,
+      draftContent,
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 620,
     });
     expect(allowed.ok).toBe(true);
     expect(passingDeps.mutationCalls.length).toBeGreaterThan(0);

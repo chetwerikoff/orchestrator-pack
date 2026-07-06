@@ -4,5 +4,5 @@ param(
     [string]$DraftPath,
     [string]$RepoRoot
 )
-& (Join-Path $PSScriptRoot 'check-draft-text-guard.ps1') -Guard tier-gate -DraftPath $DraftPath -RepoRoot $RepoRoot
+& (Join-Path $PSScriptRoot 'check-draft-text-guard.ps1') -Guard stage-completeness -DraftPath $DraftPath -RepoRoot $RepoRoot
 exit $LASTEXITCODE
