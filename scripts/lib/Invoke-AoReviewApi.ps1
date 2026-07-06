@@ -39,6 +39,51 @@ function Get-AoDaemonApiBaseUrl {
     return "http://127.0.0.1:$port"
 }
 
+function Read-AoHttpResponseBodyText {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Response,
+        [string]$FallbackText = ''
+    )
+
+    if ($null -eq $Response) {
+        return $FallbackText
+    }
+
+    if ($Response -is [Microsoft.PowerShell.Commands.WebResponseObject]) {
+        return [string]$Response.Content
+    }
+
+    if ($Response -is [System.Net.Http.HttpResponseMessage]) {
+        return $Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    }
+
+    if ($Response.PSObject.Methods.Name -contains 'GetResponseStream') {
+        $stream = $Response.GetResponseStream()
+        if ($null -eq $stream) { return $FallbackText }
+        $reader = New-Object System.IO.StreamReader($stream)
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+
+    return $FallbackText
+}
+
+function ConvertTo-AoDaemonHttpJsonResult {
+    param(
+        [Parameter(Mandatory = $true)][int]$StatusCode,
+        [string]$BodyText = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BodyText)) {
+        return @{ httpStatus = $StatusCode }
+    }
+    $parsed = $BodyText | ConvertFrom-Json
+    if ($parsed -is [pscustomobject]) {
+        $parsed | Add-Member -NotePropertyName httpStatus -NotePropertyValue $StatusCode -Force
+    }
+    return $parsed
+}
+
 function Invoke-AoDaemonHttpJson {
     param(
         [Parameter(Mandatory = $true)][ValidateSet('GET', 'POST', 'PUT')][string]$Method,
@@ -51,10 +96,14 @@ function Invoke-AoDaemonHttpJson {
 
     $base = Get-AoDaemonApiBaseUrl -Override $BaseUrl -HealthPayload $HealthPayload
     $uri = "$base$Path"
+    $useSkipHttpErrorCheck = $PSVersionTable.PSVersion.Major -ge 7
     $params = @{
         Method      = $Method
         Uri         = $uri
         ContentType = 'application/json'
+    }
+    if ($useSkipHttpErrorCheck) {
+        $params.SkipHttpErrorCheck = $true
     }
     if ($null -ne $Body) {
         $params.Body = ($Body | ConvertTo-Json -Depth 20 -Compress)
@@ -64,36 +113,27 @@ function Invoke-AoDaemonHttpJson {
         $response = Invoke-WebRequest @params -UseBasicParsing
     }
     catch {
-        $resp = $_.Exception.Response
-        if ($resp) {
-            $statusCode = [int]$resp.StatusCode
-            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-            $text = $reader.ReadToEnd()
-            $reader.Close()
-            if ($AllowedStatus -contains $statusCode) {
-                if ([string]::IsNullOrWhiteSpace($text)) { return @{ httpStatus = $statusCode } }
-                return ($text | ConvertFrom-Json) | ForEach-Object {
-                    $_ | Add-Member -NotePropertyName httpStatus -NotePropertyValue $statusCode -Force
-                    $_
-                }
-            }
-            throw "AO daemon $Method $Path failed (HTTP $statusCode): $text"
+        if ($useSkipHttpErrorCheck) {
+            throw "AO daemon $Method $Path failed: $_"
         }
-        throw "AO daemon $Method $Path failed: $_"
+        $resp = $_.Exception.Response
+        if ($null -eq $resp) {
+            throw "AO daemon $Method $Path failed: $_"
+        }
+        $statusCode = [int]$resp.StatusCode
+        $text = Read-AoHttpResponseBodyText -Response $resp -FallbackText ([string]$_.ErrorDetails.Message)
+        if ($AllowedStatus -contains $statusCode) {
+            return ConvertTo-AoDaemonHttpJsonResult -StatusCode $statusCode -BodyText $text
+        }
+        throw "AO daemon $Method $Path failed (HTTP $statusCode): $text"
     }
 
     $status = [int]$response.StatusCode
     if ($AllowedStatus -notcontains $status) {
-        throw "AO daemon $Method $Path unexpected HTTP $status"
+        $bodyText = Read-AoHttpResponseBodyText -Response $response
+        throw "AO daemon $Method $Path failed (HTTP $status): $bodyText"
     }
-    if ([string]::IsNullOrWhiteSpace($response.Content)) {
-        return @{ httpStatus = $status }
-    }
-    $parsed = $response.Content | ConvertFrom-Json
-    if ($parsed -is [pscustomobject]) {
-        $parsed | Add-Member -NotePropertyName httpStatus -NotePropertyValue $status -Force
-    }
-    return $parsed
+    return ConvertTo-AoDaemonHttpJsonResult -StatusCode $status -BodyText ([string]$response.Content)
 }
 
 function Get-AoSessionReviewsJson {

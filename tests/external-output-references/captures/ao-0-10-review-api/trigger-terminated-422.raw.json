@@ -1,0 +1,6 @@
+{
+  "error": "unprocessable",
+  "code": "REVIEW_INVALID",
+  "message": "worker session terminated",
+  "httpStatus": 422
+}

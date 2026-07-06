@@ -26,6 +26,7 @@ const wakeTriggerLib = path.join(repoRoot, 'scripts/lib/Invoke-ReviewWakeTrigger
 const reconcileScript = path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1');
 const reevalLib = path.join(repoRoot, 'scripts/lib/Invoke-ReviewTriggerReeval.ps1');
 const workerRecoveryLib = path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1');
+const reviewApiLib = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
 
 function loadJson(filePath: string) {
   return JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
@@ -149,5 +150,40 @@ describe('AO 0.10 review trigger API (Issue #623)', () => {
     const removeIdx = text.indexOf('worktree remove --force $pathCanon.canonical');
     expect(gateIdx).toBeGreaterThan(-1);
     expect(removeIdx).toBeGreaterThan(gateIdx);
+  });
+
+  it('Invoke-AoReviewApi uses SkipHttpErrorCheck on PowerShell 7+ for allowed-status handling', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    expect(text).toMatch(/SkipHttpErrorCheck/);
+    expect(text).toMatch(/Read-AoHttpResponseBodyText/);
+    const httpJsonStart = text.indexOf('function Invoke-AoDaemonHttpJson');
+    const httpJsonEnd = text.indexOf('function Get-AoSessionReviewsJson');
+    const httpJsonBody = text.slice(httpJsonStart, httpJsonEnd);
+    expect(httpJsonBody).toMatch(/Read-AoHttpResponseBodyText -Response \$resp/);
+    expect(httpJsonBody).not.toMatch(/GetResponseStream\(\)/);
+  });
+
+  it('Invoke-AoReviewTriggerForWorker classifies HTTP 422 fixture as review_trigger_invalid', () => {
+    const trigger422 = path.join(capturesDir, 'trigger-terminated-422.raw.json');
+    const out = runPwsh(`
+      . '${reviewApiLib}'
+      $fixture = Get-Content '${trigger422}' -Raw | ConvertFrom-Json
+      $result = Invoke-AoReviewTriggerForWorker -SessionId 'orchestrator-pack-dead' -FixturePayload $fixture
+      $result | ConvertTo-Json -Compress -Depth 5
+    `).trim();
+    const result = JSON.parse(out) as { ok: boolean; httpStatus: number; reason: string };
+    expect(result.ok).toBe(false);
+    expect(result.httpStatus).toBe(422);
+    expect(result.reason).toBe('review_trigger_invalid');
+  });
+
+  it('Read-AoHttpResponseBodyText reads HttpResponseMessage bodies on PowerShell 7', () => {
+    const out = runPwsh(`
+      . '${reviewApiLib}'
+      $msg = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::UnprocessableEntity)
+      $msg.Content = [System.Net.Http.StringContent]::new('{"error":"unprocessable"}', [System.Text.Encoding]::UTF8, 'application/json')
+      Read-AoHttpResponseBodyText -Response $msg
+    `).trim();
+    expect(out).toContain('unprocessable');
   });
 });

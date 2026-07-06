@@ -74,6 +74,14 @@
       "path": "captures/ao-0-10-review-api/trigger-reused.raw.json",
       "contentHash": "sha256:38aef3e6305f4f8c7cfd63eff7861ecd07cc7255bcda1568008b05a207b4d1e9"
     },
+    "ao-0-10-review-api/trigger-terminated-422": {
+      "id": "ao-0-10-review-api/trigger-terminated-422",
+      "producer": "ao-0-10-review-api",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-0-10-review-api/trigger-terminated-422.raw.json",
+      "contentHash": "sha256:5e469fb361fa84071ee6e66496dadf7f5962136791388c57b9e3f38685be0b7e"
+    },
     "ao-review-run/cancelled": {
       "id": "ao-review-run/cancelled",
       "producer": "ao",
