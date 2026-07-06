@@ -134,6 +134,25 @@ describe('review producer contract (Issue #626)', () => {
     ).toBe('outdated');
   });
 
+  it('detects drift on full SHA even when 12-char prefixes match', () => {
+    const sharedPrefix = 'abc123def456';
+    const headSha = `${sharedPrefix}7890abcdef1234567890abcdef12`;
+    const targetSha = `${sharedPrefix}7890abcdef1234567890abcdef99`;
+    expect(headSha.slice(0, 12)).toBe(targetSha.slice(0, 12));
+    expect(
+      mapEngineToBoardStatus({
+        prReviewStatus: 'changes_requested',
+        latestRun: {
+          status: 'completed',
+          verdict: 'changes_requested',
+          deliveredAt: '2026-07-06T08:15:00.000Z',
+          targetSha,
+        },
+        headSha,
+      }),
+    ).toBe('outdated');
+  });
+
   it('binds session worker-context fields from sessions-list capture', () => {
     const sessionsPayload = loadJson('sessions-list.raw.json');
     const projectsPayload = loadJson('projects-list.raw.json');

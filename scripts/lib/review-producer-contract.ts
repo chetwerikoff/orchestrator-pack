@@ -114,9 +114,7 @@ export interface EngineBoardMappingInput {
 }
 
 function normalizeSha(value: unknown): string {
-  const sha = String(value ?? '').trim().toLowerCase();
-  if (!sha) return '';
-  return sha.length > 12 ? sha.slice(0, 12) : sha;
+  return String(value ?? '').trim().toLowerCase();
 }
 
 function hasDeliveredAt(latestRun: ReviewRunState | null | undefined): boolean {
