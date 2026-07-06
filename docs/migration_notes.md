@@ -1,5 +1,15 @@
 # Migration notes
 
+> **AO 0.10.2 precedence note (2026-07-06):** older entries below may describe
+> pre-0.10 live YAML adoption (`agent-orchestrator.yaml`, `orchestratorRules`,
+> `reactions`, `notifiers`, `notificationRouting`) and daemon reloads with
+> `ao stop` / `ao start`. On AO 0.10.2 those YAML sections are not live runtime
+> config after legacy import. Use `ao project set-config` for ProjectConfig
+> env/PATH/agent changes, then recycle affected sessions with
+> `ao session kill <id> -p <project>` and `ao session restore <id> -p <project>`.
+> Pack prompt delivery is tracked separately in Issue #625; do not infer it from
+> YAML edits.
+
 Source migration note read read-only from:
 
 `C:\Users\che\.claude\projects\C--Users-che-Documents-Projects-ai-orchestrator\memory\project_composio_migration.md`
@@ -23,7 +33,8 @@ AO already provides:
 - per-session worktrees;
 - PR, CI, and review reactions;
 - dashboard/status UX;
-- YAML config through `agent-orchestrator.yaml`;
+- legacy YAML import from `agent-orchestrator.yaml` (AO 0.10 live config is
+  per-project ProjectConfig in the daemon store, managed with `ao project get/set-config`);
 - `agentRules` / `agentRulesFile` prompt injection;
 - session metadata and flat-file state;
 - plugin slots for runtime, agent, workspace, tracker, SCM, notifier, and
@@ -1252,9 +1263,10 @@ cat-only `$(cat <file>)`).
 
 ```powershell
 pwsh -NoProfile -File scripts/orchestrator-worktree-preflight.ps1 -Apply
-ao stop
-ao start
-pwsh -File scripts/wait-orchestrator-launch.ps1
+ao orchestrator ls --json
+ao session kill <orchestrator-session-id> -p orchestrator-pack
+ao session restore <orchestrator-session-id> -p orchestrator-pack
+pwsh -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId <orchestrator-session-id> -ProjectId orchestrator-pack
 ```
 
 **Legacy (native Windows only, retired):** `scripts/unlock-op-orchestrator-worktree.ps1`
@@ -1316,17 +1328,24 @@ transcripts by itself — bootstrap loop is not explained by worker argv patch a
 launch or post-kill corpse, **not** “idle orchestrator”). Do not use `ao spawn` to
 revive a dead orchestrator (see **Dead orchestrator vs `ao spawn`**).
 
-**Remediation order (operator, live `agent-orchestrator.yaml`):**
+**Remediation order (operator, AO 0.10.2):**
 
-1. `agentRulesFile: prompts/agent_rules.md` (do not point at a stub that is not on disk).
+1. Do not rely on editing live `agent-orchestrator.yaml`; AO 0.10.2 no longer reloads
+   YAML rules/prompts as live runtime config. Pack prompt delivery is being migrated in
+   Issue #625.
 2. Stop `orchestrator-worktree-trust-watcher.ps1` during diagnosis if it is running.
 3. `pwsh -File scripts/orchestrator-worktree-preflight.ps1 -Apply` for `branch_collision`.
-4. `ao stop` then `ao start`; optional `pwsh -File scripts/wait-orchestrator-launch.ps1` (stderr from notifiers breaks JSON — use `2>$null` or fix script).
-5. `ao session attach op-orchestrator` within ~20s — first screen must be full orchestrator text, not bootstrap only.
+4. Resolve the orchestrator id with `ao orchestrator ls --json`, then run
+   `ao session kill <orchestrator-session-id> -p orchestrator-pack` and
+   `ao session restore <orchestrator-session-id> -p orchestrator-pack`; optional
+   `pwsh -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId <id> -ProjectId orchestrator-pack`.
+5. Inspect the restored session promptly — first screen must be the intended orchestrator
+   prompt when Issue #625 delivery is available, not bootstrap only.
 
 **Stale `orchestrator/*` worktree/branch:** after `ao session kill`, leftover
 `orchestrator/op-orchestrator` branch or worktree dir causes `workspace.branch_collision`
-on respawn. Pack hygiene: `scripts/orchestrator-worktree-preflight.ps1` before `ao start`.
+on respawn. Pack hygiene: `scripts/orchestrator-worktree-preflight.ps1` before
+`ao session restore`.
 
 **Pack-side checks:** `scripts/check-orchestrator-launch-failure.ps1` — Signature A/B
 PTY fixtures only.
@@ -1346,16 +1365,18 @@ runtime target (decision §P).
 
 **Operator adoption** — after merge:
 
-1. Merge `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`,
-   including the updated `orchestratorRules` (pwsh **REVIEW_COMMAND**, no retired
-   Windows PowerShell 5.1 launch-hazard prose).
+1. Treat `agent-orchestrator.yaml.example` as a legacy/import reference on AO 0.10.2,
+   not live runtime config. Apply live env/PATH/agent changes through
+   `ao project set-config` when an adoption note names them.
 2. Set `projects.*.path` to target repos on **ext4** (`/home/...`). Move clones
    and AO state off **`/mnt/c`** if you used WSL with Windows paths.
 3. Provision the environment per
    [`docs/ubuntu-setup-runbook.md`](ubuntu-setup-runbook.md) (snap npm prefix,
    `/snap/bin` on `PATH`, `appendWindowsPath=false` in `/etc/wsl.conf`, agent
    CLIs).
-4. Restart AO: `ao stop` then `ao start` (and wake listener/heartbeat if used).
+4. Recycle only affected AO sessions/processes: for orchestrator runtime changes use
+   `ao orchestrator ls --json`, `ao session kill <id> -p orchestrator-pack`, then
+   `ao session restore <id> -p orchestrator-pack`; restart wake listener/heartbeat if used.
 
 See also [`README.md`](../README.md) (Linux baseline) and decision §P in
 [`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
@@ -1463,7 +1484,8 @@ After merge, replace the two-terminal wake startup with the supervisor:
 
 1. Stop any manual `orchestrator-wake-listener.ps1` / `orchestrator-wake-heartbeat.ps1`
    processes (Ctrl+C or close those terminals).
-2. From the pack root, with `ao start orchestrator-pack` running:
+2. From the pack root, with AO 0.10.2 daemon healthy (`ao status --json`) and an
+   orchestrator session visible in `ao orchestrator ls --json`:
    `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
 3. Confirm: `... orchestrator-wake-supervisor.ps1 -Action Status` shows listener and
    heartbeat running.
@@ -1778,20 +1800,19 @@ ordinary trigger-firing unit. The metric summary now also exposes
 Extends source-agnostic worker-message submit so plain orchestrator `ao send` deliveries
 can be observed through a metadata-only transactional outbox before the send side effect.
 The new wrapper is `scripts/journaled-worker-send.ps1`; it reads the worker payload from
-stdin (orchestrator routing pipes the message in), delivers through real `ao send --file`
-ingestion, and records shape metadata (`delivery_id`, char length, line count, dispatch
-outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome), authoritative draft state), and never stores or logs the raw message.
+stdin (orchestrator routing pipes the message in). **AO 0.10.2 note:** the historical
+implementation delivered through `ao send --file`, but live AO 0.10.2 exposes only
+`ao send --session <id> --message <body>`. Until the separate send-transport migration
+updates this section, the wrapper/adoption proof must fail closed rather than requiring
+operators to run removed `--file` transport.
 
 **Operator adoption** — after merge:
 
-1. Add an `orchestratorRules` send-routing line in the live `agent-orchestrator.yaml` so
-   orchestrator-originated worker sends call the wrapper, for example:
-   `pwsh -NoProfile -File scripts/journaled-worker-send.ps1 <worker-session>` with the
-   message piped on stdin. Include the wrapper's child-scoped reentrancy sentinel in the
-   routing exclusion so the wrapper's internal `ao send` is not wrapped again.
-2. Restart AO from the operator terminal (`ao stop` / `ao start`) so the live process loads
-   the rule. Managed worker sessions must not run those commands.
-3. Generate the side-effect-isolated adoption probes and validate them for the running AO
+1. Legacy pre-0.10 adoption added an `orchestratorRules` send-routing line in live YAML.
+   On AO 0.10.2 live YAML routing is ignored; do not require this as an adoption check.
+2. Do not use daemon restart as a routing reload on AO 0.10.2. The transport migration must
+   define the supported ProjectConfig/session mechanism before this proof becomes mandatory.
+3. After that migration exists, generate the side-effect-isolated adoption probes and validate them for the running AO
    epoch/config path with the preflight's `-WriteProbeEntries` mode:
    `pwsh -NoProfile -File scripts/worker-message-send-adoption-preflight.ps1 -AoEpoch <running-epoch> -ConfigPath <loaded-config-path> -WriteProbeEntries`.
    Probe generation invokes a synthetic `ao send` carrying adoption-probe markers so the live routing rule must call `scripts/journaled-worker-send.ps1`; the
@@ -1813,8 +1834,8 @@ outcome (`dispatch_in_flight` before `ao send` resolves, then terminal outcome),
    `no_manual_enter=true`. Do not record the message body, terminal transcript, session URL, or
    worker output.
 
-Current AO versions that do not advertise `--file` ingestion for `ao send` remain a hard
-gate: the wrapper exits fail-closed rather than binding to unsupported transport forms.
+AO 0.10.2 does not advertise `--file` ingestion for `ao send`; this remains a hard gate.
+The wrapper exits fail-closed rather than binding to unsupported transport forms.
 
 Issue #602 adoption check: after restart, run the adoption preflight and confirm the live
 dispatch journal contains both required probe branches (`plain-ao-send:pending-draft` and
