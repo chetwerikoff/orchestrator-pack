@@ -26,7 +26,7 @@ $required = @(
     'Issue #195',
     'review-trigger-reconcile.ps1',
     'gh pr list --state open',
-    'ao review list --json',
+    'Get-AoReviewRuns',
     'gh pr checks',
     'never ao spawn',
     'AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES'

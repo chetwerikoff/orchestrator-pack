@@ -1,5 +1,5 @@
 {
-  "description": "Legacy run-pack-review.ps1 REVIEW_COMMAND with blank terminationReason passes (command-drift path, not selector)",
+  "description": "Legacy run-pack-review.ps1 REVIEW_COMMAND with blank body passes (command-drift path, not selector)",
   "expectPass": true,
   "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-pack-review.ps1 --repo-root . --base origin/main",
   "runs": [
@@ -8,7 +8,7 @@
       "findingCount": 0,
       "openFindingCount": 0,
       "sentFindingCount": 0,
-      "terminationReason": "",
+      "body": "",
       "completedAt": "2026-05-30T12:00:00Z"
     }
   ]

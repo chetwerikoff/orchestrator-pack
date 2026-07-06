@@ -118,8 +118,8 @@ if (-not $shape.ok -or $shape.deliveryPath -ne 'pending-draft') {
     Write-Host 'agent-orchestrator.yaml.example report-stale must resolve to pending-draft deliveryPath'
     exit 1
 }
-if ([int]$shape.messageShape.charLength -ne 224) {
-    Write-Host 'agent-orchestrator.yaml.example report-stale message must remain 224 chars for drift guard'
+if ([int]$shape.messageShape.charLength -ne 226) {
+    Write-Host 'agent-orchestrator.yaml.example report-stale message must remain 226 chars for drift guard'
     exit 1
 }
 

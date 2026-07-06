@@ -9,7 +9,7 @@
       "findingCount": 0,
       "openFindingCount": 0,
       "sentFindingCount": 0,
-      "terminationReason": "scripts/run-pack-review-claude.ps1: claude --print exited 1",
+      "body": "scripts/run-pack-review-claude.ps1: claude --print exited 1",
       "completedAt": "2026-05-29T12:12:00Z"
     }
   ]
