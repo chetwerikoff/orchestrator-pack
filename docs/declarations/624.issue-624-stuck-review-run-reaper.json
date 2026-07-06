@@ -1,0 +1,20 @@
+{
+  "issue_number": 624,
+  "iteration_id": "issue-624-stuck-review-run-reaper",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T12:12:45.642Z",
+  "baseline": {
+    "commit_sha": "27ddb961377844f9319f85ded14e986ac8bb3376",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7f5cb2ae3dd3c8cb67a8129f187c44d2f68285efff4dcf9d08f01ebad5a288ed"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**",
+    "docs/**"
+  ],
+  "amendments": []
+}
