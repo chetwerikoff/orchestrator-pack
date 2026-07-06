@@ -11,6 +11,8 @@
   If the local ao send does not advertise --message and --session, this wrapper fails closed.
   -NoWait and -TimeoutSeconds remain accepted for callers; removed ao send CLI wait flags
   are not forwarded — the wrapper uses process-level wait only when -NoWait is unset.
+  Inline --message transport is refused before ao send when the quoted argv would exceed
+  the host command-line budget (Windows CreateProcess ~32767 chars; conservative on Unix).
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +38,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Script:InlineAoSendMessageMaxBytes = 1572864
+$Script:InlineAoSendArgvReserveChars = 64
 $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/QuotedProcessArguments.ps1')
@@ -96,10 +98,38 @@ function Test-AoSendMessageContract {
     return ($help -match '(?im)--message' -and $help -match '(?im)--session')
 }
 
+function Get-InlineAoSendArgvCeilingChars {
+    if ($env:AO_JOURNALED_SEND_ARGV_CEILING_CHARS -match '^\d+$') {
+        return [int]$env:AO_JOURNALED_SEND_ARGV_CEILING_CHARS
+    }
+    if (($PSVersionTable.PSVersion.Major -ge 6) -and $IsWindows) {
+        return 32767
+    }
+    if ($env:OS -eq 'Windows_NT') {
+        return 32767
+    }
+    if (($PSVersionTable.PSVersion.Major -ge 6) -and ($IsLinux -or $IsMacOS)) {
+        try {
+            $argMax = [int](& getconf ARG_MAX 2>$null)
+            if ($argMax -gt 2048) {
+                return [Math]::Min($argMax - 2048, 32767)
+            }
+        }
+        catch { }
+    }
+    return 32767
+}
+
 function Test-InlineAoSendMessageTooLarge {
-    param([string]$Payload)
-    $byteCount = [System.Text.Encoding]::UTF8.GetByteCount([string]$Payload)
-    return ($byteCount -gt $Script:InlineAoSendMessageMaxBytes)
+    param(
+        [string]$Payload,
+        [string]$SessionId,
+        [string]$AoPath = 'ao'
+    )
+
+    $argv = Join-QuotedProcessArguments -Arguments @('send', '--message', $Payload, '--session', $SessionId)
+    $ceiling = Get-InlineAoSendArgvCeilingChars
+    return ($argv.Length -gt ($ceiling - $Script:InlineAoSendArgvReserveChars))
 }
 
 function Update-JournaledWorkerSendOutcome {
@@ -340,8 +370,9 @@ if ($DryRun) {
     exit 0
 }
 
-if (Test-InlineAoSendMessageTooLarge -Payload $payload) {
-    Write-JournaledWorkerSendLog "inline message exceeds transport limit ($Script:InlineAoSendMessageMaxBytes bytes); refusing transport"
+if (Test-InlineAoSendMessageTooLarge -Payload $payload -SessionId $SessionId -AoPath $AoPath) {
+    $argvCeiling = Get-InlineAoSendArgvCeilingChars
+    Write-JournaledWorkerSendLog "inline message exceeds argv budget (ceiling=$argvCeiling chars); refusing transport"
     $shapeDraftState = if ($register.deliveryPath -eq 'self-submitted') { 'auto_submitted' } else { 'unknown' }
     $update = Update-JournaledWorkerSendOutcome -DeliveryId $register.deliveryId -DispatchOutcome 'send_failed' -DraftState $shapeDraftState -JournalPath $effectiveJournalPath
     if (-not $update.ok) {

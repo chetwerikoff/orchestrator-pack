@@ -2346,16 +2346,31 @@ exit 99
     expect(existsSync(journal)).toBe(false);
   });
 
-  it('fails closed before ao send when inline message exceeds transport limit', () => {
+
+  it('rejects argv-budget overflow well below legacy 1.5 MiB guard', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-argv-budget-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, buildAoSend0102Stub({ onSendBody: 'exit 0' }));
+    chmodSync(fakeAo, 0o755);
+    const payload = 'x'.repeat(33000);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: payload, encoding: 'utf8', timeout: 60000 });
+    expect(result.status).toBe(45);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/inline message exceeds argv budget/i);
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(/exception_before_send/i);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"send_failed"');
+  });
+
+  it('fails closed before ao send when inline message exceeds argv budget', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-oversized-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, buildAoSend0102Stub({ onSendBody: 'exit 0' }));
     chmodSync(fakeAo, 0o755);
-    const payload = 'x'.repeat(1572865);
+    const payload = 'x'.repeat(33000);
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: payload, encoding: 'utf8', timeout: 60000 });
     expect(result.status).toBe(45);
-    expect(`${result.stdout}${result.stderr}`).toMatch(/inline message exceeds transport limit/i);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/inline message exceeds argv budget/i);
     expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"send_failed"');
   });
 
