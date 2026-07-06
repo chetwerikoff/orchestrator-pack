@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "GET /api/v1/projects",
+  "toolVersion": "ao 0.10.x daemon HTTP",
+  "capturedAt": "2026-07-06T08:35:00.000Z",
+  "context": "Project name lookup for producer projectName field.",
+  "scrubLog": ["Synthetic project id/name only"]
+}

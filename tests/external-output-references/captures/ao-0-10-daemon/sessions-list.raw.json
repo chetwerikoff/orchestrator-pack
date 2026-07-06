@@ -1,0 +1,38 @@
+{
+  "sessions": [
+    {
+      "id": "orchestrator-pack-7",
+      "projectId": "orchestrator-pack",
+      "kind": "worker",
+      "harness": "cursor",
+      "branch": "issue-626-review-producer-contract",
+      "status": "working",
+      "activity": {
+        "state": "working",
+        "lastActivityAt": "2026-07-06T08:30:00.000Z"
+      },
+      "prs": ["https://github.com/chetwerikoff/orchestrator-pack/pull/626"],
+      "terminalHandleId": "term-orchestrator-pack-7",
+      "isTerminated": false,
+      "createdAt": "2026-07-06T05:28:31.980498165Z",
+      "updatedAt": "2026-07-06T08:30:00.000Z"
+    },
+    {
+      "id": "orchestrator-pack-8",
+      "projectId": "orchestrator-pack",
+      "kind": "worker",
+      "harness": "cursor",
+      "branch": "issue-625-vocabulary",
+      "status": "needs_input",
+      "activity": {
+        "state": "waiting_input",
+        "lastActivityAt": "2026-07-06T08:20:00.000Z"
+      },
+      "prs": [],
+      "terminalHandleId": "",
+      "isTerminated": false,
+      "createdAt": "2026-07-06T06:00:00.000Z",
+      "updatedAt": "2026-07-06T08:20:00.000Z"
+    }
+  ]
+}

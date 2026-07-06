@@ -42,6 +42,30 @@
       "path": "captures/ao-0-10-cli/session-ls-terminated.raw.json",
       "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c"
     },
+    "ao-0-10-daemon/per-session-reviews-populated": {
+      "id": "ao-0-10-daemon/per-session-reviews-populated",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/per-session-reviews-populated.raw.json",
+      "contentHash": "sha256:59f9e7f1a6aeca931a8167a23d02d03978105a86c9e006506b18af45ef6c3b9e"
+    },
+    "ao-0-10-daemon/projects-list": {
+      "id": "ao-0-10-daemon/projects-list",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/projects",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/projects-list.raw.json",
+      "contentHash": "sha256:81a0251f20221e57e40342a0984c7d55509e74a43ed0482a17d5a2461a080318"
+    },
+    "ao-0-10-daemon/sessions-list": {
+      "id": "ao-0-10-daemon/sessions-list",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/sessions-list.raw.json",
+      "contentHash": "sha256:c2f16defecb38e07648d450ad81e42051a83ec28bf4aa160ed5332ee414ff239"
+    },
     "ao-0-10-review-api/project-config": {
       "id": "ao-0-10-review-api/project-config",
       "producer": "ao-0-10-review-api",

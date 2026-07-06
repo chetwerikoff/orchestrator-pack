@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "GET /api/v1/sessions",
+  "toolVersion": "ao 0.10.x daemon HTTP",
+  "capturedAt": "2026-07-06T08:35:00.000Z",
+  "context": "Worker session rows for producer worker-context field binding.",
+  "scrubLog": ["Synthetic session ids; single-PR and empty prs arrays"]
+}
