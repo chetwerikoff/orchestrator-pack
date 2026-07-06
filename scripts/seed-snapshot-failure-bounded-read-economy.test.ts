@@ -165,6 +165,40 @@ esac
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
   });
 
+  it('stale cache with zero tracked matches serves empty without repair read', async () => {
+    harness = withSeedHarness('seed-econ-stale-empty-');
+    harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '1';
+    harness.env.GH_FLEET_OPEN_PR_LIST_TTL_SECONDS = '2';
+    harness.env.GH_FLEET_SEED_SNAPSHOT_OPEN_PR_LIST_STALE_SERVE_SECONDS = '30';
+    const warm = await spawnPwsh(openPrsScript('@(1,2)'), repoRoot, harness.env);
+    expect(warm.status, warm.stderr || warm.stdout).toBe(0);
+    const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
+
+    writeFileSync(
+      join(harness.root, 'bin/gh'),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_FLEET_TEST_AUDIT_FILE"
+joined="$*"
+case "$joined" in
+  *"pr list"*) echo 'rate limited' >&2; exit 1 ;;
+  *"pr view"*) echo 'rate limited' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const stale = await spawnPwsh(openPrsScript('@(99)', 1_700_000_120_000), repoRoot, harness.env);
+    expect(stale.status, stale.stderr || stale.stdout).toBe(0);
+    expect(Number(stale.stdout.trim())).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(baselineList);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
+    expect(
+      countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_degraded_serve\b.*mode=stale_cache\b/),
+    ).toBeGreaterThan(0);
+  });
+
   it('absent snapshot defers to shared repair window without per-head fan-out', async () => {
     harness = withSeedHarness('seed-econ-absent-');
     const inventoryCache = join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");

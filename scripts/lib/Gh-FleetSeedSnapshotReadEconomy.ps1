@@ -422,7 +422,7 @@ function Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache {
     )
 
     $cacheRoot = Get-GhFleetInventoryCacheRoot
-    if (-not $cacheRoot) { return @() }
+    if (-not $cacheRoot) { return $null }
 
     $repoSlug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
     $queryId = Get-GhFleetOpenPrListQueryIdentity
@@ -435,14 +435,14 @@ function Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache {
         -StaleServeSeconds (Get-GhFleetSeedSnapshotOpenPrListStaleServeSeconds)
 
     if (-not $entry -or $entry.kind -ne 'data') {
-        return @()
+        return $null
     }
 
     $rows = @(Select-GhOpenPrRowsForTrackedNumbers -OpenPrs @($entry.envelope.prs) -TrackedPrNumbers $TrackedPrNumbers)
     foreach ($pr in @($rows)) {
         Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
     }
-    return $rows
+    return ,@($rows)
 }
 
 function Resolve-ReviewReadyReportStateSeedOpenPrs {
@@ -479,15 +479,15 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
     }
 
     if ($state -eq 'stale') {
-        $staleRows = @(Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache -RepoRoot $RepoRoot -TrackedPrNumbers $tracked)
-        if ($staleRows.Count -gt 0) {
+        $staleRows = Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache -RepoRoot $RepoRoot -TrackedPrNumbers $tracked
+        if ($null -ne $staleRows) {
             Write-GhFleetCacheAuditLine -Event 'seed_snapshot_degraded_serve' -Fields @{
                 consumer = $Consumer
                 state    = 'stale'
                 mode     = 'stale_cache'
-                count    = $staleRows.Count
+                count    = @($staleRows).Count
             }
-            return $staleRows
+            return @($staleRows)
         }
 
         $repairGate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
@@ -514,7 +514,11 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
             }
         }
 
-        return @(Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache -RepoRoot $RepoRoot -TrackedPrNumbers $tracked)
+        $staleFallbackRows = Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache -RepoRoot $RepoRoot -TrackedPrNumbers $tracked
+        if ($null -ne $staleFallbackRows) {
+            return @($staleFallbackRows)
+        }
+        return @()
     }
 
     $repairGate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
@@ -547,7 +551,11 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
         }
     }
 
-    return @(Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache -RepoRoot $RepoRoot -TrackedPrNumbers $tracked)
+    $fallbackRows = Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache -RepoRoot $RepoRoot -TrackedPrNumbers $tracked
+    if ($null -ne $fallbackRows) {
+        return @($fallbackRows)
+    }
+    return @()
 }
 
 function Get-GhFleetSeedSnapshotReadEconomyContract {
