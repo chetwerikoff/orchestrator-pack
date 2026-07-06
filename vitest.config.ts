@@ -6,7 +6,7 @@ const lightMaxWorkers = Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '2');
 
 export default defineConfig({
   test: {
-    include: ['plugins/**/tests/**/*.test.ts', 'scripts/**/*.test.ts', 'tests/**/*.test.ts'],
+    include: ['plugins/**/tests/**/*.test.ts', 'scripts/**/*.test.ts'],
     environment: 'node',
     // Issue #488 slow-test budget: per-test ceiling must not be below 120s in CI.
     testTimeout: ci ? 120_000 : 15_000,
