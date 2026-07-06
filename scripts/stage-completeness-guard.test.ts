@@ -162,6 +162,12 @@ describe('stage-completeness empty capture', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/empty capture file/);
   });
+
+  it('fails when a capture filename is not parseable as pass-NN-stage', () => {
+    const result = check('malformed-filename');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/unparseable capture filename: competitive\.capture\.txt/);
+  });
 });
 
 describe('stage-completeness missing lens', () => {

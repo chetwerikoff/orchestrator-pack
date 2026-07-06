@@ -21,8 +21,6 @@ const COUNTED_STAGE_TOKENS = new Set([
 const CAPTURE_FILENAME_RE =
   /^pass-(\d+)-(competitive|architectural-lens|architectural-final|architectural)\.capture\.txt$/i;
 
-const PASS_LIKE_CAPTURE_RE = /^pass-.+\.capture\.txt$/i;
-
 const WAIVER_REASONS = new Set(['codex-substitution', 'operator-waiver']);
 
 export interface ParsedCapture {
@@ -145,9 +143,7 @@ function loadReviewCaptures(reviewDir: string): {
 
     const parsed = parseCaptureFileName(fileName);
     if (!parsed) {
-      if (PASS_LIKE_CAPTURE_RE.test(fileName)) {
-        errors.push(`unparseable capture filename: ${fileName}`);
-      }
+      errors.push(`unparseable capture filename: ${fileName}`);
       continue;
     }
 

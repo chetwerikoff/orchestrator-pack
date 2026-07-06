@@ -3,11 +3,11 @@
   "iteration_id": "orchestrator-pack-9",
   "iteration_id_source": "ao_session",
   "supersedes": null,
-  "created_at": "2026-07-06T08:37:16.330Z",
+  "created_at": "2026-07-06T09:16:53.616Z",
   "baseline": {
-    "commit_sha": "8748a801489faf160f635bff42183367dcde7a50",
+    "commit_sha": "3b545124a0692e7cde9d3f64346220a76619dc70",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:1a5addaede0501765370c2c6e0f7a941b8da6d91e4b947dc4fee6e70c724b26b"
+    "active_scope_hash": "sha256:fb51c162b8665fe5298cc2b722d986396a6a55b396b18c49f915812c83497cfb"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -45,6 +45,9 @@
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/lens-ordering/pass-01-architectural-lens.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/lens-ordering/pass-02-competitive.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/lens-ordering/pass-03-architectural-final.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/malformed-filename/competitive.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/malformed-filename/pass-02-architectural-lens.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/malformed-filename/pass-03-architectural-final.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/missing-competitive/pass-01-architectural.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/missing-competitive/pass-02-architectural-lens.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/missing-competitive/pass-03-architectural-final.capture.txt",
@@ -66,6 +69,7 @@
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/final-ceiling.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/final-ordering.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/lens-ordering.md",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/malformed-filename.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/missing-competitive.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/missing-final.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/missing-lens.md",
