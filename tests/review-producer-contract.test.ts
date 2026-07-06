@@ -12,7 +12,7 @@ import {
   mapEngineToBoardStatus,
   mapPrReviewToBoardRun,
   mapSessionRowWorkerContext,
-} from './lib/review-producer-contract';
+} from '../scripts/lib/review-producer-contract';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const capturesDir = path.join(
