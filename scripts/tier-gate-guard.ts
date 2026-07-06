@@ -3,72 +3,55 @@
  * Tier-gate guard CLI (Issue #576).
  */
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   checkTierGateGuard,
   formatTierGatePassMessage,
   selectAuthoringReviewStages,
 } from './lib/tier-gate-core.js';
 import {
+  createDraftTextGuardBaseOptions,
+  parseDraftTextGuardArgv,
+  type DraftTextGuardBaseOptions,
+} from './lib/draft-text-guard-cli.js';
+import {
   isDirectCliExecution,
   runReviewerTsCli,
 } from './lib/reviewer-ts-cli.js';
 
-interface CliOptions {
-  textPath: string | null;
-  text: string | null;
-  draftPath: string | null;
+interface CliOptions extends DraftTextGuardBaseOptions {
   tier: string | null;
   skipLine: boolean;
   explicitAdversarialWrapper: boolean;
-  repoRoot: string;
   emitStagesJson: boolean;
 }
 
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
-    textPath: null,
-    text: null,
-    draftPath: null,
+    ...createDraftTextGuardBaseOptions(),
     tier: null,
     skipLine: false,
     explicitAdversarialWrapper: false,
-    repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), '..'),
     emitStagesJson: false,
   };
 
-  for (let i = 2; i < argv.length; i += 1) {
-    const arg = argv[i]!;
+  parseDraftTextGuardArgv(argv, opts, (arg, args, index) => {
     switch (arg) {
-      case '--text-file':
-        opts.textPath = String(argv[++i] ?? '');
-        break;
-      case '--draft-path':
-        opts.draftPath = String(argv[++i] ?? '');
-        break;
-      case '--text':
-        opts.text = String(argv[++i] ?? '');
-        break;
       case '--tier':
-        opts.tier = String(argv[++i] ?? '').toUpperCase();
-        break;
+        opts.tier = String(args[++index] ?? '').toUpperCase();
+        return index;
       case '--skip-line':
         opts.skipLine = true;
-        break;
+        return 'handled';
       case '--explicit-adversarial-wrapper':
         opts.explicitAdversarialWrapper = true;
-        break;
-      case '--repo-root':
-        opts.repoRoot = resolve(String(argv[++i] ?? opts.repoRoot));
-        break;
+        return 'handled';
       case '--emit-stages-json':
         opts.emitStagesJson = true;
-        break;
+        return 'handled';
       default:
-        throw new Error(`unknown argument: ${arg}`);
+        return 'unknown';
     }
-  }
+  });
 
   return opts;
 }
