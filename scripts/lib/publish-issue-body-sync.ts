@@ -3,6 +3,11 @@ import {
   checkTierGateGuard,
   formatTierGatePassMessage,
 } from './tier-gate-core.js';
+import {
+  checkStageCompletenessGuard,
+  formatStageCompletenessPassMessage,
+  resolveRepoRootFromDraftPath,
+} from './stage-completeness-core.js';
 
 export type IssueMutationSubcommand = 'issue create' | 'issue edit';
 
@@ -42,11 +47,17 @@ export interface TierGateGuardValidationResult {
   message: string;
 }
 
+export type StageCompletenessGuardValidationResult = TierGateGuardValidationResult;
+
 export interface PublishIssueBodySyncDeps {
   runGh(argv: string[]): GhInvocationResult;
   writeBodyFile(content: string): string;
   emitAudit(record: MutationAuditRecord): void;
   validateTierGateGuard?: (draftContent: string, draftPath?: string) => TierGateGuardValidationResult;
+  validateStageCompletenessGuard?: (
+    draftContent: string,
+    draftPath?: string,
+  ) => StageCompletenessGuardValidationResult;
 }
 
 export interface CreateIssueBodySyncInput {
@@ -287,6 +298,28 @@ export function validateTierGateGuardReceipt(
   };
 }
 
+export function validateStageCompletenessGuardReceipt(
+  draftContent: string,
+  draftPath?: string,
+): StageCompletenessGuardValidationResult {
+  const result = checkStageCompletenessGuard(draftContent, {
+    draftPath,
+    repoRoot: resolveRepoRootFromDraftPath(draftPath),
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      message: result.errors
+        .map((error: string) => `stage-completeness guard: ${error}`)
+        .join('\n'),
+    };
+  }
+  return {
+    ok: true,
+    message: formatStageCompletenessPassMessage(result),
+  };
+}
+
 export function syncPublishIssueBody(
   deps: PublishIssueBodySyncDeps,
   input: PublishIssueBodySyncInput,
@@ -303,6 +336,17 @@ export function syncPublishIssueBody(
         ok: false,
         issueNumber: issueNumber ?? null,
         message: tierGate.message,
+      };
+    }
+
+    const validateStageCompleteness =
+      deps.validateStageCompletenessGuard ?? validateStageCompletenessGuardReceipt;
+    const stageCompleteness = validateStageCompleteness(input.draftContent, input.draftPath);
+    if (!stageCompleteness.ok) {
+      return {
+        ok: false,
+        issueNumber: issueNumber ?? null,
+        message: stageCompleteness.message,
       };
     }
 
