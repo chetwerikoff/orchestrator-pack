@@ -1,10 +1,12 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
+  parseCompetitiveWaiver,
 } from './lib/stage-completeness-core.js';
 import { runCli } from './stage-completeness-guard.js';
 
@@ -98,6 +100,51 @@ describe('stage-completeness waiver path', () => {
     const result = check('waiver-invalid');
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/missing competitive stage/);
+  });
+
+  it('rejects waiver records with loose recorded-at or coerced after-pass values', () => {
+    const reviewDir = mkdtempSync(join(tmpdir(), 'stage-completeness-waiver-'));
+    const cases = [
+      {
+        label: 'non-ISO recorded-at',
+        body: JSON.stringify({
+          reason: 'codex-substitution',
+          'recorded-at': '2026-07-06',
+          'after-pass': 0,
+        }),
+      },
+      {
+        label: 'null after-pass',
+        body: JSON.stringify({
+          reason: 'operator-waiver',
+          'recorded-at': '2026-07-06T00:00:00.000Z',
+          'after-pass': null,
+        }),
+      },
+      {
+        label: 'string after-pass',
+        body: JSON.stringify({
+          reason: 'operator-waiver',
+          'recorded-at': '2026-07-06T00:00:00.000Z',
+          'after-pass': '0',
+        }),
+      },
+      {
+        label: 'boolean after-pass',
+        body: JSON.stringify({
+          reason: 'operator-waiver',
+          'recorded-at': '2026-07-06T00:00:00.000Z',
+          'after-pass': false,
+        }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      writeFileSync(join(reviewDir, 'competitive-stage-waiver.json'), testCase.body, 'utf8');
+      const parsed = parseCompetitiveWaiver(reviewDir);
+      expect(parsed.waiver, testCase.label).toBeNull();
+      expect(parsed.invalid, testCase.label).toBe(true);
+    }
   });
 });
 

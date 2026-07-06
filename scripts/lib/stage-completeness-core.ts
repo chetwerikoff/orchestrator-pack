@@ -54,9 +54,24 @@ export interface StageCompletenessGuardResult {
   } | null;
 }
 
-function isIso8601(value: string): boolean {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed);
+const ISO_8601_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function isStrictIso8601Timestamp(value: string): boolean {
+  if (!ISO_8601_TIMESTAMP_RE.test(value)) {
+    return false;
+  }
+  return Number.isFinite(Date.parse(value));
+}
+
+function parseAfterPassAnchor(value: unknown): number | null {
+  if (value === undefined) {
+    return 0;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return null;
+  }
+  return value;
 }
 
 export function parseCaptureFileName(fileName: string): ParsedCapture | null {
@@ -97,17 +112,13 @@ export function parseCompetitiveWaiver(
   const record = parsed as Record<string, unknown>;
   const reason = typeof record.reason === 'string' ? record.reason.trim() : '';
   const recordedAt = typeof record['recorded-at'] === 'string' ? record['recorded-at'].trim() : '';
-  if (!WAIVER_REASONS.has(reason) || !recordedAt || !isIso8601(recordedAt)) {
+  if (!WAIVER_REASONS.has(reason) || !recordedAt || !isStrictIso8601Timestamp(recordedAt)) {
     return { waiver: null, invalid: true };
   }
 
-  let afterPass = 0;
-  if (record['after-pass'] !== undefined) {
-    const raw = Number(record['after-pass']);
-    if (!Number.isInteger(raw) || raw < 0) {
-      return { waiver: null, invalid: true };
-    }
-    afterPass = raw;
+  const afterPass = parseAfterPassAnchor(record['after-pass']);
+  if (afterPass === null) {
+    return { waiver: null, invalid: true };
   }
 
   return {
