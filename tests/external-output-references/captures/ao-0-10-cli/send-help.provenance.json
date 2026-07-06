@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao send --help",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-06T17:57:00.000Z",
+  "context": "AO 0.10.2 inline send contract — --message and --session required; no --file or positional session target.",
+  "scrubLog": []
+}

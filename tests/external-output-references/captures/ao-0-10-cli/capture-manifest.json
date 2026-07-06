@@ -2,6 +2,12 @@
   "version": 1,
   "captures": [
     {
+      "id": "send-help",
+      "command": "ao send --help",
+      "raw": "send-help.raw.txt",
+      "provenance": "send-help.provenance.json"
+    },
+    {
       "id": "daemon-status",
       "command": "ao status --json",
       "raw": "daemon-status.raw.json",

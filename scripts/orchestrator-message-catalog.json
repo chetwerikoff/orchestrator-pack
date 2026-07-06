@@ -121,9 +121,9 @@
       },
       "callsite": {
         "file": "scripts/journaled-worker-send.ps1",
-        "function": "Invoke-AoSendViaFile",
+        "function": "Invoke-AoSendViaMessage",
         "anchor": "helper-body",
-        "predicateBodyHash": "43ed7dd4fd7ff661"
+        "predicateBodyHash": "2433763090919942"
       }
     },
     {

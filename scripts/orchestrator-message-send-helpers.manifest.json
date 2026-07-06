@@ -33,7 +33,7 @@
       "relatedFunctions": ["Invoke-TmuxSubmitEnter"]
     },
     {
-      "name": "Invoke-AoSendViaFile",
+      "name": "Invoke-AoSendViaMessage",
       "file": "scripts/journaled-worker-send.ps1",
       "mechanisms": ["ao-send"]
     }
