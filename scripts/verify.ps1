@@ -1263,10 +1263,39 @@ else {
     Add-Failure 'Missing AO 0.10 argv-shape guard (Issue #619)'
 }
 
+$aoCaptureRedactionCheck = Join-Path $Root 'scripts/check-ao-0-10-cli-capture-redaction.ps1'
+if (Test-Path -LiteralPath $aoCaptureRedactionCheck -PathType Leaf) {
+    & $aoCaptureRedactionCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-ao-0-10-cli-capture-redaction.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 capture redaction gate failed (Issue #619/#637)'
+    }
+    else {
+        $aoCaptureRedactionSelfTest = Join-Path $Root 'scripts/check-ao-capture-redaction-selftest.ps1'
+        if (Test-Path -LiteralPath $aoCaptureRedactionSelfTest -PathType Leaf) {
+            & $aoCaptureRedactionSelfTest
+            if ($LASTEXITCODE -ne 0) {
+                Write-Check 'scripts/check-ao-capture-redaction-selftest.ps1' 'FAIL' "self-test exit=$LASTEXITCODE"
+                Add-Failure 'AO capture redaction self-test failed (Issue #637)'
+            }
+            else {
+                Write-Check 'scripts/check-ao-0-10-cli-capture-redaction.ps1' 'PASS' 'completed'
+            }
+        }
+        else {
+            Write-Check 'scripts/check-ao-capture-redaction-selftest.ps1' 'FAIL' 'missing'
+            Add-Failure 'Missing AO capture redaction self-test (Issue #637)'
+        }
+    }
+}
+else {
+    Write-Check 'scripts/check-ao-0-10-cli-capture-redaction.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 capture redaction gate (Issue #619/#637)'
+}
+
 foreach ($check in @(
         @{ Path = 'scripts/check-ao-dead-argv-bypass.ps1'; Label = 'dead-argv bypass scan (Issue #619)' },
-        @{ Path = 'scripts/check-ao-session-adapter-project-filter.ps1'; Label = 'session adapter project filter (Issue #619)' },
-        @{ Path = 'scripts/check-ao-0-10-cli-capture-redaction.ps1'; Label = 'AO 0.10 capture redaction gate (Issue #619)' }
+        @{ Path = 'scripts/check-ao-session-adapter-project-filter.ps1'; Label = 'session adapter project filter (Issue #619)' }
     )) {
     $checkPath = Join-Path $Root $check.Path
     if (Test-Path -LiteralPath $checkPath -PathType Leaf) {
