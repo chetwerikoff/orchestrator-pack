@@ -856,6 +856,11 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/review-send-reconcile.ps1',
     'scripts/review-finding-delivery-confirm.ps1',
   ],
+  619: [
+    'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
+    'scripts/orchestrator-wake-supervisor.ps1',
+    'scripts/orchestrator-wake-supervisor.test.ts',
+  ],
 };
 
 /**
