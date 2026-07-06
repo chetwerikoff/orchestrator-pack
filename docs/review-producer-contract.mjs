@@ -144,7 +144,7 @@ export function isDeliveredChangesRequested(run) {
 export function isUndeliveredChangesRequested(run) {
   const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
   const openFindingCount = Number(run?.openFindingCount ?? 0);
-  if (Number.isFinite(openFindingCount) && openFindingCount > 0) {
+  if (Number.isFinite(openFindingCount) && openFindingCount > 0 && !isDeliveredChangesRequested(run)) {
     return true;
   }
   if (isLegacyUndeliveredReviewStatus(rawStatus)) {

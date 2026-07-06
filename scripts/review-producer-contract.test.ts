@@ -108,4 +108,16 @@ describe('review-producer-contract', () => {
   it('deriveDeliveredFindingCount is zero without deliveredAt', () => {
     expect(deriveDeliveredFindingCount({ findingCount: 2 }, 'changes_requested')).toBe(0);
   });
+
+  it('does not treat delivered changes_requested with open findings as undelivered', () => {
+    const run = {
+      prReviewStatus: 'changes_requested',
+      status: 'changes_requested',
+      deliveredAt: '2026-07-06T01:00:00.000Z',
+      deliveredFindingCount: 2,
+      openFindingCount: 1,
+    };
+    expect(isDeliveredChangesRequested(run)).toBe(true);
+    expect(isUndeliveredChangesRequested(run)).toBe(false);
+  });
 });

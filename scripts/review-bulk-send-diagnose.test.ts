@@ -65,6 +65,20 @@ describe('classifyBulkSendRun', () => {
     });
     expect(result.flagged).toBe(false);
   });
+
+  it('classifies delivered partial-open as stuck_open not undelivered', () => {
+    const result = classifyBulkSendRun({
+      id: 'r3',
+      status: 'changes_requested',
+      deliveredAt: '2026-07-06T01:00:00.000Z',
+      openFindingCount: 2,
+      deliveredFindingCount: 1,
+      findingCount: 3,
+    });
+    const kinds = result.signals.map((s) => s.kind);
+    expect(kinds).toContain('stuck_open');
+    expect(kinds).not.toContain('undelivered_changes_requested');
+  });
 });
 
 describe('diagnoseBulkSendBlock fixtures', () => {
