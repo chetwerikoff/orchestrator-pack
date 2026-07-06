@@ -1,0 +1,21 @@
+{
+  "issue_number": 617,
+  "iteration_id": "codex-20260706T031602Z",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T03:16:02.141Z",
+  "baseline": {
+    "commit_sha": "7ee0c9bcb5ceb6f626b3ff4b53a762ca68cb947d",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:codex-20260706T031602Z"
+  },
+  "declared_paths": [
+    "docs/declarations/617.codex-20260706T031602Z.json",
+    "scripts/orchestrator-worktree-trust-watcher.ps1",
+    "scripts/trust-ao-worktree.ps1",
+    "scripts/trust-ao-worktree.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
