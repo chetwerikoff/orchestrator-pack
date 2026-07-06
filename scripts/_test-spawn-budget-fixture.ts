@@ -18,6 +18,18 @@ case "\${1:-}" in
     printf '{"data":[]}\\n'
     exit 0
     ;;
+  session)
+    if [[ "\${2:-}" == "ls" && "\${3:-}" == "--json" ]]; then
+      printf '{"data":[]}\\n'
+      exit 0
+    fi
+    ;;
+  orchestrator)
+    if [[ "\${2:-}" == "ls" && "\${3:-}" == "--json" ]]; then
+      printf '{"data":[]}\\n'
+      exit 0
+    fi
+    ;;
   review)
     if [[ "\${2:-}" == "list" ]]; then
       printf '[]\\n'

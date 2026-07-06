@@ -92,6 +92,20 @@ export function autonomousClaimPrProbeEnv(overrides: NodeJS.ProcessEnv = {}): No
   });
 }
 
+
+/** AO 0.10 session/orchestrator list argv used by Get-AoStatusSessions (Issue #619). */
+export const AUTONOMOUS_AO_010_LIST_STUB_HANDLERS = `
+if [[ "\${1:-}" == "session" && "\${2:-}" == "ls" && "\${3:-}" == "--json" ]]; then
+  printf '{"data":[]}\\n'
+  exit 0
+fi
+if [[ "\${1:-}" == "orchestrator" && "\${2:-}" == "ls" && "\${3:-}" == "--json" ]]; then
+  printf '{"data":[]}\\n'
+  exit 0
+fi
+`;
+
+
 export const AUTONOMOUS_AO_PROBE_STUB_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 ${recordNonLiveReceipt()}
@@ -103,6 +117,7 @@ if [[ "\${1:-}" == "status" ]]; then
   printf '{"data":[]}\\n'
   exit 0
 fi
+${AUTONOMOUS_AO_010_LIST_STUB_HANDLERS}
 exit 0
 `;
 
@@ -124,6 +139,7 @@ if [[ "\${1:-}" == "status" ]]; then
   printf '{"data":[]}\\n'
   exit 0
 fi
+${AUTONOMOUS_AO_010_LIST_STUB_HANDLERS}
 if [[ "\${1:-}" == "events" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; then
   printf '[]\\n'
   exit 0
@@ -154,6 +170,7 @@ if [[ "\${1:-}" == "status" ]]; then
   printf '{"data":[]}\\n'
   exit 0
 fi
+${AUTONOMOUS_AO_010_LIST_STUB_HANDLERS}
 if [[ "\${1:-}" == "events" && "\${2:-}" == "list" && "\${3:-}" == "--json" ]]; then
   printf '[]\\n'
   exit 0
