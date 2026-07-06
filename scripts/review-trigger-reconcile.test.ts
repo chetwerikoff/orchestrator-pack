@@ -16,6 +16,7 @@ import {
   findFailedOrCancelledRunForHead,
   isHeadCovered,
   isRunCoveringHead,
+  resolveAuthoritativeReviewRunStatus,
   collectSessionIdentifiers,
   findSessionById,
   getSessionIdentifier,
@@ -126,6 +127,15 @@ describe('isRunCoveringHead', () => {
         latestRunStatus: 'queued',
       }),
     ).toBe(true);
+  });
+
+  it('resolveAuthoritativeReviewRunStatus honors failed latestRun over stale running', () => {
+    expect(
+      resolveAuthoritativeReviewRunStatus({
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      }),
+    ).toBe('failed');
   });
 });
 

@@ -211,6 +211,8 @@ export declare function normalizeSha(sha: string | undefined | null): string;
 
 export declare function isRunCoveringHead(run: ReviewRun): boolean;
 
+export declare function resolveAuthoritativeReviewRunStatus(run: ReviewRun | null | undefined): string;
+
 export declare function isHeadCovered(
   runs: ReviewRun[],
   prNumber: number,

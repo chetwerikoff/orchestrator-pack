@@ -29,6 +29,7 @@ import {
   isLiveWorkerSession,
   normalizeSha,
   parseLastActivityAgeMs,
+  resolveAuthoritativeReviewRunStatus,
   toArray,
 } from './review-reconcile-primitives.mjs';
 import {
@@ -244,7 +245,7 @@ export function listPrReviewRuns(runs, prNumber) {
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun} run
  */
 export function isRevisionTerminalReleased(run) {
-  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  const status = String(resolveAuthoritativeReviewRunStatus(run) ?? '').toLowerCase();
   if (status === 'up_to_date') {
     return true;
   }
@@ -342,7 +343,7 @@ function isWorkerActivelyWorkingLocal(session, headSha, nowMs, options = {}) {
  * @param {{ headCommittedAtMs?: number, nowMs?: number }} [options]
  */
 export function isRevisionDrained(run, session, workerDeliveries, currentHeadSha, options = {}) {
-  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  const status = String(resolveAuthoritativeReviewRunStatus(run) ?? '').toLowerCase();
   const findingCount = Number(run?.findingCount ?? 0);
   const deliveredFindingCount = Number(run?.deliveredFindingCount ?? 0);
   const openFindingCount = Number(run?.openFindingCount ?? 0);
@@ -414,7 +415,7 @@ export function evaluateOpenReviewRevision({
 }) {
   const runs = listPrReviewRuns(reviewRuns, prNumber);
   for (const run of runs) {
-    const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+    const status = String(resolveAuthoritativeReviewRunStatus(run) ?? '').toLowerCase();
     const runId = getReviewRunId(run);
     if (!runId) {
       continue;

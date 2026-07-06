@@ -72,6 +72,7 @@ export {
   isRunCoveringHead,
   normalizeLegacyReviewRunStatus,
   normalizeSha,
+  resolveAuthoritativeReviewRunStatus,
   resolveNormalizedReviewRunStatus,
   toArray,
 } from './review-reconcile-primitives.mjs';

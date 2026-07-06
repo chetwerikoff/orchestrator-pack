@@ -5,7 +5,11 @@
  * consumed by the claim reaper, acquire path, and automated starters.
  */
 import { printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
-import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
+import {
+  isRunCoveringHead,
+  normalizeLegacyReviewRunStatus,
+  resolveAuthoritativeReviewRunStatus,
+} from './review-reconcile-primitives.mjs';
 import {
   DEFAULT_ATTEMPT_CEILING_MS,
   evaluateAttemptCeiling,
@@ -184,7 +188,7 @@ export function evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha)
   const ambiguousRuns = [];
   for (const run of toArray(reviewRuns)) {
     if (!runMatchesKey(run, prNumber, normalized)) continue;
-    const status = normalizeStatus(run?.prReviewStatus ?? run?.status);
+    const status = normalizeStatus(resolveAuthoritativeReviewRunStatus(run));
     if (!status) {
       ambiguousRuns.push({ runId: String(run?.id ?? run?.runId ?? ''), status: '' });
       continue;
@@ -210,7 +214,8 @@ export function findCoveringRunForKey(reviewRuns, prNumber, headSha, projectName
       ? runMatchesBindingKey(run, prNumber, normalized, projectNamespace)
       : runMatchesKey(run, prNumber, normalized);
     if (!keyMatch) continue;
-    const status = normalizeStatus(run?.prReviewStatus ?? run?.status);
+    if (!isRunCoveringHead(run)) continue;
+    const status = normalizeStatus(resolveAuthoritativeReviewRunStatus(run));
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     const entry = { run, status, runId: String(run?.id ?? run?.runId ?? '') };
     if (IN_FLIGHT_RUN_STATUSES.includes(status)) {

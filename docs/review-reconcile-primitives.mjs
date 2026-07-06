@@ -103,6 +103,24 @@ export function normalizeSha(sha) {
 }
 
 /**
+ * Status that drives claim/revision decisions — honors latestRunStatus over stale prReviewStatus (#625).
+ * @param {ReviewRun | undefined | null} run
+ */
+export function resolveAuthoritativeReviewRunStatus(run) {
+  const latestRaw = String(run?.latestRunStatus ?? '').trim();
+  if (latestRaw) {
+    const latestStatus = normalizeLegacyReviewRunStatus(latestRaw);
+    if (
+      FAILED_OR_CANCELLED_REVIEW_STATUSES.has(latestStatus) ||
+      IN_FLIGHT_REVIEW_STATUSES.has(latestStatus)
+    ) {
+      return latestStatus;
+    }
+  }
+  return resolveNormalizedReviewRunStatus(run);
+}
+
+/**
  * @param {ReviewRun} run
  */
 export function isRunCoveringHead(run) {
