@@ -3,11 +3,11 @@
   "iteration_id": "orchestrator-pack-9",
   "iteration_id_source": "ao_session",
   "supersedes": null,
-  "created_at": "2026-07-06T09:16:53.616Z",
+  "created_at": "2026-07-06T09:33:03.172Z",
   "baseline": {
-    "commit_sha": "3b545124a0692e7cde9d3f64346220a76619dc70",
+    "commit_sha": "77854144bd298f8055190b84050c70a3f6a757f7",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:fb51c162b8665fe5298cc2b722d986396a6a55b396b18c49f915812c83497cfb"
+    "active_scope_hash": "sha256:72094b8ba350519ada152f1feceb4d850db9f46452fe93a0c0c07c0d84d698f4"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -56,6 +56,10 @@
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/missing-lens/pass-01-competitive.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/missing-lens/pass-03-architectural-final.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/positive-outcome/pass-04-architectural-final.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/tolerated-architectural-filename/architectural.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/tolerated-architectural-filename/pass-01-competitive.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/tolerated-architectural-filename/pass-02-architectural-lens.capture.txt",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/tolerated-architectural-filename/pass-03-architectural-final.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/waiver-invalid/competitive-stage-waiver.json",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/waiver-invalid/pass-02-architectural-lens.capture.txt",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/waiver-invalid/pass-03-architectural-final.capture.txt",
@@ -77,6 +81,7 @@
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/t1-base.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/t2-base.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/t3-base.md",
+    "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/tolerated-architectural-filename.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/waiver-invalid.md",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/waiver-valid.md"
   ],

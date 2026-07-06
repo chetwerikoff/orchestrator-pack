@@ -168,6 +168,12 @@ describe('stage-completeness empty capture', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/unparseable capture filename: competitive\.capture\.txt/);
   });
+
+  it('tolerates malformed plain architectural capture filenames', () => {
+    const result = check('tolerated-architectural-filename');
+    expect(result.ok).toBe(true);
+    expect(result.receipt?.finalPass).toBe(3);
+  });
 });
 
 describe('stage-completeness missing lens', () => {

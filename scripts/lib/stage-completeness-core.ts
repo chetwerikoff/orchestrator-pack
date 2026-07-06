@@ -21,6 +21,9 @@ const COUNTED_STAGE_TOKENS = new Set([
 const CAPTURE_FILENAME_RE =
   /^pass-(\d+)-(competitive|architectural-lens|architectural-final|architectural)\.capture\.txt$/i;
 
+const COUNTED_STAGE_FILENAME_TOKEN_RE =
+  /competitive|architectural-lens|architectural-final/i;
+
 const WAIVER_REASONS = new Set(['codex-substitution', 'operator-waiver']);
 
 export interface ParsedCapture {
@@ -88,6 +91,10 @@ export function parseCaptureFileName(fileName: string): ParsedCapture | null {
   };
 }
 
+export function referencesCountedStageFilenameToken(fileName: string): boolean {
+  return COUNTED_STAGE_FILENAME_TOKEN_RE.test(fileName);
+}
+
 export function parseCompetitiveWaiver(
   reviewDir: string,
 ): { waiver: CompetitiveWaiver | null; invalid: boolean } {
@@ -143,7 +150,9 @@ function loadReviewCaptures(reviewDir: string): {
 
     const parsed = parseCaptureFileName(fileName);
     if (!parsed) {
-      errors.push(`unparseable capture filename: ${fileName}`);
+      if (referencesCountedStageFilenameToken(fileName)) {
+        errors.push(`unparseable capture filename: ${fileName}`);
+      }
       continue;
     }
 
