@@ -5,6 +5,7 @@
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
 
 $required = @(
     'scripts/lib/review-producer-contract.ts',
@@ -18,13 +19,7 @@ $required = @(
     'tests/external-output-references/captures/ao-0-10-daemon/projects-list.raw.json'
 )
 
-foreach ($rel in $required) {
-    $path = Join-Path $Root $rel
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Write-Host "Missing required file: $rel"
-        exit 1
-    }
-}
+Assert-RequiredPathsExist -Paths @($required | ForEach-Object { Join-Path $Root $_ })
 
 $mappingSource = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/review-producer-contract.ts') -Raw
 foreach ($field in @('needs_triage', 'sentFindingCount', 'terminationReason')) {
