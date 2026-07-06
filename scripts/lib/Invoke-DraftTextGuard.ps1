@@ -23,7 +23,7 @@ function Invoke-DraftTextGuard {
             --text-file (Resolve-Path $DraftPath).Path `
             --draft-path (Resolve-Path $DraftPath).Path `
             --repo-root $Root
-        exit $LASTEXITCODE
+        return $LASTEXITCODE
     }
     finally {
         Pop-Location

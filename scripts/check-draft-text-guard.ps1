@@ -24,4 +24,5 @@ $guardScript = switch ($Guard) {
 }
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-DraftTextGuard.ps1')
-Invoke-DraftTextGuard -GuardScript $guardScript -DraftPath $DraftPath -RepoRoot $RepoRoot
+$exitCode = Invoke-DraftTextGuard -GuardScript $guardScript -DraftPath $DraftPath -RepoRoot $RepoRoot
+exit $exitCode
