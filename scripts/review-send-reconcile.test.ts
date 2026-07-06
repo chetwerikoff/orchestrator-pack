@@ -158,7 +158,7 @@ describe('mechanical helpers', () => {
   });
 
   it('evaluateReviewSendInterval uses default cadence', () => {
-    expect(evaluateReviewSendInterval({ nowMs: 0, lastTickMs: null }).ok).toBe(true);
+    expect(evaluateReviewSendInterval({ nowMs: 0, lastTickMs: undefined }).ok).toBe(true);
     expect(DEFAULT_REVIEW_SEND_INTERVAL_MS).toBe(120_000);
   });
 

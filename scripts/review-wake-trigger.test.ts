@@ -126,7 +126,7 @@ describe('evaluateWakeReviewTrigger', () => {
     const result = evaluateFixture(fixture);
     expect(result.triggerReviewRun).toBe(false);
     expect(result.route).toBe('empty_review_trap');
-    expect(result.terminationReason).toContain('reviewer command exited');
+    expect(result.failureDetail).toContain('reviewer command exited');
   });
 
   it('review trigger failure reason annotates merge wake as non-mergeable', () => {

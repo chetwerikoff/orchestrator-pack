@@ -381,7 +381,7 @@ describe('confirmation anchor after prior delivery observation', () => {
 describe('observe-only escalation (AC4)', () => {
   it('escalates when confirmation window elapsed (no pack redelivery)', () => {
     const { actions } = planFromFixture('window-elapsed-redeliver.json');
-    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
@@ -423,7 +423,7 @@ describe('linked session identifier matching', () => {
       nowMs: 1_717_504_000_000,
       config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
     });
-    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
@@ -460,7 +460,7 @@ describe('openPrs passed to planner (live CLI path)', () => {
       nowMs,
       config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
     });
-    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(
       actions.some(
         (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
@@ -504,7 +504,7 @@ describe('openPrs passed to planner (live CLI path)', () => {
 describe('stale run head (ownership)', () => {
   it('escalates when PR head advanced past run targetSha', () => {
     const { actions } = planFromFixture('stale-head-advanced.json');
-    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a: DeliveryConfirmAction) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(
       actions.some(
         (a: DeliveryConfirmAction) =>
@@ -517,7 +517,7 @@ describe('stale run head (ownership)', () => {
 describe('orphan linked session (AC4a)', () => {
   it('escalates immediately with zero re-sends', () => {
     const { actions } = planFromFixture('orphan-dead-session.json');
-    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a: DeliveryConfirmAction) => (a as { type: string }).type === 'redeliver')).toBe(false);
     const escalation = actions.find(
       (a): a is Extract<DeliveryConfirmAction, { type: 'escalate' }> =>
         a.type === 'escalate',
@@ -534,7 +534,7 @@ describe('orphan linked session (AC4a)', () => {
 describe('no worker lifecycle on no-confirmation path (AC5)', () => {
   it('observe-only planner never emits pack redelivery actions', () => {
     const { actions } = planFromFixture('window-elapsed-redeliver.json');
-    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(
       findForbiddenDeliveryLifecycleCommands([
         'ao review send run-abc',
@@ -549,7 +549,7 @@ describe('no worker lifecycle on no-confirmation path (AC5)', () => {
 describe('escalate after max redeliveries (submit owned by #232)', () => {
   it('escalates when redeliveries exhausted — no submit action', () => {
     const { actions, tracking } = planFromFixture('max-redeliveries-escalate.json');
-    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(
       actions.some(
@@ -577,7 +577,7 @@ describe('delivery state outcomes (AC7)', () => {
 describe('idempotent confirmed runs (AC8)', () => {
   it('does not re-deliver when addressing_reviews exists after send', () => {
     const { actions } = planFromFixture('confirmed-idempotent.json');
-    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(actions.some((a) => (a as { type: string }).type === 'redeliver')).toBe(false);
     expect(actions).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'mark_confirmed' })]),
     );
