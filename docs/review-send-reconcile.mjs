@@ -75,7 +75,7 @@ export function buildDedupeKey(runId, targetSha) {
  * @param {ReviewRun} run
  */
 export function resolveSentFindingCount(run) {
-  const raw = run?.deliveredFindingCount;
+  const raw = run?.deliveredFindingCount ?? run?.sentFindingCount;
   if (raw === null || raw === undefined) {
     return { ok: false, reason: 'delivered_finding_count_missing' };
   }

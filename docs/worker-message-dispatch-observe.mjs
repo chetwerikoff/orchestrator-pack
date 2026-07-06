@@ -314,7 +314,7 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
   /** @type {Array<Record<string, unknown>>} */
   const deliveries = [];
   for (const run of toArray(reviewRuns)) {
-    const deliveredCount = Number(run?.deliveredFindingCount ?? 0);
+    const deliveredCount = Number(run?.deliveredFindingCount ?? run?.sentFindingCount ?? 0);
     if (deliveredCount <= 0) {
       continue;
     }

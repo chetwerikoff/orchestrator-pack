@@ -212,13 +212,13 @@ describe('evaluateMergeIntentAfterReviewTrigger', () => {
       reviewRuns: fixture.reviewRuns!,
     });
     expect(mergeEval.mergeable).toBe(false);
-    expect(mergeEval.reason).toBe('waiting_update_revalidate');
+    expect(mergeEval.reason).toBe('delivered_changes_requested_revalidate');
     const amended = amendMergeWakeMessage(
       'wake merge.ready session=opk-wait pr=#216',
       mergeEval,
     );
     expect(amended).toContain('mergeable=false');
-    expect(amended).toContain('waiting_update_revalidate');
+    expect(amended).toContain('delivered_changes_requested_revalidate');
   });
 
   it('webhook sessionId fallback rejects non-live workers', () => {

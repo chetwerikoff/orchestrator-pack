@@ -62,6 +62,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
   );
   for (const doc of [
     'ao-0-10-review-api.mjs',
+    'review-producer-contract.mjs',
     'autonomous-gate-preflight.mjs',
     'autonomous-orchestrator-boundary.mjs',
     'autonomous-review-retry.mjs',

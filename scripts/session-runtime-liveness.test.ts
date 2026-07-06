@@ -91,17 +91,18 @@ describe('review-send reconcile (production-shape)', () => {
     linkedSessionId: 'opk-33',
   };
 
-  it('plans send when runtime field is absent', () => {
+  it('first-send reconcile is REMOVED on AO 0.10 auto-delivery', () => {
     const session = productionWorker({ name: 'opk-33' });
     const candidate = evaluateFirstSendCandidate(run, [session], [{ number: 42, headRefOid: 'deadbeef' }], new Set());
     expect(candidate.eligible).toBe(true);
-    const { actions } = planReviewSendActions({
+    const { actions, removed } = planReviewSendActions({
       reviewRuns: [run],
       sessions: [session],
       openPrs: [{ number: 42, headRefOid: 'deadbeef' }],
       tracking: { sent: {} },
     });
-    expect(actions.some((a) => a.type === 'send')).toBe(true);
+    expect(removed).toBe(true);
+    expect(actions).toHaveLength(0);
   });
 
   it('skips on terminal runtime death', () => {
@@ -118,18 +119,16 @@ describe('review-send reconcile (production-shape)', () => {
     expect(candidate.reason).toBe('linked_session_runtime_not_alive');
   });
 
-  it('incident opk-rev-177 plans send not runtime_not_alive skip', () => {
+  it('incident opk-rev-177 reconcile path is REMOVED (no pack send actions)', () => {
     const fixture = JSON.parse(
       readFileSync(
         path.join(repoRoot, 'tests/fixtures/review-send-reconcile/incident-opk-rev-177.json'),
         'utf8',
       ),
     );
-    const { actions } = planReviewSendActions(fixture);
-    expect(actions.some((a) => a.type === 'send')).toBe(true);
-    expect(
-      actions.some((a) => a.type === 'skip' && a.reason === 'linked_session_runtime_not_alive'),
-    ).toBe(false);
+    const { actions, removed } = planReviewSendActions(fixture);
+    expect(removed).toBe(true);
+    expect(actions).toHaveLength(0);
   });
 
   it('pre-send recheck fails when session disappears', () => {

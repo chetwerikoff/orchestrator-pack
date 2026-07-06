@@ -416,7 +416,7 @@ describe('review-start-claim-lifecycle predicates', () => {
         holdStartedAtUtc: '2026-06-24T11:00:00.000Z',
       },
       holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
-      reviewRuns: [{ id: 'run-done', prNumber: 266, targetSha: fullSha, status: 'clean' }],
+      reviewRuns: [{ id: 'run-done', prNumber: 266, targetSha: fullSha, status: 'up_to_date' }],
       nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
     });
     expect(decision.action).toBe('terminalize');

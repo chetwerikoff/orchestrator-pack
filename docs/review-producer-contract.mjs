@@ -3,7 +3,13 @@
  * Maps GET /api/v1/sessions/{id}/reviews PRReviewState + latestRun to status+verdict vocabulary.
  * Vitest: scripts/review-producer-contract.test.ts
  */
-import { toArray, normalizeSha } from './review-reconcile-primitives.mjs';
+import {
+  isLegacyDeliveredReviewStatus,
+  isLegacyUndeliveredReviewStatus,
+  normalizeLegacyReviewRunStatus,
+  toArray,
+  normalizeSha,
+} from './review-reconcile-primitives.mjs';
 
 /** Engine-level PR review statuses (AO 0.10 PRReviewState.status). */
 export const PR_REVIEW_STATUSES = [
@@ -71,7 +77,7 @@ export function resolveFailureDetail(latestRun) {
   if (status !== 'failed' && status !== 'cancelled') {
     return '';
   }
-  return String(latestRun.body ?? '').trim();
+  return String(latestRun.body ?? latestRun.terminationReason ?? '').trim();
 }
 
 /**
@@ -112,19 +118,38 @@ export function deriveDeliveredFindingCount(latestRun, prReviewStatus) {
  * @param {NormalizedReviewRun} run
  */
 export function isDeliveredChangesRequested(run) {
-  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  if (isLegacyUndeliveredReviewStatus(rawStatus)) {
+    return false;
+  }
+  if (isLegacyDeliveredReviewStatus(rawStatus)) {
+    return true;
+  }
+  const status = normalizeLegacyReviewRunStatus(rawStatus);
   if (status !== 'changes_requested') {
     return false;
   }
-  return Boolean(run?.deliveredAt);
+  if (run?.deliveredAt) {
+    return true;
+  }
+  const sentLegacy = Number(run?.sentFindingCount ?? 0);
+  return Number.isFinite(sentLegacy) && sentLegacy > 0;
 }
 
 /**
  * @param {NormalizedReviewRun} run
  */
 export function isUndeliveredChangesRequested(run) {
-  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
-  return status === 'changes_requested' && !run?.deliveredAt;
+  const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  if (isLegacyUndeliveredReviewStatus(rawStatus)) {
+    const sent = Number(run?.sentFindingCount ?? 0);
+    return !Number.isFinite(sent) || sent <= 0;
+  }
+  if (isLegacyDeliveredReviewStatus(rawStatus)) {
+    return false;
+  }
+  const status = normalizeLegacyReviewRunStatus(rawStatus);
+  return status === 'changes_requested' && !isDeliveredChangesRequested(run);
 }
 
 /**

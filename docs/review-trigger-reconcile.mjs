@@ -61,13 +61,18 @@ export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
   IN_FLIGHT_REVIEW_STATUSES,
+  LEGACY_REVIEW_STATUS_ALIASES,
   NON_LIVE_WORKER_SESSION_STATUSES,
   collectSessionIdentifiers,
   getSessionIdentifier,
   isHeadCovered,
+  isLegacyDeliveredReviewStatus,
+  isLegacyUndeliveredReviewStatus,
   isLiveWorkerSession,
   isRunCoveringHead,
+  normalizeLegacyReviewRunStatus,
   normalizeSha,
+  resolveNormalizedReviewRunStatus,
   toArray,
 } from './review-reconcile-primitives.mjs';
 

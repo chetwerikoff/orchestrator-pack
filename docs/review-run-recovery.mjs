@@ -9,6 +9,7 @@
  * timeout.
  */
 import { createHash } from 'node:crypto';
+import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -94,7 +95,7 @@ export function validateRecoveryConfig(config = resolveRecoveryConfig()) {
 }
 
 function normalizeStatus(status) {
-  return String(status ?? '').trim().toLowerCase();
+  return normalizeLegacyReviewRunStatus(status);
 }
 
 export function classifyReviewStatus(status) {
