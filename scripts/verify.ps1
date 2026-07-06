@@ -595,6 +595,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== AO 0.10 stuck review-run reaper (Issue #624) =='
+$ao010StuckReaperCheck = Join-Path $Root 'scripts/check-review-stuck-run-reaper.ps1'
+if (Test-Path -LiteralPath $ao010StuckReaperCheck -PathType Leaf) {
+    & $ao010StuckReaperCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-stuck-run-reaper.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-stuck-run-reaper.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 stuck review-run reaper checks failed (Issue #624)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-stuck-run-reaper.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 stuck review-run reaper check script (Issue #624)'
+}
+
+Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
 $reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
 $seedSnapshotEconomyCheck = Join-Path $Root 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1'

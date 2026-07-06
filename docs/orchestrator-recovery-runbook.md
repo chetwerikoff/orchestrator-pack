@@ -956,6 +956,36 @@ steps (covered-head re-check, fresh `ao review run` on the live session). The ca
 data is what distinguishes a reviewer hang from worktree-drift from a daemon reconcile —
 without it the next occurrence is again unattributable.
 
+## Stuck review run (AO 0.10)
+
+On AO **0.10.x**, review runs live in the daemon database. When a reviewer pane
+crashes or the daemon restarts mid-run, `latestRun.status` can remain `running` for
+the current PR head even though no reviewer is alive. The engine will not supersede
+same-head stuck runs on a fresh trigger — only a head advance clears them.
+
+Pack-owned recovery (Issue **#624**):
+
+- Supervised child: `scripts/review-stuck-run-reaper.ps1` (wake-supervisor registry id
+  `review-stuck-run-reaper`).
+- Detection: age floor (default 600s, override `AO_REVIEW_STUCK_AGE_FLOOR_SECONDS`) +
+  reviewer pane probe via `reviewerHandleId` from `GET /api/v1/sessions/{workerId}/reviews`
+  and tmux / session runtime signals.
+- **Healthy pane always wins** — long legitimate reviews are never classified stuck.
+- **Unknown pane liveness is alert-only** — no destructive recovery call.
+- Recovery requires a supported upstream **fail-stale-run** surface
+  ([AgentWrapper/agent-orchestrator#2070](https://github.com/AgentWrapper/agent-orchestrator/issues/2070)).
+  Until that lands, the reaper emits classified supervisor log lines only.
+
+Operator checks:
+
+```bash
+curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/sessions/<workerId>/reviews"   | jq '{reviewerHandleId, statuses: [.reviews[].latestRun.status]}'
+tmux has-session -t "review-<workerId>" && echo pane=alive || echo pane=absent
+```
+
+Legacy local-store recovery (`scripts/review-run-recovery.ps1`, Issue #287) is
+superseded on AO 0.10 — do not expect it to terminalize daemon-backed runs.
+
 ## After manual PR merge
 
 When a worker PR is merged on GitHub (human merge per repo policy), AO 0.9.x
