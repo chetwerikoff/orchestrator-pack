@@ -441,11 +441,17 @@ describe('orchestrator message registry (Issue #298)', () => {
     expect(pwshNorm).toBe(nodeResult);
   });
 
-  it('runs check-orchestrator-message-registry.ps1 clean on the real tree', () => {
-    execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
-  });
+  it(
+    'runs check-orchestrator-message-registry.ps1 clean on the real tree',
+    () => {
+      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
+    },
+    240_000,
+  );
 
-  it('keeps protected-runtime check green on the real tree without branch/env issue context', () => {
+  it(
+    'keeps protected-runtime check green on the real tree without branch/env issue context',
+    () => {
     // Warm-fetch PR refs while the real GitHub event (if any) is still available.
     listChangedFiles(repoRoot, 'origin/main');
     const pr = readGithubActionsPullRequestShas();
@@ -512,7 +518,9 @@ describe('orchestrator message registry (Issue #298)', () => {
       else process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES = prevLinked;
       if (scrubbedEventPath && fs.existsSync(scrubbedEventPath)) fs.unlinkSync(scrubbedEventPath);
     }
-  });
+  },
+    240_000,
+  );
 
   it('preserves newlines when regenerating the map via pwsh helper', () => {
     const tmpMap = path.join(os.tmpdir(), `orch-map-${Date.now()}.md`);

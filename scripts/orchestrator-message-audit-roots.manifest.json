@@ -11,6 +11,7 @@
     "scripts/review-finding-delivery-confirm.ps1",
     "scripts/review-run-recovery.ps1",
     "scripts/review-start-claim-reaper.ps1",
+    "scripts/review-stuck-run-reaper.ps1",
     "scripts/review-send-reconcile.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",

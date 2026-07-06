@@ -1,0 +1,45 @@
+{
+  "issue_number": 624,
+  "iteration_id": "issue-624-stuck-review-run-reaper",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-06T12:12:45.642Z",
+  "baseline": {
+    "commit_sha": "27ddb961377844f9319f85ded14e986ac8bb3376",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:302982ee6ddfe8ce42897e0a88feb5da1e1c95f0363146d91110a6195b10ebf1"
+  },
+  "declared_paths": [
+    "scripts/review-stuck-run-reaper.ps1",
+    "scripts/orchestrator-side-process-registry.json",
+    "scripts/review-run-recovery.ps1",
+    "scripts/orchestrator-message-audit-roots.manifest.json",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**",
+    "docs/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:7f5cb2ae3dd3c8cb67a8129f187c44d2f68285efff4dcf9d08f01ebad5a288ed",
+      "new_active_scope_hash": "sha256:302982ee6ddfe8ce42897e0a88feb5da1e1c95f0363146d91110a6195b10ebf1",
+      "changed": {
+        "added": [
+          "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+          "scripts/orchestrator-message-audit-roots.manifest.json",
+          "scripts/orchestrator-side-process-registry.json",
+          "scripts/review-run-recovery.ps1",
+          "scripts/review-stuck-run-reaper.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Add explicit declared_paths for protected-runtime coordination",
+      "actor": "orchestrator-pack-11",
+      "timestamp": "2026-07-06T12:20:53.149Z",
+      "applied": true
+    }
+  ]
+}

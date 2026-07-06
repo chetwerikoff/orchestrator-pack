@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
 
+. (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
+
 $required = @(
     'scripts/ao-review.ps1',
     'scripts/lib/Invoke-AoReviewApi.ps1',

@@ -861,6 +861,13 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/orchestrator-wake-supervisor.ps1',
     'scripts/orchestrator-wake-supervisor.test.ts',
   ],
+  624: [
+    'scripts/orchestrator-side-process-registry.json',
+    'scripts/review-stuck-run-reaper.ps1',
+    'scripts/review-run-recovery.ps1',
+    'scripts/orchestrator-message-audit-roots.manifest.json',
+    'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json',
+  ],
 };
 
 /**

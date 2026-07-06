@@ -28,6 +28,20 @@ $RecoveryCli = Join-Path $PackRoot 'docs/review-run-recovery.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
 
+function Test-ReviewRunRecoverySupersededByDaemonReaper {
+    if ($env:AO_REVIEW_RECOVERY_MODE -eq 'legacy') { return $false }
+    if ($env:AO_REVIEW_RECOVERY_MODE -eq 'daemon') { return $true }
+    try {
+        $health = Get-AoDaemonHealthJson
+        $version = [string]$health.version
+        if ($version -match '^0\.10\.') { return $true }
+    }
+    catch {
+        return $false
+    }
+    return $false
+}
+
 function Write-RecoveryLog {
     param([string]$Message)
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -41,6 +55,10 @@ function Invoke-RecoveryCli {
 }
 
 function Invoke-RecoveryTick {
+    if (Test-ReviewRunRecoverySupersededByDaemonReaper) {
+        Write-RecoveryLog 'tick skipped: AO 0.10 daemon review path handled by review-stuck-run-reaper (#624)'
+        return @{ ok = $true; reason = 'superseded_by_review_stuck_run_reaper'; actions = @() }
+    }
     $payload = @{
         projectId = $ProjectId
         dryRun    = [bool]$DryRun

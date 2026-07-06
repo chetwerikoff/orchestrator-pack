@@ -59,7 +59,10 @@ worker's current PR head.
 Pack enforcement (Issue #623):
 
 - `scripts/lib/Worker-Recovery.ps1` refuses `git worktree remove` when the gate blocks.
-- Wait until the run reaches `complete`, `failed`, `delivered`, or is reaped per #211.
+- Wait until the run reaches `complete`, `failed`, `delivered`, or is reaped per **#624**
+  (`scripts/review-stuck-run-reaper.ps1` — supervised detection + recovery when
+  upstream fail-stale surface exists; see
+  [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md#stuck-review-run-ao-010)).
 
 Manual probe:
 
@@ -87,6 +90,7 @@ Do **not** edit live `agent-orchestrator.yaml` from automation — harness adopt
 ## Related
 
 - Issue **#623** — harness + trigger loop
+- Issue **#624** — stuck `running` review-run reaper
 - Issue **#619** — session identity readers
 - Issues **#213–#215** — review producer contract and board consumers
 - [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md) — legacy `PACK_REVIEWER` context (0.9 path)

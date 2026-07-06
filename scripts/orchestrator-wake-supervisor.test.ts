@@ -568,7 +568,8 @@ describe('orchestrator-wake-supervisor', () => {
       supervisorLog = fs.readFileSync(logPath, 'utf8');
     }
     expect(supervisorLog).toMatch(/crash backoff: listener/);
-    expect(observedPids.size).toBeLessThanOrEqual(4);
+    // Listener-only crash backoff; allow one extra PID when the registry grows.
+    expect(observedPids.size).toBeLessThanOrEqual(5);
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1500));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);

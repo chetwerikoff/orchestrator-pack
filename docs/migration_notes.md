@@ -1879,6 +1879,32 @@ Optional window overrides are `AO_REVIEW_RECOVERY_CRASH_GRACE_MS`,
 the enforced review timeout; otherwise the recovery check fails closed and emits
 a de-duplicated escalation audit rather than terminalizing runs.
 
+
+## Stuck review-run reaper (Issue #624)
+
+AO 0.10 exposes no engine-side reaper for `review_run` rows stuck in
+`status=running`. Pack-owned detection and recovery now run as supervised child
+`review-stuck-run-reaper` from `scripts/orchestrator-side-process-registry.json`.
+The tick scans worker sessions via daemon HTTP, classifies `stuck_same_head` when
+the reviewer pane is absent and age is at or above the configured floor, and
+invokes the fail-stale-run surface only when `AO_REVIEW_FAIL_STALE_SURFACE` is
+`available`. On AO 0.10, `scripts/review-run-recovery.ps1` skips its legacy tick
+and defers to this reaper.
+
+Operator adoption after merge:
+
+1. Merge the updated `scripts/orchestrator-side-process-registry.json` into the
+   checkout used by the live supervisor. The registry must contain exactly one
+   required child with `id: "review-stuck-run-reaper"`.
+2. From the operator terminal only, restart AO so the registry is reloaded:
+   `ao stop` then `ao start`.
+3. Confirm registration in source with:
+   `pwsh -NoProfile -File scripts/check-review-stuck-run-reaper.ps1`.
+   Expected output: `review-stuck-run-reaper registration/config OK`.
+4. When upstream fail-stale-run is available, set
+   `AO_REVIEW_FAIL_STALE_SURFACE=available` in the operator environment before
+   `ao start` if automated recovery (not alert-only) is desired.
+
 ## Reviewer failure evidence log (Issue #312)
 
 `scripts/invoke-pack-review.ps1` now creates an incremental, secret-safe

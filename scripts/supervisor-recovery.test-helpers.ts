@@ -18,6 +18,7 @@ export const managedChildRoles = [
   'review-ready-report-state-seed',
   'ci-green-wake-reconcile',
   'review-run-recovery',
+  'review-stuck-run-reaper',
   'review-start-claim-reaper',
   'ci-failure-notification-reconcile',
   'ci-failure-notification-reaction',
