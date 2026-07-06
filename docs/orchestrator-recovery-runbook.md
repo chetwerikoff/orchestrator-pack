@@ -1,16 +1,25 @@
 # Orchestrator recovery runbook
 
+> **AO 0.10.2 precedence note (2026-07-06):** use `ao status --json` for daemon
+> health, `ao orchestrator ls --json` / `ao session ls --json -p <project>` for
+> sessions, and `ao session kill` + `ao session restore` for project-session
+> recycle. Older `ao status --reports full`, `ao status --json --reports full`,
+> `ao events`, `ao review list/run/send`, and live YAML reload instructions in
+> historical subsections are pre-0.10 references unless a later migration note
+> explicitly updates them.
+
 Operator procedure when AO observability flags the orchestrator session
 (e.g. `op-orchestrator`) as **`stuck`** or **`probe_failure`** while workers,
 review runs, or open PRs still need coordination.
 
 This runbook is **manual and read-only until escalation step 3**. It does not
 add schedulers, daemons, or automatic recovery. After recovery, the orchestrator
-resumes the autonomous review-loop decision procedure defined in
-`agent-orchestrator.yaml.example` (`orchestratorRules`) and
-`docs/migration_notes.md` (Issue #28).
+resumes the autonomous coordination procedure defined by the current AO runtime
+surface and pack migration notes. On AO 0.10.2, `agent-orchestrator.yaml` /
+`.example` YAML rules are legacy/import references, not live runtime config; live
+env/PATH/agent settings are ProjectConfig (`ao project set-config`).
 
-For first-time setup and the full autoloop checklist (processes, live YAML,
+For first-time setup and the full autoloop checklist (processes, AO 0.10 ProjectConfig,
 verification), see [`docs/orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
 
 When review runs show `failed` with `findingCount: 0`, run
@@ -30,11 +39,11 @@ For a **healthy orchestrator process that never reacts to CI/review events**, se
 |---------|---------------|--------------|
 | **Worker** exits within ~1 minute of spawn, no PR, no `ao acknowledge` | Worker session PTY | `docs/migration_notes.md` — **Worker** prompt-delivery launch failure (Issue #63) |
 | Workers fail at spawn with Signature A/B **right after** `npm i -g @aoagents/ao@…` | `@aoagents/ao-plugin-agent-cursor` `dist/index.js` | `docs/migration_notes.md` — **After `ao` upgrade — verify worker #2074 patch** (`ao-worker-prompt-`, two `cat`) |
-| **Orchestrator** `stuck` / `probe_failure` / `detecting` within ~1 minute of `ao start`, `ao session kill` + respawn, or restore | Orchestrator session PTY (`op-orchestrator`) | `docs/migration_notes.md` — **Orchestrator** prompt-delivery launch failure (Issue #91) |
+| **Orchestrator** `stuck` / `probe_failure` / `detecting` within ~1 minute of session restore | Orchestrator session PTY (`op-orchestrator`) | `docs/migration_notes.md` — **Orchestrator** prompt-delivery launch failure (Issue #91) |
 | Spawn logs show `workspace.branch_collision` on `orchestrator/*` | Stale branch/worktree before kill/restart | `scripts/orchestrator-worktree-preflight.ps1` (Issue #91) |
-| `ao start` → `EPERM` on `worktrees/op-orchestrator` | Orphan `pwsh` / `cursor-agent` holding the directory | `scripts/orchestrator-worktree-preflight.ps1 -Apply`; `docs/migration_notes.md` |
+| Session restore fails with `EPERM` on `worktrees/op-orchestrator` | Orphan `pwsh` / `cursor-agent` holding the directory | `scripts/orchestrator-worktree-preflight.ps1 -Apply`; `docs/migration_notes.md` |
 | Same on **legacy native Windows** (retired) | Orphan processes + 9P locks | **Do not use** `unlock-op-orchestrator-worktree.ps1` on Linux — see migration_notes (legacy) |
-| Orchestrator PTY empty, `alive:false`, exit **0** under ~1s | `~/.ao/bin/agent` bash shim shadows real `agent` | Remove shim; `Test-Path ~/.ao/bin/agent` must be **False** before `ao start` |
+| Orchestrator PTY empty, `alive:false`, exit **0** under ~1s | `~/.ao/bin/agent` bash shim shadows real `agent` | Remove shim; `Test-Path ~/.ao/bin/agent` must be **False** before session restore |
 
 **Signatures A/B** (worker **and** orchestrator on Windows): Signature A — `printf` not
 recognized / `unknown option '-ne'`; Signature B — `command line is too long`.
@@ -203,8 +212,8 @@ the observability flag may clear on the next natural turn.
 |------|--------|--------------|
 | 1 | `ao send` diagnostic nudge | None — one orchestrator turn |
 | 2 | Inspect (`ao status`, `ao review list`, diagnose helper) | None — read-only |
-| 3 | `ao session kill <orchestrator-id>` then `ao start` | Orchestrator session only |
-| 4 | `ao stop` then `ao start` | Full AO daemon, dashboard, YAML reload |
+| 3 | `ao session kill <orchestrator-id> -p orchestrator-pack` then `ao session restore <orchestrator-id> -p orchestrator-pack` | Orchestrator session only |
+| 4 | Legacy full `ao stop` / `ao start` | Pre-AO 0.10 only; not a YAML reload path on AO 0.10.2 |
 
 Do not skip step 2 before step 3 or 4.
 
@@ -259,10 +268,9 @@ shows it processed `ao review list` / sent triage / pinged a worker per
 Assemble state before any kill.
 
 ```powershell
-ao status --reports full
-ao review list --json
-ao events list --since 30m --kind session.stuck
-ao events list --since 2h --type lifecycle.transition -s op-orchestrator
+ao status --json
+ao orchestrator ls --json
+ao session ls --json -p orchestrator-pack --all
 ```
 
 Or:
@@ -282,10 +290,10 @@ you accept manual follow-up on that PR.
 Record:
 
 - Orchestrator session id and status.
-- Each active worker: session id, status, PR, latest `reportState`.
-- Review runs in `needs_triage` / `waiting_update` with counts.
-- Whether a ping was already sent this episode (`ao events list` for `ao send`
-  to workers).
+- Each active worker: session id, status, PR/issue linkage when available.
+- Any AO 0.10 replacement review/submit state that the active migration exposes.
+- Whether a ping was already sent this episode, if an active migration exposes a
+  supported audit surface.
 
 This snapshot is your baseline for step 3 **after** checks.
 
@@ -304,7 +312,8 @@ pwsh -File scripts/orchestrator-worktree-preflight.ps1
 pwsh -File scripts/orchestrator-worktree-preflight.ps1 -Apply
 ```
 
-Then `ao start` and confirm no repeated `branch_collision` in spawn logs.
+Then restore the orchestrator session with Step 3 (`ao session restore`) and confirm no
+repeated `branch_collision` in spawn logs.
 
 ### Step 2c — Worktree `EPERM` and `~/.ao/bin/agent` shim (before step 3)
 
@@ -342,7 +351,7 @@ for workers, not a standing bash shim in `~/.ao/bin`.
 
 </details>
 
-## Step 3 — Kill orchestrator session and restart AO
+## Step 3 — Kill and restore orchestrator session
 
 Respawns **only** the orchestrator agent session; workers and review state remain
 in AO storage.
@@ -350,13 +359,14 @@ in AO storage.
 Run step **2b** first when stale `orchestrator/*` worktree/branch exists.
 
 ```powershell
-ao session kill op-orchestrator
-ao start
-pwsh -File scripts/wait-orchestrator-launch.ps1
+ao orchestrator ls --json
+ao session kill <orchestrator-session-id> -p orchestrator-pack
+ao session restore <orchestrator-session-id> -p orchestrator-pack
+pwsh -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId <orchestrator-session-id> -ProjectId orchestrator-pack
 ```
 
-Use your orchestrator id. `ao start` recreates the orchestrator per project
-config (same as a normal daemon start after kill).
+Use your orchestrator id from `ao orchestrator ls --json`. AO 0.10.2 applies
+ProjectConfig env/PATH/agent settings when the session is created/restored.
 
 ### Before
 
@@ -370,8 +380,9 @@ config (same as a normal daemon start after kill).
 ### After
 
 ```powershell
-ao status --reports full
-ao review list --json
+ao status --json
+ao orchestrator ls --json
+ao session ls --json -p orchestrator-pack --all
 ```
 
 **Success:**
@@ -389,17 +400,20 @@ auto-run within a minute.
 
 ---
 
-## Step 4 — Full `ao stop` / `ao start` (last resort)
+## Step 4 — Full `ao stop` / `ao start` (legacy / daemon-health only)
 
-Restarts the AO daemon, dashboard, and reloads `agent-orchestrator.yaml`. Use only
-when step 3 fails, the daemon is unhealthy, or YAML was just changed.
+On AO 0.10.2 this is **not** a project restart and does **not** reload
+`agent-orchestrator.yaml`. `ao start` opens the desktop app and has no project operand.
+Use only for daemon-health recovery when `ao status --json` shows the daemon itself is
+unhealthy, not for pack runtime adoption.
 
 ```powershell
 ao stop
 ao start
 ```
 
-Optional: `ao start --restore` to bring back sessions from last stop (see `ao start --help`).
+There is no `ao start <project>` form. For project runtime adoption, return to Step 3
+and use `ao session restore`; for env/PATH/agent changes first apply `ao project set-config`.
 
 ### Before
 
@@ -409,12 +423,12 @@ Optional: `ao start --restore` to bring back sessions from last stop (see `ao st
 ### After
 
 ```powershell
-ao status --reports full
-ao review list --json
+ao status --json
+ao orchestrator ls --json
+ao session ls --json -p orchestrator-pack --all
 ```
 
-Verify workers and review runs reappear; re-run step 1 nudge on the orchestrator
-if it does not resume the review loop on its own.
+Verify the daemon is healthy and sessions are visible. Do not claim YAML/rules reload.
 
 ---
 
@@ -1032,7 +1046,7 @@ alive, workers idle but review run in `waiting_update`.
 
 - `docs/migration_notes.md` — autonomous review loop and wake listener adoption
 - `docs/orchestrator-wake-runbook.md` — event-driven wakes (#39)
-- `agent-orchestrator.yaml.example` — `orchestratorRules` (Issue #28)
+- `agent-orchestrator.yaml.example` — legacy/import reference; AO 0.10 live settings are ProjectConfig
 
 ### Plain `ao send` journaled delivery (Issue #281)
 
@@ -1051,9 +1065,9 @@ If a worker message is stuck unsubmitted:
    `plain-ao-send:self-submitted`; the live routing rule must call the journaled wrapper,
    and the preflight does not directly edit the journal to fake those records. The resulting synthetic outbox-only probes are then validated for
    matching epoch/config hashes. `wrapper_not_adopted` means the live AO routing rule is
-   missing, ineffective, stale, or the probe entries could not be generated/validated;
-   fix live `agent-orchestrator.yaml`, restart AO from the operator terminal, and rerun
-   the command.
+   missing, ineffective, stale, or the probe entries could not be generated/validated.
+   This check is legacy on AO 0.10.2 because live YAML routing and `ao send --file` are
+   unavailable; do not require it until the send-transport migration updates this section.
 2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
    temp default). A `dispatch_in_flight` delivery is still being resolved until its finite budget expires; a `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
    must not receive blind Enter; have the source resend if needed.
@@ -1065,9 +1079,9 @@ If a worker message is stuck unsubmitted:
    metadata (delivery id, shape, outcome, draft state). Do not capture pane text or worker
    output.
 
-If local `ao send --help` does not advertise `--file` ingestion, this pack intentionally
-fails closed. Do not bypass with unsupported flags; use a published AO version that exposes
-`ao send --file` or `-f, --file <path>`.
+On AO 0.10.2, `ao send --help` exposes `--session` and `--message` only. The old
+`--file` ingestion proof intentionally fails closed; the transport migration must update
+this runbook before operators require a worker-send adoption proof again.
 
 ## Gated worker nudge adoption (Issue #384)
 
