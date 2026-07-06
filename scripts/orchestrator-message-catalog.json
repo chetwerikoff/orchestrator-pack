@@ -163,20 +163,20 @@
     {
       "message_class_id": "review-findings-first-send",
       "trigger": {
-        "summary": "Review run needs_triage with unsent findings on live session",
-        "event": "review_needs_triage_unsent"
+        "summary": "AO 0.10 auto-delivery on review submit (pack first-send reconcile REMOVED)",
+        "event": "review_auto_delivery_on_submit"
       },
-      "owning_process": "review-send-reconcile",
+      "owning_process": "review-finding-delivery-confirm",
       "recipient_key": "specific-session",
       "intent_key": "review-findings-first",
-      "mechanism": "ao-review-send",
+      "mechanism": "ao-auto-delivery",
       "delivery_idempotency_owner": "issue-281",
       "semantic_dedup_owner": "none",
       "callsite": {
-        "file": "scripts/review-send-reconcile.ps1",
-        "function": "Invoke-PlannedFirstReviewSend",
+        "file": "docs/review-send-reconcile.mjs",
+        "function": "planReviewSendActions",
         "anchor": "helper-body",
-        "predicateBodyHash": "347a47c6cd51e17a"
+        "predicateBodyHash": "e33359a764f44774"
       }
     },
     {
@@ -195,7 +195,7 @@
         "file": "scripts/review-finding-delivery-confirm.ps1",
         "function": "Invoke-PlannedReviewSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "89014ea9bc7360a5"
+        "predicateBodyHash": "11550b49a8f0293e"
       }
     },
     {

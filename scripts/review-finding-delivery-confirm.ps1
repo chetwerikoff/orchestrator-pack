@@ -251,7 +251,52 @@ function Invoke-PlannedReviewSend {
         [switch]$DryRunMode
     )
 
+    if ($DryRunMode) {
+        Write-DeliveryLog "dry-run would skip redelivery (observe-only on AO 0.10): run=$RunId PR #$PrNumber attempt=$Attempt"
+        return @{ sent = $false; reason = 'dry_run' }
+    }
+
+    $intentClass = 'review-findings-redelivery'
+    $cycleKey = "redelivery:${RunId}:${Attempt}"
+    $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Get-OpenPrList)
+    $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
+        -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
+    if (-not $targetResolution.ok) {
+        Write-DeliveryLog "redelivery suppressed (PR-claim target unresolved) run=${RunId}: $($targetResolution.reason)"
+        return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }
+    }
+    $targetId = [string]$targetResolution.targetId
+    $targetGeneration = [string]$targetResolution.targetGeneration
+    $workerTarget = [string]$targetResolution.workerTarget
+    if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
+    $sendSessionId = [string]$targetResolution.ownerSessionId
+    if (-not $sendSessionId) { $sendSessionId = $SessionId }
+    $tupleKey = "$PrNumber|$cycleKey|$intentClass|$workerTarget"
+    $reviewMessage = 'Review findings for PR #' + $PrNumber + ' (run ' + $RunId + ', redelivery attempt ' + $Attempt + ')'
+
+    $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass $intentClass `
+        -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
+        -TupleKey $tupleKey -Surface 'review-finding-delivery-confirm' -ProjectId $ProjectId -Message $reviewMessage
+    if (-not $claim.acquired) {
+        Write-DeliveryLog "redelivery suppressed by claim gate run=${RunId}: $($claim.reason)"
+        return @{
+            sent         = $false
+            reason       = [string]$claim.reason
+            claimSkipped = $true
+            escalate     = [bool]$claim.escalate
+            diagnosis    = [string]$claim.diagnosis
+        }
+    }
+
+    $sendAttempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
+    if (-not $sendAttempt.ok) {
+        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$sendAttempt.reason } | Out-Null
+        Write-DeliveryLog "redelivery aborted (claim send-attempt failed) run=${RunId}: $($sendAttempt.reason)"
+        return @{ sent = $false; reason = [string]$sendAttempt.reason }
+    }
+
     Write-DeliveryLog "redelivery skipped (observe-only on AO 0.10) run=$RunId PR #$PrNumber attempt=$Attempt"
+    Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
     return @{ sent = $false; reason = 'redelivery_removed' }
 }
 
