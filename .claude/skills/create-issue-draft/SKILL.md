@@ -528,15 +528,18 @@ pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath docs/issues_d
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
+pwsh -NoProfile -File scripts/check-stage-completeness-guard.ps1 -DraftPath docs/issues_drafts/NN-<slug>.md
 pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
   -CapturesDir docs/issues_drafts/.review/NN-<slug> `
   -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
 ```
 
 **Guard order (independent — either failing blocks sync):** tier-gate guard →
-contract-evidence / positive-outcome / parked-root → finding-ledger guard (when
-captures exist). `scripts/publish-issue-body-sync` also refuses create/edit without
-a passing tier-gate guard receipt (mechanical sync coupling, Issue #576).
+stage-completeness guard (T3 only) → contract-evidence / positive-outcome /
+parked-root → finding-ledger guard (when captures exist).
+`scripts/publish-issue-body-sync` also refuses create/edit without passing
+tier-gate and stage-completeness guard receipts (mechanical sync coupling,
+Issues #576 / #620).
 
 Fix failures before sync. Drafts without a `behavior-kind` fence are not
 checked for positive-outcome (additive guard only). The finding-ledger guard validates **every** `*.capture.txt` under the review
@@ -736,9 +739,10 @@ including scope growth from accepted findings — escalates to the architect bef
 publish. Downward drift is impossible (#574 monotonic rule).
 
 **Sync gate:** do not run `scripts/publish-issue-body-sync` create/edit until
-the tier-gate guard passes, review stages for the recomputed tier complete
-(`NO_FINDINGS` or documented cap exit), the finding-ledger guard passes when
-captures exist, and other pre-sync checks pass.
+the tier-gate guard passes, T3 stage-completeness guard passes when tier is T3,
+review stages for the recomputed tier complete (`NO_FINDINGS` or documented cap
+exit), the finding-ledger guard passes when captures exist, and other pre-sync
+checks pass.
 
 Contract references: `docs/issues_drafts/06-codex-reviewer-scope-context.md`,
 `docs/issues_drafts/19-codex-review-finding-bar.md` (#51 carve-out),
