@@ -3,17 +3,18 @@
   "iteration_id": "orchestrator-pack-9",
   "iteration_id_source": "ao_session",
   "supersedes": null,
-  "created_at": "2026-07-06T08:29:34.534Z",
+  "created_at": "2026-07-06T08:37:16.330Z",
   "baseline": {
-    "commit_sha": "4770eb7fbe48741402aa86ab54dd1f6c50be147f",
+    "commit_sha": "8748a801489faf160f635bff42183367dcde7a50",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:c1307ba2ea98b9a4118f0a1818535feb507b5bcb3f9cf8de6b92778f795fca9f"
+    "active_scope_hash": "sha256:1a5addaede0501765370c2c6e0f7a941b8da6d91e4b947dc4fee6e70c724b26b"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "docs/declarations/620.orchestrator-pack-9.json",
     "scripts/check-draft-text-guard.ps1",
     "scripts/check-stage-completeness-guard.ps1",
+    "scripts/check-tier-gate-guard.ps1",
     "scripts/lib/Invoke-DraftTextGuard.ps1",
     "scripts/lib/draft-text-guard-cli.ts",
     "scripts/lib/publish-issue-body-sync.ts",
@@ -21,6 +22,7 @@
     "scripts/publish-issue-body-sync.test.ts",
     "scripts/stage-completeness-guard.test.ts",
     "scripts/stage-completeness-guard.ts",
+    "scripts/tier-gate-guard.ts",
     "scripts/vitest-ci-lanes.config.json",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/both-signals/competitive-stage-waiver.json",
     "tests/fixtures/stage-completeness/worktree/docs/issues_drafts/.review/both-signals/pass-02-architectural-lens.capture.txt",
