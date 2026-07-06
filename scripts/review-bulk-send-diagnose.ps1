@@ -1,11 +1,11 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Read-only Gate 0 diagnostic for legacy bulk `ao review send` and stuck open findings.
+  Read-only Gate 0 diagnostic for undelivered changes_requested / stuck open findings and stuck open findings.
 
 .DESCRIPTION
   Surfaces review runs where AO 0.9.2 cannot enact per-finding routing (bulk all-open send,
-  no programmatic dismiss/backlog). No `ao review send`, dismiss, or file writes.
+  no programmatic dismiss/backlog). No pack send, dismiss, or file writes.
   See docs/architecture.md#finding-routing-enactment--gate-0-ao-092-2026-06-02 (Issue #140).
 #>
 [CmdletBinding()]
@@ -47,7 +47,7 @@ if ($FixturePath) {
     if (-not $runs -and $fixture.data) { $runs = @($fixture.data) }
 }
 else {
-    $payload = Get-AoReviewListJson -Project $ProjectId
+    $payload = Get-AoReviewRuns -Project $ProjectId
     $runs = @(Get-AoReviewRunsFromPayload -Payload $payload -Project $ProjectId)
 }
 
@@ -68,7 +68,7 @@ Write-Host ("Runs scanned: {0}; flagged: {1}" -f $result.summary.totalRuns, $res
 
 if ($result.summary.flaggedRuns -eq 0) {
     Write-Host ''
-    Write-Host 'No bulk-send trap or stuck-open runs detected in current `ao review list` snapshot.'
+    Write-Host 'No bulk-send trap or stuck-open runs detected in current Get-AoReviewRuns snapshot.'
 }
 else {
     Write-Host ''
@@ -82,7 +82,7 @@ else {
             '(no id)'
         }
         Write-Host ("  {0,-38} {1,-16} open={2} sent={3} {4}" -f `
-                $id, $entry.status, $entry.openFindingCount, $entry.sentFindingCount, $pr)
+                $id, $entry.status, $entry.openFindingCount, $entry.deliveredFindingCount, $pr)
         foreach ($signal in $entry.signals) {
             Write-Host ("    [{0}] {1}" -f $signal.kind, $signal.detail)
         }
@@ -95,6 +95,6 @@ else {
 Write-Host ''
 Write-Host '-- Upstream unblock (pack #140) --'
 Write-Host '  Pipeline (preferred): builtin/router #1631 + artifact dismiss|send #1346'
-Write-Host '  Legacy fallback: ao review per-finding API #2088'
+Write-Host '  Legacy fallback: upstream per-finding API #2088'
 Write-Host '  Delivery trust: skipped-reason observability #1943 / #614'
 Write-Host ("  Pack tracking: {0}" -f $result.upstream.packIssue)

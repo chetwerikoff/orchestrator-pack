@@ -10,7 +10,6 @@ import {
   DELIVERY_STATE_ESCALATED,
   DELIVERY_STATE_UNCONFIRMED,
   buildEscalationMessage,
-  buildReviewSendArgv,
   evaluateDeliveryTickInterval,
   findForbiddenDeliveryLifecycleCommands,
   isDeliveryConfirmed,
@@ -56,38 +55,50 @@ function planFromFixture(name: string) {
     config: fixture.config,
   });
 }
+/** AO 0.10: delivered changes_requested (was waiting_update / sent_to_agent). */
+function deliveredRun(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'changes_requested',
+    prReviewStatus: 'changes_requested',
+    deliveredAt: '2026-06-04T11:00:00.000Z',
+    deliveredFindingCount: 1,
+    ...overrides,
+  };
+}
+
+/** AO 0.10: undelivered changes_requested (was needs_triage). */
+function undeliveredRun(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'changes_requested',
+    prReviewStatus: 'changes_requested',
+    deliveredFindingCount: 0,
+    ...overrides,
+  };
+}
+
 
 describe('isPendingSentDeliveryRun', () => {
-  it('is true for waiting_update with sent findings', () => {
+  it('is true for delivered changes_requested with findings', () => {
+    expect(isPendingSentDeliveryRun(deliveredRun())).toBe(true);
+  });
+
+  it('is true when prReviewStatus carries the delivered state', () => {
     expect(
       isPendingSentDeliveryRun({
-        status: 'waiting_update',
-        sentFindingCount: 1,
+        prReviewStatus: 'changes_requested',
+        deliveredAt: '2026-06-04T11:00:00.000Z',
+        deliveredFindingCount: 2,
       }),
     ).toBe(true);
   });
 
-  it('is true for sent_to_agent with sent findings', () => {
-    expect(
-      isPendingSentDeliveryRun({
-        status: 'sent_to_agent',
-        sentFindingCount: 1,
-      }),
-    ).toBe(true);
-  });
-
-  it('is false for needs_triage (not yet sent)', () => {
-    expect(
-      isPendingSentDeliveryRun({
-        status: 'needs_triage',
-        sentFindingCount: 0,
-      }),
-    ).toBe(false);
+  it('is false for undelivered changes_requested', () => {
+    expect(isPendingSentDeliveryRun(undeliveredRun())).toBe(false);
   });
 });
 
 describe('delivery confirmation signal (AC1)', () => {
-  it('AC1a: sent_to_agent without addressing_reviews is not confirmed', () => {
+  it('AC1a: delivered changes_requested without addressing_reviews is not confirmed', () => {
     const fixture = loadFixture('sent-no-review-round-report.json');
     const sendMs = resolveSendObservedAtMs(fixture.reviewRuns[0]!, fixture.nowMs);
     expect(
@@ -183,24 +194,20 @@ describe('ambiguous overlapping runs (AC1a)', () => {
     const nowMs = 1_717_502_000_000;
     const { actions, tracking } = planDeliveryConfirmActions({
       reviewRuns: [
-        {
+        deliveredRun({
           id: 'run-a',
           prNumber: 99,
           targetSha: 'deadbeef',
-          status: 'waiting_update',
-          sentFindingCount: 1,
           linkedSessionId: 'op-live',
-          sentAt: '2024-06-04T10:00:00.000Z',
-        },
-        {
+          deliveredAt: '2024-06-04T10:00:00.000Z',
+        }),
+        deliveredRun({
           id: 'run-b',
           prNumber: 99,
           targetSha: 'deadbeef',
-          status: 'sent_to_agent',
-          sentFindingCount: 1,
           linkedSessionId: 'stable-session-id',
-          sentAt: '2024-06-04T10:01:00.000Z',
-        },
+          deliveredAt: '2024-06-04T10:01:00.000Z',
+        }),
       ],
       sessions: [
         {
@@ -237,9 +244,7 @@ describe('ambiguous overlapping runs (AC1a)', () => {
     expect(tracking.runs?.['run-a']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
     expect(tracking.runs?.['run-b']?.deliveryState).not.toBe(DELIVERY_STATE_CONFIRMED);
     expect(
-      actions.filter(
-        (a: DeliveryConfirmAction) => a.type === 'redeliver' || a.type === 'escalate',
-      ).length,
+      actions.filter((a: DeliveryConfirmAction) => a.type === 'escalate').length,
     ).toBeGreaterThan(0);
   });
 
@@ -247,24 +252,20 @@ describe('ambiguous overlapping runs (AC1a)', () => {
     const nowMs = 1_717_502_000_000;
     const { actions, tracking } = planDeliveryConfirmActions({
       reviewRuns: [
-        {
+        deliveredRun({
           id: 'run-a',
           prNumber: 99,
           targetSha: 'deadbeef',
-          status: 'waiting_update',
-          sentFindingCount: 1,
           linkedSessionId: 'op-live',
-          sentAt: '2024-06-04T10:00:00.000Z',
-        },
-        {
+          deliveredAt: '2024-06-04T10:00:00.000Z',
+        }),
+        deliveredRun({
           id: 'run-b',
           prNumber: 99,
           targetSha: 'deadbeef',
-          status: 'waiting_update',
-          sentFindingCount: 1,
           linkedSessionId: 'op-live',
-          sentAt: '2024-06-04T10:01:00.000Z',
-        },
+          deliveredAt: '2024-06-04T10:01:00.000Z',
+        }),
       ],
       sessions: [
         {
@@ -325,21 +326,19 @@ describe('confirmation window config (AC3)', () => {
   });
 });
 
-describe('confirmation anchor after re-delivery', () => {
-  it('waits from lastRedeliveryAtMs before another re-deliver', () => {
+describe('confirmation anchor after prior delivery observation', () => {
+  it('waits from lastRedeliveryAtMs before escalating', () => {
     const nowMs = 1_000_000;
     const sendObservedAtMs = nowMs - 600_000;
     const lastRedeliveryAtMs = nowMs - 60_000;
     const { actions } = planDeliveryConfirmActions({
       reviewRuns: [
-        {
+        deliveredRun({
           id: 'run-anchor',
-          status: 'waiting_update',
-          sentFindingCount: 1,
           linkedSessionId: 'opk-worker',
           prNumber: 42,
           targetSha: 'sha42',
-        },
+        }),
       ],
       sessions: [
         {
@@ -365,9 +364,7 @@ describe('confirmation anchor after re-delivery', () => {
     });
 
     expect(actions.some((a: DeliveryConfirmAction) => a.type === 'wait')).toBe(true);
-    expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
-    ).toHaveLength(0);
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'escalate')).toBe(false);
   });
 
   it('getConfirmationAnchorMs prefers lastRedeliveryAtMs', () => {
@@ -381,20 +378,20 @@ describe('confirmation anchor after re-delivery', () => {
   });
 });
 
-describe('bounded re-delivery (AC4)', () => {
-  it('re-delivers to the same linked session within max count', () => {
+describe('observe-only escalation (AC4)', () => {
+  it('escalates when confirmation window elapsed (no pack redelivery)', () => {
     const { actions } = planFromFixture('window-elapsed-redeliver.json');
-    const redelivers = actions.filter(
-      (a): a is Extract<DeliveryConfirmAction, { type: 'redeliver' }> =>
-        a.type === 'redeliver',
-    );
-    expect(redelivers).toHaveLength(1);
-    expect(redelivers[0]).toMatchObject({
+    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(
+      actions.some(
+        (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
+      ),
+    ).toBe(true);
+    expect(actions[0]).toMatchObject({
+      type: 'escalate',
       runId: 'run-redeliver-1',
       sessionId: 'opk-worker-live',
       prNumber: 166,
-      attempt: 1,
-      maxRedeliveries: 2,
     });
   });
 });
@@ -403,15 +400,13 @@ describe('linked session identifier matching', () => {
   it('treats linkedSessionId as sessionId when status row also has name', () => {
     const { actions } = planDeliveryConfirmActions({
       reviewRuns: [
-        {
+        deliveredRun({
           id: 'run-id-match',
           prNumber: 166,
           targetSha: 'sha166',
-          status: 'waiting_update',
-          sentFindingCount: 1,
           linkedSessionId: 'opk-worker-stable-id',
-          sentAt: '2024-06-04T12:00:00.000Z',
-        },
+          deliveredAt: '2024-06-04T12:00:00.000Z',
+        }),
       ],
       sessions: [
         {
@@ -428,30 +423,28 @@ describe('linked session identifier matching', () => {
       nowMs: 1_717_504_000_000,
       config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
     });
-    expect(actions.filter((a: DeliveryConfirmAction) => a.type === 'escalate')).toHaveLength(
-      0,
-    );
-    expect(actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver')).toHaveLength(
-      1,
-    );
+    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
+    expect(
+      actions.some(
+        (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
+      ),
+    ).toBe(true);
   });
 });
 
 describe('openPrs passed to planner (live CLI path)', () => {
-  it('redelivers when session lacks ownedHeadSha but openPrs matches run head', () => {
+  it('escalates when session lacks ownedHeadSha but openPrs matches run head', () => {
     const nowMs = 1_717_520_000_000;
     const sendMs = nowMs - 600_000;
     const { actions } = planDeliveryConfirmActions({
       reviewRuns: [
-        {
+        deliveredRun({
           id: 'run-open-prs',
           prNumber: 180,
           targetSha: 'livehead1',
-          status: 'waiting_update',
-          sentFindingCount: 1,
           linkedSessionId: 'opk-16',
-          sentAt: new Date(sendMs).toISOString(),
-        },
+          deliveredAt: new Date(sendMs).toISOString(),
+        }),
       ],
       sessions: [
         {
@@ -467,27 +460,25 @@ describe('openPrs passed to planner (live CLI path)', () => {
       nowMs,
       config: { confirmationWindowMs: 300_000, maxRedeliveries: 2 },
     });
+    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
     expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'escalate'),
-    ).toHaveLength(0);
-    expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
-    ).toHaveLength(1);
+      actions.some(
+        (a) => a.type === 'escalate' && a.reason === 'max_redeliveries_exhausted',
+      ),
+    ).toBe(true);
   });
 
   it('escalates when openPrs is omitted and session has no owned head', () => {
     const nowMs = 1_717_520_000_000;
     const { actions } = planDeliveryConfirmActions({
       reviewRuns: [
-        {
+        deliveredRun({
           id: 'run-no-open-prs',
           prNumber: 180,
           targetSha: 'livehead1',
-          status: 'sent_to_agent',
-          sentFindingCount: 1,
           linkedSessionId: 'opk-16',
-          sentAt: '2026-06-04T14:00:00.000Z',
-        },
+          deliveredAt: '2026-06-04T14:00:00.000Z',
+        }),
       ],
       sessions: [
         {
@@ -513,9 +504,7 @@ describe('openPrs passed to planner (live CLI path)', () => {
 describe('stale run head (ownership)', () => {
   it('escalates when PR head advanced past run targetSha', () => {
     const { actions } = planFromFixture('stale-head-advanced.json');
-    expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
-    ).toHaveLength(0);
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'redeliver')).toBe(false);
     expect(
       actions.some(
         (a: DeliveryConfirmAction) =>
@@ -528,9 +517,7 @@ describe('stale run head (ownership)', () => {
 describe('orphan linked session (AC4a)', () => {
   it('escalates immediately with zero re-sends', () => {
     const { actions } = planFromFixture('orphan-dead-session.json');
-    expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
-    ).toHaveLength(0);
+    expect(actions.some((a: DeliveryConfirmAction) => a.type === 'redeliver')).toBe(false);
     const escalation = actions.find(
       (a): a is Extract<DeliveryConfirmAction, { type: 'escalate' }> =>
         a.type === 'escalate',
@@ -545,12 +532,12 @@ describe('orphan linked session (AC4a)', () => {
 });
 
 describe('no worker lifecycle on no-confirmation path (AC5)', () => {
-  it('redeliver argv uses ao review send only', () => {
-    const argv = buildReviewSendArgv('run-abc');
-    const commandLine = `ao ${argv.join(' ')}`;
-    expect(findForbiddenDeliveryLifecycleCommands([commandLine])).toEqual([]);
+  it('observe-only planner never emits pack redelivery actions', () => {
+    const { actions } = planFromFixture('window-elapsed-redeliver.json');
+    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
     expect(
       findForbiddenDeliveryLifecycleCommands([
+        'ao review send run-abc',
         'ao spawn --claim-pr 1',
         'ao session kill op-1',
         'ao send op-2 ping',
@@ -562,9 +549,7 @@ describe('no worker lifecycle on no-confirmation path (AC5)', () => {
 describe('escalate after max redeliveries (submit owned by #232)', () => {
   it('escalates when redeliveries exhausted — no submit action', () => {
     const { actions, tracking } = planFromFixture('max-redeliveries-escalate.json');
-    expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
-    ).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
     expect(actions.map((a) => a.type as string)).not.toContain('submit');
     expect(
       actions.some(
@@ -592,9 +577,7 @@ describe('delivery state outcomes (AC7)', () => {
 describe('idempotent confirmed runs (AC8)', () => {
   it('does not re-deliver when addressing_reviews exists after send', () => {
     const { actions } = planFromFixture('confirmed-idempotent.json');
-    expect(
-      actions.filter((a: DeliveryConfirmAction) => a.type === 'redeliver'),
-    ).toHaveLength(0);
+    expect(actions.some((a) => a.type === 'redeliver')).toBe(false);
     expect(actions).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'mark_confirmed' })]),
     );

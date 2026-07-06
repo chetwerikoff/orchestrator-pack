@@ -11,7 +11,9 @@ import {
   extractReviewerEvidenceFromText,
   extractReviewerFailureClass,
   countSameHeadFailuresByClass as countReviewerFailuresByClass,
+  resolveRunFailureText,
 } from './reviewer-failure-evidence-markers.mjs';
+import { isUndeliveredChangesRequested } from './review-producer-contract.mjs';
 import {
   INFRA_NO_TRUSTWORTHY_VERDICT_ESCALATION,
   isPreLaunchFailureClass,
@@ -153,7 +155,8 @@ export function extractFailureClassFromArtifact(artifact) {
   const chunks = [
     artifact.stderrTail,
     artifact.stdoutTail,
-    artifact.terminationReason,
+    artifact.body,
+    artifact.failureDetail,
   ];
   for (const chunk of chunks) {
     const fromMarker = extractReviewerEvidenceFromText(String(chunk ?? ''));
@@ -262,7 +265,7 @@ export function classifyPostRunFailure(run, evidence = {}, allRuns = []) {
     return { failureClass: fromTermination, source: 'termination_reason' };
   }
 
-  const heuristic = classifyFromTerminationHeuristics(String(run?.terminationReason ?? ''));
+  const heuristic = classifyFromTerminationHeuristics(resolveRunFailureText(run));
   if (heuristic) {
     return { failureClass: heuristic, source: 'termination_heuristic' };
   }
@@ -595,14 +598,17 @@ export function shouldRouteNeedsTriageToSend(reviewRuns, prNumber, headSha) {
     if (Number(run?.prNumber) !== prNumber || normalizeSha(run?.targetSha) !== head) {
       return false;
     }
-    if (String(run?.status ?? '').toLowerCase() !== 'needs_triage') {
+    if (!isUndeliveredChangesRequested(run)) {
       return false;
     }
     const openFindingCount = Number(run?.openFindingCount ?? run?.findingCount ?? 0);
-    const sentFindingCount = Number(run?.sentFindingCount ?? 0);
-    return openFindingCount > 0 && sentFindingCount === 0;
+    const deliveredFindingCount = Number(run?.deliveredFindingCount ?? 0);
+    return openFindingCount > 0 && deliveredFindingCount === 0;
   });
 }
+
+/** AO 0.10 alias for undelivered changes_requested routing (#625). */
+export const shouldRouteUndeliveredChangesRequestedToSend = shouldRouteNeedsTriageToSend;
 
 runStdinJsonCli('autonomous-review-retry.mjs', {
   enrichReviewRuns: () => {

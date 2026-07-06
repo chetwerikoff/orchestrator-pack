@@ -5,8 +5,8 @@
 
 .DESCRIPTION
   Acquires the shared review-start claim, applies covered-head + head-ready gates,
-  and launches ao review run with a process-boundary bypass token. Autonomous
-  orchestrator sessions must use this script instead of bare `ao review run`.
+  and launches review via ao-review run with a process-boundary bypass token. Autonomous
+  orchestrator sessions must use this script instead of bare legacy review-run CLI.
 #>
 [CmdletBinding()]
 param(
@@ -50,7 +50,7 @@ if ($Probe) {
         reviewRuns = @(@{
                 prNumber   = 999999
                 targetSha  = '0000000000000000000000000000000000000999'
-                status     = 'clean'
+                status     = 'up_to_date'
                 id         = 'probe-run'
                 createdAt  = '2026-06-16T00:00:00.000Z'
             })

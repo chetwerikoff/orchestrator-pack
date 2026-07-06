@@ -13,7 +13,7 @@
       "prNumber": 71,
       "targetSha": "fail71",
       "status": "failed",
-      "terminationReason": "codex exec review exited 1",
+      "body": "codex exec review exited 1",
       "findingCount": 0
     }
   ],

@@ -38,9 +38,8 @@ export const COVERED_RUN_STATUSES = [
   'preparing',
   'running',
   'reviewing',
-  'clean',
-  'needs_triage',
-  'waiting_update',
+  'up_to_date',
+  'changes_requested',
 ];
 
 export const IN_FLIGHT_RUN_STATUSES = ['queued', 'preparing', 'running', 'reviewing'];
@@ -184,7 +183,7 @@ export function evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha)
   const ambiguousRuns = [];
   for (const run of toArray(reviewRuns)) {
     if (!runMatchesKey(run, prNumber, normalized)) continue;
-    const status = normalizeStatus(run?.status);
+    const status = normalizeStatus(run?.prReviewStatus ?? run?.status);
     if (!status) {
       ambiguousRuns.push({ runId: String(run?.id ?? run?.runId ?? ''), status: '' });
       continue;
@@ -210,7 +209,7 @@ export function findCoveringRunForKey(reviewRuns, prNumber, headSha, projectName
       ? runMatchesBindingKey(run, prNumber, normalized, projectNamespace)
       : runMatchesKey(run, prNumber, normalized);
     if (!keyMatch) continue;
-    const status = normalizeStatus(run?.status);
+    const status = normalizeStatus(run?.prReviewStatus ?? run?.status);
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     const entry = { run, status, runId: String(run?.id ?? run?.runId ?? '') };
     if (IN_FLIGHT_RUN_STATUSES.includes(status)) {

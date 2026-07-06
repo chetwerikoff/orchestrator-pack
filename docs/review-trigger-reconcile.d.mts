@@ -52,8 +52,10 @@ export interface ReviewRun {
   status?: string;
   findingCount?: number;
   openFindingCount?: number;
-  sentFindingCount?: number;
-  terminationReason?: string;
+  deliveredFindingCount?: number;
+  deliveredAt?: string | null;
+  prReviewStatus?: string;
+  body?: string;
   retryEligible?: boolean;
   retryCount?: number;
 }

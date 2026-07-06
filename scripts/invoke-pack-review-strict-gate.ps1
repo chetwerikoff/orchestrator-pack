@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Default (CI / verify.ps1): evaluates committed JSON fixtures only — no ao, gh, or network.
-  -Live: reads live agent-orchestrator.yaml and ao review list --json (operator workstation).
+  -Live: reads live agent-orchestrator.yaml and Get-AoReviewRuns fan-out (operator workstation).
 
   Exit non-zero when the latest run violates empty-review trap or command-drift rules.
 #>
@@ -97,7 +97,7 @@ function Invoke-LiveGate {
         return $false
     }
 
-    $payload = Get-AoReviewListJson -Project $Project
+    $payload = Get-AoReviewRuns -Project $Project
     $runs = Get-AoReviewRunsFromPayload -Payload $payload -Project $Project
 
     $expectedReviewer = Get-PackReviewerFromSelector
@@ -110,8 +110,8 @@ function Invoke-LiveGate {
     Write-Host '[FAIL] Live strict gate violations:'
     foreach ($v in $violations) {
         Write-Host ("  [{0}] {1}" -f $v.Kind, $v.Message)
-        if ($v.Run -and $v.Run.terminationReason) {
-            $line = ($v.Run.terminationReason -split "`n")[0]
+        if ($v.Run -and $v.Run.body) {
+            $line = ($v.Run.body -split "`n")[0]
             if ($line.Length -gt 120) { $line = $line.Substring(0, 117) + '...' }
             Write-Host ("           {0}" -f $line)
         }

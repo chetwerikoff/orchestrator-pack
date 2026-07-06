@@ -177,7 +177,7 @@ function aoReviewExecuteFailed({ aoProc, run }) {
   if (run.status === 'failed') {
     return true;
   }
-  if (typeof run.terminationReason === 'string' && /Command failed:/i.test(run.terminationReason)) {
+  if (typeof run.body === 'string' && /Command failed:/i.test(run.body)) {
     return true;
   }
   return false;
@@ -299,7 +299,7 @@ const { aoProc, run: aoReviewRun } = runAoReviewExecute(sessionId);
 output.viaAoReviewExecute = !aoReviewExecuteFailed({ aoProc, run: aoReviewRun });
 
 if (!output.viaAoReviewExecute) {
-  const detail = aoReviewRun?.terminationReason
+  const detail = aoReviewRun?.body
     ?? aoReviewRun?.status
     ?? `exit ${aoProc.status ?? 'null'}`;
   output.error = `AO --execute reviewer path failed (${detail})`;

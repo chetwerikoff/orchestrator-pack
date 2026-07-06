@@ -6,19 +6,21 @@
       "id": "run-a",
       "prNumber": 99,
       "targetSha": "deadbeef",
-      "status": "waiting_update",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "linkedSessionId": "op-live",
-      "sentAt": "2024-06-04T11:26:40.000Z"
+      "deliveredAt": "2024-06-04T11:26:40.000Z"
     },
     {
       "id": "run-b",
       "prNumber": 99,
       "targetSha": "deadbeef",
-      "status": "waiting_update",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "linkedSessionId": "op-live",
-      "sentAt": "2024-06-04T11:27:00.000Z"
+      "deliveredAt": "2024-06-04T11:27:00.000Z"
     }
   ],
   "sessions": [

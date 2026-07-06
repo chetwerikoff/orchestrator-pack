@@ -1,13 +1,13 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Remove stale AO reviewer workspace directories before ao review run (Issue #98).
+  Remove stale AO reviewer workspace directories before ao-review run (Issue #98).
 
 .DESCRIPTION
   AO creates code-reviews/workspaces/op-rev-* via git worktree add. A failed run can
   leave the directory on disk so the next worktree add fails with already exists.
   This script removes a targeted path or orphan workspace dirs not registered in
-  git worktree list. Run from the pack repo root before ao review run — not from
+  git worktree list. Run from the pack repo root before ao-review run — not from
   inside an active reviewer workspace.
 #>
 param(

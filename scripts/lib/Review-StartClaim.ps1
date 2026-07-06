@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Cross-process single-flight claims for automated `ao review run` starters.
+  Cross-process single-flight claims for automated ao-review run starters.
 
   The active claim file is created with an atomic File.Move(temp, active) so a
   complete JSON record becomes visible in one step. Lifecycle changes that can
@@ -12,7 +12,7 @@ $Script:ReviewStartClaimDefaultStaleMinutes = 10
 $Script:ReviewStartClaimSafeFloorMinutes = 2
 $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
-$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
+$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'changes_requested')
 $Script:ReviewStartClaimInFlightRunStatuses = @('queued', 'preparing', 'running', 'reviewing')
 
 function Get-ReviewStartClaimProjectNamespace {

@@ -1,5 +1,5 @@
 /**
- * Review-start claim ↔ AO review run lifecycle binding (Issue #521).
+ * Review-start claim ↔ review trigger lifecycle binding (Issue #521).
  */
 import { printJson, readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import {

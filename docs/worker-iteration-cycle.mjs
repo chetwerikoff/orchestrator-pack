@@ -31,6 +31,10 @@ import {
   parseLastActivityAgeMs,
   toArray,
 } from './review-reconcile-primitives.mjs';
+import {
+  isDeliveredChangesRequested,
+  isUndeliveredChangesRequested,
+} from './review-producer-contract.mjs';
 
 /** Re-use #261 debounce duration without importing review-head-ready (breaks import cycle). */
 export const QUIESCENCE_DEBOUNCE_MS = 15 * 60 * 1000;
@@ -56,7 +60,7 @@ export const IN_FLIGHT_REVISION_STATUSES = new Set([
 ]);
 
 export const TERMINAL_REVISION_RELEASE_STATUSES = new Set([
-  'clean',
+  'up_to_date',
   'failed',
   'cancelled',
   'outdated',
@@ -240,8 +244,8 @@ export function listPrReviewRuns(runs, prNumber) {
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun} run
  */
 export function isRevisionTerminalReleased(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status === 'clean') {
+  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  if (status === 'up_to_date') {
     return true;
   }
   if (status === 'failed' || status === 'cancelled') {
@@ -338,12 +342,12 @@ function isWorkerActivelyWorkingLocal(session, headSha, nowMs, options = {}) {
  * @param {{ headCommittedAtMs?: number, nowMs?: number }} [options]
  */
 export function isRevisionDrained(run, session, workerDeliveries, currentHeadSha, options = {}) {
-  const status = String(run?.status ?? '').toLowerCase();
+  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
   const findingCount = Number(run?.findingCount ?? 0);
-  const sentFindingCount = Number(run?.sentFindingCount ?? 0);
+  const deliveredFindingCount = Number(run?.deliveredFindingCount ?? 0);
   const openFindingCount = Number(run?.openFindingCount ?? 0);
 
-  if (status === 'clean' && findingCount === 0 && sentFindingCount === 0 && openFindingCount === 0) {
+  if (status === 'up_to_date' && findingCount === 0 && deliveredFindingCount === 0 && openFindingCount === 0) {
     return true;
   }
 
@@ -362,7 +366,7 @@ export function isRevisionDrained(run, session, workerDeliveries, currentHeadSha
   }
 
   const sendObservedAtMs =
-    parseIsoMs(run?.sentAt) ?? parseIsoMs(run?.updatedAt) ?? Number(options.nowMs ?? 0);
+    parseIsoMs(run?.deliveredAt) ?? parseIsoMs(run?.updatedAt) ?? Number(options.nowMs ?? 0);
   const deliveryId = buildReviewSendDeliveryId(sessionId, runId, sendObservedAtMs);
   const delivery =
     toArray(workerDeliveries).find((row) => String(row?.deliveryId ?? '') === deliveryId) ??
@@ -374,7 +378,7 @@ export function isRevisionDrained(run, session, workerDeliveries, currentHeadSha
     ? isDeliveryConsumed(session, revisionDelivery, Number(revisionDelivery.deliveredAtMs ?? sendObservedAtMs))
     : isPendingSentDeliveryRun(run)
       ? false
-      : sentFindingCount > 0 &&
+      : deliveredFindingCount > 0 &&
         toArray(session?.reports).some((report) => {
           const ts = getReportTimestampMs(report);
           return ts > sendObservedAtMs && getReportState(report) === 'addressing_reviews';
@@ -410,13 +414,13 @@ export function evaluateOpenReviewRevision({
 }) {
   const runs = listPrReviewRuns(reviewRuns, prNumber);
   for (const run of runs) {
-    const status = String(run?.status ?? '').toLowerCase();
+    const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
     const runId = getReviewRunId(run);
     if (!runId) {
       continue;
     }
     if (TERMINAL_REVISION_RELEASE_STATUSES.has(status) && status !== 'failed' && status !== 'cancelled') {
-      if (status === 'clean') {
+      if (status === 'up_to_date') {
         continue;
       }
       continue;
@@ -430,7 +434,7 @@ export function evaluateOpenReviewRevision({
         openedAtMs: parseIsoMs(run?.startedAt) ?? parseIsoMs(run?.createdAt) ?? nowMs,
       };
     }
-    if (status === 'needs_triage' || status === 'waiting_update' || isPendingSentDeliveryRun(run)) {
+    if (isUndeliveredChangesRequested(run) || isDeliveredChangesRequested(run) || isPendingSentDeliveryRun(run)) {
       if (isRevisionDrained(run, session, workerDeliveries, currentHeadSha, {
         headCommittedAtMs,
         nowMs,
@@ -442,8 +446,8 @@ export function evaluateOpenReviewRevision({
         runId,
         headSha: normalizeSha(run?.targetSha),
         reason:
-          Number(run?.sentFindingCount ?? 0) > 0 ? 'revision_findings_open' : 'revision_open',
-        openedAtMs: parseIsoMs(run?.sentAt) ?? parseIsoMs(run?.updatedAt) ?? nowMs,
+          Number(run?.deliveredFindingCount ?? 0) > 0 ? 'revision_findings_open' : 'revision_open',
+        openedAtMs: parseIsoMs(run?.deliveredAt) ?? parseIsoMs(run?.updatedAt) ?? nowMs,
       };
     }
     if ((status === 'failed' || status === 'cancelled') && !isRevisionDrained(run, session, workerDeliveries, currentHeadSha, {

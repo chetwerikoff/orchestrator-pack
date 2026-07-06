@@ -1,17 +1,13 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: Issue #202 first-send review-finding delivery wiring.
+  Regression guard: Issue #202/#625 — review-send reconcile REMOVED on AO 0.10.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$example = Join-Path $Root 'agent-orchestrator.yaml.example'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
 $wakeScript = Join-Path $Root 'scripts/review-send-reconcile.ps1'
 $wakeMjs = Join-Path $Root 'docs/review-send-reconcile.mjs'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
-$supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
-$runbook = Join-Path $Root 'docs/orchestrator-recovery-runbook.md'
 
 if (-not (Test-Path -LiteralPath $wakeScript -PathType Leaf)) {
     Write-Host 'Missing scripts/review-send-reconcile.ps1'
@@ -23,37 +19,28 @@ if (-not (Test-Path -LiteralPath $wakeMjs -PathType Leaf)) {
     exit 1
 }
 
-$required = @(
-    'STATE-DERIVED FIRST REVIEW SEND',
-    'review-send-reconcile.ps1',
-    'sentFindingCount: 0',
-    'never ao spawn',
-    'never --claim-pr',
-    'never ao session kill',
-    'never ao send',
-    'never ao report',
-    'ao review send',
-    'AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES',
-    'AO_REVIEW_SEND_RECONCILE_STATE',
-    'additive to',
-    'heartbeat backstop'
-)
-
-$text = Get-Content -LiteralPath $example -Raw
-$missing = @($required | Where-Object { $text -notlike "*$_*" })
-if ($missing.Count -gt 0) {
-    Write-Host ("agent-orchestrator.yaml.example missing review-send reconcile phrases: {0}" -f ($missing -join ', '))
+$ps1 = Get-Content -LiteralPath $wakeScript -Raw
+if ($ps1 -notmatch 'REMOVED on AO 0\.10') {
+    Write-Host 'review-send-reconcile.ps1 must be a REMOVED stub (AO 0.10 auto-delivery)'
     exit 1
 }
-
-if ((Get-Content -LiteralPath $agentRules -Raw) -notlike '*first-send review delivery*') {
-    Write-Host 'prompts/agent_rules.md missing first-send review delivery section'
+if ($ps1 -notmatch 'exit\s+2') {
+    Write-Host 'review-send-reconcile.ps1 REMOVED stub must exit 2'
     exit 1
 }
 
 $mjs = Get-Content -LiteralPath $wakeMjs -Raw
-if ($mjs -notmatch 'DEFAULT_REVIEW_SEND_INTERVAL_MS = 2 \* 60 \* 1000') {
-    Write-Host 'docs/review-send-reconcile.mjs must default to 2-minute interval'
+if ($mjs -notmatch 'REVIEW_SEND_RECONCILE_REMOVED\s*=\s*true') {
+    Write-Host 'docs/review-send-reconcile.mjs must export REVIEW_SEND_RECONCILE_REMOVED'
+    exit 1
+}
+if ($mjs -notmatch 'actions:\s*\[\]') {
+    Write-Host 'docs/review-send-reconcile.mjs planReviewSendActions must return empty actions'
+    exit 1
+}
+$deadSendPhrase = 'ao review ' + 'send'
+if ($mjs -like "*$deadSendPhrase*") {
+    Write-Host 'docs/review-send-reconcile.mjs must not reference dead ao review send CLI'
     exit 1
 }
 
@@ -63,39 +50,10 @@ if (-not (Test-Path -LiteralPath $registryPath)) {
 }
 $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
 $sendChild = $registry.children | Where-Object { $_.id -eq 'review-send-reconcile' } | Select-Object -First 1
-if (-not $sendChild) {
-    Write-Host 'orchestrator-side-process-registry.json must register review-send-reconcile'
-    exit 1
-}
-$supervisor = Get-Content -LiteralPath $supervisorLib -Raw
-if ($supervisor -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
-    Write-Host 'Orchestrator-SideProcessSupervisor.ps1 must load registry-managed children'
+if ($sendChild) {
+    Write-Host 'orchestrator-side-process-registry.json must not register review-send-reconcile (REMOVED on AO 0.10)'
     exit 1
 }
 
-$ps1 = Get-Content -LiteralPath $wakeScript -Raw
-if ($ps1 -notmatch 'UseFixtureSnapshot[\s\S]*\$DryRunMode = \$true') {
-    Write-Host 'review-send-reconcile.ps1 must force dry-run when using fixture snapshots'
-    exit 1
-}
-if ($ps1 -notmatch 'if \(\$FixturePath\)[\s\S]*-DryRunMode -Fixture \$FixturePath') {
-    Write-Host 'review-send-reconcile.ps1 must pass -DryRunMode on fixture ticks (no live ao/gh)'
-    exit 1
-}
-
-$runbookText = Get-Content -LiteralPath $runbook -Raw
-$runbookRequired = @(
-    'review-send-reconcile',
-    'AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES',
-    'AO_REVIEW_SEND_RECONCILE_STATE',
-    'First-send review findings undelivered'
-)
-
-$missingRunbook = @($runbookRequired | Where-Object { $runbookText -notlike "*$_*" })
-if ($missingRunbook.Count -gt 0) {
-    Write-Host ("orchestrator-recovery-runbook.md missing review-send phrases: {0}" -f ($missingRunbook -join ', '))
-    exit 1
-}
-
-Write-Host '[PASS] first-send review delivery reconcile entrypoint and wiring (Issue #202)'
+Write-Host '[PASS] review-send reconcile REMOVED stub and registry guard (Issues #202, #625)'
 exit 0

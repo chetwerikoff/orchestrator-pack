@@ -11,7 +11,8 @@
     {
       "prNumber": 11,
       "targetSha": "bbb222",
-      "status": "clean",
+      "status": "up_to_date",
+      "prReviewStatus": "up_to_date",
       "findingCount": 0
     }
   ],

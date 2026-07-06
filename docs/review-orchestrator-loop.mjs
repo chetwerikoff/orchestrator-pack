@@ -18,7 +18,7 @@ export {
   preRunHeadReadyRecheck,
 } from './review-head-ready.mjs';
 
-/** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, terminationReason?: string }} ReviewRun */
+/** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, prReviewStatus?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, body?: string, deliveredAt?: string | null, deliveredFindingCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
 
 export {
@@ -73,7 +73,7 @@ export function shouldStartReviewRun(input) {
 }
 
 /**
- * Pre-run re-check: second read immediately before ao review run.
+ * Pre-run re-check: second read immediately before review trigger.
  *
  * @param {object} input
  * @param {ReviewRun[]} input.runsAtTurnStart

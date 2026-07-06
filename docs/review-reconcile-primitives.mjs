@@ -7,17 +7,15 @@
 /** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} AoSession */
 
 export const IN_FLIGHT_REVIEW_STATUSES = new Set([
+  'needs_review',
+  'running',
   'queued',
   'preparing',
-  'running',
   'reviewing',
 ]);
 
-export const COVERED_TERMINAL_REVIEW_STATUSES = new Set([
-  'clean',
-  'needs_triage',
-  'waiting_update',
-]);
+/** AO 0.10 engine statuses that cover a head without starting a new review (#189, #625). */
+export const COVERED_TERMINAL_REVIEW_STATUSES = new Set(['up_to_date', 'changes_requested']);
 
 export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
   'done',
@@ -50,11 +48,15 @@ export function normalizeSha(sha) {
  * @param {ReviewRun} run
  */
 export function isRunCoveringHead(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status === 'outdated') {
+  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  if (status === 'ineligible' || status === 'outdated') {
     return false;
   }
   if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {
+    return true;
+  }
+  const latestStatus = String(run?.latestRunStatus ?? '').toLowerCase();
+  if (IN_FLIGHT_REVIEW_STATUSES.has(latestStatus)) {
     return true;
   }
   if (COVERED_TERMINAL_REVIEW_STATUSES.has(status)) {

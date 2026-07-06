@@ -1,5 +1,6 @@
 /**
- * State-derived first review-finding delivery (Issue #202).
+ * REMOVED on AO 0.10 — auto-delivery supersedes first-send reconcile (Issues #202, #210, #625).
+ * Exports retained for import stability; planReviewSendActions returns empty actions.
  * Vitest: scripts/review-send-reconcile.test.ts
  */
 import {
@@ -21,37 +22,41 @@ import {
   sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import { isUndeliveredChangesRequested } from './review-producer-contract.mjs';
 
-/** Default tick cadence: 2 minutes (low-frequency; far below heartbeat backstop). */
+/** REMOVED: first-send reconcile retired on AO 0.10 auto-delivery. */
+export const REVIEW_SEND_RECONCILE_REMOVED = true;
+export const REVIEW_SEND_RECONCILE_REMOVED_REASON = 'ao_0_10_auto_delivery';
+
+/** Default tick cadence: 2 minutes (legacy constant; reconcile path is REMOVED). */
 export const DEFAULT_REVIEW_SEND_INTERVAL_MS = 2 * 60 * 1000;
 
-/** Run statuses eligible for first-send only. */
-export const FIRST_SEND_RUN_STATUS = 'needs_triage';
+/** Undelivered changes_requested was eligible for legacy first-send. */
+export const FIRST_SEND_RUN_STATUS = 'changes_requested';
 
-/** Terminal / ineligible run statuses (fail-closed). */
+/** Terminal / ineligible run statuses (fail-closed, AO 0.10). */
 export const INELIGIBLE_FIRST_SEND_STATUSES = new Set([
   'failed',
   'cancelled',
   'outdated',
-  'waiting_update',
-  'sent_to_agent',
-  'clean',
+  'up_to_date',
   'queued',
   'preparing',
   'running',
   'reviewing',
+  'needs_review',
 ]);
 
-/** Shell fragments forbidden on this path (PR #97 split-brain). ao review send is required. */
+/** Shell fragments forbidden on this path (PR #97 split-brain). */
 export const FORBIDDEN_LIFECYCLE_PATTERNS = [
   ...MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL,
   /\bclaim-pr\b/i,
   /\bao\s+send\b/i,
   /\bao\s+report\b/i,
-  /\bao\s+review\s+run\b/i,
+  new RegExp('ao\\s+review\\s+run', 'i'),
 ];
 
-/** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, openFindingCount?: number, sentFindingCount?: number, linkedSessionId?: string }} ReviewRun */
+/** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, linkedSessionId?: string }} ReviewRun */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, runtime?: string }} AoSession */
 /** @typedef {{ runId?: string, targetSha?: string, sessionId?: string, sentAtMs?: number }} SentDeliveryRecord */
@@ -70,16 +75,19 @@ export function buildDedupeKey(runId, targetSha) {
  * @param {ReviewRun} run
  */
 export function resolveSentFindingCount(run) {
-  const raw = run?.sentFindingCount;
+  const raw = run?.deliveredFindingCount;
   if (raw === null || raw === undefined) {
-    return { ok: false, reason: 'sent_finding_count_missing' };
+    return { ok: false, reason: 'delivered_finding_count_missing' };
   }
   const count = Number(raw);
   if (!Number.isFinite(count) || count < 0) {
-    return { ok: false, reason: 'sent_finding_count_ambiguous' };
+    return { ok: false, reason: 'delivered_finding_count_ambiguous' };
   }
   return { ok: true, count };
 }
+
+/** @deprecated Use resolveSentFindingCount — retained for import stability (#625). */
+export const resolveDeliveredFindingCount = resolveSentFindingCount;
 
 /**
  * @param {ReviewRun} run
@@ -100,8 +108,7 @@ export function resolveOpenFindingCount(run) {
  * @param {ReviewRun} run
  */
 export function isNeedsTriageNeverSentRun(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status !== FIRST_SEND_RUN_STATUS) {
+  if (!isUndeliveredChangesRequested(run)) {
     return false;
   }
   const sent = resolveSentFindingCount(run);
@@ -181,12 +188,12 @@ export function evaluateFirstSendCandidate(run, sessions, openPrs, mergedPrNumbe
     return { eligible: false, reason: 'missing_run_id' };
   }
 
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status !== FIRST_SEND_RUN_STATUS) {
+  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  if (!isUndeliveredChangesRequested(run)) {
     return { eligible: false, reason: `status_${status || 'missing'}` };
   }
 
-  if (INELIGIBLE_FIRST_SEND_STATUSES.has(status) && status !== FIRST_SEND_RUN_STATUS) {
+  if (INELIGIBLE_FIRST_SEND_STATUSES.has(status)) {
     return { eligible: false, reason: `ineligible_status_${status}` };
   }
 
@@ -276,60 +283,12 @@ export function planReviewSendActions({
   const sessionList = toArray(sessions);
   const openPrList = toArray(openPrs);
   const merged = buildMergedPrNumberSet(runList, sessionList, openPrList, explicitMerged);
-  const sent = tracking.sent ?? {};
-  /** @type {ReviewSendAction[]} */
-  const actions = [];
-
-  for (const run of runList) {
-    const runId = getReviewRunId(run);
-    const candidate = evaluateFirstSendCandidate(run, sessionList, openPrList, merged);
-    if (!candidate.eligible) {
-      if (isNeedsTriageNeverSentRun(run) || String(run?.status ?? '').toLowerCase() === FIRST_SEND_RUN_STATUS) {
-        actions.push({
-          type: 'skip',
-          runId: runId ?? undefined,
-          prNumber: Number(run?.prNumber) || undefined,
-          targetSha: normalizeSha(run?.targetSha) || undefined,
-          reason: candidate.reason,
-        });
-      }
-      continue;
-    }
-
-    if (countAmbiguousNeedsTriagePeers(runList, run) > 1) {
-      actions.push({
-        type: 'skip',
-        runId: candidate.runId,
-        prNumber: candidate.prNumber,
-        targetSha: candidate.targetSha,
-        reason: 'ambiguous_overlapping_runs',
-      });
-      continue;
-    }
-
-    const dedupeKey = buildDedupeKey(candidate.runId, candidate.targetSha);
-    if (sent[dedupeKey]) {
-      actions.push({
-        type: 'skip',
-        runId: candidate.runId,
-        prNumber: candidate.prNumber,
-        targetSha: candidate.targetSha,
-        reason: 'dedupe_recorded',
-      });
-      continue;
-    }
-
-    actions.push({
-      type: 'send',
-      runId: candidate.runId,
-      prNumber: candidate.prNumber,
-      targetSha: candidate.targetSha,
-      sessionId: candidate.sessionId,
-      dedupeKey,
-    });
-  }
-
-  return { actions, mergedPrNumbers: [...merged] };
+  return {
+    actions: [],
+    mergedPrNumbers: [...merged],
+    removed: true,
+    reason: REVIEW_SEND_RECONCILE_REMOVED_REASON,
+  };
 }
 
 /**
@@ -342,9 +301,8 @@ export function verifyRunSentStateAfterSend(run, expectedRunId, expectedTargetSh
   if (!runId || runId !== expectedRunId) {
     return { ok: false, reason: 'run_missing_after_send' };
   }
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status === FIRST_SEND_RUN_STATUS) {
-    return { ok: false, reason: 'still_needs_triage_after_send' };
+  if (isUndeliveredChangesRequested(run)) {
+    return { ok: false, reason: 'still_undelivered_changes_requested_after_send' };
   }
   const sent = resolveSentFindingCount(run);
   if (!sent.ok) {
@@ -453,13 +411,6 @@ export function evaluateReviewSendInterval({ nowMs, lastTickMs, intervalMs }) {
  */
 export function findForbiddenReviewSendReconcileCommands(commandLines) {
   return findForbiddenCommandPatterns(commandLines, FORBIDDEN_LIFECYCLE_PATTERNS);
-}
-
-/**
- * @param {string} runId
- */
-export function buildReviewSendArgv(runId) {
-  return ['review', 'send', runId];
 }
 
 runStdinJsonCli('review-send-reconcile.mjs', {

@@ -40,6 +40,7 @@ import {
   resolveReconcileEvaluationSession,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import { resolveFailureDetail } from './review-producer-contract.mjs';
 import { buildTimeoutRetryObserved } from './codex-reviewer-timeout-retry.mjs';
 import { resolveFailedRunRetryEligibility } from './autonomous-review-retry.mjs';
 
@@ -872,7 +873,7 @@ export function resolveCurrentPrHeadSha(openPrs, prNumber) {
 }
 
 /**
- * Pre-run revalidation immediately before ao review run (widens #189 PRE-RUN COVERAGE RE-CHECK).
+ * Pre-run revalidation immediately before review trigger (widens #189 PRE-RUN COVERAGE RE-CHECK).
  *
  * @param {object} planned
  * @param {number} planned.prNumber
@@ -1353,7 +1354,7 @@ export function buildFailedCancelledObserved(run, prNumber, headSha, reviewRuns 
     currentHeadSha: normalizeSha(headSha),
     runId: String(run?.id ?? run?.runId ?? ''),
     status: String(run?.status ?? ''),
-    terminationReason: String(run?.terminationReason ?? ''),
+    failureDetail: resolveFailureDetail(run) || String(run?.body ?? ''),
     retryEligible: retryState.retryEligible,
     failureClass: retryState.failureClass ?? timeoutObserved.failureClass ?? undefined,
     escalationReason: retryState.escalationReason ?? timeoutObserved.escalationReason ?? undefined,

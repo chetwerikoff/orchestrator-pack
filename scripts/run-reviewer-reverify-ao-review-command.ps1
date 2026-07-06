@@ -78,7 +78,7 @@ if (-not [string]::IsNullOrWhiteSpace($AoSessionId)) {
     ) -join ' '
     Push-Location $packRoot
     try {
-        & ao review run $AoSessionId --execute --command $mechanicalCommand
+        & ao-review run $AoSessionId
         exit $LASTEXITCODE
     }
     finally {

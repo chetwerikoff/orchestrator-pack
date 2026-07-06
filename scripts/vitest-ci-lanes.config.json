@@ -98,6 +98,7 @@
     "scripts/seed-snapshot-failure-bounded-read-economy.test.ts": "heavy",
     "scripts/review-run-recovery.test.ts": "light",
     "scripts/review-stuck-run-reaper.test.ts": "light",
+    "scripts/review-producer-contract.test.ts": "light",
     "scripts/review-send-reconcile.test.ts": "light",
     "scripts/review-start-claim-budget-semantics.test.ts": "heavy",
     "scripts/review-start-claim-lifecycle.test.ts": "light",

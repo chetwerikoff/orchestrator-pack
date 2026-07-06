@@ -6,6 +6,7 @@ export declare const REVIEWER_EVIDENCE_PREFIX: 'reviewer-evidence:';
 export declare const DEFAULT_TIMEOUT_RETRY_MAX: 1;
 
 export declare function resolveTimeoutRetryMax(env?: NodeJS.ProcessEnv): number;
+export declare function resolveRunFailureText(run: ReviewRun | null | undefined): string;
 export declare function extractReviewerEvidenceFromText(
   text: string,
 ): { reviewer: Record<string, unknown> } | null;

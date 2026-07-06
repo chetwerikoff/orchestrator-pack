@@ -9,9 +9,8 @@ const COVERED_RUN_STATUSES = [
   'preparing',
   'running',
   'reviewing',
-  'clean',
-  'needs_triage',
-  'waiting_update',
+  'up_to_date',
+  'changes_requested',
 ];
 
 function normalizeHeadSha(headSha) {
@@ -25,7 +24,7 @@ export function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
     const runPr = Number(run?.prNumber);
     if (!Number.isInteger(runPr) || runPr !== prNumber) continue;
     if (normalizeHeadSha(run?.targetSha) !== normalized) continue;
-    const status = String(run?.status ?? '').trim().toLowerCase();
+    const status = String(run?.prReviewStatus ?? run?.status ?? '').trim().toLowerCase();
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     return { run, status, runId: String(run?.id ?? run?.runId ?? '') };
   }

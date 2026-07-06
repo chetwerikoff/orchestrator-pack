@@ -8,7 +8,10 @@ export interface ReviewRun extends ReconcileReviewRun {
   id?: string;
   linkedSessionId?: string;
   reviewerSessionId?: string;
-  terminationReason?: string;
+  body?: string;
+  deliveredAt?: string | null;
+  deliveredFindingCount?: number;
+  prReviewStatus?: string;
 }
 
 export type AoSession = ReconcileAoSession;

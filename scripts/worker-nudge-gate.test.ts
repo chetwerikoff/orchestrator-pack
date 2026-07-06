@@ -1542,15 +1542,14 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       path.join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
       'utf8',
     );
+    expect(ciGreen).toMatch(/Resolve-WorkerNudgeTargetFromPrClaim/);
+    expect(ciGreen).not.toMatch(/\$workerTarget = "\$sessionId`:\$sessionId"/);
+    expect(ciGreen).toMatch(/-TargetId \$targetId -TargetGeneration \$targetGeneration/);
     const reviewSend = readFileSync(
       path.join(repoRoot, 'scripts/review-send-reconcile.ps1'),
       'utf8',
     );
-    for (const script of [ciGreen, reviewSend]) {
-      expect(script).toMatch(/Resolve-WorkerNudgeTargetFromPrClaim/);
-      expect(script).not.toMatch(/\$workerTarget = "\$sessionId`:\$sessionId"/);
-      expect(script).toMatch(/-TargetId \$targetId -TargetGeneration \$targetGeneration/);
-    }
+    expect(reviewSend).toMatch(/REMOVED on AO 0\.10/);
   });
 
   it('does not register dispatch journal twice after journaled CI-green send', () => {
@@ -1816,10 +1815,10 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     expect(result.stdout).toMatch(/\[PASS\] worker nudge gate wiring/);
   });
 
-  it('journals review-send delivery against resolved send session', () => {
+  it('review-send-reconcile is REMOVED on AO 0.10 (auto-delivery)', () => {
     const body = readFileSync(path.join(repoRoot, 'scripts/review-send-reconcile.ps1'), 'utf8');
-    expect(body).toMatch(/Register-WorkerMessageDispatch -SessionId \$sendSessionId/);
-    expect(body).not.toMatch(/Register-WorkerMessageDispatch -SessionId \$Action\.sessionId/);
+    expect(body).toMatch(/REMOVED on AO 0\.10/);
+    expect(body).toMatch(/exit 2/);
   });
 
   it('converges already-served ci-failure claim skips for SENT and UNCERTAIN phases', () => {
@@ -1900,9 +1899,7 @@ describe('worker-observable sender wiring (#384 opk-rev-765)', () => {
     const senderPaths = [
       'scripts/invoke-gated-worker-nudge.ps1',
       'scripts/ci-green-wake-reconcile.ps1',
-      'scripts/review-send-reconcile.ps1',
       'scripts/ci-failure-notification-reconcile.ps1',
-      'scripts/review-finding-delivery-confirm.ps1',
     ];
     for (const rel of senderPaths) {
       const body = readFileSync(path.join(repoRoot, rel), 'utf8');

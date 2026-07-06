@@ -1,16 +1,17 @@
 {
-  "description": "AC1a: sent_to_agent (waiting_update) but worker never reported addressing_reviews",
+  "description": "AC1a: changes_requested delivered but worker never reported addressing_reviews",
   "nowMs": 1717500000000,
   "reviewRuns": [
     {
       "id": "run-opk8-166",
       "prNumber": 166,
       "targetSha": "abc123",
-      "status": "sent_to_agent",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "openFindingCount": 0,
       "linkedSessionId": "opk-8",
-      "sentAt": "2024-06-04T11:10:00.000Z"
+      "deliveredAt": "2024-06-04T11:10:00.000Z"
     }
   ],
   "sessions": [

@@ -77,5 +77,5 @@ $failed = @($runs | Where-Object { $_.prNumber -eq $PrNumber -and $_.targetSha -
 Write-ManualOperatorReviewRetryAudit -Namespace $namespace -PrNumber $PrNumber -HeadSha $HeadSha `
     -FailureClass ([string]$failed.failureClass) -RunId ([string]$failed.id) | Out-Null
 
-& ao review run $SessionId --execute --command $ReviewCommand
+& ao-review run $SessionId
 exit $LASTEXITCODE

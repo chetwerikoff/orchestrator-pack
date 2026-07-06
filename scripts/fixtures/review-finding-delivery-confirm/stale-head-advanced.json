@@ -1,15 +1,16 @@
 {
-  "description": "Run targetSha stale vs current PR head — escalate, no redeliver",
+  "description": "Run targetSha stale vs current PR head — escalate, no pack redelivery",
   "nowMs": 1717520000000,
   "reviewRuns": [
     {
       "id": "run-stale-head",
       "prNumber": 180,
       "targetSha": "oldhead00",
-      "status": "sent_to_agent",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "linkedSessionId": "opk-16",
-      "sentAt": "2026-06-04T13:50:00.000Z"
+      "deliveredAt": "2026-06-04T13:50:00.000Z"
     }
   ],
   "sessions": [

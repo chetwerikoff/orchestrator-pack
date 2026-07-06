@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Independent process from the LLM orchestrator turn loop. Enumerates open PR heads via gh,
-  compares coverage from ao review list --json, and starts ao review run only when the head
+  compares coverage from Get-AoReviewRuns fan-out, and starts review via ao-review run only when the head
   is ready for review (Issue #195) — never ao spawn, --claim-pr, ao session kill, or ao send.
 
   Composes with Issue #98/#189 idempotency and reviewer-workspace-preflight.ps1.

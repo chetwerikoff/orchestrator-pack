@@ -22,7 +22,7 @@ export interface ClassifiedBulkSendRun {
   runId: string;
   status: string;
   openFindingCount: number;
-  sentFindingCount: number;
+  deliveredFindingCount: number;
   findingCount: number;
   prNumber: unknown;
   linkedSessionId: unknown;

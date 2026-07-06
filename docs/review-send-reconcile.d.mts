@@ -1,3 +1,5 @@
+export declare const REVIEW_SEND_RECONCILE_REMOVED: boolean;
+export declare const REVIEW_SEND_RECONCILE_REMOVED_REASON: string;
 export declare const DEFAULT_REVIEW_SEND_INTERVAL_MS: number;
 export declare const FIRST_SEND_RUN_STATUS: string;
 export declare const INELIGIBLE_FIRST_SEND_STATUSES: ReadonlySet<string>;
@@ -14,7 +16,9 @@ export interface ReviewRun {
   targetSha?: string;
   status?: string;
   openFindingCount?: number;
-  sentFindingCount?: number;
+  deliveredFindingCount?: number;
+  deliveredAt?: string | null;
+  prReviewStatus?: string;
   linkedSessionId?: string;
 }
 
@@ -100,6 +104,8 @@ export declare function evaluateFirstSendCandidate(
 export declare function planReviewSendActions(input: PlanReviewSendInput): {
   actions: ReviewSendAction[];
   mergedPrNumbers: number[];
+  removed?: boolean;
+  reason?: string;
 };
 
 export declare function verifyRunSentStateAfterSend(
@@ -143,5 +149,3 @@ export declare function evaluateReviewSendInterval(input: {
 export declare function findForbiddenReviewSendReconcileCommands(
   commandLines: string[],
 ): Array<{ command: string; pattern: string }>;
-
-export declare function buildReviewSendArgv(runId: string): string[];

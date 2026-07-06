@@ -4,11 +4,10 @@
   Sender-side review-finding delivery confirmation (Issue #171).
 
 .DESCRIPTION
-  Low-frequency mechanical loop: observes run-level state from ao review list --json
+  Low-frequency mechanical loop: observes run-level state from Get-AoReviewRuns fan-out
   and worker reports from ao status --reports full. Confirms delivery only when the
-  linked worker reports addressing_reviews (or equivalent) after send; on timeout
-  re-delivers via ao review send to the same live session (bounded); when re-deliveries
-  are exhausted escalates; draft submit is owned by worker-message-submit-reconcile.ps1
+  linked worker reports addressing_reviews (or equivalent) after deliveredAt; on timeout
+  escalates (AO 0.10 auto-delivery — observe-only, no pack redelivery); draft submit is owned by worker-message-submit-reconcile.ps1
   (Issue #232). Never ao spawn,
   --claim-pr, ao session kill, or ao send.
 
@@ -252,96 +251,8 @@ function Invoke-PlannedReviewSend {
         [switch]$DryRunMode
     )
 
-    $sendArgs = @('review', 'send', $RunId)
-    $commandLine = "ao $($sendArgs -join ' ')"
-    Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
-
-    if ($DryRunMode) {
-        Write-DeliveryLog "dry-run would redeliver: $commandLine (PR #$PrNumber session=$SessionId attempt=$Attempt)"
-        return @{ sent = $true; reason = 'dry_run' }
-    }
-
-    $intentClass = 'review-findings-redelivery'
-    $cycleKey = "redelivery:${RunId}:${Attempt}"
-    $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Get-OpenPrList)
-    $targetResolution = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
-        -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
-    if (-not $targetResolution.ok) {
-        Write-DeliveryLog "redelivery suppressed (PR-claim target unresolved) run=${RunId}: $($targetResolution.reason)"
-        return @{ sent = $false; reason = [string]$targetResolution.reason; targetUnresolved = $true }
-    }
-    $targetId = [string]$targetResolution.targetId
-    $targetGeneration = [string]$targetResolution.targetGeneration
-    $workerTarget = [string]$targetResolution.workerTarget
-    if (-not $workerTarget) { $workerTarget = "$targetId`:$targetGeneration" }
-    $sendSessionId = [string]$targetResolution.ownerSessionId
-    if (-not $sendSessionId) { $sendSessionId = $SessionId }
-    $tupleKey = "$PrNumber|$cycleKey|$intentClass|$workerTarget"
-    $reviewMessage = 'Review findings for PR #' + $PrNumber + ' (run ' + $RunId + ', redelivery attempt ' + $Attempt + ')'
-
-    $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass $intentClass `
-        -WorkerTarget $workerTarget -SessionId $sendSessionId -TargetId $targetId -TargetGeneration $targetGeneration `
-        -TupleKey $tupleKey -Surface 'review-finding-delivery-confirm' -ProjectId $ProjectId -Message $reviewMessage
-    if (-not $claim.acquired) {
-        Write-DeliveryLog "redelivery suppressed by claim gate run=${RunId}: $($claim.reason)"
-        return @{
-            sent         = $false
-            reason       = [string]$claim.reason
-            claimSkipped = $true
-            escalate     = [bool]$claim.escalate
-            diagnosis    = [string]$claim.diagnosis
-        }
-    }
-
-    $sendAttempt = Set-WorkerNudgeClaimSendAttempted -ClaimResult $claim
-    if (-not $sendAttempt.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = [string]$sendAttempt.reason } | Out-Null
-        Write-DeliveryLog "redelivery aborted (claim send-attempt failed) run=${RunId}: $($sendAttempt.reason)"
-        return @{ sent = $false; reason = [string]$sendAttempt.reason }
-    }
-
-    Write-DeliveryLog "re-delivering findings: run=$RunId PR #$PrNumber head=$TargetSha session=$sendSessionId attempt=$Attempt"
-    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'delivery-confirm-side-effect.lock'
-    Write-OrchestratorSideProcessProgress -ChildId 'review-finding-delivery-confirm' -Phase 'side_effect'
-    try {
-        $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-            & ao @sendArgs
-            if ($LASTEXITCODE -ne 0) {
-                throw "ao review send failed (exit $LASTEXITCODE) for run $RunId"
-            }
-        }
-        if (-not $fenced.ok) {
-            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'side_effect_busy' } | Out-Null
-            Write-DeliveryLog "redelivery skipped (side-effect busy) run=$RunId"
-            return @{ sent = $false; reason = 'side_effect_busy' }
-        }
-    }
-    catch {
-        $sendError = [string]$_.Exception.Message
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = 'send_failed'; detail = $sendError } | Out-Null
-        Write-DeliveryLog "redelivery failed run=${RunId}: $sendError"
-        return @{ sent = $false; reason = 'send_failed'; detail = $sendError }
-    }
-
-    $post = @{ reviewRuns = @(Get-AoReviewRuns -Project $ProjectId) }
-    $verify = Invoke-ReviewSendFilterCli -Subcommand 'verify-sent' -Payload @{
-        reviewRuns = @($post.reviewRuns)
-        runId      = $RunId
-        targetSha  = $TargetSha
-    }
-    $messageHashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $reviewMessage }
-    $messageContentHash = [string]$messageHashResult.messageContentHash
-    if (-not $verify.ok) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'UNCERTAIN' -Extra @{
-            reason             = [string]$verify.reason
-            messageContentHash = $messageContentHash
-        } | Out-Null
-        Write-DeliveryLog "post-send verify failed run=${RunId}: $($verify.reason) (claim UNCERTAIN; non-retryable)"
-        return @{ sent = $false; reason = $verify.reason; uncertain = $true }
-    }
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' -Extra @{ messageContentHash = $messageContentHash } | Out-Null
-
-    return @{ sent = $true; reason = 'sent' }
+    Write-DeliveryLog "redelivery skipped (observe-only on AO 0.10) run=$RunId PR #$PrNumber attempt=$Attempt"
+    return @{ sent = $false; reason = 'redelivery_removed' }
 }
 
 function Invoke-DeliveryTick {

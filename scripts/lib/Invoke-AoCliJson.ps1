@@ -72,28 +72,13 @@ function Get-AoStatusSessionsFromPayload {
     return $sessions
 }
 
-function Get-AoReviewListJson {
-    param([string]$Project = '')
-
-    $args = @('review', 'list')
-    if ($Project) { $args += $Project }
-    $args += '--json'
-    return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao review list'
-}
-
 function Get-AoReviewRuns {
     param([string]$Project = '')
 
-    try {
-        $payload = Get-AoReviewListJson -Project $Project
-        return Get-AoReviewRunsFromPayload -Payload $payload -Project $Project
+    if (-not (Get-Command Get-AoReviewRunsFromWorkerSessions -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
     }
-    catch {
-        if (-not (Get-Command Get-AoReviewRunsFromWorkerSessions -ErrorAction SilentlyContinue)) {
-            . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
-        }
-        return @(Get-AoReviewRunsFromWorkerSessions -Project $Project)
-    }
+    return @(Get-AoReviewRunsFromWorkerSessions -Project $Project)
 }
 
 function Throw-AoReportSurfaceUnavailable {

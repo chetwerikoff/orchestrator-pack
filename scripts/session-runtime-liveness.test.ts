@@ -307,7 +307,6 @@ describe('liveness gate inventory (AC12)', () => {
       'isRuntimeAlive',
       'isSessionAlive',
       'Test-SessionRuntimeFieldLive',
-      'review-send-reconcile',
       'ci-green-wake-reconcile',
       'review-ready-stuck-guard',
       'worker-message-submit-reconcile',

@@ -101,9 +101,8 @@ describe('isRunCoveringHead', () => {
     ['preparing', true],
     ['running', true],
     ['reviewing', true],
-    ['clean', true],
-    ['needs_triage', true],
-    ['waiting_update', true],
+    ['up_to_date', true],
+    ['changes_requested', true],
     ['outdated', false],
     ['failed', false],
     ['cancelled', false],
@@ -560,10 +559,10 @@ describe('planReconcileActions', () => {
             id: 'opk-rev-open',
             prNumber: 260,
             targetSha: oldHead,
-            status: 'needs_triage',
+            status: 'changes_requested',
+            prReviewStatus: 'changes_requested',
             findingCount: 1,
             openFindingCount: 1,
-            sentFindingCount: 1,
           },
         ],
       };
@@ -1066,7 +1065,7 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.observed).toMatchObject({
       runId: 'run-fail-71',
       status: 'failed',
-      terminationReason: 'codex exec review exited 1',
+      failureDetail: 'codex exec review exited 1',
     });
   });
 
@@ -1079,7 +1078,7 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.observed).toMatchObject({
       runId: 'run-fail-73',
       status: 'failed',
-      terminationReason: 'codex exec review exited 1',
+      failureDetail: 'codex exec review exited 1',
     });
     expect(skip?.record?.branch).not.toBe('head_covered');
   });
@@ -1090,7 +1089,7 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.branch).toBe('head_covered');
     expect(skip?.record?.primary).toBe('head_covered');
     expect(skip?.record?.observed).toMatchObject({
-      coveringRunStatus: 'clean',
+      coveringRunStatus: 'up_to_date',
       headMatch: true,
       prMatch: true,
     });

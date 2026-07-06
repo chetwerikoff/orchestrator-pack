@@ -4,7 +4,7 @@
   Read-only AO snapshot before orchestrator recovery escalation.
 
 .DESCRIPTION
-  Shells ao status, ao review list, and ao events (stuck + lifecycle) and prints
+  Shells ao status, GET /reviews fan-out (Get-AoReviewRuns), and ao events (stuck + lifecycle) and prints
   a one-screen summary. No ao send, kills, or file writes.
   See docs/orchestrator-recovery-runbook.md.
 #>
@@ -28,7 +28,7 @@ $TerminalWorkerStatuses = @(
 )
 
 $ActiveReviewStatuses = @(
-    'needs_triage', 'waiting_update', 'queued', 'preparing', 'running'
+    'changes_requested', 'needs_review', 'running', 'queued', 'preparing', 'reviewing'
 )
 
 $WorkerReviewReportStates = @(
@@ -41,6 +41,24 @@ function Get-OrchestratorSessionId {
     $fromEnv = $env:AO_ORCHESTRATOR_SESSION_ID
     if ($fromEnv) { return $fromEnv.Trim() }
     return 'op-orchestrator'
+}
+
+function Test-ReviewCommandInFailureDetail {
+    param(
+        [string]$ReviewCommand,
+        [string]$FailureDetail
+    )
+    if ([string]::IsNullOrWhiteSpace($ReviewCommand) -or [string]::IsNullOrWhiteSpace($FailureDetail)) {
+        return $null
+    }
+    $scriptName = $null
+    if ($ReviewCommand -match '([^\\/]+\.(?:ps1|mjs|ts))') {
+        $scriptName = $Matches[1]
+    }
+    if ($scriptName -and $FailureDetail -notmatch [regex]::Escape($scriptName)) {
+        return $scriptName
+    }
+    return $null
 }
 
 function Invoke-AoJson {
@@ -286,35 +304,39 @@ if ($reviewReports.Count -gt 0) {
     }
 }
 
-# --- review list ---
+# --- review runs (AO 0.10 fan-out) ---
 Write-Host ''
-# ao review list takes [project] as a positional argument (not -p); place it before --json.
-$reviewArgs = @('review', 'list')
-if ($ProjectId) { $reviewArgs += $ProjectId }
-$reviewArgs += '--json'
-$reviewPayload = Invoke-AoJson -AoArgs $reviewArgs
-$runs = @($reviewPayload.runs)
-if (-not $runs -and $reviewPayload.data) { $runs = @($reviewPayload.data) }
-if ($ProjectId) {
-    $runs = @($runs | Where-Object { $_.projectId -eq $ProjectId })
-}
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+$runs = @(Get-AoReviewRuns -Project $ProjectId)
 
-$actionable = @($runs | Where-Object { $ActiveReviewStatuses -contains $_.status })
-$needsTriage = @($actionable | Where-Object { $_.status -eq 'needs_triage' })
-$waitingUpdate = @($actionable | Where-Object { $_.status -eq 'waiting_update' })
+$actionable = @($runs | Where-Object {
+        $st = if ($null -ne $_.prReviewStatus) { [string]$_.prReviewStatus } else { [string]$_.status }
+        $ActiveReviewStatuses -contains $st
+    })
+$undelivered = @($actionable | Where-Object {
+        $st = if ($null -ne $_.prReviewStatus) { [string]$_.prReviewStatus } else { [string]$_.status }
+        $st -eq 'changes_requested' -and -not $_.deliveredAt
+    })
+$deliveredChanges = @($actionable | Where-Object {
+        $st = if ($null -ne $_.prReviewStatus) { [string]$_.prReviewStatus } else { [string]$_.status }
+        $st -eq 'changes_requested' -and $_.deliveredAt
+    })
 
 Write-Host ("-- Review runs needing attention ({0} active of {1} total) --" -f $actionable.Count, $runs.Count)
 if ($actionable.Count -eq 0) {
-    Write-Host '  none in needs_triage / waiting_update / in-flight review'
+    Write-Host '  none in undelivered/delivered changes_requested / in-flight review'
 }
 else {
     foreach ($r in $actionable | Select-Object -First 12) {
         $pr = if ($r.prNumber) { "PR #$($r.prNumber)" } else { '-' }
-        Write-Host ("  {0,-38} {1,-16} open={2} sent={3} {4} worker={5}" -f `
-                $r.id.Substring(0, [Math]::Min(38, $r.id.Length)), `
-                $r.status, `
+        $st = if ($null -ne $r.prReviewStatus) { [string]$r.prReviewStatus } else { [string]$r.status }
+        $id = [string]$r.id
+        if ($id.Length -gt 38) { $id = $id.Substring(0, 38) }
+        Write-Host ("  {0,-38} {1,-16} open={2} delivered={3} {4} worker={5}" -f `
+                $id, `
+                $st, `
                 $r.openFindingCount, `
-                $r.sentFindingCount, `
+                $r.deliveredFindingCount, `
                 $pr, `
                 $r.linkedSessionId)
     }
@@ -335,19 +357,19 @@ $failedEmpty = @(
 Write-Host ''
 Write-Host ("-- Empty failed reviews (failed/cancelled, findingCount=0): {0} --" -f $failedEmpty.Count)
 if ($failedEmpty.Count -eq 0) {
-    Write-Host '  none - good (still verify latest head has status clean, not only absence of failures)'
+    Write-Host '  none - good (still verify latest head has status up_to_date, not only absence of failures)'
 }
 else {
-    Write-Host '  NOT clean - reviewer command or Codex/Claude infra failed before findings were emitted.'
+    Write-Host '  NOT up_to_date - reviewer command or Codex/Claude infra failed before findings were emitted.'
     foreach ($r in $failedEmpty | Select-Object -First 6) {
         $pr = if ($r.prNumber) { "PR #$($r.prNumber)" } else { '-' }
-        $reason = ($r.terminationReason -split "`n")[0]
+        $reason = ([string]$r.body -split "`n")[0]
         if ($reason.Length -gt 100) { $reason = $reason.Substring(0, 97) + '...' }
         Write-Host ("  {0}  {1,-10} {2}  worker={3}" -f $r.reviewerSessionId, $r.status, $pr, $r.linkedSessionId)
         Write-Host ("           {0}" -f $reason)
     }
     if ($failedEmpty.Count -gt 6) {
-        Write-Host ("  ... and {0} more (ao review list --json, field terminationReason)" -f ($failedEmpty.Count - 6))
+        Write-Host ("  ... and {0} more (Get-AoReviewRuns, field body/failureDetail)" -f ($failedEmpty.Count - 6))
     }
 }
 
@@ -364,16 +386,17 @@ if ($expectedCommand) {
     $cmdPreview = $expectedCommand
     if ($cmdPreview.Length -gt 110) { $cmdPreview = $cmdPreview.Substring(0, 107) + '...' }
     Write-Host ("  REVIEW_COMMAND: {0}" -f $cmdPreview)
-    if ($latestRun -and $latestRun.terminationReason) {
-        $drift = Test-ReviewCommandInTerminationReason -ReviewCommand $expectedCommand -TerminationReason $latestRun.terminationReason
+    $failureDetail = [string]$latestRun.body
+    if ($latestRun -and $failureDetail) {
+        $drift = Test-ReviewCommandInFailureDetail -ReviewCommand $expectedCommand -FailureDetail $failureDetail
         if ($drift) {
-            Write-Host ("  WARN: latest run terminationReason does not mention expected script ({0}) - command drift?" -f $drift)
+            Write-Host ("  WARN: latest run failure detail does not mention expected script ({0}) - command drift?" -f $drift)
         }
         elseif (@('failed', 'cancelled') -contains $latestRun.status) {
-            Write-Host '  WARN: latest run failed - read full terminationReason; do not treat zero findings as clean.'
+            Write-Host '  WARN: latest run failed - read full body/failureDetail; do not treat zero findings as up_to_date.'
         }
-        elseif ($latestRun.status -eq 'clean') {
-            Write-Host '  OK: latest run is clean.'
+        elseif (if ($null -ne $latestRun.prReviewStatus) { [string]$latestRun.prReviewStatus } else { [string]$latestRun.status } -eq 'up_to_date') {
+            Write-Host '  OK: latest run is up_to_date.'
         }
     }
 }

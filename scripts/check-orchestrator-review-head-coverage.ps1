@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: orchestratorRules covered-head idempotency (Issue #189).
+  Regression guard: orchestratorRules covered-head idempotency (Issue #189, #625).
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -20,8 +20,8 @@ $requiredExample = @(
     'REVIEW RUN IDEMPOTENCY',
     'Issue #189',
     'covered terminal',
-    'needs_triage',
-    'waiting_update',
+    'up_to_date',
+    'changes_requested',
     'SAME prNumber linkage',
     'normalized head SHA',
     'different PR does NOT count',
@@ -29,13 +29,15 @@ $requiredExample = @(
     'FAILED / CANCELLED ON CURRENT HEAD',
     'not plain uncovered',
     'PRE-RUN COVERAGE RE-CHECK',
-    're-read ao review list --json',
     'Runs with no prNumber',
     'linkedSessionId',
     'fail closed to inaction'
 )
 
 $missingExample = @($requiredExample | Where-Object { $exampleText -notlike "*$_*" })
+if ($exampleText -notlike '*re-read Get-AoReviewRuns*' -and $exampleText -notlike '*Get-AoReviewRuns fan-out*') {
+    $missingExample += 're-read Get-AoReviewRuns'
+}
 if ($missingExample.Count -gt 0) {
     Write-Host ("agent-orchestrator.yaml.example missing Issue #189 phrases: {0}" -f ($missingExample -join ', '))
     exit 1

@@ -13,14 +13,15 @@
       "prNumber": 73,
       "targetSha": "both73",
       "status": "failed",
-      "terminationReason": "codex exec review exited 1",
+      "body": "codex exec review exited 1",
       "findingCount": 0
     },
     {
       "id": "run-clean-73",
       "prNumber": 73,
       "targetSha": "both73",
-      "status": "clean",
+      "status": "up_to_date",
+      "prReviewStatus": "up_to_date",
       "findingCount": 0
     }
   ],

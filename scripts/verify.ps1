@@ -631,6 +631,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== AO 0.10 review vocabulary (Issue #625) =='
+$review010VocabularyCheck = Join-Path $Root 'scripts/check-review-010-vocabulary.ps1'
+if (Test-Path -LiteralPath $review010VocabularyCheck -PathType Leaf) {
+    & $review010VocabularyCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-010-vocabulary.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-010-vocabulary.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 review vocabulary checks failed (Issue #625)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-010-vocabulary.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 review vocabulary check script (Issue #625)'
+}
+
+Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
 $reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
 $seedSnapshotEconomyCheck = Join-Path $Root 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1'
