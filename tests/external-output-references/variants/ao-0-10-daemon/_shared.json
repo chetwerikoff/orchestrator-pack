@@ -1,0 +1,11 @@
+{
+  "forbiddenFields": [
+    "needs_triage",
+    "sentFindingCount",
+    "terminationReason",
+    "session",
+    "reports",
+    "data"
+  ],
+  "allowedFields": ["reviewerHandleId", "reviews"]
+}

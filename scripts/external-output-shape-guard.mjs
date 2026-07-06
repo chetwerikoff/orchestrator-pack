@@ -722,6 +722,58 @@ export function runExternalOutputShapeGuard(repoRoot, options = {}) {
   return { ok: errors.length === 0, errors };
 }
 
+
+/**
+ * Validate one catalog variant capture (Issue #626 producer-emission proof path).
+ * @param {string} repoRoot
+ * @param {string} variantId e.g. ao-0-10-daemon/per-session-reviews-populated
+ */
+export function validateSingleVariantCapture(repoRoot, variantId) {
+  const referencesRoot = defaultReferencesRoot(repoRoot);
+  const { catalog } = loadVariantCatalog(referencesRoot);
+  const variant = catalog.get(variantId);
+  if (!variant) {
+    return {
+      ok: false,
+      errors: [
+        {
+          fixture: variantId,
+          path: referencesRoot,
+          field: '',
+          reason: `unknown variant id ${variantId}`,
+        },
+      ],
+    };
+  }
+  if (!variant.captureRef) {
+    return {
+      ok: false,
+      errors: [
+        {
+          fixture: variantId,
+          path: referencesRoot,
+          field: '',
+          reason: 'variant has no captureRef',
+          variantId: variant.id,
+        },
+      ],
+    };
+  }
+  const errors = validateReferenceCaptures(referencesRoot, new Map([[variant.id, variant]]));
+  const provenanceErrors = validateReferenceProvenance(
+    referencesRoot,
+    new Map([[variant.id, variant]]),
+  ).map((message) => ({
+    fixture: variant.id,
+    path: referencesRoot,
+    field: '',
+    reason: message,
+    variantId: variant.id,
+  }));
+  const all = [...provenanceErrors, ...errors];
+  return { ok: all.length === 0, errors: all };
+}
+
 /**
  * @param {ShapeError[]} errors
  */
@@ -744,10 +796,18 @@ if (isCliMain()) {
   const repoRoot = process.argv.includes('--repo-root')
     ? path.resolve(process.argv[process.argv.indexOf('--repo-root') + 1])
     : path.join(__dirname, '..');
-  const result = runExternalOutputShapeGuard(repoRoot);
+  const variantIdx = process.argv.indexOf('--variant');
+  const variantId = variantIdx >= 0 ? String(process.argv[variantIdx + 1] ?? '').trim() : '';
+  const result = variantId
+    ? validateSingleVariantCapture(repoRoot, variantId)
+    : runExternalOutputShapeGuard(repoRoot);
   if (!result.ok) {
     console.error(formatShapeErrors(result.errors));
     process.exit(1);
   }
-  console.log('[PASS] external-output shape guard (Issue #223)');
+  if (variantId) {
+    console.log(`[PASS] external-output shape guard variant ${variantId}`);
+  } else {
+    console.log('[PASS] external-output shape guard (Issue #223)');
+  }
 }

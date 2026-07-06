@@ -1,0 +1,17 @@
+{
+  "id": "ao-0-10-daemon/projects-list",
+  "command": "ao-0-10-daemon",
+  "variant": "projects-list",
+  "allowedFields": ["projects"],
+  "forbiddenFields": [
+    "needs_triage",
+    "sentFindingCount",
+    "terminationReason",
+    "data",
+    "reports",
+    "reviews",
+    "sessions"
+  ],
+  "captureRef": "captures/ao-0-10-daemon/projects-list.raw.json",
+  "provenanceRef": "captures/ao-0-10-daemon/projects-list.provenance.json"
+}

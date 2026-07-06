@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
+  "toolVersion": "ao 0.10.x daemon HTTP",
+  "capturedAt": "2026-07-06T08:35:00.000Z",
+  "context": "Synthetic populated per-session reviews exercising running, changes_requested (delivered/undelivered), up_to_date, and queued shapes.",
+  "scrubLog": ["Synthetic PR numbers, SHAs, and review run ids"]
+}

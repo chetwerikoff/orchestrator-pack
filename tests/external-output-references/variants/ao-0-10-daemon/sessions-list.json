@@ -1,0 +1,16 @@
+{
+  "id": "ao-0-10-daemon/sessions-list",
+  "command": "ao-0-10-daemon",
+  "variant": "sessions-list",
+  "allowedFields": ["sessions"],
+  "forbiddenFields": [
+    "needs_triage",
+    "sentFindingCount",
+    "terminationReason",
+    "data",
+    "reports",
+    "reviews"
+  ],
+  "captureRef": "captures/ao-0-10-daemon/sessions-list.raw.json",
+  "provenanceRef": "captures/ao-0-10-daemon/sessions-list.provenance.json"
+}
