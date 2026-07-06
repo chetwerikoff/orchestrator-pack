@@ -3,7 +3,7 @@
  * Keep this module free of imports from cycle/head-ready/ci-green modules.
  */
 
-/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string }} ReviewRun */
+/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} AoSession */
 
 export const IN_FLIGHT_REVIEW_STATUSES = new Set([
