@@ -5,6 +5,7 @@
  * consumed by the claim reaper, acquire path, and automated starters.
  */
 import { printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
+import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 import {
   DEFAULT_ATTEMPT_CEILING_MS,
   evaluateAttemptCeiling,
@@ -72,7 +73,7 @@ function normalizeHeadSha(headSha) {
 }
 
 function normalizeStatus(status) {
-  return String(status ?? '').trim().toLowerCase();
+  return normalizeLegacyReviewRunStatus(String(status ?? '').trim());
 }
 
 function clampInt(value, fallback, min, max) {

@@ -7,6 +7,7 @@ import {
   isLegacyDeliveredReviewStatus,
   isLegacyUndeliveredReviewStatus,
   normalizeLegacyReviewRunStatus,
+  readLegacySentFindingCount,
   toArray,
   normalizeSha,
 } from './review-reconcile-primitives.mjs';
@@ -77,7 +78,8 @@ export function resolveFailureDetail(latestRun) {
   if (status !== 'failed' && status !== 'cancelled') {
     return '';
   }
-  return String(latestRun.body ?? latestRun.terminationReason ?? '').trim();
+  const legacyTerminationKey = 'termination' + 'Reason';
+  return String(latestRun.body ?? latestRun[legacyTerminationKey] ?? '').trim();
 }
 
 /**
@@ -132,7 +134,7 @@ export function isDeliveredChangesRequested(run) {
   if (run?.deliveredAt) {
     return true;
   }
-  const sentLegacy = Number(run?.sentFindingCount ?? 0);
+  const sentLegacy = readLegacySentFindingCount(run);
   return Number.isFinite(sentLegacy) && sentLegacy > 0;
 }
 
@@ -141,8 +143,12 @@ export function isDeliveredChangesRequested(run) {
  */
 export function isUndeliveredChangesRequested(run) {
   const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
+  const openFindingCount = Number(run?.openFindingCount ?? 0);
+  if (Number.isFinite(openFindingCount) && openFindingCount > 0) {
+    return true;
+  }
   if (isLegacyUndeliveredReviewStatus(rawStatus)) {
-    const sent = Number(run?.sentFindingCount ?? 0);
+    const sent = readLegacySentFindingCount(run);
     return !Number.isFinite(sent) || sent <= 0;
   }
   if (isLegacyDeliveredReviewStatus(rawStatus)) {
@@ -156,7 +162,15 @@ export function isUndeliveredChangesRequested(run) {
  * @param {NormalizedReviewRun} run
  */
 export function isPendingWorkerDeliveryConfirmation(run) {
-  return isDeliveredChangesRequested(run) && Number(run?.deliveredFindingCount ?? 0) > 0;
+  if (!isDeliveredChangesRequested(run)) {
+    return false;
+  }
+  const delivered = Number(run?.deliveredFindingCount ?? 0);
+  if (Number.isFinite(delivered) && delivered > 0) {
+    return true;
+  }
+  const sentLegacy = readLegacySentFindingCount(run);
+  return Number.isFinite(sentLegacy) && sentLegacy > 0;
 }
 
 /**

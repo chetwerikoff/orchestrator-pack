@@ -15,6 +15,7 @@ import {
 } from './mechanical-reconcile-bounds.mjs';
 import { isRuntimeFieldLive } from './session-runtime-liveness.mjs';
 import { isLiveWorkerSession, normalizeSha, toArray } from './review-trigger-reconcile.mjs';
+import { readLegacySentFindingCount } from './review-reconcile-primitives.mjs';
 import {
   getEventTimestampMs,
   resolveEventSessionId,
@@ -314,7 +315,7 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
   /** @type {Array<Record<string, unknown>>} */
   const deliveries = [];
   for (const run of toArray(reviewRuns)) {
-    const deliveredCount = Number(run?.deliveredFindingCount ?? run?.sentFindingCount ?? 0);
+    const deliveredCount = readLegacySentFindingCount(run);
     if (deliveredCount <= 0) {
       continue;
     }

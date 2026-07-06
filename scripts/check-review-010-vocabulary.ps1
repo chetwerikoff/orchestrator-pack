@@ -9,6 +9,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $allowlist = @(
     'scripts/ao-review.ps1',
     'scripts/check-review-010-vocabulary.ps1',
+    'scripts/check-review-producer-contract.ps1',
     'scripts/check-ao-0-10-review-trigger.ps1',
     'scripts/patch-codex-review4.ps1',
     'scripts/check-review-send-reconcile.ps1',

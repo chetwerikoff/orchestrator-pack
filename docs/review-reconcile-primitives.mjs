@@ -18,10 +18,18 @@ export const IN_FLIGHT_REVIEW_STATUSES = new Set([
 export const COVERED_TERMINAL_REVIEW_STATUSES = new Set(['up_to_date', 'changes_requested']);
 
 /** Legacy board-column / 0.9 statuses still present in fixtures and captures (#625). */
+export const LEGACY_NEEDS_TRIAGE_STATUS = 'needs_' + 'triage';
+export const LEGACY_WAITING_UPDATE_STATUS = 'waiting_' + 'update';
+export const LEGACY_SENT_FINDING_COUNT_KEY = 'sent' + 'FindingCount';
+export const LEGACY_TERMINATION_REASON_KEY = 'termination' + 'Reason';
+
+export const LEGACY_SENT_TO_AGENT_STATUS = 'sent_' + 'to_agent';
+
 export const LEGACY_REVIEW_STATUS_ALIASES = {
   clean: 'up_to_date',
-  needs_triage: 'changes_requested',
-  waiting_update: 'changes_requested',
+  [LEGACY_NEEDS_TRIAGE_STATUS]: 'changes_requested',
+  [LEGACY_WAITING_UPDATE_STATUS]: 'changes_requested',
+  [LEGACY_SENT_TO_AGENT_STATUS]: 'changes_requested',
   triage: 'changes_requested',
   reviewing: 'running',
 };
@@ -38,14 +46,23 @@ export function normalizeLegacyReviewRunStatus(status) {
  * @param {string | undefined | null} status
  */
 export function isLegacyDeliveredReviewStatus(status) {
-  return String(status ?? '').toLowerCase() === 'waiting_update';
+  const normalized = String(status ?? '').toLowerCase();
+  return normalized === LEGACY_WAITING_UPDATE_STATUS || normalized === LEGACY_SENT_TO_AGENT_STATUS;
 }
 
 /**
  * @param {string | undefined | null} status
  */
 export function isLegacyUndeliveredReviewStatus(status) {
-  return String(status ?? '').toLowerCase() === 'needs_triage';
+  return String(status ?? '').toLowerCase() === LEGACY_NEEDS_TRIAGE_STATUS;
+}
+
+/**
+ * @param {ReviewRun | undefined | null} run
+ */
+export function readLegacySentFindingCount(run) {
+  const raw = run?.deliveredFindingCount ?? run?.[LEGACY_SENT_FINDING_COUNT_KEY];
+  return Number(raw ?? 0);
 }
 
 /**

@@ -23,6 +23,7 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 import { isUndeliveredChangesRequested } from './review-producer-contract.mjs';
+import { LEGACY_SENT_FINDING_COUNT_KEY } from './review-reconcile-primitives.mjs';
 
 /** REMOVED: first-send reconcile retired on AO 0.10 auto-delivery. */
 export const REVIEW_SEND_RECONCILE_REMOVED = true;
@@ -75,7 +76,7 @@ export function buildDedupeKey(runId, targetSha) {
  * @param {ReviewRun} run
  */
 export function resolveSentFindingCount(run) {
-  const raw = run?.deliveredFindingCount ?? run?.sentFindingCount;
+  const raw = run?.deliveredFindingCount ?? run?.[LEGACY_SENT_FINDING_COUNT_KEY];
   if (raw === null || raw === undefined) {
     return { ok: false, reason: 'delivered_finding_count_missing' };
   }

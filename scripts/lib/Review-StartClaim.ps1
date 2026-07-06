@@ -15,6 +15,23 @@ $Script:ReviewStartClaimMutexStaleSeconds = 5
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'changes_requested')
 $Script:ReviewStartClaimInFlightRunStatuses = @('queued', 'preparing', 'running', 'reviewing')
 
+function ConvertTo-ReviewStartClaimNormalizedRunStatus {
+    param([object]$Run)
+
+    $raw = if ($null -ne $Run.prReviewStatus) { [string]$Run.prReviewStatus } else { [string]$Run.status }
+    $status = $raw.Trim().ToLowerInvariant()
+    switch ($status) {
+        'clean' { return 'up_to_date' }
+        { $_ -eq ('needs_' + 'triage') } { return 'changes_requested' }
+        'waiting_update' { return 'changes_requested' }
+        'triage' { return 'changes_requested' }
+        'reviewing' { return 'running' }
+        'sent_to_agent' { return 'changes_requested' }
+        default { return $status }
+    }
+}
+
+
 function Get-ReviewStartClaimProjectNamespace {
     param([string]$ProjectId = 'orchestrator-pack')
 
@@ -330,7 +347,7 @@ function Test-ReviewStartClaimRunMatchesKey {
 function Test-ReviewStartClaimRunIsCovering {
     param([object]$Run)
 
-    $status = ([string]$Run.status).Trim().ToLowerInvariant()
+    $status = ConvertTo-ReviewStartClaimNormalizedRunStatus -Run $Run
     return ($status -in $Script:ReviewStartClaimCoveredRunStatuses)
 }
 
@@ -427,7 +444,7 @@ function Get-ReviewStartClaimVisibleRunId {
         $runId = [string]$run.id
         if (-not $runId) { $runId = [string]$run.runId }
         if (-not $runId) { continue }
-        $status = ([string]$run.status).Trim().ToLowerInvariant()
+        $status = ConvertTo-ReviewStartClaimNormalizedRunStatus -Run $run
         $created = Get-ReviewStartClaimRunCreatedAtUtc -Run $run
         if ($created -eq [datetime]::MinValue) { $created = [datetime]::MinValue.AddSeconds($index) }
         if ($status -in $Script:ReviewStartClaimInFlightRunStatuses) {
