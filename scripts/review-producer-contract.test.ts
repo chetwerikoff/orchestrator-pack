@@ -7,6 +7,7 @@ import {
   isUndeliveredChangesRequested,
   mapEngineStateToBoardStatus,
   resolveFailureDetail,
+  resolveNormalizedRowStatus,
 } from '../docs/review-producer-contract.mjs';
 
 describe('review-producer-contract', () => {
@@ -70,6 +71,38 @@ describe('review-producer-contract', () => {
   it('resolveFailureDetail reads latestRun.body on failed runs', () => {
     expect(resolveFailureDetail({ status: 'failed', body: 'codex timeout' })).toBe('codex timeout');
     expect(resolveFailureDetail({ status: 'completed', body: 'ignored' })).toBe('');
+  });
+
+  it('resolveNormalizedRowStatus preserves failed latestRun when PR state is stale in-flight', () => {
+    expect(resolveNormalizedRowStatus('running', 'failed')).toBe('failed');
+    expect(resolveNormalizedRowStatus('needs_review', 'cancelled')).toBe('cancelled');
+    expect(resolveNormalizedRowStatus('changes_requested', 'completed')).toBe('changes_requested');
+    expect(resolveNormalizedRowStatus('', 'running')).toBe('running');
+  });
+
+  it('flatten preserves failed latestRun status when entry status is still running', () => {
+    const payload = {
+      reviews: [
+        {
+          prNumber: 42,
+          headSha: 'abc123def4567890abcdef1234567890abcdef12',
+          status: 'running',
+          latestRun: {
+            id: 'rr-failed',
+            status: 'failed',
+            body: 'codex timeout',
+            targetSha: 'abc123def4567890abcdef1234567890abcdef12',
+          },
+        },
+      ],
+    };
+    const runs = flattenSessionReviewsToNormalizedRuns(payload, 'opk-1');
+    expect(runs).toHaveLength(1);
+    const run = runs[0]!;
+    expect(run.prReviewStatus).toBe('running');
+    expect(run.latestRunStatus).toBe('failed');
+    expect(run.status).toBe('failed');
+    expect(run.body).toBe('codex timeout');
   });
 
   it('deriveDeliveredFindingCount is zero without deliveredAt', () => {

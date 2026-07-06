@@ -30,6 +30,10 @@ export interface NormalizedReviewRun {
 }
 
 export declare function resolveFailureDetail(latestRun: unknown): string;
+export declare function resolveNormalizedRowStatus(
+  prReviewStatus: string,
+  latestRunStatus: string,
+): string;
 export declare function deriveDeliveredFindingCount(
   latestRun: unknown,
   prReviewStatus: string,

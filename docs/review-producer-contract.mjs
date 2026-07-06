@@ -75,6 +75,21 @@ export function resolveFailureDetail(latestRun) {
 }
 
 /**
+ * Row `status` must surface terminal latestRun failure even when PRReviewState.status is stale in-flight.
+ *
+ * @param {string} prReviewStatus
+ * @param {string} latestRunStatus
+ */
+export function resolveNormalizedRowStatus(prReviewStatus, latestRunStatus) {
+  const latest = String(latestRunStatus ?? '').toLowerCase();
+  if (latest === 'failed' || latest === 'cancelled') {
+    return latest;
+  }
+  const pr = String(prReviewStatus ?? '').toLowerCase();
+  return pr || latest;
+}
+
+/**
  * @param {unknown} latestRun
  * @param {string} prReviewStatus
  */
@@ -210,7 +225,7 @@ export function normalizePrReviewStateRow(entry, linkedSessionId = '') {
       ? Number(latestRun.openFindingCount)
       : undefined,
     deliveredFindingCount,
-    status: prReviewStatus || latestRunStatus,
+    status: resolveNormalizedRowStatus(prReviewStatus, latestRunStatus),
     githubReviewId: latestRun.githubReviewId ?? null,
     batchId: latestRun.batchId ? String(latestRun.batchId) : undefined,
     createdAt: latestRun.createdAt ? String(latestRun.createdAt) : undefined,
