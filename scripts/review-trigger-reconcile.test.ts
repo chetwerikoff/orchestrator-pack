@@ -109,6 +109,24 @@ describe('isRunCoveringHead', () => {
   ])('status %s covered=%s', (status, covered) => {
     expect(isRunCoveringHead({ status })).toBe(covered);
   });
+
+  it('does not treat stale prReviewStatus as covering when latestRun failed', () => {
+    expect(
+      isRunCoveringHead({
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      }),
+    ).toBe(false);
+  });
+
+  it('still treats latestRun queued as covering when primary status is failed', () => {
+    expect(
+      isRunCoveringHead({
+        status: 'failed',
+        latestRunStatus: 'queued',
+      }),
+    ).toBe(true);
+  });
 });
 
 describe('isHeadCovered', () => {

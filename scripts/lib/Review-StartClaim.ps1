@@ -14,6 +14,7 @@ $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
 $Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'changes_requested')
 $Script:ReviewStartClaimInFlightRunStatuses = @('needs_review', 'queued', 'preparing', 'running', 'reviewing')
+$Script:ReviewStartClaimTerminalFailureRunStatuses = @('failed', 'cancelled')
 
 function ConvertTo-ReviewStartClaimNormalizedRunStatus {
     param(
@@ -364,20 +365,26 @@ function Test-ReviewStartClaimRunMatchesKey {
 function Test-ReviewStartClaimRunIsCovering {
     param([object]$Run)
 
+    $latestRaw = [string]$Run.latestRunStatus
+    if (-not [string]::IsNullOrWhiteSpace($latestRaw)) {
+        $latestStatus = ConvertTo-ReviewStartClaimNormalizedRunStatus -Status $latestRaw.Trim()
+        if ($latestStatus -in $Script:ReviewStartClaimTerminalFailureRunStatuses) {
+            return $false
+        }
+        if (Test-ReviewStartClaimStatusInFlight -Status $latestStatus) {
+            return $true
+        }
+    }
+
     $status = ConvertTo-ReviewStartClaimNormalizedRunStatus -Run $Run
     if ($status -in @('ineligible', 'outdated')) {
         return $false
     }
+    if ($status -in $Script:ReviewStartClaimTerminalFailureRunStatuses) {
+        return $false
+    }
     if (Test-ReviewStartClaimStatusInFlight -Status $status) {
         return $true
-    }
-
-    $latestRaw = [string]$Run.latestRunStatus
-    if (-not [string]::IsNullOrWhiteSpace($latestRaw)) {
-        $latestStatus = ConvertTo-ReviewStartClaimNormalizedRunStatus -Status $latestRaw.Trim()
-        if (Test-ReviewStartClaimStatusInFlight -Status $latestStatus) {
-            return $true
-        }
     }
 
     return ($status -in $Script:ReviewStartClaimCoveredRunStatuses)

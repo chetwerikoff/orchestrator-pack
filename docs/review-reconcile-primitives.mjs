@@ -17,6 +17,9 @@ export const IN_FLIGHT_REVIEW_STATUSES = new Set([
 /** AO 0.10 engine statuses that cover a head without starting a new review (#189, #625). */
 export const COVERED_TERMINAL_REVIEW_STATUSES = new Set(['up_to_date', 'changes_requested']);
 
+/** Latest-run terminal failures that override stale prReviewStatus (#625). */
+export const FAILED_OR_CANCELLED_REVIEW_STATUSES = new Set(['failed', 'cancelled']);
+
 /** Legacy board-column / 0.9 statuses still present in fixtures and captures (#625). */
 export const LEGACY_NEEDS_TRIAGE_STATUS = 'needs_' + 'triage';
 export const LEGACY_WAITING_UPDATE_STATUS = 'waiting_' + 'update';
@@ -103,15 +106,25 @@ export function normalizeSha(sha) {
  * @param {ReviewRun} run
  */
 export function isRunCoveringHead(run) {
+  const latestRaw = String(run?.latestRunStatus ?? '').trim();
+  if (latestRaw) {
+    const latestStatus = normalizeLegacyReviewRunStatus(latestRaw);
+    if (FAILED_OR_CANCELLED_REVIEW_STATUSES.has(latestStatus)) {
+      return false;
+    }
+    if (IN_FLIGHT_REVIEW_STATUSES.has(latestStatus)) {
+      return true;
+    }
+  }
+
   const status = resolveNormalizedReviewRunStatus(run);
   if (status === 'ineligible' || status === 'outdated') {
     return false;
   }
-  if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {
-    return true;
+  if (FAILED_OR_CANCELLED_REVIEW_STATUSES.has(status)) {
+    return false;
   }
-  const latestStatus = normalizeLegacyReviewRunStatus(run?.latestRunStatus);
-  if (IN_FLIGHT_REVIEW_STATUSES.has(latestStatus)) {
+  if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {
     return true;
   }
   if (COVERED_TERMINAL_REVIEW_STATUSES.has(status)) {

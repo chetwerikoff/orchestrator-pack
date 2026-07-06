@@ -495,6 +495,23 @@ describe('Review-StartClaim single-flight contract', () => {
     expect(result.retryFailedPlusRunning).toBe(false);
   });
 
+  it('does not treat stale prReviewStatus running as covering when latestRun failed', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $visible = Test-ReviewStartClaimRunVisible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'running'; latestRunStatus = 'failed' }
+      ) -PrNumber 266 -HeadSha $sha
+      $retry = Test-ReviewStartClaimRetryEligible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'running'; latestRunStatus = 'failed' }
+      ) -PrNumber 266 -HeadSha $sha
+      [pscustomobject]@{ visible = [bool]$visible; retry = [bool]$retry } | ConvertTo-Json -Compress
+    `);
+    const result = JSON.parse(output);
+    expect(result.visible).toBe(false);
+    expect(result.retry).toBe(true);
+  });
+
   it('treats AO 0.10 needs_review with queued latestRun as covering', () => {
     const output = runPwsh(`
       . ${psString(helperPath)}
