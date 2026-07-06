@@ -51,7 +51,7 @@ describe.sequential('seed snapshot failure bounded read economy (Issue #609)', (
     expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(Number(result.stdout.trim())).toBe(3);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBeLessThanOrEqual(10);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_state\b/)).toBeGreaterThan(0);
   });
 
@@ -87,8 +87,8 @@ esac
 
   it('stale snapshot serves bounded stale cache without per-head fan-out', async () => {
     harness = withSeedHarness('seed-econ-stale-');
-    harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '2';
-    harness.env.GH_FLEET_REPO_TICK_STALE_SERVE_SECONDS = '30';
+    harness.env.GH_FLEET_OPEN_PR_LIST_TTL_SECONDS = '2';
+    harness.env.GH_FLEET_SEED_SNAPSHOT_OPEN_PR_LIST_STALE_SERVE_SECONDS = '30';
     const warm = await spawnPwsh(openPrsScript('@(1,2)'), repoRoot, harness.env);
     expect(warm.status).toBe(0);
     const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
@@ -248,8 +248,7 @@ finally {
     expect(Number(result.stdout.trim())).toBe(5);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
     const viewCalls = countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/);
-    expect(viewCalls).toBeLessThanOrEqual(5);
-    expect(viewCalls).toBeLessThan(95);
+    expect(viewCalls).toBe(0);
   });
 
   it('hourly budget contract states 150 reads/hour for 5 workers', async () => {

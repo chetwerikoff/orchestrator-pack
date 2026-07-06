@@ -25,6 +25,8 @@ foreach ($needle in @(
         'function Resolve-ReviewReadyReportStateSeedOpenPrs',
         'function Invoke-GhOpenPrListForTrackedNumbersListShaped',
         'function Test-GhFleetSeedSnapshotRepairAllowed',
+        'function Repair-ReviewReadyReportStateSeedOpenPrListSnapshot',
+        'BoundedListOnly',
         'function Read-GhFleetOpenPrListEnvelopeWithStaleServe',
         'seed_snapshot_degraded_serve',
         'seed_snapshot_state'

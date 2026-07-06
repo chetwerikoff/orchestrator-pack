@@ -368,6 +368,29 @@ function Select-GhOpenPrRowsForTrackedNumbers {
     return @($OpenPrs | Where-Object { $trackedSet[[int]$_.number] })
 }
 
+
+function Repair-ReviewReadyReportStateSeedOpenPrListSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [int[]]$TrackedPrNumbers,
+        [string]$Consumer = '',
+        [scriptblock]$ProgressWriter = $null
+    )
+
+    if ($ProgressWriter) {
+        & $ProgressWriter 'open_pr_list_repair' 1
+    }
+    $allOpen = @(Invoke-GhFleetCachedOpenPrListRaw -RepoRoot $RepoRoot -Consumer $Consumer -BoundedListOnly)
+    $rows = @(Select-GhOpenPrRowsForTrackedNumbers -OpenPrs $allOpen -TrackedPrNumbers $TrackedPrNumbers)
+    foreach ($pr in @($rows)) {
+        Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
+    }
+    return $rows
+}
+
 function Invoke-GhOpenPrListForTrackedNumbersListShaped {
     param(
         [Parameter(Mandatory = $true)]
@@ -382,8 +405,12 @@ function Invoke-GhOpenPrListForTrackedNumbersListShaped {
     if ($ProgressWriter) {
         & $ProgressWriter 'open_pr_list' 1
     }
-    $allOpen = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer $Consumer)
-    return @(Select-GhOpenPrRowsForTrackedNumbers -OpenPrs $allOpen -TrackedPrNumbers $TrackedPrNumbers)
+    $allOpen = @(Invoke-GhFleetCachedOpenPrListRaw -RepoRoot $RepoRoot -Consumer $Consumer -BoundedListOnly)
+    $rows = @(Select-GhOpenPrRowsForTrackedNumbers -OpenPrs $allOpen -TrackedPrNumbers $TrackedPrNumbers)
+    foreach ($pr in @($rows)) {
+        Add-GhPrHeadCommittedAtFromFleetMemo -RepoRoot $RepoRoot -Pr $pr
+    }
+    return $rows
 }
 
 function Resolve-ReviewReadyReportStateSeedOpenPrsFromStaleCache {
@@ -466,13 +493,13 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
         $repairGate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
         if ($repairGate.allowed) {
             try {
-                $null = Ensure-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer $Consumer -DataClass 'open_pr_list'
-                Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome 'stale_repair_ok' -ReadCount 1
-                return @(Invoke-GhOpenPrListForTrackedNumbersListShaped `
+                $repaired = @(Repair-ReviewReadyReportStateSeedOpenPrListSnapshot `
                     -RepoRoot $RepoRoot `
                     -TrackedPrNumbers $tracked `
                     -Consumer $Consumer `
                     -ProgressWriter $ProgressWriter)
+                Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome 'stale_repair_ok' -ReadCount 1
+                return $repaired
             }
             catch {
                 Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome 'stale_repair_failed' -ReadCount 1 -FailureMessage $_.Exception.Message
@@ -493,13 +520,13 @@ function Resolve-ReviewReadyReportStateSeedOpenPrs {
     $repairGate = Test-GhFleetSeedSnapshotRepairAllowed -RepoRoot $RepoRoot -NowMs $NowMs -RequestedReads 1
     if ($repairGate.allowed) {
         try {
-            $null = Ensure-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot -Consumer $Consumer -DataClass 'open_pr_list'
-            Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome "${state}_repair_ok" -ReadCount 1
-            return @(Invoke-GhOpenPrListForTrackedNumbersListShaped `
+            $repaired = @(Repair-ReviewReadyReportStateSeedOpenPrListSnapshot `
                 -RepoRoot $RepoRoot `
                 -TrackedPrNumbers $tracked `
                 -Consumer $Consumer `
                 -ProgressWriter $ProgressWriter)
+            Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome "${state}_repair_ok" -ReadCount 1
+            return $repaired
         }
         catch {
             Record-GhFleetSeedSnapshotRepairAttempt -Paths $repairGate.paths -State $repairGate.state -NowMs $NowMs -Outcome "${state}_repair_failed" -ReadCount 1 -FailureMessage $_.Exception.Message
