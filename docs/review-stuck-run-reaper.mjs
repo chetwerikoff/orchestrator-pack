@@ -90,6 +90,16 @@ export function probeReviewerPaneLiveness({ reviewerHandleId, sessions = [], tmu
   const handle = String(reviewerHandleId ?? '').trim();
   if (!handle) return { paneLiveness: 'unknown', reason: 'missing_reviewer_handle' };
 
+  if (typeof tmuxExists === 'function') {
+    const tmux = tmuxExists(handle);
+    if (tmux === 'missing') {
+      return { paneLiveness: 'absent', reason: 'tmux_session_missing' };
+    }
+    if (tmux === 'exists') {
+      return { paneLiveness: 'healthy', reason: 'tmux_session_present' };
+    }
+  }
+
   const session = sessions.find((row) => String(row?.id ?? row?.name ?? '').trim() === handle);
   if (session) {
     if (isRuntimeFieldLive(session)) {
@@ -105,8 +115,6 @@ export function probeReviewerPaneLiveness({ reviewerHandleId, sessions = [], tmu
 
   if (typeof tmuxExists === 'function') {
     const tmux = tmuxExists(handle);
-    if (tmux === 'exists') return { paneLiveness: 'healthy', reason: 'tmux_session_present' };
-    if (tmux === 'missing') return { paneLiveness: 'absent', reason: 'tmux_session_missing' };
     if (tmux === 'unavailable') return { paneLiveness: 'unknown', reason: 'tmux_unavailable' };
   }
 
@@ -177,6 +185,8 @@ export async function justInTimeRevalidate({
   listPayload = null,
   refreshListPayload = null,
   paneProbe,
+  ageFloorSeconds = DEFAULT_STUCK_AGE_FLOOR_SECONDS,
+  nowMs = Date.now(),
 }) {
   const payload =
     typeof refreshListPayload === 'function' ? await refreshListPayload() : listPayload;
@@ -199,6 +209,16 @@ export async function justInTimeRevalidate({
   if (status !== 'running') return { ok: false, reason: 'run_no_longer_running', status };
   const targetSha = String(latest.targetSha ?? entry.headSha ?? '');
   if (normalizeSha(targetSha) !== head) return { ok: false, reason: 'head_changed' };
+  const freshRunId = String(latest.id ?? latest.runId ?? '');
+  const priorRunId = String(prior.runId ?? '');
+  if (priorRunId && freshRunId && priorRunId !== freshRunId) {
+    return { ok: false, reason: 'run_id_changed', runId: freshRunId, priorRunId };
+  }
+  const floor = Math.max(0, Number(ageFloorSeconds) || DEFAULT_STUCK_AGE_FLOOR_SECONDS);
+  const ageSeconds = computeRunAgeSeconds(latest, nowMs);
+  if (ageSeconds < floor) {
+    return { ok: false, reason: 'below_age_floor', ageSeconds };
+  }
   const pane = await Promise.resolve(
     paneProbe({ reviewerHandleId: String(payload?.reviewerHandleId ?? '') }),
   );
@@ -206,7 +226,7 @@ export async function justInTimeRevalidate({
   if (pane.paneLiveness === 'unknown') return { ok: false, reason: 'pane_liveness_unknown' };
   return {
     ok: true,
-    runId: String(latest.id ?? latest.runId ?? prior.runId ?? ''),
+    runId: freshRunId || priorRunId,
     targetSha,
   };
 }
@@ -321,6 +341,8 @@ export async function runStuckRunReaperTick({
               typeof refreshPaneProbe === 'function'
                 ? (ctx) => refreshPaneProbe({ ...ctx, sessionId })
                 : jitPaneProbe,
+            ageFloorSeconds,
+            nowMs,
           });
           if (!jit.ok) {
             action.recovery = { invoke: false, reason: 'jit_abort', detail: jit.reason };

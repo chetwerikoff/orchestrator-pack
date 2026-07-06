@@ -62,7 +62,9 @@ export declare function justInTimeRevalidate(input: {
   listPayload?: unknown;
   refreshListPayload?: (() => Promise<unknown>) | null;
   paneProbe: (ctx: { reviewerHandleId: string }) => PaneProbeResult | Promise<PaneProbeResult>;
-}): Promise<{ ok: boolean; reason?: string; runId?: string; targetSha?: string; status?: string }>;
+  ageFloorSeconds?: number;
+  nowMs?: number;
+}): Promise<{ ok: boolean; reason?: string; runId?: string; priorRunId?: string; targetSha?: string; status?: string; ageSeconds?: number }>;
 export declare function detectFailStaleSurfaceFromProbe(probeResult: unknown): boolean;
 export declare function evaluateFailStaleInvocation(input: {
   classification: string;

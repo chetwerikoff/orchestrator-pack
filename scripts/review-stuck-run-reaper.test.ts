@@ -281,6 +281,74 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     ).toBe('unknown');
   });
 
+  it('prefers tmux absence over stale session runtime alive (daemon restart)', () => {
+    const result = probeReviewerPaneLiveness({
+      reviewerHandleId: 'review-orchestrator-pack-7',
+      sessions: [{ id: 'review-orchestrator-pack-7', status: 'working', runtime: 'alive' }],
+      tmuxExists: () => 'missing',
+    });
+    expect(result).toMatchObject({ paneLiveness: 'absent', reason: 'tmux_session_missing' });
+  });
+
+  it('aborts JIT recovery when a new same-head run id superseded the scanned run', async () => {
+    const stalePayload = loadFixture('stuck-same-head-absent-pane.json');
+    const freshPayload = JSON.parse(JSON.stringify(stalePayload)) as {
+      reviews: Array<{ latestRun: Record<string, unknown> }>;
+    };
+    freshPayload.reviews[0].latestRun.id = 'rr-624-stuck-replacement';
+    freshPayload.reviews[0].latestRun.runId = 'rr-624-stuck-replacement';
+    const invocations: unknown[] = [];
+    const tick = await runStuckRunReaperTick({
+      workerSessions: [{ id: sessionId, role: 'worker' }],
+      listPayloads: { [sessionId]: stalePayload },
+      paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
+      config: { ageFloorSeconds: 600 },
+      nowMs,
+      failStaleSurfaceAvailable: true,
+      refreshListPayload: async () => freshPayload,
+      refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
+      failStaleInvoker: async (ctx) => {
+        invocations.push(ctx);
+        return { ok: true };
+      },
+    });
+    expect(invocations).toHaveLength(0);
+    expect(tick.actions[0]?.recovery).toMatchObject({
+      invoke: false,
+      reason: 'jit_abort',
+      detail: 'run_id_changed',
+    });
+  });
+
+  it('aborts JIT recovery when refreshed run is below the age floor', async () => {
+    const stalePayload = loadFixture('stuck-same-head-absent-pane.json');
+    const freshPayload = JSON.parse(JSON.stringify(stalePayload)) as {
+      reviews: Array<{ latestRun: Record<string, unknown> }>;
+    };
+    freshPayload.reviews[0].latestRun.updatedAt = '2026-07-06T08:59:30.000Z';
+    const invocations: unknown[] = [];
+    const tick = await runStuckRunReaperTick({
+      workerSessions: [{ id: sessionId, role: 'worker' }],
+      listPayloads: { [sessionId]: stalePayload },
+      paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
+      config: { ageFloorSeconds: 600 },
+      nowMs,
+      failStaleSurfaceAvailable: true,
+      refreshListPayload: async () => freshPayload,
+      refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
+      failStaleInvoker: async (ctx) => {
+        invocations.push(ctx);
+        return { ok: true };
+      },
+    });
+    expect(invocations).toHaveLength(0);
+    expect(tick.actions[0]?.recovery).toMatchObject({
+      invoke: false,
+      reason: 'jit_abort',
+      detail: 'below_age_floor',
+    });
+  });
+
   it('binds fail-stale path to AO 0.10 session-scoped reviews surface', () => {
     expect(AO_REVIEW_FAIL_STALE_PATH).toContain('/reviews/runs/');
     expect(buildFailStalePath(sessionId, 'rr-624-stuck-1')).toBe(
