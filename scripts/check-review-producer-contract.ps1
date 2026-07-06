@@ -12,7 +12,6 @@ $required = @(
     'docs/ao-0-10-review-producer-contract.md',
     'docs/ao-0-10-review-producer-contract.schema.json',
     'tests/review-producer-contract.test.ts',
-    'tests/vitest.review-producer-contract.config.ts',
     'tests/external-output-references/variants/ao-0-10-daemon/per-session-reviews-populated.json',
     'tests/external-output-references/captures/ao-0-10-daemon/per-session-reviews-populated.raw.json',
     'tests/external-output-references/captures/ao-0-10-daemon/sessions-list.raw.json',
