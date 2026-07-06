@@ -27,15 +27,12 @@ if (-not $orchId) {
 function Get-OrchestratorFromAdapter {
     param([string]$Id, [string]$Proj)
 
-    $rows = @(Get-AoOrchestratorSessions -Project $Proj -IncludeTerminated)
-    $orch = $rows | Where-Object { $_.id -eq $Id -or $_.name -eq $Id -or $_.sessionId -eq $Id } | Select-Object -First 1
-    if (-not $orch) {
-        $orch = $rows | Where-Object { $_.role -eq 'orchestrator' -and -not $_.isTerminated } | Select-Object -First 1
+    if ($Id) {
+        $rows = @(Get-AoOrchestratorSessions -Project $Proj -IncludeTerminated)
+        $orch = $rows | Where-Object { $_.id -eq $Id -or $_.name -eq $Id -or $_.sessionId -eq $Id } | Select-Object -First 1
+        if ($orch) { return $orch }
     }
-    if (-not $orch) {
-        $orch = $rows | Where-Object { $_.role -eq 'orchestrator' } | Select-Object -First 1
-    }
-    return $orch
+    return @(Get-AoOrchestratorSessions -Project $Proj) | Select-Object -First 1
 }
 
 for ($i = 1; $i -le $PollCount; $i++) {

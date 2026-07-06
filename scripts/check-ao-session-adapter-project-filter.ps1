@@ -57,6 +57,22 @@ if (@($merged | Where-Object { $_.projectId -eq 'other-project' }).Count -gt 0) 
     throw 'merged sessions must exclude foreign projectId rows'
 }
 
+$terminatedOnly = [pscustomobject]@{
+    data = @(
+        [pscustomobject]@{
+            id           = 'orchestrator-pack-dead'
+            projectId    = 'orchestrator-pack'
+            role         = 'orchestrator'
+            status       = 'terminated'
+            isTerminated = $true
+        }
+    )
+}
+$terminatedResolved = Resolve-AoOrchestratorSessionId -Project 'orchestrator-pack' -OrchestratorListPayload $terminatedOnly
+if ($terminatedResolved) {
+    throw 'terminated-only orchestrator listing must not resolve an active orchestrator session id'
+}
+
 if ($SelfTest) {
     $badPayload = [pscustomobject]@{
         data = @(

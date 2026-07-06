@@ -385,10 +385,9 @@ function Resolve-AoOrchestratorSessionId {
         return @{ Id = $Override.Trim(); Source = 'override' }
     }
 
-    $rows = @(Get-AoOrchestratorSessions -Project $Project -IncludeTerminated `
+    $rows = @(Get-AoOrchestratorSessions -Project $Project `
             -OrchestratorListPayload $OrchestratorListPayload -AoCommand $AoCommand)
-    $live = @($rows | Where-Object { -not $_.isTerminated })
-    $pick = if ($live.Count -gt 0) { $live | Select-Object -First 1 } else { $rows | Select-Object -First 1 }
+    $pick = $rows | Select-Object -First 1
     if (-not $pick) { return $null }
     return @{ Id = [string]$pick.id; Source = 'ao_orchestrator_ls' }
 }

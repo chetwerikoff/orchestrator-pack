@@ -82,4 +82,16 @@ describe('Invoke-AoCliJson AO 0.10 session adapter (Issue #619)', () => {
     expect(capture.session).toBeTruthy();
     expect(capture.session.reports).toBeUndefined();
   });
+
+  it('does not resolve terminated-only orchestrator rows as active session', () => {
+    const out = runPwsh(`
+      . '${lib}'
+      $payload = [pscustomobject]@{ data = @(
+        [pscustomobject]@{ id='orchestrator-pack-dead'; projectId='orchestrator-pack'; role='orchestrator'; status='terminated'; isTerminated=$true }
+      ) }
+      $resolved = Resolve-AoOrchestratorSessionId -Project 'orchestrator-pack' -OrchestratorListPayload $payload
+      if ($null -eq $resolved) { 'null' } else { $resolved.Id }
+    `).trim();
+    expect(out).toBe('null');
+  });
 });
