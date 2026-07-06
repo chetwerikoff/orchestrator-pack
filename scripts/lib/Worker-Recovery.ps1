@@ -506,9 +506,13 @@ function Invoke-WorkerRecovery {
         if ($selectionWorktreeRecord -and $selectionWorktreeRecord.head) {
             $gateHead = [string]$selectionWorktreeRecord.head
         }
+        $resolvedPrNumber = $PrNumber
+        if ($resolvedPrNumber -le 0 -and $Session -and $Session.prNumber) {
+            [void][int]::TryParse([string]$Session.prNumber, [ref]$resolvedPrNumber)
+        }
         try {
             if (-not $FixtureMode) {
-                Assert-ReviewBeforeCleanupGate -SessionId $SessionId -HeadSha $gateHead -Context 'worker_recovery_worktree_remove'
+                Assert-ReviewBeforeCleanupGate -SessionId $SessionId -HeadSha $gateHead -PrNumber $resolvedPrNumber -Context 'worker_recovery_worktree_remove'
             }
         }
         catch {

@@ -142,7 +142,6 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     $headSha = [string]$preClaim.currentHeadSha
-    if ($ReviewCommand) { void $ReviewCommand }
     $commandLine = Get-ReviewTriggerInvocationLine -SessionId $SessionId
     Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
 
