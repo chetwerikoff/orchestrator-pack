@@ -49,9 +49,23 @@ function Get-AoReviewRunsFromPayload {
         [string]$Project = ''
     )
 
-    $runs = @($Payload.runs)
-    if (-not $runs -and $Payload.data) {
+    if ($null -eq $Payload) {
+        return @()
+    }
+
+    $runs = @()
+    if ($Payload -is [System.Array]) {
+        # Get-AoReviewRuns already returns normalized run rows (AO 0.10 fan-out).
+        $runs = @($Payload)
+    }
+    elseif ($Payload.PSObject.Properties.Name -contains 'runs') {
+        $runs = @($Payload.runs)
+    }
+    elseif ($Payload.PSObject.Properties.Name -contains 'data') {
         $runs = @($Payload.data)
+    }
+    else {
+        $runs = @($Payload)
     }
 
     if ($Project) {
