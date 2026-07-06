@@ -302,7 +302,6 @@ describe('orchestrator-wake-supervisor', () => {
     expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   working');
     expect(statusUp.stdout).toContain('heartbeat:  working');
-    expect(statusUp.stdout).toContain('listener: working');
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 500));
