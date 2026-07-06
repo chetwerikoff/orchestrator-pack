@@ -10,6 +10,7 @@ import {
   deriveGreenEpoch,
   evaluateCiGreenWakeCandidate,
   isPreHandOffWorkerForHead,
+  buildCiGreenWakeSendArgv,
   findForbiddenCiGreenWakeCommands,
   mergeBranchRequiredCheckNames,
   planCiGreenWakeActions,
@@ -611,6 +612,19 @@ describe('mergeLegacyNudgedWithPendingJournal', () => {
       { '42:abc123:1': { sessionId: 'op-worker', sentAtMs: 5000, message: 'hand off' } },
     );
     expect(merged['42:abc123:1']?.sentAtMs).toBe(9000);
+  });
+});
+
+
+describe('buildCiGreenWakeSendArgv', () => {
+  it('builds AO 0.10.2 inline send argv', () => {
+    expect(buildCiGreenWakeSendArgv('op-1', 'hello')).toEqual([
+      'send',
+      '--message',
+      'hello',
+      '--session',
+      'op-1',
+    ]);
   });
 });
 

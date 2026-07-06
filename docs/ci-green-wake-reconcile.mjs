@@ -660,7 +660,7 @@ export function findForbiddenCiGreenWakeCommands(commandLines) {
  * @param {string} message
  */
 export function buildCiGreenWakeSendArgv(sessionId, message) {
-  return ['send', sessionId, message];
+  return ['send', '--message', message, '--session', sessionId];
 }
 
 /**

@@ -57,8 +57,9 @@ $SessionStatusForbiddenPatterns = @(
 )
 
 $SendTransportForbiddenPatterns = @(
-    "@\(\s*'send'\s*,\s*\`$SessionId\b",
-    "@\(\s*'send'\s*,\s*\`$sessionId\b",
+    "@\(\s*'send'\s*,\s*\`$",
+    "@\(\s*'send'\s*,\s*\[",
+    "@\(\s*'send'\s*,\s*'[^-]",
     "@\(\s*'send'\s*,\s*'[^']+'\s*,\s*'--file'",
     "'--file'\s*,\s*\`$payloadFile",
     "'--no-wait'",
