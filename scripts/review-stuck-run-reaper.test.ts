@@ -28,6 +28,29 @@ const nowMs = Date.parse('2026-07-06T09:00:00.000Z');
 const sessionId = 'orchestrator-pack-7';
 const headSha = 'abc123def4567890abcdef1234567890abcdef12';
 
+type FailStaleInvokerContext = {
+  sessionId: string;
+  runId: string;
+  targetSha: string;
+  prUrl: string;
+};
+
+type ReaperAction = {
+  classification?: string;
+  paneLiveness?: string;
+  recovery?: Record<string, unknown>;
+};
+
+type ReaperTickResult = {
+  ok: boolean;
+  actions: ReaperAction[];
+  upstream?: string | null;
+};
+
+async function runReaperTick(input: Record<string, unknown>): Promise<ReaperTickResult> {
+  return (await runStuckRunReaperTick(input)) as ReaperTickResult;
+}
+
 describe('review-stuck-run-reaper (Issue #624)', () => {
   it('classifies stuck_same_head when running, absent pane, and age at or above floor', () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
@@ -83,7 +106,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
 
   it('emits alert-only classification when pane liveness is unknown', async () => {
     const listPayload = loadFixture('unknown-pane-liveness.json');
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'unknown' },
@@ -123,14 +146,14 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
   it('does not invoke fail-stale-run when upstream surface is absent', async () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
     const invocations: unknown[] = [];
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
       config: { ageFloorSeconds: 600 },
       nowMs,
       failStaleSurfaceAvailable: false,
-      failStaleInvoker: async (ctx) => {
+      failStaleInvoker: async (ctx: FailStaleInvokerContext) => {
         invocations.push(ctx);
         return { ok: true };
       },
@@ -147,7 +170,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
     const invocations: Array<Record<string, unknown>> = [];
     let refreshCalls = 0;
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
@@ -159,7 +182,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
         return listPayload;
       },
       refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
-      failStaleInvoker: async (ctx) => {
+      failStaleInvoker: async (ctx: FailStaleInvokerContext) => {
         invocations.push(ctx);
         return { ok: true, reason: '200' };
       },
@@ -193,7 +216,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     };
     freshPayload.reviews[0].latestRun.status = 'complete';
     const invocations: unknown[] = [];
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: stalePayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
@@ -202,7 +225,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
       failStaleSurfaceAvailable: true,
       refreshListPayload: async () => freshPayload,
       refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
-      failStaleInvoker: async (ctx) => {
+      failStaleInvoker: async (ctx: FailStaleInvokerContext) => {
         invocations.push(ctx);
         return { ok: true };
       },
@@ -218,7 +241,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
   it('aborts fail-stale when JIT pane re-probe returns healthy despite stale scan map', async () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
     const invocations: unknown[] = [];
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
@@ -227,7 +250,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
       failStaleSurfaceAvailable: true,
       refreshListPayload: async () => listPayload,
       refreshPaneProbe: async () => ({ paneLiveness: 'healthy' }),
-      failStaleInvoker: async (ctx) => {
+      failStaleInvoker: async (ctx: FailStaleInvokerContext) => {
         invocations.push(ctx);
         return { ok: true };
       },
@@ -243,7 +266,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
   it('prevents duplicate recovery for the same run when single-flight is busy', async () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
     let calls = 0;
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
@@ -292,7 +315,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
 
   it('awaits async pane probes before scan classification', async () => {
     const listPayload = loadFixture('stuck-same-head-absent-pane.json');
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: listPayload },
       paneByHandle: {},
@@ -313,7 +336,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     freshPayload.reviews[0].latestRun.id = 'rr-624-stuck-replacement';
     freshPayload.reviews[0].latestRun.runId = 'rr-624-stuck-replacement';
     const invocations: unknown[] = [];
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: stalePayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
@@ -322,7 +345,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
       failStaleSurfaceAvailable: true,
       refreshListPayload: async () => freshPayload,
       refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
-      failStaleInvoker: async (ctx) => {
+      failStaleInvoker: async (ctx: FailStaleInvokerContext) => {
         invocations.push(ctx);
         return { ok: true };
       },
@@ -342,7 +365,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
     };
     freshPayload.reviews[0].latestRun.updatedAt = '2026-07-06T08:59:30.000Z';
     const invocations: unknown[] = [];
-    const tick = await runStuckRunReaperTick({
+    const tick = await runReaperTick({
       workerSessions: [{ id: sessionId, role: 'worker' }],
       listPayloads: { [sessionId]: stalePayload },
       paneByHandle: { 'review-orchestrator-pack-7': 'absent' },
@@ -351,7 +374,7 @@ describe('review-stuck-run-reaper (Issue #624)', () => {
       failStaleSurfaceAvailable: true,
       refreshListPayload: async () => freshPayload,
       refreshPaneProbe: async () => ({ paneLiveness: 'absent' }),
-      failStaleInvoker: async (ctx) => {
+      failStaleInvoker: async (ctx: FailStaleInvokerContext) => {
         invocations.push(ctx);
         return { ok: true };
       },

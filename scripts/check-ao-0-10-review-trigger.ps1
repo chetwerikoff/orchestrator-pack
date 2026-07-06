@@ -6,6 +6,8 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 
+. (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
+
 $required = @(
     'scripts/ao-review.ps1',
     'scripts/lib/Invoke-AoReviewApi.ps1',
@@ -16,13 +18,7 @@ $required = @(
     'docs/ao-0-10-review-harness-adoption.md'
 )
 
-foreach ($rel in $required) {
-    $path = Join-Path $Root $rel
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Write-Host "Missing required file: $rel"
-        exit 1
-    }
-}
+Assert-RequiredPathsExist -Paths @($required | ForEach-Object { Join-Path $Root $_ })
 
 $triggerScripts = @(
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
