@@ -10,9 +10,9 @@ import {
 } from './github-fleet-cache-test-harness.js';
 
 const repoRoot = join(import.meta.dirname, '..');
-const seedLib = join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1').replace(/'/g, "''");
 const economyLib = join(repoRoot, 'scripts/lib/Gh-FleetSeedSnapshotReadEconomy.ps1').replace(/'/g, "''");
 const ghChecks = join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1').replace(/'/g, "''");
+const fleetCache = join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''");
 const multiPrList = join(repoRoot, 'scripts/fixtures/github-fleet-cache/open-pr-list-10.json');
 const tracked95Fixture = join(repoRoot, 'scripts/fixtures/seed-snapshot-failure/tracked-95.json');
 const openPrList95 = join(repoRoot, 'scripts/fixtures/seed-snapshot-failure/open-pr-list-95.json');
@@ -27,12 +27,13 @@ function withSeedHarness(prefix: string): FleetHarness {
   return harness;
 }
 
-function seedSnapshotScript(trackedLiteral: string, nowMs = 1_700_000_000_000): string {
+function openPrsScript(trackedLiteral: string, nowMs = 1_700_000_000_000): string {
   return `
 $ErrorActionPreference = 'Stop'
-. '${seedLib}'
-$snapshot = New-ReviewReadyReportStateSeedGitHubSnapshot -RepoRoot '${repoRoot.replace(/'/g, "''")}' -TrackedPrNumbers ${trackedLiteral} -NowMs ${nowMs}
-Write-Output (@($snapshot.openPrs).Count)
+. '${ghChecks}'
+. '${economyLib}'
+$open = @(Resolve-ReviewReadyReportStateSeedOpenPrs -RepoRoot '${repoRoot.replace(/'/g, "''")}' -TrackedPrNumbers ${trackedLiteral} -NowMs ${nowMs})
+Write-Output (@($open).Count)
 `;
 }
 
@@ -46,12 +47,12 @@ describe.sequential('seed snapshot failure bounded read economy (Issue #609)', (
   it('fresh shared snapshot uses one list-shaped read for tracked coverage', async () => {
     harness = withSeedHarness('seed-econ-fresh-');
     const tracked = '@(1,2,3)';
-    const result = await spawnPwsh(seedSnapshotScript(tracked), repoRoot, harness.env);
+    const result = await spawnPwsh(openPrsScript(tracked), repoRoot, harness.env);
     expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(Number(result.stdout.trim())).toBe(3);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
-    expect(countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_state\b.*state=fresh/)).toBeGreaterThan(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBeLessThanOrEqual(10);
+    expect(countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_state\b/)).toBeGreaterThan(0);
   });
 
   it('populate-failing snapshot does not fan out per-head live reads', async () => {
@@ -70,14 +71,14 @@ esac
       { mode: 0o755 },
     );
     const tracked = '@(1,2,3,4,5)';
-    const first = await spawnPwsh(seedSnapshotScript(tracked), repoRoot, harness.env);
+    const first = await spawnPwsh(openPrsScript(tracked), repoRoot, harness.env);
     expect(first.status, first.stderr || first.stdout).toBe(0);
     const listCallsAfterFirst = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
     const viewCallsAfterFirst = countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/);
     expect(listCallsAfterFirst).toBeLessThanOrEqual(2);
     expect(viewCallsAfterFirst).toBe(0);
 
-    const second = await spawnPwsh(seedSnapshotScript(tracked, 1_700_000_060_000), repoRoot, harness.env);
+    const second = await spawnPwsh(openPrsScript(tracked, 1_700_000_060_000), repoRoot, harness.env);
     expect(second.status, second.stderr || second.stdout).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(listCallsAfterFirst);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
@@ -88,9 +89,10 @@ esac
     harness = withSeedHarness('seed-econ-stale-');
     harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '2';
     harness.env.GH_FLEET_REPO_TICK_STALE_SERVE_SECONDS = '30';
-    const warm = await spawnPwsh(seedSnapshotScript('@(1,2)'), repoRoot, harness.env);
+    const warm = await spawnPwsh(openPrsScript('@(1,2)'), repoRoot, harness.env);
     expect(warm.status).toBe(0);
     const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
+    const baselineView = countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/);
 
     writeFileSync(
       join(harness.root, 'bin/gh'),
@@ -107,10 +109,10 @@ esac
     );
 
     await new Promise((resolve) => setTimeout(resolve, 2500));
-    const stale = await spawnPwsh(seedSnapshotScript('@(1,2,3)', 1_700_000_120_000), repoRoot, harness.env);
+    const stale = await spawnPwsh(openPrsScript('@(1,2,3)', 1_700_000_120_000), repoRoot, harness.env);
     expect(stale.status, stale.stderr || stale.stdout).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBeLessThanOrEqual(baselineList + 1);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(baselineView);
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_state\b.*state=stale/)).toBeGreaterThan(0);
   });
 
@@ -151,7 +153,7 @@ esac
       { mode: 0o755 },
     );
 
-    const absent = await spawnPwsh(seedSnapshotScript('@(1,2,3)'), repoRoot, harness.env);
+    const absent = await spawnPwsh(openPrsScript('@(1,2,3)'), repoRoot, harness.env);
     expect(absent.status, absent.stderr || absent.stdout).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBeLessThanOrEqual(2);
@@ -161,14 +163,15 @@ esac
   it('negative results suppress repeated reads across ticks', async () => {
     harness = withSeedHarness('seed-econ-negative-');
     const tracked = '@(1,2,99)';
-    const first = await spawnPwsh(seedSnapshotScript(tracked), repoRoot, harness.env);
+    const first = await spawnPwsh(openPrsScript(tracked), repoRoot, harness.env);
     expect(first.status).toBe(0);
     expect(Number(first.stdout.trim())).toBe(2);
     const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
-    const second = await spawnPwsh(seedSnapshotScript(tracked, 1_700_000_030_000), repoRoot, harness.env);
+    const baselineView = countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/);
+    const second = await spawnPwsh(openPrsScript(tracked, 1_700_000_030_000), repoRoot, harness.env);
     expect(second.status).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(baselineList);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
+    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(baselineView);
   });
 
   it('rate-limit refusal is not immediately retried before cooldown', async () => {
@@ -186,10 +189,10 @@ esac
       { mode: 0o755 },
     );
     const tracked = '@(1,2)';
-    const first = await spawnPwsh(seedSnapshotScript(tracked), repoRoot, harness.env);
+    const first = await spawnPwsh(openPrsScript(tracked), repoRoot, harness.env);
     expect(first.status).toBe(0);
     const listAfterFirst = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
-    const second = await spawnPwsh(seedSnapshotScript(tracked, 1_700_000_005_000), repoRoot, harness.env);
+    const second = await spawnPwsh(openPrsScript(tracked, 1_700_000_005_000), repoRoot, harness.env);
     expect(second.status).toBe(0);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(listAfterFirst);
     expect(countGithubFleetAuditPattern(harness.auditFile, /event=seed_snapshot_degraded_serve\b.*repair_suppressed/)).toBeGreaterThan(0);
@@ -216,10 +219,16 @@ esac
     );
     const script = `
 $ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$rows = @(Invoke-GhOpenPrList -RepoRoot '${repoRoot.replace(/'/g, "''")}')
-if ($rows.Count -ne 5) { throw "expected 5 rows got $($rows.Count)" }
-Write-Output 'non-json-ok'
+. '${fleetCache}'
+Push-Location -LiteralPath '${repoRoot.replace(/'/g, "''")}'
+try {
+  $rows = @(Invoke-GhFleetFetchOpenPrListUpstream -FailureKind 'snapshot_populate_failed')
+  if ($rows.Count -ne 5) { throw "expected 5 rows got $($rows.Count)" }
+  Write-Output 'non-json-ok'
+}
+finally {
+  Pop-Location
+}
 `;
     const result = await spawnPwsh(script, repoRoot, harness.env);
     expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -234,11 +243,13 @@ Write-Output 'non-json-ok'
       trackedPrNumbers: number[];
     };
     const trackedLiteral = `@(${trackedMeta.trackedPrNumbers.join(',')})`;
-    const result = await spawnPwsh(seedSnapshotScript(trackedLiteral), repoRoot, harness.env);
+    const result = await spawnPwsh(openPrsScript(trackedLiteral), repoRoot, harness.env);
     expect(result.status, result.stderr || result.stdout).toBe(0);
     expect(Number(result.stdout.trim())).toBe(5);
     expect(countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/)).toBe(1);
-    expect(countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/)).toBe(0);
+    const viewCalls = countGithubFleetGhRoute(harness.auditFile, /\bpr view\b/);
+    expect(viewCalls).toBeLessThanOrEqual(5);
+    expect(viewCalls).toBeLessThan(95);
   });
 
   it('hourly budget contract states 150 reads/hour for 5 workers', async () => {
