@@ -215,4 +215,26 @@ describe('review producer contract (Issue #626)', () => {
       expect(source).toContain(apiPath);
     }
   });
+
+  it('schema requires every contracted row field with explicit nullability', () => {
+    const schemaPath = path.join(repoRoot, 'docs/ao-0-10-review-producer-contract.schema.json');
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as {
+      required?: string[];
+      properties?: Record<string, { type?: unknown }>;
+    };
+    expect([...(schema.required ?? [])].sort()).toEqual([...REVIEW_BOARD_RUN_FIELD_NAMES].sort());
+    for (const field of REVIEW_BOARD_RUN_FIELD_NAMES) {
+      expect(schema.properties?.[field]).toBeDefined();
+    }
+    const nullableFields = REVIEW_BOARD_RUN_FIELD_NAMES.filter(
+      (field) => field !== 'sessionId' && field !== 'status' && field !== 'workerHasRuntime',
+    );
+    for (const field of nullableFields) {
+      const type = schema.properties?.[field]?.type;
+      expect(type).toBeDefined();
+      if (Array.isArray(type)) {
+        expect(type).toContain('null');
+      }
+    }
+  });
 });
