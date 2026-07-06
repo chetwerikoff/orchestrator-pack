@@ -33,6 +33,19 @@ function Get-AoWorktreesRoot {
     Join-Path (Get-PackUserHome) '.agent-orchestrator' 'projects' $Id 'worktrees'
 }
 
+function Get-AoDataWorktreesRoot {
+    param([string]$Id)
+    Join-Path (Get-PackUserHome) '.ao' 'data' 'worktrees' $Id
+}
+
+function Get-AoWorktreesRoots {
+    param([string]$Id)
+    @(
+        (Get-AoDataWorktreesRoot -Id $Id),
+        (Get-AoWorktreesRoot -Id $Id)
+    )
+}
+
 function Get-CursorProjectsDir {
     Join-Path (Get-PackUserHome) '.cursor' 'projects'
 }
@@ -88,11 +101,13 @@ function Resolve-AoWorkspacePath {
     )
 
     if ($Session) {
-        $candidate = Join-Path (Get-AoWorktreesRoot -Id $Id) $Session
-        if (-not (Test-Path -LiteralPath $candidate -PathType Container)) {
-            throw "Worktree not found for session ${Session}: $candidate"
+        $candidates = Get-AoWorktreesRoots -Id $Id | ForEach-Object { Join-Path $_ $Session }
+        foreach ($candidate in $candidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                return (Resolve-Path -LiteralPath $candidate).Path
+            }
         }
-        return (Resolve-Path -LiteralPath $candidate).Path
+        throw "Worktree not found for session ${Session}: $($candidates -join ', ')"
     }
 
     if (-not $Path) {
@@ -151,13 +166,14 @@ function Invoke-AoWorktreeTrust {
 $targets = [System.Collections.Generic.List[string]]::new()
 
 if ($TrustWorktreesRoot) {
-    $root = Get-AoWorktreesRoot -Id $ProjectId
-    if (Test-Path -LiteralPath $root -PathType Container) {
-        $targets.Add((Resolve-Path -LiteralPath $root).Path)
+    foreach ($root in (Get-AoWorktreesRoots -Id $ProjectId)) {
+        if (Test-Path -LiteralPath $root -PathType Container) {
+            $targets.Add((Resolve-Path -LiteralPath $root).Path)
+        }
     }
-    elseif (-not $WorkspacePath -and -not $SessionId) {
+    if ($targets.Count -eq 0 -and -not $WorkspacePath -and -not $SessionId) {
         if (-not $Quiet) {
-            Write-Host "[trust-ao-worktree] worktrees root does not exist yet ($root)"
+            Write-Host "[trust-ao-worktree] worktrees roots do not exist yet"
         }
         return
     }
