@@ -71,10 +71,10 @@ if ($SelfTest) {
     }
     $bad = Resolve-AoOrchestratorSessionId -Project 'orchestrator-pack' -OrchestratorListPayload $badPayload
     if ($bad) {
-        Write-Host '[PASS] self-test: foreign orchestrator excluded'
-        exit 0
+        throw 'self-test: foreign orchestrator must not be selected for orchestrator-pack'
     }
-    throw 'self-test: expected null for foreign orchestrator under project filter'
+    Write-Host '[PASS] self-test: foreign orchestrator excluded'
+    exit 0
 }
 
 Write-Host '[PASS] AO session adapter project filter (Issue #619)'

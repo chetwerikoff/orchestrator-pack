@@ -138,13 +138,7 @@ function Release-AutonomousClaimPrResumeMutex {
     Remove-Item -LiteralPath $Mutex.lockDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-function Invoke-AutonomousGateResolvedAoCliJson {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$AoArgs,
-        [string]$FailureLabel = ''
-    )
-
+function Get-AutonomousGateResolvedAoCommand {
     $packRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
     $realAo = 'ao'
     $configPath = Join-Path $packRoot '.ao' 'autonomous-real-binaries.json'
@@ -158,7 +152,17 @@ function Invoke-AutonomousGateResolvedAoCliJson {
         }
         catch { }
     }
+    return $realAo
+}
 
+function Invoke-AutonomousGateResolvedAoCliJson {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$AoArgs,
+        [string]$FailureLabel = ''
+    )
+
+    $realAo = Get-AutonomousGateResolvedAoCommand
     $label = if ($FailureLabel) { $FailureLabel } else { "resolved ao $($AoArgs -join ' ')" }
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -185,10 +189,11 @@ function Invoke-AutonomousGateResolvedAoCliJson {
 function Get-AutonomousGateStatusSessions {
     param([switch]$IncludeTerminated)
 
+    $aoCommand = Get-AutonomousGateResolvedAoCommand
     if ($IncludeTerminated) {
-        return @(Get-AoStatusSessionsIncludingTerminated)
+        return @(Get-AoStatusSessionsIncludingTerminated -AoCommand $aoCommand)
     }
-    return @(Get-AoStatusSessions)
+    return @(Get-AoStatusSessions -AoCommand $aoCommand)
 }
 
 function Get-AutonomousGateSessionPrNumber {
