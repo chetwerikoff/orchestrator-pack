@@ -548,10 +548,11 @@ function Invoke-GhFleetFetchOpenPrListUpstream {
 
     $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
     if ($null -eq $parsed) {
+        $detail = "gh pr list failed (exit 0): no parseable JSON array in output: $raw"
         if ($FailureKind -eq 'snapshot_populate_failed') {
-            throw (Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage "gh pr list failed (exit 0): no parseable JSON array in output: $raw")
+            throw (Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage $detail)
         }
-        throw "gh pr list failed (exit 0): no parseable JSON array in output: $raw"
+        throw $detail
     }
     return @($parsed)
 }
