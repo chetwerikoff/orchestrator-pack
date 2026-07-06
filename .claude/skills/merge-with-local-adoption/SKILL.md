@@ -7,9 +7,11 @@ description: >-
   and confirm adoption surfaces (Step 8). After merge, kill the merged PR's
   worker AO session and run ao session cleanup -p orchestrator-pack. Use when the user asks to merge
   a finished task — e.g. «мерж», «мерж 385», «мерж и пул», «смерж», «merge»,
-  «merge and pull» — or clearly wants a ready PR merged after review/CI. Operates
-  on the operator's live working tree in Cursor; never discards uncommitted local
-  work. Skip when the user only asks about merge policy without a concrete PR.
+  «merge and pull» — or clearly wants a ready PR merged after review/CI. When CI is red and/or the branch is behind base,
+  delegate the fix to the PR worker (Step 3b) and resume merge + local adoption
+  only after CI is green. Operates on the operator's live working tree in
+  Cursor; never discards uncommitted local work. Skip when the user only asks
+  about merge policy without a concrete PR.
 ---
 
 # Merge with local adoption (Cursor)
@@ -143,6 +145,95 @@ Stop without merging if:
 Optional when AO review is in play: `ao review list orchestrator-pack --json` for
 the PR head — do not merge on open/sent findings or empty failed runs (see
 `prompts/agent_rules.md`).
+
+---
+
+## Step 3b — Worker handoff when CI or base sync is blocked
+
+When Step 3 finds **any** of:
+
+- One or more checks failing (`gh pr checks P` shows `fail`)
+- Branch not up to date with base (`mergeStateStatus` is `BEHIND`, or strict
+  protection blocks merge until `gh pr update-branch P`)
+- **Both** (common after `main` moved while CI was red)
+
+**Stop before Step 4.** Do **not** patch worker-scope implementation on the PR
+branch from the architect Cursor session (declaration snapshots, vitest lane
+classification, `verify.ps1` guards, scripts/tests on the PR diff). Delegate to
+the PR worker when one is available; **resume merge and local adoption only
+after** the worker unblocks CI and the branch is sync-ready.
+
+### 3b-i — Resolve worker session
+
+```bash
+ao session ls
+gh pr view P --repo chetwerikoff/orchestrator-pack --json headRefName,body
+```
+
+Derive linked issue `I` from the PR body (`Closes #I`, `Fixes #I`, …). Find a
+worker session where `role` is `worker` or `coding` and `issue == I` (or the
+session display name / branch matches the PR head).
+
+| Outcome | Action |
+|---------|--------|
+| Worker found (`idle` or `working`) | → 3b-ii |
+| No worker, task was AO-spawned | Report blocker; offer `ao spawn` only if the user asks to unblock |
+| User explicitly authorized architect direct fix | `direct-fix-checklist` — exception only |
+
+### 3b-ii — Send fix task (do not merge yet)
+
+Collect failure evidence before sending:
+
+```bash
+gh pr checks P --repo chetwerikoff/orchestrator-pack
+gh pr view P --json mergeStateStatus,statusCheckRollup
+# For each failing job, skim:
+gh run view <run-id> --log-failed
+```
+
+```bash
+ao send --session <W> --message "<task>"
+```
+
+The message must include:
+
+- PR `P`, branch name, linked issue `I`
+- Failing check names and the top actionable log lines (scope guard, vitest
+  `classification-required`, `verify.ps1` guard names, etc.)
+- If the branch is behind base: worker must land fixes **and** sync with `main`
+  (`git merge origin/main` / rebase per project norm, or `gh pr update-branch P`
+  after push) so strict protection can pass
+- Explicit: **do not merge** — architect resumes this skill at Step 3 when CI is
+  green
+
+Record handoff: worker session id, UTC time, checks that were red.
+
+### 3b-iii — Wait, then resume merge workflow
+
+Poll from the operator session:
+
+```bash
+gh pr checks P --repo chetwerikoff/orchestrator-pack
+gh pr view P --json mergeStateStatus,mergeable,statusCheckRollup
+```
+
+Resume at **Step 3** (re-run readiness) when:
+
+- No failing checks (required contexts green per branch protection)
+- Branch is not `BEHIND` base (run `gh pr update-branch P` from the operator
+  session if the worker fixed code but GitHub still shows behind)
+- `mergeStateStatus` is merge-ready (`CLEAN` or acceptable `UNSTABLE` with zero
+  failures — not blocked on sync)
+
+Then continue **Step 4 → 10** in order: collect adoption → merge → safe pull →
+operator adoption → runtime verification (if any) → worker teardown → report.
+
+**Order invariant:** worker fixes land first; **merge and local adoption always
+run after** CI is green — never in parallel with an in-flight worker fix.
+
+If the worker finishes idle but CI is still red, send a follow-up `ao send` with
+the remaining failures or escalate to the user.
+
 
 ---
 
@@ -829,6 +920,11 @@ Reply in the user’s language (Russian if they wrote Russian):
 - **Runtime adoption:** подтверждён (только Outcome A) / routing не подтверждён (Outcome B) / stale / пропущен (не runtime-sensitive)
 - **Escalation:** <recovery runbook step / change-orchestrator-runtime / contract gap / —>
 
+### Worker handoff (Step 3b)
+- **Delegated:** yes / no
+- **Worker session:** <W / none>
+- **CI green after handoff:** yes / still blocked / not needed
+
 ### Worker session (Step 9)
 - **Worker session id:** <W / not found / multiple — stopped>
 - **Kill:** выполнен / пропущен (нет сессии) / не удался (<stderr>)
@@ -848,6 +944,10 @@ Do not claim CI/adoption/restart succeeded without the commands you actually ran
 
 - Delegate merge or adoption to `opencode run` / `opencode-publish.sh`
 - Merge without identifying the PR
+- Fix red CI or rebase/sync the PR branch in the architect session when an AO
+  worker for that issue/PR is available — use Step 3b instead (unless the user
+  explicitly authorized `direct-fix-checklist`)
+- Merge or run local adoption while Step 3b worker handoff is still in progress
 - Skip the adoption scan because CI is green
 - Use `git push --force` to main
 - Replace the user’s entire live yaml from example

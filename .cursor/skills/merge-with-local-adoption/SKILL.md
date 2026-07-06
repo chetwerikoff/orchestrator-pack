@@ -8,7 +8,9 @@ description: >-
   merged PR's worker AO session and run ao session cleanup -p orchestrator-pack.
   Use when the user asks to merge a finished task — e.g. «мерж», «мерж 385»,
   «мерж и пул», «смерж», «merge», «merge and pull» — or clearly wants a ready PR
-  merged after review/CI. Operates on the operator's live working tree in
+  merged after review/CI. When CI is red and/or the branch is behind base,
+  delegate the fix to the PR worker (Step 3b) and resume merge + local adoption
+  only after CI is green. Operates on the operator's live working tree in
   Cursor; never discards uncommitted local work. Skip when the user only asks
   about merge policy without a concrete PR.
 ---
