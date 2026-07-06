@@ -12,7 +12,8 @@ import {
   mapEngineToBoardStatus,
   mapPrReviewToBoardRun,
   mapSessionRowWorkerContext,
-} from '../scripts/lib/review-producer-contract';
+  type ReviewBoardRun,
+} from '../scripts/lib/review-producer-contract.js';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const capturesDir = path.join(
@@ -183,7 +184,7 @@ describe('review producer contract (Issue #626)', () => {
       },
     });
     expect(runs.length).toBeGreaterThanOrEqual(4);
-    expect(runs.map((run) => run.status).sort()).toEqual(
+    expect(runs.map((run: ReviewBoardRun) => run.status).sort()).toEqual(
       expect.arrayContaining(['reviewing', 'triage', 'waiting', 'clean', 'queued']),
     );
   });
