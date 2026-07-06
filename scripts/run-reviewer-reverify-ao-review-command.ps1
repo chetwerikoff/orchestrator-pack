@@ -63,22 +63,14 @@ $changedPathsFile = Join-Path ([IO.Path]::GetTempPath()) ("opk-e2e-changed-paths
 [System.IO.File]::WriteAllLines($changedPathsFile, @('docs/issue_queue_index.md'))
 
 if (-not [string]::IsNullOrWhiteSpace($AoSessionId)) {
-    . (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
-    $mechanicalCommand = @(
-        'pwsh -NoProfile -File'
-        $PSCommandPath
-        '-RepoRoot'
-        $packRoot
-        '-FixtureDir'
-        $FixtureDir
-        '-ManifestPath'
-        $ManifestPath
-        '-ExplicitIssue'
-        $ExplicitIssue
-    ) -join ' '
+    # AO 0.10 removed ao review --execute --command; run the intended reverify entrypoint directly.
     Push-Location $packRoot
     try {
-        & ao-review run $AoSessionId
+        & pwsh -NoProfile -File $PSCommandPath `
+            -RepoRoot $packRoot `
+            -FixtureDir $FixtureDir `
+            -ManifestPath $ManifestPath `
+            -ExplicitIssue $ExplicitIssue
         exit $LASTEXITCODE
     }
     finally {
