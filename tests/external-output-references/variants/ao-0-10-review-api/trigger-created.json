@@ -1,0 +1,5 @@
+{
+  "extends": "_shared.json",
+  "captureRef": "captures/ao-0-10-review-api/trigger-created.raw.json",
+  "requiredFields": ["reviewerHandleId", "reviews", "httpStatus"]
+}

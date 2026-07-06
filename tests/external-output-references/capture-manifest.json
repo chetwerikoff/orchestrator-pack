@@ -42,6 +42,38 @@
       "path": "captures/ao-0-10-cli/session-ls-terminated.raw.json",
       "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c"
     },
+    "ao-0-10-review-api/project-config": {
+      "id": "ao-0-10-review-api/project-config",
+      "producer": "ao-0-10-review-api",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-0-10-review-api/project-config.raw.json",
+      "contentHash": "sha256:d15e59ac925d066aa1b142a760fb20962413056267141fda2891a55f9d7b0a38"
+    },
+    "ao-0-10-review-api/session-reviews-list": {
+      "id": "ao-0-10-review-api/session-reviews-list",
+      "producer": "ao-0-10-review-api",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-0-10-review-api/session-reviews-list.raw.json",
+      "contentHash": "sha256:096fa72e8c3bf66d4763c5d7719ff5e0760b078d0612d824acade951e57ce723"
+    },
+    "ao-0-10-review-api/trigger-created": {
+      "id": "ao-0-10-review-api/trigger-created",
+      "producer": "ao-0-10-review-api",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-0-10-review-api/trigger-created.raw.json",
+      "contentHash": "sha256:90a6e7ee8e6dce64c802f4349c2d001b6ea2f6a38e7d603497a6ce738e6aeb88"
+    },
+    "ao-0-10-review-api/trigger-reused": {
+      "id": "ao-0-10-review-api/trigger-reused",
+      "producer": "ao-0-10-review-api",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-0-10-review-api/trigger-reused.raw.json",
+      "contentHash": "sha256:38aef3e6305f4f8c7cfd63eff7861ecd07cc7255bcda1568008b05a207b4d1e9"
+    },
     "ao-review-run/cancelled": {
       "id": "ao-review-run/cancelled",
       "producer": "ao",

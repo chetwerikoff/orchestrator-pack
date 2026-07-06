@@ -8,6 +8,7 @@
 . (Join-Path $PSScriptRoot 'Worker-RecoveryBranchCleanup.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-AutonomousSpawnGate.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 
 $Script:WorkerRecoveryCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs'
 
@@ -501,6 +502,17 @@ function Invoke-WorkerRecovery {
         Write-WorkerRecoveryAudit -Namespace $claim.namespace -Record $preCleanupAudit
     }
     if (-not $DryRun -and $shouldCleanup) {
+        $gateHead = ''
+        if ($selectionWorktreeRecord -and $selectionWorktreeRecord.head) {
+            $gateHead = [string]$selectionWorktreeRecord.head
+        }
+        try {
+            Assert-ReviewBeforeCleanupGate -SessionId $SessionId -HeadSha $gateHead -Context 'worker_recovery_worktree_remove'
+        }
+        catch {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'review_before_cleanup_blocked'
+            return @{ ok = $false; outcome = 'review_before_cleanup_blocked'; reason = [string]$_ }
+        }
         $cleanupAttempted = $true
         & git -C $RepoRoot worktree remove --force $pathCanon.canonical
         if ($LASTEXITCODE -eq 0) { $cleanupDone = $true }

@@ -1,0 +1,92 @@
+# AO 0.10 review harness and trigger adoption (Issue #623)
+
+Operator steps to re-enable pack-driven code review on AO **0.10.x** after merge.
+This complements [`ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrade-runbook.md).
+
+## Prerequisite
+
+- AO **0.10.x** daemon running (`ao status --json` shows `ready`).
+- Issue **#589** spawn shape adopted.
+- Pack PR for **#623** merged and pulled in the operator checkout.
+
+## 1. Configure reviewer harness (project config API)
+
+AO 0.10 selects the reviewer agent via typed `ProjectConfig.reviewers` — not
+`REVIEW_COMMAND` / `--command` on `ao review run` (removed).
+
+```bash
+ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'
+```
+
+Verify:
+
+```bash
+curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/projects/orchestrator-pack/config" | jq '.reviewers'
+```
+
+Expect `[{"harness":"codex"}]` (or your chosen harness: `claude-code` | `codex` | `opencode`).
+
+Fixture shape: `tests/external-output-references/captures/ao-0-10-review-api/project-config.raw.json`.
+
+## 2. Trigger loop (pack-owned)
+
+The engine does **not** auto-trigger review. Pack sidecars call:
+
+```http
+POST /api/v1/sessions/{workerId}/reviews/trigger
+```
+
+Rebound entrypoints (after #623):
+
+- `scripts/lib/Invoke-ReviewWakeTrigger.ps1` (wake listener)
+- `scripts/review-trigger-reconcile.ps1`
+- `scripts/review-trigger-reeval.ps1`
+
+Anti-corruption shim for incremental script migration:
+
+```powershell
+pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>
+```
+
+`ao-review send` and `ao-review execute` exit **non-zero** with `REMOVED` — delivery is automatic on `submit`.
+
+## 3. Review-before-cleanup (lifecycle invariant)
+
+Do **not** terminate a worker session or remove its worktree while
+`GET /api/v1/sessions/{workerId}/reviews` shows `latestRun.status=running` for the
+worker's current PR head.
+
+Pack enforcement (Issue #623):
+
+- `scripts/lib/Worker-Recovery.ps1` refuses `git worktree remove` when the gate blocks.
+- Wait until the run reaches `complete`, `failed`, `delivered`, or is reaped per #211.
+
+Manual probe:
+
+```bash
+curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/sessions/<workerId>/reviews" | jq '.reviews[].latestRun.status'
+```
+
+## 4. Start / verify wake-supervisor children
+
+After harness config, restart sidecars so they pick up the trigger path:
+
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1
+pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+```
+
+## 5. Smoke proof (operator terminal)
+
+1. Ensure one worker PR is review-ready (#195 predicate).
+2. `pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>`
+3. Confirm HTTP 201 or 200 and a `running` / `queued` latestRun via `ao-review list <session> --json`.
+
+Do **not** edit live `agent-orchestrator.yaml` from automation — harness adoption is operator-only.
+
+## Related
+
+- Issue **#623** — harness + trigger loop
+- Issue **#619** — session identity readers
+- Issues **#213–#215** — review producer contract and board consumers
+- [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md) — legacy `PACK_REVIEWER` context (0.9 path)

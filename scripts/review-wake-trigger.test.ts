@@ -275,20 +275,18 @@ describe('evaluateMergeIntentAfterReviewTrigger', () => {
 });
 
 describe('findForbiddenReviewWakeCommands', () => {
-  it('Issue #207 (7): allows only review run — forbids spawn/claim/kill/send/merge', () => {
-    const allowed = findForbiddenReviewWakeCommands([
-      'ao review run opk-11 --execute --command ./scripts/run-pack-review.ps1',
-    ]);
-    expect(allowed).toHaveLength(0);
+  it('Issue #623: forbids legacy ao review run; allows ao-review shim', () => {
+    expect(findForbiddenReviewWakeCommands(['ao-review run opk-11'])).toHaveLength(0);
 
     const violations = findForbiddenReviewWakeCommands([
+      'ao review run opk-11 --execute --command ./scripts/run-pack-review.ps1',
       'ao spawn worker',
       'ao send opk-11 ping',
       'gh pr merge 1',
       'ao session kill opk-11',
       'ao review run x --claim-pr',
     ]);
-    expect(violations.length).toBeGreaterThanOrEqual(5);
+    expect(violations.length).toBeGreaterThanOrEqual(6);
     expect(
       violations.some((entry) => entry.command.includes('gh pr merge')),
     ).toBe(true);
@@ -314,14 +312,11 @@ describe('residual race benign-ness', () => {
 });
 
 describe('buildReviewRunArgv', () => {
-  it('binds run to worker session and review command', () => {
+  it('binds trigger to ao-review shim for worker session', () => {
     expect(buildReviewRunArgv('opk-11', './scripts/run-pack-review.ps1')).toEqual([
-      'review',
+      'ao-review',
       'run',
       'opk-11',
-      '--execute',
-      '--command',
-      './scripts/run-pack-review.ps1',
     ]);
   });
 });

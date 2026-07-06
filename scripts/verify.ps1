@@ -577,6 +577,24 @@ else {
 }
 
 Write-Host ''
+Write-Host '== AO 0.10 review harness + trigger loop (Issue #623) =='
+$ao010ReviewTriggerCheck = Join-Path $Root 'scripts/check-ao-0-10-review-trigger.ps1'
+if (Test-Path -LiteralPath $ao010ReviewTriggerCheck -PathType Leaf) {
+    & $ao010ReviewTriggerCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-ao-0-10-review-trigger.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-ao-0-10-review-trigger.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 review harness + trigger loop checks failed (Issue #623)'
+    }
+}
+else {
+    Write-Check 'scripts/check-ao-0-10-review-trigger.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 review harness + trigger loop check script (Issue #623)'
+}
+
+Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
 $reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
 $seedSnapshotEconomyCheck = Join-Path $Root 'scripts/check-seed-snapshot-failure-bounded-read-economy.ps1'

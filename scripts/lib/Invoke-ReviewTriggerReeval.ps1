@@ -11,6 +11,7 @@
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
 . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 
 function Test-ReviewTriggerReevalForbiddenCommand {
     param([string]$CommandLine)
@@ -42,8 +43,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         startReason = if ($Action.startReason) { [string]$Action.startReason } else { 'deferred_head_watch' }
     }
 
-    $runArgs = @('review', 'run', $planned.sessionId, '--execute', '--command', $ReviewCommand)
-    $commandLine = "ao $($runArgs -join ' ')"
+    $commandLine = Get-ReviewTriggerInvocationLine -SessionId $planned.sessionId
     Test-ReviewTriggerReevalForbiddenCommand -CommandLine $commandLine
 
     $claim = @{ acquired = $true; dryRun = $true; key = "dry-run:$($planned.prNumber):$($planned.headSha)" }
@@ -183,9 +183,18 @@ function Invoke-ReviewTriggerReevalPlannedRun {
         }
         Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($holdRuns) | Out-Null
         & $LogWriter "review-trigger-reeval: starting review PR #$($planned.prNumber) head=$($planned.headSha) session=$($planned.sessionId)"
-        & ao @runArgs
-        if ($LASTEXITCODE -ne 0) {
-            $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$($planned.prNumber)"
+        $triggerResult = Invoke-AoReviewTriggerForWorker -SessionId $planned.sessionId
+        if (-not $triggerResult.ok) {
+            if ($triggerResult.httpStatus -eq 422) {
+                & $LogWriter "review-trigger-reeval: skip terminated/invalid worker PR #$($planned.prNumber) session=$($planned.sessionId)"
+                Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() -Extra @{ reason = 'review_trigger_invalid' } | Out-Null
+                return @{
+                    triggered   = $false
+                    reason      = 'review_trigger_invalid'
+                    retainWatch = $true
+                }
+            }
+            $failure = "review trigger failed (http $($triggerResult.httpStatus)) for PR #$($planned.prNumber)"
             $postFailureRuns = if ($ResolveFreshSnapshot) { @((& $ResolveFreshSnapshot $planned $claim).reviewRuns) } else { @() }
             Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
             throw $failure
