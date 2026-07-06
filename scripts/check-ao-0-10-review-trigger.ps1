@@ -27,7 +27,8 @@ foreach ($rel in $required) {
 $triggerScripts = @(
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
     'scripts/review-trigger-reconcile.ps1',
-    'scripts/lib/Invoke-ReviewTriggerReeval.ps1'
+    'scripts/lib/Invoke-ReviewTriggerReeval.ps1',
+    'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1'
 )
 
 foreach ($rel in $triggerScripts) {

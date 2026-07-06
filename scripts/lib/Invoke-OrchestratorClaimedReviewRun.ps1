@@ -4,6 +4,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'Review-MechanicalForbiddenCommand.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
@@ -141,8 +142,8 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
 
     $headSha = [string]$preClaim.currentHeadSha
-    $runArgs = @('review', 'run', $SessionId, '--execute', '--command', $ReviewCommand)
-    $commandLine = "ao $($runArgs -join ' ')"
+    if ($ReviewCommand) { void $ReviewCommand }
+    $commandLine = Get-ReviewTriggerInvocationLine -SessionId $SessionId
     Test-ReviewMechanicalForbiddenCommand -CommandLine $commandLine
 
     if ($DryRun) {
@@ -200,32 +201,31 @@ function Invoke-OrchestratorClaimedReviewRun {
     }
     & $writeLog "orchestrator-claimed-review-run: starting review PR #$PrNumber head=$headSha session=$SessionId"
     $lockPath = Join-Path $AuditRoot 'orchestrator-turn-side-effect.lock'
+    $script:OrchestratorClaimedReviewTriggerInvalid = $false
     $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
         Register-PostRunAutonomousRetryAttemptFromClaim -ClaimResult $claim -ReviewRuns @($claimRuns) | Out-Null
-        $prevBypass = $env:AO_CLAIMED_REVIEW_RUN_BYPASS
-        $env:AO_CLAIMED_REVIEW_RUN_BYPASS = '1'
-        try {
-            & ao @runArgs
-            if ($LASTEXITCODE -ne 0) {
-                $failure = "ao review run failed (exit $LASTEXITCODE) for PR #$PrNumber"
-                $postFailureRuns = if ($FixtureSnapshot) {
-                    @($FixtureSnapshot.reviewRuns)
-                }
-                else {
-                    @(Get-AoReviewRuns -Project $Project)
-                }
-                Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
-                throw $failure
+        $triggerResult = Invoke-AoReviewTriggerForWorker -SessionId $SessionId
+        if (-not $triggerResult.ok) {
+            $failure = "review trigger failed (http $($triggerResult.httpStatus)) for PR #$PrNumber"
+            if ($triggerResult.httpStatus -eq 422) {
+                $script:OrchestratorClaimedReviewTriggerInvalid = $true
+                Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'aborted_by_recheck' -ReviewRuns @() `
+                    -Extra @{ reason = 'review_trigger_invalid' } | Out-Null
+                return
             }
-        }
-        finally {
-            if ($null -eq $prevBypass) {
-                Remove-Item Env:AO_CLAIMED_REVIEW_RUN_BYPASS -ErrorAction SilentlyContinue
+            $postFailureRuns = if ($FixtureSnapshot) {
+                @($FixtureSnapshot.reviewRuns)
             }
             else {
-                $env:AO_CLAIMED_REVIEW_RUN_BYPASS = $prevBypass
+                @(Get-AoReviewRuns -Project $Project)
             }
+            Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $postFailureRuns -Failure $failure | Out-Null
+            throw $failure
         }
+    }
+    if ($script:OrchestratorClaimedReviewTriggerInvalid) {
+        & $writeLog "orchestrator-claimed-review-run: skip invalid worker PR #$PrNumber session=$SessionId"
+        return @{ started = $false; reason = 'review_trigger_invalid'; headSha = $headSha }
     }
     if (-not $fenced.ok) {
         Complete-ReviewStartClaim -ClaimResult $claim -Outcome 'released_for_retry' -ReviewRuns @() -Extra @{ reason = 'side_effect_in_flight' } | Out-Null
