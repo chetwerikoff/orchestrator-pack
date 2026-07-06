@@ -20,7 +20,6 @@
     "scripts/review-finding-delivery-confirm.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
     "scripts/review-run-recovery.ps1",
-    "scripts/review-stuck-run-reaper.ps1",
     "scripts/orchestrator-wake-supervisor.ps1"
   ],
   "ownerImplementationBindings": [
