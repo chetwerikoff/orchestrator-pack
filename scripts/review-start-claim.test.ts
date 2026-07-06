@@ -512,6 +512,18 @@ describe('Review-StartClaim single-flight contract', () => {
     expect(result.retry).toBe(true);
   });
 
+  it('does not treat bare needs_review without latestRun as covering', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $visible = Test-ReviewStartClaimRunVisible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'needs_review' }
+      ) -PrNumber 266 -HeadSha $sha
+      [pscustomobject]@{ visible = [bool]$visible } | ConvertTo-Json -Compress
+    `);
+    expect(JSON.parse(output).visible).toBe(false);
+  });
+
   it('treats AO 0.10 needs_review with queued latestRun as covering', () => {
     const output = runPwsh(`
       . ${psString(helperPath)}

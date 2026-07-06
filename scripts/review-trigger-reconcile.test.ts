@@ -111,6 +111,17 @@ describe('isRunCoveringHead', () => {
     expect(isRunCoveringHead({ status })).toBe(covered);
   });
 
+  it('does not treat bare needs_review without latestRun as covering', () => {
+    expect(isRunCoveringHead({ prReviewStatus: 'needs_review' })).toBe(false);
+    expect(
+      isHeadCovered(
+        [{ prNumber: 42, targetSha: 'abc123', prReviewStatus: 'needs_review' }],
+        42,
+        'abc123',
+      ),
+    ).toBe(false);
+  });
+
   it('does not treat stale prReviewStatus as covering when latestRun failed', () => {
     expect(
       isRunCoveringHead({

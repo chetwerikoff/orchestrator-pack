@@ -7,7 +7,6 @@
 /** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} AoSession */
 
 export const IN_FLIGHT_REVIEW_STATUSES = new Set([
-  'needs_review',
   'running',
   'queued',
   'preparing',
