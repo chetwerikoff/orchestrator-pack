@@ -89,7 +89,7 @@
         "file": "scripts/ci-failure-notification-reconcile.ps1",
         "function": "Invoke-PlannedCiFailureReconcileSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "d6c0d318a9c0750d"
+        "predicateBodyHash": "26c841bf46906d81"
       }
     },
     {
