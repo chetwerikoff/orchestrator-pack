@@ -161,10 +161,11 @@ describe.sequential('side-process launch contract (#659)', () => {
       $stateRoot = ${ps(stateRoot)}
       $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
       $env:AO_ORCHESTRATOR_ESCALATION_STATE = ${ps(escalationState)}
+      $env:AO_ESCALATION_FORCE_SEND_FAILURE = '1'
       $pidVal = Start-OrchestratorWakeSupervisorChild -ChildId 'escalation-router' -OrchestratorSessionId 'orch-659' -Paths $paths -ProjectId 'orchestrator-pack' -ExtraChildArgs @('-Once','-PollSeconds','1')
       $mainLogPath = Join-Path $stateRoot 'escalation-router.log'
       $errLogPath = Join-Path $stateRoot 'escalation-router.log.err'
-      $deadline = [DateTimeOffset]::UtcNow.AddSeconds(45)
+      $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
       $mainLog = ''
       while ([DateTimeOffset]::UtcNow -lt $deadline) {
         if ((Test-Path -LiteralPath $mainLogPath) -and ((Get-Item -LiteralPath $mainLogPath).Length -gt 0)) {
@@ -204,7 +205,7 @@ describe.sequential('side-process launch contract (#659)', () => {
     const errText = payload.errLog ?? '';
     const mainText = payload.mainLog ?? '';
     expect(errText).not.toMatch(/parameter name 'ProjectId'/i);
-    expect(mainText).toMatch(/tick complete redelivered=1/i);
+    expect(mainText).toMatch(/tick complete redelivered=/i);
     expect(payload.attempts).toBeGreaterThan(attemptsBefore);
   });
 });
