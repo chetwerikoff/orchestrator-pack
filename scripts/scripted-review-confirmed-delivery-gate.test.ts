@@ -319,8 +319,9 @@ describe('post-submit seam wiring', () => {
 
   it('invoke-pack-review wires post-submit delivery after successful wrapper', () => {
     const text = readFileSync(path.join(repoRoot, 'scripts/invoke-pack-review.ps1'), 'utf8');
-    expect(text).toMatch(/Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview/);
+    expect(text).toMatch(/Invoke-ScriptedReviewPostSubmitDelivery\.ps1/);
     expect(text).toMatch(/Invoke-PackReviewWrapperWithFailureEvidence/);
+    expect(text.match(/Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview/g)?.length).toBe(2);
   });
 
   it('post-submit lib forwards to invoke-scripted-review-post-submit-delivery seam', () => {

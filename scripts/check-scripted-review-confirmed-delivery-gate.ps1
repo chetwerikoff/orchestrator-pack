@@ -62,16 +62,24 @@ foreach ($path in @($invokePackReview, $postSubmitLib, $postSubmitMjs)) {
 }
 
 $invokeText = Get-Content -LiteralPath $invokePackReview -Raw
-if ($invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview') {
-    Write-Host 'invoke-pack-review.ps1 must invoke post-submit confirmed-delivery gate wiring'
+$postSubmitLibText = Get-Content -LiteralPath $postSubmitLib -Raw
+if ($invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDelivery\.ps1') {
+    Write-Host 'invoke-pack-review.ps1 must dot-source Invoke-ScriptedReviewPostSubmitDelivery.ps1'
+    exit 1
+}
+$postSubmitCallCount = ([regex]::Matches($invokeText, 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview')).Count
+if ($postSubmitCallCount -lt 2) {
+    Write-Host 'invoke-pack-review.ps1 must invoke post-submit delivery on both successful wrapper branches'
     exit 1
 }
 if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -and $invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview') {
     Write-Host 'invoke-pack-review.ps1 must route through invoke-scripted-review-post-submit-delivery seam'
     exit 1
 }
-
-$postSubmitLibText = Get-Content -LiteralPath $postSubmitLib -Raw
+if ($postSubmitLibText -notmatch 'pwsh -NoProfile -File \$seamScript') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must launch invoke-scripted-review-post-submit-delivery.ps1'
+    exit 1
+}
 if ($postSubmitLibText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1') {
     Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must call invoke-scripted-review-post-submit-delivery seam'
     exit 1

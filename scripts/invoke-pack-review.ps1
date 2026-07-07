@@ -1,5 +1,7 @@
 # Reviewer-agnostic AO review entrypoint (Issue #86).
 # REVIEW_COMMAND names this script only; PACK_REVIEWER selects claude | codex.
+# After a successful wrapper (ao review submit inside), post-submit delivery runs
+# invoke-scripted-review-post-submit-delivery.ps1 → confirmed-delivery gate (Issue #669).
 #Requires -Version 5.1
 param()
 
