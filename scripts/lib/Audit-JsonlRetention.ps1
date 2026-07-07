@@ -401,6 +401,34 @@ function Invoke-AuditJsonlRetentionMaintenance {
     }
 }
 
+
+function Invoke-AuditJsonlLockedAppend {
+    param(
+        [string]$ActivePath,
+        [string]$Payload,
+        [scriptblock]$LogWriter = $null,
+        [int]$TimeoutMs = 30000
+    )
+
+    $lockPath = "$ActivePath.append.lock"
+    $deadline = (Get-Date).ToUniversalTime().AddMilliseconds($TimeoutMs)
+    while ($true) {
+        if (Test-AuditJsonlMaintenanceLock -LockPath $lockPath -LogWriter $LogWriter) {
+            try {
+                [System.IO.File]::AppendAllText($ActivePath, $Payload, [System.Text.UTF8Encoding]::new($false))
+                return
+            }
+            finally {
+                Remove-AuditJsonlMaintenanceLock -LockPath $lockPath
+            }
+        }
+        if ((Get-Date).ToUniversalTime() -gt $deadline) {
+            throw "audit_jsonl_append_lock_timeout: $ActivePath"
+        }
+        Start-Sleep -Milliseconds 5
+    }
+}
+
 function Add-AuditJsonlLine {
     param(
         [string]$ActivePath,
@@ -416,5 +444,5 @@ function Add-AuditJsonlLine {
 
     Invoke-AuditJsonlRetentionMaintenance -ActivePath $ActivePath -Policy $Policy -LogWriter $LogWriter | Out-Null
     $payload = if ($Line.EndsWith("`n")) { $Line } else { "$Line`n" }
-    [System.IO.File]::AppendAllText($ActivePath, $payload, [System.Text.UTF8Encoding]::new($false))
+    Invoke-AuditJsonlLockedAppend -ActivePath $ActivePath -Payload $payload -LogWriter $LogWriter
 }
