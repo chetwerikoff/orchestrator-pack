@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,14 @@ describe('AO Reviews board UI fork (Issue #628)', () => {
 
   it('renders seven column headers and one card per column via ReviewBoardView', () => {
     const uiRoot = path.join(repoRoot, 'tests/ao-reviews-board-runtime/ui');
+    if (!existsSync(path.join(uiRoot, 'node_modules', 'react', 'package.json'))) {
+      const install = spawnSync('npm', ['install', '--no-audit', '--no-fund'], {
+        cwd: uiRoot,
+        encoding: 'utf8',
+      });
+      expect(install.status, install.stderr || install.stdout).toBe(0);
+    }
+
     const result = spawnSync(
       process.execPath,
       ['--import', 'tsx', 'render-board-view.harness.ts'],
