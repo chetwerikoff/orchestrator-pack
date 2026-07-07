@@ -2,6 +2,10 @@
   "schemaVersion": 1,
   "description": "Explicit test-exclusion classes for launch-argv discovery (Issue #661 AC#5).",
   "pathPatterns": [
+    "*.test.ts",
+    "*.test.mjs",
+    "*.test.ps1",
+    "*.Tests.ps1",
     "**/*.test.ts",
     "**/*.test.mjs",
     "**/*.test.ps1",

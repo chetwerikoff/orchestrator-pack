@@ -124,7 +124,25 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
   it('excludes test-only spawn sites explicitly', () => {
     const bundle = loadLaunchArgvBundle(repoRoot);
     expect(isTestExcludedFile('scripts/foo.test.ts', bundle.testExclusions)).toBe(true);
+    expect(isTestExcludedFile('foo.test.ts', bundle.testExclusions)).toBe(true);
     expect(isTestExcludedFile('scripts/lib/Worker-Recovery.ps1', bundle.testExclusions)).toBe(false);
+  });
+
+  it('does not classify RegExp.prototype.exec as a process launch', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'launch-argv-regexp-exec-'));
+    tempDirs.push(tmp);
+    const rel = 'scripts/regex-exec-probe.mjs';
+    mkdirSync(join(tmp, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(tmp, rel),
+      "const pattern = /foo/;\nexport function scan(line) { return pattern.exec(line); }\n",
+      'utf8',
+    );
+    const hits = discoverLaunchSites(tmp, {
+      files: [rel],
+      testExclusions: { pathPatterns: [], dedicatedTestHelperModules: [] },
+    });
+    expect(hits.some((h) => h.patternId === 'exec')).toBe(false);
   });
 
   it('rejects invalid validator ids in inventory rows', () => {

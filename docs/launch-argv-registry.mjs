@@ -100,7 +100,11 @@ export const LAUNCH_IDIOM_PATTERNS = [
     id: 'exec',
     languages: ['ts', 'mjs', 'js'],
     regex: /\bexec\s*\(/,
-    lineFilter: (line) => !/\bexecFile/.test(line) && !/^\s*(\/\/|\/\*|\*)/.test(line) && !/import\s+/.test(line),
+    lineFilter: (line) =>
+      (/\bchild_process\.exec\s*\(/.test(line)
+        || (!/\.exec\s*\(/.test(line) && !/\bexecFile/.test(line)))
+      && !/^\s*(\/\/|\/\*|\*)/.test(line)
+      && !/import\s+/.test(line),
   },
   {
     id: 'fork',
@@ -168,20 +172,52 @@ function normalizeRel(rel) {
 }
 
 /**
+ * @param {string} pattern
+ */
+function globPatternToRegex(pattern) {
+  let re = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    if (pattern.startsWith('**/', i)) {
+      re += '(?:.*/)?';
+      i += 2;
+      continue;
+    }
+    if (pattern.startsWith('/**', i)) {
+      re += '(?:/.*)?';
+      i += 2;
+      continue;
+    }
+    if (pattern.startsWith('**', i)) {
+      re += '.*';
+      i += 1;
+      continue;
+    }
+    const ch = pattern[i];
+    if (ch === '*') {
+      re += '[^/]*';
+      continue;
+    }
+    if (ch === '?') {
+      re += '[^/]';
+      continue;
+    }
+    if ('\\.^${}()|[]+'.includes(ch)) {
+      re += `\\${ch}`;
+    } else {
+      re += ch;
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+/**
  * @param {string} rel
  * @param {string[]} patterns
  */
 export function matchesPathPattern(rel, patterns) {
   const norm = normalizeRel(rel);
   for (const pattern of patterns) {
-    const escaped = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*\*/g, '<<<GLOBSTAR>>>')
-      .replace(/\*/g, '[^/]*')
-      .replace(/<<<GLOBSTAR>>>/g, '.*')
-      .replace(/\?/g, '[^/]');
-    const re = new RegExp(`^${escaped}$`);
-    if (re.test(norm)) return true;
+    if (globPatternToRegex(pattern).test(norm)) return true;
   }
   return false;
 }
