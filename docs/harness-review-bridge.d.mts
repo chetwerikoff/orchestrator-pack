@@ -1,4 +1,7 @@
 import type { TerminalVerdictPayload } from '../plugins/ao-codex-pr-reviewer/lib/emit.js';
+import type { ReviewerHarnessAbortClassification } from './ao-0-10-review-api.d.mts';
+
+export type { ReviewerHarnessAbortClassification };
 
 export declare const HARNESS_BRIDGE_KILL_SWITCH_ENV: string;
 export declare const HARNESS_NESTED_BUDGET_ENV: string;
@@ -21,15 +24,6 @@ export interface HarnessKillSwitchEvaluation {
 export interface NestedReviewBudgetEvaluation {
   ok: boolean;
   reason?: string;
-}
-
-export interface ReviewerHarnessAbortClassification {
-  abort: boolean;
-  reason: string;
-  harness?: string | null;
-  expectedHarness?: string;
-  httpStatus?: number;
-  classified?: boolean;
 }
 
 export interface MapperSubmitValidation {
