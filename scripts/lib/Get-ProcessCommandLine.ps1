@@ -3,16 +3,16 @@
   Shared process command-line reader for Linux/macOS/Windows.
 #>
 
-function Get-ProcessCommandLineById {
+function Get-ProcessCommandLinePartsById {
     param([int]$ProcessId)
 
-    if ($ProcessId -le 0) { return '' }
+    if ($ProcessId -le 0) { return @() }
 
     if ($IsLinux) {
         $procPath = "/proc/$ProcessId/cmdline"
         if (Test-Path -LiteralPath $procPath) {
             $raw = [System.IO.File]::ReadAllBytes($procPath)
-            if ($raw.Length -eq 0) { return '' }
+            if ($raw.Length -eq 0) { return @() }
             $parts = New-Object System.Collections.Generic.List[string]
             $current = New-Object System.Text.StringBuilder
             foreach ($byte in $raw) {
@@ -29,22 +29,35 @@ function Get-ProcessCommandLineById {
             if ($current.Length -gt 0) {
                 $parts.Add($current.ToString())
             }
-            return ($parts -join ' ')
+            return [string[]]$parts.ToArray()
         }
+        return @()
     }
 
     if ($IsMacOS) {
         $out = & ps -p $ProcessId -o command= 2>$null
-        return (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+        $commandLine = (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+        if (-not $commandLine) { return @() }
+        return [string[]](Split-ProcessCommandLineTokens -CommandLine $commandLine)
     }
 
     try {
         $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
-        return [string]$cim.CommandLine
+        $commandLine = [string]$cim.CommandLine
+        if (-not $commandLine) { return @() }
+        return [string[]](Split-ProcessCommandLineTokens -CommandLine $commandLine)
     }
     catch {
-        return ''
+        return @()
     }
+}
+
+function Get-ProcessCommandLineById {
+    param([int]$ProcessId)
+
+    $parts = @(Get-ProcessCommandLinePartsById -ProcessId $ProcessId)
+    if ($parts.Count -eq 0) { return '' }
+    return ($parts -join ' ')
 }
 
 function Get-OrchestratorWakeSupervisorProcessCommandLineFixture {
@@ -66,6 +79,17 @@ function Get-OrchestratorWakeSupervisorProcessCommandLineFixture {
         return [string]$map.$key
     }
     return $null
+}
+
+
+function Get-OrchestratorWakeSupervisorProcessCommandLineTokens {
+    param([int]$ProcessId)
+
+    $fixture = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
+    if ($null -ne $fixture) {
+        return [string[]](Split-ProcessCommandLineTokens -CommandLine $fixture)
+    }
+    return [string[]](Get-ProcessCommandLinePartsById -ProcessId $ProcessId)
 }
 
 function Get-OrchestratorWakeSupervisorProcessCommandLine {
@@ -111,5 +135,5 @@ function Split-ProcessCommandLineTokens {
     if ($current.Length -gt 0) {
         $tokens.Add($current.ToString())
     }
-    return ,@($tokens.ToArray())
+    return [string[]]$tokens.ToArray()
 }

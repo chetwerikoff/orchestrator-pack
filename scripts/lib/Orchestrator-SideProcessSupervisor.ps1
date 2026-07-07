@@ -487,7 +487,7 @@ function Get-OrchestratorWakeSupervisorCommandLineSwitchValue {
             }
             return 'true'
         }
-        if ($token -like "$SwitchName=*") {
+        if ($token.StartsWith("$SwitchName=") -and $token.Length -gt ($SwitchName.Length + 1)) {
             return $token.Substring($SwitchName.Length + 1)
         }
     }
@@ -516,15 +516,16 @@ function Get-OrchestratorWakeSupervisorCommandLineScriptPath {
 
 function Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity {
     param(
-        [string]$CommandLine,
+        [string]$CommandLine = '',
+        [string[]]$Tokens = @(),
         [string]$ProjectId,
         [string]$StateRoot
     )
 
-    if (-not $CommandLine) { return $false }
-
-    $tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
-    if (-not $tokens -or $tokens.Count -eq 0) { return $false }
+    if ((-not $Tokens -or $Tokens.Count -eq 0) -and $CommandLine) {
+        $Tokens = @(Split-ProcessCommandLineTokens -CommandLine $CommandLine)
+    }
+    if (-not $Tokens -or $Tokens.Count -eq 0) { return $false }
 
     $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
     if (-not $scriptInCommand) { return $false }
@@ -575,8 +576,9 @@ function Test-OrchestratorWakeSupervisorSupervisorIdentity {
     if ($ProcessId -le 0) { return $false }
     if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return $false }
 
-    $commandLine = Get-OrchestratorWakeSupervisorProcessCommandLine -ProcessId $ProcessId
-    return Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity -CommandLine $commandLine `
+    $tokens = @(Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId)
+    if ($tokens.Count -eq 0) { return $false }
+    return Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity -Tokens $tokens `
         -ProjectId $ProjectId -StateRoot $StateRoot
 }
 
@@ -680,12 +682,15 @@ function Resolve-OrchestratorWakeSupervisorSupervisorPid {
             -ProjectId $ProjectId -StateRoot $Paths.Root
     }
 
+    $scannedCandidates = Find-OrchestratorWakeSupervisorManagedSupervisorCandidates -ProjectId $ProjectId -StateRoot $Paths.Root
+    $candidateSet = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($candidatePid in @($scannedCandidates)) {
+        [void]$candidateSet.Add([int]$candidatePid)
+    }
     if ($recordedValid) {
-        $candidates = @($recordedPid)
+        [void]$candidateSet.Add([int]$recordedPid)
     }
-    else {
-        $candidates = Find-OrchestratorWakeSupervisorManagedSupervisorCandidates -ProjectId $ProjectId -StateRoot $Paths.Root
-    }
+    $candidates = @($candidateSet | Sort-Object)
 
     $ambiguous = ($candidates.Count -gt 1)
     $resolvedPid = 0
@@ -693,38 +698,35 @@ function Resolve-OrchestratorWakeSupervisorSupervisorPid {
 
     if ($ambiguous) {
         $diagnostics.Add("ambiguous managed supervisor candidates: $($candidates -join ',')") | Out-Null
-    }
-
-    if ($recordedValid) {
-        $resolvedPid = $recordedPid
-        $discoverySource = 'pid-file'
-        if ($recordedPid -gt 0 -and $candidates.Count -gt 0 -and $candidates -notcontains $recordedPid) {
-            $diagnostics.Add("supervisor.pid pid=$recordedPid validated; additional managed candidates: $($candidates -join ',')") | Out-Null
+        if ($recordedValid) {
+            $diagnostics.Add("supervisor.pid pid=$recordedPid valid but additional managed supervisor candidates were discovered") | Out-Null
         }
     }
     elseif ($candidates.Count -eq 1) {
         $resolvedPid = $candidates[0]
-        $discoverySource = 'process-scan'
-        if ($recordedPid -gt 0) {
-            if (Test-ProcessAlive -ProcessId $recordedPid) {
-                $diagnostics.Add("supervisor.pid pid=$recordedPid unrelated to managed supervisor") | Out-Null
+        $discoverySource = if ($recordedValid -and $resolvedPid -eq $recordedPid) { 'pid-file' } else { 'process-scan' }
+        if (-not $recordedValid) {
+            if ($recordedPid -gt 0) {
+                if (Test-ProcessAlive -ProcessId $recordedPid) {
+                    $diagnostics.Add("supervisor.pid pid=$recordedPid unrelated to managed supervisor") | Out-Null
+                }
+                else {
+                    $diagnostics.Add("supervisor.pid pid=$recordedPid stale (exited)") | Out-Null
+                }
+            }
+            elseif (Test-Path -LiteralPath $Paths.SupervisorPid) {
+                $diagnostics.Add('supervisor.pid missing or empty; discovered managed supervisor by process scan') | Out-Null
             }
             else {
-                $diagnostics.Add("supervisor.pid pid=$recordedPid stale (exited)") | Out-Null
+                $diagnostics.Add('supervisor.pid missing; discovered managed supervisor by process scan') | Out-Null
             }
-        }
-        elseif (Test-Path -LiteralPath $Paths.SupervisorPid) {
-            $diagnostics.Add('supervisor.pid missing or empty; discovered managed supervisor by process scan') | Out-Null
-        }
-        else {
-            $diagnostics.Add('supervisor.pid missing; discovered managed supervisor by process scan') | Out-Null
         }
     }
     elseif ($recordedPid -gt 0 -and (Test-ProcessAlive -ProcessId $recordedPid)) {
         $diagnostics.Add("supervisor.pid pid=$recordedPid unrelated to managed supervisor") | Out-Null
     }
 
-    if ($ambiguous -and -not $recordedValid) {
+    if ($ambiguous) {
         $resolvedPid = 0
         $discoverySource = 'none'
     }

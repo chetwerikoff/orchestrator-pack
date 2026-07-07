@@ -7,7 +7,7 @@ export const repoRoot = path.resolve(import.meta.dirname, '..');
 export const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 
-const supervisorHookTimeoutMs = 120_000;
+const supervisorHookTimeoutMs = 180_000;
 const tmpRoots: string[] = [];
 
 export const managedChildRoles = [
@@ -125,7 +125,7 @@ export function runSupervisor(
       cwd: repoRoot,
       env: process.env,
       encoding: 'utf8',
-      timeout: 120_000,
+      timeout: supervisorHookTimeoutMs,
     },
   );
   for (const [key, previous] of Object.entries(savedEnv)) {

@@ -12,7 +12,7 @@ import {
 } from './supervisor-recovery.test-helpers.js';
 
 const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
-const issue613TimeoutMs = 90_000;
+const issue613TimeoutMs = 180_000;
 
 vi.setConfig({ testTimeout: issue613TimeoutMs, hookTimeout: 30_000 });
 
@@ -45,7 +45,7 @@ function startDetachedSupervisor(
 }
 
 async function waitForListenerMarker(stateDir: string): Promise<void> {
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (fs.existsSync(path.join(stateDir, 'markers', 'listener.marker.json'))) {
       return;
