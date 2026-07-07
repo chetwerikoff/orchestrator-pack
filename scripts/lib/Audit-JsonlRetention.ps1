@@ -4,13 +4,8 @@
 #>
 
 $Script:AuditJsonlRetentionPolicyPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'audit-jsonl-retention-policy.json'
-$Script:AuditJsonlProcessAliveLoaded = $false
 
-function Ensure-AuditJsonlProcessAliveLoaded {
-    if ($Script:AuditJsonlProcessAliveLoaded) { return }
-    . (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
-    $Script:AuditJsonlProcessAliveLoaded = $true
-}
+. (Join-Path $PSScriptRoot 'Orchestrator-ProcessAlive.ps1')
 
 function Get-AuditJsonlMaintenanceLockMaxAgeSeconds {
     $raw = [Environment]::GetEnvironmentVariable('AUDIT_JSONL_MAINTENANCE_LOCK_MAX_AGE_SECONDS')
@@ -48,7 +43,6 @@ function Test-AuditJsonlMaintenanceLockStale {
 
     $ownerPid = Get-AuditJsonlMaintenanceLockPid -LockPath $LockPath
     if ($ownerPid -gt 0) {
-        Ensure-AuditJsonlProcessAliveLoaded
         if (-not (Test-ProcessAlive -ProcessId $ownerPid)) {
             return $true
         }

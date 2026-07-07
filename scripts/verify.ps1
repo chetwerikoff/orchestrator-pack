@@ -1097,6 +1097,24 @@ else {
 
 Write-Check 'verify-runtime/github-fleet-cache-vitest' 'SKIP' 'owned by check-github-fleet-cache-bypass.ps1 + full Vitest lane (Issue #488)'
 
+Write-Host ''
+Write-Host '== audit retention guarded dot-source (Issue #610) =='
+$auditRetentionGuardedDotSourceCheck = Join-Path $Root 'scripts/check-audit-retention-guarded-dotsource.ps1'
+if (Test-Path -LiteralPath $auditRetentionGuardedDotSourceCheck -PathType Leaf) {
+    & $auditRetentionGuardedDotSourceCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-audit-retention-guarded-dotsource.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'audit retention guarded dot-source regression failed (Issue #610)'
+    }
+    else {
+        Write-Check 'scripts/check-audit-retention-guarded-dotsource.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-audit-retention-guarded-dotsource.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing audit retention guarded dot-source regression (Issue #610)'
+}
+
 Write-Host '== github fleet shared API governor (Issue #585) =='
 $governorChokepointCheck = Join-Path $Root 'scripts/check-gh-governor-chokepoint-inventory.ps1'
 if (Test-Path -LiteralPath $governorChokepointCheck -PathType Leaf) {
