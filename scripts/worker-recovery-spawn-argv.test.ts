@@ -21,7 +21,7 @@ import {
   type DeriveRecoverySpawnDisplayNameResult,
 } from './lib/worker-recovery-spawn-argv.mjs';
 import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
-import { psString, repoRoot } from './_test-pwsh-helpers.js';
+import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const recoveryPs1 = path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1');
 
@@ -161,6 +161,18 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
     expect(recoveryText).toMatch(/Invoke-WorkerRecoverySpawnArgvCli/);
     expect(recoveryText).toMatch(/Resolve-WorkerRecoverySpawnProjectId/);
     expect(recoveryText).toMatch(/grantDenied\s*=\s*\[bool\]\$spawnGate\.denied/);
+  });
+
+  it('worker recovery spawn: accepts PSCustomObject worktree records for project resolution', () => {
+    const script = `
+      . '${recoveryPs1.replace(/'/g, "''")}'
+      $record = '{"sessionId":"opk-638","projectId":"orchestrator-pack"}' | ConvertFrom-Json
+      $result = Resolve-WorkerRecoverySpawnProjectId -WorktreeRecord $record -FallbackProjectId 'fallback-project'
+      [pscustomobject]@{ ok = [bool]$result.ok; projectId = [string]$result.projectId } | ConvertTo-Json -Compress
+    `;
+    const parsed = JSON.parse(runPwsh(script)) as { ok: boolean; projectId: string };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.projectId).toBe('orchestrator-pack');
   });
 });
 

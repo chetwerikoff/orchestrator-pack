@@ -71,7 +71,7 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
         [string]$RepoRoot,
         [string]$CanonicalPath,
         [string]$ProjectId = 'orchestrator-pack',
-        [hashtable]$FallbackRecord = $null,
+        $FallbackRecord = $null,
         [switch]$FixtureMode
     )
 
@@ -289,16 +289,32 @@ function Build-WorkerRecoverySpawnArgv {
     }
 }
 
+function ConvertTo-WorkerRecoveryRecordMap {
+    param($Record)
+
+    if ($null -eq $Record) { return $null }
+    if ($Record -is [hashtable]) { return $Record }
+    if ($Record -is [System.Collections.IDictionary]) {
+        return @{ } + $Record
+    }
+
+    $map = [ordered]@{}
+    foreach ($prop in $Record.PSObject.Properties) {
+        $map[$prop.Name] = $prop.Value
+    }
+    return $map
+}
+
 function Resolve-WorkerRecoverySpawnProjectId {
     param(
-        [hashtable]$WorktreeRecord = $null,
+        $WorktreeRecord = $null,
         $AoSessionRow = $null,
         [string]$FallbackProjectId = ''
     )
 
     return Invoke-WorkerRecoverySpawnArgvCli -Subcommand 'resolveRecoverySpawnProjectId' -Payload @{
-        worktreeRecord    = $WorktreeRecord
-        aoSessionRow      = $AoSessionRow
+        worktreeRecord    = (ConvertTo-WorkerRecoveryRecordMap -Record $WorktreeRecord)
+        aoSessionRow      = (ConvertTo-WorkerRecoveryRecordMap -Record $AoSessionRow)
         fallbackProjectId = $FallbackProjectId
     }
 }
