@@ -85,10 +85,6 @@
     {
       "path": "scripts/check-agent-rules-grep-inventory.ps1",
       "kind": "guard"
-    },
-    {
-      "path": "scripts/agent-rules-line-budget.test.ts",
-      "kind": "test"
     }
   ]
 }

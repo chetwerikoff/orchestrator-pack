@@ -1,0 +1,43 @@
+{
+  "issue_number": 654,
+  "iteration_id": "issue-654-agent-rules-restructure",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T11:39:27.419Z",
+  "baseline": {
+    "commit_sha": "75879ddbfbaac4253027246f76e50548224d3ab8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4ae898ea7c86769c36cf63914447329c52ec74ec71f24cf694fffb79b8286a77"
+  },
+  "declared_paths": [
+    "prompts/agent_rules.md",
+    "docs/coworker-delegation.md",
+    "docs/tiering.md",
+    "docs/migration_notes.md",
+    "AGENTS.md",
+    "scripts/check-review-wake-trigger.ps1",
+    "scripts/check-review-trigger-reeval.ps1",
+    "scripts/check-review-ready-report-state-seed.ps1",
+    "scripts/check-dead-worker-reconcile.ps1",
+    "scripts/check-ci-green-wake-reconcile.ps1",
+    "scripts/check-gh-wrapper.ps1",
+    "scripts/check-orchestrator-review-head-coverage.ps1",
+    "scripts/check-orchestrator-review-head-ready.ps1",
+    "scripts/check-command-runtime-forbidden-workaround.ps1",
+    "scripts/check-coworker-delegation-threshold-drift.ps1",
+    "scripts/check-read-delegation-policy-consistency.ps1",
+    "scripts/check-reviewer-contract-mapping.ps1",
+    "scripts/check-contract-evidence-reverify.ps1",
+    "scripts/draft-discipline.mjs",
+    "scripts/rca-spec-discipline-surfaces.json",
+    "scripts/verify.ps1",
+    "scripts/check-agent-rules-line-budget.ps1",
+    "scripts/check-agent-rules-moved-content.ps1",
+    "scripts/check-agent-rules-grep-inventory.ps1",
+    "scripts/agent-rules-grep-inventory.json"
+  ],
+  "declared_globs": [
+    "tests/**"
+  ],
+  "amendments": []
+}
