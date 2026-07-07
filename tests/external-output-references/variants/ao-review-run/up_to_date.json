@@ -1,0 +1,10 @@
+{
+  "id": "ao-review-run/up_to_date",
+  "command": "ao-review list",
+  "variant": "up_to_date",
+  "version": 1,
+  "captureRef": "captures/ao-review-run/up_to_date.raw.json",
+  "provenanceRef": "captures/ao-review-run/up_to_date.provenance.json",
+  "extends": "_shared.json",
+  "forbiddenTogether": []
+}

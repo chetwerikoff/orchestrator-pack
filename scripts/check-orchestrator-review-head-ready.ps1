@@ -25,7 +25,11 @@ $requiredExample = @(
     'PRE-RUN HEAD-READY RE-CHECK',
     'degraded-CI orchestrator branch',
     'ROUND PROGRESSION',
-    'only when the new head is ready for review'
+    'only when the new head is ready for review',
+    'SCRIPT-OWNED ROUTINE REVIEW',
+    'review-trigger-reconcile.ps1',
+    'review-trigger-reeval.ps1',
+    'orchestrator-wake-listener.ps1'
 )
 
 $missingExample = @($requiredExample | Where-Object { $exampleText -notlike "*$_*" })
@@ -39,7 +43,12 @@ $requiredRules = @(
     'Issue #195',
     'review-head-ready.mjs',
     'uncovered-but-not-ready',
-    'PRE-RUN HEAD-READY RE-CHECK'
+    'PRE-RUN HEAD-READY RE-CHECK',
+    'review-trigger-reconcile.ps1',
+    'review-trigger-reeval.ps1',
+    'orchestrator-wake-listener.ps1',
+    'does **not** apply this gate for routine rounds',
+    'issue #641'
 )
 
 $missingRules = @($requiredRules | Where-Object { $rulesText -notlike "*$_*" })

@@ -45,7 +45,7 @@ import {
   CYCLE_SURFACE_READY_FOR_REVIEW,
 } from './worker-iteration-cycle.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
-/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, findingCount?: number, openFindingCount?: number, sentFindingCount?: number, terminationReason?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
+/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string, findingCount?: number, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, body?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
 /** @typedef {{ prNumber?: number, checks?: Array<{ name?: string, state?: string, conclusion?: string, status?: string }> }} CiChecksByPrRow */
 /** @typedef {{ prNumber?: number, requiredCheckNames?: string[] }} RequiredCheckNamesRow */
@@ -61,13 +61,19 @@ export const DEFAULT_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 export {
   COVERED_TERMINAL_REVIEW_STATUSES,
   IN_FLIGHT_REVIEW_STATUSES,
+  LEGACY_REVIEW_STATUS_ALIASES,
   NON_LIVE_WORKER_SESSION_STATUSES,
   collectSessionIdentifiers,
   getSessionIdentifier,
   isHeadCovered,
+  isLegacyDeliveredReviewStatus,
+  isLegacyUndeliveredReviewStatus,
   isLiveWorkerSession,
   isRunCoveringHead,
+  normalizeLegacyReviewRunStatus,
   normalizeSha,
+  resolveAuthoritativeReviewRunStatus,
+  resolveNormalizedReviewRunStatus,
   toArray,
 } from './review-reconcile-primitives.mjs';
 

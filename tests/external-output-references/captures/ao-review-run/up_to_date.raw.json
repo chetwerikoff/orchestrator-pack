@@ -1,0 +1,11 @@
+{
+  "id": "review-run-scrubbed-clean",
+  "status": "up_to_date",
+  "prReviewStatus": "up_to_date",
+  "prNumber": 42,
+  "targetSha": "deadbeef",
+  "findingCount": 0,
+  "openFindingCount": 0,
+  "deliveredFindingCount": 0,
+  "verdict": "approved"
+}

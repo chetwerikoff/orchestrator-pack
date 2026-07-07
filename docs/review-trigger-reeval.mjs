@@ -637,7 +637,7 @@ export function planDeferredWatchTick(input) {
         type: 'empty_review_trap',
         prNumber: Number(entry.prNumber),
         headSha: normalizeSha(String(entry.headSha ?? '')),
-        terminationReason: evaluation.terminationReason,
+        failureDetail: evaluation.failureDetail,
         watchKey: key,
       });
       nextEntries[key] = { ...evaluation.nextEntry, status: 'discarded' };

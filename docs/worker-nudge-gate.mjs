@@ -658,9 +658,9 @@ export function classifyIntent(input) {
     surface === 'waiting_worker_review_response' ||
     surface === 'merge.ready' ||
     message.includes('review findings') ||
-    message.includes('needs_triage') ||
+    message.includes('changes_requested') ||
     message.includes('addressing_reviews') ||
-    message.includes('ao review list')
+    message.includes('GET /reviews')
   ) {
     return 'review-findings';
   }

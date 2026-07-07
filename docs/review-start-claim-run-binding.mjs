@@ -1,5 +1,5 @@
 /**
- * Review-start claim ↔ AO review run lifecycle binding (Issue #521).
+ * Review-start claim ↔ review trigger lifecycle binding (Issue #521).
  */
 import { printJson, readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import {
@@ -8,6 +8,7 @@ import {
   KNOWN_NON_COVERING_RUN_STATUSES,
 } from './review-start-claim-lifecycle.mjs';
 import { toArray } from './review-run-recovery.mjs';
+import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 
 export const REVIEW_START_CLAIM_RUN_BINDING_VERSION = 'review-start-claim-run-binding/v1';
 
@@ -82,7 +83,7 @@ export function resolveBindingProjectNamespace({ claim, projectNamespace } = {})
 }
 
 function normalizeStatus(status) {
-  return String(status ?? '').trim().toLowerCase();
+  return normalizeLegacyReviewRunStatus(String(status ?? '').trim());
 }
 
 function claimProjectMatches(claim, projectNamespace) {

@@ -6,11 +6,12 @@
       "id": "run-reassign-pr188",
       "prNumber": 188,
       "targetSha": "reassigndead",
-      "status": "waiting_update",
-      "sentFindingCount": 2,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 2,
       "openFindingCount": 0,
       "linkedSessionId": "opk-reuse",
-      "sentAt": "2026-06-04T10:15:00.000Z"
+      "deliveredAt": "2026-06-04T10:15:00.000Z"
     }
   ],
   "sessions": [

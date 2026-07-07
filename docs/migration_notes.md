@@ -14,6 +14,22 @@ Source migration note read read-only from:
 
 `C:\Users\che\.claude\projects\C--Users-che-Documents-Projects-ai-orchestrator\memory\project_composio_migration.md`
 
+
+## AO 0.10 review pipeline vocabulary migration (Issue #625)
+
+After merging the #625 vocabulary migration:
+
+1. **Dead CLI retired:** production scripts use `ao-review run` / `Get-AoReviewRuns` fan-out — not `ao review run|list|send|execute`.
+2. **`review-send-reconcile.ps1` REMOVED:** auto-delivery on submit supersedes first-send `ao review send`; drop the child from wake-supervisor if still registered locally.
+3. **Status vocabulary:** `needs_triage` / `waiting_update` / `sentFindingCount` / `terminationReason` → `changes_requested` / `deliveredAt` / `deliveredFindingCount` / `latestRun.body`.
+4. **Live orchestration:** `orchestratorRules` yaml is legacy-import-only at 0.10; follow `prompts/agent_rules.md` + side-process scripts (`review-trigger-reconcile.ps1`, `review-finding-delivery-confirm.ps1`).
+5. **Operator adoption (AC#6):**
+   - Apply #210 `reviewers` harness via project-config API.
+   - Restart wake-supervisor children (`scripts/orchestrator-wake-supervisor.ps1`).
+   - Verify a **routine review round triggered script-side** (e.g. `review-trigger-reconcile.ps1 -Once -DryRun` then live tick, or wake-listener on a ready head) while the **orchestrator LLM session is idle** — not from an LLM turn procedure.
+   - Confirm `prompts/agent_rules.md` contains **no routine-turn review procedure** (script-owned starters + #641 exception pointer only).
+
+
 ## Issue queue index (2026-05)
 
 Operators and architects resolving draft files to GitHub Issues should use

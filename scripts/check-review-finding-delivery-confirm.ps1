@@ -53,8 +53,8 @@ if ($submitMjsText -notmatch 'DEFAULT_MAX_SUBMITS = 1') {
     exit 1
 }
 
-if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'sent_to_agent'") {
-    Write-Host 'docs/review-finding-delivery-confirm.mjs must treat sent_to_agent as pending sent delivery'
+if ($mjs -notmatch "PENDING_SENT_DELIVERY_STATUSES[\s\S]*'changes_requested'") {
+    Write-Host 'docs/review-finding-delivery-confirm.mjs must treat changes_requested as pending sent delivery'
     exit 1
 }
 

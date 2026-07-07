@@ -17,6 +17,7 @@ import {
   hasFailedOrCancelledOnHead,
   isHeadCovered,
   isRunCoveringHead,
+  normalizeLegacyReviewRunStatus,
   normalizeSha,
   resolveHeadCommittedAtMs,
   toArray,
@@ -99,7 +100,7 @@ export function classifyCurrentHeadCoverage(rows) {
     if (!sha) {
       return { verdict: 'unknown', reason: 'malformed_head_sha' };
     }
-    const status = String(run?.status ?? '').toLowerCase();
+    const status = normalizeLegacyReviewRunStatus(run?.status);
     if (!status) {
       return { verdict: 'unknown', reason: 'missing_status' };
     }
@@ -112,7 +113,7 @@ export function classifyCurrentHeadCoverage(rows) {
   }
 
   const terminalRows = list.filter((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
+    const status = normalizeLegacyReviewRunStatus(run?.status);
     return status !== 'outdated';
   });
   if (terminalRows.length === 0) {
@@ -134,7 +135,7 @@ export function classifyCurrentHeadCoverage(rows) {
     return aMs === bMs;
   });
   if (latestPeers.length > 1) {
-    const statuses = new Set(latestPeers.map((run) => String(run?.status ?? '').toLowerCase()));
+    const statuses = new Set(latestPeers.map((run) => normalizeLegacyReviewRunStatus(run?.status)));
     if (statuses.size > 1) {
       return { verdict: 'unknown', reason: 'ambiguous_latest_rows' };
     }

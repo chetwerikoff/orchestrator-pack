@@ -6,6 +6,11 @@
  */
 import { printJson, readStdinJson, resolveBoundedInt, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
 import {
+  isRunCoveringHead,
+  normalizeLegacyReviewRunStatus,
+  resolveAuthoritativeReviewRunStatus,
+} from './review-reconcile-primitives.mjs';
+import {
   DEFAULT_ATTEMPT_CEILING_MS,
   evaluateAttemptCeiling,
   evaluateReadinessEnvelopeWithPause,
@@ -38,9 +43,8 @@ export const COVERED_RUN_STATUSES = [
   'preparing',
   'running',
   'reviewing',
-  'clean',
-  'needs_triage',
-  'waiting_update',
+  'up_to_date',
+  'changes_requested',
 ];
 
 export const IN_FLIGHT_RUN_STATUSES = ['queued', 'preparing', 'running', 'reviewing'];
@@ -73,7 +77,7 @@ function normalizeHeadSha(headSha) {
 }
 
 function normalizeStatus(status) {
-  return String(status ?? '').trim().toLowerCase();
+  return normalizeLegacyReviewRunStatus(String(status ?? '').trim());
 }
 
 function clampInt(value, fallback, min, max) {
@@ -184,7 +188,7 @@ export function evaluateMatchingRunEvidenceForKey(reviewRuns, prNumber, headSha)
   const ambiguousRuns = [];
   for (const run of toArray(reviewRuns)) {
     if (!runMatchesKey(run, prNumber, normalized)) continue;
-    const status = normalizeStatus(run?.status);
+    const status = normalizeStatus(resolveAuthoritativeReviewRunStatus(run));
     if (!status) {
       ambiguousRuns.push({ runId: String(run?.id ?? run?.runId ?? ''), status: '' });
       continue;
@@ -210,7 +214,8 @@ export function findCoveringRunForKey(reviewRuns, prNumber, headSha, projectName
       ? runMatchesBindingKey(run, prNumber, normalized, projectNamespace)
       : runMatchesKey(run, prNumber, normalized);
     if (!keyMatch) continue;
-    const status = normalizeStatus(run?.status);
+    if (!isRunCoveringHead(run)) continue;
+    const status = normalizeStatus(resolveAuthoritativeReviewRunStatus(run));
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     const entry = { run, status, runId: String(run?.id ?? run?.runId ?? '') };
     if (IN_FLIGHT_RUN_STATUSES.includes(status)) {

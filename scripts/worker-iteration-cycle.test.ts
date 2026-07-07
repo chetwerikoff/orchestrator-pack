@@ -15,6 +15,7 @@ import {
   commitReviewStartedCycleState,
   evaluateNudgeCycleGate,
   evaluateOpenReviewRevision,
+  isRevisionTerminalReleased,
   evaluateReadyForReviewSettleDebounce,
   evaluateReviewCycleGate,
   evaluateWorkerIterationCycleForPr,
@@ -104,6 +105,25 @@ describe('open review revision', () => {
       currentHeadSha: 'abc123',
     });
     expect(open.open).toBe(false);
+  });
+
+  it('treats failed latestRun as terminal even when prReviewStatus is stale running', () => {
+    const run = {
+      id: 'run-failed',
+      prNumber: 42,
+      targetSha: 'abc123',
+      prReviewStatus: 'running',
+      latestRunStatus: 'failed',
+    };
+    expect(isRevisionTerminalReleased(run)).toBe(true);
+    const open = evaluateOpenReviewRevision({
+      reviewRuns: [run],
+      prNumber: 42,
+      session: liveWorker(),
+      currentHeadSha: 'abc123',
+      nowMs: Date.parse('2026-06-01T00:05:00.000Z'),
+    });
+    expect(open.reason).not.toBe('revision_in_flight');
   });
 });
 

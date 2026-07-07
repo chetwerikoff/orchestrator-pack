@@ -11,6 +11,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 
 $Script:WorkerRecoveryCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/worker-recovery.mjs'
+$Script:WorkerRecoverySpawnArgvCli = Join-Path $PSScriptRoot 'worker-recovery-spawn-argv.mjs'
 
 function Invoke-WorkerRecoveryCli {
     param(
@@ -70,7 +71,7 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
         [string]$RepoRoot,
         [string]$CanonicalPath,
         [string]$ProjectId = 'orchestrator-pack',
-        [hashtable]$FallbackRecord = $null,
+        $FallbackRecord = $null,
         [switch]$FixtureMode
     )
 
@@ -100,7 +101,6 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
             branch    = if ($record.branch) { [string]$record.branch } else { '' }
             detached  = [bool]$record.detached
             sessionId = $sessionId
-            projectId = $ProjectId
         }
     }
     return $FallbackRecord
@@ -262,16 +262,88 @@ function Get-WorkerRecoveryDirtyState {
     }
 }
 
+
+function Invoke-WorkerRecoverySpawnArgvCli {
+    param(
+        [string]$Subcommand,
+        [hashtable]$Payload
+    )
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoverySpawnArgvCli `
+        -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery-spawn-argv' -JsonDepth 30
+}
+
+function Build-WorkerRecoverySpawnArgv {
+    param(
+        [string]$SpawnAction,
+        [string]$ProjectId,
+        [int]$IssueNumber = 0,
+        [int]$PrNumber = 0
+    )
+
+    return Invoke-WorkerRecoverySpawnArgvCli -Subcommand 'buildRecoverySpawnArgv' -Payload @{
+        spawnAction = $SpawnAction
+        projectId   = $ProjectId
+        issueNumber = $IssueNumber
+        prNumber    = $PrNumber
+    }
+}
+
+function ConvertTo-WorkerRecoveryRecordMap {
+    param($Record)
+
+    if ($null -eq $Record) { return $null }
+    if ($Record -is [hashtable]) { return $Record }
+    if ($Record -is [System.Collections.IDictionary]) {
+        return @{ } + $Record
+    }
+
+    $map = [ordered]@{}
+    foreach ($prop in $Record.PSObject.Properties) {
+        $map[$prop.Name] = $prop.Value
+    }
+    return $map
+}
+
+function Resolve-WorkerRecoverySpawnProjectId {
+    param(
+        $WorktreeRecord = $null,
+        $AoSessionRow = $null,
+        [string]$FallbackProjectId = ''
+    )
+
+    return Invoke-WorkerRecoverySpawnArgvCli -Subcommand 'resolveRecoverySpawnProjectId' -Payload @{
+        worktreeRecord    = (ConvertTo-WorkerRecoveryRecordMap -Record $WorktreeRecord)
+        aoSessionRow      = (ConvertTo-WorkerRecoveryRecordMap -Record $AoSessionRow)
+        fallbackProjectId = $FallbackProjectId
+    }
+}
+
 function Invoke-WorkerRecoverySpawn {
     param(
         [string]$SpawnAction,
         [int]$IssueNumber = 0,
         [int]$PrNumber = 0,
+        [string]$ProjectId = '',
         [string]$PackRoot = '',
         [hashtable]$SpawnPolicy = $null,
         [switch]$FixtureMode,
         [switch]$DryRun
     )
+
+    $built = Build-WorkerRecoverySpawnArgv -SpawnAction $SpawnAction -ProjectId $ProjectId `
+        -IssueNumber $IssueNumber -PrNumber $PrNumber
+    if (-not $built.ok) {
+        $grantDenied = [string]$built.reason -in @(
+            'missing_pr_number', 'missing_issue_number', 'unknown_spawn_action', 'missing_project_id'
+        )
+        return @{ ok = $false; started = $false; reason = [string]$built.reason; grantDenied = $grantDenied }
+    }
+    $argv = @($built.argv)
+
+    $gate = Test-AutonomousSpawnDenied -Argv $argv -PackRoot $PackRoot -FixturePolicy $SpawnPolicy -FixtureMode:$FixtureMode
+    if ($gate.denied) {
+        return @{ ok = $false; started = $false; reason = [string]$gate.reason; grantDenied = $true }
+    }
 
     if ($DryRun) {
         return @{ ok = $true; started = $true; reason = 'spawn_started_dry_run'; grantDenied = $false }
@@ -280,34 +352,26 @@ function Invoke-WorkerRecoverySpawn {
         return @{ ok = $true; started = $true; reason = 'spawn_started_fixture'; grantDenied = $false }
     }
 
-    $argv = @('spawn')
-    if ($SpawnAction -eq 'claim-pr-resume') {
-        if ($PrNumber -le 0) {
-            return @{ ok = $false; started = $false; reason = 'missing_pr_number'; grantDenied = $true }
-        }
-        $argv += @('--claim-pr', [string]$PrNumber)
-    }
-    elseif ($SpawnAction -eq 'spawn-new') {
-        if ($IssueNumber -le 0) {
-            return @{ ok = $false; started = $false; reason = 'missing_issue_number'; grantDenied = $true }
-        }
-        $argv += @([string]$IssueNumber)
-    }
-    else {
-        return @{ ok = $false; started = $false; reason = 'unknown_spawn_action'; grantDenied = $true }
-    }
-
-    $gate = Test-AutonomousSpawnDenied -Argv $argv -PackRoot $PackRoot -FixturePolicy $SpawnPolicy -FixtureMode:$FixtureMode
-    if ($gate.denied) {
-        return @{ ok = $false; started = $false; reason = [string]$gate.reason; grantDenied = $true }
-    }
-
     Push-Location -LiteralPath $PackRoot
     try {
-        & ao @argv
+        $spawnOutput = & ao @argv 2>&1
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
-            return @{ ok = $false; started = $false; reason = "spawn_exit_$exitCode"; grantDenied = $false; exitCode = $exitCode }
+            $combined = ($spawnOutput | Out-String)
+            $classified = Invoke-WorkerRecoverySpawnArgvCli -Subcommand 'classifyRecoverySpawnExit' -Payload @{
+                exitCode    = $exitCode
+                stdout      = $combined
+                stderr      = ''
+                spawnAction = $SpawnAction
+            }
+            return @{
+                ok          = $false
+                started     = $false
+                reason      = [string]$classified.reason
+                grantDenied = $false
+                defer       = [bool]$classified.defer
+                exitCode    = $exitCode
+            }
         }
         return @{ ok = $true; started = $true; reason = 'spawn_started'; grantDenied = $false }
     }
@@ -563,6 +627,7 @@ function Invoke-WorkerRecovery {
 
     $spawnDecision = 'not_attempted'
     $spawnOutcome = 'spawn_denied'
+    $spawnDeferEscalate = $false
     if (-not $SkipSpawn -and $SpawnAction -and -not ($cleanupAttempted -and -not $cleanupDone) -and -not $branchCleanupBlocked) {
         $policy = if ($FixtureMode -and $SpawnPolicy) {
             @{ ok = $true; policy = $SpawnPolicy; reason = 'spawn_policy_ok' }
@@ -581,14 +646,25 @@ function Invoke-WorkerRecovery {
             liveDifferentOwner     = [bool]$liveOwnerCheck.liveDifferentOwner
             restUnavailable        = $true
         }
-        $spawnArgv = @('spawn')
-        if ($SpawnAction -eq 'claim-pr-resume') {
-            $spawnArgv += @('--claim-pr', [string]$PrNumber)
+        $aoSessionRow = $null
+        if (-not $FixtureMode -and $SessionId) {
+            $aoSessionRow = Get-WorkerRecoveryAoSessionById -SessionId $SessionId
         }
-        elseif ($SpawnAction -eq 'spawn-new') {
-            $spawnArgv += @([string]$resolvedIssueNumber)
+        $spawnProjectResolved = Resolve-WorkerRecoverySpawnProjectId -WorktreeRecord $selectionWorktreeRecord `
+            -AoSessionRow $aoSessionRow -FallbackProjectId $ProjectId
+        $spawnProjectId = if ($spawnProjectResolved.ok) {
+            [string]$spawnProjectResolved.projectId
         }
-        $spawnGate = if ($FixtureMode) {
+        else {
+            $ProjectId
+        }
+        $spawnArgvBuild = Build-WorkerRecoverySpawnArgv -SpawnAction $SpawnAction -ProjectId $spawnProjectId `
+            -IssueNumber $resolvedIssueNumber -PrNumber $PrNumber
+        $spawnArgv = if ($spawnArgvBuild.ok) { @($spawnArgvBuild.argv) } else { @('spawn') }
+        $spawnGate = if (-not $spawnArgvBuild.ok) {
+            @{ denied = $true; reason = [string]$spawnArgvBuild.reason }
+        }
+        elseif ($FixtureMode) {
             @{ denied = $false; reason = 'spawn_policy_ok' }
         }
         else {
@@ -601,16 +677,25 @@ function Invoke-WorkerRecovery {
             grantDenied  = [bool]$spawnGate.denied
             grantReason  = [string]$spawnGate.reason
         }
+        $spawnDeferEscalate = $false
         if ($freshness.allowed -and $route.allowed) {
-            $spawnResult = Invoke-WorkerRecoverySpawn -SpawnAction $SpawnAction -IssueNumber $resolvedIssueNumber `
-                -PrNumber $PrNumber -PackRoot $PackRoot -SpawnPolicy $policy.policy -FixtureMode:$FixtureMode -DryRun:$DryRun
-            if ($spawnResult.started) {
-                $spawnDecision = 'spawn_started'
-                $spawnOutcome = [string]$spawnResult.reason
+            if (-not $spawnArgvBuild.ok) {
+                $spawnDecision = 'spawn_denied'
+                $spawnOutcome = [string]$spawnArgvBuild.reason
             }
             else {
-                $spawnDecision = 'spawn_denied'
-                $spawnOutcome = [string]$spawnResult.reason
+                $spawnResult = Invoke-WorkerRecoverySpawn -SpawnAction $SpawnAction -IssueNumber $resolvedIssueNumber `
+                    -PrNumber $PrNumber -ProjectId $spawnProjectId -PackRoot $PackRoot -SpawnPolicy $policy.policy `
+                    -FixtureMode:$FixtureMode -DryRun:$DryRun
+                if ($spawnResult.started) {
+                    $spawnDecision = 'spawn_started'
+                    $spawnOutcome = [string]$spawnResult.reason
+                }
+                else {
+                    $spawnDecision = 'spawn_denied'
+                    $spawnOutcome = [string]$spawnResult.reason
+                    if ($spawnResult.defer) { $spawnDeferEscalate = $true }
+                }
             }
         }
         else {
@@ -624,6 +709,9 @@ function Invoke-WorkerRecovery {
         $finalState = 'partial_failure'
     }
     elseif ($branchCleanupBlocked) {
+        $finalState = 'escalated'
+    }
+    elseif ($spawnDeferEscalate) {
         $finalState = 'escalated'
     }
     elseif ($cleanupDone -and $spawnDecision -eq 'spawn_denied' -and $SpawnAction) {

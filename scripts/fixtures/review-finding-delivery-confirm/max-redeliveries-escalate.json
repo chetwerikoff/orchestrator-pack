@@ -1,15 +1,16 @@
 {
-  "description": "AC6: after max redeliveries without confirmation, escalate and stop",
+  "description": "AC6: after confirmation window without worker acknowledgment, escalate (observe-only)",
   "nowMs": 1717506000000,
   "reviewRuns": [
     {
       "id": "run-exhausted",
       "prNumber": 166,
       "targetSha": "sha166b",
-      "status": "waiting_update",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "linkedSessionId": "opk-worker-live",
-      "sentAt": "2026-06-04T14:00:00Z"
+      "deliveredAt": "2026-06-04T14:00:00Z"
     }
   ],
   "sessions": [

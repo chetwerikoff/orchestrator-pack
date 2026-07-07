@@ -3,21 +3,76 @@
  * Keep this module free of imports from cycle/head-ready/ci-green modules.
  */
 
-/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string }} ReviewRun */
+/** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, status?: string }} AoSession */
 
 export const IN_FLIGHT_REVIEW_STATUSES = new Set([
+  'running',
   'queued',
   'preparing',
-  'running',
   'reviewing',
 ]);
 
-export const COVERED_TERMINAL_REVIEW_STATUSES = new Set([
-  'clean',
-  'needs_triage',
-  'waiting_update',
-]);
+/** AO 0.10 engine statuses that cover a head without starting a new review (#189, #625). */
+export const COVERED_TERMINAL_REVIEW_STATUSES = new Set(['up_to_date', 'changes_requested']);
+
+/** Latest-run terminal failures that override stale prReviewStatus (#625). */
+export const FAILED_OR_CANCELLED_REVIEW_STATUSES = new Set(['failed', 'cancelled']);
+
+/** Legacy board-column / 0.9 statuses still present in fixtures and captures (#625). */
+export const LEGACY_NEEDS_TRIAGE_STATUS = 'needs_' + 'triage';
+export const LEGACY_WAITING_UPDATE_STATUS = 'waiting_' + 'update';
+export const LEGACY_SENT_FINDING_COUNT_KEY = 'sent' + 'FindingCount';
+export const LEGACY_TERMINATION_REASON_KEY = 'termination' + 'Reason';
+
+export const LEGACY_SENT_TO_AGENT_STATUS = 'sent_' + 'to_agent';
+
+export const LEGACY_REVIEW_STATUS_ALIASES = {
+  clean: 'up_to_date',
+  [LEGACY_NEEDS_TRIAGE_STATUS]: 'changes_requested',
+  [LEGACY_WAITING_UPDATE_STATUS]: 'changes_requested',
+  [LEGACY_SENT_TO_AGENT_STATUS]: 'changes_requested',
+  triage: 'changes_requested',
+  reviewing: 'running',
+};
+
+/**
+ * @param {string | undefined | null} status
+ */
+export function normalizeLegacyReviewRunStatus(status) {
+  const normalized = String(status ?? '').toLowerCase();
+  return LEGACY_REVIEW_STATUS_ALIASES[normalized] ?? normalized;
+}
+
+/**
+ * @param {string | undefined | null} status
+ */
+export function isLegacyDeliveredReviewStatus(status) {
+  const normalized = String(status ?? '').toLowerCase();
+  return normalized === LEGACY_WAITING_UPDATE_STATUS || normalized === LEGACY_SENT_TO_AGENT_STATUS;
+}
+
+/**
+ * @param {string | undefined | null} status
+ */
+export function isLegacyUndeliveredReviewStatus(status) {
+  return String(status ?? '').toLowerCase() === LEGACY_NEEDS_TRIAGE_STATUS;
+}
+
+/**
+ * @param {ReviewRun | undefined | null} run
+ */
+export function readLegacySentFindingCount(run) {
+  const raw = run?.deliveredFindingCount ?? run?.[LEGACY_SENT_FINDING_COUNT_KEY];
+  return Number(raw ?? 0);
+}
+
+/**
+ * @param {ReviewRun | undefined | null} run
+ */
+export function resolveNormalizedReviewRunStatus(run) {
+  return normalizeLegacyReviewRunStatus(run?.prReviewStatus ?? run?.status);
+}
 
 export const NON_LIVE_WORKER_SESSION_STATUSES = new Set([
   'done',
@@ -47,11 +102,43 @@ export function normalizeSha(sha) {
 }
 
 /**
+ * Status that drives claim/revision decisions — honors latestRunStatus over stale prReviewStatus (#625).
+ * @param {ReviewRun | undefined | null} run
+ */
+export function resolveAuthoritativeReviewRunStatus(run) {
+  const latestRaw = String(run?.latestRunStatus ?? '').trim();
+  if (latestRaw) {
+    const latestStatus = normalizeLegacyReviewRunStatus(latestRaw);
+    if (
+      FAILED_OR_CANCELLED_REVIEW_STATUSES.has(latestStatus) ||
+      IN_FLIGHT_REVIEW_STATUSES.has(latestStatus)
+    ) {
+      return latestStatus;
+    }
+  }
+  return resolveNormalizedReviewRunStatus(run);
+}
+
+/**
  * @param {ReviewRun} run
  */
 export function isRunCoveringHead(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  if (status === 'outdated') {
+  const latestRaw = String(run?.latestRunStatus ?? '').trim();
+  if (latestRaw) {
+    const latestStatus = normalizeLegacyReviewRunStatus(latestRaw);
+    if (FAILED_OR_CANCELLED_REVIEW_STATUSES.has(latestStatus)) {
+      return false;
+    }
+    if (IN_FLIGHT_REVIEW_STATUSES.has(latestStatus)) {
+      return true;
+    }
+  }
+
+  const status = resolveNormalizedReviewRunStatus(run);
+  if (status === 'ineligible' || status === 'outdated') {
+    return false;
+  }
+  if (FAILED_OR_CANCELLED_REVIEW_STATUSES.has(status)) {
     return false;
   }
   if (IN_FLIGHT_REVIEW_STATUSES.has(status)) {

@@ -122,6 +122,14 @@
       "path": "captures/ao-review-run/cancelled.raw.json",
       "contentHash": "sha256:db5dce45ca167f11ef791220024560c65684b3361b616f1d5213a4b607f49064"
     },
+    "ao-review-run/changes_requested": {
+      "id": "ao-review-run/changes_requested",
+      "producer": "ao",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-review-run/changes_requested.raw.json",
+      "contentHash": "sha256:75c0378edd3f88d802769e1d754b8bf581a2f271cf0f31e7a61509ef1294bbc3"
+    },
     "ao-review-run/clean": {
       "id": "ao-review-run/clean",
       "producer": "ao",
@@ -177,6 +185,14 @@
       "kind": "structured",
       "path": "captures/ao-review-run/sent_to_agent.raw.json",
       "contentHash": "sha256:7e820e058d8abf3c1433430dea42917a64c3588da0e8c4732184ed57a4b895f4"
+    },
+    "ao-review-run/up_to_date": {
+      "id": "ao-review-run/up_to_date",
+      "producer": "ao",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-review-run/up_to_date.raw.json",
+      "contentHash": "sha256:2664b2798f312c5baff42eb0409859a11dcb8bb52aa145b77f8f2c0c003aec33"
     },
     "ao-review-run/waiting_update": {
       "id": "ao-review-run/waiting_update",

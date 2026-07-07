@@ -186,4 +186,53 @@ describe('AO 0.10 review trigger API (Issue #623)', () => {
     `).trim();
     expect(out).toContain('unprocessable');
   });
+
+  it('Get-AoReviewRunsFromWorkerSessions fails closed when all session review fetches fail', () => {
+    const out = runPwsh(`
+      . '${reviewApiLib}'
+      function Get-AoSessionReviewsJson {
+        param([string]$SessionId)
+        throw "GET /reviews unavailable for $SessionId"
+      }
+      $sessions = @(
+        @{ id = 'worker-1'; role = 'worker'; projectId = 'orchestrator-pack' },
+        @{ id = 'worker-2'; role = 'worker'; projectId = 'orchestrator-pack' }
+      )
+      try {
+        Get-AoReviewRunsFromWorkerSessions -Project 'orchestrator-pack' -Sessions $sessions | Out-Null
+        'UNEXPECTED_SUCCESS'
+      } catch {
+        $_.Exception.Message
+      }
+    `).trim();
+    expect(out).toContain('Get-AoReviewRuns fan-out failed for all 2 worker session(s)');
+    expect(out).toContain('GET /reviews unavailable');
+  });
+
+  it('Get-AoReviewRunsFromWorkerSessions returns partial runs when some session fetches succeed', () => {
+    const out = runPwsh(`
+      . '${reviewApiLib}'
+      $fixture = Get-Content '${path.join(capturesDir, 'session-reviews-list.raw.json')}' -Raw | ConvertFrom-Json
+      function Get-AoSessionReviewsJson {
+        param([string]$SessionId)
+        if ($SessionId -eq 'worker-ok') { return $fixture }
+        throw "GET /reviews unavailable for $SessionId"
+      }
+      $sessions = @(
+        @{ id = 'worker-ok'; role = 'worker'; projectId = 'orchestrator-pack' },
+        @{ id = 'worker-down'; role = 'worker'; projectId = 'orchestrator-pack' }
+      )
+      @(Get-AoReviewRunsFromWorkerSessions -Project 'orchestrator-pack' -Sessions $sessions).Count
+    `).trim();
+    expect(Number(out)).toBe(1);
+  });
+
+  it('Get-AoReviewRunsFromWorkerSessions returns empty array when no worker sessions exist', () => {
+    const out = runPwsh(`
+      . '${reviewApiLib}'
+      $sessions = @(@{ id = 'orch-1'; role = 'orchestrator'; projectId = 'orchestrator-pack' })
+      @(Get-AoReviewRunsFromWorkerSessions -Project 'orchestrator-pack' -Sessions $sessions).Count
+    `).trim();
+    expect(Number(out)).toBe(0);
+  });
 });

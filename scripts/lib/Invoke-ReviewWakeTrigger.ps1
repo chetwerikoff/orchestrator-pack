@@ -245,7 +245,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     if ($evaluation.route -eq 'empty_review_trap') {
-        $term = [string]$evaluation.terminationReason
+        $term = [string]$evaluation.failureDetail
         & $LogWriter "review-wake-trigger: EMPTY REVIEW TRAP PR #$prNumber ($term)"
         return @{
             triggered = $false

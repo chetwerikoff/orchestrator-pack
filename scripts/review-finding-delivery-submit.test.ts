@@ -116,7 +116,7 @@ describe('evaluateSubmitEligibility unit (legacy helper)', () => {
         targetSha: 'abc',
         linkedSessionId: 's1',
         status: 'sent_to_agent',
-        sentFindingCount: 1,
+        deliveredFindingCount: 1,
       },
       sessions: [
         { sessionId: 's1', role: 'worker', prNumber: 1, status: 'working' },

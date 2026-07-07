@@ -94,7 +94,7 @@ describe('review-run-recovery', () => {
     expect(result.actions).toContainEqual(expect.objectContaining({ terminalized: true, terminalReason: RECOVERY_REASON_PROVABLY_DEAD }));
     const updated = readRun(store);
     expect(updated.status).toBe('failed');
-    expect(updated.terminationReason).toBe(RECOVERY_REASON_PROVABLY_DEAD);
+    expect(updated.body).toBe(RECOVERY_REASON_PROVABLY_DEAD);
     expect(updated.recovery.evidence.livenessReason).toBe('proc_entry_missing');
   });
 
@@ -150,7 +150,7 @@ describe('review-run-recovery', () => {
     writeSidecar(store, run, { identity: { kind: 'partial' } });
     const result = runRecoveryTick({ storeDir: store, nowMs: Date.parse('2026-06-13T00:20:00Z') });
     expect(result.actions).toContainEqual(expect.objectContaining({ terminalized: true, terminalReason: RECOVERY_REASON_AMBIGUOUS_STALE }));
-    expect(readRun(store).terminationReason).toBe(RECOVERY_REASON_AMBIGUOUS_STALE);
+    expect(readRun(store).body).toBe(RECOVERY_REASON_AMBIGUOUS_STALE);
   });
 
   it('does not overwrite a normal terminal completion that wins the race', () => {
@@ -196,7 +196,7 @@ describe('review-run-recovery', () => {
 
   it('backfills exactly one transition audit after a crash between terminal write and audit write', () => {
     const store = tempStore();
-    writeRun(store, { status: 'failed', terminationReason: RECOVERY_REASON_PROVABLY_DEAD, completedAt: '2026-06-13T00:01:00.000Z' });
+    writeRun(store, { status: 'failed', body: RECOVERY_REASON_PROVABLY_DEAD, completedAt: '2026-06-13T00:01:00.000Z' });
     runRecoveryTick({ storeDir: store, nowMs: 1000 });
     runRecoveryTick({ storeDir: store, nowMs: 2000 });
     const records = readAudit(store).records.filter((r: any) => r.type === 'recovery_transition');
@@ -276,6 +276,6 @@ describe('review-run-recovery', () => {
       config: { crashGraceMs: 1, maxReviewDurationMs: 10, ambiguousStaleMs: 20 },
     });
     expect(tick.actions).toContainEqual(expect.objectContaining({ terminalized: true, terminalReason: RECOVERY_REASON_AMBIGUOUS_STALE }));
-    expect(readRun(store).terminationReason).toBe(RECOVERY_REASON_AMBIGUOUS_STALE);
+    expect(readRun(store).body).toBe(RECOVERY_REASON_AMBIGUOUS_STALE);
   });
 });

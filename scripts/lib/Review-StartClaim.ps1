@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Cross-process single-flight claims for automated `ao review run` starters.
+  Cross-process single-flight claims for automated ao-review run starters.
 
   The active claim file is created with an atomic File.Move(temp, active) so a
   complete JSON record becomes visible in one step. Lifecycle changes that can
@@ -12,8 +12,43 @@ $Script:ReviewStartClaimDefaultStaleMinutes = 10
 $Script:ReviewStartClaimSafeFloorMinutes = 2
 $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
-$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'clean', 'needs_triage', 'waiting_update')
+$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'changes_requested')
 $Script:ReviewStartClaimInFlightRunStatuses = @('queued', 'preparing', 'running', 'reviewing')
+$Script:ReviewStartClaimTerminalFailureRunStatuses = @('failed', 'cancelled')
+
+function ConvertTo-ReviewStartClaimNormalizedRunStatus {
+    param(
+        [object]$Run,
+        [string]$Status = ''
+    )
+
+    $raw = if ($Status) {
+        [string]$Status
+    }
+    elseif ($null -ne $Run) {
+        if ($null -ne $Run.prReviewStatus) { [string]$Run.prReviewStatus } else { [string]$Run.status }
+    }
+    else {
+        ''
+    }
+    $status = $raw.Trim().ToLowerInvariant()
+    switch ($status) {
+        'clean' { return 'up_to_date' }
+        { $_ -eq ('needs_' + 'triage') } { return 'changes_requested' }
+        'waiting_update' { return 'changes_requested' }
+        'triage' { return 'changes_requested' }
+        'reviewing' { return 'running' }
+        'sent_to_agent' { return 'changes_requested' }
+        default { return $status }
+    }
+}
+
+function Test-ReviewStartClaimStatusInFlight {
+    param([string]$Status)
+
+    return ($Status -in $Script:ReviewStartClaimInFlightRunStatuses)
+}
+
 
 function Get-ReviewStartClaimProjectNamespace {
     param([string]$ProjectId = 'orchestrator-pack')
@@ -330,7 +365,28 @@ function Test-ReviewStartClaimRunMatchesKey {
 function Test-ReviewStartClaimRunIsCovering {
     param([object]$Run)
 
-    $status = ([string]$Run.status).Trim().ToLowerInvariant()
+    $latestRaw = [string]$Run.latestRunStatus
+    if (-not [string]::IsNullOrWhiteSpace($latestRaw)) {
+        $latestStatus = ConvertTo-ReviewStartClaimNormalizedRunStatus -Status $latestRaw.Trim()
+        if ($latestStatus -in $Script:ReviewStartClaimTerminalFailureRunStatuses) {
+            return $false
+        }
+        if (Test-ReviewStartClaimStatusInFlight -Status $latestStatus) {
+            return $true
+        }
+    }
+
+    $status = ConvertTo-ReviewStartClaimNormalizedRunStatus -Run $Run
+    if ($status -in @('ineligible', 'outdated')) {
+        return $false
+    }
+    if ($status -in $Script:ReviewStartClaimTerminalFailureRunStatuses) {
+        return $false
+    }
+    if (Test-ReviewStartClaimStatusInFlight -Status $status) {
+        return $true
+    }
+
     return ($status -in $Script:ReviewStartClaimCoveredRunStatuses)
 }
 
@@ -427,7 +483,7 @@ function Get-ReviewStartClaimVisibleRunId {
         $runId = [string]$run.id
         if (-not $runId) { $runId = [string]$run.runId }
         if (-not $runId) { continue }
-        $status = ([string]$run.status).Trim().ToLowerInvariant()
+        $status = ConvertTo-ReviewStartClaimNormalizedRunStatus -Run $run
         $created = Get-ReviewStartClaimRunCreatedAtUtc -Run $run
         if ($created -eq [datetime]::MinValue) { $created = [datetime]::MinValue.AddSeconds($index) }
         if ($status -in $Script:ReviewStartClaimInFlightRunStatuses) {

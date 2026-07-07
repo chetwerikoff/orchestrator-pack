@@ -100,15 +100,6 @@ Write-Output 'ok'
 `,
     },
     {
-      id: 'review-send-reconcile',
-      script: `
-$ErrorActionPreference = 'Stop'
-. '${path.join(libDir, 'Gh-PrChecks.ps1').replace(/'/g, "''")}'
-$openPrs = ConvertTo-GhOpenPrArray -OpenPrs $null
-Write-Output 'ok'
-`,
-    },
-    {
       id: 'review-finding-delivery-confirm',
       script: `
 $ErrorActionPreference = 'Stop'

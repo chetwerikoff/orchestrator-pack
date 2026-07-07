@@ -21,8 +21,8 @@ if (-not (Test-Path -LiteralPath $mjsPath -PathType Leaf)) {
 }
 
 $mjs = Get-Content -LiteralPath $mjsPath -Raw
-if ($mjs -notmatch 'bulk_send_trap' -or $mjs -notmatch 'stuck_open') {
-    Write-Host 'docs/review-bulk-send-diagnose.mjs must classify bulk_send_trap and stuck_open'
+if ($mjs -notmatch 'undelivered_changes_requested' -or $mjs -notmatch 'stuck_open') {
+    Write-Host 'docs/review-bulk-send-diagnose.mjs must classify undelivered_changes_requested and stuck_open'
     exit 1
 }
 

@@ -1,5 +1,5 @@
 {
-  "description": "Latest clean run with terminationReason naming tracked Codex wrapper (PACK_REVIEWER=codex)",
+  "description": "Latest clean run with body naming tracked Codex wrapper (PACK_REVIEWER=codex)",
   "expectPass": true,
   "expectedReviewer": "codex",
   "reviewCommand": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main",
@@ -9,7 +9,7 @@
       "findingCount": 0,
       "openFindingCount": 0,
       "sentFindingCount": 0,
-      "terminationReason": "scripts/run-pack-review.ps1 completed",
+      "body": "scripts/run-pack-review.ps1 completed",
       "completedAt": "2026-05-29T12:10:00Z"
     }
   ]

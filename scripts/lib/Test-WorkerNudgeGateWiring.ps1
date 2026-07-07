@@ -48,7 +48,6 @@ foreach ($rel in $paths) {
 $workerObservableSenders = @(
     'scripts/invoke-gated-worker-nudge.ps1',
     'scripts/ci-green-wake-reconcile.ps1',
-    'scripts/review-send-reconcile.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
     'scripts/review-finding-delivery-confirm.ps1'
 )
@@ -83,7 +82,7 @@ foreach ($rel in $workerObservableSenders) {
             exit 1
         }
     }
-    if ($rel -eq 'scripts/review-finding-delivery-confirm.ps1' -or $rel -eq 'scripts/review-send-reconcile.ps1') {
+    if ($rel -eq 'scripts/review-finding-delivery-confirm.ps1') {
         if ($body -notmatch 'Set-WorkerNudgeClaimSendAttempted') {
             Write-Host "review sender missing Set-WorkerNudgeClaimSendAttempted: $rel"
             exit 1

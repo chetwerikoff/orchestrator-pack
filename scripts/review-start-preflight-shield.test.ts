@@ -448,12 +448,9 @@ describe('review-start preflight transient shield (#584)', () => {
     });
 
     it('returns gh_binary_missing for a missing scoped gh adoption command', () => {
-      const missingGh = path.join(tmpdir(), `missing-gh-${Date.now()}.ps1`);
+      const missingGh = path.join(tmpdir(), `missing-gh-${Date.now()}-${process.pid}.ps1`);
       const result = runScopedPreflight(
         `
-      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
-      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '1'
-      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS = '0'
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
       [pscustomobject]@{
         reason = [string]$lookup.transportFailure.reason
@@ -462,6 +459,11 @@ describe('review-start preflight transient shield (#584)', () => {
         transportFailure = [bool]$lookup.transportFailure
       } | ConvertTo-Json -Compress
     `,
+        {
+          AO_REVIEW_START_SCOPED_GH_COMMAND: missingGh,
+          AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS: '1',
+          AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS: '0',
+        },
       );
       expect(result.count).toBe(0);
       expect(result.reason).toBe('gh_binary_missing');

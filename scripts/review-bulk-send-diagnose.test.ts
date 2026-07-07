@@ -46,13 +46,13 @@ describe('classifyBulkSendRun', () => {
   it('flags actionable runs with open findings', () => {
     const result = classifyBulkSendRun({
       id: 'r1',
-      status: 'needs_triage',
+      status: 'changes_requested',
       openFindingCount: 2,
       sentFindingCount: 0,
       findingCount: 2,
     });
     expect(result.flagged).toBe(true);
-    expect(result.signals.map((s) => s.kind)).toContain('bulk_send_trap');
+    expect(result.signals.map((s) => s.kind)).toContain('multi_open_awaiting_dispatch');
   });
 
   it('does not flag clean runs', () => {
@@ -65,10 +65,24 @@ describe('classifyBulkSendRun', () => {
     });
     expect(result.flagged).toBe(false);
   });
+
+  it('classifies delivered partial-open as stuck_open not undelivered', () => {
+    const result = classifyBulkSendRun({
+      id: 'r3',
+      status: 'changes_requested',
+      deliveredAt: '2026-07-06T01:00:00.000Z',
+      openFindingCount: 2,
+      deliveredFindingCount: 1,
+      findingCount: 3,
+    });
+    const kinds = result.signals.map((s) => s.kind);
+    expect(kinds).toContain('stuck_open');
+    expect(kinds).not.toContain('undelivered_changes_requested');
+  });
 });
 
 describe('diagnoseBulkSendBlock fixtures', () => {
-  it('flags needs_triage multi-open bulk-send trap', () => {
+  it('flags changes_requested multi-open bulk-send trap', () => {
     const fixture = loadFixture('needs-triage-multi-open.json');
     const result = diagnoseFromFixture('needs-triage-multi-open.json');
     expect(result.summary.flaggedRuns).toBe(fixture.expect?.flaggedRuns);
@@ -97,8 +111,7 @@ describe('diagnoseBulkSendBlock fixtures', () => {
 });
 
 describe('ACTIONABLE_REVIEW_STATUSES', () => {
-  it('includes needs_triage and waiting_update', () => {
-    expect(ACTIONABLE_REVIEW_STATUSES).toContain('needs_triage');
-    expect(ACTIONABLE_REVIEW_STATUSES).toContain('waiting_update');
+  it('includes changes_requested for AO 0.10', () => {
+    expect(ACTIONABLE_REVIEW_STATUSES).toContain('changes_requested');
   });
 });

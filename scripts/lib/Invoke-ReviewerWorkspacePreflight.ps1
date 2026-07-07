@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Run reviewer-workspace-preflight.ps1 before ao review run (Issue #98).
+  Run reviewer-workspace-preflight.ps1 before ao-review run (Issue #98).
 #>
 
 function Invoke-ReviewerWorkspacePreflight {

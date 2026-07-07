@@ -12,8 +12,8 @@ function Get-RtkRiskTierContract {
         LowPrefixes    = @('grep', 'find', 'cat ', 'cat\t', 'ls ', 'ls\t', 'wc ', 'head ', 'tail ', 'tree ')
         MediumPrefixes = @('gh pr', 'gh issue', 'git branch', 'git log')
         HighPrefixes   = @(
-            'ao status', 'ao review', 'ao events', 'ao report', 'ao send', 'ao spawn',
-            'ao review send', 'npx ao-declare', 'ao-declare', 'git diff', 'gh pr checks'
+            'ao status', 'ao-review', 'ao events', 'ao report', 'ao send', 'ao spawn',
+            'npx ao-declare', 'ao-declare', 'git diff', 'gh pr checks'
         )
         SensitivityTargets = @(
             '.env', 'credentials', 'secret', 'token', 'private-key', 'id_rsa',

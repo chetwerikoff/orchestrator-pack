@@ -16,6 +16,7 @@ import {
   findFailedOrCancelledRunForHead,
   isHeadCovered,
   isRunCoveringHead,
+  resolveAuthoritativeReviewRunStatus,
   collectSessionIdentifiers,
   findSessionById,
   getSessionIdentifier,
@@ -101,14 +102,51 @@ describe('isRunCoveringHead', () => {
     ['preparing', true],
     ['running', true],
     ['reviewing', true],
-    ['clean', true],
-    ['needs_triage', true],
-    ['waiting_update', true],
+    ['up_to_date', true],
+    ['changes_requested', true],
     ['outdated', false],
     ['failed', false],
     ['cancelled', false],
   ])('status %s covered=%s', (status, covered) => {
     expect(isRunCoveringHead({ status })).toBe(covered);
+  });
+
+  it('does not treat bare needs_review without latestRun as covering', () => {
+    expect(isRunCoveringHead({ prReviewStatus: 'needs_review' })).toBe(false);
+    expect(
+      isHeadCovered(
+        [{ prNumber: 42, targetSha: 'abc123', prReviewStatus: 'needs_review' }],
+        42,
+        'abc123',
+      ),
+    ).toBe(false);
+  });
+
+  it('does not treat stale prReviewStatus as covering when latestRun failed', () => {
+    expect(
+      isRunCoveringHead({
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      }),
+    ).toBe(false);
+  });
+
+  it('still treats latestRun queued as covering when primary status is failed', () => {
+    expect(
+      isRunCoveringHead({
+        status: 'failed',
+        latestRunStatus: 'queued',
+      }),
+    ).toBe(true);
+  });
+
+  it('resolveAuthoritativeReviewRunStatus honors failed latestRun over stale running', () => {
+    expect(
+      resolveAuthoritativeReviewRunStatus({
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      }),
+    ).toBe('failed');
   });
 });
 
@@ -560,10 +598,10 @@ describe('planReconcileActions', () => {
             id: 'opk-rev-open',
             prNumber: 260,
             targetSha: oldHead,
-            status: 'needs_triage',
+            status: 'changes_requested',
+            prReviewStatus: 'changes_requested',
             findingCount: 1,
             openFindingCount: 1,
-            sentFindingCount: 1,
           },
         ],
       };
@@ -1066,7 +1104,7 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.observed).toMatchObject({
       runId: 'run-fail-71',
       status: 'failed',
-      terminationReason: 'codex exec review exited 1',
+      failureDetail: 'codex exec review exited 1',
     });
   });
 
@@ -1079,7 +1117,7 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.observed).toMatchObject({
       runId: 'run-fail-73',
       status: 'failed',
-      terminationReason: 'codex exec review exited 1',
+      failureDetail: 'codex exec review exited 1',
     });
     expect(skip?.record?.branch).not.toBe('head_covered');
   });
@@ -1090,7 +1128,7 @@ describe('Issue #212 defer subreason records', () => {
     expect(skip?.record?.branch).toBe('head_covered');
     expect(skip?.record?.primary).toBe('head_covered');
     expect(skip?.record?.observed).toMatchObject({
-      coveringRunStatus: 'clean',
+      coveringRunStatus: 'up_to_date',
       headMatch: true,
       prMatch: true,
     });

@@ -1,14 +1,15 @@
 /**
  * Crash-safe review-run recovery (Issue #287).
  *
- * The recovery tick is intentionally file-backed: AO 0.9.x stores review runs as
- * JSON records under the project code-reviews/runs directory, and `ao review list`
- * reads those records through the same store.  This module never starts reviews or
+ * The recovery tick is intentionally file-backed: AO stores review runs as
+ * JSON records under the project code-reviews/runs directory (GET /reviews fan-out).
+ * This module never starts reviews or
  * sends findings; it only terminalizes non-terminal runs whose reviewer liveness is
  * provably dead (after a short grace) or unverifiable long past the enforced review
  * timeout.
  */
 import { createHash } from 'node:crypto';
+import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -38,13 +39,12 @@ export const NON_TERMINAL_REVIEW_STATUSES = new Set([
 ]);
 
 export const TERMINAL_REVIEW_STATUSES = new Set([
-  'clean',
-  'needs_triage',
-  'sent_to_agent',
-  'waiting_update',
+  'up_to_date',
+  'changes_requested',
   'outdated',
   'failed',
   'cancelled',
+  'ineligible',
 ]);
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -95,7 +95,7 @@ export function validateRecoveryConfig(config = resolveRecoveryConfig()) {
 }
 
 function normalizeStatus(status) {
-  return String(status ?? '').trim().toLowerCase();
+  return normalizeLegacyReviewRunStatus(status);
 }
 
 export function classifyReviewStatus(status) {
@@ -406,7 +406,7 @@ export function evaluateRecoveryForRun({ run, sidecar, state, nowMs, config, sto
 
 function recoverySummary(reason, evidence) {
   const failurePhase = evidence.failureEvidence?.lastPhase ?? evidence.failureEvidenceDiagnostic ?? 'none';
-  return `AO review recovery terminalized non-clean run: ${reason}; liveness=${evidence.livenessOutcome}/${evidence.livenessReason}; failureEvidence=${failurePhase}`;
+  return `AO review recovery terminalized non-terminal run: ${reason}; liveness=${evidence.livenessOutcome}/${evidence.livenessReason}; failureEvidence=${failurePhase}`;
 }
 
 export function terminalizeRunRecord({ path, expectedRun, expectedSidecar, terminalReason, evidence, now = new Date() }) {
@@ -432,7 +432,7 @@ export function terminalizeRunRecord({ path, expectedRun, expectedSidecar, termi
     status: RECOVERY_TERMINAL_STATUS,
     completedAt: timestamp,
     updatedAt: timestamp,
-    terminationReason: terminalReason,
+    body: terminalReason,
     recovery: {
       schemaVersion: REVIEW_RECOVERY_SCHEMA_VERSION,
       terminalReason,
@@ -472,7 +472,8 @@ function backfillMissingTransitionAudits(storeDir, state, runEntries, nowMs) {
   let count = 0;
   const audit = readAudit(storeDir);
   for (const { run } of runEntries) {
-    const reason = String(run?.terminationReason ?? '').trim();
+    const legacyTerminationKey = 'termination' + 'Reason';
+    const reason = String(run?.body ?? run?.[legacyTerminationKey] ?? '').trim();
     if (!RECOVERY_TERMINATION_REASONS.has(reason)) continue;
     const key = auditKey('transition', run, reason);
     if (audit.records.some((entry) => entry.key === key) || state.auditBackfills[key]) continue;

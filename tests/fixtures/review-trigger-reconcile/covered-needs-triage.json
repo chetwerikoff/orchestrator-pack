@@ -1,5 +1,5 @@
 {
-  "description": "needs_triage on current head blocks re-review",
+  "description": "undelivered changes_requested on current head blocks re-review",
   "openPrs": [
     {
       "number": 12,
@@ -11,7 +11,8 @@
     {
       "prNumber": 12,
       "targetSha": "ccc333",
-      "status": "needs_triage",
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
       "findingCount": 2,
       "openFindingCount": 2
     }

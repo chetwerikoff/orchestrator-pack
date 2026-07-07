@@ -23,7 +23,7 @@ const exampleYaml = readFileSync(
 );
 
 const reportStaleLiveMessage =
-  'Worker idle (report-stale backstop). Check pending AO review findings via `ao review list` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.';
+  'Worker idle (report-stale backstop). Check pending AO review findings via `Get-AoReviewRuns` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.';
 
 describe('reaction-config-messages (Issue #402)', () => {
   it('parses only send-to-agent reactions with non-empty message from example yaml', () => {
@@ -43,7 +43,7 @@ describe('reaction-config-messages (Issue #402)', () => {
   it('AC1: report-stale live text is 224 chars and pending-draft', () => {
     const shape = resolveReactionDeliveryShapeFromYaml(exampleYaml, 'report-stale');
     expect(shape.ok).toBe(true);
-    expect(shape.messageShape?.charLength).toBe(224);
+    expect(shape.messageShape?.charLength).toBe(226);
     expect(shape.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
   });
 

@@ -203,21 +203,31 @@ function Get-AoReviewRunsFromWorkerSessions {
         })
 
     if ($workerSessions.Count -eq 0 -and -not $Sessions) {
-        $workerSessions = @(Get-AoStatusSessions -Project $Project)
+        $workerSessions = @(Get-AoStatusSessions -Project $Project | Where-Object {
+                $role = [string]$_.role
+                -not $role -or $role -eq 'worker'
+            })
     }
 
     $allRuns = @()
+    $fetchAttempts = 0
+    $fetchFailures = [System.Collections.Generic.List[string]]::new()
     foreach ($session in $workerSessions) {
         $sessionId = [string]$session.id
         if (-not $sessionId) { $sessionId = [string]$session.name }
         if (-not $sessionId) { continue }
+        $fetchAttempts++
         try {
             $payload = Get-AoSessionReviewsJson -SessionId $sessionId -BaseUrl $BaseUrl -HealthPayload $HealthPayload
             $allRuns += ConvertTo-AoReviewRunsFromSessionReviews -Payload $payload -LinkedSessionId $sessionId -ProjectId $Project
         }
         catch {
+            $fetchFailures.Add("$sessionId`: $($_.Exception.Message)") | Out-Null
             continue
         }
+    }
+    if ($fetchAttempts -gt 0 -and $fetchFailures.Count -eq $fetchAttempts) {
+        throw "Get-AoReviewRuns fan-out failed for all $fetchAttempts worker session(s): $($fetchFailures -join '; ')"
     }
     return $allRuns
 }

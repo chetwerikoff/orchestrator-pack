@@ -3,6 +3,7 @@
  */
 
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
+import { resolveFailureDetail } from './review-producer-contract.mjs';
 
 export const TIMEOUT_NO_VERDICT_FAILURE_CLASS = 'timeout_no_verdict';
 export const REPEATED_TIMEOUT_ESCALATION_REASON = 'repeated_timeout_no_verdict';
@@ -15,6 +16,22 @@ function parseNonNegativeInt(raw, fallback) {
     return fallback;
   }
   return Math.floor(parsed);
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null | undefined} run
+ */
+export function resolveRunFailureText(run) {
+  const fromContract = resolveFailureDetail(run);
+  if (fromContract) {
+    return fromContract;
+  }
+  const body = String(run?.body ?? '').trim();
+  if (body) {
+    return body;
+  }
+  const legacyKey = 'termination' + 'Reason';
+  return String(run?.[legacyKey] ?? '');
 }
 
 export function resolveTimeoutRetryMax(env = process.env) {
@@ -54,13 +71,13 @@ export function extractReviewerFailureClass(run) {
   if (typeof direct === 'string' && direct.trim()) {
     return direct.trim();
   }
-  const termination = String(run?.terminationReason ?? '');
-  const evidence = extractReviewerEvidenceFromText(termination);
+  const failureText = resolveRunFailureText(run);
+  const evidence = extractReviewerEvidenceFromText(failureText);
   const fromEvidence = evidence?.reviewer?.failureClass;
   if (typeof fromEvidence === 'string' && fromEvidence.trim()) {
     return fromEvidence.trim();
   }
-  if (/timeout before verdict/i.test(termination)) {
+  if (/timeout before verdict/i.test(failureText)) {
     return TIMEOUT_NO_VERDICT_FAILURE_CLASS;
   }
   return null;

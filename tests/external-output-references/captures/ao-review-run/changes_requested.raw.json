@@ -1,0 +1,11 @@
+{
+  "id": "review-run-scrubbed-changes",
+  "status": "changes_requested",
+  "prReviewStatus": "changes_requested",
+  "prNumber": 42,
+  "targetSha": "deadbeef",
+  "findingCount": 2,
+  "openFindingCount": 2,
+  "deliveredFindingCount": 0,
+  "deliveredAt": null
+}
