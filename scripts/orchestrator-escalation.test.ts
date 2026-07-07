@@ -104,6 +104,20 @@ describe('orchestrator escalation contract (#641)', () => {
     expect(existsSync(health)).toBe(true);
   });
 
+  it('fail-closed persists state under ErrorActionPreference Stop when send and inbox fail', () => {
+    const parsed = runJson(`
+      $ErrorActionPreference = 'Stop'
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $env:AO_ESCALATION_FORCE_SEND_FAILURE = '1'
+      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $r = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:stop-mode:s1' -Payload @{ reason = 'forced' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000
+      [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; stateExists = (Test-Path -LiteralPath ${ps(state)}) } | ConvertTo-Json -Compress
+    `);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.status).toBe('fail_closed');
+    expect(parsed.stateExists).toBe(true);
+  });
+
   it('escalation auto retry promotion', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1

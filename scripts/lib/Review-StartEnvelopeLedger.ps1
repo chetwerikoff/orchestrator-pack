@@ -244,8 +244,9 @@ function Record-ReviewStartEnvelopeLedgerTerminal {
         }
         if ($result.shouldEscalate) {
             $entry = $result.entry
+            $consecutiveFailureCount = [int]$entry.consecutiveFailureCount
             Write-ReviewStartEnvelopeLedgerEscalation -Namespace $Namespace -PrNumber $prNumber -HeadSha $headSha `
-                -ConsecutiveFailureCount ([int]$entry.consecutiveFailureCount) `
+                -ConsecutiveFailureCount $consecutiveFailureCount `
                 -LastFailureClass ([string]$entry.lastFailureClass) `
                 -Surfaces @($entry.surfaces) -LogWriter $LogWriter | Out-Null
             Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-envelope-ledger' `

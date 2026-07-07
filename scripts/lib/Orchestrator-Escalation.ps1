@@ -160,7 +160,7 @@ function Write-OrchestratorEscalationHealthSpool {
         return Write-OrchestratorEscalationJsonFile -Directory $dir -Prefix 'health' -Envelope $healthEnvelope
     }
     catch {
-        Write-Error "orchestrator escalation health spool failed: $_"
+        Write-Warning "orchestrator escalation health spool failed: $_"
         return $null
     }
 }
@@ -183,7 +183,7 @@ function Write-OrchestratorEscalationOperatorInbox {
     }
     catch {
         $spoolPath = Write-OrchestratorEscalationHealthSpool -Envelope $operatorEnvelope -HealthSpoolDir $HealthSpoolDir -Reason "operator_inbox_unwritable: $_"
-        Write-Error "orchestrator escalation operator inbox failed: $_"
+        Write-Warning "orchestrator escalation operator inbox failed: $_"
         return @{ ok = $false; reason = 'operator_inbox_unwritable'; healthSpoolPath = $spoolPath }
     }
 }
