@@ -1,0 +1,9 @@
+{
+  "name": "ao-reviews-board",
+  "private": true,
+  "type": "module",
+  "description": "Pack-local AO 0.10 Reviews board aggregation runtime (Issue #627)",
+  "scripts": {
+    "start": "node --import tsx start.ts"
+  }
+}

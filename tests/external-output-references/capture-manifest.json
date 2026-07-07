@@ -50,6 +50,14 @@
       "path": "captures/ao-0-10-cli/session-ls-terminated.raw.json",
       "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c"
     },
+    "ao-0-10-daemon/per-session-reviews-empty": {
+      "id": "ao-0-10-daemon/per-session-reviews-empty",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/per-session-reviews-empty.raw.json",
+      "contentHash": "sha256:1a989a1b51f9ae9abf3ac15a9814678ab03a16c8981c46a980bf1e3cc11802d7"
+    },
     "ao-0-10-daemon/per-session-reviews-populated": {
       "id": "ao-0-10-daemon/per-session-reviews-populated",
       "producer": "ao-0-10-daemon",

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestrator-pack/ao-reviews-board/board-read-interface.schema.json",
+  "title": "ReviewsBoardDocument",
+  "description": "Cross-session Reviews board read interface served by tests/ao-reviews-board-runtime (Issue #627).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runs",
+    "sidebarSessions",
+    "orchestrators",
+    "workerOptions",
+    "projects",
+    "projectName",
+    "dashboardLoadError"
+  ],
+  "properties": {
+    "runs": {
+      "type": "array",
+      "items": { "$ref": "../../../docs/ao-0-10-review-producer-contract.schema.json" }
+    },
+    "sidebarSessions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sidebarSession" }
+    },
+    "orchestrators": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sidebarSession" }
+    },
+    "workerOptions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sidebarSession" }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "projectName": { "type": ["string", "null"] },
+    "dashboardLoadError": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "sidebarSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "kind",
+        "branch",
+        "status",
+        "isTerminated",
+        "harness",
+        "terminalHandleId"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "projectId": { "type": ["string", "null"] },
+        "kind": { "type": ["string", "null"] },
+        "branch": { "type": ["string", "null"] },
+        "status": { "type": ["string", "null"] },
+        "isTerminated": { "type": "boolean" },
+        "harness": { "type": ["string", "null"] },
+        "terminalHandleId": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
