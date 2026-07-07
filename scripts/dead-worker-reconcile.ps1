@@ -115,7 +115,7 @@ function Get-DeadWorkerLivePlanGates {
 
 function Get-DeadWorkerLivePayload {
     return @{
-        sessions = @(Get-AoStatusSessionsIncludingTerminated)
+        sessions = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
         aoEvents = @(Get-AoEventsSince -SinceMinutes 60)
     }
 }

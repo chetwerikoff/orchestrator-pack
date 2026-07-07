@@ -22,6 +22,7 @@ $packRoot = [string](Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorWorktreeHygiene.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorLaunchHealth.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 
 $TerminalWorkerStatuses = @(
     'done', 'merged', 'terminated', 'killed', 'errored', 'cleanup', 'closed'
@@ -166,13 +167,13 @@ Write-Host ("Time (local): {0}" -f (Get-Date).ToString('o'))
 Write-Host ''
 
 # --- status ---
-$statusArgs = @('status', '--json', '--reports', 'full')
-if ($ProjectId) { $statusArgs += @('-p', $ProjectId) }
-$statusPayload = Invoke-AoJson -AoArgs $statusArgs
-$sessions = @($statusPayload.data)
-if (-not $sessions -and $statusPayload.sessions) {
-    $sessions = @($statusPayload.sessions)
+$reportProject = if ($ProjectId) { $ProjectId } else { 'orchestrator-pack' }
+$sessions = @(Get-AoStatusSessionsWithReports -Project $reportProject)
+$reportSourceSummary = 'ao status --json --reports full'
+if ($sessions.Count -gt 0 -and $sessions[0].reportSourcePath) {
+    $reportSourceSummary = [string]$sessions[0].reportSourcePath
 }
+Write-Host ("Report source: {0}" -f $reportSourceSummary)
 
 $orch = $sessions | Where-Object { $_.name -eq $orchId -or $_.sessionId -eq $orchId } | Select-Object -First 1
 if (-not $orch) {
@@ -300,7 +301,8 @@ if ($reviewReports.Count -gt 0) {
         $last = $w.reports[0]
         $state = $last.reportState
         if (-not $state) { $state = $last.report_state }
-        Write-Host ("  {0}: {1}" -f $wName, $state)
+        $source = if ($w.reportSourcePath) { [string]$w.reportSourcePath } else { $reportSourceSummary }
+        Write-Host ("  {0}: {1} (reports from {2})" -f $wName, $state, $source)
     }
 }
 

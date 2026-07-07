@@ -1,0 +1,50 @@
+{
+  "description": "Issue #611 AC#2 — plain status reports empty but report-full has accepted ready_for_review",
+  "plainStatus": {
+    "data": [
+      {
+        "name": "opk-611",
+        "id": "opk-611",
+        "role": "worker",
+        "projectId": "orchestrator-pack",
+        "status": "idle",
+        "prNumber": 611,
+        "reports": []
+      }
+    ]
+  },
+  "reportFull": {
+    "data": [
+      {
+        "name": "opk-611",
+        "id": "opk-611",
+        "role": "worker",
+        "projectId": "orchestrator-pack",
+        "status": "idle",
+        "prNumber": 611,
+        "reports": [
+          {
+            "reportState": "ready_for_review",
+            "accepted": true,
+            "timestamp": "2026-07-05T14:17:58.000Z",
+            "headRefOid": "abc611abc611abc611abc611abc611abc611ab"
+          }
+        ]
+      }
+    ]
+  },
+  "openPrs": [
+    {
+      "number": 611,
+      "headRefOid": "abc611abc611abc611abc611abc611abc611ab",
+      "isDraft": false
+    }
+  ],
+  "reviewRuns": [],
+  "ciChecksByPr": {
+    "611": [{ "name": "verify", "state": "SUCCESS" }]
+  },
+  "requiredCheckNamesByPr": {
+    "611": ["verify"]
+  }
+}

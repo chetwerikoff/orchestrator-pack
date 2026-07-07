@@ -568,6 +568,27 @@ findings are with the worker — report `ao report addressing_reviews` promptly;
 - Undelivered `changes_requested` (`deliveredAt` null) is operator/diagnostic — not a worker send target.
 - Does **not** recover dead sessions (#98) — use `--claim-pr` / respawn discipline.
 
+
+## Review-status reader contract (Issue #611)
+
+When diagnosing or reporting whether a worker has handed off `ready_for_review`, **never**
+use plain `ao status --json` or `ao session ls` rows with empty `reports` as proof that no
+hand-off exists.
+
+- Use the shared report-full reader: `Get-AoStatusSessionsWithReports` (live workers) or
+  `Get-AoStatusSessionsWithReportsIncludingTerminated` when terminated/restored sessions
+  matter (#391 seed path).
+- Session rows live under **`$.data[]`** (fallback `$.sessions[]` on legacy captures). Do
+  not query a top-level `$.sessions` field that is absent on current AO output.
+- Name the report source in diagnostics, e.g. `$.data[?name==<session>].reports[*] from
+  ao status --json --reports full`, audit-backed `.agent-report-audit/<session>.ndjson`, or
+  the explicit fixture path.
+- Prefix-safe AO JSON: strip notifier/log lines before `{` (same contract as
+  `Invoke-AoCliJson`) — never call raw `ConvertFrom-Json` on undecorated `ao` stdout in
+  review-status consumers.
+
+Inventory: `docs/review-status-consumer-inventory.md`.
+
 ## Report-state review-start seed (Issue #391)
 
 **Co-primary with #390** when AO accepts `ready_for_review` but no webhook handoff fires.

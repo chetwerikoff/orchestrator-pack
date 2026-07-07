@@ -7,6 +7,10 @@
 
 $Script:AoSessionAdapterValidRoles = @('worker', 'orchestrator')
 $Script:AoSessionAdapterReportSurfaceError = 'ao status --json --reports full unavailable on AO 0.10 (GitHub #611): report-surface-unavailable'
+$Script:AoReportFullCliProbeState = $null
+$Script:AoReportFullSourceCli = 'ao status --json --reports full'
+$Script:AoReportFullSourceCliTerminated = 'ao status --json --reports full --include-terminated'
+$Script:AoReportFullSourceAudit = '$.agent-report-audit/<session>.ndjson'
 
 function Invoke-AoCliJson {
     param(
@@ -95,6 +99,150 @@ function Get-AoReviewRuns {
     return @(Get-AoReviewRunsFromWorkerSessions -Project $Project)
 }
 
+function Get-AoBaseDir {
+    if ($env:AO_BASE_DIR -and -not [string]::IsNullOrWhiteSpace($env:AO_BASE_DIR)) {
+        return $env:AO_BASE_DIR.Trim()
+    }
+    return Join-Path $HOME '.agent-orchestrator'
+}
+
+function Get-AoAgentReportAuditDir {
+    param([string]$Project = '')
+
+    $projectId = if ($Project) { $Project.Trim() } else { 'orchestrator-pack' }
+    return Join-Path (Get-AoBaseDir) 'projects' $projectId 'sessions' '.agent-report-audit'
+}
+
+function Get-AoSessionReportAuditLookupKeys {
+    param($Session)
+
+    $keys = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($prop in @('name', 'id', 'sessionId', 'displayName', 'terminalHandleId')) {
+        if (-not $Session.PSObject.Properties.Name -contains $prop) { continue }
+        $value = [string]$Session.$prop
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if (-not $keys.Contains($value)) {
+            $keys.Add($value) | Out-Null
+        }
+    }
+    return @($keys)
+}
+
+function ConvertTo-AoWorkerReportRowFromAuditEntry {
+    param($Entry)
+
+    if (-not $Entry) { return $null }
+    $row = [ordered]@{}
+    foreach ($prop in $Entry.PSObject.Properties) {
+        $row[$prop.Name] = $prop.Value
+    }
+    if ($Entry.timestamp -and -not $row['reportedAt']) {
+        $row['reportedAt'] = [string]$Entry.timestamp
+    }
+    if ($Entry.reportState -and -not $row['report_state']) {
+        $row['report_state'] = [string]$Entry.reportState
+    }
+    return [pscustomobject]$row
+}
+
+function Read-AoAgentReportAuditReports {
+    param(
+        [string]$Project = '',
+        $Session
+    )
+
+    $auditDir = Get-AoAgentReportAuditDir -Project $Project
+    if (-not (Test-Path -LiteralPath $auditDir -PathType Container)) {
+        return @{ reports = @(); auditPath = $null }
+    }
+
+    foreach ($key in @(Get-AoSessionReportAuditLookupKeys -Session $Session)) {
+        $auditPath = Join-Path $auditDir "$key.ndjson"
+        if (-not (Test-Path -LiteralPath $auditPath -PathType Leaf)) { continue }
+
+        $reports = [System.Collections.Generic.List[object]]::new()
+        foreach ($line in @(Get-Content -LiteralPath $auditPath -Encoding UTF8)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $entry = $line | ConvertFrom-Json
+            if (-not $entry.reportState) { continue }
+            $reports.Add((ConvertTo-AoWorkerReportRowFromAuditEntry -Entry $entry)) | Out-Null
+        }
+        return @{ reports = @($reports); auditPath = $auditPath }
+    }
+
+    return @{ reports = @(); auditPath = $null }
+}
+
+function Format-AoSessionReportSourcePath {
+    param(
+        [string]$SessionId,
+        [string]$SourceKind,
+        [string]$AuditPath = ''
+    )
+
+    $id = [string]$SessionId
+    if (-not $id) { $id = '<session>' }
+    switch ($SourceKind) {
+        'cli-report-full' {
+            return "`$.data[?name==$id].reports[*] from $Script:AoReportFullSourceCli"
+        }
+        'cli-report-full-terminated' {
+            return "`$.data[?name==$id].reports[*] from $Script:AoReportFullSourceCliTerminated"
+        }
+        'fixture-report-full' {
+            return "`$.data[?name==$id].reports[*] from $Script:AoReportFullSourceCli (fixture)"
+        }
+        'fixture-report-full-terminated' {
+            return "`$.data[?name==$id].reports[*] from $Script:AoReportFullSourceCliTerminated (fixture)"
+        }
+        'audit-backed' {
+            if ($AuditPath) {
+                return "`$.agent-report-audit/$([System.IO.Path]::GetFileName($AuditPath)) (audit-backed)"
+            }
+            return $Script:AoReportFullSourceAudit
+        }
+        default {
+            return $Script:AoReportFullSourceAudit
+        }
+    }
+}
+
+function Test-AoReportFullCliAvailable {
+    param([string]$AoCommand = 'ao')
+
+    if ($null -ne $Script:AoReportFullCliProbeState) {
+        return [bool]$Script:AoReportFullCliProbeState
+    }
+
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = if ($AoCommand -eq 'ao') {
+            & ao status --json --reports full 2>&1
+        }
+        else {
+            & $AoCommand status --json --reports full 2>&1
+        }
+        $text = ($raw | ForEach-Object {
+                if ($_ -is [string]) { $_ }
+                elseif ($null -ne $_) { $_.ToString() }
+            }) -join "`n"
+        if ($LASTEXITCODE -ne 0 -or $text -match 'unknown flag:\s*--reports') {
+            $Script:AoReportFullCliProbeState = $false
+            return $false
+        }
+        $Script:AoReportFullCliProbeState = $true
+        return $true
+    }
+    catch {
+        $Script:AoReportFullCliProbeState = $false
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
 function Throw-AoReportSurfaceUnavailable {
     param([string]$EntryPoint)
 
@@ -102,12 +250,88 @@ function Throw-AoReportSurfaceUnavailable {
 }
 
 function Get-AoStatusReportsJson {
-    Throw-AoReportSurfaceUnavailable -EntryPoint 'Get-AoStatusReportsJson'
+    param(
+        [string]$Project = '',
+        [string]$AoCommand = 'ao'
+    )
+
+    if (-not (Test-AoReportFullCliAvailable -AoCommand $AoCommand)) {
+        Throw-AoReportSurfaceUnavailable -EntryPoint 'Get-AoStatusReportsJson'
+    }
+
+    $args = @('status', '--json', '--reports', 'full')
+    if ($Project) { $args += @('-p', $Project) }
+    return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao status --reports full' -AoCommand $AoCommand
 }
 
 function Get-AoStatusReportsIncludingTerminatedJson {
-    Throw-AoReportSurfaceUnavailable -EntryPoint 'Get-AoStatusReportsIncludingTerminatedJson'
+    param(
+        [string]$Project = '',
+        [string]$AoCommand = 'ao'
+    )
+
+    if (-not (Test-AoReportFullCliAvailable -AoCommand $AoCommand)) {
+        Throw-AoReportSurfaceUnavailable -EntryPoint 'Get-AoStatusReportsIncludingTerminatedJson'
+    }
+
+    $args = @('status', '--json', '--reports', 'full', '--include-terminated')
+    if ($Project) { $args += @('-p', $Project) }
+    return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao status --reports full --include-terminated' -AoCommand $AoCommand
 }
+
+function Merge-AoSessionRowsWithReportAudit {
+    param(
+        [object[]]$Sessions,
+        [string]$Project = '',
+        [string]$SourceKind = 'audit-backed'
+    )
+
+    $merged = @()
+    foreach ($session in @($Sessions)) {
+        if (-not $session) { continue }
+        $audit = Read-AoAgentReportAuditReports -Project $Project -Session $session
+        $sessionId = [string]$session.id
+        if (-not $sessionId) { $sessionId = [string]$session.name }
+        if (-not $sessionId) { $sessionId = [string]$session.sessionId }
+
+        $row = [ordered]@{}
+        foreach ($prop in $session.PSObject.Properties) {
+            $row[$prop.Name] = $prop.Value
+        }
+        $row['reports'] = @($audit.reports)
+        $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId `
+            -SourceKind $SourceKind -AuditPath ([string]$audit.auditPath)
+        $row['reportSnapshotKind'] = 'audit-backed'
+        $merged += [pscustomobject]$row
+    }
+    return $merged
+}
+
+function Get-AoStatusSessionsWithReportsFromPayload {
+    param(
+        $Payload,
+        [string]$SourceKind = 'cli-report-full'
+    )
+
+    $sessions = @(Get-AoStatusSessionsFromPayload -Payload $Payload)
+    $decorated = @()
+    foreach ($session in $sessions) {
+        if (-not $session) { continue }
+        $sessionId = [string]$session.id
+        if (-not $sessionId) { $sessionId = [string]$session.name }
+        if (-not $sessionId) { $sessionId = [string]$session.sessionId }
+        $row = [ordered]@{}
+        foreach ($prop in $session.PSObject.Properties) {
+            $row[$prop.Name] = $prop.Value
+        }
+        if (-not $row['reports']) { $row['reports'] = @() }
+        $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId -SourceKind $SourceKind
+        $row['reportSnapshotKind'] = 'report-full-cli'
+        $decorated += [pscustomobject]$row
+    }
+    return $decorated
+}
+
 
 function Get-AoDaemonHealthJson {
     return Invoke-AoCliJson -AoArgs @('status', '--json') -FailureLabel 'ao status'
@@ -350,6 +574,57 @@ function Get-AoStatusSessionsIncludingTerminated {
     return Get-AoMergedStatusSessions -Project $Project -IncludeTerminated `
         -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
         -AoCommand $AoCommand
+}
+
+function Get-AoStatusSessionsWithReports {
+    param(
+        [string]$Project = '',
+        $WorkerListPayload = $null,
+        $OrchestratorListPayload = $null,
+        $ReportFullPayload = $null,
+        [string]$AoCommand = 'ao'
+    )
+
+    if ($ReportFullPayload) {
+        return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $ReportFullPayload -SourceKind 'fixture-report-full')
+    }
+
+    if (Test-AoReportFullCliAvailable -AoCommand $AoCommand) {
+        $payload = Get-AoStatusReportsJson -Project $Project -AoCommand $AoCommand
+        return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $payload -SourceKind 'cli-report-full')
+    }
+
+    $sessions = @(Get-AoMergedStatusSessions -Project $Project `
+            -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
+            -AoCommand $AoCommand)
+    return @(Merge-AoSessionRowsWithReportAudit -Sessions $sessions -Project $Project -SourceKind 'audit-backed')
+}
+
+function Get-AoStatusSessionsWithReportsIncludingTerminated {
+    param(
+        [string]$Project = '',
+        $WorkerListPayload = $null,
+        $OrchestratorListPayload = $null,
+        $ReportFullPayload = $null,
+        [string]$AoCommand = 'ao'
+    )
+
+    if ($ReportFullPayload) {
+        return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $ReportFullPayload `
+                -SourceKind 'cli-report-full-terminated')
+    }
+
+    if (Test-AoReportFullCliAvailable -AoCommand $AoCommand) {
+        $payload = Get-AoStatusReportsIncludingTerminatedJson -Project $Project -AoCommand $AoCommand
+        return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $payload `
+                -SourceKind 'cli-report-full-terminated')
+    }
+
+    $sessions = @(Get-AoMergedStatusSessions -Project $Project -IncludeTerminated `
+            -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
+            -AoCommand $AoCommand)
+    return @(Merge-AoSessionRowsWithReportAudit -Sessions $sessions -Project $Project `
+            -SourceKind 'audit-backed')
 }
 
 function Get-AoOrchestratorSessions {

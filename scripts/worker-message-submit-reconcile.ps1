@@ -514,7 +514,7 @@ function Invoke-SubmitReconcileTick {
         }
     }
     else {
-        $sessions = Get-AoStatusSessions
+        $sessions = Get-AoStatusSessionsWithReports
         $aoEvents = Get-AoEventsSince -SinceMinutes 30
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath

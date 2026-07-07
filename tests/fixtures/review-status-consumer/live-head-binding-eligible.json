@@ -1,0 +1,42 @@
+{
+  "description": "Issue #611 AC#7 — accepted current-head ready_for_review is review-start eligible",
+  "reportFull": {
+    "data": [
+      {
+        "name": "opk-611",
+        "id": "opk-611",
+        "role": "worker",
+        "projectId": "orchestrator-pack",
+        "status": "working",
+        "prNumber": 611,
+        "reports": [
+          {
+            "reportState": "ready_for_review",
+            "accepted": true,
+            "reportedAt": "2026-07-05T14:17:58.000Z",
+            "headRefOid": "abc611abc611abc611abc611abc611abc611ab"
+          }
+        ]
+      }
+    ]
+  },
+  "openPrs": [
+    {
+      "number": 611,
+      "headRefOid": "abc611abc611abc611abc611abc611abc611ab",
+      "headCommittedAt": "2026-07-05T12:00:00.000Z",
+      "isDraft": false
+    }
+  ],
+  "reviewRuns": [],
+  "ciChecksByPr": {
+    "611": [
+      { "name": "verify", "state": "SUCCESS" },
+      { "name": "PR scope guard", "state": "SUCCESS" }
+    ]
+  },
+  "requiredCheckNamesByPr": {
+    "611": ["verify", "PR scope guard"]
+  },
+  "expectWouldRun": true
+}

@@ -1,0 +1,3 @@
+[notifier-info] session opk-611 updated
+[notifier-debug] tick
+{"data":[{"name":"opk-611","role":"worker","projectId":"orchestrator-pack","status":"idle","prNumber":611,"reports":[{"reportState":"ready_for_review","accepted":true,"timestamp":"2026-07-05T14:17:58.000Z"}]}]}

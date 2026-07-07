@@ -1,0 +1,225 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { findLatestAcceptedReadyForReviewAcrossSessions } from '../docs/review-ready-report-state-seed.mjs';
+import { evaluateHeadReadyForReview } from '../docs/review-head-ready.mjs';
+import { planReconcileActions, unwrapReconcilePlanResult } from '../docs/review-trigger-reconcile.mjs';
+
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const lib = path.join(repoRoot, 'scripts/lib/Invoke-AoCliJson.ps1');
+const fixtureDir = path.join(repoRoot, 'tests/fixtures/review-status-consumer');
+
+function runPwsh(script: string) {
+  return execFileSync('pwsh', ['-NoProfile', '-Command', script], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env },
+  });
+}
+
+function loadJson<T>(name: string): T {
+  return JSON.parse(readFileSync(path.join(fixtureDir, name), 'utf8')) as T;
+}
+
+describe('review-status consumer readers (Issue #611)', () => {
+  it('decorates report-full payload sessions with reportSourcePath', () => {
+    const fixture = loadJson<{ reportFull: Record<string, unknown> }>('live-head-binding-eligible.json');
+    const payloadPath = path.join(fixtureDir, '_tmp-live-head.json');
+    writeFileSync(payloadPath, JSON.stringify(fixture.reportFull));
+    const out = runPwsh(`
+      . '${lib}'
+      $rows = Get-AoStatusSessionsWithReports -ReportFullPayload (Get-Content '${payloadPath}' -Raw | ConvertFrom-Json)
+      $rows | ConvertTo-Json -Compress -Depth 20
+    `).trim();
+    const rows = JSON.parse(out) as Array<{ name: string; reportSourcePath?: string; reports?: unknown[] }>;
+    const list = Array.isArray(rows) ? rows : [rows];
+    expect(list[0]?.reportSourcePath).toMatch(/\$\.data\[\?name==/);
+    expect(list[0]?.reports?.length).toBeGreaterThan(0);
+  });
+
+  it('AC#2: report-full snapshot exposes ready_for_review when plain status rows are empty', () => {
+    const fixture = loadJson<{
+      plainStatus: { data: Array<Record<string, unknown>> };
+      reportFull: { data: Array<Record<string, unknown>> };
+    }>('plain-empty-vs-report-full.json');
+
+    const plainSessions = fixture.plainStatus.data;
+    const plainReady = findLatestAcceptedReadyForReviewAcrossSessions(plainSessions as never);
+    expect(plainReady.report).toBeNull();
+
+    const payloadPath = path.join(fixtureDir, '_tmp-plain-vs-full.json');
+    writeFileSync(payloadPath, JSON.stringify(fixture.reportFull));
+    const out = runPwsh(`
+      . '${lib}'
+      $rows = Get-AoStatusSessionsWithReports -ReportFullPayload (Get-Content '${payloadPath}' -Raw | ConvertFrom-Json)
+      $rows | ConvertTo-Json -Compress -Depth 20
+    `).trim();
+    const reportFullSessions = JSON.parse(out) as Array<Record<string, unknown>>;
+    const list = Array.isArray(reportFullSessions) ? reportFullSessions : [reportFullSessions];
+    const ready = findLatestAcceptedReadyForReviewAcrossSessions(list as never);
+    expect(ready.report?.reportState).toBe('ready_for_review');
+  });
+
+  it('AC#3: resolves workers from $.data[] without $.sessions', () => {
+    const fixture = loadJson<{ reportFull: { data: unknown[] }; expectedJsonPath: string }>(
+      'data-array-no-sessions.json',
+    );
+    expect(fixture.reportFull.sessions).toBeUndefined();
+    const payloadPath = path.join(fixtureDir, '_tmp-data-array.json');
+    writeFileSync(payloadPath, JSON.stringify(fixture.reportFull));
+    const out = runPwsh(`
+      . '${lib}'
+      $rows = Get-AoStatusSessionsWithReports -ReportFullPayload (Get-Content '${payloadPath}' -Raw | ConvertFrom-Json)
+      $rows | ConvertTo-Json -Compress -Depth 20
+    `).trim();
+    const rows = JSON.parse(out) as Array<{ name: string; reports?: Array<{ reportState: string }> }>;
+    const list = Array.isArray(rows) ? rows : [rows];
+    expect(list.some((row) => row.name === 'opk-142')).toBe(true);
+    expect(list[0]?.reports?.[0]?.reportState).toBe('ready_for_review');
+  });
+
+  it('AC#5: prefix-safe Invoke-AoCliJson tolerates notifier lines before JSON', () => {
+    const fixture = loadJson<{ rawCliOutput: string }>('notifier-prefixed-report-full.txt');
+    const rawPath = path.join(fixtureDir, '_tmp-notifier-prefix.txt');
+    writeFileSync(rawPath, fixture.rawCliOutput);
+    const out = runPwsh(
+      [
+        ". '" + lib + "'",
+        "$text = Get-Content -LiteralPath '" + rawPath + "' -Raw",
+        "$start = $text.IndexOf('{')",
+        "if ($start -lt 0) { throw 'no json' }",
+        '$payload = $text.Substring($start) | ConvertFrom-Json',
+        "$rows = Get-AoStatusSessionsWithReportsFromPayload -Payload $payload -SourceKind 'cli-report-full'",
+        "(@($rows | Where-Object { $_.name -eq 'opk-611' -or $_.id -eq 'opk-611' }).reports).Count",
+      ].join('\n'),
+    ).trim();
+    expect(Number(out)).toBe(1);
+  });
+
+  it('AC#5: classified parse failure when JSON after prefix strip is malformed', () => {
+    expect(() =>
+      runPwsh(`
+        . '${lib}'
+        '[notifier] broken' | ConvertFrom-Json | Out-Null
+      `),
+    ).toThrow();
+  });
+
+  it('AC#7: live head-binding path is review-start eligible via report-full reader sessions', () => {
+    const fixture = loadJson<{
+      reportFull: { data: unknown[] };
+      openPrs: unknown[];
+      reviewRuns: unknown[];
+      ciChecksByPr: Record<string, unknown>;
+      requiredCheckNamesByPr: Record<string, string[]>;
+      expectWouldRun: boolean;
+    }>('live-head-binding-eligible.json');
+    const payloadPath = path.join(fixtureDir, '_tmp-head-binding.json');
+    writeFileSync(payloadPath, JSON.stringify(fixture.reportFull));
+    const out = runPwsh(`
+      . '${lib}'
+      $rows = Get-AoStatusSessionsWithReports -ReportFullPayload (Get-Content '${payloadPath}' -Raw | ConvertFrom-Json)
+      $rows | ConvertTo-Json -Compress -Depth 20
+    `).trim();
+    const sessions = JSON.parse(out) as Array<Record<string, unknown>>;
+    const list = Array.isArray(sessions) ? sessions : [sessions];
+    const result = unwrapReconcilePlanResult(
+      planReconcileActions({
+        openPrs: fixture.openPrs as never,
+        reviewRuns: fixture.reviewRuns as never,
+        sessions: list as never,
+        ciChecksByPr: fixture.ciChecksByPr,
+        requiredCheckNamesByPr: fixture.requiredCheckNamesByPr,
+        requiredCheckLookupFailedByPr: {},
+        nowMs: Date.parse('2026-07-05T15:00:00.000Z'),
+      }),
+    );
+    expect(result.actions.some((action) => action.type === 'start_review')).toBe(fixture.expectWouldRun);
+  });
+
+  it('AC#8: stale ready_for_review on older head does not authorize current head', () => {
+    const fixture = loadJson<{
+      reportFull: { data: unknown[] };
+      openPrs: Array<{ number: number; headRefOid: string }>;
+      reviewRuns: unknown[];
+      ciChecksByPr: Record<string, unknown>;
+      requiredCheckNamesByPr: Record<string, string[]>;
+    }>('stale-ready-older-head.json');
+    const payloadPath = path.join(fixtureDir, '_tmp-stale-head.json');
+    writeFileSync(payloadPath, JSON.stringify(fixture.reportFull));
+    const out = runPwsh(`
+      . '${lib}'
+      $rows = Get-AoStatusSessionsWithReports -ReportFullPayload (Get-Content '${payloadPath}' -Raw | ConvertFrom-Json)
+      $rows | ConvertTo-Json -Compress -Depth 20
+    `).trim();
+    const sessions = JSON.parse(out) as Array<Record<string, unknown>>;
+    const session = (Array.isArray(sessions) ? sessions : [sessions])[0]!;
+    const decision = evaluateHeadReadyForReview({
+      reviewRuns: [],
+      prNumber: fixture.openPrs[0]!.number,
+      headSha: fixture.openPrs[0]!.headRefOid,
+      session: session as never,
+      ciChecks: fixture.ciChecksByPr['611'] as never,
+      requiredCheckNames: fixture.requiredCheckNamesByPr['611'],
+      requiredCheckLookupFailed: false,
+      nowMs: Date.parse('2026-07-05T14:18:00.000Z'),
+    });
+    expect(decision.eligible).toBe(false);
+    expect(decision.reason).not.toBe('head_ready_for_review');
+  });
+
+  it('audit-backed fallback attaches reports from .agent-report-audit ndjson', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'ao-audit-611-'));
+    const auditDir = path.join(tempRoot, 'projects', 'orchestrator-pack', 'sessions', '.agent-report-audit');
+    mkdirSync(auditDir, { recursive: true });
+    const auditEntry = {
+      timestamp: '2026-07-05T14:17:58.000Z',
+      source: 'report',
+      reportState: 'ready_for_review',
+      accepted: true,
+    };
+    writeFileSync(path.join(auditDir, 'opk-audit-611.ndjson'), `${JSON.stringify(auditEntry)}\n`);
+
+    const workerPayload = {
+      data: [
+        {
+          id: 'opk-audit-611',
+          name: 'opk-audit-611',
+          projectId: 'orchestrator-pack',
+          role: 'worker',
+          status: 'idle',
+          isTerminated: false,
+        },
+      ],
+    };
+    const orchPayload = { data: [] as unknown[] };
+    const workerPath = path.join(tempRoot, 'worker.json');
+    const orchPath = path.join(tempRoot, 'orch.json');
+    writeFileSync(workerPath, JSON.stringify(workerPayload));
+    writeFileSync(orchPath, JSON.stringify(orchPayload));
+
+    const out = runPwsh(
+      [
+        "$env:AO_BASE_DIR = '" + tempRoot.replace(/'/g, "''") + "'",
+        '$Script:AoReportFullCliProbeState = $false',
+        ". '" + lib + "'",
+        "$rows = Get-AoStatusSessionsWithReports -Project 'orchestrator-pack' `",
+        "  -WorkerListPayload (Get-Content '" + workerPath + "' -Raw | ConvertFrom-Json) `",
+        "  -OrchestratorListPayload (Get-Content '" + orchPath + "' -Raw | ConvertFrom-Json)",
+        '$rows | ConvertTo-Json -Compress -Depth 20',
+      ].join('\n'),
+    ).trim();
+    const rows = JSON.parse(out) as Array<{
+      reports?: Array<{ reportState: string }>;
+      reportSnapshotKind?: string;
+      reportSourcePath?: string;
+    }>;
+    const list = Array.isArray(rows) ? rows : [rows];
+    expect(list[0]?.reportSnapshotKind).toBe('audit-backed');
+    expect(list[0]?.reports?.[0]?.reportState).toBe('ready_for_review');
+    expect(list[0]?.reportSourcePath).toMatch(/audit-backed/);
+  });
+});
