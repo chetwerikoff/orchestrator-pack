@@ -18,6 +18,7 @@ import {
   findSubmittedReviewRun,
   parsePackReviewTerminalStdout,
   resolveSubmitVisibilityConfig,
+  resolveSubmittedRunTerminalStatus,
 } from '../docs/scripted-review-post-submit-delivery.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -331,6 +332,10 @@ describe('post-submit seam wiring', () => {
     );
     expect(text).toMatch(/invoke-scripted-review-post-submit-delivery\.ps1/);
     expect(text).toMatch(/Wait-ScriptedReviewSubmittedRun/);
+    expect(text).toMatch(/Invoke-ScriptedReviewDeliveryGateProcess/);
+    expect(text).toMatch(/Get-PackReviewWrapperProcessStartInfo/);
+    expect(text).toMatch(/\[Console\]::Error\.WriteLine/);
+    expect(text).not.toMatch(/\[string\]\$message\.message \| pwsh/);
   });
 });
 
@@ -374,6 +379,27 @@ describe('post-submit resolver (Issue #669 wiring)', () => {
       { prNumber: 673, targetSha: 'def' },
     );
     expect(found).toMatchObject({ ok: true, runId: 'run-new', sessionId: 'orchestrator-pack-5' });
+  });
+
+  it('prefers latestRunStatus over PR status when locating delivered runs', () => {
+    expect(resolveSubmittedRunTerminalStatus({ status: 'changes_requested', latestRunStatus: 'delivered' })).toBe(
+      'delivered',
+    );
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-delivered',
+          prNumber: 673,
+          targetSha: 'c81b171a9544b72144213f4e2e4f922ff3acac60',
+          linkedSessionId: 'orchestrator-pack-36',
+          status: 'changes_requested',
+          latestRunStatus: 'delivered',
+          createdAt: '2026-07-07T23:14:18.226Z',
+        },
+      ],
+      { prNumber: 673, targetSha: 'c81b171a9544b72144213f4e2e4f922ff3acac60' },
+    );
+    expect(found).toMatchObject({ ok: true, runId: 'run-delivered', status: 'delivered' });
   });
 
   it('builds non-empty delivery messages for approved and changes_requested', () => {

@@ -58,6 +58,48 @@ function Wait-ScriptedReviewSubmittedRun {
     return @{ ok = $false; reason = 'submit_visibility_timeout' }
 }
 
+function Invoke-ScriptedReviewDeliveryGateProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$SeamScript,
+        [Parameter(Mandatory = $true)][string[]]$GateArgs,
+        [string]$MessageText = ''
+    )
+
+    . (Join-Path $PSScriptRoot 'Review-FailureEvidence.ps1')
+    $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+    $psi = Get-PackReviewWrapperProcessStartInfo -PwshPath $pwsh -WrapperPath $SeamScript -WrapperArgs $GateArgs
+    $psi.RedirectStandardInput = $true
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    if (-not $process) {
+        throw 'Failed to start scripted-review delivery gate process'
+    }
+
+    try {
+        if ($MessageText) {
+            $process.StandardInput.Write($MessageText)
+        }
+        $process.StandardInput.Close()
+        $streams = Read-PackReviewProcessStreams -Process $process
+        foreach ($line in @($streams.Stdout, $streams.Stderr)) {
+            if (-not $line) { continue }
+            foreach ($row in ($line -split "`n")) {
+                $trimmed = $row.TrimEnd()
+                if ($trimmed) {
+                    [Console]::Error.WriteLine($trimmed)
+                }
+            }
+        }
+        return [int]$process.ExitCode
+    }
+    finally {
+        if ($process -and -not $process.HasExited) {
+            try { $process.Kill() } catch { }
+        }
+        if ($process) { $process.Dispose() }
+    }
+}
+
 function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
     [CmdletBinding()]
     param(
@@ -135,8 +177,7 @@ function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
         $gateArgs += '-DryRun'
     }
 
-    [string]$message.message | pwsh -NoProfile -File $seamScript @gateArgs
-    $gateExit = $LASTEXITCODE
+    $gateExit = Invoke-ScriptedReviewDeliveryGateProcess -SeamScript $seamScript -GateArgs $gateArgs -MessageText ([string]$message.message)
     return @{
         ok       = ($gateExit -eq 0)
         skipped  = $false

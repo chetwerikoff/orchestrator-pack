@@ -63,6 +63,7 @@ foreach ($path in @($invokePackReview, $postSubmitLib, $postSubmitMjs)) {
 
 $invokeText = Get-Content -LiteralPath $invokePackReview -Raw
 $postSubmitLibText = Get-Content -LiteralPath $postSubmitLib -Raw
+$postSubmitMjsText = Get-Content -LiteralPath $postSubmitMjs -Raw
 if ($invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDelivery\.ps1') {
     Write-Host 'invoke-pack-review.ps1 must dot-source Invoke-ScriptedReviewPostSubmitDelivery.ps1'
     exit 1
@@ -76,8 +77,20 @@ if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -an
     Write-Host 'invoke-pack-review.ps1 must route through invoke-scripted-review-post-submit-delivery seam'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'seamScript @gateArgs') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must launch invoke-scripted-review-post-submit-delivery.ps1'
+if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewDeliveryGateProcess') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must run delivery gate with redirected stdout'
+    exit 1
+}
+if ($postSubmitLibText -notmatch 'Get-PackReviewWrapperProcessStartInfo') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must redirect delivery gate stdout off REVIEW_COMMAND'
+    exit 1
+}
+if ($postSubmitLibText -match '\[string\]\$message\.message \| pwsh') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must not pipe gate output to inherited stdout'
+    exit 1
+}
+if ($postSubmitMjsText -notmatch 'resolveSubmittedRunTerminalStatus') {
+    Write-Host 'scripted-review-post-submit-delivery.mjs must prefer latestRunStatus for terminal run lookup'
     exit 1
 }
 if ($postSubmitLibText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1') {

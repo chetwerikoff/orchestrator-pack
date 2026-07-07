@@ -11,6 +11,10 @@ export declare function buildScriptedReviewDeliveryMessage(input: {
   gateVerdict?: string;
 }): { ok: boolean; reason?: string; message?: string };
 
+export declare function resolveSubmittedRunTerminalStatus(
+  run: Record<string, unknown> | undefined | null,
+): string;
+
 export declare function findSubmittedReviewRun(
   reviewRuns: Array<Record<string, unknown>>,
   submit: { prNumber?: number; targetSha?: string },

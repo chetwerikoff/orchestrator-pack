@@ -12,6 +12,19 @@ export const ENV_SUBMIT_VISIBILITY_SECONDS = 'AO_SCRIPTED_REVIEW_SUBMIT_VISIBILI
 const TERMINAL_RUN_STATUSES = new Set(['complete', 'delivered', 'failed']);
 
 /**
+ * Terminal status for submit visibility — prefer latestRunStatus (daemon run row)
+ * over status (PR review state such as changes_requested).
+ * @param {Record<string, unknown> | undefined | null} run
+ */
+export function resolveSubmittedRunTerminalStatus(run) {
+  const latest = String(run?.latestRunStatus ?? '').trim();
+  if (latest) {
+    return latest;
+  }
+  return String(run?.status ?? '').trim();
+}
+
+/**
  * @param {unknown} stdout
  * @returns {{ ok: boolean, reason?: string, packVerdict?: 'clean' | 'findings', gateVerdict?: 'approved' | 'changes_requested' }}
  */
@@ -85,7 +98,7 @@ export function findSubmittedReviewRun(reviewRuns, submit) {
   const matches = (Array.isArray(reviewRuns) ? reviewRuns : [])
     .filter((run) => Number(run?.prNumber ?? 0) === prNumber)
     .filter((run) => normalizeSha(run?.targetSha) === targetSha)
-    .filter((run) => TERMINAL_RUN_STATUSES.has(String(run?.status ?? run?.latestRunStatus ?? '').trim()))
+    .filter((run) => TERMINAL_RUN_STATUSES.has(resolveSubmittedRunTerminalStatus(run)))
     .sort((left, right) => String(right?.createdAt ?? right?.updatedAt ?? '').localeCompare(String(left?.createdAt ?? left?.updatedAt ?? '')));
 
   const run = matches[0];
@@ -104,7 +117,7 @@ export function findSubmittedReviewRun(reviewRuns, submit) {
     runId,
     batchId: String(run.batchId ?? '').trim(),
     sessionId,
-    status: String(run.status ?? run.latestRunStatus ?? '').trim(),
+    status: resolveSubmittedRunTerminalStatus(run),
   };
 }
 
