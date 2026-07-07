@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "7e1c00a3b1b6f2acaba5c6bf307f4b18ce29e7b4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9f5f12957f59e9912560556a35cbce85d80e21d32ebbeb8854306656a7652318"
+    "active_scope_hash": "sha256:7ff7173e603c5f7cde9b84a074f8ad8cbe69be922f6e99fe2ed8b1743c119b3f"
   },
   "declared_paths": [
     "docs/launch-argv-registry.d.mts",
@@ -24,8 +24,9 @@
   ],
   "declared_globs": [
     "scripts/**",
-    "docs/**",
-    "tests/**"
+    "plugins/**",
+    "tests/external-output-references/**",
+    "docs/**"
   ],
   "amendments": []
 }
