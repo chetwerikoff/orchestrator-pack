@@ -632,7 +632,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
 
         const allowCustomAo = spawnHermeticBoundaryBash(
           pack,
-          ['-c', `source ${pack.bashEnvPath}; ${customAo} spawn opk-1`],
+          ['-c', `source ${pack.bashEnvPath}; ${customAo} spawn --project orchestrator-pack --name Gate-probe --issue 1 --prompt Boundary-probe-holder`],
           nonLiveReceiptFile,
           autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
           dir,
@@ -687,7 +687,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       chmodSync(fakeAo, 0o755);
       const allowAoVar = spawnHermeticBoundaryBash(
         pack,
-        ['-c', `source ${pack.bashEnvPath}; A=${fakeAo}; "$A" spawn opk-1`],
+        ['-c', `source ${pack.bashEnvPath}; A=${fakeAo}; "$A" spawn --project orchestrator-pack --name Gate-probe --issue 1 --prompt Boundary-probe-holder`],
         nonLiveReceiptFile,
         autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
         dir,

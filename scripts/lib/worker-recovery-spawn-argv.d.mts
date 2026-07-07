@@ -9,8 +9,12 @@ export type ResolveRecoverySpawnProjectIdResult =
   | { ok: true; projectId: string }
   | { ok: false; reason: string };
 
+export type BuildRecoverySpawnPromptResult =
+  | { ok: true; prompt: string }
+  | { ok: false; reason: string };
+
 export type BuildRecoverySpawnArgvResult =
-  | { ok: true; argv: string[]; displayName: string; projectId: string }
+  | { ok: true; argv: string[]; displayName: string; projectId: string; prompt: string }
   | { ok: false; reason: string };
 
 export type ClassifyRecoverySpawnExitResult =
@@ -24,6 +28,10 @@ export declare function deriveRecoverySpawnDisplayName(
 export declare function resolveRecoverySpawnProjectId(
   input: Record<string, unknown>,
 ): ResolveRecoverySpawnProjectIdResult;
+
+export declare function buildRecoverySpawnPrompt(
+  input: Record<string, unknown>,
+): BuildRecoverySpawnPromptResult;
 
 export declare function buildRecoverySpawnArgv(
   input: Record<string, unknown>,
