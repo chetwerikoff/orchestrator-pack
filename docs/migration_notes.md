@@ -15,6 +15,15 @@ Source migration note read read-only from:
 `C:\Users\che\.claude\projects\C--Users-che-Documents-Projects-ai-orchestrator\memory\project_composio_migration.md`
 
 
+## Review-status report-full JSON readers (Issue #611)
+
+Pack review-status consumers (`review-trigger-reconcile.ps1`, wake/reconcile scripts, and
+diagnostics) now load session snapshots via `Get-AoStatusSessionsWithReports*` (`ao status
+--json --reports full` on AO 0.9; `.agent-report-audit/<session>.ndjson` fallback on AO 0.10).
+Head-ready predicate semantics are unchanged — only the reader boundary is fixed.
+
+No operator adoption required beyond the usual supervised-child restart after deploy.
+
 ## AO 0.10 review pipeline vocabulary migration (Issue #625)
 
 After merging the #625 vocabulary migration:

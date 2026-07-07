@@ -64,7 +64,7 @@ describe('review-status consumer readers (Issue #611)', () => {
   });
 
   it('AC#3: resolves workers from $.data[] without $.sessions', () => {
-    const fixture = loadJson<{ reportFull: { data: unknown[] }; expectedJsonPath: string }>(
+    const fixture = loadJson<{ reportFull: { data: unknown[]; sessions?: unknown }; expectedJsonPath: string }>(
       'data-array-no-sessions.json',
     );
     expect(fixture.reportFull.sessions).toBeUndefined();
@@ -131,7 +131,7 @@ describe('review-status consumer readers (Issue #611)', () => {
         openPrs: fixture.openPrs as never,
         reviewRuns: fixture.reviewRuns as never,
         sessions: list as never,
-        ciChecksByPr: fixture.ciChecksByPr,
+        ciChecksByPr: fixture.ciChecksByPr as never,
         requiredCheckNamesByPr: fixture.requiredCheckNamesByPr,
         requiredCheckLookupFailedByPr: {},
         nowMs: Date.parse('2026-07-05T15:00:00.000Z'),
