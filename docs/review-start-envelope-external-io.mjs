@@ -3,7 +3,7 @@
  * Infra transport pause, monotonic attempt ceiling, supervised gh classification.
  */
 import { printJson, readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
-import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
+import { normalizeLegacyReviewRunStatus, isRunCoveringHead, resolveAuthoritativeReviewRunStatus } from './review-reconcile-primitives.mjs';
 
 const COVERED_RUN_STATUSES = [
   'queued',
@@ -25,7 +25,8 @@ export function findCoveringRunForKey(reviewRuns, prNumber, headSha) {
     const runPr = Number(run?.prNumber);
     if (!Number.isInteger(runPr) || runPr !== prNumber) continue;
     if (normalizeHeadSha(run?.targetSha) !== normalized) continue;
-    const status = normalizeLegacyReviewRunStatus(String(run?.prReviewStatus ?? run?.status ?? '').trim());
+    if (!isRunCoveringHead(run)) continue;
+    const status = normalizeLegacyReviewRunStatus(resolveAuthoritativeReviewRunStatus(run));
     if (!COVERED_RUN_STATUSES.includes(status)) continue;
     return { run, status, runId: String(run?.id ?? run?.runId ?? '') };
   }
