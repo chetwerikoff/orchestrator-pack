@@ -2254,3 +2254,12 @@ grep anchor moves in this PR.
 documentation and architect policy belong in `docs/` with one-line pointers. New CI checks must not
 add mirror phrases to `prompts/agent_rules.md` (grandfathered checks only until phase-2
 `docs/review-pipeline.md` extraction).
+## Issue #613 — wake supervisor orphan discovery (Stop/Status/Start)
+
+After merging on a host with a live wake supervisor:
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
+3. Verify: `... -Action Status` reports the supervisor as running with a non-zero pid when the loop is alive, including when `supervisor.pid` was previously missing or stale.
+
+

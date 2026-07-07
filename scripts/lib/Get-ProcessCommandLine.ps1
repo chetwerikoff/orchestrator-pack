@@ -3,16 +3,16 @@
   Shared process command-line reader for Linux/macOS/Windows.
 #>
 
-function Get-ProcessCommandLineById {
+function Get-ProcessCommandLinePartsById {
     param([int]$ProcessId)
 
-    if ($ProcessId -le 0) { return '' }
+    if ($ProcessId -le 0) { return @() }
 
     if ($IsLinux) {
         $procPath = "/proc/$ProcessId/cmdline"
         if (Test-Path -LiteralPath $procPath) {
             $raw = [System.IO.File]::ReadAllBytes($procPath)
-            if ($raw.Length -eq 0) { return '' }
+            if ($raw.Length -eq 0) { return @() }
             $parts = New-Object System.Collections.Generic.List[string]
             $current = New-Object System.Text.StringBuilder
             foreach ($byte in $raw) {
@@ -29,26 +29,101 @@ function Get-ProcessCommandLineById {
             if ($current.Length -gt 0) {
                 $parts.Add($current.ToString())
             }
-            return ($parts -join ' ')
+            return [string[]]$parts.ToArray()
         }
+        return @()
     }
 
     if ($IsMacOS) {
         $out = & ps -p $ProcessId -o command= 2>$null
-        return (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+        $commandLine = (($out | ForEach-Object { $_.ToString() }) -join ' ').Trim()
+        if (-not $commandLine) { return @() }
+        return [string[]](Split-ProcessCommandLineTokens -CommandLine $commandLine)
     }
 
     try {
         $cim = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
-        return [string]$cim.CommandLine
+        $commandLine = [string]$cim.CommandLine
+        if (-not $commandLine) { return @() }
+        return [string[]](Split-ProcessCommandLineTokens -CommandLine $commandLine)
     }
     catch {
-        return ''
+        return @()
     }
+}
+
+function Get-ProcessCommandLineById {
+    param([int]$ProcessId)
+
+    $parts = @(Get-ProcessCommandLinePartsById -ProcessId $ProcessId)
+    if ($parts.Count -eq 0) { return '' }
+    return ($parts -join ' ')
+}
+
+function Get-OrchestratorWakeSupervisorProcessCommandLineFixture {
+    param([int]$ProcessId)
+
+    $fixturePath = $env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE
+    if (-not $fixturePath) { return $null }
+    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { return $null }
+
+    try {
+        $map = Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    $key = [string]$ProcessId
+    if ($map.PSObject.Properties.Name -contains $key) {
+        return $map.$key
+    }
+    return $null
+}
+
+function Get-OrchestratorWakeSupervisorProcessCommandLineFixtureTokens {
+    param([int]$ProcessId)
+
+    $entry = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
+    if ($null -eq $entry) { return $null }
+    if ($entry -is [System.Array]) {
+        return ,@($entry | ForEach-Object { [string]$_ })
+    }
+    if ($entry.PSObject.Properties.Name -contains 'tokens') {
+        return ,@($entry.tokens | ForEach-Object { [string]$_ })
+    }
+    if ($entry.PSObject.Properties.Name -contains 'commandLine') {
+        return Split-ProcessCommandLineTokens -CommandLine ([string]$entry.commandLine)
+    }
+    return Split-ProcessCommandLineTokens -CommandLine ([string]$entry)
+}
+
+function Get-OrchestratorWakeSupervisorProcessCommandLineTokens {
+    param([int]$ProcessId)
+
+    $fixtureTokens = Get-OrchestratorWakeSupervisorProcessCommandLineFixtureTokens -ProcessId $ProcessId
+    if ($null -ne $fixtureTokens) {
+        return $fixtureTokens
+    }
+    return Get-ProcessCommandLinePartsById -ProcessId $ProcessId
 }
 
 function Get-OrchestratorWakeSupervisorProcessCommandLine {
     param([int]$ProcessId)
+
+    $fixture = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
+    if ($null -ne $fixture) {
+        if ($fixture -is [System.Array]) {
+            return ($fixture -join ' ')
+        }
+        if ($fixture.PSObject.Properties.Name -contains 'commandLine') {
+            return [string]$fixture.commandLine
+        }
+        if ($fixture.PSObject.Properties.Name -contains 'tokens') {
+            return ($fixture.tokens -join ' ')
+        }
+        return [string]$fixture
+    }
     return Get-ProcessCommandLineById -ProcessId $ProcessId
 }
 

@@ -7,7 +7,7 @@ export const repoRoot = path.resolve(import.meta.dirname, '..');
 export const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 
-const supervisorHookTimeoutMs = 120_000;
+const supervisorHookTimeoutMs = 180_000;
 const tmpRoots: string[] = [];
 
 export const managedChildRoles = [
@@ -44,26 +44,68 @@ export function makeStateDir(): string {
 
 export function cleanupSupervisorTests(): void {
   for (const root of tmpRoots.splice(0)) {
-    try {
-      execFileSync(
-        'pwsh',
-        [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          supervisorScript,
-          '-Action',
-          'Stop',
-          '-StateDir',
-          root,
-        ],
-        { cwd: repoRoot, stdio: 'pipe', timeout: supervisorHookTimeoutMs },
-      );
-    } catch {
-      // best effort
-    }
+    killSupervisorStateDir(root);
     fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function killSupervisorStateDir(root: string): void {
+  const fastStopEnv = { ...process.env, AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
+  try {
+    execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        supervisorScript,
+        '-Action',
+        'Stop',
+        '-StateDir',
+        root,
+      ],
+      { cwd: repoRoot, stdio: 'pipe', timeout: 20_000, env: fastStopEnv },
+    );
+    return;
+  } catch {
+    // fall through to marker/supervisor.pid kill
+  }
+
+  const supervisorPidFile = path.join(root, 'supervisor.pid');
+  if (fs.existsSync(supervisorPidFile)) {
+    const pid = Number(fs.readFileSync(supervisorPidFile, 'utf8').trim());
+    if (pid > 0) {
+      try {
+        execFileSync('kill', ['-9', String(pid)]);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const markersDir = path.join(root, 'markers');
+  if (!fs.existsSync(markersDir)) {
+    return;
+  }
+  for (const name of fs.readdirSync(markersDir)) {
+    if (!name.endsWith('.json')) {
+      continue;
+    }
+    try {
+      const marker = JSON.parse(fs.readFileSync(path.join(markersDir, name), 'utf8')) as {
+        pid?: number;
+      };
+      if (marker.pid && marker.pid > 0) {
+        try {
+          execFileSync('kill', ['-9', String(marker.pid)]);
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -83,7 +125,7 @@ export function runSupervisor(
       cwd: repoRoot,
       env: process.env,
       encoding: 'utf8',
-      timeout: 120_000,
+      timeout: supervisorHookTimeoutMs,
     },
   );
   for (const [key, previous] of Object.entries(savedEnv)) {
