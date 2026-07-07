@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "emitters": [
+    {
+      "file": "scripts/dead-worker-reconcile.ps1",
+      "anchor": "outcome=escalated"
+    },
+    {
+      "file": "scripts/invoke-worker-recovery.ps1",
+      "anchor": "skipped_ambiguous|skipped_live|spawn_denied|partial_failure|escalated"
+    },
+    {
+      "file": "scripts/ci-failure-notification-reconcile.ps1",
+      "anchor": "gate.escalate"
+    },
+    {
+      "file": "scripts/ci-green-wake-reconcile.ps1",
+      "anchor": "claim.escalate"
+    },
+    {
+      "file": "scripts/invoke-gated-worker-nudge.ps1",
+      "anchor": "gate/claim escalate"
+    },
+    {
+      "file": "scripts/lib/Worker-NudgeClaim.ps1",
+      "anchor": "storage_failure|ambiguous_claim"
+    },
+    {
+      "file": "scripts/lib/Worker-Recovery.ps1",
+      "anchor": "escalation branch"
+    },
+    {
+      "file": "scripts/lib/Review-StartClaim.ps1",
+      "anchor": "escalation path"
+    },
+    {
+      "file": "scripts/lib/Review-StartEnvelopeLedger.ps1",
+      "anchor": "mark-escalated"
+    },
+    {
+      "file": "scripts/review-run-recovery.ps1",
+      "anchor": "action.escalated|writeFailure"
+    },
+    {
+      "file": "scripts/review-trigger-reconcile.ps1",
+      "anchor": "escalate_degraded_ci"
+    },
+    {
+      "file": "scripts/worker-message-submit-reconcile.ps1",
+      "anchor": "adoption escalated|escalate action"
+    },
+    {
+      "file": "scripts/orchestrator-wake-listener.ps1",
+      "anchor": "handoff-envelope admission"
+    }
+  ]
+}

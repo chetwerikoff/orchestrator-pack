@@ -31,6 +31,21 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Invoke-GatedNudgeEscalationEmit {
+    param(
+        [string]$TupleKey,
+        [string]$Reason,
+        [string]$Diagnosis = '',
+        [switch]$DryRun
+    )
+    $corr = "corr:nudge:$TupleKey"
+    $dedupe = "dedupe:nudge:$TupleKey:$Reason"
+    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-gated-nudge' `
+        -SourceProcess 'ci-green-wake-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+        -Diagnosis @{ tupleKey = $TupleKey; reason = $Reason; diagnosis = $Diagnosis } -DryRun:$DryRun | Out-Null
+}
+
 $PackRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 
@@ -45,6 +60,7 @@ function Get-InvokeGatedWorkerNudgeCiFailureStoreDir {
 
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
@@ -226,6 +242,7 @@ if ($resolvedIntent -eq 'ci-failure') {
 $gate = Invoke-WorkerNudgeFilterCli -Subcommand 'evaluateNudgeGate' -Payload $gatePayload
 if (-not $gate.allow) {
     Write-WorkerNudgeGateAudit -Record $gate.audit | Out-Null
+    if ($gate.escalate) { Invoke-GatedNudgeEscalationEmit -TupleKey $tupleKey -Reason $gate.reason -Diagnosis $gate.diagnosis -DryRun:$DryRun }
     @{
         sent       = $false
         reason     = [string]$gate.reason
@@ -262,6 +279,7 @@ if (-not $claim.acquired) {
     if ($claimReason -in @('storage_failure', 'ambiguous_claim')) {
         $failure = Invoke-WorkerNudgeClaimStoreFailure -Namespace $namespace -FailureReason $claimReason `
             -PrNumber $PrNumber -CycleKey $cycleKey -Surface $Surface
+        if ($failure.escalate) { Invoke-GatedNudgeEscalationEmit -TupleKey $tupleKey -Reason $claimReason -Diagnosis $failure.diagnosis -DryRun:$DryRun }
         @{
             sent            = $false
             reason          = [string]$failure.reason
@@ -279,6 +297,7 @@ if (-not $claim.acquired) {
         tupleKey = $tupleKey
         surface  = $Surface
     } | Out-Null
+    if ($claim.escalate) { Invoke-GatedNudgeEscalationEmit -TupleKey $tupleKey -Reason $claimReason -Diagnosis $claim.diagnosis -DryRun:$DryRun }
     @{
         sent       = $false
         reason     = $claimReason

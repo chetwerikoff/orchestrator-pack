@@ -1,4 +1,6 @@
 #requires -Version 5.1
+
+. (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
 <#
   Cross-process single-flight claims for automated ao-review run starters.
 
@@ -750,7 +752,12 @@ function Get-ReviewStartClaimLostRaceResult {
             }
         }
     }
-    return @{
+    $corr = "corr:review-start-claim:$PrNumber:$HeadSha"
+        $dedupe = "dedupe:review-start-claim:$PrNumber:$HeadSha"
+        Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-review-start-claim' `
+            -SourceProcess 'review-start-claim-reaper' -CorrelationKey $corr -DedupeKey $dedupe `
+            -Diagnosis @{ prNumber = $PrNumber; headSha = $HeadSha; reason = $reason } | Out-Null
+        return @{
         acquired    = $false
         reason      = 'ambiguous_claim'
         escalation  = $true

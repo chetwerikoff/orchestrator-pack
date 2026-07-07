@@ -145,6 +145,19 @@
         "leases"
       ],
       "actionTracking": true
+    },
+    {
+      "id": "escalation-router",
+      "stateFile": "orchestrator-escalation-state.json",
+      "callerScripts": [
+        "scripts/lib/Orchestrator-Escalation.ps1",
+        "scripts/orchestrator-escalation-router.ps1"
+      ],
+      "mapFields": [
+        "records",
+        "wakeWindows"
+      ],
+      "actionTracking": true
     }
   ]
 }

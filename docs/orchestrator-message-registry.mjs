@@ -246,6 +246,40 @@ export function validateCatalogEntry(entry, bundle, repoRoot) {
   return violations;
 }
 
+
+export function validateEscalationClassEntry(entry, bundle) {
+  const violations = [];
+  const required = [
+    'code',
+    'name',
+    'escalation_class_id',
+    'owning_process',
+    'route',
+    'delivery_guarantee',
+    'dedupe_owner',
+    'trigger',
+  ];
+  for (const field of required) {
+    if (!entry[field]) violations.push(`${entry.escalation_class_id ?? '?'}: missing ${field}`);
+  }
+  const allowedRoutes = new Set(['llm-orchestrator', 'operator', 'auto-retry-only']);
+  if (entry.route && !allowedRoutes.has(entry.route)) {
+    violations.push(`${entry.escalation_class_id}: invalid route ${entry.route}`);
+  }
+  const childIds = bundle.supervisorRegistry.children?.map((c) => c.id) ?? [];
+  const allowedOwners = new Set(['orchestrator-rules', 'journaled-worker-send', 'escalation-router']);
+  if (entry.owning_process && !childIds.includes(entry.owning_process) && !allowedOwners.has(entry.owning_process)) {
+    violations.push(`${entry.escalation_class_id}: owning_process ${entry.owning_process} not in supervisor inventory`);
+  }
+  if (entry.route === 'auto-retry-only') {
+    const promotionTarget = entry.promotion_target_class_id || entry.promotes_to;
+    if (!Number.isInteger(entry.promotion_after_ticks) || entry.promotion_after_ticks < 1 || !promotionTarget) {
+      violations.push(`${entry.escalation_class_id}: auto-retry-only requires positive promotion_after_ticks and promotion_target_class_id`);
+    }
+  }
+  return violations;
+}
+
 export function validateCatalog(bundle, repoRoot) {
   const violations = [];
   const entries = bundle.catalog.entries ?? [];
@@ -263,6 +297,14 @@ export function validateCatalog(bundle, repoRoot) {
       signatures.set(sig, entry.message_class_id);
     }
   }
+  const escalationEntries = bundle.catalog.escalationClasses ?? [];
+  const escalationIds = escalationEntries.map((e) => e.escalation_class_id);
+  const escalationDupes = escalationIds.filter((id, i) => escalationIds.indexOf(id) !== i);
+  if (escalationDupes.length) violations.push(`duplicate escalation_class_id: ${[...new Set(escalationDupes)].join(', ')}`);
+  for (const entry of escalationEntries) {
+    violations.push(...validateEscalationClassEntry(entry, bundle));
+  }
+
   return { ok: violations.length === 0, violations };
 }
 
@@ -660,6 +702,18 @@ export function generateMessageMap(catalog, overlapResult) {
   const entries = [...(catalog.entries ?? [])].sort((a, b) => a.message_class_id.localeCompare(b.message_class_id));
   for (const e of entries) {
     lines.push(`| ${e.message_class_id} | ${e.trigger?.summary ?? ''} | ${e.owning_process} | ${e.recipient_key} | ${e.intent_key} | ${e.mechanism} | ${e.semantic_dedup_owner} |`);
+  }
+  lines.push('');
+  lines.push('## Escalation classes');
+  lines.push('');
+  lines.push('| code | escalation_class_id | trigger | owning_process | route | delivery_guarantee | dedupe_owner |');
+  lines.push('| --- | --- | --- | --- | --- | --- | --- |');
+  const escalationEntries = [...(catalog.escalationClasses ?? [])].sort((a, b) => String(a.code).localeCompare(String(b.code), undefined, { numeric: true }));
+  for (const e of escalationEntries) {
+    const route = e.route === 'auto-retry-only'
+      ? `${e.route} (promotes after ${e.promotion_after_ticks} ticks to ${e.promotion_target_class_id || e.promotes_to})`
+      : e.route;
+    lines.push(`| ${e.code} | ${e.escalation_class_id} | ${e.trigger?.summary ?? ''} | ${e.owning_process} | ${route} | ${e.delivery_guarantee} | ${e.dedupe_owner} |`);
   }
   lines.push('');
   lines.push('## Overlap summary');

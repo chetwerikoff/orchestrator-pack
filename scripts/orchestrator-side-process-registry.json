@@ -14,7 +14,8 @@
     "review-start-claim-reaper",
     "ci-failure-notification-reconcile",
     "ci-failure-notification-reaction",
-    "dead-worker-reconcile"
+    "dead-worker-reconcile",
+    "escalation-router"
   ],
   "children": [
     {
@@ -165,6 +166,16 @@
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 60,
+      "stallGraceMultiplier": 4
+    },
+    {
+      "id": "escalation-router",
+      "script": "orchestrator-escalation-router.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "escalation-router-side-effect.lock",
+      "requiresOrchestratorSession": true,
+      "passProjectId": true,
+      "cadenceSeconds": 30,
       "stallGraceMultiplier": 4
     }
   ]

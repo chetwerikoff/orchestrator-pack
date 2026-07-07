@@ -28,6 +28,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Invoke-CiGreenEscalationEmit {
+    param(
+        [object]$Action,
+        [string]$Reason,
+        [string]$Diagnosis = ''
+    )
+    $pr = [string]$Action.prNumber
+    $head = [string]$Action.headSha
+    $corr = "corr:ci-green:$pr:$head"
+    $dedupe = "dedupe:ci-green:$pr:$head:claim"
+    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-ci-green-claim-audit' `
+        -SourceProcess 'ci-green-wake-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+        -Diagnosis @{ prNumber = $pr; headSha = $head; reason = $Reason; diagnosis = $Diagnosis } | Out-Null
+}
+
 $Script:ReconcileLogPrefix = 'ci-green-wake-reconcile'
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
@@ -43,6 +59,7 @@ $Script:DefaultIntervalMinutes = 1
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
@@ -352,6 +369,7 @@ function Invoke-PlannedCiGreenWakeSend {
     if (-not $gate.allow) {
         Write-WorkerNudgeGateDecisionAudit -Record $gate.audit -ProjectId $ProjectId | Out-Null
         Write-CiGreenWakeLog "nudge suppressed by gate PR #$($Action.prNumber): $($gate.reason)"
+        if ($gate.escalate) { Invoke-CiGreenEscalationEmit -Action $Action -Reason $gate.reason -Diagnosis $gate.diagnosis }
         return @{
             sent         = $false
             reason       = [string]$gate.reason
@@ -367,6 +385,7 @@ function Invoke-PlannedCiGreenWakeSend {
         $claimPhase = if ($claim.phase) { [string]$claim.phase } else { 'none' }
         Write-WorkerNudgeGateDecisionAudit -Record (Merge-WorkerNudgeClaimSkipAudit -GateAudit $gate.audit -Reason ([string]$claim.reason) -ClaimPhase $claimPhase) -ProjectId $ProjectId | Out-Null
         Write-CiGreenWakeLog "nudge suppressed by claim gate PR #$($Action.prNumber): $($claim.reason)"
+        if ($claim.escalate) { Invoke-CiGreenEscalationEmit -Action $Action -Reason $claim.reason -Diagnosis $claim.diagnosis }
         return @{
             sent         = $false
             reason       = [string]$claim.reason

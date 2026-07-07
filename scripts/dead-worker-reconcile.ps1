@@ -33,6 +33,7 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorYamlRules.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 
 $Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
@@ -318,6 +319,15 @@ function Invoke-DeadWorkerTick {
         }
         $finalAction.outcome = $finalAction.type
         $finalAction.reason = if ($result.reason) { [string]$result.reason } else { [string]$finalAction.type }
+        if ($finalAction.type -eq 'escalated') {
+            $sessionId = [string]$action.sessionId
+            $reason = [string]$finalAction.reason
+            $corr = "corr:recovery:$sessionId"
+            $dedupe = "dedupe:recovery:$sessionId`:$reason"
+            Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-dead-worker-recovery' `
+                -SourceProcess 'dead-worker-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                -Diagnosis @{ sessionId = $sessionId; reason = $reason; action = $finalAction } | Out-Null
+        }
         $tracking = Commit-DeadWorkerAction -State $tracking -Action $finalAction -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
     }
     $tracking.lastTickMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

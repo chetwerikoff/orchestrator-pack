@@ -1,0 +1,5 @@
+{
+  "class": "escalation-review-trigger-degraded-ci",
+  "correlation": "corr:review-trigger:pr:head",
+  "axis": "F4"
+}

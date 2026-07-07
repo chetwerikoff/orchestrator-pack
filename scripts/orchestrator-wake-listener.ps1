@@ -26,6 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'orchestrator-wake-common.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
@@ -464,6 +465,11 @@ try {
                     Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'wake_received'
                     try {
                         $triggerWakeReceivedMs = if ($filterResult.wakeKind -eq 'ready_for_review') { $wakeReceivedMs } else { 0 }
+                        $envelopeKey = if ($filterResult.dedupeKey) { [string]$filterResult.dedupeKey } else { [string]$filterResult.sessionId }
+                        Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-handoff-envelope' `
+                            -SourceProcess 'listener' -CorrelationKey ("corr:handoff:$envelopeKey") `
+                            -DedupeKey ("dedupe:handoff:$envelopeKey") `
+                            -Diagnosis @{ wakeKind = $filterResult.wakeKind; sessionId = $filterResult.sessionId; prNumber = $filterResult.prNumber } | Out-Null
                         $handoffTrigger = Invoke-HandoffWakeTriggerFromFilter `
                             -FilterResult $filterResult `
                             -WakeReceivedMs $triggerWakeReceivedMs `

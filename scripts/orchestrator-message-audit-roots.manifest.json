@@ -6,6 +6,7 @@
     "scripts/ci-failure-notification-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/dead-worker-reconcile.ps1",
+    "scripts/orchestrator-escalation-router.ps1",
     "scripts/orchestrator-wake-heartbeat.ps1",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-finding-delivery-confirm.ps1",
@@ -16,7 +17,8 @@
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
     "scripts/review-ready-report-state-seed.ps1",
-    "scripts/worker-message-submit-reconcile.ps1"
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/orchestrator-escalation-router.ps1"
   ],
   "supervisorEntrypoints": [
     "scripts/orchestrator-wake-supervisor.ps1"

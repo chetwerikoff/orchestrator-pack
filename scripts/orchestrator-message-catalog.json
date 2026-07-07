@@ -55,7 +55,7 @@
         "file": "scripts/ci-green-wake-reconcile.ps1",
         "function": "Invoke-PlannedCiGreenWakeSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "de390d205611dec6"
+        "predicateBodyHash": "dffe58cb4dced762"
       }
     },
     {
@@ -89,7 +89,7 @@
         "file": "scripts/ci-failure-notification-reconcile.ps1",
         "function": "Invoke-PlannedCiFailureReconcileSend",
         "anchor": "helper-body",
-        "predicateBodyHash": "a38bd6bc16846f0b"
+        "predicateBodyHash": "d6c0d318a9c0750d"
       }
     },
     {
@@ -215,6 +215,206 @@
         "function": "Invoke-WorkerInputDraftSubmit",
         "anchor": "helper-body",
         "predicateBodyHash": "a5d1091c116abe25"
+      }
+    }
+  ],
+  "escalationClasses": [
+    {
+      "code": "E1",
+      "escalation_class_id": "escalation-dead-worker-recovery",
+      "name": "dead-worker-recovery",
+      "owning_process": "dead-worker-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Dead worker recovery exhausted",
+        "event": "dead_worker_recovery_escalated"
+      }
+    },
+    {
+      "code": "E2",
+      "escalation_class_id": "escalation-claim-store-integrity",
+      "name": "claim-store-integrity",
+      "owning_process": "worker-message-submit-reconcile",
+      "route": "operator",
+      "delivery_guarantee": "at-least-once-operator-inbox",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Worker nudge claim-store integrity failure",
+        "event": "claim_store_integrity"
+      }
+    },
+    {
+      "code": "E3",
+      "escalation_class_id": "escalation-review-trigger-degraded-ci",
+      "name": "review-trigger-degraded-ci",
+      "owning_process": "review-trigger-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Review trigger degraded CI exhausted",
+        "event": "review_trigger_degraded_ci"
+      }
+    },
+    {
+      "code": "E4",
+      "escalation_class_id": "escalation-review-run-recovery",
+      "name": "review-run-recovery",
+      "owning_process": "review-run-recovery",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Review-run recovery failed",
+        "event": "review_run_recovery_escalated"
+      }
+    },
+    {
+      "code": "E5",
+      "escalation_class_id": "escalation-submit-adoption",
+      "name": "submit-adoption",
+      "owning_process": "worker-message-submit-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Worker message submit adoption escalated",
+        "event": "submit_adoption_escalated"
+      }
+    },
+    {
+      "code": "E6",
+      "escalation_class_id": "escalation-handoff-envelope",
+      "name": "handoff-envelope",
+      "owning_process": "listener",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Worker blocked / handoff question admitted",
+        "event": "handoff_envelope_admission"
+      }
+    },
+    {
+      "code": "E7",
+      "escalation_class_id": "escalation-protected-finding",
+      "name": "protected-finding",
+      "owning_process": "review-finding-delivery-confirm",
+      "route": "operator",
+      "delivery_guarantee": "at-least-once-operator-inbox",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Contested protected finding (deferred sibling #625)",
+        "event": "protected_finding_contested"
+      },
+      "deferredSibling": 625
+    },
+    {
+      "code": "E8",
+      "escalation_class_id": "escalation-pipeline-failure",
+      "name": "pipeline-failure",
+      "owning_process": "escalation-router",
+      "route": "operator",
+      "delivery_guarantee": "at-least-once-operator-inbox",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Escalation pipeline publish/delivery failure",
+        "event": "escalation_pipeline_failure"
+      }
+    },
+    {
+      "code": "E10",
+      "escalation_class_id": "escalation-ci-failure-notify",
+      "name": "ci-failure-notify",
+      "owning_process": "ci-failure-notification-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "CI failure notification reconcile escalate",
+        "event": "ci_failure_notify_escalate"
+      }
+    },
+    {
+      "code": "E11",
+      "escalation_class_id": "escalation-ci-green-claim-audit",
+      "name": "ci-green-claim-audit",
+      "owning_process": "ci-green-wake-reconcile",
+      "route": "auto-retry-only",
+      "delivery_guarantee": "audit-until-promotion",
+      "dedupe_owner": "issue-641",
+      "promotion_after_ticks": 5,
+      "trigger": {
+        "summary": "CI green wake claim escalate (audit)",
+        "event": "ci_green_claim_escalate_audit"
+      },
+      "promotion_target_class_id": "escalation-ci-green-claim"
+    },
+    {
+      "code": "E11-promoted",
+      "escalation_class_id": "escalation-ci-green-claim",
+      "name": "ci-green-claim",
+      "owning_process": "ci-green-wake-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "CI green wake claim escalate (promoted)",
+        "event": "ci_green_claim_escalate"
+      }
+    },
+    {
+      "code": "E12",
+      "escalation_class_id": "escalation-gated-nudge",
+      "name": "gated-nudge",
+      "owning_process": "ci-green-wake-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Gated worker nudge gate/claim escalate",
+        "event": "gated_nudge_escalate"
+      }
+    },
+    {
+      "code": "E13",
+      "escalation_class_id": "escalation-envelope-ledger",
+      "name": "envelope-ledger",
+      "owning_process": "review-start-claim-reaper",
+      "route": "operator",
+      "delivery_guarantee": "at-least-once-operator-inbox",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Review-start envelope ledger mark-escalated",
+        "event": "envelope_ledger_escalated"
+      }
+    },
+    {
+      "code": "E14",
+      "escalation_class_id": "escalation-review-start-claim",
+      "name": "review-start-claim",
+      "owning_process": "review-start-claim-reaper",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Review-start claim escalation path",
+        "event": "review_start_claim_escalated"
+      }
+    },
+    {
+      "code": "E15",
+      "escalation_class_id": "escalation-worker-recovery",
+      "name": "worker-recovery",
+      "owning_process": "dead-worker-reconcile",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Worker recovery lib escalation branch",
+        "event": "worker_recovery_escalated"
       }
     }
   ],

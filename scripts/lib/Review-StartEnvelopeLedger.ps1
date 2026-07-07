@@ -1,4 +1,6 @@
 #requires -Version 5.1
+
+. (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
 <#
   Cross-attempt review-start envelope ledger bridge (Issue #516).
 #>
@@ -246,6 +248,11 @@ function Record-ReviewStartEnvelopeLedgerTerminal {
                 -ConsecutiveFailureCount ([int]$entry.consecutiveFailureCount) `
                 -LastFailureClass ([string]$entry.lastFailureClass) `
                 -Surfaces @($entry.surfaces) -LogWriter $LogWriter | Out-Null
+            Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-envelope-ledger' `
+                -SourceProcess 'review-start-claim-reaper' `
+                -CorrelationKey ("corr:envelope-ledger:$PrNumber:$HeadSha") `
+                -DedupeKey ("dedupe:envelope-ledger:$PrNumber:$HeadSha`:$consecutiveFailureCount") `
+                -Diagnosis @{ prNumber = $PrNumber; headSha = $HeadSha; consecutiveFailureCount = $consecutiveFailureCount } | Out-Null
             $marked = Invoke-ReviewStartEnvelopeLedgerCli -Subcommand 'mark-escalated' -Payload @{
                 ledger   = $result.ledger
                 prNumber = $prNumber

@@ -1,0 +1,5 @@
+{
+  "class": "escalation-dead-worker-recovery",
+  "correlation": "corr:recovery:opk-s1",
+  "axis": "F1"
+}

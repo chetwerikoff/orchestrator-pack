@@ -1,4 +1,6 @@
 #requires -Version 5.1
+
+. (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
 <#
   Cross-process single-flight claims for orchestrator→worker nudges (Issue #384).
 #>
@@ -1106,6 +1108,13 @@ function Invoke-WorkerNudgeClaimStoreFailure {
     Write-WorkerNudgeGateAudit -Record $audit | Out-Null
     if ($eval.escalate -and $eval.diagnosis) {
         [Console]::Error.WriteLine([string]$eval.diagnosis)
+        $failureKind = [string]$FailureReason
+        if (-not $failureKind) { $failureKind = [string]$eval.reason }
+        $corr = "corr:claim-store:$Namespace"
+        $dedupe = "dedupe:claim-store:$Namespace`:$failureKind"
+        Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-claim-store-integrity' `
+            -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+            -Diagnosis @{ namespace = $Namespace; failureKind = $failureKind; diagnosis = $eval.diagnosis } | Out-Null
     }
     return @{
         escalate        = [bool]$eval.escalate

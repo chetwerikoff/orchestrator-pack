@@ -18,6 +18,8 @@ param(
     [switch]$Once
 )
 
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
+
 $ErrorActionPreference = 'Stop'
 $Script:RecoveryLogPrefix = 'review-run-recovery'
 $PackRoot = Split-Path -Parent $PSScriptRoot
@@ -103,6 +105,12 @@ try {
                 }
                 elseif ($action.escalated -eq $true -or $action.writeFailure) {
                     Write-RecoveryLog "ESCALATE $detail"
+                    $runId = if ($action.runId) { [string]$action.runId } else { [string]$action.reviewRunId }
+                    $corr = "corr:review-run:$runId"
+                    $dedupe = "dedupe:review-run:$runId`:recovery"
+                    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-review-run-recovery' `
+                        -SourceProcess 'review-run-recovery' -CorrelationKey $corr -DedupeKey $dedupe `
+                        -Diagnosis @{ detail = $detail; action = $action } | Out-Null
                 }
                 else {
                     Write-RecoveryLog "observed $detail"
