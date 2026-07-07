@@ -237,7 +237,7 @@ function Get-CiGreenWakePreSendSnapshot {
     )
 
     $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
-    $sessions = Get-AoStatusSessions
+    $sessions = Get-AoStatusSessionsWithReports
     $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @(
         @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
     )
@@ -482,7 +482,7 @@ function Invoke-CiGreenWakeTick {
     }
     else {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
-        $sessions = Get-AoStatusSessions
+        $sessions = Get-AoStatusSessionsWithReports
         $checksBundle = Get-CiGreenWakeChecksByPr -OpenPrs @($openPrs)
         $ciChecksByPr = $checksBundle.ciChecksByPr
         $requiredCheckNamesByPr = $checksBundle.requiredCheckNamesByPr

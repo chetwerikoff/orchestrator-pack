@@ -368,7 +368,7 @@ function Get-PreRunRecheckSnapshot {
     else {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $reviewRuns = Get-AoReviewRuns -Project $Project
-        $sessions = Get-AoStatusSessions
+        $sessions = Get-AoStatusSessionsWithReports
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
             @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
         )
@@ -642,7 +642,7 @@ function Invoke-ReconcileTick {
     else {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $reviewRuns = Get-AoReviewRuns -Project $Project
-        $sessions = Get-AoStatusSessions
+        $sessions = Get-AoStatusSessionsWithReports
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @($openPrs)
         $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
         $payload = @{

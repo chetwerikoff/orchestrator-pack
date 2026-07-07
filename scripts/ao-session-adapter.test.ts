@@ -95,3 +95,21 @@ describe('Invoke-AoCliJson AO 0.10 session adapter (Issue #619)', () => {
     expect(out).toBe('null');
   });
 });
+
+describe('Invoke-AoCliJson report-full readers (Issue #611)', () => {
+  it('Get-AoStatusSessionsWithReports decorates fixture report-full payload', () => {
+    const capturePath = path.join(
+      repoRoot,
+      'tests/external-output-references/captures/ao-status-sessions/ready_for_review_on_head.raw.json',
+    );
+    const out = runPwsh(`
+      . '${lib}'
+      $rows = Get-AoStatusSessionsWithReports -ReportFullPayload (Get-Content '${capturePath}' -Raw | ConvertFrom-Json)
+      $rows | ConvertTo-Json -Compress -Depth 8
+    `).trim();
+    const rows = JSON.parse(out) as Array<{ name: string; reports?: unknown[]; reportSourcePath?: string }>;
+    const list = Array.isArray(rows) ? rows : [rows];
+    expect(list[0]?.reports?.length).toBeGreaterThan(0);
+    expect(list[0]?.reportSourcePath).toMatch(/\$\.data\[\?name==/);
+  });
+});

@@ -682,6 +682,22 @@ else {
     $script:VerifyFailed = $true
 }
 
+$reviewStatusConsumerCheck = Join-Path $Root 'scripts/check-review-status-consumers.ps1'
+if (Test-Path -LiteralPath $reviewStatusConsumerCheck -PathType Leaf) {
+    & $reviewStatusConsumerCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-review-status-consumers.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        $script:VerifyFailed = $true
+    }
+    else {
+        Write-Check 'scripts/check-review-status-consumers.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-status-consumers.ps1' 'FAIL' 'missing'
+    $script:VerifyFailed = $true
+}
+
 $reviewTriggerReevalCheck = Join-Path $Root 'scripts/check-review-trigger-reeval.ps1'
 if (Test-Path -LiteralPath $reviewTriggerReevalCheck -PathType Leaf) {
     & $reviewTriggerReevalCheck

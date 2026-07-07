@@ -116,19 +116,11 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
     );
 
     await waitForMarker(stateDir, 'heartbeat', 25_000);
-
-    const deadline = Date.now() + 20_000;
-    let sawTerminal = false;
-    while (Date.now() < deadline) {
-      const log = readSupervisorLog(stateDir);
-      if (/heartbeat terminal degraded: deterministic defect/.test(log)) {
-        sawTerminal = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-
-    expect(sawTerminal).toBe(true);
+    await waitForSupervisorLogMatch(
+      stateDir,
+      /heartbeat terminal degraded: deterministic defect/,
+      25_000,
+    );
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
@@ -160,19 +152,11 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
     );
 
     await waitForMarker(stateDir, 'heartbeat', 25_000);
-
-    const deadline = Date.now() + 20_000;
-    let sawTerminal = false;
-    while (Date.now() < deadline) {
-      const log = readSupervisorLog(stateDir);
-      if (/heartbeat terminal degraded: deterministic defect/.test(log)) {
-        sawTerminal = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-
-    expect(sawTerminal).toBe(true);
+    await waitForSupervisorLogMatch(
+      stateDir,
+      /heartbeat terminal degraded: deterministic defect/,
+      25_000,
+    );
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));

@@ -191,9 +191,9 @@ function Get-AutonomousGateStatusSessions {
 
     $aoCommand = Get-AutonomousGateResolvedAoCommand
     if ($IncludeTerminated) {
-        return @(Get-AoStatusSessionsIncludingTerminated -AoCommand $aoCommand)
+        return @(Get-AoStatusSessionsWithReportsIncludingTerminated -AoCommand $aoCommand)
     }
-    return @(Get-AoStatusSessions -AoCommand $aoCommand)
+    return @(Get-AoStatusSessionsWithReports -AoCommand $aoCommand)
 }
 
 function Get-AutonomousGateSessionPrNumber {

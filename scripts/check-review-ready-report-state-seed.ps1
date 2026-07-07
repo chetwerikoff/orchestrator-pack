@@ -71,7 +71,7 @@ if ((Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1') -R
     exit 1
 }
 
-if ((Get-Content -LiteralPath $invokeLib -Raw) -match 'Invoke-GhOpenPrList -RepoRoot \$RepoRoot\)[\s\S]{0,120}Get-AoStatusSessionsIncludingTerminated') {
+if ((Get-Content -LiteralPath $invokeLib -Raw) -match 'Invoke-GhOpenPrList -RepoRoot \$RepoRoot\)[\s\S]{0,120}Get-AoStatusSessionsWithReportsIncludingTerminated') {
     Write-Host 'Invoke-ReviewReadyReportStateSeed.ps1 must not run a full open-PR GitHub scan before every ao status poll'
     exit 1
 }

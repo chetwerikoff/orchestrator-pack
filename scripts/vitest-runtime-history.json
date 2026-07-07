@@ -58,6 +58,7 @@
     "scripts/review-start-envelope-ledger.test.ts": 45000,
     "scripts/review-start-scoped-gh-json-capture.test.ts": 45000,
     "scripts/review-start-supervised-gh-pid.test.ts": 45000,
+    "scripts/review-status-consumer.test.ts": 45000,
     "scripts/review-trigger-reconcile.test.ts": 90000,
     "scripts/review-trigger-reeval.test.ts": 45000,
     "scripts/review-wake-trigger.test.ts": 45000,
