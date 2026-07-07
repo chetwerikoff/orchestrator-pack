@@ -22,6 +22,8 @@ if ($Shard -lt 1 -or $Shard -gt $ShardTotal) {
 }
 
 $env:CI = 'true'
+. (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
+Set-OpkVitestHarnessEnv | Out-Null
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 Push-Location $Root

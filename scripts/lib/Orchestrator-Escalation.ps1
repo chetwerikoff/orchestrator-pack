@@ -15,26 +15,75 @@ $Script:OrchestratorEscalationDefaultState = @{
 }
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Set-OpkVitestHarnessEnv.ps1')
+
+function Test-OpkVitestHarnessActive {
+    return $env:OPK_VITEST_HARNESS -eq '1'
+}
+
+function Assert-OrchestratorEscalationPathNotSharedDefault {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedPath,
+        [Parameter(Mandatory = $true)][ValidateSet('state', 'operator_inbox', 'health_spool')][string]$Surface
+    )
+    if (-not (Test-OpkVitestHarnessActive)) { return }
+
+    $shared = switch ($Surface) {
+        'state' { Get-OrchestratorEscalationSharedDefaultStatePath }
+        'operator_inbox' { Get-OrchestratorEscalationSharedDefaultOperatorInboxDir }
+        'health_spool' { Get-OrchestratorEscalationSharedDefaultHealthSpoolDir }
+    }
+
+    $resolvedFull = [System.IO.Path]::GetFullPath($ResolvedPath)
+    $sharedFull = [System.IO.Path]::GetFullPath($shared)
+    if ($resolvedFull -eq $sharedFull) {
+        throw "orchestrator escalation $Surface path resolves to shared production default under test harness: $ResolvedPath"
+    }
+}
 
 function Get-OrchestratorEscalationStatePath {
     param([string]$StatePath = '')
-    if ($StatePath) { return $StatePath }
-    if ($env:AO_ORCHESTRATOR_ESCALATION_STATE) { return $env:AO_ORCHESTRATOR_ESCALATION_STATE }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-escalation-state.json'
+    $resolved = if ($StatePath) {
+        $StatePath
+    }
+    elseif ($env:AO_ORCHESTRATOR_ESCALATION_STATE) {
+        $env:AO_ORCHESTRATOR_ESCALATION_STATE
+    }
+    else {
+        Get-OrchestratorEscalationSharedDefaultStatePath
+    }
+    Assert-OrchestratorEscalationPathNotSharedDefault -ResolvedPath $resolved -Surface 'state'
+    return $resolved
 }
 
 function Get-OrchestratorEscalationOperatorInboxDir {
     param([string]$OperatorInboxDir = '')
-    if ($OperatorInboxDir) { return $OperatorInboxDir }
-    if ($env:AO_OPERATOR_ESCALATION_INBOX) { return $env:AO_OPERATOR_ESCALATION_INBOX }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-operator-inbox'
+    $resolved = if ($OperatorInboxDir) {
+        $OperatorInboxDir
+    }
+    elseif ($env:AO_OPERATOR_ESCALATION_INBOX) {
+        $env:AO_OPERATOR_ESCALATION_INBOX
+    }
+    else {
+        Get-OrchestratorEscalationSharedDefaultOperatorInboxDir
+    }
+    Assert-OrchestratorEscalationPathNotSharedDefault -ResolvedPath $resolved -Surface 'operator_inbox'
+    return $resolved
 }
 
 function Get-OrchestratorEscalationHealthSpoolDir {
     param([string]$HealthSpoolDir = '')
-    if ($HealthSpoolDir) { return $HealthSpoolDir }
-    if ($env:AO_ESCALATION_HEALTH_SPOOL) { return $env:AO_ESCALATION_HEALTH_SPOOL }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-escalation-health'
+    $resolved = if ($HealthSpoolDir) {
+        $HealthSpoolDir
+    }
+    elseif ($env:AO_ESCALATION_HEALTH_SPOOL) {
+        $env:AO_ESCALATION_HEALTH_SPOOL
+    }
+    else {
+        Get-OrchestratorEscalationSharedDefaultHealthSpoolDir
+    }
+    Assert-OrchestratorEscalationPathNotSharedDefault -ResolvedPath $resolved -Surface 'health_spool'
+    return $resolved
 }
 
 function Get-OrchestratorEscalationNowMs {

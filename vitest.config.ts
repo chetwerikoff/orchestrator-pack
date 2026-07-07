@@ -6,6 +6,7 @@ const lightMaxWorkers = Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '2');
 
 export default defineConfig({
   test: {
+    globalSetup: ['scripts/vitest-global-setup.ts'],
     include: [
       'plugins/**/tests/**/*.test.ts',
       'scripts/**/*.test.ts',
