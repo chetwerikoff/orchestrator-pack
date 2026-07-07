@@ -538,8 +538,7 @@ function Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity {
 
     $hasSupervisorLoop = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-SupervisorLoop'
     $hasForeground = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-Foreground'
-    $hasTestMode = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-TestMode'
-    if (-not $hasSupervisorLoop -and -not ($hasForeground -and $hasTestMode)) {
+    if (-not $hasSupervisorLoop -and -not $hasForeground) {
         return $false
     }
 

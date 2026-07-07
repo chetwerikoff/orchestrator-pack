@@ -116,6 +116,30 @@ describe('Issue #613 orphan supervisor discovery (unit)', () => {
     ).toBe(true);
   });
 
+  it('identity predicate accepts a non-test foreground supervisor command line', () => {
+    const stateDir = makeStateDir();
+    const scriptPath = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
+    const tokens = [
+      'pwsh',
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      scriptPath,
+      '-Action',
+      'Start',
+      '-Foreground',
+      '-ProjectId',
+      'orchestrator-pack',
+      '-StateDir',
+      stateDir,
+    ];
+
+    expect(
+      testSupervisorCommandLineIdentityTokens(tokens, 'orchestrator-pack', stateDir),
+    ).toBe(true);
+  });
+
   it('identity predicate preserves argv boundaries for StateDir values containing spaces', () => {
     const stateDir = makeStateDirWithSpacesInPath();
     const scriptPath = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
