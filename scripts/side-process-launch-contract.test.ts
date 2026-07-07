@@ -9,6 +9,8 @@ const guardScript = join(repoRoot, 'scripts/check-side-process-launch-contract.p
 const fixtureRoot = join(repoRoot, 'scripts/fixtures/side-process-launch-contract');
 const supervisorLib = join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1');
 const pendingEscalationFixture = join(fixtureRoot, 'pending-llm-orchestrator-escalation.json');
+const pwshTestTimeoutMs = 120_000;
+const integrationTestTimeoutMs = 180_000;
 
 function ps(value: string) {
   return `'${value.replaceAll("'", "''")}'`;
@@ -18,7 +20,7 @@ function runGuard(args: string[] = []) {
   return spawnSync(
     'pwsh',
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardScript, ...args],
-    { cwd: repoRoot, encoding: 'utf8', timeout: 120_000 },
+    { cwd: repoRoot, encoding: 'utf8', timeout: pwshTestTimeoutMs },
   );
 }
 
@@ -27,7 +29,7 @@ function runPwsh(script: string, env: Record<string, string> = {}) {
     cwd: repoRoot,
     encoding: 'utf8',
     env: { ...process.env, ...env },
-    timeout: 120_000,
+    timeout: pwshTestTimeoutMs,
   });
 }
 
@@ -36,7 +38,7 @@ function parseLastJson(stdout: string): unknown {
   return JSON.parse(line);
 }
 
-describe.sequential('side-process launch contract (#659)', () => {
+describe.sequential('side-process launch contract (#659)', { timeout: pwshTestTimeoutMs }, () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -89,7 +91,7 @@ describe.sequential('side-process launch contract (#659)', () => {
     expect(parsed.hasOrchestratorSessionId).toBe(true);
   });
 
-  it('escalation-router launched via supervisor child-spawn path completes one tick', { timeout: 180_000 }, () => {
+  it('escalation-router launched via supervisor child-spawn path completes one tick', { timeout: integrationTestTimeoutMs }, () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'escalation-router-launch-'));
     tempDirs.push(stateRoot);
     const escalationState = join(stateRoot, 'escalation-state.json');
@@ -144,7 +146,7 @@ describe.sequential('side-process launch contract (#659)', () => {
     expect(mainText).toMatch(/\[orchestrator-escalation-router\] tick complete redelivered=/i);
   });
 
-  it('router tick records a redelivery attempt on seeded pending llm-orchestrator state', { timeout: 180_000 }, () => {
+  it('router tick records a redelivery attempt on seeded pending llm-orchestrator state', { timeout: integrationTestTimeoutMs }, () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'escalation-router-redelivery-'));
     tempDirs.push(stateRoot);
     const escalationState = join(stateRoot, 'escalation-state.json');
