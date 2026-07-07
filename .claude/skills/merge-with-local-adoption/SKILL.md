@@ -412,9 +412,15 @@ before must still exist or be accounted for. **Never** use
 ### 6e — Orchestrator worktree commit probe (mandatory after merge)
 
 Step 6 updates only the **operator live checkout**. The AO **orchestrator runtime worktree**
-(`~/.agent-orchestrator/projects/orchestrator-pack/worktrees/<session-id>/`) is a separate
-clone — it does **not** auto-sync on `git pull` in the pack root. After every successful
-merge, probe it even when Step 8 is skipped (non-runtime-sensitive PRs).
+(`~/.ao/data/worktrees/orchestrator-pack/orchestrator/orchestrator-orchestrator/` on AO
+0.10.2 — often **not** `$WT_BASE/<session-id>/`) is a separate clone — it does **not**
+auto-sync on `git pull` in the pack root. `ao session restore` also does **not** fast-forward
+it to `main` (verified AO 0.10.2, 2026-07-07). After every successful merge, probe and
+sync via this step even when Step 8 is skipped (non-runtime-sensitive PRs).
+
+**Do not confuse with recovery runbook Step 2b → Step 3:** that path removes stale
+`orchestrator/*` branches/worktrees for `branch_collision` / `EPERM` only. It does **not**
+pull `origin/main` into a live orchestrator worktree that is merely behind `main`.
 
 **Skip only when:** `ao orchestrator ls --json` has no non-terminated
 `projectId == "orchestrator-pack"` row and `ao session ls --json -p orchestrator-pack --all`
@@ -482,6 +488,51 @@ process.stdin.on("end", () => {
     return 1
   }
 }
+
+resolve_orchestrator_worktree_path() {
+  local s="$1"
+  local candidate wt
+  for candidate in \
+    "$WT_BASE/orchestrator/orchestrator-$s" \
+    "$WT_BASE/orchestrator/orchestrator-orchestrator" \
+    "$WT_BASE/orchestrator" \
+    "$WT_BASE/$s"; do
+    if [ -d "$candidate/.git" ] || [ -f "$candidate/.git" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  wt="$(git worktree list --porcelain 2>/dev/null | node -e '
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const lines = input.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^worktree (.+)$/);
+    if (!m) continue;
+    const path = m[1];
+    let branch = "";
+    if (lines[i + 2] && lines[i + 2].startsWith("branch ")) {
+      branch = lines[i + 2].slice("branch refs/heads/".length);
+    }
+    if (
+      path.includes("/worktrees/orchestrator-pack/orchestrator/") ||
+      branch === "ao/opk-orchestrator" ||
+      branch.startsWith("orchestrator/")
+    ) {
+      process.stdout.write(path);
+      process.exit(0);
+    }
+  }
+  process.exit(2);
+}')"
+  if [ -n "$wt" ]; then
+    printf '%s\n' "$wt"
+    return 0
+  fi
+  echo "Step 6e aborted: orchestrator worktree path not found under $WT_BASE" >&2
+  return 1
+}
 ```
 
 #### Probe and sync (operator pack root — not inside `$WT` for the live-checkout pull)
@@ -492,10 +543,7 @@ ORIGIN_MAIN="$(git rev-parse origin/main)"
 MERGE_SHA="<from Step 5 mergeCommit.oid>"
 
 S="$(resolve_orchestrator_session_id)" || { echo "Step 6e: no orchestrator session — skipped"; exit 0; }
-WT="$WT_BASE/orchestrator"
-if [ ! -d "$WT/.git" ] && [ -d "$WT_BASE/$S/.git" ]; then
-  WT="$WT_BASE/$S"
-fi
+WT="$(resolve_orchestrator_worktree_path "$S")" || exit 1
 WT_HEAD="$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo MISSING)"
 WT_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSING)"
 
@@ -527,9 +575,12 @@ git merge-base --is-ancestor "$MERGE_SHA" "$WT_HEAD"
 **If worktree is dirty, pull fails, or still stale after fast-forward:**
 
 - **Do not** `reset`, `checkout`, or `clean` inside `$WT`.
-- Classify the merge as **runtime-sensitive retroactively** and run **Step 8** (session recycle +
-  `orchestrator-worktree-preflight.ps1`), or escalate
-  `docs/orchestrator-recovery-runbook.md` Step 2b → Step 3.
+- Run `orchestrator-worktree-preflight.ps1` only when spawn logs show
+  `branch_collision` / `EPERM` — **not** when the only symptom is behind `main`.
+- Classify the merge as **runtime-sensitive retroactively** and run **Step 8** after any
+  successful Step 6e sync (session recycle + launch health).
+- If still stale: escalate `docs/orchestrator-recovery-runbook.md` Step 2b → Step 3 for
+  collision/EPERM hygiene, then **re-run Step 6e fast-forward** — restore alone is insufficient.
 - Record expected (`MERGE_SHA`, `ORIGIN_MAIN`) vs actual (`WT_HEAD`) in the final report.
 
 **Optional after successful sync:** when `ao orchestrator ls --json` shows a non-working
@@ -596,7 +647,8 @@ Canonical references — do **not** invent parallel worktree/git procedures:
 | Need | Canonical doc / script |
 |------|------------------------|
 | ProjectConfig/env/PATH adoption | `ao project set-config orchestrator-pack --env KEY=VALUE ... --json`; config resolves when sessions spawn/restore |
-| Stale `orchestrator/*` branch / worktree before recycle | `docs/orchestrator-recovery-runbook.md` — **Step 2b — Orchestrator worktree hygiene**; `scripts/orchestrator-worktree-preflight.ps1` |
+| Orchestrator worktree behind `main` after merge | **Step 6e** fast-forward (`git -C "$WT" pull --no-rebase origin main` when clean) — **not** runbook Step 2b alone |
+| Stale `orchestrator/*` branch / `branch_collision` / `EPERM` before recycle | `docs/orchestrator-recovery-runbook.md` — **Step 2b**; `scripts/orchestrator-worktree-preflight.ps1` |
 | Launch health after orchestrator restore | `scripts/wait-orchestrator-launch.ps1` (recovery runbook Step 3) |
 | Fresh runtime/prompt delivery semantics | [`.claude/skills/change-orchestrator-runtime/SKILL.md`](../change-orchestrator-runtime/SKILL.md) and Issue #625; do not improvise |
 | Merged PR review-loop policy (not worktree repair) | `docs/orchestrator-recovery-runbook.md` — **After manual PR merge** |
@@ -615,11 +667,11 @@ Step 4 required runtime-sensitive adoption.
 
 ```bash
 S="$(resolve_orchestrator_session_id)" || exit 1
-WT="$WT_BASE/orchestrator"
-if [ ! -d "$WT/.git" ] && [ -d "$WT_BASE/$S/.git" ]; then
-  WT="$WT_BASE/$S"
-fi
+WT="$(resolve_orchestrator_worktree_path "$S")" || exit 1
 ```
+
+**Prerequisite:** Step 6e must have left `$WT` containing `MERGE_SHA` before recycle.
+`ao session restore` does not fast-forward the worktree on AO 0.10.2.
 
 Record `S` and `WT`. Re-run `resolve_orchestrator_session_id` in Step 8d after restore
 when the id may have changed — still fail closed; do not substitute a guessed id.
@@ -690,10 +742,7 @@ changed after restore — **stop Step 8** on failure; then:
 
 ```bash
 S="$(resolve_orchestrator_session_id)" || exit 1
-WT="$WT_BASE/orchestrator"
-if [ ! -d "$WT/.git" ] && [ -d "$WT_BASE/$S/.git" ]; then
-  WT="$WT_BASE/$S"
-fi
+WT="$(resolve_orchestrator_worktree_path "$S")" || exit 1
 WT_AFTER_HEAD="$(git -C "$WT" rev-parse HEAD 2>/dev/null || echo MISSING)"
 WT_AFTER_BRANCH="$(git -C "$WT" branch --show-current 2>/dev/null || echo MISSING)"
 ao status --json
@@ -754,8 +803,10 @@ contain `MERGE_SHA`, or `origin/main` does not contain `MERGE_SHA`):
 - **Stop** Step 8; record **expected** (`MERGE_SHA` / `ORIGIN_MAIN`) vs **actual**
   (`WT_AFTER_HEAD`).
 - Direct the operator to the documented recovery path:
-  1. `docs/orchestrator-recovery-runbook.md` — Step 2b → Step 3
-  2. If prompt delivery remains stale after that: Issue #625 / `change-orchestrator-runtime`
+  1. Re-run **Step 6e** fast-forward when `$WT` is clean (if not already tried)
+  2. `docs/orchestrator-recovery-runbook.md` — Step 2b → Step 3 for `branch_collision` /
+     `EPERM` only; then re-run Step 6e
+  3. If prompt delivery remains stale after that: Issue #625 / `change-orchestrator-runtime`
 - If no safe automated recreate path covers this scenario, note **contract gap** in the
   final report (do not improvise worktree deletion).
 
