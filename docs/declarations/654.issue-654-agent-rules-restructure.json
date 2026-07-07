@@ -34,7 +34,10 @@
     "scripts/check-agent-rules-line-budget.ps1",
     "scripts/check-agent-rules-moved-content.ps1",
     "scripts/check-agent-rules-grep-inventory.ps1",
-    "scripts/agent-rules-grep-inventory.json"
+    "scripts/agent-rules-grep-inventory.json",
+    "vitest.config.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/lib/vitest-ci-lanes.mjs"
   ],
   "declared_globs": [
     "tests/**"

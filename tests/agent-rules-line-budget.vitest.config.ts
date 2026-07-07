@@ -1,8 +1,11 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, mergeConfig } from 'vitest/config';
+import baseConfig from '../vitest.config';
 
-export default defineConfig({
-  test: {
-    include: ['tests/agent-rules-line-budget.test.ts'],
-    environment: 'node',
-  },
-});
+export default mergeConfig(
+  baseConfig,
+  defineConfig({
+    test: {
+      include: ['tests/agent-rules-line-budget.test.ts'],
+    },
+  }),
+);
