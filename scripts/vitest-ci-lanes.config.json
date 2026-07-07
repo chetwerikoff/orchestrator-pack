@@ -149,6 +149,7 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "scripts/ao-spawn-shape.test.ts": "light",
     "scripts/dead-worker-reconcile.test.ts": "heavy",
-    "scripts/github-fleet-governor.test.ts": "heavy"
+    "scripts/github-fleet-governor.test.ts": "heavy",
+    "scripts/launch-argv-inventory.test.ts": "light"
   }
 }
