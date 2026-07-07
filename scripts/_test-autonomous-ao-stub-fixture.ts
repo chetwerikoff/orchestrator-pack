@@ -22,18 +22,36 @@ export const repoHeadOid = execFileSync(resolveTrustedSystemGit(), ['-C', repoRo
   encoding: 'utf8',
 }).trim();
 
-/** Reserved synthetic spawn target — safe for pack-layer refuse / obvious test isolation. */
-export const SPAWN_GATE_FIXTURE_SESSION_ID = 'opk-probe' as const;
+/** Reserved synthetic spawn issue — safe for pack-layer refuse / obvious test isolation. */
+export const SPAWN_GATE_FIXTURE_ISSUE_NUMBER = '470' as const;
 
-/** AO 0.10.x runnable spawn shape for live-armed spawn-gate probes (Issue #589). */
+/** AO 0.10.x runnable spawn-new shape for live-armed spawn-gate probes (#589, #652). */
+export const SPAWN_GATE_FIXTURE_SPAWN_PROMPT =
+  'Gate probe holder prompt for autonomous spawn gate fixtures.';
+
 export const SPAWN_GATE_FIXTURE_SPAWN_COMMAND =
-  'ao spawn --project orchestrator-pack --name "Gate probe" opk-probe';
+  `ao spawn --project orchestrator-pack --name "Gate probe" --issue ${SPAWN_GATE_FIXTURE_ISSUE_NUMBER} --prompt "${SPAWN_GATE_FIXTURE_SPAWN_PROMPT}"`;
+
+export const SPAWN_GATE_FIXTURE_SPAWN_ARGV = [
+  'spawn',
+  '--project',
+  'orchestrator-pack',
+  '--name',
+  'Gate probe',
+  '--issue',
+  SPAWN_GATE_FIXTURE_ISSUE_NUMBER,
+  '--prompt',
+  SPAWN_GATE_FIXTURE_SPAWN_PROMPT,
+] as const;
 
 export function spawnGateFixtureCommand(
-  sessionId: string = SPAWN_GATE_FIXTURE_SESSION_ID,
+  issueNumber: string = SPAWN_GATE_FIXTURE_ISSUE_NUMBER,
 ): string {
-  return `ao spawn --project orchestrator-pack --name "Gate probe" ${sessionId}`;
+  return `ao spawn --project orchestrator-pack --name "Gate probe" --issue ${issueNumber} --prompt "${SPAWN_GATE_FIXTURE_SPAWN_PROMPT}"`;
 }
+
+/** @deprecated use SPAWN_GATE_FIXTURE_ISSUE_NUMBER */
+export const SPAWN_GATE_FIXTURE_SESSION_ID = 'opk-probe' as const;
 
 export const AO_SPAWN_NONLIVE_RECEIPT_ENV = 'AO_SPAWN_NONLIVE_RECEIPT_FILE';
 

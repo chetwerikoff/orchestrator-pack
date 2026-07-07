@@ -85,7 +85,7 @@ describe('spawn worktree grant (#470)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','373')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','373','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -146,7 +146,7 @@ describe('spawn worktree grant (#470)', () => {
     const projectId = 'orchestrator-pack';
     const worktrees = path.join(aoBase, 'projects', projectId, 'worktrees');
     mkdirSync(worktrees, { recursive: true });
-    const target = path.join(worktrees, 'opk-once');
+    const target = path.join(worktrees, 'opk-1');
     const grantId = 'grant-once';
 
     const output = runPwsh(`
@@ -156,7 +156,7 @@ describe('spawn worktree grant (#470)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','opk-once')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','1','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -226,7 +226,7 @@ describe('spawn worktree grant (#470)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','opk-race')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','470','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = ${holderPid}; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -294,7 +294,7 @@ describe('spawn worktree grant (#470)', () => {
 
   it('path hardening denies escape outside worktrees prefix', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', 'opk-470'],
+      argv: ['spawn', '--issue', '470'],
       grantId: 'g1',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -337,7 +337,8 @@ describe('spawn worktree grant (#470)', () => {
       const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-470'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath,
+          'spawn', '--project', 'orchestrator-pack', '--name', 'Gate probe', '--issue', '470', '--prompt', 'Spawn gate fixture prompt'],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -375,12 +376,31 @@ describe('spawn worktree grant (#470)', () => {
 
   it('parses spawn worktree argv shapes', () => {
     expect(parseGitSpawnWorktreeAddArgv(['worktree', 'add', '/tmp/wt', 'HEAD']).ok).toBe(true);
-    expect(parseSpawnTargetFromArgv(['spawn', '470']).targetKey).toBe('470');
+    expect(parseSpawnTargetFromArgv(['spawn', '--issue', '470']).targetKey).toBe('470');
+    expect(parseSpawnTargetFromArgv(['spawn', '470']).targetKey).toBe('');
     expect(parseSpawnTargetFromArgv(['spawn', '--claim-pr', '42']).targetKey).toBe('pr:42');
     expect(parseSpawnTargetFromArgv(['spawn', '--prompt', 'checkpoint holder prompt']).targetKey).toBe('');
     expect(parseSpawnTargetFromArgv(['spawn', '--prompt', 'checkpoint holder prompt']).issueTarget).toBeNull();
-    expect(parseSpawnTargetFromArgv(['spawn', '470', '--prompt', 'extra instructions']).targetKey).toBe('470');
-    expect(parseSpawnTargetFromArgv(['spawn', '--agent', 'codex', '470']).targetKey).toBe('470');
+    expect(parseSpawnTargetFromArgv([
+      'spawn',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'wr-i470',
+      '--issue',
+      '470',
+      '--prompt',
+      'extra instructions',
+    ]).targetKey).toBe('470');
+    expect(parseSpawnTargetFromArgv([
+      'spawn',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'wr-i470',
+      '--prompt',
+      'extra instructions',
+    ]).targetKey).toBe('');
     expect(parseSpawnTargetFromArgv(['spawn', '--prompt=inline prompt']).targetKey).toBe('');
     expect(pathIsUnderCanonicalPrefix('/tmp/a/worktrees/opk-1', '/tmp/a/worktrees')).toBe(true);
   });
@@ -388,7 +408,7 @@ describe('spawn worktree grant (#470)', () => {
   it('does not authorize prompt text as spawn worktree basename', () => {
     const promptText = 'checkpoint-2 contract-evidence reverify e2e fixture holder';
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '470', '--prompt', promptText],
+      argv: ['spawn', '--issue', '470', '--prompt', promptText],
       grantId: 'grant-prompt-flag',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -415,7 +435,7 @@ describe('spawn worktree grant (#470)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const target = `${prefix}/opk-27`;
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '373'],
+      argv: ['spawn', '--issue', '373'],
       grantId: 'grant-ao-session-basename',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -475,7 +495,7 @@ describe('spawn worktree grant (#470)', () => {
   it('denies non-AO worktree basenames with drift-visible diagnostics (#472)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '373'],
+      argv: ['spawn', '--issue', '373'],
       grantId: 'grant-invalid-basename',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -502,7 +522,7 @@ describe('spawn worktree grant (#470)', () => {
     expect(isAoSpawnWorktreeSessionBasename('opk-once')).toBe(false);
   });
 
-  it('allows prompt-only spawn-new without minting a worktree grant', () => {
+  it('denies prompt-only spawn-new without derivable issue target (#652)', () => {
     const output = runPwsh(`
       . ${psString(spawnGateLibPath)}
       $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
@@ -510,8 +530,8 @@ describe('spawn worktree grant (#470)', () => {
       [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason; grantId = [string]$env:AO_SPAWN_WORKTREE_GRANT_ID } | ConvertTo-Json -Compress
     `);
     const parsed = JSON.parse(output);
-    expect(parsed.denied).toBe(false);
-    expect(parsed.reason).toBe('spawn_policy_allowed');
+    expect(parsed.denied).toBe(true);
+    expect(parsed.reason).toBe('spawn_target_missing');
     expect(parsed.grantId).toBeFalsy();
   });
 
@@ -519,7 +539,7 @@ describe('spawn worktree grant (#470)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const target = `${prefix}/opk-470`;
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '470'],
+      argv: ['spawn', '--issue', '470'],
       grantId: 'grant-branch',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -542,7 +562,7 @@ describe('spawn worktree grant (#470)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const target = `${prefix}/opk-470`;
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '470'],
+      argv: ['spawn', '--issue', '470'],
       grantId: 'grant-repo-global',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -565,7 +585,7 @@ describe('spawn worktree grant (#470)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const target = `${prefix}/opk-470`;
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '470'],
+      argv: ['spawn', '--issue', '470'],
       grantId: 'grant-repo-mismatch',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },

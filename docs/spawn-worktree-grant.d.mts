@@ -68,6 +68,8 @@ export interface BoundaryEscapeVerdict {
   signals: string[];
 }
 
+export declare function parseIssueNumberFromSpawnArgv(argv: string[]): number | null;
+
 export declare function parseSpawnTargetFromArgv(argv: string[]): SpawnTargetParse;
 export declare function isAoSpawnWorktreeSessionBasename(basename: string): boolean;
 export declare function evaluateSpawnWorktreeBasenameBinding(

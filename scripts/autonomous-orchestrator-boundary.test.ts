@@ -33,6 +33,8 @@ import {
   buildHermeticSpawnGateEnv,
   spawnHermeticBoundaryBash,
   withAoSpawnProbeStub,
+,
+  SPAWN_GATE_FIXTURE_SPAWN_ARGV,
 } from './_test-autonomous-ao-stub-fixture.js';
 import { stripInterposerBashEnvBlockers } from './_test-interposer-pack-fixture.js';
 
@@ -132,9 +134,9 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
 
   it('policy-aware spawn boundary allows default-on autonomous spawn', () => {
     for (const commandLine of [
-      'ao spawn --project orchestrator-pack --name "Boundary probe" opk-1',
+      'ao spawn --project orchestrator-pack --name "Boundary probe" --issue 1 --prompt "Boundary probe holder prompt"',
       'ao spawn --project orchestrator-pack --name "Claim PR" --claim-pr 322',
-      '/usr/local/bin/ao spawn --project orchestrator-pack --name "Boundary probe" opk-1',
+      '/usr/local/bin/ao spawn --project orchestrator-pack --name "Boundary probe" --issue 1 --prompt "Boundary probe holder prompt"',
     ]) {
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: true }).allowed).toBe(true);
       expect(evaluateAutonomousSpawnBoundary({ commandLine, autonomousSurface: false }).allowed).toBe(true);
@@ -722,7 +724,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       );
 
       const aoScript = path.join(dir, 'mutate-ao.sh');
-      writeFileSync(aoScript, '#!/usr/bin/env bash\nao spawn --project orchestrator-pack --name "Boundary probe" opk-1\n');
+      writeFileSync(aoScript, '#!/usr/bin/env bash\nao spawn --project orchestrator-pack --name "Boundary probe" --issue 1 --prompt "Boundary probe holder prompt"\n');
       chmodSync(aoScript, 0o755);
       const allowAoScript = spawnHermeticBoundaryBash(
         pack,
@@ -871,7 +873,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, ...SPAWN_GATE_FIXTURE_SPAWN_ARGV],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -885,7 +887,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       );
       expect(result.status).toBe(0);
       expect(result.stderr).toMatch(/autonomous spawn policy allow: action=spawn-new/i);
-      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-1']);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual([...SPAWN_GATE_FIXTURE_SPAWN_ARGV]);
     });
   });
 
@@ -915,7 +917,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const spawnProbe = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, ...SPAWN_GATE_FIXTURE_SPAWN_ARGV],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -928,7 +930,7 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120_000
       );
       expect(spawnProbe.status).not.toBe(93);
       expect(spawnProbe.status).toBe(0);
-      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-1']);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual([...SPAWN_GATE_FIXTURE_SPAWN_ARGV]);
     });
 
     withTempGitRepo((dir) => {

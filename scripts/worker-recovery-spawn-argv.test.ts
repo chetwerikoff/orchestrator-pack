@@ -15,6 +15,7 @@ import {
 import {
   RECOVERY_SPAWN_DISPLAY_NAME_MAX_LENGTH,
   buildRecoverySpawnArgv,
+  buildRecoverySpawnPrompt,
   classifyRecoverySpawnExit,
   deriveRecoverySpawnDisplayName,
   resolveRecoverySpawnProjectId,
@@ -25,6 +26,13 @@ import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-au
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const recoveryPs1 = path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1');
+
+function formatAoSpawnCommand(argv: readonly string[]) {
+  const rendered = argv
+    .map((token) => (/\s/.test(token) ? `"${token.replace(/"/g, '\\"')}"` : token))
+    .join(' ');
+  return `ao ${rendered}`;
+}
 
 function expectBuildOk(built: BuildRecoverySpawnArgvResult) {
   expect(built.ok).toBe(true);
@@ -42,61 +50,67 @@ function expectDisplayNameOk(result: DeriveRecoverySpawnDisplayNameResult) {
   return result;
 }
 
-describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
-  it('builds claim-pr-resume argv with --project, --name, --claim-pr, and --no-takeover', () => {
+describe('worker recovery AO 0.10.2 spawn argv (#638, #652)', () => {
+  it('builds claim-pr-resume argv with --project, --name, --claim-pr, --no-takeover, and --prompt', () => {
     const built = buildRecoverySpawnArgv({
       spawnAction: 'claim-pr-resume',
       projectId: 'orchestrator-pack',
       prNumber: 589,
+      issueNumber: 652,
     });
-    expect(built).toEqual({
-      ok: true,
+    const builtOk = expectBuildOk(built);
+    expect(builtOk).toMatchObject({
       projectId: 'orchestrator-pack',
       displayName: 'wr-pr589',
-      argv: [
-        'spawn',
-        '--project',
-        'orchestrator-pack',
-        '--name',
-        'wr-pr589',
-        '--claim-pr',
-        '589',
-        '--no-takeover',
-      ],
     });
-    expect(validateRunnableSpawnCommand(`ao ${expectBuildOk(built).argv.join(' ')}`)).toEqual([]);
+    expect(builtOk.argv).toEqual([
+      'spawn',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'wr-pr589',
+      '--claim-pr',
+      '589',
+      '--no-takeover',
+      '--prompt',
+      builtOk.prompt,
+    ]);
+    expect(builtOk.prompt).toMatch(/PR #589/);
+    expect(builtOk.prompt).toMatch(/issue #652/);
+    expect(validateRunnableSpawnCommand(formatAoSpawnCommand(builtOk.argv))).toEqual([]);
   });
 
-  it('builds spawn-new argv with positional issue for grant parsing and --issue for AO CLI', () => {
+  it('builds spawn-new argv with --issue and --prompt and no positional issue token', () => {
     const built = buildRecoverySpawnArgv({
       spawnAction: 'spawn-new',
       projectId: 'orchestrator-pack',
       issueNumber: 638,
     });
-    expect(built).toEqual({
-      ok: true,
+    const builtOk = expectBuildOk(built);
+    expect(builtOk).toMatchObject({
       projectId: 'orchestrator-pack',
       displayName: 'wr-i638',
-      argv: [
-        'spawn',
-        '638',
-        '--project',
-        'orchestrator-pack',
-        '--name',
-        'wr-i638',
-        '--issue',
-        '638',
-      ],
     });
-    const builtOk = expectBuildOk(built);
-    expect(builtOk.argv[1]).toBe('638');
-    expect(builtOk.argv[builtOk.argv.indexOf('--issue') + 1]).toBe('638');
+    expect(builtOk.argv).toEqual([
+      'spawn',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'wr-i638',
+      '--issue',
+      '638',
+      '--prompt',
+      builtOk.prompt,
+    ]);
+    expect(builtOk.argv[1]).toBe('--project');
+    expect(builtOk.prompt).toMatch(/issue #638/);
+    expect(builtOk.prompt).toMatch(/read the issue body/i);
     expect(parseSpawnTargetFromArgv(builtOk.argv)).toMatchObject({
       action: 'spawn-new',
       targetKey: '638',
       issueTarget: '638',
     });
-    expect(validateRunnableSpawnCommand(`ao ${builtOk.argv.join(' ')}`)).toEqual([]);
+    expect(validateRunnableSpawnCommand(formatAoSpawnCommand(builtOk.argv))).toEqual([]);
   });
 
   it('keeps recovery display names within the AO 0.10.x limit', () => {
@@ -157,6 +171,26 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
     expect(parseClaimPrNumberFromSpawnArgv(claimArgv)).toBe(589);
   });
 
+  it('buildRecoverySpawnPrompt returns non-empty instructive text for both recovery paths', () => {
+    const spawnNew = buildRecoverySpawnPrompt({ spawnAction: 'spawn-new', issueNumber: 652 });
+    expect(spawnNew.ok).toBe(true);
+    if (spawnNew.ok) {
+      expect(spawnNew.prompt.length).toBeGreaterThan(0);
+      expect(spawnNew.prompt).toMatch(/#652/);
+    }
+
+    const claimPr = buildRecoverySpawnPrompt({
+      spawnAction: 'claim-pr-resume',
+      prNumber: 589,
+      issueNumber: 652,
+    });
+    expect(claimPr.ok).toBe(true);
+    if (claimPr.ok) {
+      expect(claimPr.prompt.length).toBeGreaterThan(0);
+      expect(claimPr.prompt).toMatch(/PR #589/);
+    }
+  });
+
   it('classifies --no-takeover refusal as bounded defer/escalate reason', () => {
     const classified = classifyRecoverySpawnExit({
       exitCode: 1,
@@ -214,7 +248,7 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
   });
 });
 
-describe('worker recovery spawn no-bypass matrix (#638 AC#4)', () => {
+describe('worker recovery spawn no-bypass matrix (#638 AC#4, #652 fail-closed)', () => {
   const identityCases = [
     {
       label: 'spawn-new missing issue',
@@ -312,6 +346,30 @@ describe('worker recovery spawn no-bypass matrix (#638 AC#4)', () => {
       expect(parsed.grantDenied).toBe(true);
       expect(parsed.reason).toMatch(/spawn_policy_allowClaimPrResume_false/);
       expect(parsed.started).toBe(false);
+      expect(existsSync(probeFile)).toBe(false);
+    });
+  });
+
+  it('spawn-new argv without derivable issue target fails closed at gate', () => {
+    withAoSpawnProbeStub(({ probeFile, pack }) => {
+      const script = `
+        . '${path.join(pack.scriptsDir, 'lib', 'Orchestrator-AutonomousSpawnGate.ps1').replace(/'/g, "''")}'
+        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $spawn = Test-AutonomousSpawnDenied -Argv @(
+          'spawn','--project','orchestrator-pack','--name','wr-i652','--prompt','holder prompt without issue'
+        ) -FixtureMode -FixturePolicy @{ version='${AUTONOMOUS_SPAWN_POLICY_VERSION}'; allowSpawnNew=$true; allowClaimPrResume=$true }
+        [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason; grantId = [string]$env:AO_SPAWN_WORKTREE_GRANT_ID } | ConvertTo-Json -Compress
+      `;
+      const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+        cwd: pack.packRoot,
+        encoding: 'utf8',
+        env: autonomousSpawnFixtureProbeEnv(),
+      });
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(result.stdout.trim()) as { denied: boolean; reason: string; grantId: string };
+      expect(parsed.denied).toBe(true);
+      expect(parsed.reason).toBe('spawn_target_missing');
+      expect(parsed.grantId).toBeFalsy();
       expect(existsSync(probeFile)).toBe(false);
     });
   });

@@ -179,22 +179,31 @@ function Test-AutonomousSpawnDenied {
 
     if ($decision.allowed) {
         $parsedTarget = Invoke-SpawnWorktreeGrantCli -Subcommand 'parseSpawnTarget' -Payload @{ argv = @($Argv) }
-        $grantId = ''
-        if ($parsedTarget.targetKey) {
-            $grant = Mint-AutonomousSpawnWorktreeGrant -Argv $Argv -Action ([string]$decision.action)
-            if (-not $grant.ok) {
-                if ($claimPrResumeMutex) {
-                    Release-AutonomousClaimPrResumeMutex -Mutex $claimPrResumeMutex
-                }
-                return @{
-                    denied    = $true
-                    reason    = [string]$grant.reason
-                    auditLine = "autonomous spawn worktree grant deny: action=$($decision.action) reason=$($grant.reason)"
-                    action    = [string]$decision.action
-                }
+        if (-not $parsedTarget.targetKey) {
+            if ($claimPrResumeMutex) {
+                Release-AutonomousClaimPrResumeMutex -Mutex $claimPrResumeMutex
             }
-            $grantId = [string]$grant.grantId
+            return @{
+                denied    = $true
+                reason    = 'spawn_target_missing'
+                auditLine = "autonomous spawn worktree grant deny: action=$($decision.action) reason=spawn_target_missing"
+                action    = [string]$decision.action
+            }
         }
+        $grantId = ''
+        $grant = Mint-AutonomousSpawnWorktreeGrant -Argv $Argv -Action ([string]$decision.action)
+        if (-not $grant.ok) {
+            if ($claimPrResumeMutex) {
+                Release-AutonomousClaimPrResumeMutex -Mutex $claimPrResumeMutex
+            }
+            return @{
+                denied    = $true
+                reason    = [string]$grant.reason
+                auditLine = "autonomous spawn worktree grant deny: action=$($decision.action) reason=$($grant.reason)"
+                action    = [string]$decision.action
+            }
+        }
+        $grantId = [string]$grant.grantId
         if ($claimPrResumeMutex) {
             $script:AutonomousClaimPrResumeActiveMutex = $claimPrResumeMutex
         }

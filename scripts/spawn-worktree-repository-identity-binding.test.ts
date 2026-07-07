@@ -90,7 +90,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
     const headOid = resolveGitCommitRefInRepo(fixture.mainRoot, 'HEAD').commitOid!;
 
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '511'],
+      argv: ['spawn', '--issue', '511'],
       grantId: 'grant-linked-worktree',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -123,7 +123,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
     const headOid = resolveGitCommitRefInRepo(fixture.linkedRoot, 'HEAD').commitOid!;
 
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '511'],
+      argv: ['spawn', '--issue', '511'],
       grantId: 'grant-legacy-worktree-root-2',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -161,7 +161,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
         const prefix = '/tmp/projects/orchestrator-pack/worktrees';
         const target = `${prefix}/opk-511`;
         const built = buildSpawnWorktreeGrantRecord({
-          argv: ['spawn', '511'],
+          argv: ['spawn', '--issue', '511'],
           grantId: 'grant-cross-repo',
           projectId: 'orchestrator-pack',
           holder: { pid: 1 },
@@ -237,7 +237,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
     const prefix = '/tmp/projects/orchestrator-pack/worktrees';
     const target = `${prefix}/opk-511`;
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '511'],
+      argv: ['spawn', '--issue', '511'],
       grantId: 'grant-stale-linked',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -278,7 +278,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','511')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','511','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID }
@@ -344,7 +344,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
     expect(mainHeadOid).not.toBe(linkedHeadOid);
 
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '511'],
+      argv: ['spawn', '--issue', '511'],
       grantId: 'grant-missing-consumer-worktree',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },
@@ -405,7 +405,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
     expect(worktree.ok).toBe(true);
 
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '511'],
+      argv: ['spawn', '--issue', '511'],
       grantId: 'grant-linked-head',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },

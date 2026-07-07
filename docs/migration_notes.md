@@ -1213,7 +1213,7 @@ worktree hygiene; inspect separately.
 
 ### Dead orchestrator vs `ao spawn` (operator)
 
-`ao spawn --project <project> --name "<label>" <issue>` starts or revives **worker** sessions only. It does **not**
+`ao spawn --project <project> --name "<label>" --issue <N> --prompt "<task text>"` starts or revives **worker** sessions only. It does **not**
 restart a dead orchestrator. If `op-orchestrator` is already `detecting` /
 `exited` / `stuck` with `runtime=exited` or `process_missing`, repeated
 `ao spawn` only bumps probe counters against a corpse — it is not a recovery step.

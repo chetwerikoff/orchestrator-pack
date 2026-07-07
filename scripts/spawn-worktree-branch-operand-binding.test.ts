@@ -39,7 +39,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
   it('records production-shaped branch_mismatch when grant lacks branch binding (pre-fix baseline)', () => {
     setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '315'],
+        argv: ['spawn', '--issue', '315'],
         grantId: 'grant-pre-fix',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
@@ -66,7 +66,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
   it('allows production-shaped spawn-new worker branch under active grant', () => {
     setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '561'],
+        argv: ['spawn', '--issue', '561'],
         grantId: 'grant-spawn-new',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
@@ -94,7 +94,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
   it('denies arbitrary, orchestrator, and malformed branch operands before mutation', () => {
     setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '561'],
+        argv: ['spawn', '--issue', '561'],
         grantId: 'grant-negative',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
@@ -172,7 +172,7 @@ describe('spawn worktree branch-operand binding (#561)', () => {
 
     setupSpawnWorktreeRepo(({ repo, baseRef }) => {
       const spawnBuilt = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '561'],
+        argv: ['spawn', '--issue', '561'],
         grantId: 'capture-spawn-new',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,

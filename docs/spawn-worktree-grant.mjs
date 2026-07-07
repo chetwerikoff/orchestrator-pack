@@ -57,8 +57,15 @@ export const AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN = /^opk-\d+$/i;
 /** Git globals that select a repository other than the process cwd. */
 export const GIT_SOURCE_SELECTING_GLOBAL_FLAGS = new Set(['-C', '--git-dir', '--work-tree']);
 
-/** `ao spawn` flags that consume the next argv token (see `ao spawn --help`). */
-export const SPAWN_ARGV_OPTIONS_WITH_VALUE = ['--agent', '--claim-pr', '--prompt'];
+/** `ao spawn` flags that consume the next argv token (see `ao spawn --help`, AO 0.10.2). */
+export const SPAWN_ARGV_OPTIONS_WITH_VALUE = [
+  '--agent',
+  '--claim-pr',
+  '--issue',
+  '--name',
+  '--project',
+  '--prompt',
+];
 
 /**
  * @param {string} token
@@ -83,6 +90,38 @@ function spawnArgvOptionConsumesNextToken(token) {
 }
 
 /**
+ * @param {string} raw
+ * @returns {number | null}
+ */
+function parseStrictPositiveIssueValue(raw) {
+  const value = String(raw).trim();
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * @param {string[]} argv
+ * @returns {number | null}
+ */
+export function parseIssueNumberFromSpawnArgv(argv) {
+  const list = Array.isArray(argv) ? argv.map((part) => String(part)) : [];
+  for (let index = 0; index < list.length; index += 1) {
+    const token = list[index];
+    if (token === '--issue' && index + 1 < list.length) {
+      return parseStrictPositiveIssueValue(list[index + 1]);
+    }
+    const eqMatch = /^--issue=(.+)$/i.exec(token);
+    if (eqMatch) {
+      return parseStrictPositiveIssueValue(eqMatch[1]);
+    }
+  }
+  return null;
+}
+
+/**
  * @param {string[]} argv
  */
 export function parseSpawnTargetFromArgv(argv) {
@@ -100,38 +139,17 @@ export function parseSpawnTargetFromArgv(argv) {
   if (action !== 'spawn-new') {
     return { action, targetKey: '', prNumber: null, issueTarget: null };
   }
-  let sawSpawn = false;
-  for (let index = 0; index < list.length; index += 1) {
-    const token = list[index];
-    if (!sawSpawn) {
-      if (token.toLowerCase() === 'spawn') {
-        sawSpawn = true;
-      }
-      continue;
-    }
-    if (token.startsWith('-')) {
-      if (token === '--claim-pr' || /^--claim-pr=/i.test(token)) {
-        break;
-      }
-      if (spawnArgvOptionInlineValue(token)) {
-        continue;
-      }
-      if (spawnArgvOptionConsumesNextToken(token)) {
-        if (index + 1 < list.length && !list[index + 1].startsWith('-')) {
-          index += 1;
-        }
-        continue;
-      }
-      continue;
-    }
-    return {
-      action,
-      targetKey: token,
-      prNumber: null,
-      issueTarget: token,
-    };
+  const issueNumber = parseIssueNumberFromSpawnArgv(list);
+  if (issueNumber === null) {
+    return { action, targetKey: '', prNumber: null, issueTarget: null };
   }
-  return { action, targetKey: '', prNumber: null, issueTarget: null };
+  const issueToken = String(issueNumber);
+  return {
+    action,
+    targetKey: issueToken,
+    prNumber: null,
+    issueTarget: issueToken,
+  };
 }
 
 /**

@@ -116,7 +116,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
   it('literal HEAD vs origin/main spellings allow when OID matches', () => {
     setupSpawnRepo(({ repo, mainOid, baseRef }) => {
       const built = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '493'],
+        argv: ['spawn', '--issue', '493'],
         grantId: 'grant-head-spellings',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
@@ -178,7 +178,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
       gitIn(repo, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
 
       const built = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '493'],
+        argv: ['spawn', '--issue', '493'],
         grantId: 'grant-negative',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
@@ -339,7 +339,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
 
       const spawnArgv = manifest.spawnNew.argv.map((part) => (part === 'origin/main' ? baseRef : part));
       const built = buildSpawnWorktreeGrantRecord({
-        argv: ['spawn', '493'],
+        argv: ['spawn', '--issue', '493'],
         grantId: 'capture-spawn-new',
         holder: { pid: 1 },
         sourceRepositoryRoot: repo,
@@ -444,7 +444,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
         $env:AO_BASE_DIR = ${psString(aoBase)}
         $env:AO_PROJECT_ID = ${psString(projectId)}
         $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-          argv = @('spawn','493')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','493','--prompt','Spawn gate fixture prompt')
           grantId = 'ps-grant-493'
           projectId = ${psString(projectId)}
           holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
