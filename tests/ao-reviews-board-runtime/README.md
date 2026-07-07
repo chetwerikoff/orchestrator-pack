@@ -1,6 +1,18 @@
 # AO Reviews board runtime (Issue #627)
 
-Pack-local backend-for-frontend that aggregates AO 0.10 daemon HTTP reads into the Reviews board JSON consumed by the UI fork (#215).
+Pack-local backend-for-frontend that aggregates AO 0.10 daemon HTTP reads into the Reviews board JSON consumed by the UI fork (#628).
+
+## UI
+
+Static kanban UI lives in `ui/` (Vite bundle). Build before serving:
+
+```bash
+cd tests/ao-reviews-board-runtime/ui
+npm install
+npm run build
+```
+
+The runtime serves `ui/dist` at `/`. See `ui/README.md` and `ui/NOTICE`.
 
 ## Start
 
@@ -26,7 +38,7 @@ Defaults:
 | `/health` | Liveness JSON |
 | `/api/reviews` | Aggregated board document (`?projectId=` optional filter) |
 | `/api/dashboard/reviews` | Alias of `/api/reviews` |
-| `/` | Minimal HTML index |
+| `/` | Reviews board UI (static bundle from `ui/dist`) |
 
 ## Data sources (read-only)
 
