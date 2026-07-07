@@ -29,6 +29,7 @@
     "plugins/ao-token-chain-ledger/tests/session_cost.test.ts": "light",
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/_test-stub-pack-import-closure.test.ts": "light",
+    "scripts/agent-rules-line-budget.test.ts": "light",
     "scripts/audit-jsonl-retention.test.ts": "light",
     "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",
     "scripts/ao-session-adapter.test.ts": "light",
