@@ -40,7 +40,14 @@ function Invoke-AoCliJson {
             throw "$label produced no JSON output"
         }
 
-        return $text.Substring($start) | ConvertFrom-Json
+        $jsonText = $text.Substring($start)
+        try {
+            return $jsonText | ConvertFrom-Json
+        }
+        catch {
+            $detail = $_.Exception.Message
+            throw "$label parse failed: $detail"
+        }
     }
     finally {
         $ErrorActionPreference = $prevEap

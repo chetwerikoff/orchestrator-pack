@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,13 @@ function runPwsh(script: string) {
 
 function loadJson<T>(name: string): T {
   return JSON.parse(readFileSync(path.join(fixtureDir, name), 'utf8')) as T;
+}
+
+function writeFakeAoScript(dir: string, body: string): string {
+  const fakeAo = path.join(dir, 'ao');
+  writeFileSync(fakeAo, `#!/usr/bin/env bash\nset -euo pipefail\n${body}\n`, { mode: 0o755 });
+  chmodSync(fakeAo, 0o755);
+  return fakeAo;
 }
 
 describe('review-status consumer readers (Issue #611)', () => {
@@ -83,15 +90,17 @@ describe('review-status consumer readers (Issue #611)', () => {
 
   it('AC#5: prefix-safe Invoke-AoCliJson tolerates notifier lines before JSON', () => {
     const fixture = loadJson<{ rawCliOutput: string }>('notifier-prefixed-report-full.txt');
-    const rawPath = path.join(fixtureDir, '_tmp-notifier-prefix.txt');
-    writeFileSync(rawPath, fixture.rawCliOutput);
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'ao-cli-611-prefix-'));
+    const outputPath = path.join(tempDir, 'prefixed-output.txt');
+    writeFileSync(outputPath, fixture.rawCliOutput);
+    const fakeAo = writeFakeAoScript(
+      tempDir,
+      `cat '${outputPath.replace(/'/g, "'\\''")}'`,
+    );
     const out = runPwsh(
       [
         ". '" + lib + "'",
-        "$text = Get-Content -LiteralPath '" + rawPath + "' -Raw",
-        "$start = $text.IndexOf('{')",
-        "if ($start -lt 0) { throw 'no json' }",
-        '$payload = $text.Substring($start) | ConvertFrom-Json',
+        "$payload = Invoke-AoCliJson -AoArgs @('status','--json','--reports','full') -FailureLabel 'ao status --reports full' -AoCommand '" + fakeAo.replace(/'/g, "''") + "'",
         "$rows = Get-AoStatusSessionsWithReportsFromPayload -Payload $payload -SourceKind 'cli-report-full'",
         "(@($rows | Where-Object { $_.name -eq 'opk-611' -or $_.id -eq 'opk-611' }).reports).Count",
       ].join('\n'),
@@ -99,13 +108,20 @@ describe('review-status consumer readers (Issue #611)', () => {
     expect(Number(out)).toBe(1);
   });
 
-  it('AC#5: classified parse failure when JSON after prefix strip is malformed', () => {
+  it('AC#8: classified parse failure when JSON after prefix strip is malformed', () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'ao-cli-611-malformed-'));
+    const fakeAo = writeFakeAoScript(
+      tempDir,
+      "printf '%s\\n' '[notifier] broken' '{not-json'",
+    );
     expect(() =>
-      runPwsh(`
-        . '${lib}'
-        '[notifier] broken' | ConvertFrom-Json | Out-Null
-      `),
-    ).toThrow();
+      runPwsh(
+        [
+          ". '" + lib + "'",
+          "Invoke-AoCliJson -AoArgs @('status','--json','--reports','full') -FailureLabel 'ao status --reports full' -AoCommand '" + fakeAo.replace(/'/g, "''") + "' | Out-Null",
+        ].join('\n'),
+      ),
+    ).toThrow(/ao status --reports full parse failed/i);
   });
 
   it('AC#7: live head-binding path is review-start eligible via report-full reader sessions', () => {
