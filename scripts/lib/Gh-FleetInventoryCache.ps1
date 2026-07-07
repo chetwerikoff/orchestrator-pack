@@ -6,6 +6,7 @@
 
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Get-SupervisedRepoSlug.ps1')
+. (Join-Path $PSScriptRoot 'Audit-JsonlRetention.ps1')
 
 $Script:GhFleetOpenPrListTtlSeconds = 15
 $Script:GhFleetPrViewTtlSeconds = 15
@@ -43,11 +44,6 @@ function Write-GhFleetInventoryCacheAudit {
     if (-not $root) { return }
 
     try {
-        if (-not $Script:AuditJsonlRetentionLoaded) {
-            . (Join-Path $PSScriptRoot 'Audit-JsonlRetention.ps1')
-            $Script:AuditJsonlRetentionLoaded = $true
-        }
-
         $auditPath = Join-Path $root 'audit.jsonl'
         $payload = @{
             at    = (Get-Date).ToString('o')
