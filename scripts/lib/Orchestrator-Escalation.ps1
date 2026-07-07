@@ -48,6 +48,17 @@ function ConvertTo-OrchestratorEscalationHashtable {
     return ConvertTo-MechanicalJsonStateHashtable -Value $Value
 }
 
+
+function Sync-OrchestratorEscalationMutableRecord {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$RecordKey
+    )
+    $record = ConvertTo-OrchestratorEscalationHashtable -Value $State.records[$RecordKey]
+    $State.records[$RecordKey] = $record
+    return $record
+}
+
 function Get-OrchestratorEscalationCatalog {
     param([string]$CatalogPath = '')
     $path = if ($CatalogPath) { $CatalogPath } else { $Script:OrchestratorEscalationCatalogPath }
@@ -241,7 +252,7 @@ function Publish-OrchestratorEscalation {
             deliveryFailures  = @()
         }
     }
-    $record = $state.records[$recordKey]
+    $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $recordKey
     if (Test-OrchestratorEscalationAcked -Record $record) {
         Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
         return @{ ok = $true; status = 'acked'; escalationId = $recordKey; delivered = $false; reason = 'already_acked' }
@@ -332,7 +343,7 @@ function Write-OrchestratorEscalationAck {
     if (-not $state.records.ContainsKey($EscalationId)) {
         return @{ ok = $false; reason = 'unknown_escalation_id' }
     }
-    $record = $state.records[$EscalationId]
+    $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $EscalationId
     if ([string]$record.ackToken -ne $AckToken) {
         return @{ ok = $false; reason = 'invalid_ack_token' }
     }
@@ -355,7 +366,7 @@ function Write-OperatorEscalationAck {
     if (-not $state.records.ContainsKey($EscalationId)) {
         return @{ ok = $false; reason = 'unknown_escalation_id' }
     }
-    $record = $state.records[$EscalationId]
+    $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $EscalationId
     if ([string]$record.ackToken -ne $AckToken) {
         return @{ ok = $false; reason = 'invalid_ack_token' }
     }
