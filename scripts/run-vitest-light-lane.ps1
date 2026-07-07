@@ -13,6 +13,8 @@ $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 
 $env:CI = 'true'
 $env:VITEST_CI_LIGHT_LANE = '1'
+. (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
+Set-OpkVitestHarnessEnv | Out-Null
 
 Push-Location $Root
 try {
