@@ -105,7 +105,7 @@ function Test-ProcessIsDescendantOf {
 
 function Test-JournaledWorkerSendCapabilityRegistrationAllowed {
     if ($env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -eq '1') { return $true }
-    $allowedCommands = @('Invoke-AoSendViaFile', 'Test-AoSendFileContract', 'New-JournaledWorkerSendInternalCapability')
+    $allowedCommands = @('Invoke-AoSendViaMessage', 'Test-AoSendMessageContract', 'New-JournaledWorkerSendInternalCapability')
     foreach ($frame in Get-PSCallStack) {
         if ($frame.Command -notin $allowedCommands) { continue }
         if (Test-TrustedJournaledWorkerSendScriptPath -CandidatePath ([string]$frame.ScriptName)) {

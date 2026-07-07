@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Verifies the local ao send CLI exposes --file ingestion (Issue #373).
+  Verifies the local ao send CLI exposes AO 0.10.2 inline message transport (Issues #373 / #640).
 #>
 param(
     [switch]$ValidateCommitted
@@ -18,16 +18,20 @@ function Test-CommittedAoSendTransportEvidence {
         return $false
     }
     $text = Get-Content -LiteralPath $Path -Raw
-    if ($text -notmatch 'Issue #373') {
-        Write-Host '[FAIL] committed transport evidence missing Issue #373 marker'
+    if ($text -notmatch 'Issue #640') {
+        Write-Host '[FAIL] committed transport evidence missing Issue #640 marker'
         return $false
     }
-    if ($text -notmatch '(?im)(--file|\-f,\s*--file)') {
-        Write-Host '[FAIL] committed transport evidence missing --file ingestion'
+    if ($text -notmatch '(?im)--message') {
+        Write-Host '[FAIL] committed transport evidence missing --message flag'
         return $false
     }
-    if ($text -notmatch '(?im)ao send \[options\]') {
-        Write-Host '[FAIL] committed transport evidence missing ao send usage line'
+    if ($text -notmatch '(?im)--session') {
+        Write-Host '[FAIL] committed transport evidence missing --session flag'
+        return $false
+    }
+    if ($text -notmatch '(?im)ao send \[flags\]') {
+        Write-Host '[FAIL] committed transport evidence missing ao send [flags] usage line'
         return $false
     }
     return $true
@@ -35,7 +39,7 @@ function Test-CommittedAoSendTransportEvidence {
 
 if ($ValidateCommitted) {
     if (Test-CommittedAoSendTransportEvidence -Path $evidencePath) {
-        Write-Host '[PASS] committed ao send --file transport contract evidence verified'
+        Write-Host '[PASS] committed ao send inline transport contract evidence verified'
         exit 0
     }
     exit 1
@@ -43,14 +47,22 @@ if ($ValidateCommitted) {
 
 $aoPath = if ($env:AO_CLI_PATH) { $env:AO_CLI_PATH } else { 'ao' }
 $help = (& $aoPath send --help 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-if ($help -notmatch '(?im)(--file|\-f,\s*--file)') {
-    Write-Host '[FAIL] ao send --file contract missing from local ao send --help'
+if ($help -notmatch '(?im)--message') {
+    Write-Host '[FAIL] ao send --message contract missing from local ao send --help'
+    exit 1
+}
+if ($help -notmatch '(?im)--session') {
+    Write-Host '[FAIL] ao send --session contract missing from local ao send --help'
+    exit 1
+}
+if ($help -notmatch '(?im)ao send \[flags\]') {
+    Write-Host '[FAIL] ao send [flags] usage line missing from local ao send --help'
     exit 1
 }
 
 $stamp = (Get-Date).ToString('o')
 $lines = @(
-    '# Captured ao send transport contract (Issue #373)',
+    '# Captured ao send transport contract (Issue #373 / Issue #640)',
     "capturedAt=$stamp",
     "aoPath=$aoPath",
     '',
@@ -58,5 +70,5 @@ $lines = @(
 )
 Set-Content -LiteralPath $evidencePath -Value $lines -Encoding utf8
 
-Write-Host '[PASS] ao send --file transport contract verified'
+Write-Host '[PASS] ao send inline transport contract verified'
 exit 0

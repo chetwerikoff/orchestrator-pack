@@ -301,7 +301,7 @@ function Invoke-PlannedCiGreenWakeSend {
         return @{ sent = $false; reason = $recheck.reason }
     }
 
-    $sendArgs = @('send', [string]$Action.sessionId, [string]$Action.message)
+    $sendArgs = @('send', '--message', [string]$Action.message, '--session', [string]$Action.sessionId)
     $commandLine = "ao $($sendArgs -join ' ')"
     Test-CiGreenWakeMechanicalForbiddenCommand -CommandLine $commandLine
 

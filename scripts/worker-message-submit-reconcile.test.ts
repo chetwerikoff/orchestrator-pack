@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { AO_SEND_0102_HELP, buildAoSend0102Stub } from './_ao-send-0102-test-fixture.js';
 import {
   AO_PASTE_CHAR_THRESHOLD,
   buildReviewSendDeliveryId,
@@ -1898,7 +1899,7 @@ describe('journaled-worker-send wrapper transport', () => {
   it('classifies private payload setup failure as send_failed', () => {
     const text = readFileSync('scripts/journaled-worker-send.ps1', 'utf8');
     expect(text).toContain('payload_transport_not_private');
-    expect(text).toMatch(/process_not_started\|session_not_found\|arg_rejected\|exception_before_send\|payload_transport_not_private/);
+    expect(text).toMatch(/process_not_started\|session_not_found\|arg_rejected\|exception_before_send\|payload_transport_not_private\|inline_message_too_large/);
     const result = spawnSync('pwsh', ['-NoProfile', '-Command', `
       $Reason = 'payload_transport_not_private'
       $ExitCode = 1
@@ -1914,7 +1915,7 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(result.status).toBe(45);
   });
 
-  it('fails closed when ao send --file contract is absent', () => {
+  it('fails closed when ao send --message/--session contract is absent', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-no-file-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
@@ -1928,19 +1929,36 @@ describe('journaled-worker-send wrapper transport', () => {
     expect(existsSync(journal)).toBe(false);
   });
 
-  it('sets reentrancy sentinel while probing ao send --file help', () => {
+  it('sets reentrancy sentinel while probing ao send --help', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-help-sentinel-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
 if [[ "$1" == "send" && "$2" == "--help" ]]; then
   if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 88; fi
-  echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
   exit 0
 fi
 if [[ -z "\${AO_JOURNALED_SEND_INTERNAL:-}" ]]; then exit 89; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -1956,9 +1974,28 @@ exit 0
     const sentMarker = path.join(dir, 'sent.txt');
     writeFileSync(journal, '{not-json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 printf sent > '${sentMarker}'
 exit 0
 `);
@@ -1977,9 +2014,28 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -1996,17 +2052,37 @@ exit 0
     expect(new Set(sourceKeys).size).toBe(2);
   });
 
-  it('passes multiline option-shaped payload through --file and stores metadata only', () => {
+  it('passes multiline option-shaped payload through --message and stores metadata only', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-file-'));
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     const fileCapture = path.join(dir, 'payload.txt');
     const argvCapture = path.join(dir, 'argv.txt');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
 printf '%s\n' "$@" > "${argvCapture}"
-if [[ "$3" == "--file" ]]; then cat "$4" > "${fileCapture}"; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s' "$message" > "${fileCapture}"
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -2014,7 +2090,10 @@ exit 0
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-SourceKey', 'branch with spaces'], { input: payload, encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(readFileSync(fileCapture, 'utf8')).toBe(payload);
-    expect(readFileSync(argvCapture, 'utf8')).not.toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
+    const argvText = readFileSync(argvCapture, 'utf8');
+    expect(argvText).toContain('--message');
+    expect(argvText).toContain('--session');
+    expect(argvText).toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
     const journalText = readFileSync(journal, 'utf8');
     expect(journalText).not.toContain('opk_secret_TOKEN_SHOULD_NOT_LEAK');
     expect(journalText).not.toContain('branch with spaces');
@@ -2028,9 +2107,28 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -2063,9 +2161,28 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -2091,9 +2208,28 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 exit 0
 `);
     chmodSync(fakeAo, 0o755);
@@ -2112,9 +2248,28 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 printf '{"startedAt":"2999-01-01T00:00:00Z"}' > "${journal}.lock"
 exit 0
 `);
@@ -2130,9 +2285,28 @@ exit 0
     const fakeAo = path.join(dir, 'ao');
     const journal = path.join(dir, 'journal.json');
     writeFileSync(fakeAo, `#!/usr/bin/env bash
-if [[ "$1" == "send" && "$2" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]
-  -f, --file <path>    Send contents of a file instead"; exit 0; fi
-if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  cat <<'AO_SEND_HELP_EOF'
+Send a message to a running agent session
+
+Usage:
+  ao send [flags]
+
+Flags:
+  -h, --help             help for send
+      --message string   Message body (required)
+      --session string   Session id (required)
+AO_SEND_HELP_EOF
+  exit 0; fi
+message=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    send) shift ;;
+    --message) message="$2"; shift 2 ;;
+    --session) shift 2 ;;
+    *) shift ;;
+  esac
+done
 python3 - <<'PY2'
 import sys
 sys.stdout.write('o' * 1048576)
@@ -2150,6 +2324,55 @@ exit 0
   });
 });
 
+
+
+
+  it('ao send help probe trap', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-help-trap-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, `#!/usr/bin/env bash
+if [[ "$1" == "send" && "$2" == "--help" ]]; then
+  echo "Usage: ao [command]"
+  echo "Available Commands:"
+  exit 0
+fi
+exit 99
+`);
+    chmodSync(fakeAo, 0o755);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal], { input: 'payload', encoding: 'utf8' });
+    expect(result.status).toBe(42);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/ao send --message\/--session contract is unavailable/i);
+    expect(existsSync(journal)).toBe(false);
+  });
+
+
+  it('rejects argv-budget overflow well below legacy 1.5 MiB guard', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-argv-budget-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, buildAoSend0102Stub({ onSendBody: 'exit 0' }));
+    chmodSync(fakeAo, 0o755);
+    const payload = 'x'.repeat(33000);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: payload, encoding: 'utf8', timeout: 60000 });
+    expect(result.status).toBe(45);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/inline message exceeds argv budget/i);
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(/exception_before_send/i);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"send_failed"');
+  });
+
+  it('fails closed before ao send when inline message exceeds argv budget', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'journaled-send-oversized-'));
+    const fakeAo = path.join(dir, 'ao');
+    const journal = path.join(dir, 'journal.json');
+    writeFileSync(fakeAo, buildAoSend0102Stub({ onSendBody: 'exit 0' }));
+    chmodSync(fakeAo, 0o755);
+    const payload = 'x'.repeat(33000);
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/journaled-worker-send.ps1', '-SessionId', 'worker one', '-AoPath', fakeAo, '-JournalPath', journal, '-TimeoutSeconds', '5'], { input: payload, encoding: 'utf8', timeout: 60000 });
+    expect(result.status).toBe(45);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/inline message exceeds argv budget/i);
+    expect(readFileSync(journal, 'utf8')).toContain('"dispatchOutcome":"send_failed"');
+  });
 
 describe('worker-message-send adoption preflight', () => {
   it('fails present-but-incomplete routing branch coverage', () => {
@@ -2199,11 +2422,29 @@ describe('worker-message-send adoption preflight', () => {
     writeFileSync(fakeAo, [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]"; echo "  -f, --file <path>    Send contents of a file instead"; exit 0; fi',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then cat <<\'AO_SEND_HELP_EOF\'',
+            'Send a message to a running agent session',
+      '',
+      'Usage:',
+      '  ao send [flags]',
+      '',
+      'Flags:',
+      '  -h, --help             help for send',
+      '      --message string   Message body (required)',
+      '      --session string   Session id (required)',
+      'AO_SEND_HELP_EOF',
+      'exit 0; fi',
       'if [[ "$1" != "send" ]]; then exit 64; fi',
-      'if [[ "$3" != "--file" ]]; then exit 65; fi',
-      `payload=$(cat "$4")`,
-      `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
+      'message=""',
+      'while [[ $# -gt 0 ]]; do',
+      '  case "$1" in',
+      '    send) shift ;;',
+      '    --message) message="$2"; shift 2 ;;',
+      '    --session) shift 2 ;;',
+      '    *) shift ;;',
+      '  esac',
+      'done',
+      `printf "%s" "$message" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
       '',
     ].join('\n'));
     chmodSync(fakeAo, 0o755);
@@ -2247,7 +2488,7 @@ describe('worker-message-send adoption preflight', () => {
       staleProbe1: { deliveryId: 'staleProbe1', sessionId: 'synthetic', deliveredAtMs: 1, source: 'adoption-probe', sourceKey: hash('plain-ao-send:pending-draft'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 240, lineCount: 2 } },
       staleProbe2: { deliveryId: 'staleProbe2', sessionId: 'synthetic', deliveredAtMs: 2, source: 'adoption-probe', sourceKey: hash('plain-ao-send:self-submitted'), adoptionProbe: true, aoEpochHash: hash('epoch-current'), configPathHash: hash('/cfg/current.yaml'), adoptionProbeRunIdHash: hash('old-run'), dispatchOutcome: 'dispatched', draftState: 'auto_submitted', messageShape: { charLength: 20, lineCount: 1 } },
     }));
-    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then if [[ "$3" == "--file" ]]; then cat "$4" >/dev/null; fi; exit 0; fi\nexit 64\n');
+    writeFileSync(fakeAo, '#!/usr/bin/env bash\nif [[ "$1" == "send" ]]; then exit 0; fi\nexit 64\n');
     chmodSync(fakeAo, 0o755);
 
     const result = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/worker-message-send-adoption-preflight.ps1', '-JournalPath', journal, '-StateFile', state, '-AoEpoch', 'epoch-current', '-ConfigPath', '/cfg/current.yaml', '-AoPath', fakeAo, '-WriteProbeEntries'], { encoding: 'utf8' });
@@ -2266,11 +2507,29 @@ describe('worker-message-send adoption preflight', () => {
     writeFileSync(fakeAo, [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
-      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then echo "Usage: ao send [options] <session> [message...]"; echo "  -f, --file <path>    Send contents of a file instead"; exit 0; fi',
+      'if [[ "$1" == "send" && "${2:-}" == "--help" ]]; then cat <<\'AO_SEND_HELP_EOF\'',
+            'Send a message to a running agent session',
+      '',
+      'Usage:',
+      '  ao send [flags]',
+      '',
+      'Flags:',
+      '  -h, --help             help for send',
+      '      --message string   Message body (required)',
+      '      --session string   Session id (required)',
+      'AO_SEND_HELP_EOF',
+      'exit 0; fi',
       'if [[ "$1" != "send" ]]; then exit 64; fi',
-      'if [[ "$3" != "--file" ]]; then exit 65; fi',
-      `payload=$(cat "$4")`,
-      `printf "%s" "$payload" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
+      'message=""',
+      'while [[ $# -gt 0 ]]; do',
+      '  case "$1" in',
+      '    send) shift ;;',
+      '    --message) message="$2"; shift 2 ;;',
+      '    --session) shift 2 ;;',
+      '    *) shift ;;',
+      '  esac',
+      'done',
+      `printf "%s" "$message" | pwsh -NoProfile -File '${wrapperPath}' -SessionId synthetic-adoption-probe -AoPath "$0"`,
       '',
     ].join('\n'));
     chmodSync(fakeAo, 0o755);
@@ -2630,13 +2889,14 @@ describe('issue #373 supervised adoption preflight', () => {
 
 
 describe('ao send transport contract (Issue #373)', () => {
-  it('confirms committed capture-backed evidence documents --file ingestion', () => {
+  it('confirms committed capture-backed evidence documents AO 0.10.2 inline send flags', () => {
     const evidencePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs/ao-send-transport-contract.txt');
     expect(existsSync(evidencePath)).toBe(true);
     const text = readFileSync(evidencePath, 'utf8');
-    expect(text).toContain('Issue #373');
-    expect(text).toMatch(/(?:--file|\-f,\s*--file)/i);
-    expect(text).toMatch(/ao send \[options\]/i);
+    expect(text).toContain('Issue #640');
+    expect(text).toMatch(/--message/i);
+    expect(text).toMatch(/--session/i);
+    expect(text).toMatch(/ao send \[flags\]/i);
   });
 });
 

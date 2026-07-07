@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Invokable adoption preflight for journaled worker sends (Issues #281 / #373).
+  Invokable adoption preflight for journaled worker sends (Issues #281 / #373 / #640).
 #>
 
 . (Join-Path $PSScriptRoot 'Record-WorkerMessageDispatch.ps1')
@@ -35,27 +35,17 @@ function New-WorkerMessageAdoptionProbePayload {
     return "AO_WORKER_MESSAGE_ADOPTION_PROBE_V1`nbranch=$Branch`naoEpochHash=$EpochHash`nconfigPathHash=$ConfigHash`nadoptionProbeRunIdHash=$RunIdHash`n$filler"
 }
 
-function Invoke-AoSendProbeViaFile {
+function Invoke-AoSendProbeViaMessage {
     param(
         [string]$AoPath,
         [string]$SessionId,
-        [string]$Payload,
-        [switch]$NoWait
+        [string]$Payload
     )
 
-    $payloadFile = [System.IO.Path]::GetTempFileName()
-    try {
-        [System.IO.File]::WriteAllText($payloadFile, $Payload)
-        $args = @('send', $SessionId, '--file', $payloadFile)
-        if ($NoWait) { $args += '--no-wait' }
-        $output = & $AoPath @args 2>&1
-        $exitCode = $LASTEXITCODE
-        if ($null -eq $exitCode) { $exitCode = 0 }
-        return @{ output = @($output); exitCode = $exitCode }
-    }
-    finally {
-        Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
-    }
+    $output = & $AoPath send --message $Payload --session $SessionId 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) { $exitCode = 0 }
+    return @{ output = @($output); exitCode = $exitCode }
 }
 
 function Invoke-WorkerMessageAdoptionProbeGeneration {
@@ -93,7 +83,7 @@ function Invoke-WorkerMessageAdoptionProbeGeneration {
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH', $ProbeRunIdHash.Value, 'Process')
             [System.Environment]::SetEnvironmentVariable('AO_WORKER_MESSAGE_DISPATCH_JOURNAL', $EffectiveJournalPath, 'Process')
             $probePayload = New-WorkerMessageAdoptionProbePayload -Branch $branch -EpochHash $epochHash -ConfigHash $configHash -RunIdHash $ProbeRunIdHash.Value
-            $sendResult = Invoke-AoSendProbeViaFile -AoPath $AoPath -SessionId 'synthetic-adoption-probe' -Payload $probePayload -NoWait
+            $sendResult = Invoke-AoSendProbeViaMessage -AoPath $AoPath -SessionId 'synthetic-adoption-probe' -Payload $probePayload
             $probeOutput = $sendResult.output
             $probeExit = [int]$sendResult.exitCode
         }

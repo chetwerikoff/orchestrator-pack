@@ -18,6 +18,14 @@
       "path": "captures/ao-0-10-cli/orchestrator-ls.raw.json",
       "contentHash": "sha256:e650fa284be8a6ef4da700512f7219e7347bacce7941463ddfb3f27062cb9f9e"
     },
+    "ao-0-10-cli/send-help": {
+      "id": "ao-0-10-cli/send-help",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao send --help",
+      "kind": "unstructured",
+      "path": "captures/ao-0-10-cli/send-help.raw.txt",
+      "contentHash": "sha256:615ccc8fa729d038d41e449b76927b01e145ccbb12c7a6cb022e78597130b59e"
+    },
     "ao-0-10-cli/session-get-worker": {
       "id": "ao-0-10-cli/session-get-worker",
       "producer": "ao-0-10-cli",

@@ -614,6 +614,17 @@ describe('mergeLegacyNudgedWithPendingJournal', () => {
   });
 });
 
+
+describe('ci-green wake send argv (Issue #640)', () => {
+  it('uses AO 0.10.2 inline send argv in the production send path', () => {
+    const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ci-green-wake-reconcile.ps1');
+    const text = readFileSync(scriptPath, 'utf8');
+    expect(text).toMatch(/@\('send',\s*'--message'/);
+    expect(text).toMatch(/'--session',\s*\[string\]\$Action\.sessionId/);
+    expect(text).not.toMatch(/@\('send',\s*\[string\]\$Action\.sessionId,\s*\[string\]\$Action\.message/);
+  });
+});
+
 describe('findForbiddenCiGreenWakeCommands', () => {
   it('forbids spawn, claim-pr, and kill but allows ao send', () => {
     expect(findForbiddenCiGreenWakeCommands(['ao send op-1 hello'])).toHaveLength(0);

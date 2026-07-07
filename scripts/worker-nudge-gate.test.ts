@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+import { AO_SEND_0102_HELP } from './_ao-send-0102-test-fixture.js';
 import {
   ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY,
   WORKER_NUDGE_GATE_VERSION,
@@ -60,15 +61,22 @@ function writeDownstreamAoStub(dir: string): string {
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "send" && "\${2:-}" == "--help" ]]; then
-  echo "Usage: ao send <session> -f, --file <path>"
+  cat <<'AO_SEND_HELP_EOF'
+${AO_SEND_0102_HELP}
+AO_SEND_HELP_EOF
   exit 0
 fi
 if [[ "\${1:-}" == "send" ]]; then
-  for arg in "$@"; do
-    if [[ "$arg" == "--file" ]]; then
-      exit 0
-    fi
+  message=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      send) shift ;;
+      --message) message="$2"; shift 2 ;;
+      --session) shift 2 ;;
+      *) shift ;;
+    esac
   done
+  exit 0
 fi
 printf 'unhandled:%s\\n' "$*" >&2
 exit 99
@@ -116,7 +124,7 @@ function autonomousProductionChainEnv(aoBaseDir: string): NodeJS.ProcessEnv {
     AO_BASE_DIR: aoBaseDir,
   };
   delete env.AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE;
-  delete env.AO_JOURNALED_SEND_ASSUME_FILE;
+  delete env.AO_JOURNALED_SEND_ASSUME_CONTRACT;
   delete env.AO_REAL_BINARY;
   return env;
 }
@@ -616,7 +624,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         cwd: repoRoot,
         encoding: 'utf8',
         input: 'hello worker',
-        env: { ...process.env, AO_JOURNALED_SEND_ASSUME_FILE: '1' },
+        env: { ...process.env, AO_JOURNALED_SEND_ASSUME_CONTRACT: '1' },
       },
     );
     expect(result.status).toBe(46);
@@ -633,7 +641,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         input: 'hello worker',
         env: {
           ...process.env,
-          AO_JOURNALED_SEND_ASSUME_FILE: '1',
+          AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
           AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
         },
       },
@@ -792,7 +800,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         },
       );
       expect(result.status).toBe(0);
-      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --file contract is unavailable/i);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --message\/--session contract is unavailable/i);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
     } finally {
       config.cleanup();
@@ -833,7 +841,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       const parsed = JSON.parse(jsonLine ?? '{}');
       expect(parsed.exitCode).toBe(0);
       expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
-      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --file contract is unavailable/i);
+      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --message\/--session contract is unavailable/i);
     } finally {
       config.cleanup();
       rmSync(claimDir, { recursive: true, force: true });
