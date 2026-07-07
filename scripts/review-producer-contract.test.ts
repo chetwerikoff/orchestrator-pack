@@ -111,6 +111,58 @@ describe('review-producer-contract', () => {
     expect(deriveDeliveredFindingCount({ findingCount: 2 }, 'changes_requested')).toBe(0);
   });
 
+  it('deriveDeliveredFindingCount prefers AO deliveredFindingCount over findingCount', () => {
+    expect(
+      deriveDeliveredFindingCount(
+        {
+          deliveredAt: '2026-07-06T01:00:00.000Z',
+          findingCount: 3,
+          openFindingCount: 2,
+          deliveredFindingCount: 1,
+        },
+        'changes_requested',
+      ),
+    ).toBe(1);
+  });
+
+  it('deriveDeliveredFindingCount preserves explicit zero delivery', () => {
+    expect(
+      deriveDeliveredFindingCount(
+        {
+          deliveredAt: '2026-07-06T01:00:00.000Z',
+          findingCount: 2,
+          deliveredFindingCount: 0,
+        },
+        'changes_requested',
+      ),
+    ).toBe(0);
+  });
+
+  it('flatten preserves partial delivery counts from latestRun', () => {
+    const payload = {
+      reviews: [
+        {
+          prNumber: 99,
+          headSha: 'abc123def4567890abcdef1234567890abcdef12',
+          status: 'changes_requested',
+          latestRun: {
+            id: 'rr-partial',
+            status: 'completed',
+            targetSha: 'abc123def4567890abcdef1234567890abcdef12',
+            deliveredAt: '2026-07-06T01:00:00.000Z',
+            findingCount: 3,
+            openFindingCount: 2,
+            deliveredFindingCount: 1,
+          },
+        },
+      ],
+    };
+    const run = flattenSessionReviewsToNormalizedRuns(payload, 'opk-9')[0]!;
+    expect(run.deliveredFindingCount).toBe(1);
+    expect(run.openFindingCount).toBe(2);
+    expect(run.findingCount).toBe(3);
+  });
+
   it('does not treat delivered changes_requested with open findings as undelivered', () => {
     const run = {
       prReviewStatus: 'changes_requested',

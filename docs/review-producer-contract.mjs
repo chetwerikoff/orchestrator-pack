@@ -107,6 +107,10 @@ export function deriveDeliveredFindingCount(latestRun, prReviewStatus) {
   if (!deliveredAt) {
     return 0;
   }
+  const deliveredFindingCount = Number(latestRun?.deliveredFindingCount);
+  if (Number.isFinite(deliveredFindingCount) && deliveredFindingCount >= 0) {
+    return deliveredFindingCount;
+  }
   const findingCount = Number(latestRun?.findingCount);
   if (Number.isFinite(findingCount) && findingCount >= 0) {
     return findingCount;
@@ -245,7 +249,14 @@ export function normalizePrReviewStateRow(entry, linkedSessionId = '') {
   const latestRunStatus = String(latestRun.status ?? '').toLowerCase();
   const verdict = String(latestRun.verdict ?? '').toLowerCase();
   const deliveredAt = latestRun.deliveredAt ?? null;
-  const deliveredFindingCount = deriveDeliveredFindingCount(latestRun, prReviewStatus);
+  const deliveredFindingCount = deriveDeliveredFindingCount(
+    {
+      ...latestRun,
+      deliveredFindingCount: latestRun.deliveredFindingCount ?? entry.deliveredFindingCount,
+      findingCount: latestRun.findingCount ?? entry.findingCount,
+    },
+    prReviewStatus,
+  );
   const failureDetail = resolveFailureDetail(latestRun);
   /** @type {NormalizedReviewRun} */
   const row = {
