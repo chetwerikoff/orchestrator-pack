@@ -68,6 +68,16 @@ if ($reconcilePs -notmatch 'issueBodiesByPr') {
     exit 1
 }
 
+$reevalPs = Get-Content -LiteralPath (Join-Path $Root 'scripts/review-trigger-reeval.ps1') -Raw
+if ($reevalPs -notmatch 'Get-ReviewCycleCapIssueBodiesByPr') {
+    Write-Host 'review-trigger-reeval.ps1 must pass issue tier data via Get-ReviewCycleCapIssueBodiesByPr'
+    exit 1
+}
+if ($reevalPs -notmatch 'issueBodiesByPr') {
+    Write-Host 'review-trigger-reeval.ps1 must pass issueBodiesByPr into cap gate payload'
+    exit 1
+}
+
 $integrationScripts = @{
     'docs/review-trigger-reconcile.mjs'      = 'evaluateReviewCycleCapGate'
     'docs/orchestrator-claimed-review-run.mjs' = 'evaluateReviewCycleCapGate'

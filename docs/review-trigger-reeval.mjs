@@ -630,7 +630,7 @@ export function planDeferredWatchTick(input) {
         openPrs: toArray(input.openPrs),
         reviewRuns: toArray(input.reviewRuns),
         capState: nextCapCycleState,
-        issueBody: input.issueBody,
+        issueBody: input.issueBodiesByPr?.[String(evaluation.planned.prNumber)] ?? input.issueBody,
         producer: 'review-trigger-reeval',
         nowMs,
       });

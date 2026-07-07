@@ -181,8 +181,19 @@ function Invoke-ReviewTriggerReevalTick {
         }
     }
 
+    $fixtureSnapshot = $null
+    if ($FixturePayload) {
+        $fixtureSnapshot = @{}
+        if ($FixturePayload.issueBodiesByPr) {
+            $fixtureSnapshot.issueBodiesByPr = Copy-MechanicalJsonMap -Map $FixturePayload.issueBodiesByPr
+        }
+        if ($FixturePayload.issueBody) {
+            $fixtureSnapshot.issueBody = [string]$FixturePayload.issueBody
+        }
+    }
+
     $capCycleState = Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId)
-    $plan = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'planTick' -Payload @{
+    $planPayload = @{
         watchEntries                  = $watchMap
         openPrs                       = @($snapshot.openPrs)
         reviewRuns                    = @($snapshot.reviewRuns)
@@ -194,6 +205,12 @@ function Invoke-ReviewTriggerReevalTick {
         snapshotErrorsByKey           = if ($FixturePayload.snapshotErrorsByKey) { $FixturePayload.snapshotErrorsByKey } else { @{} }
         capCycleState                 = $capCycleState
     }
+    $issueBodiesByPr = Get-ReviewCycleCapIssueBodiesByPr -OpenPrs @($snapshot.openPrs) -RepoRoot $RepoRoot `
+        -ProjectId $ProjectId -FixtureSnapshot $fixtureSnapshot
+    if ($issueBodiesByPr.Count -gt 0) {
+        $planPayload.issueBodiesByPr = $issueBodiesByPr
+    }
+    $plan = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'planTick' -Payload $planPayload
 
     if ($plan.capCycleState) {
         Set-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId) -State $plan.capCycleState

@@ -7,6 +7,7 @@ import { evaluateOrchestratorTurnGate } from '../docs/orchestrator-claimed-revie
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 import { planDeferredWatchTick } from '../docs/review-trigger-reeval.mjs';
 import {
+  REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
   TERMINAL_AT_CAP_OPEN_FINDINGS,
   TERMINAL_CLEAN_EARLY_STOP,
   TIER_CAP_BY_TIER,
@@ -208,7 +209,7 @@ describe('distinct head counting matrix', () => {
 
     const t1Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: t1Body } });
     expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
-    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === TERMINAL_AT_CAP_OPEN_FINDINGS)).toBe(true);
+    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED)).toBe(true);
   });
 
   it('(h) eight distinct terminal heads on T3 exhausts budget', () => {
@@ -469,8 +470,56 @@ describe('review cycle cap scenario matrix', () => {
     }));
     const gate = run(pr, newHead, runs, { issueBody: '```complexity-tier\ntier: T1\n```' });
     expect(gate.allowStart).toBe(false);
-    expect(gate.reason).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
+    expect(gate.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
+    expect(gate.terminal).toBeNull();
+    expect(gate.atCapRecord).toBeUndefined();
     expect(gate.prState?.distinctHeadsReviewed).toHaveLength(2);
+    expect(gate.prState?.terminal).toBeNull();
+    expect(gate.prState?.atCapRecord).toBeNull();
+  });
+
+  it('reeval deferred watch honors per-PR tier via issueBodiesByPr', () => {
+    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
+    const current = 'a3'.padEnd(40, '1');
+    const runs = prior.map((sha, idx) => ({
+      prNumber: pr,
+      targetSha: sha,
+      status: 'changes_requested',
+      openFindingCount: 1,
+      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
+    }));
+    const t1Body = '```complexity-tier\ntier: T1\n```';
+    const t2Body = '```complexity-tier\ntier: T2\n```';
+    const base = {
+      watchEntries: {
+        [`${pr}:${current}`]: {
+          prNumber: pr,
+          headSha: current,
+          status: 'watching',
+          windowExpiresMs: Date.now() + 60_000,
+        },
+      },
+      openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
+      reviewRuns: runs,
+      sessions: [
+        {
+          sessionId: 'opk-646',
+          role: 'worker',
+          prNumber: pr,
+          status: 'working',
+          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
+        },
+      ],
+      ciChecksByPr: { [pr]: [{ name: 'verify', state: 'SUCCESS' }] },
+      requiredCheckNamesByPr: { [pr]: ['verify'] },
+      capCycleState: {},
+    };
+    const t2Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: t2Body } });
+    expect(t2Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
+
+    const t1Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: t1Body } });
+    expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
+    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED)).toBe(true);
   });
   it('at-cap head advance without clearance keeps terminal and suppresses starts', () => {
     const heads = ['c1', 'c2', 'c3', 'c4'].map((h) => h.padEnd(40, 'x'));

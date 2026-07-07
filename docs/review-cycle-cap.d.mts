@@ -6,6 +6,7 @@ export declare const TIER_CAP_BY_TIER: Readonly<Record<string, number>>;
 export declare const VALID_REVIEW_CYCLE_TIERS: ReadonlySet<string>;
 export declare const TERMINAL_CLEAN_EARLY_STOP: string;
 export declare const TERMINAL_AT_CAP_OPEN_FINDINGS: string;
+export declare const REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED: string;
 
 export type ComplexityTierParseResult =
   | { kind: 'tier'; tier: string }

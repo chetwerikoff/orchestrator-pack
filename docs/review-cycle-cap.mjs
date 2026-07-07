@@ -22,6 +22,7 @@ export const VALID_REVIEW_CYCLE_TIERS = new Set(Object.keys(TIER_CAP_BY_TIER));
 
 export const TERMINAL_CLEAN_EARLY_STOP = 'clean_early_stop';
 export const TERMINAL_AT_CAP_OPEN_FINDINGS = 'at_cap_open_findings';
+export const REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED = 'review_cycle_cap_budget_exhausted';
 
 const COMPLEXITY_TIER_FENCE_RE = /```complexity-tier\s*\n([\s\S]*?)```/i;
 
@@ -476,7 +477,7 @@ export function syncReviewCycleCapState(input) {
   const currentHead = normalizeSha(currentHeadSha);
   const alreadyConsumed = distinctHeads.includes(currentHead);
   const budgetExhausted = distinctHeads.length >= prState.cap;
-  if (budgetExhausted && (!alreadyConsumed || openFindingCount > 0)) {
+  if (budgetExhausted && openFindingCount > 0) {
     prState.terminal = TERMINAL_AT_CAP_OPEN_FINDINGS;
     prState.terminalHeadSha = currentHeadSha;
     prState.mergeEligible = false;
@@ -581,37 +582,47 @@ export function evaluateReviewCycleCapGate(input) {
       prNumber,
       currentHeadSha,
     );
-    const atCapRecord =
-      prState.atCapRecord ??
-      buildAtCapOpenFindingsRecord({
-        prNumber,
-        headSha: currentHeadSha,
-        tier: prState.tier,
-        cap: prState.cap,
-        distinctHeadsReviewed: prState.distinctHeadsReviewed,
-        openFindingCount,
-        cycleOpenedAtUtc:
-          prState.cycleOpenedAtUtc ?? new Date(Number(input.nowMs ?? Date.now())).toISOString(),
-        terminatedAtUtc: new Date(Number(input.nowMs ?? Date.now())).toISOString(),
-        producer: input.producer ?? 'review-cycle-cap',
-        nowMs: input.nowMs,
-      });
-    const blockedPrState = {
-      ...prState,
-      terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
-      terminalHeadSha: currentHeadSha,
-      mergeEligible: false,
-      atCapRecord,
-    };
-    const blockedCapState = { ...synced.capState, [String(prNumber)]: blockedPrState };
+    if (openFindingCount > 0) {
+      const atCapRecord =
+        prState.atCapRecord ??
+        buildAtCapOpenFindingsRecord({
+          prNumber,
+          headSha: currentHeadSha,
+          tier: prState.tier,
+          cap: prState.cap,
+          distinctHeadsReviewed: prState.distinctHeadsReviewed,
+          openFindingCount,
+          cycleOpenedAtUtc:
+            prState.cycleOpenedAtUtc ?? new Date(Number(input.nowMs ?? Date.now())).toISOString(),
+          terminatedAtUtc: new Date(Number(input.nowMs ?? Date.now())).toISOString(),
+          producer: input.producer ?? 'review-cycle-cap',
+          nowMs: input.nowMs,
+        });
+      const blockedPrState = {
+        ...prState,
+        terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
+        terminalHeadSha: currentHeadSha,
+        mergeEligible: false,
+        atCapRecord,
+      };
+      const blockedCapState = { ...synced.capState, [String(prNumber)]: blockedPrState };
+      return {
+        allowStart: false,
+        reason: TERMINAL_AT_CAP_OPEN_FINDINGS,
+        terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
+        mergeEligible: false,
+        capState: blockedCapState,
+        prState: blockedPrState,
+        atCapRecord,
+      };
+    }
     return {
       allowStart: false,
-      reason: TERMINAL_AT_CAP_OPEN_FINDINGS,
-      terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
+      reason: REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
+      terminal: null,
       mergeEligible: false,
-      capState: blockedCapState,
-      prState: blockedPrState,
-      atCapRecord,
+      capState: synced.capState,
+      prState,
     };
   }
 
