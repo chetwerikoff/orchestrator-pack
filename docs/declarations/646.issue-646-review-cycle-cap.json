@@ -1,0 +1,23 @@
+{
+  "issue_number": 646,
+  "iteration_id": "issue-646-review-cycle-cap",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-07T20:50:00.000Z",
+  "baseline": {
+    "commit_sha": "b5230dc8f0e1036cffa558f20394c31897c4c4ba",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:cc7d2bdc88f6d858e669901de665762d60ca832602b933a99c936d4dd0410365"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}
