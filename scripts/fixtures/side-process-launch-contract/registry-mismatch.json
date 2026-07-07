@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "requiredChildIds": [
+    "mismatch-child"
+  ],
+  "children": [
+    {
+      "id": "mismatch-child",
+      "script": "mismatch-child.ps1",
+      "sideEffecting": false,
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 30,
+      "stallGraceMultiplier": 4
+    }
+  ]
+}

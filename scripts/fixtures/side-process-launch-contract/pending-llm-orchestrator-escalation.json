@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "records": {
+    "b3e3f9f24cc76d57068e7e4a": {
+      "escalationClassId": "escalation-review-start-claim",
+      "correlationKey": "corr:review-start:fixture",
+      "escalationId": "b3e3f9f24cc76d57068e7e4a",
+      "ackToken": "fixture-ack-token-659",
+      "route": "llm-orchestrator",
+      "status": "pending",
+      "operatorStatus": "pending",
+      "attempts": 0,
+      "createdAtMs": 1000,
+      "updatedAtMs": 1000,
+      "autoRetryTicks": 0,
+      "deliveryFailures": [],
+      "lastPayload": {
+        "issueNumber": 659
+      },
+      "lastMessage": "fixture pending llm-orchestrator delivery"
+    }
+  },
+  "wakeWindows": {},
+  "audit": {}
+}
