@@ -1426,6 +1426,30 @@ else {
     Add-Failure 'Missing coworker delegation threshold drift check script (Issue #255)'
 }
 
+Write-Host ''
+Write-Host '== Agent rules restructure guards (Issue #654) =='
+foreach ($check in @(
+        @{ Path = 'scripts/check-agent-rules-line-budget.ps1'; Label = 'agent-rules line budget (Issue #654)' },
+        @{ Path = 'scripts/check-agent-rules-moved-content.ps1'; Label = 'agent-rules moved-content guard (Issue #654)' },
+        @{ Path = 'scripts/check-agent-rules-grep-inventory.ps1'; Label = 'agent-rules grep-consumer inventory (Issue #654)' }
+    )) {
+    $scriptPath = Join-Path $Root $check.Path
+    if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
+        & $scriptPath
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check $check.Path 'PASS' 'completed'
+        }
+        else {
+            Write-Check $check.Path 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure ($check.Label + ' failed')
+        }
+    }
+    else {
+        Write-Check $check.Path 'FAIL' 'missing'
+        Add-Failure ('Missing ' + $check.Label + ' script')
+    }
+}
+
 $reviewerContractMappingCheck = Join-Path $Root 'scripts/check-reviewer-contract-mapping.ps1'
 if (Test-Path -LiteralPath $reviewerContractMappingCheck -PathType Leaf) {
     & $reviewerContractMappingCheck
