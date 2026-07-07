@@ -266,7 +266,14 @@ export function filterRunsWithinCycleBoundary(runs, cycleOpenedAtUtc) {
   if (!boundaryMs) {
     return toArray(runs);
   }
-  return toArray(runs).filter((run) => resolveRunCompletionMs(run) >= boundaryMs);
+  return toArray(runs).filter((run) => {
+    const runMs = resolveRunCompletionMs(run);
+    // Undated run rows stay in the active cycle; fresh cycles still exclude them.
+    if (!runMs) {
+      return true;
+    }
+    return runMs >= boundaryMs;
+  });
 }
 
 export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
@@ -440,7 +447,7 @@ export function syncReviewCycleCapState(input) {
       prState.cycleOpenedAtUtc =
         firstConsuming.completedAt != null
           ? new Date(Date.parse(String(firstConsuming.completedAt)) || nowMs).toISOString()
-          : nowIso;
+          : new Date(0).toISOString();
       prState.tierFrozen = true;
     }
   }
