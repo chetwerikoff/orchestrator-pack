@@ -303,6 +303,37 @@ export function hashNormalizedBody(text) {
 }
 
 /**
+ * @param {string} repoRoot
+ * @param {{ file: string, line: number }} hit
+ */
+export function hashPinnedSpanForHit(repoRoot, hit) {
+  const full = path.join(repoRoot, hit.file);
+  const source = readFileSync(full, 'utf8');
+  const span = source.split('\n').slice(Math.max(0, hit.line - 3), hit.line + 2).join('\n');
+  return hashNormalizedBody(span);
+}
+
+/**
+ * @param {InventoryRow} row
+ * @param {Array<{ path: string, patternId: LaunchPatternId, sourceHash: string, rowId: string }>} hashPinned
+ */
+function expectedHashForAllowlistDebtRow(row, hashPinned) {
+  if (row.hashPinnedSourceHash) {
+    return row.hashPinnedSourceHash;
+  }
+  const match = row.discoveryMatch;
+  if (!match) return null;
+  const file = match.file ?? '';
+  const patternId = match.patternIds?.[0];
+  const entry = hashPinned.find(
+    (e) => e.rowId === row.rowId
+      && normalizeRel(e.path) === normalizeRel(file)
+      && (!patternId || e.patternId === patternId),
+  );
+  return entry?.sourceHash ?? null;
+}
+
+/**
  * @param {string} rel
  * @param {number} line
  * @param {LaunchPatternId} patternId
@@ -329,18 +360,41 @@ export function matchDiscoveryHit(hit, rows, hashPinned = [], repoRoot = process
     return { outcome: 'test-excluded', rowId: null };
   }
 
+  /** @type {InventoryRow | null} */
+  let allowlistDebtRow = null;
+
   for (const row of rows) {
-    if (discoveryMatchCoversHit(hit.file, hit.line, hit.patternId, row)) {
+    if (!discoveryMatchCoversHit(hit.file, hit.line, hit.patternId, row)) {
+      continue;
+    }
+    if (row.coverageKind === 'validator-backed') {
       return { outcome: 'inventoried', rowId: row.rowId };
     }
+    if (row.coverageKind === 'allowlist-debt') {
+      allowlistDebtRow = row;
+      break;
+    }
+    return { outcome: 'inventoried', rowId: row.rowId };
+  }
+
+  if (allowlistDebtRow) {
+    const expectedHash = expectedHashForAllowlistDebtRow(allowlistDebtRow, hashPinned);
+    if (!expectedHash) {
+      return { outcome: 'fail', rowId: allowlistDebtRow.rowId };
+    }
+    const liveHash = hashPinnedSpanForHit(repoRoot, hit);
+    if (liveHash === expectedHash) {
+      return { outcome: 'inventoried', rowId: allowlistDebtRow.rowId };
+    }
+    return { outcome: 'allowlist-drift', rowId: allowlistDebtRow.rowId };
   }
 
   for (const entry of hashPinned) {
-    if (normalizeRel(entry.path) !== hit.file || entry.patternId !== hit.patternId) continue;
-    const full = path.join(repoRoot, hit.file);
-    const source = readFileSync(full, 'utf8');
-    const span = source.split('\n').slice(Math.max(0, hit.line - 3), hit.line + 2).join('\n');
-    if (entry.sourceHash === hashNormalizedBody(span)) {
+    if (normalizeRel(entry.path) !== hit.file || entry.patternId !== hit.patternId) {
+      continue;
+    }
+    const liveHash = hashPinnedSpanForHit(repoRoot, hit);
+    if (entry.sourceHash === liveHash) {
       return { outcome: 'inventoried', rowId: entry.rowId };
     }
     return { outcome: 'allowlist-drift', rowId: entry.rowId };
@@ -381,6 +435,19 @@ export function validateInventoryRows(bundle, repoRoot) {
       const debt = row.allowlistDebt;
       if (!debt?.reason?.trim() || !debt?.followUpOwner?.trim()) {
         violations.push(`${row.rowId}: allowlist-debt row missing reason or followUpOwner`);
+      }
+      const hashPinnedAllowlist = bundle.inventory.hashPinnedAllowlist ?? [];
+      const expectedHash = expectedHashForAllowlistDebtRow(row, hashPinnedAllowlist);
+      if (!expectedHash) {
+        violations.push(`${row.rowId}: allowlist-debt row missing hashPinnedSourceHash`);
+      } else if (row.discoveryMatch?.file && row.discoveryMatch.line != null) {
+        const liveHash = hashPinnedSpanForHit(repoRoot, {
+          file: row.discoveryMatch.file,
+          line: row.discoveryMatch.line,
+        });
+        if (liveHash !== expectedHash) {
+          violations.push(`${row.rowId}: hashPinnedSourceHash stale vs discovery callsite span`);
+        }
       }
     }
 
@@ -628,6 +695,7 @@ export function buildDefaultInventoryRows(repoRoot) {
         reason: 'Census row for fail-closed discovery; capture-backed validator deferred.',
         followUpOwner: 'future-draft-callee-validators',
       },
+      hashPinnedSourceHash: hashPinnedSpanForHit(repoRoot, hit),
       discoveryMatch: { file: hit.file, line: hit.line, patternIds },
     });
   }

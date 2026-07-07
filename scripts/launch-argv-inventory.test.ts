@@ -8,7 +8,7 @@ import {
   auditLaunchArgvInventory,
   classifyDiscoveryHits,
   discoverLaunchSites,
-  hashNormalizedBody,
+  hashPinnedSpanForHit,
   isTestExcludedFile,
   loadLaunchArgvBundle,
   matchDiscoveryHit,
@@ -91,11 +91,9 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
     copyFileSync(join(repoRoot, 'scripts/launch-argv-validators.manifest.json'), join(tmp, 'scripts/launch-argv-validators.manifest.json'));
     copyFileSync(join(repoRoot, 'scripts/launch-argv-test-exclusions.manifest.json'), join(tmp, 'scripts/launch-argv-test-exclusions.manifest.json'));
     const rel = 'scripts/new-unregistered-launch.ts';
-    writeFileSync(
-      join(tmp, rel),
-      "import { spawnSync } from 'node:child_process';\nexport function go() { return spawnSync('node', ['-e', 'process.exit(0)']); }\n",
-      'utf8',
-    );
+    const source = "import { spawnSync } from 'node:child_process';\nexport function go() { return spawnSync('node', ['-e', 'process.exit(0)']); }\n";
+    writeFileSync(join(tmp, rel), source, 'utf8');
+    const spanHash = hashPinnedSpanForHit(tmp, { file: rel, line: 2 });
     writeJson(tmp, 'scripts/launch-argv-inventory.json', {
       schemaVersion: 1,
       absorbedCoverage: [],
@@ -108,6 +106,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
           calleeContractSourceClass: 'allowlist-only',
           coverageKind: 'allowlist-debt',
           allowlistDebt: { reason: 'fixture allowlist', followUpOwner: 'fixture' },
+          hashPinnedSourceHash: spanHash,
           discoveryMatch: { file: rel, line: 2, patternIds: ['spawnSync', 'node-child'] },
         },
       ],
@@ -118,7 +117,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
       testExclusions: JSON.parse(readFileSync(join(tmp, 'scripts/launch-argv-test-exclusions.manifest.json'), 'utf8')),
     });
     const bundle = loadLaunchArgvBundle(tmp);
-    const { failures } = classifyDiscoveryHits(hits, bundle.inventory.rows, []);
+    const { failures } = classifyDiscoveryHits(hits, bundle.inventory.rows, [], tmp);
     expect(failures).toEqual([]);
   });
 
@@ -169,6 +168,49 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
     }
   });
 
+  it('fails allowlist-debt argv drift when hashPinnedSourceHash is stale', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'launch-argv-debt-drift-'));
+    tempDirs.push(tmp);
+    mkdirSync(join(tmp, 'scripts'), { recursive: true });
+    copyFileSync(join(repoRoot, 'scripts/launch-argv-validators.manifest.json'), join(tmp, 'scripts/launch-argv-validators.manifest.json'));
+    copyFileSync(join(repoRoot, 'scripts/launch-argv-test-exclusions.manifest.json'), join(tmp, 'scripts/launch-argv-test-exclusions.manifest.json'));
+    const rel = 'scripts/debt-drift-probe.ts';
+    const original = "import { spawnSync } from 'node:child_process';\nexport function go() { return spawnSync('node', ['-e', 'process.exit(0)']); }\n";
+    writeFileSync(join(tmp, rel), original, 'utf8');
+    const spanHash = hashPinnedSpanForHit(tmp, { file: rel, line: 2 });
+    writeJson(tmp, 'scripts/launch-argv-inventory.json', {
+      schemaVersion: 1,
+      absorbedCoverage: [],
+      hashPinnedAllowlist: [],
+      rows: [
+        {
+          rowId: 'fixture-debt-drift',
+          caller: { file: rel, line: 2 },
+          callee: { kind: 'other-external', identity: 'node -e' },
+          calleeContractSourceClass: 'allowlist-only',
+          coverageKind: 'allowlist-debt',
+          allowlistDebt: { reason: 'fixture allowlist', followUpOwner: 'fixture' },
+          hashPinnedSourceHash: spanHash,
+          discoveryMatch: { file: rel, line: 2, patternIds: ['spawnSync', 'node-child'] },
+        },
+      ],
+    });
+
+    writeFileSync(
+      join(tmp, rel),
+      "import { spawnSync } from 'node:child_process';\nexport function go() { return spawnSync('node', ['-e', 'process.exit(42)']); }\n",
+      'utf8',
+    );
+
+    const hits = discoverLaunchSites(tmp, {
+      files: [rel],
+      testExclusions: JSON.parse(readFileSync(join(tmp, 'scripts/launch-argv-test-exclusions.manifest.json'), 'utf8')),
+    });
+    const bundle = loadLaunchArgvBundle(tmp);
+    const { failures } = classifyDiscoveryHits(hits, bundle.inventory.rows, [], tmp);
+    expect(failures.some((v: string) => v.includes('hash-pinned allowlist drift'))).toBe(true);
+  });
+
   it('fails hash-pinned allowlist drift when body changes', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'launch-argv-hash-'));
     tempDirs.push(tmp);
@@ -176,7 +218,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
     const source = "import { spawnSync } from 'node:child_process';\nspawnSync('node', ['--version']);\n";
     mkdirSync(join(tmp, 'scripts'), { recursive: true });
     writeFileSync(join(tmp, rel), source, 'utf8');
-    const hash = hashNormalizedBody(source);
+    const spanHash = hashPinnedSpanForHit(tmp, { file: rel, line: 2 });
     const hit = {
       file: rel,
       line: 2,
@@ -184,13 +226,23 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
       lineText: "spawnSync('node', ['--version']);",
       classification: 'production' as const,
     };
-    const match = matchDiscoveryHit(hit, [], [{ path: rel, patternId: 'spawnSync', sourceHash: hash, rowId: 'hash-pin' }], tmp);
+    const row: InventoryRow = {
+      rowId: 'hash-pin',
+      caller: { file: rel, line: 2 },
+      callee: { kind: 'other-external', identity: 'node --version' },
+      calleeContractSourceClass: 'allowlist-only',
+      coverageKind: 'allowlist-debt',
+      allowlistDebt: { reason: 'fixture', followUpOwner: 'fixture' },
+      hashPinnedSourceHash: spanHash,
+      discoveryMatch: { file: rel, line: 2, patternIds: ['spawnSync'] },
+    };
+    const match = matchDiscoveryHit(hit, [row], [], tmp);
     expect(match.outcome).toBe('inventoried');
 
     const drifted = matchDiscoveryHit(
       hit,
+      [{ ...row, hashPinnedSourceHash: 'sha256:deadbeef' }],
       [],
-      [{ path: rel, patternId: 'spawnSync', sourceHash: 'sha256:deadbeef', rowId: 'hash-pin' }],
       tmp,
     );
     expect(drifted.outcome).toBe('allowlist-drift');

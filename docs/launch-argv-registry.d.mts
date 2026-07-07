@@ -92,6 +92,10 @@ export declare function loadLaunchArgvBundle(repoRoot: string): {
   testExclusions: { pathPatterns?: string[]; dedicatedTestHelperModules?: string[] };
 };
 export declare function hashNormalizedBody(text: string): string;
+export declare function hashPinnedSpanForHit(
+  repoRoot: string,
+  hit: { file: string; line: number },
+): string;
 export declare function matchDiscoveryHit(
   hit: LaunchSiteHit,
   rows: InventoryRow[],
