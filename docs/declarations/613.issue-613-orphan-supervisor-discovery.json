@@ -1,0 +1,29 @@
+{
+  "issue_number": 613,
+  "iteration_id": "issue-613-orphan-supervisor-discovery",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T11:37:48.166Z",
+  "baseline": {
+    "commit_sha": "ba9054646bd500fae9cd5c8b2d5ff05d0ff7eea7",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:45197de2448880bf5d07ee4df461461e481ae4f05d8deb9a14bed733f1d650c6"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/lib/Get-ProcessCommandLine.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-integration.test.ts",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/supervisor-recovery.test-helpers.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "docs/**",
+    "tests/**"
+  ],
+  "amendments": []
+}
