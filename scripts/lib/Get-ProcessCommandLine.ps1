@@ -47,8 +47,34 @@ function Get-ProcessCommandLineById {
     }
 }
 
+function Get-OrchestratorWakeSupervisorProcessCommandLineFixture {
+    param([int]$ProcessId)
+
+    $fixturePath = $env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE
+    if (-not $fixturePath) { return $null }
+    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { return $null }
+
+    try {
+        $map = Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    $key = [string]$ProcessId
+    if ($map.PSObject.Properties.Name -contains $key) {
+        return [string]$map.$key
+    }
+    return $null
+}
+
 function Get-OrchestratorWakeSupervisorProcessCommandLine {
     param([int]$ProcessId)
+
+    $fixture = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
+    if ($null -ne $fixture) {
+        return $fixture
+    }
     return Get-ProcessCommandLineById -ProcessId $ProcessId
 }
 

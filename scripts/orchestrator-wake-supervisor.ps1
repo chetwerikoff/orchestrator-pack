@@ -51,7 +51,9 @@ if (-not (Test-Path -LiteralPath $paths.Root)) {
 
 switch ($Action) {
     'Status' {
-        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid) -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid) `
+            -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog `
+            -ProjectId $project -StateRoot $stateRoot
         foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
             $pidPath = Get-OrchestratorWakeSupervisorChildPidPath -Paths $paths -ChildId $child.Id
             Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId (Read-OrchestratorWakeSupervisorPidFile -Path $pidPath) `
@@ -59,6 +61,9 @@ switch ($Action) {
         }
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
         Write-OrchestratorWakeSupervisorStatusOutput -Report $report
+        if ($report.SupervisorAmbiguous) {
+            exit 1
+        }
         if (Test-OrchestratorWakeSupervisorAllChildrenHealthy -Report $report) {
             exit 0
         }
@@ -66,12 +71,22 @@ switch ($Action) {
     }
 
     'Stop' {
-        $supervisorPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
+        $resolution = Resolve-OrchestratorWakeSupervisorSupervisorPid -Paths $paths -ProjectId $project -LogPath $paths.SupervisorLog
+        if ($resolution.Ambiguous) {
+            $message = "stop blocked: ambiguous managed supervisor candidates ($($resolution.CandidatePids -join ',')); manual remediation required"
+            Write-OrchestratorWakeSupervisorLog -Message $message -LogPath $paths.SupervisorLog
+            Write-Error $message
+            exit 1
+        }
+
+        $supervisorPid = $resolution.ResolvedPid
         Write-OrchestratorWakeSupervisorLog -Message 'stopping wake supervisor and children'
         Set-OrchestratorWakeSupervisorStoppingFlag -Paths $paths
-        Stop-OrchestratorWakeSupervisorProcess -ProcessId $supervisorPid -PidFile $paths.SupervisorPid -ManagedRole 'supervisor' -LogPath $paths.SupervisorLog
+        Stop-OrchestratorWakeSupervisorProcess -ProcessId $supervisorPid -PidFile $paths.SupervisorPid `
+            -ManagedRole 'supervisor' -LogPath $paths.SupervisorLog -ProjectId $project -StateRoot $stateRoot
         Wait-OrchestratorWakeSupervisorProcessExit -ProcessId $supervisorPid -TimeoutSeconds 5
-        Stop-OrchestratorWakeSupervisorChildren -Paths $paths -LogPath $paths.SupervisorLog
+        Stop-OrchestratorWakeSupervisorChildren -Paths $paths -LogPath $paths.SupervisorLog `
+            -ProjectId $project -StateRoot $stateRoot
         if (Test-Path -LiteralPath $paths.StateJson) {
             Remove-Item -LiteralPath $paths.StateJson -Force -ErrorAction SilentlyContinue
         }
@@ -94,10 +109,20 @@ switch ($Action) {
         }
 
         $existingPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
-        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId $existingPid -PidFile $paths.SupervisorPid -Role 'supervisor' -LogPath $paths.SupervisorLog
-        $existingPid = Read-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid
-        if ((Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $existingPid -Role 'supervisor') -and -not $Foreground -and -not $SupervisorLoop) {
-            Write-OrchestratorWakeSupervisorLog -Message "supervisor already running (pid=$existingPid)"
+        Clear-OrchestratorWakeSupervisorStalePidIfNeeded -ProcessId $existingPid -PidFile $paths.SupervisorPid `
+            -Role 'supervisor' -LogPath $paths.SupervisorLog -ProjectId $project -StateRoot $stateRoot
+        $resolution = Resolve-OrchestratorWakeSupervisorSupervisorPid -Paths $paths -ProjectId $project -LogPath $paths.SupervisorLog
+        if ($resolution.Ambiguous -and -not $Foreground -and -not $SupervisorLoop) {
+            $message = "ambiguous managed supervisor candidates ($($resolution.CandidatePids -join ',')); manual remediation required"
+            Write-OrchestratorWakeSupervisorLog -Message $message -LogPath $paths.SupervisorLog
+            Write-Error $message
+            exit 2
+        }
+        if ($resolution.ResolvedAlive -and -not $Foreground -and -not $SupervisorLoop) {
+            if ($resolution.ResolvedPid -ne $existingPid -or $resolution.DiscoverySource -eq 'process-scan') {
+                Write-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid -ProcessId $resolution.ResolvedPid
+            }
+            Write-OrchestratorWakeSupervisorLog -Message "supervisor already running (pid=$($resolution.ResolvedPid))"
             $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
             Write-OrchestratorWakeSupervisorStatusOutput -Report $report
             exit 0
