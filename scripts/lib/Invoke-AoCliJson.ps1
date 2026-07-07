@@ -12,6 +12,31 @@ $Script:AoReportFullSourceCli = 'ao status --json --reports full'
 $Script:AoReportFullSourceCliTerminated = 'ao status --json --reports full --include-terminated'
 $Script:AoReportFullSourceAudit = '$.agent-report-audit/<session>.ndjson'
 
+
+function ConvertFrom-AoCliPrefixedOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [string]$FailureLabel
+    )
+
+    $label = [string]$FailureLabel
+    $start = $Text.IndexOf('{')
+    if ($start -lt 0) {
+        throw "$label produced no JSON output"
+    }
+
+    $jsonText = $Text.Substring($start)
+    try {
+        return $jsonText | ConvertFrom-Json
+    }
+    catch {
+        $detail = $_.Exception.Message
+        throw "$label parse failed: $detail"
+    }
+}
+
 function Invoke-AoCliJson {
     param(
         [Parameter(Mandatory = $true)]
@@ -35,19 +60,7 @@ function Invoke-AoCliJson {
                 if ($_ -is [string]) { $_ }
                 elseif ($null -ne $_) { $_.ToString() }
             }) -join "`n"
-        $start = $text.IndexOf('{')
-        if ($start -lt 0) {
-            throw "$label produced no JSON output"
-        }
-
-        $jsonText = $text.Substring($start)
-        try {
-            return $jsonText | ConvertFrom-Json
-        }
-        catch {
-            $detail = $_.Exception.Message
-            throw "$label parse failed: $detail"
-        }
+        return ConvertFrom-AoCliPrefixedOutput -Text $text -FailureLabel $label
     }
     finally {
         $ErrorActionPreference = $prevEap
