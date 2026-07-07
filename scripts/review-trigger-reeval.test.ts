@@ -30,6 +30,7 @@ import {
 } from '../docs/review-trigger-reeval.mjs';
 import {
   evaluateReviewCycleCapGate,
+  REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
   TERMINAL_CLEAN_EARLY_STOP,
 } from '../docs/review-cycle-cap.mjs';
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
@@ -108,6 +109,55 @@ function planFixtureTick(fixture: ReevalFixture) {
     snapshotErrorsByKey: fixture.snapshotErrorsByKey,
   });
 }
+
+describe('deferred watch wake decision tier threading', () => {
+  it('evaluateHeadReviewTriggerDecision honors per-PR tier before cap gate', () => {
+    const pr = 672;
+    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
+    const current = 'a3'.padEnd(40, '1');
+    const runs = prior.map((sha, idx) => ({
+      prNumber: pr,
+      targetSha: sha,
+      status: 'changes_requested',
+      openFindingCount: 1,
+      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
+    }));
+    const t1Body = '```complexity-tier\ntier: T1\n```';
+    const base = {
+      prNumber: pr,
+      headSha: current,
+      sessionId: 'opk-672',
+      readinessObservedMs: Date.parse('2026-07-03T01:00:00Z'),
+      nowMs: Date.parse('2026-07-03T01:00:05Z'),
+      openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
+      reviewRuns: runs,
+      sessions: [
+        {
+          sessionId: 'opk-672',
+          role: 'worker',
+          prNumber: pr,
+          status: 'working',
+          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
+        },
+      ],
+      ciChecks: [{ name: 'verify', state: 'SUCCESS' }],
+      requiredCheckNames: ['verify'],
+      capCycleState: {},
+    };
+    const t2Verdict = evaluateHeadReviewTriggerDecision({
+      ...base,
+      issueBodiesByPr: { [String(pr)]: '```complexity-tier\ntier: T2\n```' },
+    });
+    expect(t2Verdict.triggerReviewRun).toBe(true);
+
+    const t1Verdict = evaluateHeadReviewTriggerDecision({
+      ...base,
+      issueBodiesByPr: { [String(pr)]: t1Body },
+    });
+    expect(t1Verdict.triggerReviewRun).toBe(false);
+    expect(t1Verdict.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
+  });
+});
 
 describe('review-cycle cap state in deferred watch ticks', () => {
   it('carries capCycleState across sequential cap gates in one tick', () => {

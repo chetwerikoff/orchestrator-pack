@@ -447,7 +447,7 @@ export function evaluateHeadReviewTriggerDecision(input) {
     requiredCheckNames: input.requiredCheckNames,
     requiredCheckLookupFailed: input.requiredCheckLookupFailed,
     capCycleState: input.capCycleState,
-    issueBody: input.issueBody,
+    issueBody: input.issueBodiesByPr?.[String(prNumber)] ?? input.issueBody,
   });
 
   const retainWatch =
@@ -525,7 +525,8 @@ export function evaluateDeferredWatchEntry(input) {
     requiredCheckNames,
     requiredCheckLookupFailed,
     capCycleState: input.capCycleState,
-    issueBody: input.issueBody,
+    issueBody: input.issueBodiesByPr?.[prKey] ?? input.issueBody,
+    issueBodiesByPr: input.issueBodiesByPr,
     entryPath:
       String(entry.seedSource ?? '') === 'report_state_poll'
         ? 'report_state_seed'
@@ -618,6 +619,8 @@ export function planDeferredWatchTick(input) {
       requiredCheckNamesByPr: input.requiredCheckNamesByPr,
       requiredCheckLookupFailedByPr: input.requiredCheckLookupFailedByPr,
       snapshotError: Boolean(input.snapshotErrorsByKey?.[key]),
+      issueBody: input.issueBody,
+      issueBodiesByPr: input.issueBodiesByPr,
       entryPath: 'scoped_deferred_head_watch',
     });
 

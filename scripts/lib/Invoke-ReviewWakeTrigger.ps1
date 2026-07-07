@@ -190,6 +190,16 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
     }
 
     $prKey = if ($snapshot.prKey) { $snapshot.prKey } else { [string]$prNumber }
+    $openPr = @($snapshot.openPrs | Where-Object { [int]$_.number -eq $prNumber } | Select-Object -First 1)
+    $prHeadSha = ''
+    if ($isHandoffWake -and $FilterResult.handoffAdmission.admittedHeadSha) {
+        $prHeadSha = [string]$FilterResult.handoffAdmission.admittedHeadSha
+    }
+    elseif ($openPr -and $openPr.headRefOid) {
+        $prHeadSha = [string]$openPr.headRefOid
+    }
+    $issueBody = Get-ReviewCycleCapIssueBody -PrNumber $prNumber -RepoRoot $RepoRoot -HeadSha $prHeadSha `
+        -ProjectId $ProjectId -FixtureSnapshot $FixtureSnapshot
     $capCycleState = Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId)
     $evaluatePayload = @{
         wakeKind                  = $FilterResult.wakeKind
@@ -211,6 +221,9 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
         $evaluatePayload.repoRoot = [string]$snapshot.repoRoot
     }
     $evaluatePayload.capCycleState = $capCycleState
+    if ($issueBody) {
+        $evaluatePayload.issueBody = $issueBody
+    }
     $evaluation = Invoke-ReviewWakeTriggerFilterCli -Subcommand 'evaluate' -Payload $evaluatePayload
     if ($evaluation.capCycleState) {
         Set-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId) -State $evaluation.capCycleState

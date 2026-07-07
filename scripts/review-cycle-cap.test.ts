@@ -478,6 +478,45 @@ describe('review cycle cap scenario matrix', () => {
     expect(gate.prState?.atCapRecord).toBeNull();
   });
 
+  it('wake honors issue tier via issueBody', () => {
+    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
+    const current = 'a3'.padEnd(40, '1');
+    const runs = prior.map((sha, idx) => ({
+      prNumber: pr,
+      targetSha: sha,
+      status: 'changes_requested',
+      openFindingCount: 1,
+      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
+    }));
+    const t1Body = '```complexity-tier\ntier: T1\n```';
+    const session = {
+      sessionId: 'opk-646',
+      role: 'worker',
+      prNumber: pr,
+      status: 'working',
+      reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
+    };
+    const base = {
+      wakeKind: 'ready_for_review' as const,
+      prNumber: pr,
+      admittedHeadSha: current,
+      admittedBaseRef: 'refs/heads/feature',
+      openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
+      reviewRuns: runs,
+      sessions: [session],
+      ciChecks: [{ name: 'verify', state: 'SUCCESS' }],
+      requiredCheckNames: ['verify'],
+      sessionId: 'opk-646',
+      capCycleState: {},
+    };
+    const t2Wake = evaluateWakeReviewTrigger({ ...base, issueBody: '```complexity-tier\ntier: T2\n```' });
+    expect(t2Wake.triggerReviewRun).toBe(true);
+
+    const t1Wake = evaluateWakeReviewTrigger({ ...base, issueBody: t1Body });
+    expect(t1Wake.triggerReviewRun).toBe(false);
+    expect(t1Wake.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
+  });
+
   it('reeval deferred watch honors per-PR tier via issueBodiesByPr', () => {
     const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
     const current = 'a3'.padEnd(40, '1');

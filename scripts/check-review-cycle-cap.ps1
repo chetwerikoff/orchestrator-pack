@@ -78,6 +78,16 @@ if ($reevalPs -notmatch 'issueBodiesByPr') {
     exit 1
 }
 
+$wakePs = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-ReviewWakeTrigger.ps1') -Raw
+if ($wakePs -notmatch 'Get-ReviewCycleCapIssueBody') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must pass issue tier data via Get-ReviewCycleCapIssueBody'
+    exit 1
+}
+if ($wakePs -notmatch 'issueBody') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must pass issueBody into cap gate payload'
+    exit 1
+}
+
 $integrationScripts = @{
     'docs/review-trigger-reconcile.mjs'      = 'evaluateReviewCycleCapGate'
     'docs/orchestrator-claimed-review-run.mjs' = 'evaluateReviewCycleCapGate'
