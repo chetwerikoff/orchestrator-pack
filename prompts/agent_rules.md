@@ -95,6 +95,7 @@ Run `ao acknowledge` before the first `coworker` invocation.
 **Ask invocation shape.** Pass corpus via `--paths`; do **not** append files as
 positional arguments after `--question`. Canonical form:
 `coworker ask --profile code [--allow-code] --paths <files>... --question "..."`.
+Use `--allow-code` only under the upstream file gate below.
 
 **Invalid forms:** `--file`, `--stdin`, pipes, heredocs, or bare questions without
 `--question`.
@@ -121,7 +122,14 @@ When preflight or mapping cannot complete (`skipped_no_spec`,
 `skipped_no_acceptance`, `ambiguous_spec`, `lookup_unavailable`,
 `skipped_provider_fence`, `skipped_input_limit`, `artifact_prep_failed`,
 `incomplete_evidence`, `unavailable`, `malformed`), continue direct review with
-the bounded status — mapping must not block review availability.
+the bounded status — mapping must not block review availability. Emit a
+structured status record (enum, PR head SHA, bound spec IDs/hashes, usability).
+
+**Upstream file gate.** Default corpus for `coworker ask` and context for
+`coworker write` is text/markdown only. Source-code input requires `--allow-code`
+or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
+requires code at the cheap provider; do not bypass the gate to force delegation on
+undeclared code.
 
 **Checkpoint-2 contract-evidence re-verification (reviewers only).** For every PR
 with a linked issue, run checkpoint-2 **after** contract-mapping (when applicable)
