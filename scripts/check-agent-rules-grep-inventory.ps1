@@ -7,10 +7,9 @@ param(
     [string]$RepoRoot
 )
 
-$ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
-}
+. (Join-Path $PSScriptRoot 'lib/Initialize-PackGateCheck.ps1')
+$gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
+$RepoRoot = $gate.RepoRoot
 
 $inventoryPath = Join-Path $RepoRoot 'scripts/agent-rules-grep-inventory.json'
 if (-not (Test-Path -LiteralPath $inventoryPath)) {

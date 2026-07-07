@@ -7,10 +7,9 @@ param(
     [string]$RepoRoot
 )
 
-$ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
-}
+. (Join-Path $PSScriptRoot 'lib/Initialize-PackGateCheck.ps1')
+$gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
+$RepoRoot = $gate.RepoRoot
 
 $canonical = Join-Path $RepoRoot 'prompts/agent_rules.md'
 if (-not (Test-Path -LiteralPath $canonical)) {
