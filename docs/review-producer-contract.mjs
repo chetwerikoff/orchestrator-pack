@@ -94,6 +94,9 @@ export function resolveNormalizedRowStatus(prReviewStatus, latestRunStatus) {
   if (latest === 'failed' || latest === 'cancelled') {
     return latest;
   }
+  if (IN_FLIGHT_LATEST_RUN_STATUSES.has(latest)) {
+    return latest;
+  }
   const pr = String(prReviewStatus ?? '').toLowerCase();
   return pr || latest;
 }

@@ -82,6 +82,35 @@ describe('review-producer-contract', () => {
     expect(resolveNormalizedRowStatus('', 'running')).toBe('running');
   });
 
+  it('resolveNormalizedRowStatus surfaces in-flight latestRun over stale needs_review', () => {
+    expect(resolveNormalizedRowStatus('needs_review', 'queued')).toBe('queued');
+    expect(resolveNormalizedRowStatus('needs_review', 'preparing')).toBe('preparing');
+    expect(resolveNormalizedRowStatus('needs_review', 'running')).toBe('running');
+  });
+
+  it('flatten preserves in-flight latestRun status when entry status is needs_review', () => {
+    const payload = {
+      reviews: [
+        {
+          prNumber: 42,
+          headSha: 'abc123def4567890abcdef1234567890abcdef12',
+          status: 'needs_review',
+          latestRun: {
+            id: 'rr-queued',
+            status: 'queued',
+            targetSha: 'abc123def4567890abcdef1234567890abcdef12',
+          },
+        },
+      ],
+    };
+    const runs = flattenSessionReviewsToNormalizedRuns(payload, 'opk-1');
+    expect(runs).toHaveLength(1);
+    const run = runs[0]!;
+    expect(run.prReviewStatus).toBe('needs_review');
+    expect(run.latestRunStatus).toBe('queued');
+    expect(run.status).toBe('queued');
+  });
+
   it('flatten preserves failed latestRun status when entry status is still running', () => {
     const payload = {
       reviews: [
