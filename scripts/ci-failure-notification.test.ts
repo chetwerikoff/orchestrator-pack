@@ -907,7 +907,7 @@ describe('fixtures, wrapper, and legacy compatibility', () => {
   it('wrapper evaluate-suppressor mode returns live-worker suppression (review opk-rev-974)', () => {
     const result = runWrapper('evaluate-suppressor', {
       episode,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       workerState: captureWorkerState('live-worker-fixing-ci-captured.json'),
       ...freshProgressClock(),
     });

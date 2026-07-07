@@ -34,12 +34,6 @@
       "evidence": "scripts/ci-green-wake-reconcile.ps1 gated send path"
     },
     {
-      "source": "orchestrator-turn-nudge",
-      "messageClass": "ci-failure-orchestrator-turn",
-      "transport": "journaled-worker-send",
-      "evidence": "orchestratorRules worker nudge command uses journaled-worker-send when configured"
-    },
-    {
       "source": "plain-worker-send-routed",
       "messageClass": "plain-worker-send-routed",
       "transport": "journaled-worker-send",

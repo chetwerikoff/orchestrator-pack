@@ -34,7 +34,7 @@ const BASELINE_CLASS_IDS = [
   'orchestrator-wake-heartbeat',
   'ci-green-worker-nudge',
   'ci-failure-reaction-routed',
-  'ci-failure-orchestrator-turn',
+  'ci-failure-reconcile-ping',
   'review-findings-first-send',
   'review-findings-redelivery',
   'worker-input-draft-submit',
@@ -212,7 +212,7 @@ export function validateCatalogEntry(entry, bundle, repoRoot) {
   if (!bundle.taxonomy.intentKeys.includes(entry.intent_key)) {
     violations.push(`${entry.message_class_id}: invalid intent_key ${entry.intent_key}`);
   }
-  const allowedOwners = new Set(['orchestrator-rules', 'journaled-worker-send']);
+  const allowedOwners = new Set(['journaled-worker-send']);
   const childIds = bundle.supervisorRegistry.children?.map((c) => c.id) ?? [];
   if (!childIds.includes(entry.owning_process) && !allowedOwners.has(entry.owning_process)) {
     violations.push(`${entry.message_class_id}: owning_process ${entry.owning_process} not in supervisor inventory`);
@@ -283,6 +283,12 @@ export function validateEscalationClassEntry(entry, bundle) {
 export function validateCatalog(bundle, repoRoot) {
   const violations = [];
   const entries = bundle.catalog.entries ?? [];
+  const orchestratorRulesOwners = entries.filter((e) => e.owning_process === 'orchestrator-rules');
+  if (orchestratorRulesOwners.length) {
+    violations.push(
+      `catalog must contain zero owning_process=orchestrator-rules entries (found: ${orchestratorRulesOwners.map((e) => e.message_class_id).join(', ')})`,
+    );
+  }
   const ids = entries.map((e) => e.message_class_id);
   const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
   if (dupes.length) violations.push(`duplicate message_class_id: ${[...new Set(dupes)].join(', ')}`);

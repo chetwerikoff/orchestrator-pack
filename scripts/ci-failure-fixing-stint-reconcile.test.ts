@@ -16,6 +16,9 @@ import {
 import { evaluateNudgeGate } from '../docs/worker-nudge-gate.mjs';
 import { buildCaptureWorkerState } from './lib/ci-failure-capture-worker-state.mjs';
 
+// Issue #645: production had zero invoke-gated-worker-nudge.ps1 callers with ci-failure intent;
+// reconcile sends exclusively via journaled-worker-send.ps1. Suppression matrix is reconcile-bound below.
+
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/ci-failure-notification');
 
@@ -75,13 +78,13 @@ function tempStore() {
   return mkdtempSync(path.join(tmpdir(), 'ci-failure-fixing-stint-'));
 }
 
-describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
-  it('AC#1 orchestrator-turn cross-head suppress on H2 with fresh H1 fixing_ci bridge', () => {
+describe('ci-failure-fixing-stint-reconcile (Issues #459 / #645)', () => {
+  it('AC#1 reconcile cross-head suppress on H2 with fresh H1 fixing_ci bridge', () => {
     const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
     const decision = evaluateCiFailureSuppressorDecision({
       episode: episodeForHead(H2),
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
     expect(decision.decision).toBe('SUPPRESS');
@@ -96,8 +99,8 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       targetId: 'session-active-redacted',
       targetGeneration: 'generation-active-redacted',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: ws,
       storePath: '/tmp/test-claims',
       claims: [],
@@ -120,8 +123,8 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       targetId: 'session-active-redacted',
       targetGeneration: 'generation-active-redacted',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: ws,
       storePath: '/tmp/test-claims',
       claims: [{ tupleKey, phase: 'SENT' }],
@@ -131,7 +134,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     expect(['already_served', 'suppressed-live-worker']).toContain(gate.reason);
   });
 
-  it('AC#3 reconcile and orchestrator-turn agree on open cross-head stint', () => {
+  it('AC#3 reconcile suppresses open cross-head fixing stint', () => {
     const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
     const episode = episodeForHead(H2);
     const reconcile = evaluateCiFailureSuppressorDecision({
@@ -140,18 +143,11 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
-    const turn = evaluateCiFailureSuppressorDecision({
-      episode,
-      workerState: ws,
-      surface: 'orchestrator-turn',
-      ...freshClock(),
-    });
     expect(reconcile.decision).toBe('SUPPRESS');
-    expect(turn.decision).toBe('SUPPRESS');
-    expect(reconcile.reason).toBe(turn.reason);
+    expect(reconcile.reason).toBe('suppressed-live-worker');
   });
 
-  it('AC#4 progress_stale reconcile SEND arms post-stale lock that suppresses orchestrator-turn', () => {
+  it('AC#4 progress_stale reconcile SEND arms post-stale lock cleared on live-worker recovery', () => {
     const storeDir = tempStore();
     try {
       const episode = episodeForHead(H1);
@@ -170,36 +166,28 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
 
       const lock = readPostStaleEscalationLock(storeDir, episode);
       expect(lock.open).toBe(true);
-
-      const turn = evaluateCiFailureSuppressorDecision({
-        episode,
-        workerState: ws,
-        surface: 'orchestrator-turn',
-        storeDir,
-        ...staleClock(),
-      });
-      expect(turn.decision).toBe('SUPPRESS');
-      expect(turn.reason).toBe('post_stale_escalation_lock');
+      expect(lock.owner).toBe('reconcile');
 
       const recovered = evaluateCiFailureSuppressorDecision({
         episode,
         workerState: captureWorkerState('live-worker-fixing-ci-captured.json', H1),
-        surface: 'orchestrator-turn',
+        surface: 'ci-failure-notification-reconcile',
         storeDir,
         ...freshClock(),
       });
       expect(recovered.decision).toBe('SUPPRESS');
       expect(recovered.reason).toBe('suppressed-live-worker');
-      expect(readPostStaleEscalationLock(storeDir, episode).open).toBe(false);
+      // Lock clear on live-worker recovery was orchestrator-turn-only (#459); reconcile suppresses without consuming it (#645).
+      expect(readPostStaleEscalationLock(storeDir, episode).open).toBe(true);
     } finally {
       rmSync(storeDir, { recursive: true, force: true });
     }
   });
 
-  it('AC#5 stale-head without bridge remains SEND on both surfaces', () => {
+  it('AC#5 stale-head without bridge remains SEND on reconcile surface', () => {
     const ws = captureWorkerState('live-worker-cross-head-stale-bridge.json', H2);
     const episode = episodeForHead(H2);
-    for (const surface of ['orchestrator-turn', 'ci-failure-notification-reconcile']) {
+    for (const surface of ['ci-failure-notification-reconcile']) {
       const decision = evaluateCiFailureSuppressorDecision({
         episode,
         workerState: ws,
@@ -212,7 +200,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     }
   });
 
-  it('AC#6 H1 fresh fixing_ci with H3 current suppresses orchestrator-turn', () => {
+  it('AC#6 H1 fresh fixing_ci with H3 current suppresses reconcile', () => {
     const ws = captureWorkerState('live-worker-cross-head-h3-bridge.json', H3);
     const live = evaluateLiveWorkerSuppressor({
       episode: episodeForHead(H3),
@@ -226,37 +214,37 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     const turn = evaluateCiFailureSuppressorDecision({
       episode: episodeForHead(H3),
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
     expect(turn.decision).toBe('SUPPRESS');
   });
 
-  it('AC#7 newly red during open stint still suppresses orchestrator-turn', () => {
+  it('AC#7 newly red during open stint still suppresses reconcile', () => {
     const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
     const episode = episodeForHead(H2, 'suite-201-attempt-2');
     const turn = evaluateCiFailureSuppressorDecision({
       episode,
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
     expect(turn.decision).toBe('SUPPRESS');
   });
 
-  it('AC#8 cold path without qualifying report still SENDs once', () => {
+  it('AC#8 cold path without qualifying report still SENDs on reconcile', () => {
     const ws = captureWorkerState('live-worker-same-head-recency.json', H1);
     const decision = evaluateCiFailureSuppressorDecision({
       episode: episodeForHead(H1),
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
     expect(decision.decision).toBe('SEND');
     expect(decision.reason).toBe('no_suppressor');
   });
 
-  it('AC#9 cross-surface agreement matrix for Classes A/B/C', () => {
+  it('AC#9 reconcile surface matrix for Classes A/B/C', () => {
     const cases = [
       {
         label: 'A',
@@ -287,14 +275,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
         surface: 'ci-failure-notification-reconcile',
         ...clock,
       });
-      const turn = evaluateCiFailureSuppressorDecision({
-        episode,
-        workerState: row.ws,
-        surface: 'orchestrator-turn',
-        ...clock,
-      });
       expect(reconcile.decision, row.label).toBe(row.expect);
-      expect(turn.decision, row.label).toBe(row.expect);
     }
   });
 
@@ -307,15 +288,15 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       targetId: 'session-active-redacted',
       targetGeneration: 'generation-active-redacted',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: ws,
       storePath: '/tmp/test-claims',
       claims: [],
       ...freshClock(),
     });
     const audit = auditRecord(gate.audit).ciFailureFixingStint as Record<string, unknown>;
-    expect(audit?.surface).toBe('orchestrator-turn');
+    expect(audit?.surface).toBe('ci-failure-notification-reconcile');
     expect(audit?.stintClass).toBe('B');
     expect(audit?.headSha).toBe(H2);
     expect(audit?.bridgeHeadSha).toBe(H1);
@@ -327,7 +308,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     const decision = evaluateCiFailureSuppressorDecision({
       episode: episodeForHead(H2),
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
     const emission = {
@@ -361,14 +342,14 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     expect(result.reason).toBe('suppressed-live-worker');
   });
 
-  it('superseded episode suppresses on orchestrator-turn instead of SEND (review opk-rev-968)', () => {
+  it('superseded episode suppresses on reconcile instead of SEND (review opk-rev-968)', () => {
     const ws = captureWorkerState('live-worker-cross-head-h2-bridge.json', H2);
     ws.openPrs = [{ number: 283, headRefOid: H3, headCommittedAt: '2026-06-18T13:25:00.000Z' }];
     const episode = episodeForHead(H2);
     const decision = evaluateCiFailureSuppressorDecision({
       episode,
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     });
     expect(decision.decision).toBe('SUPPRESS');
@@ -381,8 +362,8 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
       targetId: 'session-active-redacted',
       targetGeneration: 'generation-active-redacted',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: ws,
       storePath: '/tmp/test-claims',
       claims: [],
@@ -406,7 +387,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     ws.sessions[0].status = 'working';
     const decision = evaluateCiFailureSuppressorDecision({
       episode: episodeForHead(H2),
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       workerState: ws,
       ...freshClock(),
     });
@@ -420,7 +401,7 @@ describe('ci-failure-fixing-stint-orchestrator-turn (Issue #459)', () => {
     const payload = {
       episode: episodeForHead(H2),
       workerState: ws,
-      surface: 'orchestrator-turn',
+      surface: 'ci-failure-notification-reconcile',
       ...freshClock(),
     };
     const result = spawnSync(

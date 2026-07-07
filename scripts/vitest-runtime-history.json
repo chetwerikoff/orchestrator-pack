@@ -16,7 +16,7 @@
     "scripts/autonomous-spawn-worktree-gate.test.ts": 45000,
     "scripts/autonomous-worker-nudge-boundary.test.ts": 45000,
     "scripts/check-ci-pipeline-split.test.ts": 45000,
-    "scripts/ci-failure-fixing-stint-orchestrator-turn.test.ts": 45000,
+    "scripts/ci-failure-fixing-stint-reconcile.test.ts": 45000,
     "scripts/ci-failure-notification.test.ts": 45000,
     "scripts/ci-failure-progress-freshness.test.ts": 45000,
     "scripts/ci-failure-progress-stale.test.ts": 45000,

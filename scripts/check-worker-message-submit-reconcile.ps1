@@ -290,7 +290,7 @@ if ($null -eq $auditJson.sources) {
     Write-Host 'submit-reconcile-delivery-source-audit.json must expose a sources array'
     exit 1
 }
-$requiredSources = @('review-send', 'reaction-routed', 'ci-failure-nudge', 'ci-green-nudge', 'orchestrator-turn-nudge')
+$requiredSources = @('review-send', 'reaction-routed', 'ci-failure-nudge', 'ci-green-nudge')
 foreach ($source in $requiredSources) {
     $row = @($auditJson.sources | Where-Object { $_.source -eq $source })
     if ($row.Count -ne 1) {
