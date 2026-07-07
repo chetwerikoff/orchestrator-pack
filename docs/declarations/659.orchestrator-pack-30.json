@@ -3,14 +3,13 @@
   "iteration_id": "orchestrator-pack-30",
   "iteration_id_source": "ao_session",
   "supersedes": null,
-  "created_at": "2026-07-07T14:55:00.000Z",
+  "created_at": "2026-07-07T14:58:00.000Z",
   "baseline": {
-    "commit_sha": "f99af92e5d368be2defc7191a781f6b31214e0a8",
+    "commit_sha": "d2e9c3549fabc1cafca2d93de4bf5ca8890532b6",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:8abe5b5927573584485c280b51b3e5045c8e42a34456c1cd14c32096d0c3c6b0"
+    "active_scope_hash": "sha256:5a1d3d437313a406051c52fec9056e79fcabd73835d645104aad500880b62560"
   },
   "declared_paths": [
-    "docs/declarations/659.orchestrator-pack-30.json",
     "scripts/check-side-process-launch-contract.ps1",
     "scripts/fixtures/side-process-launch-contract/mismatch-child.ps1",
     "scripts/fixtures/side-process-launch-contract/pending-llm-orchestrator-escalation.json",
