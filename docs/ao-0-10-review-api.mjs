@@ -4,6 +4,7 @@
  */
 
 import { readStdinJson, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
+import { classifyReviewerHarnessAbort } from './harness-review-bridge.mjs';
 import {
   flattenSessionReviewsToNormalizedRuns,
   attachProjectIdToNormalizedRuns,
@@ -202,6 +203,10 @@ runStdinJsonCli('ao-0-10-review-api.mjs', {
   'harness-eval': () => {
     const payload = readStdinJson();
     return evaluateProjectReviewerHarness(payload.payload, String(payload.expectedHarness ?? 'codex'));
+  },
+  'harness-guard': () => {
+    const payload = readStdinJson();
+    return classifyReviewerHarnessAbort(payload.payload, String(payload.expectedHarness ?? 'codex'));
   },
   forbidden: () => {
     const payload = readStdinJson();

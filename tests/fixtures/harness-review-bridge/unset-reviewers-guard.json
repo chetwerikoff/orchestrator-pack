@@ -1,0 +1,8 @@
+{
+  "description": "Unset reviewers — trigger must abort before POST",
+  "projectConfig": {},
+  "expect": {
+    "abort": true,
+    "reason": "reviewers_harness_misconfig"
+  }
+}
