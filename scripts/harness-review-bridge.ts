@@ -1,16 +1,14 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { executeReview, type ReviewOptions } from '../plugins/ao-codex-pr-reviewer/lib/review_core.js';
 import {
-  parseTerminalVerdictPayload,
   type TerminalVerdictPayload,
 } from '../plugins/ao-codex-pr-reviewer/lib/emit.js';
 import {
   HARNESS_NESTED_BUDGET_ENV,
-  containsProseSubmitMarkers,
+  validateMapperSubmitPayload,
 } from '../docs/harness-review-bridge.mjs';
 
 export const HARNESS_BRIDGE_KILL_SWITCH = 'PACK_HARNESS_BRIDGE_DISABLED';
@@ -78,41 +76,12 @@ function isEnabledEnv(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
 }
 
-function assertMapperFindingTitle(title: string): void {
-  if (/^\[P[0-3]\]\s+\S/i.test(title)) {
-    return;
-  }
-  if (/^\[scope-violation\]/i.test(title)) {
-    return;
-  }
-  throw new Error(`mapper-normalized finding title missing [P0]-[P3] prefix: ${title}`);
-}
-
 export function buildHarnessSubmitPayload(aoStdout: string): TerminalVerdictPayload {
-  const trimmed = String(aoStdout ?? '').trim();
-  if (!trimmed) {
-    throw new Error('mapper output was empty');
+  const result = validateMapperSubmitPayload(aoStdout);
+  if (!result.ok) {
+    throw new Error(result.reason ?? 'invalid_terminal_verdict_payload');
   }
-  if (containsProseSubmitMarkers(trimmed)) {
-    throw new Error('mapper output contains prose submit markers');
-  }
-  const parsed = parseTerminalVerdictPayload(trimmed);
-  if (!parsed) {
-    throw new Error('reviewer stdout was not terminal verdict JSON');
-  }
-  if (parsed.verdict === 'clean') {
-    if (parsed.findingCount !== 0) {
-      throw new Error('clean verdict requires findingCount 0');
-    }
-    return parsed;
-  }
-  for (const finding of parsed.findings) {
-    assertMapperFindingTitle(finding.title);
-    if (!/\bseverity:\s*(blocking|non-blocking)\b/i.test(finding.body)) {
-      throw new Error(`finding body missing architecture F severity: ${finding.title}`);
-    }
-  }
-  return parsed;
+  return result.payload!;
 }
 
 function submitReview(
@@ -194,19 +163,26 @@ export function runHarnessReviewBridge(options: HarnessBridgeOptions): HarnessBr
     };
   }
 
-  let payload: TerminalVerdictPayload;
-  try {
-    payload = buildHarnessSubmitPayload(review.aoStdout);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  const validation = validateMapperSubmitPayload(review.aoStdout);
+  if (!validation.ok) {
     return {
       ok: false,
-      reason: message,
+      reason: validation.reason ?? 'invalid_terminal_verdict_payload',
       exitCode: 1,
       submitSkipped: true,
       trustedPaths,
     };
   }
+  if (!validation.payload) {
+    return {
+      ok: false,
+      reason: 'invalid_terminal_verdict_payload',
+      exitCode: 1,
+      submitSkipped: true,
+      trustedPaths,
+    };
+  }
+  const payload = validation.payload;
 
   const sessionId = options.sessionId?.trim() || options.runId;
   const submit = submitReview(options.runId, sessionId, payload);

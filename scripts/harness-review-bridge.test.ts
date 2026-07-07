@@ -211,6 +211,9 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
       'claude_supersede_policy',
       'unstructured_github_body',
       'prose_submit_markers',
+      'empty_mapper_output',
+      'invalid_terminal_verdict_payload',
+      'finding_missing_pn_title_prefix',
       'harness_bridge_kill_switch',
       'nested_review_budget_exceeded',
     ]) {
@@ -227,6 +230,19 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
           findings: [{ title: 'Missing priority prefix', severity: 'warning', body: 'severity: non-blocking' }],
         }),
       ),
-    ).toThrow(/missing \[P0\]-\[P3\]/);
+    ).toThrow('finding_missing_pn_title_prefix');
+  });
+
+  it('maps mapper validation failures to stable harness failure classes', () => {
+    const cases: Array<[string, string]> = [
+      ['', 'empty_mapper_output'],
+      ['Finding: bad\n', 'prose_submit_markers'],
+      ['not-json', 'invalid_terminal_verdict_payload'],
+    ];
+    for (const [stdout, reason] of cases) {
+      expect(validateMapperSubmitPayload(stdout)).toMatchObject({ ok: false, reason });
+      expect(() => buildHarnessSubmitPayload(stdout)).toThrow(reason);
+      expect(classifyHarnessBridgeFailure(reason).classified).toBe(true);
+    }
   });
 });
