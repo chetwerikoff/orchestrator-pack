@@ -22,6 +22,7 @@ const client = createHttpDaemonClient({ baseUrl: daemonUrl });
 const server = await startReviewsBoardServer({ host, port, client });
 
 console.log(`AO Reviews board runtime listening on ${server.baseUrl}`);
+console.log(`Board UI: ${server.baseUrl}/`);
 console.log(`Daemon source: ${daemonUrl}`);
 console.log(`Board JSON: ${server.baseUrl}/api/reviews`);
 

@@ -150,47 +150,45 @@ projects:
       reconcile tick after enqueue (never evaluate in the enqueue tick). Freshness SLA:
       max-eligible-evaluation-age ≤ 3× reconcile interval and < report-stale (~30m).
 
-      On EVERY orchestrator turn, BEFORE the autonomous review-loop reads below, for each
-      open worker PR whose current head has red required CI per the definition above:
-        1. Build one consistent CI snapshot from the same canonical source used for
-           the reaction basis (AO SCM tracker status when available; otherwise the
-           documented required-check fallback). The CI failure episode key is the full
-           tuple {repo, PR number, head SHA, aggregate red-period discriminator,
-           active notification targetId + targetGeneration}. The failing required-check set is message
-           context only, never part of the episode identity.
-        2. Resolve the active worker notification target and its generation, then invoke
-           the tracked wrapper from the repository root:
-             pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode record
-           to enqueue the pending episode when red CI is first observed for that key.
-           Delivery evaluation uses:
-             pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode evaluate
-           Feed JSON containing the episode key, workerState {sessions, openPrs} from
-           ao status --json --reports full + gh pr list, minimized reaction.action_succeeded
-           events with reactionKey=ci-failed, and exact-key intent-token state (excluding
-           the episode's own pending record/claim from dedup/intent suppressors).
-           The wrapper timeout/error contract emits phase=diagnostic hard failures;
-           repeated helper errors are operator-visible via reconcile health.
-        3. Obey the returned terminal_action exactly when phase=terminal. The only legal
-           values are SEND or SUPPRESS. Missing/incompatible workerState is a non-terminal
-           hard failure (re-evaluable next tick) — never a silent unconditional ping.
-        4. SUPPRESS when the predicate binds a reaction.action_succeeded event with
-           reactionKey=ci-failed and action=send-to-agent to the full episode identity
-           (excluding own record). Notify-only ci-failed reactions (action: notify) record
-           pending episodes but do not prove worker delivery and MUST NOT suppress the
-           reconcile ping. Also SUPPRESS when the live PR-owning worker session is in
-           fixing_ci and passes liveness, when no live owner exists (abandoned-no-live-owner),
-           when the episode is superseded (abandoned-superseded), or when an exact
-           episode-keyed orchestrator intent token already owns the ping (excluding own claim).
-           working and pr_created do NOT suppress. A reaction/intent for an earlier head,
-           earlier red-period, or superseded session MUST NOT suppress the active session's ping.
-        5. If the verdict is SEND, use strict outbox: claim/preflight → pre-submit
-           revalidation against live workerState → reserve submit-intent (idempotency key)
-           → ao send + Register-WorkerMessageDispatch → resolve delivery ack. Once
-           submit-intent is reserved, recovery never reclassifies to suppression.
-        6. Emit audit lines with phase=record|diagnostic|terminal; only phase=terminal is
-           authoritative. Terminal reasons include sent, delivery-failed, suppressed-live-worker,
-           suppressed-dedup, suppressed-intent-token, abandoned-no-live-owner,
-           abandoned-expired, abandoned-superseded.
+      OPERATOR REFERENCE — mechanical CI-failure notification pair (Issues #283/#342/#645).
+      Red-CI worker delivery is owned by supervised side-process children, not orchestratorRules
+      on AO 0.10.2+. Copy this block into live yaml only as documentation; wiring is via
+      agent-orchestrator.yaml.example reactions + sideProcessChildren (not orchestrator turn prose).
+
+      Record path (phase=record): reactions.ci-failed enqueues a pending episode via
+        pwsh -NoProfile -File scripts/ci-failure-notification-reaction.ps1
+      Evaluate + send path: supervised reconcile evaluates live workerState and sends via
+        pwsh -NoProfile -File scripts/ci-failure-notification-reconcile.ps1
+      Low-level helper (reaction/reconcile invoke this; operators rarely call directly):
+        pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode record
+        pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode evaluate
+
+      Episode identity uses the full episode key tuple {repo, PR number, head SHA, aggregate
+      red-period discriminator, active notification targetId + targetGeneration}. The failing
+      required-check set is message context only, never part of the episode identity.
+      Feed JSON containing the episode key, workerState {sessions, openPrs} from
+      ao status --json --reports full + gh pr list, minimized reaction.action_succeeded
+      events with reactionKey=ci-failed, and exact-key intent-token state (excluding
+      the episode's own pending record/claim from dedup/intent suppressors).
+      The wrapper timeout/error contract emits phase=diagnostic hard failures;
+      repeated helper errors are operator-visible via reconcile health.
+
+      Reconcile delivery-time rules (authoritative at evaluate/send, not at reaction fire):
+        Terminal_action when phase=terminal is SEND or SUPPRESS only. Missing/incompatible
+        workerState is a non-terminal hard failure (re-evaluable next tick).
+        SUPPRESS when the predicate binds a reaction.action_succeeded event with
+        reactionKey=ci-failed and action=send-to-agent to the full episode identity
+        (excluding own record). Notify-only ci-failed reactions (action: notify) record
+        pending episodes but do not prove worker delivery and MUST NOT suppress the
+        reconcile ping. Also SUPPRESS when the live PR-owning worker session is in
+        fixing_ci and passes liveness (suppressed-live-worker), when no live owner exists
+        (abandoned-no-live-owner), when the episode is superseded (abandoned-superseded),
+        or when an exact episode-keyed orchestrator intent token already owns the ping.
+        working and pr_created do NOT suppress. A reaction/intent for an earlier head,
+        earlier red-period, or superseded session MUST NOT suppress the active session's ping.
+        SEND uses strict outbox: claim/preflight → pre-submit revalidation against live
+        workerState → reserve submit-intent → ao send + Register-WorkerMessageDispatch.
+      Audit lines use phase=record|diagnostic|terminal; only phase=terminal is authoritative.
 
       Startup / operator adoption gate (machine-checkable on live gitignored yaml):
         pwsh -NoProfile -File scripts/check-ci-failure-notification-adoption.ps1

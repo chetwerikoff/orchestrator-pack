@@ -1,6 +1,6 @@
 import type { ProjectRow, ReviewBoardRun, SessionRow } from '../../../scripts/lib/review-producer-contract.js';
 
-/** Board JSON read interface consumed by the UI fork (#215). */
+/** Board JSON read interface consumed by the UI fork (#628). */
 export interface SidebarSession {
   id: string;
   projectId: string | null;

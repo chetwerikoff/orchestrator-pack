@@ -112,6 +112,36 @@ describe('orchestrator message registry (Issue #298)', () => {
     }
   });
 
+  it('ci-failure-orchestrator-turn absent', () => {
+    const bundle = loadRegistryBundle(repoRoot) as {
+      catalog: {
+        entries: Array<{ message_class_id: string; semanticDedupCoverage?: { messageClassIds?: string[] } }>;
+      };
+    };
+    const entries = bundle.catalog.entries ?? [];
+    expect(entries.some((e) => e.message_class_id === 'ci-failure-orchestrator-turn')).toBe(false);
+    const dedupRefs = entries.flatMap((e) => e.semanticDedupCoverage?.messageClassIds ?? []);
+    expect(dedupRefs).not.toContain('ci-failure-orchestrator-turn');
+  });
+
+  it('zero orchestrator-rules owner', () => {
+    const bundle = loadRegistryBundle(repoRoot) as {
+      catalog: { entries: Array<{ message_class_id: string; owning_process: string }> };
+    };
+    const bad = (bundle.catalog.entries ?? []).filter((e) => e.owning_process === 'orchestrator-rules');
+    expect(bad).toEqual([]);
+  });
+
+  it('ci-failure reconcile ownership', () => {
+    const bundle = loadRegistryBundle(repoRoot) as {
+      catalog: { entries: Array<{ message_class_id: string; owning_process: string }> };
+    };
+    const reconcile = bundle.catalog.entries.find((e) => e.message_class_id === 'ci-failure-reconcile-ping');
+    expect(reconcile?.owning_process).toBe('ci-failure-notification-reconcile');
+    const reaction = bundle.catalog.entries.find((e) => e.message_class_id === 'ci-failure-reaction-routed');
+    expect(reaction).toBeTruthy();
+  });
+
   it('fails audit when a declared audit root file is missing on disk', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'msg-registry-'));
     try {

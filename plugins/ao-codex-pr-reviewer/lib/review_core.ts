@@ -6,6 +6,7 @@ import { selectReviewVerdict } from './verdict.js';
 import {
   defaultSourceFromEnv,
   emitAoReviewPayload,
+  emitTerminalVerdictPayload,
   formatGithubComment,
   toAoFindings,
 } from './emit.js';
@@ -229,7 +230,10 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     return {
       exitCode: 0,
       logLines,
-      aoStdout: findings.length > 0 ? emitAoReviewPayload(toAoFindings(findings)) : '',
+      aoStdout: emitTerminalVerdictPayload({
+        verdict: 'clean',
+        findings: toAoFindings(findings),
+      }),
       structuredFindings: findings,
       githubComment,
     };

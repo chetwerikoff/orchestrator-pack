@@ -6,7 +6,6 @@
 
 | message_class_id | trigger | owning_process | recipient | intent | mechanism | semantic_dedup |
 | --- | --- | --- | --- | --- | --- | --- |
-| ci-failure-orchestrator-turn | Orchestrator turn records red-CI episode; reconcile evaluates SEND | orchestrator-rules | head-owning-worker | ci-failure-fix | ao-send | issue-283 |
 | ci-failure-reaction-routed | AO ci-failed reaction routed through journaled-worker-send wrapper | journaled-worker-send | specific-session | ci-failure-fix | ao-send | issue-283 |
 | ci-failure-reconcile-ping | Pending red-CI episode eligible after reconcile preflight | ci-failure-notification-reconcile | head-owning-worker | ci-failure-fix | ao-send | issue-283 |
 | ci-green-worker-nudge | Required CI green + worker pre-hand-off state after reconcile | ci-green-wake-reconcile | head-owning-worker | ci-green-handoff | ao-send | none |
@@ -39,6 +38,6 @@
 ## Overlap summary
 
 - Unowned collisions: 0
-- Owner-covered pairs: 3
+- Owner-covered pairs: 1
 - Evidenced overrides: 0
 
