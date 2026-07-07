@@ -59,8 +59,49 @@ function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 }
 
+export type TerminalVerdict = 'clean' | 'findings';
+
+export interface TerminalVerdictPayload {
+  verdict: TerminalVerdict;
+  findingCount: number;
+  findings: AoReviewFinding[];
+}
+
+export function emitTerminalVerdictPayload(options: {
+  verdict: TerminalVerdict;
+  findings: AoReviewFinding[];
+}): string {
+  return JSON.stringify({
+    verdict: options.verdict,
+    findingCount: options.findings.length,
+    findings: options.findings,
+  });
+}
+
 export function emitAoReviewPayload(findings: AoReviewFinding[]): string {
-  return JSON.stringify({ findings });
+  return emitTerminalVerdictPayload({ verdict: 'findings', findings });
+}
+
+export function parseTerminalVerdictPayload(stdout: string): TerminalVerdictPayload | null {
+  try {
+    const parsed = JSON.parse(stdout) as Partial<TerminalVerdictPayload>;
+    if (parsed.verdict !== 'clean' && parsed.verdict !== 'findings') {
+      return null;
+    }
+    if (typeof parsed.findingCount !== 'number' || !Number.isFinite(parsed.findingCount)) {
+      return null;
+    }
+    if (!Array.isArray(parsed.findings)) {
+      return null;
+    }
+    return parsed as TerminalVerdictPayload;
+  } catch {
+    return null;
+  }
+}
+
+export function isCleanTerminalVerdict(stdout: string): boolean {
+  return parseTerminalVerdictPayload(stdout)?.verdict === 'clean';
 }
 
 export function formatGithubComment(options: {
