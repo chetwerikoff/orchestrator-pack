@@ -642,6 +642,7 @@ function Invoke-ReconcileTick {
             legacyNudged                  = $payload.legacyNudged
             repoRoot                      = $RepoRoot
             capCycleState                 = if ($payload.capCycleState) { Copy-MechanicalJsonMap -Map $payload.capCycleState } else { @{} }
+            issueBodiesByPr               = if ($payload.issueBodiesByPr) { Copy-MechanicalJsonMap -Map $payload.issueBodiesByPr } else { @{} }
         }
     }
     else {
@@ -689,6 +690,11 @@ function Invoke-ReconcileTick {
     $planPayload.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     Merge-ReconcileTrackingIntoPlanPayload -PlanPayload $planPayload -TrackingState $TrackingState
     $planPayload.repoRoot = $RepoRoot
+    $issueBodiesByPr = Get-ReviewCycleCapIssueBodiesByPr -OpenPrs @($planPayload.openPrs) -RepoRoot $RepoRoot `
+        -ProjectId $Project -FixtureSnapshot $fixtureSnapshot
+    if ($issueBodiesByPr.Count -gt 0) {
+        $planPayload.issueBodiesByPr = $issueBodiesByPr
+    }
 
     $planResult = Invoke-ReconcileFilterCli -Subcommand 'plan' -Payload $planPayload
     $plan = @()

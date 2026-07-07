@@ -169,6 +169,48 @@ describe('distinct head counting matrix', () => {
     expect(gate.prState?.terminal).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
   });
 
+  it('reconcile plan honors per-PR tier via issueBodiesByPr (not T2 fallback)', () => {
+    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
+    const current = 'a3'.padEnd(40, '1');
+    const runs = [
+      ...prior.map((sha, idx) => ({
+        prNumber: pr,
+        targetSha: sha,
+        status: 'changes_requested',
+        openFindingCount: 1,
+        completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
+      })),
+    ];
+    const t1Body = '```complexity-tier\ntier: T1\n```';
+    const t2Body = '```complexity-tier\ntier: T2\n```';
+    const base = {
+      openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
+      reviewRuns: runs,
+      sessions: [
+        {
+          sessionId: 'opk-646',
+          role: 'worker',
+          prNumber: pr,
+          status: 'working',
+          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
+        },
+      ],
+      ciChecksByPr: {
+        [pr]: [
+          { name: 'verify', state: 'SUCCESS' },
+        ],
+      },
+      requiredCheckNamesByPr: { [pr]: ['verify'] },
+      capCycleState: {},
+    };
+    const t2Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: t2Body } });
+    expect(t2Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
+
+    const t1Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: t1Body } });
+    expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
+    expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === TERMINAL_AT_CAP_OPEN_FINDINGS)).toBe(true);
+  });
+
   it('(h) eight distinct terminal heads on T3 exhausts budget', () => {
     const heads = Array.from({ length: 8 }, (_, i) => `t3-${i}`.padEnd(40, '8'));
     const runs = heads.map((sha, idx) => ({

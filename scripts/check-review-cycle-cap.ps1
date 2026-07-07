@@ -43,6 +43,10 @@ if ($capPs -notmatch 'Get-ReviewCycleCapIssueBody') {
     Write-Host 'Review-CycleCap.ps1 missing Get-ReviewCycleCapIssueBody helper'
     exit 1
 }
+if ($capPs -notmatch 'Get-ReviewCycleCapIssueBodiesByPr') {
+    Write-Host 'Review-CycleCap.ps1 missing Get-ReviewCycleCapIssueBodiesByPr helper'
+    exit 1
+}
 
 $claimedRunPs = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1') -Raw
 if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {
@@ -51,6 +55,16 @@ if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {
 }
 if ($claimedRunPs -notmatch 'issueBody') {
     Write-Host 'Invoke-OrchestratorClaimedReviewRun.ps1 must pass issueBody into cap gate payload'
+    exit 1
+}
+
+$reconcilePs = Get-Content -LiteralPath (Join-Path $Root 'scripts/review-trigger-reconcile.ps1') -Raw
+if ($reconcilePs -notmatch 'Get-ReviewCycleCapIssueBodiesByPr') {
+    Write-Host 'review-trigger-reconcile.ps1 must pass issue tier data via Get-ReviewCycleCapIssueBodiesByPr'
+    exit 1
+}
+if ($reconcilePs -notmatch 'issueBodiesByPr') {
+    Write-Host 'review-trigger-reconcile.ps1 must pass issueBodiesByPr into cap gate payload'
     exit 1
 }
 

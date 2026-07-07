@@ -79,6 +79,12 @@ function Get-ReviewCycleCapIssueBody {
         [hashtable]$FixtureSnapshot
     )
 
+    if ($FixtureSnapshot -and $FixtureSnapshot['issueBodiesByPr']) {
+        $prKey = [string]$PrNumber
+        if ($FixtureSnapshot['issueBodiesByPr'].ContainsKey($prKey) -and $FixtureSnapshot['issueBodiesByPr'][$prKey]) {
+            return [string]$FixtureSnapshot['issueBodiesByPr'][$prKey]
+        }
+    }
     if ($FixtureSnapshot -and $FixtureSnapshot['issueBody']) {
         return [string]$FixtureSnapshot['issueBody']
     }
@@ -126,4 +132,26 @@ function Get-ReviewCycleCapIssueBody {
     }
 
     return $null
+}
+
+function Get-ReviewCycleCapIssueBodiesByPr {
+    param(
+        [array]$OpenPrs,
+        [string]$RepoRoot,
+        [string]$ProjectId = 'orchestrator-pack',
+        [hashtable]$FixtureSnapshot
+    )
+
+    $byPr = @{}
+    foreach ($pr in @($OpenPrs)) {
+        $prNumber = [int]$pr.number
+        if ($prNumber -le 0) { continue }
+        $headSha = if ($pr.headRefOid) { [string]$pr.headRefOid } else { '' }
+        $body = Get-ReviewCycleCapIssueBody -PrNumber $prNumber -RepoRoot $RepoRoot -HeadSha $headSha `
+            -ProjectId $ProjectId -FixtureSnapshot $FixtureSnapshot
+        if ($body) {
+            $byPr[[string]$prNumber] = $body
+        }
+    }
+    return $byPr
 }
