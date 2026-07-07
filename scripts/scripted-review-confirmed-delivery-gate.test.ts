@@ -13,6 +13,12 @@ import {
   isTerminalNotDelivered,
   resolveGateConfig,
 } from '../docs/scripted-review-confirmed-delivery-gate.mjs';
+import {
+  buildScriptedReviewDeliveryMessage,
+  findSubmittedReviewRun,
+  parsePackReviewTerminalStdout,
+  resolveSubmitVisibilityConfig,
+} from '../docs/scripted-review-post-submit-delivery.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/scripted-review-confirmed-delivery-gate');
@@ -309,5 +315,84 @@ describe('post-submit seam wiring', () => {
     expect(text).toMatch(/Complete-ScriptedReviewDeliveryGateAfterExplicitSend/);
     expect(text).toMatch(/classify-post-send/);
     expect(text).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
+  });
+
+  it('invoke-pack-review wires post-submit delivery after successful wrapper', () => {
+    const text = readFileSync(path.join(repoRoot, 'scripts/invoke-pack-review.ps1'), 'utf8');
+    expect(text).toMatch(/Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview/);
+    expect(text).toMatch(/Invoke-PackReviewWrapperWithFailureEvidence/);
+  });
+
+  it('post-submit lib forwards to invoke-scripted-review-post-submit-delivery seam', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'),
+      'utf8',
+    );
+    expect(text).toMatch(/invoke-scripted-review-post-submit-delivery\.ps1/);
+    expect(text).toMatch(/Wait-ScriptedReviewSubmittedRun/);
+  });
+});
+
+describe('post-submit resolver (Issue #669 wiring)', () => {
+  it('maps terminal pack stdout to gate verdicts', () => {
+    const clean = parsePackReviewTerminalStdout(
+      JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+    );
+    expect(clean).toMatchObject({ ok: true, gateVerdict: 'approved', packVerdict: 'clean' });
+
+    const findings = parsePackReviewTerminalStdout(
+      JSON.stringify({
+        verdict: 'findings',
+        findingCount: 1,
+        findings: [{ severity: 'warning', title: 'x', body: 'y' }],
+      }),
+    );
+    expect(findings).toMatchObject({ ok: true, gateVerdict: 'changes_requested', packVerdict: 'findings' });
+  });
+
+  it('finds submitted run by PR head on worker review runs', () => {
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-old',
+          prNumber: 673,
+          targetSha: 'abc',
+          linkedSessionId: 'orchestrator-pack-5',
+          status: 'complete',
+          createdAt: '2026-07-07T08:00:00.000Z',
+        },
+        {
+          id: 'run-new',
+          prNumber: 673,
+          targetSha: 'def',
+          linkedSessionId: 'orchestrator-pack-5',
+          status: 'complete',
+          createdAt: '2026-07-07T09:00:00.000Z',
+        },
+      ],
+      { prNumber: 673, targetSha: 'def' },
+    );
+    expect(found).toMatchObject({ ok: true, runId: 'run-new', sessionId: 'orchestrator-pack-5' });
+  });
+
+  it('builds non-empty delivery messages for approved and changes_requested', () => {
+    const approved = buildScriptedReviewDeliveryMessage({
+      prNumber: 673,
+      runId: 'run-1',
+      gateVerdict: 'approved',
+    });
+    const changes = buildScriptedReviewDeliveryMessage({
+      prNumber: 673,
+      runId: 'run-1',
+      gateVerdict: 'changes_requested',
+    });
+    expect(approved.ok).toBe(true);
+    expect(changes.ok).toBe(true);
+    expect(approved.message).toContain('PR #673');
+    expect(changes.message).toContain('Review findings');
+  });
+
+  it('defaults submit visibility window to 30s', () => {
+    expect(resolveSubmitVisibilityConfig({})).toMatchObject({ visibilityMs: 30_000, intervalMs: 1000 });
   });
 });

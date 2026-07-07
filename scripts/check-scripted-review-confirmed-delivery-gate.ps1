@@ -51,6 +51,32 @@ if ($ps1 -notmatch 'Write-OrchestratorSideProcessProgress') {
 }
 
 $runbookText = Get-Content -LiteralPath $runbook -Raw
+$invokePackReview = Join-Path $Root 'scripts/invoke-pack-review.ps1'
+$postSubmitLib = Join-Path $Root 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'
+$postSubmitMjs = Join-Path $Root 'docs/scripted-review-post-submit-delivery.mjs'
+foreach ($path in @($invokePackReview, $postSubmitLib, $postSubmitMjs)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Host "Missing required post-submit wiring file: $path"
+        exit 1
+    }
+}
+
+$invokeText = Get-Content -LiteralPath $invokePackReview -Raw
+if ($invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview') {
+    Write-Host 'invoke-pack-review.ps1 must invoke post-submit confirmed-delivery gate wiring'
+    exit 1
+}
+if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -and $invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview') {
+    Write-Host 'invoke-pack-review.ps1 must route through invoke-scripted-review-post-submit-delivery seam'
+    exit 1
+}
+
+$postSubmitLibText = Get-Content -LiteralPath $postSubmitLib -Raw
+if ($postSubmitLibText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must call invoke-scripted-review-post-submit-delivery seam'
+    exit 1
+}
+
 $required = @(
     'scripted-review-confirmed-delivery-gate',
     'AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS',

@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-FailureEvidence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1')
 
 Clear-StalePackReviewerProcessScope
 $reviewer = Get-PackReviewerFromSelector
@@ -57,14 +58,29 @@ $wrapperArgs = @('--repo-root', $resolvedRoot, '--base', $cli.Base) + $forwardAr
 
 try {
     if ($evidenceHandle.ok) {
-        $exitCode = Invoke-PackReviewWrapperWithFailureEvidence -WrapperPath $wrapperPath -WrapperArgs $wrapperArgs -EvidenceHandle $evidenceHandle
-        if ($exitCode -eq 0 -and $evidenceHandle.ok) {
+        $wrapperResult = Invoke-PackReviewWrapperWithFailureEvidence -WrapperPath $wrapperPath -WrapperArgs $wrapperArgs -EvidenceHandle $evidenceHandle
+        if ($wrapperResult.exitCode -eq 0 -and $evidenceHandle.ok) {
             Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'normal_completion' | Out-Null
         }
-        exit $exitCode
+        if ($wrapperResult.exitCode -eq 0) {
+            $delivery = Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview `
+                -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode
+            if (-not $delivery.skipped -and -not $delivery.ok -and $env:AO_SCRIPTED_REVIEW_DELIVERY_DEBUG) {
+                [Console]::Error.WriteLine("scripted-review post-submit delivery failed: $($delivery.reason)")
+            }
+        }
+        exit $wrapperResult.exitCode
     }
-    & $wrapperPath @wrapperArgs
-    exit $LASTEXITCODE
+
+    $wrapperResult = Invoke-PackReviewWrapperWithFailureEvidence -WrapperPath $wrapperPath -WrapperArgs $wrapperArgs -EvidenceHandle $null
+    if ($wrapperResult.exitCode -eq 0) {
+        $delivery = Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview `
+            -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode
+        if (-not $delivery.skipped -and -not $delivery.ok -and $env:AO_SCRIPTED_REVIEW_DELIVERY_DEBUG) {
+            [Console]::Error.WriteLine("scripted-review post-submit delivery failed: $($delivery.reason)")
+        }
+    }
+    exit $wrapperResult.exitCode
 }
 catch {
     if ($evidenceHandle.ok) {
