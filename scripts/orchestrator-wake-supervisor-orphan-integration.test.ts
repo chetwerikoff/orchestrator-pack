@@ -127,6 +127,36 @@ describe('Issue #613 orphan supervisor discovery (integration)', () => {
     issue613TimeoutMs,
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'detached Start passes resolved StateDir when state dir comes from env',
+    { timeout: issue613TimeoutMs },
+    () => {
+      const stateDir = makeStateDir();
+      const start = runSupervisor(
+        [
+          '-Action',
+          'Start',
+          '-TestMode',
+          '-SkipInitialWait',
+          '-OrchestratorSessionId',
+          'op-613-env-state-dir',
+          '-PollSeconds',
+          '1',
+        ],
+        { AO_WAKE_SUPERVISOR_STATE_DIR: stateDir },
+      );
+      expect(start.status).toBe(0);
+
+      const launcher = path.join(stateDir, 'launch-supervisor.sh');
+      expect(fs.existsSync(launcher)).toBe(true);
+      const script = fs.readFileSync(launcher, 'utf8');
+      const quotedStateDir = `'${stateDir.replace(/'/g, "'\\''")}'`;
+      expect(script).toContain(`'-StateDir' ${quotedStateDir}`);
+
+      runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    },
+  );
+
   it(
     'Start adopts an orphaned detached supervisor instead of launching a duplicate',
     async () => {

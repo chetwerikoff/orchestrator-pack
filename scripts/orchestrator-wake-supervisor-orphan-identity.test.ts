@@ -116,6 +116,14 @@ describe('Issue #613 orphan supervisor discovery (unit)', () => {
     ).toBe(true);
   });
 
+  it('detached Start always includes resolved StateDir in supervisor loop args', () => {
+    const script = fs.readFileSync(
+      path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1'),
+      'utf8',
+    );
+    expect(script).toMatch(/\$loopArgs \+= @\('-StateDir', \$stateRoot\)/);
+  });
+
   it('identity predicate accepts a non-test foreground supervisor command line', () => {
     const stateDir = makeStateDir();
     const scriptPath = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');

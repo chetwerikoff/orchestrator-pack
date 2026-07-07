@@ -175,7 +175,7 @@ switch ($Action) {
         if ($OrchestratorSessionId) {
             $loopArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
         }
-        if ($StateDir) { $loopArgs += @('-StateDir', $stateRoot) }
+        $loopArgs += @('-StateDir', $stateRoot)
         if ($FixturePath) { $loopArgs += @('-FixturePath', $FixturePath) }
         if ($AoCommand) { $loopArgs += @('-AoCommand', $AoCommand) }
         if ($TestMode) { $loopArgs += @('-TestMode') }
