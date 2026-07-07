@@ -319,7 +319,7 @@ outside automated claim. **Script-owned procedure** — do not re-derive inline.
 ### Event-driven review trigger
 
 On `merge.ready`, `scripts/orchestrator-wake-listener.ps1` applies #195/#189,
-claim #267, then may `ao-review run` — never spawn, claim, kill, send, or merge.
+claim #267, then may `ao-review run` — never `ao spawn`, `--claim-pr`, `ao session kill`, `ao send`, or merge.
 
 ### Deferred-head review re-evaluation
 
