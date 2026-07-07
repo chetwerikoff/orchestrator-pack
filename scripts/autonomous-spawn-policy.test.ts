@@ -20,7 +20,6 @@ import {
   autonomousClaimPrProbeEnv,
   autonomousSpawnFixtureProbeEnv,
   withAoSpawnProbeStub,
-,
   SPAWN_GATE_FIXTURE_SPAWN_ARGV,
 } from './_test-autonomous-ao-stub-fixture.js';
 

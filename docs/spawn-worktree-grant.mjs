@@ -8,6 +8,7 @@ import {
   classifySpawnAction,
   gitArgvSubcommandIndex,
   parseClaimPrNumberFromSpawnArgv,
+  parseStrictPositiveIntegerToken,
 } from './autonomous-orchestrator-boundary.mjs';
 import {
   evaluateSpawnClaimPrPostCheckout,
@@ -90,19 +91,6 @@ function spawnArgvOptionConsumesNextToken(token) {
 }
 
 /**
- * @param {string} raw
- * @returns {number | null}
- */
-function parseStrictPositiveIssueValue(raw) {
-  const value = String(raw).trim();
-  if (!/^\d+$/.test(value)) {
-    return null;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-/**
  * @param {string[]} argv
  * @returns {number | null}
  */
@@ -111,11 +99,11 @@ export function parseIssueNumberFromSpawnArgv(argv) {
   for (let index = 0; index < list.length; index += 1) {
     const token = list[index];
     if (token === '--issue' && index + 1 < list.length) {
-      return parseStrictPositiveIssueValue(list[index + 1]);
+      return parseStrictPositiveIntegerToken(list[index + 1]);
     }
     const eqMatch = /^--issue=(.+)$/i.exec(token);
     if (eqMatch) {
-      return parseStrictPositiveIssueValue(eqMatch[1]);
+      return parseStrictPositiveIntegerToken(eqMatch[1]);
     }
   }
   return null;

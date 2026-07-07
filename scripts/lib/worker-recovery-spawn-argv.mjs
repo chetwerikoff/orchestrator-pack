@@ -2,6 +2,7 @@
  * Worker recovery AO 0.10.2 spawn argv builders (Issues #638, #652).
  * Vitest: scripts/worker-recovery-spawn-argv.test.ts
  */
+import { parseStrictPositiveIntegerToken } from '../../docs/autonomous-orchestrator-boundary.mjs';
 import { asRecord, runAsyncStdinJsonSubcommandCli } from '../../docs/review-mechanical-cli.mjs';
 
 export const RECOVERY_SPAWN_DISPLAY_NAME_PREFIX = 'wr-';
@@ -57,18 +58,6 @@ export function resolveRecoverySpawnProjectId(input) {
 }
 
 /**
- * @param {string} raw
- */
-function parseStrictPositiveIssueValue(raw) {
-  const value = String(raw).trim();
-  if (!/^\d+$/.test(value)) {
-    return null;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-/**
  * Non-empty recovery task text delivered via AO `--prompt` (Issue #652).
  *
  * @param {object} input
@@ -76,7 +65,7 @@ function parseStrictPositiveIssueValue(raw) {
 export function buildRecoverySpawnPrompt(input) {
   const action = String(input.spawnAction ?? '');
   if (action === 'spawn-new') {
-    const issue = parseStrictPositiveIssueValue(input.issueNumber);
+    const issue = parseStrictPositiveIntegerToken(input.issueNumber);
     if (issue === null) {
       return { ok: false, reason: 'missing_issue_number' };
     }
@@ -92,7 +81,7 @@ export function buildRecoverySpawnPrompt(input) {
     if (!Number.isFinite(pr) || pr <= 0) {
       return { ok: false, reason: 'missing_pr_number' };
     }
-    const issue = parseStrictPositiveIssueValue(input.issueNumber);
+    const issue = parseStrictPositiveIntegerToken(input.issueNumber);
     const issueClause =
       issue === null ? '' : ` Read GitHub issue #${issue} (body and prerequisites) as well.`;
     return {
@@ -145,7 +134,7 @@ export function buildRecoverySpawnArgv(input) {
     );
   }
   else if (action === 'spawn-new') {
-    const issue = parseStrictPositiveIssueValue(input.issueNumber);
+    const issue = parseStrictPositiveIntegerToken(input.issueNumber);
     if (issue === null) {
       return { ok: false, reason: 'missing_issue_number' };
     }

@@ -64,6 +64,7 @@ export declare function hasClaimPrFlagInSpawnArgv(argv: string[]): boolean;
 export declare function classifySpawnAction(
   argv: string[],
 ): 'spawn-new' | 'claim-pr-resume' | 'claim-pr-malformed' | 'not-spawn';
+export declare function parseStrictPositiveIntegerToken(raw: string): number | null;
 export declare function parseClaimPrNumberFromSpawnArgv(argv: string[]): number | null;
 export declare function validateAutonomousSpawnPolicy(policy: unknown): SpawnPolicyLoadResult;
 export declare function loadAutonomousSpawnPolicy(packRoot: string): SpawnPolicyLoadResult;

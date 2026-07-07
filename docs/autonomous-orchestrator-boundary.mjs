@@ -332,7 +332,7 @@ export function classifySpawnAction(argv) {
  * @param {string} raw
  * @returns {number | null}
  */
-function parseStrictPositiveClaimPrValue(raw) {
+export function parseStrictPositiveIntegerToken(raw) {
   const value = String(raw).trim();
   if (!/^\d+$/.test(value)) {
     return null;
@@ -350,11 +350,11 @@ export function parseClaimPrNumberFromSpawnArgv(argv) {
   for (let index = 0; index < list.length; index += 1) {
     const token = list[index];
     if (token === '--claim-pr' && index + 1 < list.length) {
-      return parseStrictPositiveClaimPrValue(list[index + 1]);
+      return parseStrictPositiveIntegerToken(list[index + 1]);
     }
     const eqMatch = /^--claim-pr=(.+)$/i.exec(token);
     if (eqMatch) {
-      return parseStrictPositiveClaimPrValue(eqMatch[1]);
+      return parseStrictPositiveIntegerToken(eqMatch[1]);
     }
   }
   return null;
