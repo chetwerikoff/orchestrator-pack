@@ -1,7 +1,8 @@
 /**
- * Worker recovery AO 0.10.2 spawn argv builders (Issue #638).
+ * Worker recovery AO 0.10.2 spawn argv builders (Issues #638, #652).
  * Vitest: scripts/worker-recovery-spawn-argv.test.ts
  */
+import { parseStrictPositiveIntegerToken } from '../../docs/autonomous-orchestrator-boundary.mjs';
 import { asRecord, runAsyncStdinJsonSubcommandCli } from '../../docs/review-mechanical-cli.mjs';
 
 export const RECOVERY_SPAWN_DISPLAY_NAME_PREFIX = 'wr-';
@@ -57,6 +58,42 @@ export function resolveRecoverySpawnProjectId(input) {
 }
 
 /**
+ * Non-empty recovery task text delivered via AO `--prompt` (Issue #652).
+ *
+ * @param {object} input
+ */
+export function buildRecoverySpawnPrompt(input) {
+  const action = String(input.spawnAction ?? '');
+  if (action === 'spawn-new') {
+    const issue = parseStrictPositiveIntegerToken(input.issueNumber);
+    if (issue === null) {
+      return { ok: false, reason: 'missing_issue_number' };
+    }
+    return {
+      ok: true,
+      prompt:
+        `Implement GitHub issue #${issue}: read the issue body and prerequisites. `
+        + 'Continue the task and open a PR when ready.',
+    };
+  }
+  if (action === 'claim-pr-resume') {
+    const pr = Number.parseInt(String(input.prNumber ?? ''), 10);
+    if (!Number.isFinite(pr) || pr <= 0) {
+      return { ok: false, reason: 'missing_pr_number' };
+    }
+    const issue = parseStrictPositiveIntegerToken(input.issueNumber);
+    const issueClause =
+      issue === null ? '' : ` Read GitHub issue #${issue} (body and prerequisites) as well.`;
+    return {
+      ok: true,
+      prompt:
+        `Resume work on PR #${pr}:${issueClause} Continue implementation and keep the PR ready for review.`,
+    };
+  }
+  return { ok: false, reason: 'unknown_spawn_action' };
+}
+
+/**
  * @param {object} input
  */
 export function buildRecoverySpawnArgv(input) {
@@ -69,28 +106,54 @@ export function buildRecoverySpawnArgv(input) {
   if (!nameResult.ok) {
     return { ok: false, reason: nameResult.reason };
   }
+  const promptResult = buildRecoverySpawnPrompt({
+    spawnAction: action,
+    issueNumber: input.issueNumber,
+    prNumber: input.prNumber,
+  });
+  if (!promptResult.ok) {
+    return { ok: false, reason: promptResult.reason };
+  }
+
   const argv = ['spawn'];
   if (action === 'claim-pr-resume') {
     const pr = Number.parseInt(String(input.prNumber ?? ''), 10);
     if (!Number.isFinite(pr) || pr <= 0) {
       return { ok: false, reason: 'missing_pr_number' };
     }
-    argv.push('--project', projectId, '--name', nameResult.name, '--claim-pr', String(pr), '--no-takeover');
+    argv.push(
+      '--project',
+      projectId,
+      '--name',
+      nameResult.name,
+      '--claim-pr',
+      String(pr),
+      '--no-takeover',
+      '--prompt',
+      promptResult.prompt,
+    );
   }
   else if (action === 'spawn-new') {
-    const issue = Number.parseInt(String(input.issueNumber ?? ''), 10);
-    if (!Number.isFinite(issue) || issue <= 0) {
+    const issue = parseStrictPositiveIntegerToken(input.issueNumber);
+    if (issue === null) {
       return { ok: false, reason: 'missing_issue_number' };
     }
     const issueToken = String(issue);
-    // Positional issue is required for spawn-worktree grant target parsing; --issue
-    // remains for AO 0.10.x spawn CLI binding.
-    argv.push(issueToken, '--project', projectId, '--name', nameResult.name, '--issue', issueToken);
+    argv.push(
+      '--project',
+      projectId,
+      '--name',
+      nameResult.name,
+      '--issue',
+      issueToken,
+      '--prompt',
+      promptResult.prompt,
+    );
   }
   else {
     return { ok: false, reason: 'unknown_spawn_action' };
   }
-  return { ok: true, argv, displayName: nameResult.name, projectId };
+  return { ok: true, argv, displayName: nameResult.name, projectId, prompt: promptResult.prompt };
 }
 
 /**
@@ -126,6 +189,8 @@ function handleCliSubcommand(subcommand, payload) {
       return deriveRecoverySpawnDisplayName(payload);
     case 'resolveRecoverySpawnProjectId':
       return resolveRecoverySpawnProjectId(payload);
+    case 'buildRecoverySpawnPrompt':
+      return buildRecoverySpawnPrompt(payload);
     case 'buildRecoverySpawnArgv':
       return buildRecoverySpawnArgv(payload);
     case 'classifyRecoverySpawnExit':

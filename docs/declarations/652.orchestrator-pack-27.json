@@ -1,0 +1,39 @@
+{
+  "issue_number": 652,
+  "iteration_id": "orchestrator-pack-27",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T07:16:41.158Z",
+  "baseline": {
+    "commit_sha": "8d25fe7d1cf74c09f60bc0674d992cab3b869b4f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4f322934471c8619fb9694d6056ec1951334d3f4cbe5d1c6f2fb24bfdad33daa"
+  },
+  "declared_paths": [
+    "docs/ao-0-10-operator-upgrade-runbook.md",
+    "docs/ao-spawn-shape.mjs",
+    "docs/autonomous-orchestrator-boundary.d.mts",
+    "docs/autonomous-orchestrator-boundary.mjs",
+    "docs/migration_notes.md",
+    "docs/spawn-worktree-grant.d.mts",
+    "docs/spawn-worktree-grant.mjs",
+    "scripts/_test-autonomous-ao-stub-fixture.ts",
+    "scripts/ao-spawn-shape.test.ts",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/autonomous-spawn-policy.test.ts",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1",
+    "scripts/lib/worker-recovery-spawn-argv.mjs",
+    "scripts/spawn-worktree-branch-operand-binding.test.ts",
+    "scripts/spawn-worktree-grant-finalization.test.ts",
+    "scripts/spawn-worktree-head-ref-oid-binding.test.ts",
+    "scripts/spawn-worktree-repository-identity-binding.test.ts",
+    "scripts/worker-recovery-spawn-argv.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "docs/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}

@@ -119,7 +119,7 @@ npx vitest run scripts/ao-spawn-shape.test.ts
 ```
 
 Live `agent-orchestrator.yaml` must teach
-`ao spawn --project <project> --name "<label>"` (not bare `ao spawn`). Restart
+`ao spawn --project <project> --name "<label>" --issue <N> --prompt "<task text>"` (not bare `ao spawn`). Restart
 AO after yaml edits **before** the binary upgrade.
 
 ### 2. Repo-side preflight (safe in any checkout)

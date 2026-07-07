@@ -19,6 +19,7 @@ import {
   assertSpawnGateIsolationPreflight,
   assertSpawnGateOutcome,
   SPAWN_GATE_FIXTURE_SESSION_ID,
+  SPAWN_GATE_FIXTURE_SPAWN_ARGV,
   spawnGateFixtureCommand,
   spawnHermeticEvalHidden,
   spawnHermeticIsolatedOrchestratorBash,
@@ -596,14 +597,7 @@ exit 0
         AO_SPAWN_PROBE_FILE: probeFile,
       });
       assertSpawnGateOutcome('worker-surface-allow-stub-receipt', workerSpawn, ctx);
-      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual([
-        'spawn',
-        '--project',
-        'orchestrator-pack',
-        '--name',
-        'Gate probe',
-        SPAWN_GATE_FIXTURE_SESSION_ID,
-      ]);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual([...SPAWN_GATE_FIXTURE_SPAWN_ARGV]);
       expect(`${workerSpawn.stderr}${workerSpawn.stdout}`).not.toMatch(/autonomous worker spawn denied/i);
 
       const gated = spawnSync(

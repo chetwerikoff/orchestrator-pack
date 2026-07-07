@@ -12,6 +12,7 @@ export const AO_SPAWN_DISPLAY_NAME_MAX_LENGTH = 20;
 export const SPAWN_ARGV_OPTIONS_WITH_VALUE = [
   '--agent',
   '--claim-pr',
+  '--issue',
   '--name',
   '--project',
   '--prompt',
@@ -231,7 +232,7 @@ function isValidSpawnOptionValue(token) {
  */
 export function parseSpawnShapeFlags(command) {
   const tokens = tokenizeSpawnArgv(String(command).trim());
-  /** @type {{ project?: string; name?: string }} */
+  /** @type {{ project?: string; name?: string; prompt?: string; claimPr?: boolean }} */
   const flags = {};
 
   for (let index = 0; index < tokens.length; index += 1) {
@@ -264,10 +265,82 @@ export function parseSpawnShapeFlags(command) {
         flags.name = stripQuotes(value);
         index += 1;
       }
+      continue;
+    }
+    if (lower === '--prompt') {
+      const value = tokens[index + 1];
+      if (isValidSpawnOptionValue(value)) {
+        flags.prompt = stripQuotes(value);
+        index += 1;
+      }
+      continue;
+    }
+    if (lower === '--claim-pr') {
+      flags.claimPr = true;
+      const value = tokens[index + 1];
+      if (isValidSpawnOptionValue(value)) {
+        index += 1;
+      }
+      continue;
+    }
+    if (inline && inline[1].toLowerCase() === '--claim-pr') {
+      flags.claimPr = true;
+      continue;
+    }
+    if (lower === '--issue') {
+      const value = tokens[index + 1];
+      if (isValidSpawnOptionValue(value)) {
+        index += 1;
+      }
     }
   }
 
   return flags;
+}
+
+
+/**
+ * @param {string} token
+ */
+function spawnShapeOptionConsumesNextToken(token) {
+  const inline = /^(--[^=]+)=(.*)$/i.exec(token);
+  if (inline) {
+    return false;
+  }
+  return SPAWN_ARGV_OPTIONS_WITH_VALUE.includes(token.toLowerCase());
+}
+
+/**
+ * @param {string} command
+ */
+function hasSpawnPositionalArguments(command) {
+  const tokens = tokenizeSpawnArgv(String(command).trim());
+  let spawnIndex = -1;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].toLowerCase() === 'spawn') {
+      spawnIndex = index;
+      break;
+    }
+  }
+  if (spawnIndex < 0) {
+    return false;
+  }
+  for (let index = spawnIndex + 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.startsWith('-')) {
+      if (/^(--[^=]+)=/.test(token)) {
+        continue;
+      }
+      if (spawnShapeOptionConsumesNextToken(token)) {
+        if (index + 1 < tokens.length && !tokens[index + 1].startsWith('-')) {
+          index += 1;
+        }
+      }
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -288,6 +361,15 @@ export function validateRunnableSpawnCommand(command) {
     violations.push(
       `--name exceeds ${AO_SPAWN_DISPLAY_NAME_MAX_LENGTH} chars (AO 0.10.x display label limit)`,
     );
+  }
+
+  if (!flags.claimPr) {
+    if (!flags.prompt || !String(flags.prompt).trim()) {
+      violations.push('missing or empty --prompt');
+    }
+    if (hasSpawnPositionalArguments(command)) {
+      violations.push('positional arguments are not allowed on ao spawn');
+    }
   }
 
   return violations;

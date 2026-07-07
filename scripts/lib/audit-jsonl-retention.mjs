@@ -325,13 +325,44 @@ export function maybeMaintainAuditJsonl(activePath, policy, log) {
   }
 }
 
+
+function sleepSync(ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    // busy-wait for short append-lock retries
+  }
+}
+
+function appendLockPath(activePath) {
+  return `${activePath}.append.lock`;
+}
+
+function appendWithLock(activePath, payload, log, env = process.env, timeoutMs = 30000) {
+  const lockPath = appendLockPath(activePath);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    if (tryAcquireMaintenanceLock(lockPath, log, env)) {
+      try {
+        appendFileSync(activePath, payload, 'utf8');
+        return;
+      } finally {
+        releaseMaintenanceLock(lockPath);
+      }
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`audit_jsonl_append_lock_timeout: ${activePath}`);
+    }
+    sleepSync(5);
+  }
+}
+
 export function appendAuditJsonlLine(activePath, line, options = {}) {
   const policy = options.policy ?? resolveAuditJsonlPolicy(options.streamId ?? 'gh-wrapper', options.env);
   const log = options.log;
   mkdirSync(dirname(activePath), { recursive: true });
   maybeMaintainAuditJsonl(activePath, policy, log);
   const payload = line.endsWith('\n') ? line : `${line}\n`;
-  appendFileSync(activePath, payload, 'utf8');
+  appendWithLock(activePath, payload, log, options.env);
 }
 
 export function maintenanceLockPath(activePath) {

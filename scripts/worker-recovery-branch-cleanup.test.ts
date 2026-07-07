@@ -36,7 +36,7 @@ function gitIn(dir: string, args: string[]) {
 
 function buildConsumedGrant(issueNumber: number, repo: string, baseRef: string, sessionId: string, worktreePath: string) {
   const built = buildSpawnWorktreeGrantRecord({
-    argv: ['spawn', String(issueNumber)],
+    argv: ['spawn', '--issue', String(issueNumber)],
     grantId: `grant-${sessionId}`,
     holder: { pid: 1 },
     sourceRepositoryRoot: repo,

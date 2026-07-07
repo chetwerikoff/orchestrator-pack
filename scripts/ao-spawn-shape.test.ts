@@ -30,6 +30,24 @@ describe('validateRunnableSpawnCommand', () => {
     ).toEqual([]);
   });
 
+  it('requires --prompt on spawn-new runnable instructions (#652)', () => {
+    expect(
+      validateRunnableSpawnCommand(
+        'ao spawn --project orchestrator-pack --name wr-i652 --issue 652',
+      ),
+    ).toContain('missing or empty --prompt');
+    expect(
+      validateRunnableSpawnCommand(
+        'ao spawn --project orchestrator-pack --name wr-i652 --issue 652 --prompt "Implement GitHub issue #652"',
+      ),
+    ).toEqual([]);
+    expect(
+      validateRunnableSpawnCommand(
+        'ao spawn 652 --project orchestrator-pack --name wr-i652 --issue 652 --prompt "task text"',
+      ),
+    ).toContain('positional arguments are not allowed on ao spawn');
+  });
+
   it('fails when --project or --name is removed', () => {
     expect(
       validateRunnableSpawnCommand('ao spawn --name "Claim PR" --claim-pr 589'),

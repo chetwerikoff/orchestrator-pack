@@ -54,7 +54,7 @@ describe('spawn worktree grant finalization (#567)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','567')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','567','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture-567'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -104,7 +104,7 @@ describe('spawn worktree grant finalization (#567)', () => {
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','567')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','567','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture-567-commit'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -183,7 +183,7 @@ describe('spawn worktree grant finalization (#567)', () => {
       $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
       $trustedGit = ${psString(trustedSystemGit)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
-        argv = @('spawn','567')
+        argv = @('spawn','--project','orchestrator-pack','--name','Gate probe','--issue','567','--prompt','Spawn gate fixture prompt')
         grantId = ${psString(grantId)}
         projectId = ${psString(projectId)}
         holder = @{ pid = $PID; host = 'test'; processGuid = 'fixture-567-recover'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -235,7 +235,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('validates same-lineage before reserved durable idempotent allow', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-idempotent-deny',
       projectId: 'orchestrator-pack',
       holder: { pid: 1, processGuid: 'holder-idempotent' },
@@ -285,7 +285,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('replay-deny-preserved: consumed grant from another path still denies before mutation', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-finalized',
       projectId: 'orchestrator-pack',
       holder: { pid: 1, processGuid: 'holder-a' },
@@ -352,7 +352,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('bounded retry stops after max finalization attempts', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-exhausted',
       projectId: 'orchestrator-pack',
       holder: { pid: 1, processGuid: 'holder-retry' },
@@ -387,7 +387,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('exhausted reserved grant still allows durable idempotent finalize recovery', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-exhausted-durable',
       projectId: 'orchestrator-pack',
       holder: { pid: 1, processGuid: 'holder-exhausted-durable' },
@@ -425,7 +425,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('consumed grant requires durable worktree for same-path idempotent replay', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-consumed-plain',
       projectId: 'orchestrator-pack',
       holder: { pid: 1, processGuid: 'holder-consumed-plain' },
@@ -492,7 +492,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('reserved plain preexisting path is not idempotent without durable worktree', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-plain-preexists',
       projectId: 'orchestrator-pack',
       holder: { pid: 1, processGuid: 'holder-plain' },
@@ -542,7 +542,7 @@ describe('spawn worktree grant finalization (#567)', () => {
         expect(identityA.identity).not.toBe(identityB.identity);
 
         const built = buildSpawnWorktreeGrantRecord({
-          argv: ['spawn', '567'],
+          argv: ['spawn', '--issue', '567'],
           grantId: 'g-foreign-path',
           projectId: 'orchestrator-pack',
           holder: { pid: 1 },
@@ -564,7 +564,7 @@ describe('spawn worktree grant finalization (#567)', () => {
 
   it('evaluateFinalize rejects commit when worktree is not durable', () => {
     const built = buildSpawnWorktreeGrantRecord({
-      argv: ['spawn', '567'],
+      argv: ['spawn', '--issue', '567'],
       grantId: 'g-not-durable',
       projectId: 'orchestrator-pack',
       holder: { pid: 1 },

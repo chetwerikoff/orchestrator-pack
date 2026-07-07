@@ -20,6 +20,7 @@ import {
   autonomousClaimPrProbeEnv,
   autonomousSpawnFixtureProbeEnv,
   withAoSpawnProbeStub,
+  SPAWN_GATE_FIXTURE_SPAWN_ARGV,
 } from './_test-autonomous-ao-stub-fixture.js';
 
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
@@ -119,13 +120,14 @@ describe('claim-pr classification', () => {
   it('classifies AO 0.10.2 recovery-shaped spawn argv (#638)', () => {
     const spawnNew = [
       'spawn',
-      '638',
       '--project',
       'orchestrator-pack',
       '--name',
       'wr-i638',
       '--issue',
       '638',
+      '--prompt',
+      'Implement GitHub issue #638: read the issue body and prerequisites. Continue the task and open a PR when ready.',
     ];
     const claimPr = [
       'spawn',
@@ -136,6 +138,8 @@ describe('claim-pr classification', () => {
       '--claim-pr',
       '589',
       '--no-takeover',
+      '--prompt',
+      'Resume work on PR #589: Continue implementation and keep the PR ready for review.',
     ];
     expect(classifySpawnAction(spawnNew)).toBe('spawn-new');
     expect(classifySpawnAction(claimPr)).toBe('claim-pr-resume');
@@ -335,12 +339,12 @@ describe('spawn policy adoption', () => {
 });
 
 describe('spawn policy guard integration', () => {
-  it('allows bare spawn with committed default policy', () => {
+  it('allows CLI-legal spawn-new with committed default policy (#652)', () => {
     withAoSpawnProbeStub(({ probeFile, pack }) => {
       const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, 'spawn', 'opk-1'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath, ...SPAWN_GATE_FIXTURE_SPAWN_ARGV],
         {
           cwd: repoRoot,
           encoding: 'utf8',
@@ -349,7 +353,7 @@ describe('spawn policy guard integration', () => {
       );
       expect(result.status).toBe(0);
       expect(result.stderr).toMatch(/autonomous spawn policy allow: action=spawn-new/);
-      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual(['spawn', 'opk-1']);
+      expect(readFileSync(probeFile, 'utf8').trim().split('\n')).toEqual([...SPAWN_GATE_FIXTURE_SPAWN_ARGV]);
     });
   });
 
@@ -392,7 +396,7 @@ describe('spawn policy guard integration', () => {
 
   it('ao shim allows spawn on autonomous surface with default policy', () => {
     withAoSpawnProbeStub(({ probeFile, pack }) => {
-      const result = spawnSync(pack.aoShimPath, ['spawn', 'opk-probe'], {
+      const result = spawnSync(pack.aoShimPath, [...SPAWN_GATE_FIXTURE_SPAWN_ARGV], {
         cwd: repoRoot,
         encoding: 'utf8',
         env: autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
