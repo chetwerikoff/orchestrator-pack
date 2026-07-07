@@ -50,6 +50,14 @@
       "path": "captures/ao-0-10-cli/session-ls-terminated.raw.json",
       "contentHash": "sha256:e38539d727a53c467573b8cbf5bf3a4b987a34a295c506e33638cb3a1ef64a3c"
     },
+    "ao-0-10-daemon/per-session-reviews-delivered-status": {
+      "id": "ao-0-10-daemon/per-session-reviews-delivered-status",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions/{id}/reviews + live ao.db review_run crosswalk",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json",
+      "contentHash": "sha256:1fa25250f6d2abc4a704919b24678542e7a339aefd271d1e2e130b6b6a350a47"
+    },
     "ao-0-10-daemon/per-session-reviews-empty": {
       "id": "ao-0-10-daemon/per-session-reviews-empty",
       "producer": "ao-0-10-daemon",
@@ -58,6 +66,14 @@
       "path": "captures/ao-0-10-daemon/per-session-reviews-empty.raw.json",
       "contentHash": "sha256:1a989a1b51f9ae9abf3ac15a9814678ab03a16c8981c46a980bf1e3cc11802d7"
     },
+    "ao-0-10-daemon/per-session-reviews-latestRun-status": {
+      "id": "ao-0-10-daemon/per-session-reviews-latestRun-status",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions/orchestrator-pack-23/reviews",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/per-session-reviews-latestRun-status.raw.json",
+      "contentHash": "sha256:5808e2bf35caa523af35b653c0853b4d3534cc0c30549d9217abde2ffebe615f"
+    },
     "ao-0-10-daemon/per-session-reviews-populated": {
       "id": "ao-0-10-daemon/per-session-reviews-populated",
       "producer": "ao-0-10-daemon",
@@ -65,6 +81,22 @@
       "kind": "structured",
       "path": "captures/ao-0-10-daemon/per-session-reviews-populated.raw.json",
       "contentHash": "sha256:59f9e7f1a6aeca931a8167a23d02d03978105a86c9e006506b18af45ef6c3b9e"
+    },
+    "ao-0-10-daemon/per-session-reviews-latestRun-status": {
+      "id": "ao-0-10-daemon/per-session-reviews-latestRun-status",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/per-session-reviews-latestRun-status.raw.json",
+      "contentHash": "sha256:5808e2bf35caa523af35b653c0853b4d3534cc0c30549d9217abde2ffebe615f"
+    },
+    "ao-0-10-daemon/per-session-reviews-delivered-status": {
+      "id": "ao-0-10-daemon/per-session-reviews-delivered-status",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json",
+      "contentHash": "sha256:1fa25250f6d2abc4a704919b24678542e7a339aefd271d1e2e130b6b6a350a47"
     },
     "ao-0-10-daemon/projects-list": {
       "id": "ao-0-10-daemon/projects-list",
@@ -433,22 +465,6 @@
       "kind": "unstructured",
       "path": "captures/spawn-worktree-grant-ao-session-basename/integration-spawn-373-opk-27.raw.txt",
       "contentHash": "sha256:459c49d2ea490604afce82290e10f7c88b6289a326d3db3a4710c8d6cdc3eff9"
-    },
-    "ao-0-10-daemon/per-session-reviews-latestRun-status": {
-      "id": "ao-0-10-daemon/per-session-reviews-latestRun-status",
-      "producer": "ao-0-10-daemon",
-      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
-      "kind": "structured",
-      "path": "captures/ao-0-10-daemon/per-session-reviews-latestRun-status.raw.json",
-      "contentHash": "sha256:5808e2bf35caa523af35b653c0853b4d3534cc0c30549d9217abde2ffebe615f"
-    },
-    "ao-0-10-daemon/per-session-reviews-delivered-status": {
-      "id": "ao-0-10-daemon/per-session-reviews-delivered-status",
-      "producer": "ao-0-10-daemon",
-      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
-      "kind": "structured",
-      "path": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json",
-      "contentHash": "sha256:1fa25250f6d2abc4a704919b24678542e7a339aefd271d1e2e130b6b6a350a47"
     }
   }
 }
