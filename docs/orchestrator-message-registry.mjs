@@ -915,6 +915,16 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/orchestrator-wake-supervisor.ps1',
     'scripts/orchestrator-wake-supervisor.test.ts',
   ],
+  641: [
+    'scripts/orchestrator-wake-common.ps1',
+    'scripts/orchestrator-wake-heartbeat.ps1',
+    'scripts/orchestrator-wake-listener.ps1',
+    'scripts/ci-green-wake-reconcile.ps1',
+    'scripts/ci-failure-notification-reconcile.ps1',
+    'scripts/review-trigger-reconcile.ps1',
+    'scripts/review-run-recovery.ps1',
+    'scripts/worker-message-submit-reconcile.ps1',
+  ],
   624: [
     'scripts/orchestrator-side-process-registry.json',
     'scripts/review-stuck-run-reaper.ps1',
