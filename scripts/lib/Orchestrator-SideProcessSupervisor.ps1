@@ -614,6 +614,138 @@ function Expand-OrchestratorWakeSupervisorChildExtraArgs {
     return $expanded
 }
 
+
+function Get-OrchestratorSideProcessScriptParamNames {
+    param([string]$ScriptPath)
+
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        throw "Missing side-process child script: $ScriptPath"
+    }
+    $text = Get-Content -LiteralPath $ScriptPath -Raw
+    if ($text -notmatch '(?ms)\bparam\s*\(\s*(.*?)\)\s*\r?\n') {
+        return @()
+    }
+    $block = $Matches[1]
+    return @([regex]::Matches($block, '\[\w+(?:\([^)]*\))?\]\$(?<name>[A-Za-z_][\w-]*)') |
+        ForEach-Object { $_.Groups['name'].Value })
+}
+
+function Get-OrchestratorWakeSupervisorChildLaunchSwitchNames {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Entry,
+        [switch]$ProductionMode
+    )
+
+    $switches = [System.Collections.Generic.List[string]]::new()
+    if ($Entry.RequiresOrchestratorSession) {
+        $switches.Add('OrchestratorSessionId')
+    }
+    if ($Entry.PassProjectId) {
+        $switches.Add('ProjectId')
+    }
+    if ($Entry.ExtraArgs) {
+        foreach ($token in @($Entry.ExtraArgs)) {
+            if ([string]$token -match '^-(?<name>[A-Za-z][\w-]*)$') {
+                $switches.Add($Matches['name'])
+            }
+        }
+    }
+    return @($switches)
+}
+
+function Build-OrchestratorWakeSupervisorChildLaunchArgv {
+    param(
+        [Parameter(Mandatory = $true)][string]$ChildId,
+        [Parameter(Mandatory = $true)]$Entry,
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string]$OrchestratorSessionId = '',
+        [string]$ProjectId = '',
+        [hashtable]$Paths = @{},
+        [switch]$TestMode,
+        [string[]]$ExtraChildArgs = @()
+    )
+
+    $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath)
+    if ($TestMode) {
+        $childArgs += @('-Role', $ChildId)
+        if ($Entry.RequiresOrchestratorSession) {
+            $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
+        }
+        $modeEnvKey = "AO_WAKE_SUPERVISOR_TEST_MODE_$($ChildId -replace '-', '_')"
+        $modeFromEnv = [Environment]::GetEnvironmentVariable($modeEnvKey, 'Process')
+        if ($modeFromEnv) {
+            $childArgs += @('-Mode', $modeFromEnv)
+        }
+    }
+    elseif ($Entry.RequiresOrchestratorSession) {
+        $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
+    }
+    if ($Entry.PassProjectId -and $ProjectId) {
+        $childArgs += @('-ProjectId', $ProjectId)
+    }
+    if ($ExtraChildArgs -and -not $TestMode) {
+        $childArgs += $ExtraChildArgs
+    }
+    if (-not $TestMode -and $Entry.ExtraArgs) {
+        $childArgs += Expand-OrchestratorWakeSupervisorChildExtraArgs -ExtraArgs $Entry.ExtraArgs -Paths $Paths
+    }
+    return $childArgs
+}
+
+function Test-OrchestratorSideProcessLaunchContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$RegistryPath,
+        [Parameter(Mandatory = $true)][string]$ScriptsRoot,
+        [ref]$OutErrors
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    if (-not (Test-Path -LiteralPath $RegistryPath -PathType Leaf)) {
+        $errors.Add("missing registry: $RegistryPath")
+        $OutErrors.Value = @($errors)
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $ScriptsRoot -PathType Container)) {
+        $errors.Add("missing scripts root: $ScriptsRoot")
+        $OutErrors.Value = @($errors)
+        return $false
+    }
+
+    $doc = Get-Content -LiteralPath $RegistryPath -Raw | ConvertFrom-Json
+    $children = @($doc.children)
+    if ($children.Count -lt 1) {
+        $errors.Add('registry children[] is empty')
+        $OutErrors.Value = @($errors)
+        return $false
+    }
+
+    foreach ($child in $children) {
+        $entry = @{
+            Id                          = [string]$child.id
+            ScriptPath                  = Join-Path $ScriptsRoot ([string]$child.script)
+            RequiresOrchestratorSession = [bool]$child.requiresOrchestratorSession
+            PassProjectId               = [bool]$child.passProjectId
+            ExtraArgs                   = @($child.extraArgs)
+        }
+        if (-not (Test-Path -LiteralPath $entry.ScriptPath -PathType Leaf)) {
+            $errors.Add("$($entry.Id): missing script $($child.script)")
+            continue
+        }
+
+        $expectedSwitches = Get-OrchestratorWakeSupervisorChildLaunchSwitchNames -Entry $entry -ProductionMode
+        $paramNames = Get-OrchestratorSideProcessScriptParamNames -ScriptPath $entry.ScriptPath
+        foreach ($switchName in $expectedSwitches) {
+            if ($paramNames -notcontains $switchName) {
+                $errors.Add("$($entry.Id): supervisor launch switch '-$switchName' is not declared in $($child.script) param block")
+            }
+        }
+    }
+
+    $OutErrors.Value = @($errors)
+    return ($errors.Count -eq 0)
+}
+
 function Start-OrchestratorWakeSupervisorChild {
     param(
         [string]$ChildId,
@@ -649,30 +781,9 @@ function Start-OrchestratorWakeSupervisorChild {
     }
     Save-OrchestratorWakeSupervisorPreviousChildLog -LogPath $logPath
 
-    $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
-    if ($TestMode) {
-        $childArgs += @('-Role', $ChildId)
-        if ($entry.RequiresOrchestratorSession) {
-            $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
-        }
-        $modeEnvKey = "AO_WAKE_SUPERVISOR_TEST_MODE_$($ChildId -replace '-', '_')"
-        $modeFromEnv = [Environment]::GetEnvironmentVariable($modeEnvKey, 'Process')
-        if ($modeFromEnv) {
-            $childArgs += @('-Mode', $modeFromEnv)
-        }
-    }
-    elseif ($entry.RequiresOrchestratorSession) {
-        $childArgs += @('-OrchestratorSessionId', $OrchestratorSessionId)
-    }
-    if ($entry.PassProjectId -and $ProjectId) {
-        $childArgs += @('-ProjectId', $ProjectId)
-    }
-    if ($ExtraChildArgs -and -not $TestMode) {
-        $childArgs += $ExtraChildArgs
-    }
-    if (-not $TestMode -and $entry.ExtraArgs) {
-        $childArgs += Expand-OrchestratorWakeSupervisorChildExtraArgs -ExtraArgs $entry.ExtraArgs -Paths $Paths
-    }
+    $childArgs = Build-OrchestratorWakeSupervisorChildLaunchArgv -ChildId $ChildId -Entry $entry `
+        -ScriptPath $scriptPath -OrchestratorSessionId $OrchestratorSessionId -ProjectId $ProjectId `
+        -Paths $Paths -TestMode:$TestMode -ExtraChildArgs $ExtraChildArgs
 
     $childEnv = New-OrchestratorWakeSupervisorChildEnvironment -Paths $Paths -Entry $entry `
         -ChildId $ChildId -OrchestratorSessionId $OrchestratorSessionId -ProjectId $ProjectId -TestMode:$TestMode

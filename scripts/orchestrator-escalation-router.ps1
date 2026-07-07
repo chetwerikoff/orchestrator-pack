@@ -5,6 +5,7 @@
 [CmdletBinding()]
 param(
     [string]$OrchestratorSessionId = '',
+    [string]$ProjectId = '',
     [int]$PollSeconds = 15,
     [switch]$Once
 )
