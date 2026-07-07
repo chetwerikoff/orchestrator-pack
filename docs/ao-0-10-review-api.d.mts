@@ -38,6 +38,15 @@ export interface ProjectReviewerHarnessEvaluation {
   reviewers: Array<{ harness?: string }>;
 }
 
+export interface ReviewerHarnessAbortClassification {
+  abort: boolean;
+  reason: string;
+  harness?: string | null;
+  expectedHarness?: string;
+  httpStatus?: number;
+  classified?: boolean;
+}
+
 export declare function buildReviewTriggerPath(sessionId: string): string;
 export declare function buildReviewListPath(sessionId: string): string;
 export declare function buildLegacyReviewRunArgv(sessionId: string, reviewCommand: string): string[];
@@ -69,6 +78,10 @@ export declare function evaluateProjectReviewerHarness(
   configPayload: unknown,
   expectedHarness?: string,
 ): ProjectReviewerHarnessEvaluation;
+export declare function classifyReviewerHarnessAbort(
+  configPayload: unknown,
+  expectedHarness?: string,
+): ReviewerHarnessAbortClassification;
 export declare function findForbiddenLegacyReviewRunCommands(
   commandLines: string[],
 ): Array<{ command: string; pattern: string }>;

@@ -3,7 +3,9 @@
  * Vitest: scripts/harness-review-bridge.test.ts
  */
 import { join } from 'node:path';
-import { evaluateProjectReviewerHarness } from './ao-0-10-review-api.mjs';
+import { classifyReviewerHarnessAbort } from './ao-0-10-review-api.mjs';
+
+export { classifyReviewerHarnessAbort };
 
 /**
  * @param {string} stdout
@@ -59,8 +61,8 @@ export function resolveHarnessExecutionSurfaces(trustedPackRoot) {
   return {
     trustedPackRoot: root,
     promptPath: join(root, 'prompts/codex_review_prompt.md'),
-    bridgeEntrypoint: join(root, 'scripts/invoke-harness-review-bridge.ps1'),
-    bridgeRunner: join(root, 'scripts/invoke-harness-review-bridge.ts'),
+    bridgeEntrypoint: join(root, 'scripts/harness-review-bridge.ps1'),
+    bridgeRunner: join(root, 'scripts/harness-review-bridge.ts'),
     mapperPath: join(root, 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts'),
     reviewScript: join(root, 'plugins/ao-codex-pr-reviewer/bin/review.ps1'),
   };
@@ -152,31 +154,6 @@ export function evaluateNestedReviewBudget(env = process.env) {
     return { ok: false, reason: 'nested_review_budget_exceeded' };
   }
   return { ok: true, reason: '' };
-}
-
-/**
- * @param {unknown} configPayload
- * @param {string} [expectedHarness]
- */
-export function classifyReviewerHarnessAbort(configPayload, expectedHarness = 'codex') {
-  const evaluation = evaluateProjectReviewerHarness(configPayload, expectedHarness);
-  if (!evaluation.ok || !evaluation.matchesExpected) {
-    return {
-      abort: true,
-      reason: 'reviewers_harness_misconfig',
-      harness: evaluation.harness || null,
-      expectedHarness,
-      httpStatus: 0,
-      classified: true,
-    };
-  }
-  return {
-    abort: false,
-    reason: '',
-    harness: evaluation.harness,
-    expectedHarness,
-    classified: false,
-  };
 }
 
 /**

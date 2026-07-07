@@ -4,7 +4,6 @@
  */
 
 import { readStdinJson, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
-import { classifyReviewerHarnessAbort } from './harness-review-bridge.mjs';
 import {
   flattenSessionReviewsToNormalizedRuns,
   attachProjectIdToNormalizedRuns,
@@ -167,6 +166,31 @@ export function evaluateProjectReviewerHarness(configPayload, expectedHarness = 
     harness,
     matchesExpected: expected ? harness === expected : true,
     reviewers,
+  };
+}
+
+/**
+ * @param {unknown} configPayload
+ * @param {string} [expectedHarness]
+ */
+export function classifyReviewerHarnessAbort(configPayload, expectedHarness = 'codex') {
+  const evaluation = evaluateProjectReviewerHarness(configPayload, expectedHarness);
+  if (!evaluation.ok || !evaluation.matchesExpected) {
+    return {
+      abort: true,
+      reason: 'reviewers_harness_misconfig',
+      harness: evaluation.harness || null,
+      expectedHarness,
+      httpStatus: 0,
+      classified: true,
+    };
+  }
+  return {
+    abort: false,
+    reason: '',
+    harness: evaluation.harness,
+    expectedHarness,
+    classified: false,
   };
 }
 
