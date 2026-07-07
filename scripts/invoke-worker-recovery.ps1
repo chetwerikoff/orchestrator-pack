@@ -33,6 +33,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 
 . (Join-Path $PSScriptRoot 'lib/Worker-Recovery.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 
 $session = $null
 if ($FixtureSessionJson) {
@@ -89,6 +90,16 @@ if ($PSBoundParameters.ContainsKey('WorktreePresent') -or $Probe) {
 }
 else {
     $result = Invoke-WorkerRecovery @recoveryParams
+}
+
+if ($result.outcome -in @('skipped_ambiguous', 'skipped_live', 'spawn_denied', 'partial_failure', 'escalated')) {
+    $sessionId = [string]$SessionId
+    $reason = [string]$result.outcome
+    $corr = "corr:recovery:$sessionId"
+    $dedupe = "dedupe:recovery:$sessionId`:$reason"
+    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-dead-worker-recovery' `
+        -SourceProcess 'invoke-worker-recovery' -CorrelationKey $corr -DedupeKey $dedupe `
+        -Diagnosis @{ sessionId = $sessionId; outcome = $result.outcome; reason = $result.reason } -DryRun:$DryRun | Out-Null
 }
 
 $result | ConvertTo-Json -Compress -Depth 8

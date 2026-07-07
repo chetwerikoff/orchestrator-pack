@@ -1,4 +1,6 @@
 #requires -Version 5.1
+
+. (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
 <#
   Cross-process single-flight claims for automated ao-review run starters.
 
@@ -427,10 +429,11 @@ function Get-ReviewStartClaimContendedResult {
     param(
         [string]$Path,
         [string]$Namespace,
-        [string]$Key
+        [string]$Key,
+        [int]$MaxAttempts = 400
     )
 
-    for ($attempt = 0; $attempt -lt 400; $attempt++) {
+    for ($attempt = 0; $attempt -lt $MaxAttempts; $attempt++) {
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
             $existing = Read-ReviewStartClaimRecord -Path $Path
             if ($existing.ok) {
@@ -729,10 +732,17 @@ function Get-ReviewStartClaimLostRaceResult {
     param(
         [string]$Path,
         [string]$Namespace,
-        [string]$Key
+        [string]$Key,
+        [int]$PrNumber = 0,
+        [string]$HeadSha = ''
     )
 
-    $contended = Get-ReviewStartClaimContendedResult -Path $Path -Namespace $Namespace -Key $Key
+    if ($PrNumber -le 0 -and $Key -match '^pr-(\d+)-(.+)$') {
+        $PrNumber = [int]$Matches[1]
+        $HeadSha = [string]$Matches[2]
+    }
+
+    $contended = Get-ReviewStartClaimContendedResult -Path $Path -Namespace $Namespace -Key $Key -MaxAttempts 20
     if ($contended.holder) {
         return $contended
     }
@@ -749,6 +759,16 @@ function Get-ReviewStartClaimLostRaceResult {
                 key       = $existing.record.key
             }
         }
+    }
+    $corr = "corr:review-start-claim:${PrNumber}:${HeadSha}"
+    $dedupe = "dedupe:review-start-claim:${PrNumber}:${HeadSha}"
+    try {
+        Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-review-start-claim' `
+            -SourceProcess 'review-start-claim-reaper' -CorrelationKey $corr -DedupeKey $dedupe `
+            -Diagnosis @{ prNumber = $PrNumber; headSha = $HeadSha; reason = 'lost_race_without_active_record' } | Out-Null
+    }
+    catch {
+        # Escalation publish must not block claim acquisition; router redelivers from durable state.
     }
     return @{
         acquired    = $false
@@ -842,7 +862,7 @@ function Resolve-ReviewStartClaimAgainstExisting {
         } -PriorFirstAttemptMonotonicMs (Get-ReviewStartClaimPriorFirstAttemptMonotonicMs -Record $Existing.record)
         Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
         if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $Path -Holder $newRecord.holder)) {
-            return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key
+            return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key -PrNumber $PrNumber -HeadSha $Normalized
         }
         return @{ acquired = $true; recovered = $true; claim = $newRecord; path = $Path; namespace = $Namespace; key = $newRecord.key; recoveredRecord = $Existing.record }
     }
@@ -862,7 +882,7 @@ function Resolve-ReviewStartClaimAgainstExisting {
     } -PriorFirstAttemptMonotonicMs (Get-ReviewStartClaimPriorFirstAttemptMonotonicMs -Record $Existing.record)
     Write-ReviewStartClaimAtomic -Path $Path -Record $newRecord
     if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $Path -Holder $newRecord.holder)) {
-        return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key
+        return Get-ReviewStartClaimLostRaceResult -Path $Path -Namespace $Namespace -Key $newRecord.key -PrNumber $PrNumber -HeadSha $Normalized
     }
     return @{ acquired = $true; recovered = $true; claim = $newRecord; path = $Path; namespace = $Namespace; key = $newRecord.key; recoveredRecord = $Existing.record }
 }
@@ -908,7 +928,7 @@ function Acquire-ReviewStartClaim {
                 -PriorFirstAttemptMonotonicMs $priorFirstAttempt
             Write-ReviewStartClaimAtomic -Path $path -Record $record
             if (-not (Test-ReviewStartClaimHolderOwnsPath -Path $path -Holder $record.holder)) {
-                return Get-ReviewStartClaimLostRaceResult -Path $path -Namespace $resolved -Key $key
+                return Get-ReviewStartClaimLostRaceResult -Path $path -Namespace $resolved -Key $key -PrNumber $PrNumber -HeadSha $normalized
             }
             return @{ acquired = $true; recovered = $false; claim = $record; path = $path; namespace = $resolved; key = $record.key }
         }

@@ -18,7 +18,8 @@ $requiredFixtures = @(
     'clean-deliveries.json',
     'clean-watch-entries.json',
     'clean-report-state-seed-maps.json',
-    'clean-dead-worker-maps.json'
+    'clean-dead-worker-maps.json',
+    'clean-escalation-maps.json'
 )
 
 $discoveryExcludeCallers = @(

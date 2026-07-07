@@ -1497,6 +1497,40 @@ else {
 }
 
 Write-Host ''
+Write-Host '== Orchestrator escalation contract (Issue #641) =='
+$escalationEmitterCheck = Join-Path $Root 'scripts/check-orchestrator-escalation-emitters.ps1'
+if (Test-Path -LiteralPath $escalationEmitterCheck -PathType Leaf) {
+    & $escalationEmitterCheck $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-escalation-emitters.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-escalation-emitters.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Orchestrator escalation emitter guard failed (Issue #641)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-escalation-emitters.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestrator escalation emitter check script (Issue #641)'
+}
+
+$escalationCatalogCheck = Join-Path $Root 'scripts/check-orchestrator-escalation-catalog.ps1'
+if (Test-Path -LiteralPath $escalationCatalogCheck -PathType Leaf) {
+    & $escalationCatalogCheck $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-escalation-catalog.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-escalation-catalog.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Orchestrator escalation catalog guard failed (Issue #641)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-escalation-catalog.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestrator escalation catalog check script (Issue #641)'
+}
+
+Write-Host ''
 Write-Host '== Reviewer failure evidence registration (Issue #312) =='
 $reviewerFailureEvidenceCheck = Join-Path $Root 'scripts/check-reviewer-failure-evidence.ps1'
 if (Test-Path -LiteralPath $reviewerFailureEvidenceCheck -PathType Leaf) {

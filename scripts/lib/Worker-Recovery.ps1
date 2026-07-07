@@ -1,4 +1,6 @@
 #requires -Version 5.1
+
+. (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
 <#
   Sanctioned autonomous worker recovery primitive (Issue #522).
 #>
@@ -455,6 +457,13 @@ function Invoke-WorkerRecovery {
             recordedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
         }
         Write-WorkerRecoveryAudit -Namespace $recoveryNamespace -Record $audit
+        $sessionId = [string]$SessionId
+        $reason = [string]$retryGate.reason
+        $corr = "corr:worker-recovery:$sessionId"
+        $dedupe = "dedupe:worker-recovery:$sessionId`:$reason"
+        Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-worker-recovery' `
+            -SourceProcess 'dead-worker-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+            -Diagnosis @{ sessionId = $sessionId; reason = $reason; audit = $audit } | Out-Null
         return @{ ok = $false; outcome = 'escalated'; reason = $retryGate.reason; audit = $audit }
     }
     if (-not $retryGate.shouldRetry -and $retryState.attempt -gt 0) {

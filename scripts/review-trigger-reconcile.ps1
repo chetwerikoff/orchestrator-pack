@@ -26,6 +26,8 @@ param(
     [string]$FixturePath = ''
 )
 
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
+
 $ErrorActionPreference = 'Stop'
 $Script:ReconcileLogPrefix = 'review-trigger-reconcile'
 
@@ -706,6 +708,11 @@ function Invoke-ReconcileTick {
         }
         if ($action.type -eq 'escalate_degraded_ci') {
             Write-ReconcileLog "ESCALATE PR #$($action.prNumber): $($action.message)"
+            $corr = "corr:review-trigger:$($action.prUrl):$($action.headSha)"
+            $dedupe = "$corr:degraded_ci"
+            Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-review-trigger-degraded-ci' `
+                -SourceProcess 'review-trigger-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                -Diagnosis @{ prNumber = $action.prNumber; headSha = $action.headSha; message = $action.message } | Out-Null
             continue
         }
         if ($action.type -eq 'track_degraded_ci') {

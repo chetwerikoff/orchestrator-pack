@@ -32,6 +32,7 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
@@ -255,6 +256,13 @@ function Invoke-PlannedCiFailureReconcileSend {
         -TupleKey $tupleKey -Surface 'ci-failure-notification-reconcile' -ProjectId $ProjectId -Message $Message
     if (-not $claim.acquired) {
         $claimPhase = if ($claim.phase) { [string]$claim.phase } elseif ($claim.claim -and $claim.claim.phase) { [string]$claim.claim.phase } else { '' }
+        if ($claim.escalate) {
+            $corr = "corr:ci-failure:${prNumber}:${headSha}"
+            $dedupe = "dedupe:ci-failure:${prNumber}:${headSha}`:notify"
+            Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-ci-failure-notify' `
+                -SourceProcess 'ci-failure-notification-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                -Diagnosis @{ prNumber = $prNumber; headSha = $headSha; reason = $claim.reason; diagnosis = $claim.diagnosis } | Out-Null
+        }
         return @{
             ok           = $false
             reason       = [string]$claim.reason

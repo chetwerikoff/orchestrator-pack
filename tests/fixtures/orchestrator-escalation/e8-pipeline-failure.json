@@ -1,0 +1,5 @@
+{
+  "class": "escalation-pipeline-failure",
+  "correlation": "corr:pipeline:delivery",
+  "axis": "F2"
+}

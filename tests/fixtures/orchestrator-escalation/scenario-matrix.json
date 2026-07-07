@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "classes": [
+    "escalation-dead-worker-recovery",
+    "escalation-claim-store-integrity",
+    "escalation-review-trigger-degraded-ci",
+    "escalation-review-run-recovery",
+    "escalation-submit-adoption",
+    "escalation-handoff-envelope",
+    "escalation-protected-finding",
+    "escalation-pipeline-failure",
+    "escalation-ci-failure-notify",
+    "escalation-ci-green-claim-audit",
+    "escalation-ci-green-claim",
+    "escalation-gated-nudge",
+    "escalation-envelope-ledger",
+    "escalation-review-start-claim",
+    "escalation-worker-recovery"
+  ],
+  "notes": "Fixture anchor for Issue #641 escalation scenario matrix; executable behavior is covered in scripts/orchestrator-escalation.test.ts."
+}

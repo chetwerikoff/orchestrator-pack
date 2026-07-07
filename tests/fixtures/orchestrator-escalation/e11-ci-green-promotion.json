@@ -1,0 +1,5 @@
+{
+  "class": "escalation-ci-green-claim-audit",
+  "correlation": "corr:ci-green:1:abc",
+  "axis": "F4"
+}

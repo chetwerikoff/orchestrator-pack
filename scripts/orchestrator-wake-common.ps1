@@ -75,14 +75,14 @@ function Send-OrchestratorWakeMessage {
     )
 
     if ($DryRun) {
-        Write-OrchestratorWakeLog "dry-run: ao send $OrchestratorId $Message"
+        Write-OrchestratorWakeLog "dry-run: ao send --session $OrchestratorId --message <redacted>"
         return
     }
 
-    & ao send $OrchestratorId $Message
+    & ao send --message $Message --session $OrchestratorId
     if ($LASTEXITCODE -ne 0) {
         throw "ao send failed with exit code $LASTEXITCODE"
     }
     $label = if ($LogSuffix) { "forwarded ${LogSuffix}:" } else { 'forwarded:' }
-    Write-OrchestratorWakeLog "${label} ao send $OrchestratorId"
+    Write-OrchestratorWakeLog "${label} ao send --session $OrchestratorId"
 }

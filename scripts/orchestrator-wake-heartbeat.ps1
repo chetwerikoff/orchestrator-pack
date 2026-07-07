@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Separate process from orchestrator-wake-listener.ps1. Emits a labelled heartbeat wake on a
-  fixed interval (default 15 minutes) even when AO sends no notifications, so the orchestrator
+  fixed interval (default 4 hours) even when AO sends no notifications, so the orchestrator
   can run turn-opening reconciliation during event silence.
 
   Shares file-based single-flight state with the listener (AO_WAKE_DEDUP_STATE or
@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'orchestrator-wake-common.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 
-$Script:DefaultIntervalMinutes = 15
+$Script:DefaultIntervalMinutes = 240
 
 function Get-HeartbeatIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }

@@ -65,8 +65,19 @@ and `docs/review-reconcile-primitives.mjs` — not as an LLM turn checklist.
 outside the automated claim.
 
 **Exception-only LLM handling:** contested protected findings (**E7**) and escalation
-wakes are handled per **issue #641** — read that contract; do not duplicate its
-procedure here.
+wakes are handled per **issue #641**.
+
+**Orchestrator escalation ack (issue #641):** when a wake body contains
+`[orchestrator-escalation]` with `action=Write-OrchestratorEscalationAck`, after handling
+the incident invoke the shared helper (do not edit escalation state ad hoc):
+
+```powershell
+. scripts/lib/Orchestrator-Escalation.ps1
+Write-OrchestratorEscalationAck -EscalationId <escalation_id> -AckToken <ack_token>
+```
+
+Use the `escalation_id` and `ack_token` from the wake envelope JSON. Bogus or stale ack
+tokens must be rejected; redelivery continues until a validated ack is recorded.
 
 See also: [`README.md`](../README.md#local-codex-review-active), [`docs/architecture.md`](../docs/architecture.md#review-paths).
 

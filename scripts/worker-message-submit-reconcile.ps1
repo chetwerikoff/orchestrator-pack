@@ -38,6 +38,7 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Submit-WorkerInputDraft.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
@@ -651,6 +652,12 @@ function Invoke-SubmitReconcileTick {
             }
             'escalate' {
                 Write-SubmitReconcileLog $action.diagnosis
+                $deliveryId = [string]$action.deliveryId
+                $corr = "corr:submit:$deliveryId"
+                $dedupe = "dedupe:submit:$deliveryId`:adoption"
+                Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
+                    -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                    -Diagnosis @{ deliveryId = $deliveryId; diagnosis = $action.diagnosis; reason = $action.reason } | Out-Null
                 $escalated++
             }
             'mark_consumed' {
@@ -739,6 +746,11 @@ try {
                     -DryRunMode:$DryRun
                 if ($adoptionObservation.escalated -gt 0 -and $adoptionObservation.diagnosis) {
                     $adoptionTickError = [string]$adoptionObservation.diagnosis
+                    $corr = 'corr:submit:adoption-preflight'
+                    $dedupe = "dedupe:submit:adoption:$($adoptionObservation.reason)"
+                    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
+                        -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                        -Diagnosis @{ diagnosis = $adoptionObservation.diagnosis; reason = $adoptionObservation.reason } | Out-Null
                 }
                 $state = $adoptionObservation.tracking
                 if (-not $DryRun) {

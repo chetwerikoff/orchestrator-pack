@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "records": {
+    "abc123deadbeef": {
+      "escalationClassId": "escalation-dead-worker-recovery",
+      "correlationKey": "corr:recovery:opk-s1",
+      "route": "llm-orchestrator",
+      "status": "pending",
+      "attempts": 1
+    }
+  },
+  "wakeWindows": {
+    "escalation-dead-worker-recovery|corr:recovery:opk-s1": 1000
+  },
+  "audit": {}
+}

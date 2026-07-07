@@ -1,0 +1,5 @@
+{
+  "class": "escalation-claim-store-integrity",
+  "correlation": "corr:claim-store:ns1",
+  "axis": "F5"
+}
