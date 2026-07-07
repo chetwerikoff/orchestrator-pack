@@ -295,13 +295,34 @@ function Merge-AoSessionRowsWithReportAudit {
         if (-not $sessionId) { $sessionId = [string]$session.sessionId }
 
         $row = [ordered]@{}
-        foreach ($prop in $session.PSObject.Properties) {
-            $row[$prop.Name] = $prop.Value
+        if ($session -is [System.Collections.IDictionary]) {
+            foreach ($key in @($session.Keys)) {
+                $row[[string]$key] = $session[$key]
+            }
         }
-        $row['reports'] = @($audit.reports)
-        $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId `
-            -SourceKind $SourceKind -AuditPath ([string]$audit.auditPath)
-        $row['reportSnapshotKind'] = 'audit-backed'
+        else {
+            foreach ($prop in $session.PSObject.Properties) {
+                $row[$prop.Name] = $prop.Value
+            }
+        }
+        if (@($audit.reports).Count -gt 0) {
+            $row['reports'] = @($audit.reports)
+            $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId `
+                -SourceKind $SourceKind -AuditPath ([string]$audit.auditPath)
+            $row['reportSnapshotKind'] = 'audit-backed'
+        }
+        elseif (@($session.reports).Count -gt 0) {
+            $row['reports'] = @($session.reports)
+            $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId `
+                -SourceKind 'fixture-session-reports'
+            $row['reportSnapshotKind'] = 'fixture-session-reports'
+        }
+        else {
+            $row['reports'] = @()
+            $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId `
+                -SourceKind $SourceKind -AuditPath ([string]$audit.auditPath)
+            $row['reportSnapshotKind'] = 'audit-backed'
+        }
         $merged += [pscustomobject]$row
     }
     return $merged
@@ -594,7 +615,7 @@ function Get-AoStatusSessionsWithReports {
         return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $payload -SourceKind 'cli-report-full')
     }
 
-    $sessions = @(Get-AoMergedStatusSessions -Project $Project `
+    $sessions = @(Get-AoStatusSessions -Project $Project `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
             -AoCommand $AoCommand)
     return @(Merge-AoSessionRowsWithReportAudit -Sessions $sessions -Project $Project -SourceKind 'audit-backed')
@@ -620,7 +641,7 @@ function Get-AoStatusSessionsWithReportsIncludingTerminated {
                 -SourceKind 'cli-report-full-terminated')
     }
 
-    $sessions = @(Get-AoMergedStatusSessions -Project $Project -IncludeTerminated `
+    $sessions = @(Get-AoStatusSessionsIncludingTerminated -Project $Project `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
             -AoCommand $AoCommand)
     return @(Merge-AoSessionRowsWithReportAudit -Sessions $sessions -Project $Project `
