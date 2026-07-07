@@ -115,6 +115,16 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
     ).toEqual({ ok: true, projectId: 'orchestrator-pack' });
   });
 
+  it('resolves --project from AO session row when synthesized worktree record lacks projectId', () => {
+    expect(
+      resolveRecoverySpawnProjectId({
+        worktreeRecord: { sessionId: 'opk-638', head: 'abc123' },
+        aoSessionRow: { projectId: 'other-pack' },
+        fallbackProjectId: 'orchestrator-pack',
+      }),
+    ).toEqual({ ok: true, projectId: 'other-pack' });
+  });
+
   it('classifies new argv shapes for spawn policy routing', () => {
     const spawnNewArgv = expectBuildOk(buildRecoverySpawnArgv({
       spawnAction: 'spawn-new',
@@ -173,6 +183,19 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
     const parsed = JSON.parse(runPwsh(script)) as { ok: boolean; projectId: string };
     expect(parsed.ok).toBe(true);
     expect(parsed.projectId).toBe('orchestrator-pack');
+  });
+
+  it('worker recovery spawn: prefers AO session project when synthesized worktree record lacks projectId', () => {
+    const script = `
+      . '${recoveryPs1.replace(/'/g, "''")}'
+      $record = '{"sessionId":"opk-638","head":"abc123"}' | ConvertFrom-Json
+      $aoRow = '{"projectId":"other-pack"}' | ConvertFrom-Json
+      $result = Resolve-WorkerRecoverySpawnProjectId -WorktreeRecord $record -AoSessionRow $aoRow -FallbackProjectId 'orchestrator-pack'
+      [pscustomobject]@{ ok = [bool]$result.ok; projectId = [string]$result.projectId } | ConvertTo-Json -Compress
+    `;
+    const parsed = JSON.parse(runPwsh(script)) as { ok: boolean; projectId: string };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.projectId).toBe('other-pack');
   });
 });
 

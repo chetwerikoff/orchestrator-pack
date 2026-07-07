@@ -101,7 +101,6 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
             branch    = if ($record.branch) { [string]$record.branch } else { '' }
             detached  = [bool]$record.detached
             sessionId = $sessionId
-            projectId = $ProjectId
         }
     }
     return $FallbackRecord
