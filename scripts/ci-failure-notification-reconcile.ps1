@@ -256,6 +256,13 @@ function Invoke-PlannedCiFailureReconcileSend {
         -TupleKey $tupleKey -Surface 'ci-failure-notification-reconcile' -ProjectId $ProjectId -Message $Message
     if (-not $claim.acquired) {
         $claimPhase = if ($claim.phase) { [string]$claim.phase } elseif ($claim.claim -and $claim.claim.phase) { [string]$claim.claim.phase } else { '' }
+        if ($claim.escalate) {
+            $corr = "corr:ci-failure:${prNumber}:${headSha}"
+            $dedupe = "dedupe:ci-failure:${prNumber}:${headSha}`:notify"
+            Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-ci-failure-notify' `
+                -SourceProcess 'ci-failure-notification-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                -Diagnosis @{ prNumber = $prNumber; headSha = $headSha; reason = $claim.reason; diagnosis = $claim.diagnosis } | Out-Null
+        }
         return @{
             ok           = $false
             reason       = [string]$claim.reason
@@ -263,13 +270,6 @@ function Invoke-PlannedCiFailureReconcileSend {
             claimPhase   = $claimPhase
             escalate     = [bool]$claim.escalate
             diagnosis    = [string]$claim.diagnosis
-        }
-        if ($claim.escalate) {
-            $corr = "corr:ci-failure:${prNumber}:${headSha}"
-            $dedupe = "dedupe:ci-failure:${prNumber}:${headSha}`:notify"
-            Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-ci-failure-notify' `
-                -SourceProcess 'ci-failure-notification-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
-                -Diagnosis @{ prNumber = $prNumber; headSha = $headSha; reason = $claim.reason; diagnosis = $claim.diagnosis } | Out-Null
         }
     }
 
