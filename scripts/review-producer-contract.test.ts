@@ -52,6 +52,7 @@ describe('review-producer-contract', () => {
             status: 'completed',
             targetSha: 'abc123def4567890abcdef1234567890abcdef12',
             deliveredAt: '2026-07-06T01:00:00.000Z',
+            completedAt: '2026-07-06T01:05:00.000Z',
             findingCount: 3,
             verdict: 'changes_requested',
           },
@@ -63,6 +64,7 @@ describe('review-producer-contract', () => {
     const run = runs[0]!;
     expect(run.prReviewStatus).toBe('changes_requested');
     expect(run.deliveredFindingCount).toBe(3);
+    expect(run.completedAt).toBe('2026-07-06T01:05:00.000Z');
     expect(isDeliveredChangesRequested(run)).toBe(true);
     expect(isUndeliveredChangesRequested(run)).toBe(false);
     expect(JSON.stringify(run)).not.toMatch(/needs_triage|sentFindingCount|terminationReason/);

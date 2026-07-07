@@ -62,6 +62,7 @@ export const IN_FLIGHT_LATEST_RUN_STATUSES = new Set(['queued', 'preparing', 'ru
  *   batchId?: string,
  *   createdAt?: string,
  *   updatedAt?: string,
+ *   completedAt?: string,
  *   retryEligible?: boolean,
  *   retryCount?: number,
  * }} NormalizedReviewRun
@@ -269,6 +270,7 @@ export function normalizePrReviewStateRow(entry, linkedSessionId = '') {
     batchId: latestRun.batchId ? String(latestRun.batchId) : undefined,
     createdAt: latestRun.createdAt ? String(latestRun.createdAt) : undefined,
     updatedAt: latestRun.updatedAt ? String(latestRun.updatedAt) : undefined,
+    completedAt: latestRun.completedAt ? String(latestRun.completedAt) : undefined,
     retryEligible: latestRun.retryEligible,
     retryCount: latestRun.retryCount,
   };
