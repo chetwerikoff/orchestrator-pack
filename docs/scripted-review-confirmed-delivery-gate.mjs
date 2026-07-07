@@ -245,6 +245,31 @@ export function evaluateGatePollStep(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
   const elapsedMs = Math.max(0, nowMs - startedAtMs);
   const windowExpired = elapsedMs >= config.pollWindowMs;
+  const normalizedVerdict = String(input.verdict ?? '').trim().toLowerCase();
+
+  if (normalizedVerdict === 'approved') {
+    const liveness = classifyWorkerLiveness({
+      session: input.session,
+      openPrs: input.openPrs,
+      prNumber: input.prNumber,
+      targetSha: input.targetSha,
+    });
+    const terminal = evaluateGateTerminalAction({
+      verdict: 'approved',
+      pollOutcome: { outcome: POLL_NOT_DELIVERED, reason: 'approved_skip_poll' },
+      liveness,
+      windowExpired: false,
+    });
+    return {
+      config,
+      elapsedMs,
+      windowExpired: false,
+      pollOutcome: { outcome: POLL_NOT_DELIVERED, reason: 'approved_skip_poll' },
+      liveness,
+      terminal,
+      shouldContinuePolling: false,
+    };
+  }
 
   const findResult = findReviewEntryForSubmit(input.reviews, {
     runId: input.runId,

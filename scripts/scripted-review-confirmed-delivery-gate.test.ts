@@ -94,6 +94,28 @@ describe('gate decision matrix (AC#9)', () => {
     expect(terminal.action).toBe('send');
   });
 
+  it('approved poll-step skips review lookup (empty reviews)', () => {
+    const step = evaluateGatePollStep({
+      verdict: 'approved',
+      reviews: [],
+      runId: 'run-1',
+      prNumber: 649,
+      targetSha: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea',
+      session: {
+        sessionId: 'orchestrator-pack-23',
+        prNumber: 649,
+        status: 'working',
+        ownedHeadSha: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea',
+      },
+      openPrs: [{ number: 649, headRefOid: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea' }],
+      startedAtMs: 1_000_000,
+      nowMs: 1_001_000,
+    });
+    expect(step.terminal.action).toBe('send');
+    expect(step.shouldContinuePolling).toBe(false);
+    expect(step.pollOutcome.reason).toBe('approved_skip_poll');
+  });
+
   it('approved-dead escalates', () => {
     const scenario = loadScenario('approved-dead-escalate.json');
     const step = evaluateGatePollStep(scenario.input);
@@ -195,5 +217,16 @@ describe('post-submit seam wiring', () => {
       'utf8',
     );
     expect(text).toMatch(/scripted-review-confirmed-delivery-gate\.ps1/);
+  });
+
+  it('approved ps1 path skips reviews fetch before poll loop', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'),
+      'utf8',
+    );
+    const approvedBlock = text.match(/if \(\$Verdict -eq 'approved'\)[\s\S]*?while \(\$true\)/);
+    expect(approvedBlock).toBeTruthy();
+    expect(approvedBlock![0]).not.toMatch(/Get-ScriptedReviewDeliveryGateReviewsPayload/);
+    expect(approvedBlock![0]).toMatch(/skip daemon reviews poll/);
   });
 });

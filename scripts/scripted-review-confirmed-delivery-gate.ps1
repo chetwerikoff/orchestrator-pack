@@ -232,6 +232,52 @@ $initialObservedRunId = ''
 
 Write-ScriptedReviewDeliveryGateLog "starting session=$SessionId PR #$PrNumber run=$RunId verdict=$Verdict windowMs=$pollWindowMs intervalMs=$pollIntervalMs"
 
+if ($Verdict -eq 'approved') {
+    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'poll'
+    Write-ScriptedReviewDeliveryGateLog 'approved verdict: skip daemon reviews poll'
+    $sessions = @(Get-ScriptedReviewDeliveryGateSessions)
+    $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
+    $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
+        reviews              = @()
+        runId                = $RunId
+        batchId              = $BatchId
+        prNumber             = $PrNumber
+        targetSha            = $TargetSha
+        verdict              = $Verdict
+        session              = $session
+        openPrs              = @($openPrs)
+        startedAtMs          = $startedAtMs
+        nowMs                = $nowMs
+        initialObservedRunId = ''
+        config               = @{
+            pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
+            pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
+        }
+    }
+
+    $terminal = $step.terminal
+    $action = [string]$terminal.action
+    if ($action -eq 'escalate') {
+        Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$terminal.reason) | Out-Null
+        exit 2
+    }
+    if ($action -eq 'send') {
+        if (-not $messageText) {
+            Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'missing_delivery_message' | Out-Null
+            exit 2
+        }
+        $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
+        if ([string]$send.action -eq 'escalate') { exit 2 }
+        Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
+        exit 0
+    }
+
+    Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'approved_unexpected_terminal' | Out-Null
+    exit 2
+}
+
 while ($true) {
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'poll'
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
