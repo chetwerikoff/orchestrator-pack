@@ -42,30 +42,28 @@ function Get-GuardedIntraFunctionDotSourceSites {
             $ifStmts = $func.FindAll({
                     param($node)
                     $node -is [System.Management.Automation.Language.IfStatementAst]
-                }, $false)
+                }, $true)
             foreach ($ifStmt in $ifStmts) {
-                $condText = $ifStmt.Condition.Extent.Text
-                if ($condText -notmatch '(?i)\$Script:\w+Loaded') { continue }
+                foreach ($clause in $ifStmt.Clauses) {
+                    $condText = $clause.Item1.Extent.Text
+                    if ($condText -notmatch '(?i)\$Script:\w+Loaded') { continue }
 
-                $body = $ifStmt.Body
-                $statements = @()
-                if ($body -is [System.Management.Automation.Language.StatementBlockAst]) {
-                    $statements = @($body.Statements)
-                }
-                $hasDotSource = $false
-                $hasLoadedAssign = $false
-                foreach ($stmt in $statements) {
-                    $text = $stmt.Extent.Text
-                    if ($text -match '(?m)^\s*\.\s+') { $hasDotSource = $true }
-                    if ($text -match '(?i)\$Script:\w+Loaded\s*=\s*\$true') { $hasLoadedAssign = $true }
-                }
-                if ($hasDotSource -and $hasLoadedAssign) {
-                    $relative = $_.FullName.Substring($ScriptsRoot.Length).TrimStart([char]'\', [char]'/')
-                    $sites.Add([ordered]@{
-                            file = $relative
-                            function = $func.Name
-                            condition = $condText
-                        }) | Out-Null
+                    $statements = @($clause.Item2.Statements)
+                    $hasDotSource = $false
+                    $hasLoadedAssign = $false
+                    foreach ($stmt in $statements) {
+                        $text = $stmt.Extent.Text
+                        if ($text -match '(?m)^\s*\.\s+') { $hasDotSource = $true }
+                        if ($text -match '(?i)\$Script:\w+Loaded\s*=\s*\$true') { $hasLoadedAssign = $true }
+                    }
+                    if ($hasDotSource -and $hasLoadedAssign) {
+                        $relative = $_.FullName.Substring($ScriptsRoot.Length).TrimStart([char]'\', [char]'/')
+                        $sites.Add([ordered]@{
+                                file = $relative
+                                function = $func.Name
+                                condition = $condText
+                            }) | Out-Null
+                    }
                 }
             }
         }
