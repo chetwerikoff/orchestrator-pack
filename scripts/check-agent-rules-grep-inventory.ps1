@@ -36,9 +36,6 @@ Get-ChildItem -LiteralPath $scriptsRoot -Recurse -File |
     Where-Object { $_.Extension -in '.ps1', '.mjs', '.ts', '.js' } |
     ForEach-Object {
         $rel = $_.FullName.Substring($RepoRoot.Length).TrimStart('/', '\') -replace '\\', '/'
-        if ($rel -eq 'scripts/agent-rules-grep-inventory.json') {
-            return
-        }
         $text = Get-Content -LiteralPath $_.FullName -Raw
         foreach ($pattern in $patterns) {
             if ($text -match $pattern) {

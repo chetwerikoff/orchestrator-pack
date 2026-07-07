@@ -149,10 +149,12 @@ snapshot before assigning severity. Required parameters include
 `-PrBodyFile`, `-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
 `scripts/launch-contract-evidence-reverify.ps1` for the full parameter set).
 
-**Provider-input fence.** Material sent to coworker MUST NOT include secrets or
-personal/third-party private data unless the task explicitly authorizes it. Scrub
-logs and dumps; send minimal excerpts. `--target` for `coworker write` MUST stay
-inside declared scope.
+**Provider-input fence (sensitivity-gated, not origin-gated).** Material sent to
+coworker MUST NOT include secrets or personal/third-party private data unless the
+task explicitly authorizes it. After scrub, origin is not a gate — repo-derived
+diffs/logs and this system's scrubbed operational evidence (runtime logs, process/tmux
+output, AO activity-DB results) are permitted. Scrub logs and dumps; send minimal
+excerpts. `--target` for `coworker write` MUST stay inside declared scope.
 
 ### Read delegation (`coworker ask`)
 
