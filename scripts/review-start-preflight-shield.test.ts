@@ -452,6 +452,8 @@ describe('review-start preflight transient shield (#584)', () => {
       const result = runScopedPreflight(
         `
       $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
+      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '1'
+      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS = '0'
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
       [pscustomobject]@{
         reason = [string]$lookup.transportFailure.reason
