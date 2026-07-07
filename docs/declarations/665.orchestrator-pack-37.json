@@ -1,0 +1,21 @@
+{
+  "issue_number": 665,
+  "iteration_id": "orchestrator-pack-37",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T21:39:00.750Z",
+  "baseline": {
+    "commit_sha": "ad19c55c777f197ed4fd9a52614e1d32998d1e02",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f30c4e30112fe8f64f46c4e0486cb539e1e699ab94e9eae56245daf0e7eb4414"
+  },
+  "declared_paths": [
+    "scripts/lib/publish-issue-body-sync.ts",
+    "scripts/publish-issue-body-sync.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "tests/**"
+  ],
+  "amendments": []
+}

@@ -74,6 +74,7 @@
     "scripts/mechanical-reconcile-bounds.test.ts": "heavy",
     "scripts/orchestrator-claimed-review-run.test.ts": "heavy",
     "scripts/orchestrator-escalation.test.ts": "light",
+    "scripts/escalation-state-test-isolation.test.ts": "light",
     "scripts/side-process-launch-contract.test.ts": "heavy",
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
@@ -149,6 +150,7 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "scripts/ao-spawn-shape.test.ts": "light",
     "scripts/dead-worker-reconcile.test.ts": "heavy",
-    "scripts/github-fleet-governor.test.ts": "heavy"
+    "scripts/github-fleet-governor.test.ts": "heavy",
+    "scripts/launch-argv-inventory.test.ts": "light"
   }
 }

@@ -813,6 +813,25 @@ else {
     Add-Failure 'Missing side-process launch-contract guard (Issue #659)'
 }
 
+
+Write-Host ''
+Write-Host '== launch-argv contract inventory (Issue #661) =='
+$launchArgvInventoryCheck = Join-Path $Root 'scripts/check-launch-argv-inventory.ps1'
+if (Test-Path -LiteralPath $launchArgvInventoryCheck -PathType Leaf) {
+    & $launchArgvInventoryCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-launch-argv-inventory.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-launch-argv-inventory.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'launch-argv inventory guard failed (Issue #661)'
+    }
+}
+else {
+    Write-Check 'scripts/check-launch-argv-inventory.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing launch-argv inventory guard (Issue #661)'
+}
+
 Write-Host ''
 Write-Host '== review bulk-send / stuck-open diagnostic (Issue #140) =='
 $bulkSendDiagCheck = Join-Path $Root 'scripts/check-review-bulk-send-diagnose.ps1'

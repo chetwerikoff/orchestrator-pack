@@ -243,8 +243,35 @@ describe('publish issue-body sync (#542)', () => {
     expect(bodiesMatchForParity('alpha\nbeta', 'alpha\nbeta\n')).toBe(true);
     expect(compareIssueBodies('alpha\nbeta', 'alpha\nbeta\n').match).toBe(true);
     expect(compareIssueBodies('alpha\nbeta\n', 'alpha\nbeta').match).toBe(true);
-    expect(compareIssueBodies('alpha\nbeta', 'alpha\nbeta\n\n').match).toBe(false);
+    expect(compareIssueBodies('alpha\nbeta', 'alpha\nbeta\n\n').match).toBe(true);
+    expect(bodiesMatchForParity('alpha\nbeta', 'alpha\nbeta\n\n')).toBe(true);
     expect(compareIssueBodies('alpha\nbeta', 'alphaX\nbeta').match).toBe(false);
+    expect(compareIssueBodies('alpha\nbeta', 'alphaX\nbeta').mismatchClass).toBe('content-mismatch');
+    expect(compareIssueBodies('alpha\nbeta ', 'alpha\nbeta').match).toBe(false);
+  });
+
+  it('classifyMismatch preserves truncation when live is a strict content prefix', () => {
+    expect(classifyMismatch('alpha\nbeta\ngamma', 'alpha\nbeta')).toBe('truncation');
+    expect(compareIssueBodies('alpha\nbeta\ngamma', 'alpha\nbeta').mismatchClass).toBe('truncation');
+    expect(compareIssueBodies('alpha\nbeta\ngamma\n', 'alpha\nbeta\ngamma\n\n').match).toBe(true);
+  });
+
+  it('fenced code block ending: two trailing newlines on live REST body still matches', () => {
+    const fenceBase = '## Grounding\n\n```bash\necho hello\n```';
+    const expected = `${fenceBase}\n`;
+    const live = `${fenceBase}\n\n`;
+    expect(bodiesMatchForParity(expected, live)).toBe(true);
+    expect(compareIssueBodies(expected, live).match).toBe(true);
+
+    const { deps } = makeDeps({ liveBody: live });
+    const result = syncPublishIssueBody(deps, {
+      mode: 'edit',
+      draftPath: 'docs/issues_drafts/sample.md',
+      draftContent: `# Title\n\n${expected}`,
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 664,
+    });
+    expect(result.ok).toBe(true);
   });
 
   it('worktree-isolation composition preserved: opencode publish helper still isolates scratch checkout', () => {

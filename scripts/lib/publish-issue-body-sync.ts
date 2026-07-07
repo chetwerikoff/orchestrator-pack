@@ -132,13 +132,13 @@ export function normalizeIssueBodyForParity(body: string): string {
   return body.replace(/\r\n/g, '\n');
 }
 
-function stripAtMostOneTrailingNewline(body: string): string {
+function stripTrailingNewlines(body: string): string {
   const normalized = normalizeIssueBodyForParity(body);
-  return normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
+  return normalized.replace(/\n+$/, '');
 }
 
 export function bodiesMatchForParity(expected: string, live: string): boolean {
-  return stripAtMostOneTrailingNewline(expected) === stripAtMostOneTrailingNewline(live);
+  return stripTrailingNewlines(expected) === stripTrailingNewlines(live);
 }
 
 export function isLiteralTempPathBody(body: string): boolean {
@@ -149,8 +149,8 @@ export function classifyMismatch(expected: string, live: string): MismatchClass 
   if (isLiteralTempPathBody(live)) {
     return 'literal-temp-path';
   }
-  const normalizedExpected = stripAtMostOneTrailingNewline(expected);
-  const normalizedLive = stripAtMostOneTrailingNewline(live);
+  const normalizedExpected = stripTrailingNewlines(expected);
+  const normalizedLive = stripTrailingNewlines(live);
   if (
     normalizedLive.length < normalizedExpected.length &&
     normalizedExpected.startsWith(normalizedLive)
