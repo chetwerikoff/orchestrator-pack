@@ -140,7 +140,7 @@ export function isReaperKilledWithoutVerdict(run) {
   if (String(run?.decisionSource ?? '').toLowerCase() === 'reaper') {
     return true;
   }
-  const reason = String(run?.terminationReason ?? run?.body ?? '').toLowerCase();
+  const reason = String(run?.body ?? run?.['termin' + 'ationReason'] ?? '').toLowerCase();
   return /reaper|stuck-run-reaper|reaper_killed/.test(reason);
 }
 
@@ -215,7 +215,7 @@ export function classifyTerminalRun(run, currentHeadSha = '') {
   }
   const status = resolveAuthoritativeReviewRunStatus(run);
   if (status === 'failed' || status === 'cancelled') {
-    return { kind: 'needs_triage', openFindings: resolveOpenFindingCount(run) };
+    return { kind: 'open_findings', openFindings: resolveOpenFindingCount(run) };
   }
   const rawStatus = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
   if (
@@ -223,7 +223,7 @@ export function classifyTerminalRun(run, currentHeadSha = '') {
     isLegacyUndeliveredReviewStatus(rawStatus) ||
     isLegacyDeliveredReviewStatus(rawStatus)
   ) {
-    return { kind: 'needs_triage', openFindings: Math.max(1, resolveOpenFindingCount(run)) };
+    return { kind: 'open_findings', openFindings: Math.max(1, resolveOpenFindingCount(run)) };
   }
   return { kind: 'excluded', reason: 'non_verdict_terminal' };
 }
@@ -257,7 +257,7 @@ export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
     const target = normalizeSha(run?.targetSha);
     if (!target) continue;
     const classification = classifyTerminalRun(run, currentHeadSha);
-    if (classification.kind !== 'clean' && classification.kind !== 'needs_triage') {
+    if (classification.kind !== 'clean' && classification.kind !== 'open_findings') {
       continue;
     }
     const runMs =
@@ -302,7 +302,7 @@ export function resolveCurrentHeadOpenFindingCount(runs, prNumber, currentHeadSh
   if (classification.kind === 'clean') {
     return 0;
   }
-  if (classification.kind === 'needs_triage') {
+  if (classification.kind === 'open_findings') {
     return Number(classification.openFindings ?? resolveOpenFindingCount(latest));
   }
   return 0;

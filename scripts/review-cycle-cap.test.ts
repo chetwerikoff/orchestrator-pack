@@ -32,7 +32,7 @@ function run(prNumber: number, headSha: string, reviewRuns: Array<Record<string,
     currentHeadSha: headSha,
     openPrs: [{ number: prNumber, headRefOid: headSha }],
     reviewRuns,
-    capState: extra.capState ?? {},
+    capState: (extra.capState ?? {}) as Record<string, unknown>,
     issueBody: extra.issueBody as string | undefined,
     nowMs: extra.nowMs as number | undefined,
     producer: extra.producer as string | undefined,
@@ -121,14 +121,14 @@ describe('distinct head counting matrix', () => {
   it('(c) failed/cancelled with findings consumes one unit', () => {
     const sha = 'fail'.padEnd(40, '3');
     const runs = [{ prNumber: pr, targetSha: sha, status: 'failed', openFindingCount: 2, completedAt: '2026-07-01T00:00:00Z' }];
-    expect(classifyTerminalRun(runs[0], sha).kind).toBe('needs_triage');
+    expect(classifyTerminalRun(runs[0], sha).kind).toBe('open_findings');
     expect(deriveDistinctHeadBudget(runs, pr, sha)).toHaveLength(1);
   });
 
   it('(d) waiting_update completed reviewer pass consumes one unit', () => {
     const sha = 'wait'.padEnd(40, '4');
     const runs = [{ prNumber: pr, targetSha: sha, status: 'waiting_update', sentFindingCount: 1, completedAt: '2026-07-01T00:00:00Z' }];
-    expect(classifyTerminalRun(runs[0], sha).kind).toBe('needs_triage');
+    expect(classifyTerminalRun(runs[0], sha).kind).toBe('open_findings');
     expect(deriveDistinctHeadBudget(runs, pr, sha)).toHaveLength(1);
   });
 
@@ -198,7 +198,7 @@ describe('clean early stop terminal', () => {
     const reconcile = planReconcileActions({
       openPrs: [{ number: pr, headRefOid: head }],
       reviewRuns: runs,
-      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, ownedHeadSha: head, reports: [{ reportState: 'ready_for_review', headSha: head }] }],
+      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, ownedHeadSha: head, reports: [{ reportState: 'ready_for_review', prHeadSha: head }] }],
       ciChecksByPr: { [pr]: [{ name: 'verify', state: 'success', conclusion: 'success' }] },
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: gate.capState,
@@ -229,7 +229,7 @@ describe('clean early stop terminal', () => {
       admittedBaseRef: 'refs/heads/feature',
       openPrs: [{ number: pr, headRefOid: head }],
       reviewRuns: runs,
-      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, reports: [{ reportState: 'ready_for_review', headSha: head }] }],
+      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, reports: [{ reportState: 'ready_for_review', prHeadSha: head }] }],
       ciChecks: [{ name: 'verify', state: 'success', conclusion: 'success' }],
       requiredCheckNames: ['verify'],
       sessionId: 'opk-646',
@@ -242,14 +242,14 @@ describe('clean early stop terminal', () => {
       watchEntries: {
         [`${pr}:${head}`]: {
           prNumber: pr,
-          headSha: head,
+          prHeadSha: head,
           status: 'watching',
           windowExpiresMs: Date.now() + 60_000,
         },
       },
       openPrs: [{ number: pr, headRefOid: head }],
       reviewRuns: runs,
-      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, reports: [{ reportState: 'ready_for_review', headSha: head }] }],
+      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, reports: [{ reportState: 'ready_for_review', prHeadSha: head }] }],
       ciChecksByPr: { [pr]: [{ name: 'verify', state: 'success', conclusion: 'success' }] },
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: gate.capState,
@@ -288,7 +288,7 @@ describe('at cap open findings terminal', () => {
     const reconcile = planReconcileActions({
       openPrs: [{ number: pr, headRefOid: current }],
       reviewRuns: runs,
-      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, ownedHeadSha: current, reports: [{ reportState: 'ready_for_review', headSha: current }] }],
+      sessions: [{ name: 'opk-646', role: 'worker', prNumber: pr, ownedHeadSha: current, reports: [{ reportState: 'ready_for_review', prHeadSha: current }] }],
       ciChecksByPr: { [pr]: [{ name: 'verify', state: 'success', conclusion: 'success' }] },
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: gate.capState,
@@ -378,11 +378,11 @@ describe('review cycle cap scenario matrix', () => {
     });
     expect(second.capState['101']).toBeTruthy();
     expect(second.capState['202']).toBeTruthy();
-    expect(second.capState['101']?.distinctHeadsReviewed).toEqual([head1]);
-    expect(second.capState['202']?.distinctHeadsReviewed).toEqual([head2]);
+    expect((second.capState['101'] as { distinctHeadsReviewed?: string[] }).distinctHeadsReviewed).toEqual([head1]);
+    expect((second.capState['202'] as { distinctHeadsReviewed?: string[] }).distinctHeadsReviewed).toEqual([head2]);
   });
 
-  it('superseded run excluded and same-sha retry after needs_triage does not add budget', () => {
+  it('superseded run excluded and same-sha retry after open_findings does not add budget', () => {
     const sha = 'retry'.padEnd(40, 'r');
     const runs = [
       { prNumber: pr, targetSha: sha, status: 'outdated', superseded: true, completedAt: '2026-07-01T00:00:00Z' },

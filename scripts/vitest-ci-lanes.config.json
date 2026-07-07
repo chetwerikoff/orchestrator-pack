@@ -115,6 +115,7 @@
     "scripts/review-start-repeat-classifier.test.ts": "light",
     "scripts/review-start-scoped-gh-json-capture.test.ts": "heavy",
     "scripts/review-start-supervised-gh-pid.test.ts": "heavy",
+    "scripts/review-cycle-cap.test.ts": "heavy",
     "scripts/review-trigger-reconcile.test.ts": "heavy",
     "scripts/review-trigger-reeval.test.ts": "heavy",
     "scripts/review-wake-trigger.test.ts": "heavy",

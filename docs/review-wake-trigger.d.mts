@@ -65,6 +65,9 @@ export declare function evaluateWakeReviewTrigger(input: {
   admittedBaseRef?: string;
   admittedHeadSha?: string;
   cycleState?: Record<string, unknown>;
+  capCycleState?: Record<string, unknown>;
+  issueBody?: string | null;
+  mergedPrNumbers?: number[];
   repoRoot?: string;
   receiptToRunBoundMs?: number;
 }): WakeReviewTriggerResult;
