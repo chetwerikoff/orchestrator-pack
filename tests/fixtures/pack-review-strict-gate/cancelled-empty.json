@@ -9,7 +9,7 @@
       "findingCount": 0,
       "openFindingCount": 0,
       "sentFindingCount": 0,
-      "terminationReason": "scripts/run-pack-review.ps1: cancelled by operator",
+      "body": "scripts/run-pack-review.ps1: cancelled by operator",
       "completedAt": "2026-05-29T12:13:00Z"
     }
   ]

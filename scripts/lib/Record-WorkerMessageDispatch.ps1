@@ -4,7 +4,7 @@
   Record an AO-attributed worker message dispatch in the shared journal (Issue #232).
 
 .DESCRIPTION
-  Pack senders call this after a successful ao send / ao review send so the unified
+  Pack senders call this after a successful ao send / review delivery (automatic on 0.10) so the unified
   submit arbiter can derive pending-draft delivery path from message shape — never
   from pane text. Human keystrokes do not write journal entries.
 #>

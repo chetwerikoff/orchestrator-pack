@@ -18,6 +18,9 @@ import {
   sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import {
+  isPendingWorkerDeliveryConfirmation,
+} from './review-producer-contract.mjs';
 
 export { sessionOwnsRunHead };
 
@@ -43,7 +46,7 @@ export const DELIVERY_STATE_CONFIRMED = 'confirmed';
 export const DELIVERY_STATE_ESCALATED = 'escalated';
 export const DELIVERY_STATE_UNCONFIRMED = 'unconfirmed';
 
-/** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, sentFindingCount?: number, linkedSessionId?: string, sentAt?: string, updatedAt?: string }} ReviewRun */
+/** @typedef {{ id?: string, reviewerSessionId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, deliveredFindingCount?: number, deliveredAt?: string | null, linkedSessionId?: string, updatedAt?: string }} ReviewRun */
 /** @typedef {{ number?: number, headRefOid?: string }} OpenPr */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<{ reportState?: string, report_state?: string, reportedAt?: string, timestamp?: string, createdAt?: string }> }} AoSession */
 /** @typedef {{ deliveryState?: string, sendObservedAtMs?: number, redeliveryCount?: number, lastRedeliveryAtMs?: number, escalatedAtMs?: number, submitCount?: number, lastSubmitAtMs?: number, submitDecisionKey?: string }} RunDeliveryRecord */
@@ -57,19 +60,14 @@ export function getReviewRunId(run) {
   return id || null;
 }
 
-/** Run statuses with findings sent but delivery not yet confirmed. */
-export const PENDING_SENT_DELIVERY_STATUSES = new Set([
-  'waiting_update',
-  'sent_to_agent',
-]);
+/** AO 0.10: changes_requested with deliveredAt and positive deliveredFindingCount. */
+export const PENDING_SENT_DELIVERY_STATUSES = new Set(['changes_requested']);
 
 /**
  * @param {ReviewRun} run
  */
 export function isPendingSentDeliveryRun(run) {
-  const status = String(run?.status ?? '').toLowerCase();
-  const sent = Number(run?.sentFindingCount ?? 0);
-  return PENDING_SENT_DELIVERY_STATUSES.has(status) && sent > 0;
+  return isPendingWorkerDeliveryConfirmation(run);
 }
 
 /**
@@ -89,7 +87,7 @@ export function parseIsoMs(iso) {
  */
 export function resolveSendObservedAtMs(run, fallbackMs) {
   return (
-    parseIsoMs(run?.sentAt) ??
+    parseIsoMs(run?.deliveredAt) ??
     parseIsoMs(run?.updatedAt) ??
     fallbackMs
   );
@@ -310,8 +308,8 @@ export function resolveDeliveryConfig(config = {}) {
 
 export const OPERATOR_REMEDY_TEXT =
   'Inspect the worker session terminal (flooded input channel is a known failure mode). ' +
-  'Do not ao review send into a dead linked session — use ao session claim-pr with a live worker, ' +
-  'reviewer-workspace-preflight if needed, then ao review run on the live session. ' +
+  'Do not re-drive delivery into a dead linked session — use ao session claim-pr with a live worker, ' +
+  'reviewer-workspace-preflight if needed, then restart review on the live session. ' +
   'See docs/orchestrator-recovery-runbook.md (Review finding delivery unconfirmed).';
 
 /**
@@ -455,24 +453,7 @@ export function planDeliveryConfirmActions({
       continue;
     }
 
-    if (redeliveryCount < maxRedeliveries) {
-      nextRuns[runId] = {
-        ...nextRuns[runId],
-        deliveryState: DELIVERY_STATE_UNCONFIRMED,
-        sendObservedAtMs,
-        redeliveryCount: redeliveryCount + 1,
-        lastRedeliveryAtMs: nowMs,
-      };
-      actions.push({
-        type: 'redeliver',
-        runId,
-        sessionId: linkedSessionId,
-        prNumber,
-        attempt: redeliveryCount + 1,
-        maxRedeliveries,
-      });
-      continue;
-    }
+    // AO 0.10 auto-delivery: observe-only — no pack redelivery (#625).
 
     // Submit is owned by worker-message-submit-reconcile.ps1 (Issue #232).
     nextRuns[runId] = {
@@ -516,13 +497,6 @@ export function buildEscalationMessage({ runId, sessionId, prNumber }) {
     `[review-finding-delivery-confirm] ESCALATION: unconfirmed delivery for review run ${runId} ` +
     `(PR #${prNumber}, session ${sessionId}). Operator remedy: ${OPERATOR_REMEDY_TEXT}`
   );
-}
-
-/**
- * @param {string} runId
- */
-export function buildReviewSendArgv(runId) {
-  return ['review', 'send', runId];
 }
 
 runStdinJsonCli('review-finding-delivery-confirm.mjs', {

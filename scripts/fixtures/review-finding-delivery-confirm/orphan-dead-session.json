@@ -6,10 +6,11 @@
       "id": "run-orphan-1",
       "prNumber": 97,
       "targetSha": "sha97",
-      "status": "waiting_update",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "linkedSessionId": "opk-dead",
-      "sentAt": "2024-06-04T12:33:20.000Z"
+      "deliveredAt": "2024-06-04T12:33:20.000Z"
     }
   ],
   "sessions": [

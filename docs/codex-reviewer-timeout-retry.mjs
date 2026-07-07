@@ -9,6 +9,7 @@ import {
   extractReviewerEvidenceFromText,
   extractReviewerFailureClass,
   countSameHeadFailuresByClass,
+  resolveRunFailureText,
 } from './reviewer-failure-evidence-markers.mjs';
 import { findFailedOrCancelledRunForHead } from './review-trigger-reconcile.mjs';
 
@@ -21,6 +22,7 @@ export {
   extractReviewerEvidenceFromText,
   extractReviewerFailureClass,
   countSameHeadFailuresByClass,
+  resolveRunFailureText,
 } from './reviewer-failure-evidence-markers.mjs';
 
 /**
@@ -70,7 +72,7 @@ export function evaluateTimeoutRetryEligibility(reviewRuns, prNumber, headSha, o
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null | undefined} run
  */
 export function buildTimeoutRetryObserved(run) {
-  const evidence = extractReviewerEvidenceFromText(String(run?.terminationReason ?? ''));
+  const evidence = extractReviewerEvidenceFromText(resolveRunFailureText(run));
   return {
     effectiveBudgetMs: evidence?.reviewer?.effectiveBudgetMs ?? run?.reviewer?.effectiveBudgetMs,
     testBudgetDecision: evidence?.reviewer?.testBudgetDecision ?? run?.reviewer?.testBudgetDecision,

@@ -1,11 +1,12 @@
 /**
- * Read-only Gate 0 diagnostic: legacy bulk `ao review send` / stuck open findings (Issue #140).
+ * Read-only Gate 0 diagnostic: undelivered/delivered changes_requested and stuck open findings (Issue #140, #625).
  * Vitest: scripts/review-bulk-send-diagnose.test.ts
  */
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { isDeliveredChangesRequested, isUndeliveredChangesRequested } from './review-producer-contract.mjs';
 
-/** Runs where orchestrator rules may re-fire on open findings. */
-export const ACTIONABLE_REVIEW_STATUSES = ['needs_triage', 'waiting_update'];
+/** Engine statuses where orchestrator rules may re-fire on open findings (AO 0.10). */
+export const ACTIONABLE_REVIEW_STATUSES = ['changes_requested'];
 
 export const GATE0_CAPABILITIES = {
   selectiveSend: false,
@@ -56,35 +57,37 @@ export function normalizeReviewRuns(payload) {
  * @param {Record<string, unknown>} run
  */
 export function classifyBulkSendRun(run) {
-  const status = typeof run.status === 'string' ? run.status : '';
+  const status = String(run?.prReviewStatus ?? run?.status ?? '').toLowerCase();
   const open = toCount(run.openFindingCount);
-  const sent = toCount(run.sentFindingCount);
+  const delivered = toCount(run.deliveredFindingCount);
   const findingCount = toCount(run.findingCount);
+  const undelivered = isUndeliveredChangesRequested(run);
+  const deliveredChanges = isDeliveredChangesRequested(run);
 
   /** @type {Array<{ kind: string, detail: string }>} */
   const signals = [];
 
-  if (ACTIONABLE_REVIEW_STATUSES.includes(status) && open > 0) {
+  if (ACTIONABLE_REVIEW_STATUSES.includes(status) && undelivered && open > 0) {
     signals.push({
-      kind: 'bulk_send_trap',
+      kind: 'undelivered_changes_requested',
       detail:
-        'Actionable run with open findings: `ao review send` would bulk-send every open finding (no per-finding filter on AO 0.9.2).',
+        'changes_requested without deliveredAt: open findings not yet auto-delivered on AO 0.10 submit path.',
     });
   }
 
-  if (sent > 0 && open > 0) {
+  if (deliveredChanges && delivered > 0 && open > 0) {
     signals.push({
       kind: 'stuck_open',
       detail:
-        'Partial send: sentFindingCount > 0 but openFindingCount still > 0 — remainder cannot be dismissed/backlogged via CLI (A′ blocked).',
+        'Partial delivery: deliveredFindingCount > 0 but openFindingCount still > 0 — remainder cannot be dismissed/backlogged via pack CLI.',
     });
   }
 
-  if (status === 'needs_triage' && open > 0 && sent === 0 && findingCount > 1) {
+  if (undelivered && open > 0 && delivered === 0 && findingCount > 1) {
     signals.push({
       kind: 'multi_open_awaiting_dispatch',
       detail:
-        'Multiple open findings await dispatch; per-finding routing cannot enact forward/backlog/drop until upstream A + A′ land.',
+        'Multiple open findings await auto-delivery; per-finding routing enactment remains upstream-blocked.',
     });
   }
 
@@ -92,7 +95,7 @@ export function classifyBulkSendRun(run) {
     runId: typeof run.id === 'string' ? run.id : '',
     status,
     openFindingCount: open,
-    sentFindingCount: sent,
+    deliveredFindingCount: delivered,
     findingCount,
     prNumber: run.prNumber ?? null,
     linkedSessionId: run.linkedSessionId ?? null,
@@ -121,7 +124,7 @@ export function diagnoseBulkSendBlock(input = {}) {
   return {
     readOnly: true,
     gate0: {
-      aoVersionNote: 'Validated on AO 0.9.2 legacy `ao review` path (2026-06-02).',
+      aoVersionNote: 'Validated on AO 0.10 producer contract (status+verdict, deliveredAt, deliveredFindingCount).',
       capabilities: { ...GATE0_CAPABILITIES },
       verdict:
         'Per-finding routing enactment is upstream-blocked until selective send (A) and terminal non-forward (A′) exist.',

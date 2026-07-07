@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Supervised side-effecting child. Watches recently-deferred-not-ready PR heads and
-  issues ao review run seconds-scale when #195 readiness lands — never a full open-PR sweep.
+  issues ao-review run seconds-scale when #195 readiness lands — never a full open-PR sweep.
   Independent from review-trigger-reconcile.ps1 (#163) backstop.
 #>
 [CmdletBinding()]
@@ -240,7 +240,7 @@ function Invoke-ReviewTriggerReevalTick {
                 Write-ReviewTriggerReevalLog "hand to backstop PR #$($action.prNumber): $($action.reason)"
             }
             'empty_review_trap' {
-                Write-ReviewTriggerReevalLog "EMPTY REVIEW TRAP PR #$($action.prNumber) ($($action.terminationReason))"
+                Write-ReviewTriggerReevalLog "EMPTY REVIEW TRAP PR #$($action.prNumber) ($($action.failureDetail))"
             }
             'escalate_degraded_ci' {
                 Write-ReviewTriggerReevalLog "ESCALATE PR #$($action.prNumber): $($action.reason)"

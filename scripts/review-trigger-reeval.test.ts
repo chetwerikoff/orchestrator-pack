@@ -306,7 +306,7 @@ describe('Issue #235 acceptance criteria', () => {
       sessionId: 'opk-28',
       nowMs: fixture.nowMs,
       openPrs: asOpenPrs(fixture.openPrs),
-      reviewRuns: [{ prNumber: 235, targetSha: 'idem235', status: 'clean' }],
+      reviewRuns: [{ prNumber: 235, targetSha: 'idem235', status: 'up_to_date', prReviewStatus: 'up_to_date' }],
       sessions: fixture.sessions,
       ciChecks: fixture.ciChecksByPr?.['235'],
       entryPath: 'reapply',

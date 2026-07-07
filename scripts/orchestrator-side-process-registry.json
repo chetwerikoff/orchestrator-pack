@@ -7,7 +7,6 @@
     "review-trigger-reeval",
     "review-ready-report-state-seed",
     "ci-green-wake-reconcile",
-    "review-send-reconcile",
     "review-finding-delivery-confirm",
     "worker-message-submit-reconcile",
     "review-run-recovery",
@@ -97,16 +96,6 @@
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 60,
-      "stallGraceMultiplier": 4
-    },
-    {
-      "id": "review-send-reconcile",
-      "script": "review-send-reconcile.ps1",
-      "sideEffecting": true,
-      "sideEffectLockFile": "review-send-side-effect.lock",
-      "requiresOrchestratorSession": false,
-      "passProjectId": true,
-      "cadenceSeconds": 120,
       "stallGraceMultiplier": 4
     },
     {

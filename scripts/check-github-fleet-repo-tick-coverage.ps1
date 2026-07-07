@@ -10,7 +10,6 @@ $ExpectedCoverage = @(
     @{ id = 'ci-failure-notification-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-GhChecksBundleByPr') }
     @{ id = 'ci-failure-notification-reaction'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList') }
     @{ id = 'ci-green-wake-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-GhChecksBundleByPr') }
-    @{ id = 'review-send-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList') }
     @{ id = 'review-finding-delivery-confirm'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrListForNumbers') }
     @{ id = 'review-trigger-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReconcileChecksByPr') }
     @{ id = 'review-trigger-reeval'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReviewTriggerReevalChecksByPr') }
@@ -26,7 +25,6 @@ $ChildScriptMap = @{
     'ci-failure-notification-reconcile' = 'ci-failure-notification-reconcile.ps1'
     'ci-failure-notification-reaction'  = 'ci-failure-notification-reaction.ps1'
     'ci-green-wake-reconcile'           = 'ci-green-wake-reconcile.ps1'
-    'review-send-reconcile'             = 'review-send-reconcile.ps1'
     'review-finding-delivery-confirm'   = 'review-finding-delivery-confirm.ps1'
     'review-trigger-reconcile'          = 'review-trigger-reconcile.ps1'
     'review-trigger-reeval'             = 'review-trigger-reeval.ps1'

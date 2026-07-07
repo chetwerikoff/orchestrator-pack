@@ -1,33 +1,36 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_REVIEW_SEND_INTERVAL_MS,
+  REVIEW_SEND_RECONCILE_REMOVED,
+  REVIEW_SEND_RECONCILE_REMOVED_REASON,
   buildDedupeKey,
-  buildReviewSendArgv,
-  buildMergedPrNumberSet,
   countAmbiguousNeedsTriagePeers,
   evaluateFirstSendCandidate,
   evaluateReviewSendInterval,
   findForbiddenReviewSendReconcileCommands,
   isNeedsTriageNeverSentRun,
   planReviewSendActions,
-  preSendRecheck,
-  recordSuccessfulSend,
   resolveOpenFindingCount,
   resolveSentFindingCount,
   verifyRunSentStateAfterSend,
-  type ReviewSendAction,
 } from '../docs/review-send-reconcile.mjs';
-
-const fixturesDir = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../tests/fixtures/review-send-reconcile',
-);
 
 const HEAD = 'abc123def456';
 const PR = 202;
+
+function undeliveredRun(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'run-202',
+    prNumber: PR,
+    targetSha: HEAD,
+    prReviewStatus: 'changes_requested',
+    status: 'changes_requested',
+    openFindingCount: 2,
+    deliveredFindingCount: 0,
+    linkedSessionId: 'opk-11',
+    ...overrides,
+  };
+}
 
 function liveWorker(overrides: Record<string, unknown> = {}) {
   return {
@@ -41,356 +44,81 @@ function liveWorker(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function needsTriageRun(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'run-202',
-    prNumber: PR,
-    targetSha: HEAD,
-    status: 'needs_triage',
-    openFindingCount: 2,
-    sentFindingCount: 0,
-    linkedSessionId: 'opk-11',
-    ...overrides,
-  };
-}
-
 function openPr(head = HEAD) {
   return { number: PR, headRefOid: head };
 }
 
-function plan(input: Parameters<typeof planReviewSendActions>[0]) {
-  return planReviewSendActions(input);
-}
+describe('review-send-reconcile REMOVED (#625)', () => {
+  it('exports REMOVED sentinel', () => {
+    expect(REVIEW_SEND_RECONCILE_REMOVED).toBe(true);
+    expect(REVIEW_SEND_RECONCILE_REMOVED_REASON).toBe('ao_0_10_auto_delivery');
+  });
 
-function sendActions(actions: ReviewSendAction[]) {
-  return actions.filter(
-    (a): a is Extract<ReviewSendAction, { type: 'send' }> => a.type === 'send',
-  );
-}
+  it('planReviewSendActions returns empty actions (auto-delivery supersedes send)', () => {
+    const result = planReviewSendActions({
+      reviewRuns: [undeliveredRun()],
+      sessions: [liveWorker()],
+      openPrs: [openPr()],
+      tracking: { sent: {} },
+    });
+    expect(result.actions).toEqual([]);
+    expect(result.removed).toBe(true);
+    expect(result.reason).toBe('ao_0_10_auto_delivery');
+  });
+});
 
-function loadFixture(name: string) {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as Parameters<
-    typeof planReviewSendActions
-  >[0];
-}
-
-describe('resolveSentFindingCount', () => {
+describe('resolveSentFindingCount (deliveredFindingCount)', () => {
   it('fails closed when missing', () => {
     expect(resolveSentFindingCount({})).toEqual({
       ok: false,
-      reason: 'sent_finding_count_missing',
+      reason: 'delivered_finding_count_missing',
     });
   });
 
   it('accepts zero', () => {
-    expect(resolveSentFindingCount({ sentFindingCount: 0 })).toEqual({ ok: true, count: 0 });
+    expect(resolveSentFindingCount({ deliveredFindingCount: 0 })).toEqual({ ok: true, count: 0 });
   });
 });
 
-describe('isNeedsTriageNeverSentRun', () => {
-  it('is true for qualifying needs_triage run', () => {
-    expect(isNeedsTriageNeverSentRun(needsTriageRun())).toBe(true);
+describe('isNeedsTriageNeverSentRun (undelivered changes_requested)', () => {
+  it('is true for qualifying undelivered run', () => {
+    expect(isNeedsTriageNeverSentRun(undeliveredRun())).toBe(true);
   });
 
-  it('is false for waiting_update', () => {
+  it('is false when delivered', () => {
     expect(
       isNeedsTriageNeverSentRun(
-        needsTriageRun({ status: 'waiting_update', sentFindingCount: 1 }),
+        undeliveredRun({
+          deliveredAt: '2026-07-06T00:00:00.000Z',
+          deliveredFindingCount: 2,
+        }),
       ),
     ).toBe(false);
   });
 });
 
-describe('first-send happy path (AC1)', () => {
-  it('plans ao review send for qualifying needs_triage run', () => {
-    const { actions } = plan({
-      reviewRuns: [needsTriageRun()],
-      sessions: [liveWorker()],
-      openPrs: [openPr()],
-      tracking: { sent: {} },
-    });
-    expect(sendActions(actions)).toHaveLength(1);
-    expect(sendActions(actions)[0]).toMatchObject({
-      runId: 'run-202',
-      prNumber: PR,
-      targetSha: HEAD,
-      sessionId: 'opk-11',
-    });
-  });
-});
+describe('evaluateFirstSendCandidate predicates (unit only; plan is REMOVED)', () => {
+  const merged = new Set<number>();
 
-describe('fail-closed matrix (AC2)', () => {
-  const base = {
-    reviewRuns: [needsTriageRun()],
-    sessions: [liveWorker()],
-    openPrs: [openPr()],
-    tracking: { sent: {} },
-  };
-
-  it('skips when not needs_triage', () => {
-    const { actions } = plan({
-      ...base,
-      reviewRuns: [needsTriageRun({ status: 'waiting_update', sentFindingCount: 1 })],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips when already sent', () => {
-    const { actions } = plan({
-      ...base,
-      reviewRuns: [needsTriageRun({ sentFindingCount: 1 })],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips when sentFindingCount missing', () => {
-    const run = needsTriageRun();
-    delete (run as { sentFindingCount?: number }).sentFindingCount;
-    const { actions } = plan({ ...base, reviewRuns: [run] });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips when stale head', () => {
-    const { actions } = plan({
-      ...base,
-      openPrs: [{ number: PR, headRefOid: 'newhead99' }],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips when linked session dead', () => {
-    const { actions } = plan({
-      ...base,
-      sessions: [liveWorker({ status: 'terminated' })],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips when linked session not head-owning', () => {
-    const { actions } = plan({
-      ...base,
-      sessions: [liveWorker({ ownedHeadSha: 'otherhead' })],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips when PR merged (not in open list)', () => {
-    const { actions } = plan({
-      ...base,
-      openPrs: [],
-      mergedPrNumbers: [PR],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips failed run', () => {
-    const { actions } = plan({
-      ...base,
-      reviewRuns: [needsTriageRun({ status: 'failed' })],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips outdated run', () => {
-    const { actions } = plan({
-      ...base,
-      reviewRuns: [needsTriageRun({ status: 'outdated' })],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('skips ambiguous overlapping runs', () => {
-    const { actions } = plan({
-      ...base,
-      reviewRuns: [
-        needsTriageRun({ id: 'run-a' }),
-        needsTriageRun({ id: 'run-b', linkedSessionId: 'opk-11' }),
-      ],
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-    expect(
-      actions.some(
-        (a: ReviewSendAction) =>
-          a.type === 'skip' && a.reason === 'ambiguous_overlapping_runs',
-      ),
-    ).toBe(true);
-  });
-});
-
-describe('action surface (AC3)', () => {
-  it('forbids spawn, claim-pr, kill, send, report, review run', () => {
-    const violations = findForbiddenReviewSendReconcileCommands([
-      'ao spawn worker',
-      'ao session claim-pr 1',
-      'ao session kill x',
-      'ao send worker hi',
-      'ao report working',
-      'ao review run sess --execute',
-    ]);
-    expect(violations).toHaveLength(6);
-  });
-
-  it('allows ao review send', () => {
-    const violations = findForbiddenReviewSendReconcileCommands([
-      'ao review send run-abc',
-    ]);
-    expect(violations).toHaveLength(0);
-    expect(buildReviewSendArgv('run-abc')).toEqual(['review', 'send', 'run-abc']);
-  });
-});
-
-describe('dedupe across restart (AC4)', () => {
-  it('does not plan second send when dedupe recorded', () => {
-    const dedupeKey = buildDedupeKey('run-202', HEAD);
-    const { actions } = plan({
-      reviewRuns: [needsTriageRun()],
-      sessions: [liveWorker()],
-      openPrs: [openPr()],
-      tracking: {
-        sent: {
-          [dedupeKey]: { runId: 'run-202', targetSha: HEAD, sessionId: 'opk-11', sentAtMs: 1 },
-        },
-      },
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('records dedupe only after successful send helper', () => {
-    const dedupeKey = buildDedupeKey('run-202', HEAD);
-    const next = recordSuccessfulSend({ sent: {} }, dedupeKey, {
-      runId: 'run-202',
-      targetSha: HEAD,
-      sessionId: 'opk-11',
-      sentAtMs: 1000,
-    });
-    expect(next.sent?.[dedupeKey]).toBeDefined();
-  });
-});
-
-describe('handoff to #171 (AC7)', () => {
-  it('never sends waiting_update runs', () => {
-    const { actions } = plan({
-      reviewRuns: [
-        needsTriageRun({
-          status: 'waiting_update',
-          sentFindingCount: 1,
-          openFindingCount: 0,
-        }),
-      ],
-      sessions: [liveWorker()],
-      openPrs: [openPr()],
-      tracking: { sent: {} },
-    });
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-});
-
-describe('race safety (AC8)', () => {
-  it('pre-send recheck fails when other sender already sent', () => {
-    const planned = {
-      runId: 'run-202',
-      prNumber: PR,
-      targetSha: HEAD,
-      sessionId: 'opk-11',
-    };
-    const fresh = {
-      reviewRuns: [
-        needsTriageRun({
-          status: 'waiting_update',
-          sentFindingCount: 1,
-          openFindingCount: 0,
-        }),
-      ],
-      sessions: [liveWorker()],
-      openPrs: [openPr()],
-    };
-    expect(preSendRecheck(planned, fresh).ok).toBe(false);
-  });
-
-  it('pre-send recheck fails when head advanced', () => {
-    const planned = {
-      runId: 'run-202',
-      prNumber: PR,
-      targetSha: HEAD,
-      sessionId: 'opk-11',
-    };
-    const fresh = {
-      reviewRuns: [needsTriageRun()],
-      sessions: [liveWorker({ ownedHeadSha: 'newhead99' })],
-      openPrs: [{ number: PR, headRefOid: 'newhead99' }],
-    };
-    expect(preSendRecheck(planned, fresh).ok).toBe(false);
-    expect(preSendRecheck(planned, fresh).reason).toContain('recheck_failed');
-  });
-});
-
-describe('AO sent-state probe (AC10)', () => {
-  it('verify fails when sentFindingCount still missing after send', () => {
-    expect(
-      verifyRunSentStateAfterSend(needsTriageRun(), 'run-202', HEAD).ok,
-    ).toBe(false);
-  });
-
-  it('verify passes when run left needs_triage with sent findings', () => {
-    expect(
-      verifyRunSentStateAfterSend(
-        needsTriageRun({
-          status: 'waiting_update',
-          sentFindingCount: 2,
-          openFindingCount: 0,
-        }),
-        'run-202',
-        HEAD,
-      ).ok,
-    ).toBe(true);
-  });
-});
-
-describe('fixture ticks', () => {
-  it('happy-path fixture plans one send', () => {
-    const fixture = loadFixture('happy-needs-triage.json');
-    const { actions } = plan(fixture);
-    expect(sendActions(actions)).toHaveLength(1);
-  });
-
-  it('merged-pr fixture plans no send', () => {
-    const fixture = loadFixture('merged-pr.json');
-    const { actions } = plan(fixture);
-    expect(sendActions(actions)).toHaveLength(0);
-  });
-
-  it('incident opk-rev-177 plans send without runtime_not_alive skip', () => {
-    const fixture = loadFixture('incident-opk-rev-177.json');
-    const { actions } = plan(fixture);
-    expect(sendActions(actions)).toHaveLength(1);
-    expect(actions.some((a) => a.type === 'skip' && a.reason === 'linked_session_runtime_not_alive')).toBe(
-      false,
+  it('eligible for undelivered changes_requested on live head owner', () => {
+    const result = evaluateFirstSendCandidate(
+      undeliveredRun(),
+      [liveWorker()],
+      [openPr()],
+      merged,
     );
+    expect(result.eligible).toBe(true);
   });
-});
 
-describe('interval gate (AC5)', () => {
-  it('defaults to 2-minute cadence', () => {
-    expect(DEFAULT_REVIEW_SEND_INTERVAL_MS).toBe(120_000);
-    expect(
-      evaluateReviewSendInterval({
-        nowMs: 200_000,
-        lastTickMs: 50_000,
-      }).ok,
-    ).toBe(true);
-    expect(
-      evaluateReviewSendInterval({
-        nowMs: 100_000,
-        lastTickMs: 50_000,
-      }).ok,
-    ).toBe(false);
-  });
-});
-
-describe('buildMergedPrNumberSet', () => {
-  it('marks PR absent from open list as merged', () => {
-    const merged = buildMergedPrNumberSet([needsTriageRun()], [], []);
-    expect(merged.has(PR)).toBe(true);
+  it('reports open finding count missing', () => {
+    const result = evaluateFirstSendCandidate(
+      undeliveredRun({ openFindingCount: undefined }),
+      [liveWorker()],
+      [openPr()],
+      merged,
+    );
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe('open_finding_count_missing');
   });
 });
 
@@ -398,24 +126,49 @@ describe('countAmbiguousNeedsTriagePeers', () => {
   it('counts peers on same pr and head', () => {
     expect(
       countAmbiguousNeedsTriagePeers(
-        [needsTriageRun({ id: 'a' }), needsTriageRun({ id: 'b' })],
-        needsTriageRun(),
+        [undeliveredRun({ id: 'a' }), undeliveredRun({ id: 'b' })],
+        undeliveredRun({ id: 'a' }),
       ),
     ).toBe(2);
   });
 });
 
-describe('evaluateFirstSendCandidate', () => {
-  it('reports open finding count missing', () => {
-    const run = needsTriageRun();
-    delete (run as { openFindingCount?: number }).openFindingCount;
-    const result = evaluateFirstSendCandidate(
-      run,
-      [liveWorker()],
-      [openPr()],
-      new Set(),
-    );
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toBe('open_finding_count_missing');
+describe('verifyRunSentStateAfterSend', () => {
+  it('passes when delivered with positive deliveredFindingCount', () => {
+    expect(
+      verifyRunSentStateAfterSend(
+        {
+          id: 'run-202',
+          prReviewStatus: 'changes_requested',
+          status: 'changes_requested',
+          targetSha: HEAD,
+          deliveredAt: '2026-07-06T00:00:00.000Z',
+          deliveredFindingCount: 2,
+        },
+        'run-202',
+        HEAD,
+      ),
+    ).toEqual({ ok: true, reason: 'ok' });
+  });
+});
+
+describe('mechanical helpers', () => {
+  it('buildDedupeKey normalizes sha', () => {
+    expect(buildDedupeKey('run-1', HEAD)).toBe(`run-1:${HEAD.slice(0, 12).toLowerCase()}`);
+  });
+
+  it('evaluateReviewSendInterval uses default cadence', () => {
+    expect(evaluateReviewSendInterval({ nowMs: 0, lastTickMs: undefined }).ok).toBe(true);
+    expect(DEFAULT_REVIEW_SEND_INTERVAL_MS).toBe(120_000);
+  });
+
+  it('resolveOpenFindingCount fails closed when missing', () => {
+    expect(resolveOpenFindingCount({})).toEqual({ ok: false, reason: 'open_finding_count_missing' });
+  });
+
+  it('forbids ao review run on mechanical path', () => {
+    expect(
+      findForbiddenReviewSendReconcileCommands(['ao review run op-1 --execute --command x']),
+    ).not.toHaveLength(0);
   });
 });

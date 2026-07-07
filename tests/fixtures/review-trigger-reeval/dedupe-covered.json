@@ -4,7 +4,7 @@
   "headSha": "cov235",
   "sessionId": "opk-28",
   "openPrs": [{ "number": 235, "headRefOid": "cov235" }],
-  "reviewRuns": [{ "prNumber": 235, "targetSha": "cov235", "status": "clean" }],
+  "reviewRuns": [{ "prNumber": 235, "targetSha": "cov235", "status": "up_to_date", "prReviewStatus": "up_to_date" }],
   "sessions": [
     {
       "name": "opk-28",

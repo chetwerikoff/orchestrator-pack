@@ -1,12 +1,12 @@
 {
-  "description": "needs_triage with multiple open findings — bulk-send trap",
+  "description": "changes_requested with multiple open findings — auto-delivery dispatch trap",
   "runs": [
     {
-      "id": "run-needs-triage-multi",
+      "id": "run-changes-requested-multi",
       "projectId": "orchestrator-pack",
-      "status": "needs_triage",
+      "status": "changes_requested",
       "openFindingCount": 3,
-      "sentFindingCount": 0,
+      "deliveredFindingCount": 0,
       "findingCount": 3,
       "prNumber": 140,
       "linkedSessionId": "opk-15"
@@ -14,6 +14,6 @@
   ],
   "expect": {
     "flaggedRuns": 1,
-    "kinds": ["bulk_send_trap", "multi_open_awaiting_dispatch"]
+    "kinds": ["undelivered_changes_requested", "multi_open_awaiting_dispatch"]
   }
 }

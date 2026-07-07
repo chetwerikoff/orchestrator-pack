@@ -12,7 +12,10 @@
     {
       "prNumber": 55,
       "targetSha": "oldhead55",
-      "status": "waiting_update"
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredAt": "2026-06-05T11:00:00.000Z",
+      "deliveredFindingCount": 1
     }
   ],
   "sessions": [

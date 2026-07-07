@@ -51,17 +51,6 @@
       "actionTracking": true
     },
     {
-      "id": "review-send-reconcile",
-      "stateFile": "orchestrator-review-send-reconcile-state.json",
-      "callerScripts": [
-        "scripts/review-send-reconcile.ps1"
-      ],
-      "mapFields": [
-        "sent"
-      ],
-      "actionTracking": true
-    },
-    {
       "id": "review-trigger-reconcile",
       "stateFile": "orchestrator-review-trigger-reconcile-state.json",
       "callerScripts": [

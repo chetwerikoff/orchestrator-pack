@@ -6,10 +6,11 @@
       "id": "run-unrelated",
       "prNumber": 50,
       "targetSha": "sha50",
-      "status": "waiting_update",
-      "sentFindingCount": 2,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 2,
       "linkedSessionId": "op-worker",
-      "sentAt": "2026-06-04T09:00:00Z"
+      "deliveredAt": "2026-06-04T09:00:00Z"
     }
   ],
   "sessions": [

@@ -33,15 +33,6 @@ Write-Output 'ok'
 `,
   },
   {
-    id: 'review-send-reconcile',
-    invokeScript: `
-$ErrorActionPreference = 'Stop'
-. '${ghChecks}'
-$null = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot '${packRootEscaped}')
-Write-Output 'ok'
-`,
-  },
-  {
     id: 'review-finding-delivery-confirm',
     invokeScript: `
 $ErrorActionPreference = 'Stop'

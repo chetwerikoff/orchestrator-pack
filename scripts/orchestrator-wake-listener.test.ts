@@ -118,7 +118,7 @@ describe('evaluateWakePayload', () => {
     }
   });
 
-  it('accepts review.needs_triage from code review block', () => {
+  it('accepts review.changes_requested from code review block (legacy needs_triage status)', () => {
     const result = evaluateWakePayload(
       notificationEvent({
         type: 'review.pending',
@@ -134,7 +134,7 @@ describe('evaluateWakePayload', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.wakeKind).toBe('review.needs_triage');
+      expect(result.wakeKind).toBe('review.changes_requested');
       expect(result.runId).toBe('op-rev-11');
     }
   });
@@ -201,7 +201,7 @@ describe('evaluateWakePayload', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.wakeKind).toBe('ready_for_review');
-      expect(result.wakeKind).not.toBe('review.needs_triage');
+      expect(result.wakeKind).not.toBe('review.changes_requested');
       expect(result.handoffAdmission?.promotedFromInfoPriority).toBe(true);
     }
   });

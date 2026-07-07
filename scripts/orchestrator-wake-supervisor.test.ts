@@ -75,21 +75,6 @@ describe('orchestrator-wake-supervisor', () => {
     child.kill('SIGTERM');
   });
 
-  it('passes supervisor ProjectId to review-send-reconcile child', async () => {
-    const stateDir = makeStateDir();
-    const child = startSupervisorBackground(stateDir, [
-      '-OrchestratorSessionId',
-      'op-project-pass',
-      '-ProjectId',
-      'custom-ao-project',
-    ]);
-    await waitForMarkers(stateDir);
-
-    const reviewSend = await readMarker(stateDir, 'review-send-reconcile');
-    expect(reviewSend.projectId).toBe('custom-ao-project');
-    child.kill('SIGTERM');
-  });
-
   it('passes supervisor ProjectId to listener child', async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, [
@@ -102,29 +87,6 @@ describe('orchestrator-wake-supervisor', () => {
 
     const listener = await readMarker(stateDir, 'listener');
     expect(listener.projectId).toBe('custom-ao-project');
-    child.kill('SIGTERM');
-  });
-
-  it('restarts review-send-reconcile after it exits', async () => {
-    const stateDir = makeStateDir();
-    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart-send']);
-    await waitForMarkers(stateDir);
-
-    const first = await readMarker(stateDir, 'review-send-reconcile');
-    if (isAlive(first.pid)) {
-      process.kill(first.pid, 'SIGKILL');
-    }
-    const deadline = Date.now() + 10_000;
-    let restarted = false;
-    while (Date.now() < deadline) {
-      const current = await readMarker(stateDir, 'review-send-reconcile');
-      if (current.pid !== first.pid && isAlive(current.pid)) {
-        restarted = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-    expect(restarted).toBe(true);
     child.kill('SIGTERM');
   });
 
@@ -333,14 +295,13 @@ describe('orchestrator-wake-supervisor', () => {
       '-OrchestratorSessionId',
       'op-status-stop',
     ]);
-    await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat', 'review-send-reconcile']);
+    await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
 
     const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusUp.status).toBe(0);
     expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   working');
     expect(statusUp.stdout).toContain('heartbeat:  working');
-    expect(statusUp.stdout).toContain('review-send-reconcile: working');
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 500));

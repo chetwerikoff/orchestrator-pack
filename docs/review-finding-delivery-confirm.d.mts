@@ -15,10 +15,11 @@ export interface ReviewRun {
   prNumber?: number;
   targetSha?: string;
   status?: string;
-  sentFindingCount?: number;
+  deliveredFindingCount?: number;
+  deliveredAt?: string | null;
+  prReviewStatus?: string;
   openFindingCount?: number;
   linkedSessionId?: string;
-  sentAt?: string;
   updatedAt?: string;
 }
 
@@ -48,15 +49,6 @@ export interface MarkConfirmedAction {
   prNumber?: number;
 }
 
-export interface RedeliverAction {
-  type: 'redeliver';
-  runId: string;
-  sessionId: string;
-  prNumber: number;
-  attempt: number;
-  maxRedeliveries: number;
-}
-
 export interface EscalateAction {
   type: 'escalate';
   runId: string;
@@ -84,7 +76,6 @@ export interface DeferAction {
 
 export type DeliveryConfirmAction =
   | MarkConfirmedAction
-  | RedeliverAction
   | EscalateAction
   | WaitAction
   | DeferAction;
@@ -155,4 +146,3 @@ export declare function buildEscalationMessage(input: {
 export declare function findForbiddenDeliveryLifecycleCommands(
   commandLines: string[],
 ): Array<{ command: string; pattern: string }>;
-export declare function buildReviewSendArgv(runId: string): string[];

@@ -1,5 +1,5 @@
 /**
- * Event-driven first `ao review run` on completion wakes (Issue #207).
+ * Event-driven review trigger on completion wakes (Issue #207, #625).
  * Vitest: scripts/review-wake-trigger.test.ts
  */
 import {
@@ -21,6 +21,11 @@ import {
   HANDOFF_RECEIPT_TO_RUN_MAX_MS,
   HANDOFF_WAKE_KIND,
 } from './review-handoff-wake-admission.mjs';
+import {
+  isDeliveredChangesRequested,
+  isUndeliveredChangesRequested,
+  resolveFailureDetail,
+} from './review-producer-contract.mjs';
 import { nonEmptyString } from './orchestrator-wake-filter.mjs';
 import {
   buildReviewRunArgv,
@@ -213,7 +218,7 @@ export function evaluateWakeReviewTrigger(input) {
           ? 'retry_bound_exhausted'
           : 'failed_or_cancelled_on_head',
       route: 'empty_review_trap',
-      terminationReason: String(failedRun.terminationReason ?? ''),
+      failureDetail: resolveFailureDetail(failedRun) || String(failedRun?.body ?? ''),
       escalationReason: retryState.escalationReason ?? observed.escalationReason,
       observed,
       processingMs,
@@ -370,14 +375,12 @@ export function evaluateMergeIntentAfterReviewTrigger(input) {
       IN_FLIGHT_REVIEW_STATUSES.has(status)
     );
   });
-  const needsTriage = reviewRuns.some((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
-    return (
+  const undeliveredChangesRequested = reviewRuns.some(
+    (run) =>
       Number(run?.prNumber) === prNumber &&
       normalizeSha(run?.targetSha) === headSha &&
-      status === 'needs_triage'
-    );
-  });
+      isUndeliveredChangesRequested(run),
+  );
 
   if (inFlight) {
     return {
@@ -388,28 +391,26 @@ export function evaluateMergeIntentAfterReviewTrigger(input) {
     };
   }
 
-  if (needsTriage) {
+  if (undeliveredChangesRequested) {
     return {
       mergeable: false,
-      reason: 'needs_triage_revalidate',
+      reason: 'undelivered_changes_requested_revalidate',
       forwardWake: true,
       covered,
     };
   }
 
-  const waitingUpdate = reviewRuns.some((run) => {
-    const status = String(run?.status ?? '').toLowerCase();
-    return (
+  const deliveredChangesRequested = reviewRuns.some(
+    (run) =>
       Number(run?.prNumber) === prNumber &&
       normalizeSha(run?.targetSha) === headSha &&
-      status === 'waiting_update'
-    );
-  });
+      isDeliveredChangesRequested(run),
+  );
 
-  if (waitingUpdate) {
+  if (deliveredChangesRequested) {
     return {
       mergeable: false,
-      reason: 'waiting_update_revalidate',
+      reason: 'delivered_changes_requested_revalidate',
       forwardWake: true,
       covered,
     };
@@ -432,7 +433,7 @@ export function evaluateMergeIntentAfterReviewTrigger(input) {
       !IN_FLIGHT_REVIEW_STATUSES.has(String(run?.status ?? '').toLowerCase()),
   );
 
-  // Covered-terminal clean (etc.) is mergeable even when reviewDecision is still
+  // Covered-terminal up_to_date (etc.) is mergeable even when reviewDecision is still
   // none — only the empty-review trap (no covered run + reviewDecision none) defers.
   return {
     mergeable: terminalCovered,

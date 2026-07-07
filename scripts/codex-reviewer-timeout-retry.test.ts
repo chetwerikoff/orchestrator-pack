@@ -145,7 +145,7 @@ describe('same-head timeout retry escalation (AC#4)', () => {
       'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}',
       'reviewer timeout before verdict (effectiveBudgetMs=600000, softDeadlineMs=510000)',
     ].join('\n');
-    expect(extractReviewerFailureClass({ terminationReason, status: 'failed' })).toBe(
+    expect(extractReviewerFailureClass({ body: terminationReason, status: 'failed' })).toBe(
       TIMEOUT_NO_VERDICT_FAILURE_CLASS,
     );
   });
@@ -222,7 +222,7 @@ describe('same-head timeout retry escalation (AC#4)', () => {
         targetSha: 'abc46100000000000000000000000000000000000',
         status: 'failed',
         findingCount: 0,
-        terminationReason: 'reviewer produced empty output',
+        body: 'reviewer produced empty output',
         retryEligible: false,
         retryCount: 1,
         createdAt: '2026-06-20T00:00:00.000Z',
@@ -295,7 +295,7 @@ describe('same-head timeout retry escalation (AC#4)', () => {
           targetSha: 'fail214',
           status: 'failed',
           findingCount: 0,
-          terminationReason: 'reviewer command exited 1',
+          body: 'reviewer command exited 1',
         },
       ],
       sessions: [
@@ -310,7 +310,7 @@ describe('same-head timeout retry escalation (AC#4)', () => {
     });
     expect(result.triggerReviewRun).toBe(false);
     expect(result.route).toBe('empty_review_trap');
-    expect(result.terminationReason).toContain('reviewer command exited');
+    expect(result.failureDetail).toContain('reviewer command exited');
   });
 
   it('counts only matching failure class on same head', () => {
@@ -320,7 +320,7 @@ describe('same-head timeout retry escalation (AC#4)', () => {
         prNumber: 461,
         targetSha: 'abc46100000000000000000000000000000000000',
         status: 'failed',
-        terminationReason: 'reviewer produced empty output',
+        body: 'reviewer produced empty output',
         createdAt: '2026-06-20T00:00:00.000Z',
       },
       {
@@ -328,7 +328,7 @@ describe('same-head timeout retry escalation (AC#4)', () => {
         prNumber: 461,
         targetSha: 'abc46100000000000000000000000000000000000',
         status: 'failed',
-        terminationReason:
+        body:
           'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}',
         createdAt: '2026-06-20T01:00:00.000Z',
       },

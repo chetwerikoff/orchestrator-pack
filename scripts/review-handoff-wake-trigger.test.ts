@@ -587,7 +587,7 @@ describe('review.pending info handoff admission (Issue #390)', () => {
     expect(wake.ok).toBe(true);
     if (wake.ok) {
       expect(wake.wakeKind).toBe('ready_for_review');
-      expect(wake.wakeKind).not.toBe('review.needs_triage');
+      expect(wake.wakeKind).not.toBe('review.changes_requested');
       expect(wake.handoffAdmission?.promotedFromInfoPriority).toBe(true);
       expect(wake.handoffAdmission?.auditLine).toContain('outcome=promoted');
     }
@@ -660,7 +660,7 @@ describe('review.pending info handoff admission (Issue #390)', () => {
       if (body.event.priority === 'action' && body.event.type === 'review.pending') {
         expect(wake.ok).toBe(true);
         if (wake.ok) {
-          expect(wake.wakeKind).toBe('review.needs_triage');
+          expect(wake.wakeKind).toBe('review.changes_requested');
         }
       } else if (body.event.priority === 'info') {
         expect(wake.ok).toBe(false);

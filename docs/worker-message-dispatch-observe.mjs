@@ -15,6 +15,7 @@ import {
 } from './mechanical-reconcile-bounds.mjs';
 import { isRuntimeFieldLive } from './session-runtime-liveness.mjs';
 import { isLiveWorkerSession, normalizeSha, toArray } from './review-trigger-reconcile.mjs';
+import { readLegacySentFindingCount } from './review-reconcile-primitives.mjs';
 import {
   getEventTimestampMs,
   resolveEventSessionId,
@@ -26,6 +27,8 @@ import {
   parseIsoMs,
   REVIEW_ROUND_REPORT_STATES,
 } from './review-finding-delivery-confirm.mjs';
+import { isDeliveredChangesRequested } from './review-producer-contract.mjs';
+
 
 /** AO tmux paste path threshold (matches AO 0.9.2 sendMessage). */
 export const AO_PASTE_CHAR_THRESHOLD = 200;
@@ -106,7 +109,7 @@ export function buildDeliveryId(sessionId, deliveredAtMs, source, sourceKey = ''
  * @param {Record<string, unknown>} run
  */
 export function resolveReviewSendObservedAtMs(run) {
-  return parseIsoMs(run?.sentAt) ?? parseIsoMs(run?.updatedAt) ?? null;
+  return parseIsoMs(run?.deliveredAt) ?? parseIsoMs(run?.updatedAt) ?? null;
 }
 
 /**
@@ -312,12 +315,11 @@ export function extractReviewFindingDeliveries(reviewRuns, nowMs) {
   /** @type {Array<Record<string, unknown>>} */
   const deliveries = [];
   for (const run of toArray(reviewRuns)) {
-    const sentCount = Number(run?.sentFindingCount ?? 0);
-    if (sentCount <= 0) {
+    const deliveredCount = readLegacySentFindingCount(run);
+    if (deliveredCount <= 0) {
       continue;
     }
-    const status = String(run?.status ?? '').trim();
-    if (!['waiting_update', 'sent_to_agent'].includes(status)) {
+    if (!isDeliveredChangesRequested(run)) {
       continue;
     }
     const runId = getReviewRunId(run);

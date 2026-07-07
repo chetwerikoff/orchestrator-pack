@@ -5,8 +5,9 @@
     {
       "source": "review-send",
       "messageClass": "review-findings-first-send",
-      "transport": "ao-review-send",
-      "evidence": "scripts/review-send-reconcile.ps1 registers pending-draft journal records; not plain ao send"
+      "transport": "ao-auto-delivery",
+      "retiredPackReconcile": true,
+      "evidence": "AO 0.10 auto-delivery on submit; docs/review-send-reconcile.mjs REVIEW_SEND_RECONCILE_REMOVED"
     },
     {
       "source": "review-findings-redelivery",

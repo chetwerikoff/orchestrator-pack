@@ -159,7 +159,7 @@ export const MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL = [
   /\bao\s+session\s+kill\b/i,
 ];
 
-/** Review-trigger / delivery-confirm paths also forbid worker ao send and legacy ao review run. */
+/** Review-trigger / delivery-confirm paths also forbid worker ao send and legacy review-run CLI. */
 export const MECHANICAL_FORBIDDEN_REVIEW_MECHANICAL = [
   ...MECHANICAL_FORBIDDEN_SPAWN_CLAIM_KILL,
   /\bao\s+send\b/i,

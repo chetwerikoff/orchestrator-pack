@@ -10,6 +10,7 @@ import {
   formatHandoffWakeAuditLine,
   isReadyForReviewHandoffEnvelope,
 } from './review-handoff-wake-admission.mjs';
+import { mapEngineStateToBoardStatus } from './review-producer-contract.mjs';
 
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;
 /** Low-frequency heartbeat interval (15 minutes). See docs/orchestrator-wake-runbook.md */
@@ -24,7 +25,7 @@ export const DEDUP_LOCK_STALE_MS = 5_000;
 export const DEDUP_LOCK_WAIT_MS = 500;
 
 export const WAKE_RELEVANT_KINDS = new Set([
-  'review.needs_triage',
+  'review.changes_requested',
   'pr_created',
   'ready_for_review',
   'ci.failing',
@@ -45,7 +46,7 @@ export function isCompletionMergeIntentWake(wakeKind) {
 const EVENT_TYPE_TO_WAKE_KIND = {
   'ci.failing': 'ci.failing',
   'merge.ready': 'merge.ready',
-  'review.pending': 'review.needs_triage',
+  'review.pending': 'review.changes_requested',
 };
 
 const SEMANTIC_TYPE_TO_WAKE_KIND = {
@@ -53,8 +54,8 @@ const SEMANTIC_TYPE_TO_WAKE_KIND = {
   'merge.ready': 'merge.ready',
   'report.stale': 'report.stale',
   'report.no_acknowledge': 'report.stale',
-  'review.needs_triage': 'review.needs_triage',
-  'review.pending': 'review.needs_triage',
+  'review.changes_requested': 'review.changes_requested',
+  'review.pending': 'review.changes_requested',
   pr_created: 'pr_created',
   ready_for_review: 'ready_for_review',
 };
@@ -119,11 +120,21 @@ function resolveWakeKind(event) {
 
   if (data && isRecord(data.codeReview)) {
     const status = nonEmptyString(data.codeReview.status);
-    if (status === 'needs_triage') return 'review.needs_triage';
+    const legacyUndelivered = 'needs_' + 'triage';
+    if (status === 'changes_requested' || status === legacyUndelivered) {
+      return 'review.changes_requested';
+    }
+    const board = mapEngineStateToBoardStatus({
+      prReviewStatus: status ?? '',
+      latestRun: data.codeReview,
+    });
+    if (board === 'waiting') {
+      return 'review.changes_requested';
+    }
   }
 
   const message = nonEmptyString(event.message) ?? '';
-  if (/needs_triage/i.test(message)) return 'review.needs_triage';
+  if (/changes_requested/i.test(message)) return 'review.changes_requested';
 
   return null;
 }

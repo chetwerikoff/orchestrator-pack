@@ -5,6 +5,7 @@
  */
 import { evaluateReviewCycleGate } from './worker-iteration-cycle.mjs';
 import { evaluateCurrentHeadCoverage } from './orchestrator-claimed-review-run.mjs';
+import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const REVIEW_START_REPEAT_CLASSIFIER_VERSION = 'review-start-repeat-classifier/v1';
@@ -22,7 +23,7 @@ export const CLASSIFIER_INPUT_KEYS = Object.freeze([
 ]);
 
 const IN_FLIGHT_RUN_STATES = new Set(['queued', 'preparing', 'running', 'reviewing']);
-const COVERED_TERMINAL_STATES = new Set(['clean', 'needs_triage', 'waiting_update']);
+const COVERED_TERMINAL_STATES = new Set(['up_to_date', 'changes_requested']);
 
 /**
  * @param {object} input
@@ -53,11 +54,15 @@ export function classifyReviewStartAttempt(input) {
   );
 
   const coverage = evaluateCurrentHeadCoverage(reviewRuns, row.pr, row.head);
+  const normalizedReviewRunState = normalizeLegacyReviewRunStatus(row.reviewRunState);
   const coveredInFlight =
     IN_FLIGHT_RUN_STATES.has(row.reviewRunState) ||
+    IN_FLIGHT_RUN_STATES.has(normalizedReviewRunState) ||
     (coverage.verdict === 'covered' &&
       (IN_FLIGHT_RUN_STATES.has(String(coverage.status ?? '')) ||
-        COVERED_TERMINAL_STATES.has(String(coverage.status ?? ''))));
+        IN_FLIGHT_RUN_STATES.has(normalizeLegacyReviewRunStatus(String(coverage.status ?? ''))) ||
+        COVERED_TERMINAL_STATES.has(String(coverage.status ?? '')) ||
+        COVERED_TERMINAL_STATES.has(normalizeLegacyReviewRunStatus(String(coverage.status ?? '')))));
 
   if (coveredInFlight && !started) {
     return {
@@ -88,8 +93,9 @@ export function classifyReviewStartAttempt(input) {
 
   if (
     sameCyclePriorStarts.length > 0 &&
-    !COVERED_TERMINAL_STATES.has(row.reviewRunState) &&
-    !IN_FLIGHT_RUN_STATES.has(row.reviewRunState)
+    !COVERED_TERMINAL_STATES.has(normalizedReviewRunState) &&
+    !IN_FLIGHT_RUN_STATES.has(row.reviewRunState) &&
+    !IN_FLIGHT_RUN_STATES.has(normalizedReviewRunState)
   ) {
     return {
       ...row,

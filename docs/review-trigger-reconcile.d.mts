@@ -52,8 +52,11 @@ export interface ReviewRun {
   status?: string;
   findingCount?: number;
   openFindingCount?: number;
-  sentFindingCount?: number;
-  terminationReason?: string;
+  deliveredFindingCount?: number;
+  deliveredAt?: string | null;
+  prReviewStatus?: string;
+  latestRunStatus?: string;
+  body?: string;
   retryEligible?: boolean;
   retryCount?: number;
 }
@@ -207,6 +210,8 @@ export interface ForbiddenLifecycleViolation {
 export declare function normalizeSha(sha: string | undefined | null): string;
 
 export declare function isRunCoveringHead(run: ReviewRun): boolean;
+
+export declare function resolveAuthoritativeReviewRunStatus(run: ReviewRun | null | undefined): string;
 
 export declare function isHeadCovered(
   runs: ReviewRun[],

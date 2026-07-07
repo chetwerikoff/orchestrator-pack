@@ -118,8 +118,8 @@ if (-not $shape.ok -or $shape.deliveryPath -ne 'pending-draft') {
     Write-Host 'agent-orchestrator.yaml.example report-stale must resolve to pending-draft deliveryPath'
     exit 1
 }
-if ([int]$shape.messageShape.charLength -ne 224) {
-    Write-Host 'agent-orchestrator.yaml.example report-stale message must remain 224 chars for drift guard'
+if ([int]$shape.messageShape.charLength -ne 226) {
+    Write-Host 'agent-orchestrator.yaml.example report-stale message must remain 226 chars for drift guard'
     exit 1
 }
 
@@ -255,8 +255,8 @@ if (-not (Test-Path -LiteralPath $reviewSendPs1 -PathType Leaf)) {
     exit 1
 }
 $reviewSend = Get-Content -LiteralPath $reviewSendPs1 -Raw
-if ($reviewSend -notmatch "Register-WorkerMessageDispatch[\s\S]*-DeliveryPath 'pending-draft'") {
-    Write-Host 'review-send-reconcile.ps1 must record review-send dispatch as pending-draft'
+if ($reviewSend -notmatch 'REMOVED on AO 0\.10') {
+    Write-Host 'review-send-reconcile.ps1 must be REMOVED stub on AO 0.10 (auto-delivery supersedes send)'
     exit 1
 }
 

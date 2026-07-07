@@ -277,6 +277,32 @@ describe('review-start-envelope-external-io', () => {
       reviewRuns: [{ prNumber: 510, targetSha: fullSha, status: 'clean' }],
     });
     expect(clearMatch.clear).toBe(true);
+
+    const failedLatest = evaluateAttemptCeiling({
+      claim,
+      nowMonotonicMs: startMono + 400_000,
+      reviewRuns: [{
+        prNumber: 510,
+        targetSha: fullSha,
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      }],
+      config,
+    });
+    expect(failedLatest.reason).not.toBe('covered');
+    expect(failedLatest.exceeded).toBe(true);
+
+    const clearFailedLatest = clearFirstAttemptOnCoveredHead({
+      claim,
+      reviewRuns: [{
+        prNumber: 510,
+        targetSha: fullSha,
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      }],
+    });
+    expect(clearFailedLatest.clear).toBe(false);
+    expect(clearFailedLatest.reason).toBe('uncovered');
   });
 
   it('claimed-snapshot-wires-acquired-claim-into-supervised-gh', () => {

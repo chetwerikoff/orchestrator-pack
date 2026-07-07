@@ -867,7 +867,7 @@ describe('preRunHeadReadyRecheck', () => {
         targetSha: 'abc3180000000000000000000000000000000000',
         status: 'failed',
         findingCount: 0,
-        terminationReason:
+        body:
           'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}\nreviewer timeout before verdict',
       }],
         sessions: [
@@ -903,7 +903,7 @@ describe('preRunHeadReadyRecheck', () => {
         targetSha: 'abc3180000000000000000000000000000000000',
         status: 'failed',
         findingCount: 0,
-        terminationReason:
+        body:
           'reviewer-evidence:{"reviewer":{"effectiveBudgetMs":600000,"failureClass":"timeout_no_verdict"}}\nreviewer timeout before verdict',
       }],
         sessions: [

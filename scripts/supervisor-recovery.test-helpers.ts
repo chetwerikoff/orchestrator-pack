@@ -22,7 +22,6 @@ export const managedChildRoles = [
   'review-start-claim-reaper',
   'ci-failure-notification-reconcile',
   'ci-failure-notification-reaction',
-  'review-send-reconcile',
   'review-finding-delivery-confirm',
   'worker-message-submit-reconcile',
 ] as const;

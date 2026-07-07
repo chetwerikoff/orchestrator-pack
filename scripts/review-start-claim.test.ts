@@ -495,6 +495,47 @@ describe('Review-StartClaim single-flight contract', () => {
     expect(result.retryFailedPlusRunning).toBe(false);
   });
 
+  it('does not treat stale prReviewStatus running as covering when latestRun failed', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $visible = Test-ReviewStartClaimRunVisible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'running'; latestRunStatus = 'failed' }
+      ) -PrNumber 266 -HeadSha $sha
+      $retry = Test-ReviewStartClaimRetryEligible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'running'; latestRunStatus = 'failed' }
+      ) -PrNumber 266 -HeadSha $sha
+      [pscustomobject]@{ visible = [bool]$visible; retry = [bool]$retry } | ConvertTo-Json -Compress
+    `);
+    const result = JSON.parse(output);
+    expect(result.visible).toBe(false);
+    expect(result.retry).toBe(true);
+  });
+
+  it('does not treat bare needs_review without latestRun as covering', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $visible = Test-ReviewStartClaimRunVisible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'needs_review' }
+      ) -PrNumber 266 -HeadSha $sha
+      [pscustomobject]@{ visible = [bool]$visible } | ConvertTo-Json -Compress
+    `);
+    expect(JSON.parse(output).visible).toBe(false);
+  });
+
+  it('treats AO 0.10 needs_review with queued latestRun as covering', () => {
+    const output = runPwsh(`
+      . ${psString(helperPath)}
+      $sha = ${psString(fullSha)}
+      $visible = Test-ReviewStartClaimRunVisible -ReviewRuns @(
+        @{ prNumber = 266; targetSha = $sha; prReviewStatus = 'needs_review'; latestRunStatus = 'queued' }
+      ) -PrNumber 266 -HeadSha $sha
+      [pscustomobject]@{ visible = [bool]$visible } | ConvertTo-Json -Compress
+    `);
+    expect(JSON.parse(output).visible).toBe(true);
+  });
+
   it('does not release a claim for retry when a covering run is visible alongside a failed one', () => {
     const dir = tempClaimDir();
     try {

@@ -9,7 +9,7 @@
       "findingCount": 0,
       "openFindingCount": 0,
       "sentFindingCount": 0,
-      "terminationReason": "plugins/ao-codex-pr-reviewer/bin/review.ps1 exited 1",
+      "body": "plugins/ao-codex-pr-reviewer/bin/review.ps1 exited 1",
       "completedAt": "2026-05-29T12:14:00Z"
     }
   ]

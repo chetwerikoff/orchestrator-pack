@@ -22,7 +22,7 @@ export interface WakeReviewTriggerResult {
   reason: string;
   route: string;
   planned?: WakeReviewTriggerPlanned;
-  terminationReason?: string;
+  failureDetail?: string;
   escalationReason?: string;
   observed?: Record<string, unknown>;
   processingMs: number;

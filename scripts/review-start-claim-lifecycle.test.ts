@@ -5,6 +5,8 @@ import {
   evaluateHoldBudget,
   evaluateLaunchPending,
   evaluateMatchingRunEvidenceForKey,
+  findCoveringRunForKey,
+  hasInFlightCoveringRun,
   evaluateReadinessEnvelope,
   evaluateReclaimDecision,
   evaluateSweep,
@@ -27,6 +29,21 @@ function fakeHolder(overrides: Record<string, unknown> = {}) {
 }
 
 describe('review-start-claim-lifecycle predicates', () => {
+  it('does not treat stale prReviewStatus running as covering when latestRun failed', () => {
+    const runs = [
+      {
+        id: 'run-stale',
+        prNumber: 266,
+        targetSha: fullSha,
+        prReviewStatus: 'running',
+        latestRunStatus: 'failed',
+      },
+    ];
+    expect(findCoveringRunForKey(runs, 266, fullSha)).toBeNull();
+    expect(hasInFlightCoveringRun(runs, 266, fullSha)).toBe(false);
+    expect(evaluateMatchingRunEvidenceForKey(runs, 266, fullSha).corruptEvidence).toBe(false);
+  });
+
   it('resolves bounded lifecycle config within the readiness envelope', () => {
     const config = resolveClaimLifecycleConfig({ readinessEnvelopeMs: 30_000 });
     expect(config.readinessEnvelopeMs).toBe(30_000);
@@ -416,7 +433,7 @@ describe('review-start-claim-lifecycle predicates', () => {
         holdStartedAtUtc: '2026-06-24T11:00:00.000Z',
       },
       holderLiveness: { outcome: 'provably_not_alive', reason: 'proc_entry_missing' },
-      reviewRuns: [{ id: 'run-done', prNumber: 266, targetSha: fullSha, status: 'clean' }],
+      reviewRuns: [{ id: 'run-done', prNumber: 266, targetSha: fullSha, status: 'up_to_date' }],
       nowMs: Date.parse('2026-06-24T12:00:05.000Z'),
     });
     expect(decision.action).toBe('terminalize');

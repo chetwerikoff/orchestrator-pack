@@ -9,7 +9,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Script:AffectedWakeChildIds = @(
     'review-trigger-reconcile',
     'ci-green-wake-reconcile',
-    'review-send-reconcile',
     'review-finding-delivery-confirm',
     'ci-failure-notification-reconcile',
     'ci-failure-notification-reaction'

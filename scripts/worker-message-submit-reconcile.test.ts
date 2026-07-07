@@ -3785,10 +3785,10 @@ describe('issue #602 delivery source audit', () => {
     const workerSources = audit.sources.filter((row) => !row.outOfScope);
     expect(workerSources.length).toBeGreaterThanOrEqual(4);
     for (const row of workerSources) {
-      expect(['journaled-worker-send', 'ao-review-send', 'draft-submit']).toContain(row.transport);
+      expect(['journaled-worker-send', 'ao-review-send', 'ao-auto-delivery', 'draft-submit']).toContain(row.transport);
     }
     const bySource = Object.fromEntries(audit.sources.map((row) => [row.source, row.transport]));
-    expect(bySource['review-send']).toBe('ao-review-send');
+    expect(bySource['review-send']).toBe('ao-auto-delivery');
     expect(bySource['reaction-routed']).toBe('journaled-worker-send');
     expect(bySource['ci-failure-nudge']).toBe('journaled-worker-send');
     expect(bySource['ci-green-nudge']).toBe('journaled-worker-send');

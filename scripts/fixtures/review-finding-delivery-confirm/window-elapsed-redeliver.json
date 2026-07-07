@@ -1,15 +1,16 @@
 {
-  "description": "AC4: confirmation window elapsed triggers one bounded re-deliver to same session",
+  "description": "AC4: confirmation window elapsed escalates (observe-only — no pack redelivery)",
   "nowMs": 1717504000000,
   "reviewRuns": [
     {
       "id": "run-redeliver-1",
       "prNumber": 166,
       "targetSha": "sha166",
-      "status": "waiting_update",
-      "sentFindingCount": 1,
+      "status": "changes_requested",
+      "prReviewStatus": "changes_requested",
+      "deliveredFindingCount": 1,
       "linkedSessionId": "opk-worker-live",
-      "sentAt": "2024-06-04T12:16:40.000Z"
+      "deliveredAt": "2024-06-04T12:16:40.000Z"
     }
   ],
   "sessions": [

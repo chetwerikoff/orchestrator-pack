@@ -4,6 +4,10 @@
  */
 
 import { readStdinJson, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
+import {
+  flattenSessionReviewsToNormalizedRuns,
+  attachProjectIdToNormalizedRuns,
+} from './review-producer-contract.mjs';
 
 /** @typedef {{ id?: string, runId?: string, status?: string, targetSha?: string, prNumber?: number, linkedSessionId?: string, createdAt?: string, updatedAt?: string }} ReviewRun */
 /** @typedef {{ prNumber?: number, headSha?: string, prUrl?: string, latestRun?: ReviewRun | null }} PRReviewState */
@@ -68,28 +72,13 @@ export function normalizeSha(value) {
 }
 
 /**
- * Flatten AO 0.10 GET /reviews payload into legacy review-run rows for reconcile filters.
+ * Flatten AO 0.10 GET /reviews payload into normalized producer run rows.
  * @param {unknown} payload
  * @param {string} [linkedSessionId]
- * @returns {ReviewRun[]}
+ * @returns {import('./review-producer-contract.mjs').NormalizedReviewRun[]}
  */
 export function flattenSessionReviewsToRuns(payload, linkedSessionId = '') {
-  const reviews = toArray(payload?.reviews);
-  /** @type {ReviewRun[]} */
-  const runs = [];
-  for (const entry of reviews) {
-    const prNumber = Number(entry?.prNumber);
-    const headSha = String(entry?.headSha ?? entry?.targetSha ?? '');
-    const latestRun = entry?.latestRun ?? null;
-    if (!latestRun || typeof latestRun !== 'object') continue;
-    const run = /** @type {ReviewRun} */ ({ ...latestRun });
-    if (!run.id && run.runId) run.id = run.runId;
-    if (!run.targetSha) run.targetSha = String(latestRun.targetSha ?? headSha);
-    if (!Number.isFinite(run.prNumber) && Number.isFinite(prNumber)) run.prNumber = prNumber;
-    if (!run.linkedSessionId && linkedSessionId) run.linkedSessionId = linkedSessionId;
-    runs.push(run);
-  }
-  return runs;
+  return flattenSessionReviewsToNormalizedRuns(payload, linkedSessionId);
 }
 
 /**
@@ -97,9 +86,7 @@ export function flattenSessionReviewsToRuns(payload, linkedSessionId = '') {
  * @param {string} projectId
  */
 export function attachProjectIdToRuns(runs, projectId) {
-  const project = String(projectId ?? '').trim();
-  if (!project) return runs;
-  return runs.map((run) => (run.projectId ? run : { ...run, projectId: project }));
+  return attachProjectIdToNormalizedRuns(runs, projectId);
 }
 
 /**
@@ -191,7 +178,7 @@ export function findForbiddenLegacyReviewRunCommands(commandLines) {
   for (const command of commandLines ?? []) {
     const line = String(command ?? '');
     if (/\bao\s+review\s+run\b/i.test(line)) {
-      violations.push({ command: line, pattern: 'ao review run' });
+      violations.push({ command: line, pattern: 'legacy review-run CLI' });
     }
   }
   return violations;
