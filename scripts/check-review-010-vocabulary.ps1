@@ -24,6 +24,7 @@ $allowlist = @(
 )
 
 $deadVerbPattern = '\bao\s+review\s+(run|list|send|execute)\b'
+$deadArgvPattern = '\[\s*[''"]review[''"]\s*,\s*[''"](run|list|send|execute)[''"]'
 $falseFieldPattern = '\b(needs_triage|sentFindingCount|terminationReason)\b'
 
 $scanRoots = @(
@@ -41,6 +42,9 @@ foreach ($scanRoot in $scanRoots) {
         $text = Get-Content -LiteralPath $_.FullName -Raw
         if ($text -match $deadVerbPattern) {
             $violations += "${rel}: dead ao review CLI verb"
+        }
+        if ($text -match $deadArgvPattern) {
+            $violations += "${rel}: dead ao review CLI argv"
         }
         if ($text -match $falseFieldPattern) {
             $violations += "${rel}: false-equivalence field name"

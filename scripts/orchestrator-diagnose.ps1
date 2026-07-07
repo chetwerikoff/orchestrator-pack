@@ -386,17 +386,22 @@ if ($expectedCommand) {
     $cmdPreview = $expectedCommand
     if ($cmdPreview.Length -gt 110) { $cmdPreview = $cmdPreview.Substring(0, 107) + '...' }
     Write-Host ("  REVIEW_COMMAND: {0}" -f $cmdPreview)
-    $failureDetail = [string]$latestRun.body
-    if ($latestRun -and $failureDetail) {
-        $drift = Test-ReviewCommandInFailureDetail -ReviewCommand $expectedCommand -FailureDetail $failureDetail
-        if ($drift) {
-            Write-Host ("  WARN: latest run failure detail does not mention expected script ({0}) - command drift?" -f $drift)
-        }
-        elseif (@('failed', 'cancelled') -contains $latestRun.status) {
-            Write-Host '  WARN: latest run failed - read full body/failureDetail; do not treat zero findings as up_to_date.'
-        }
-        elseif (if ($null -ne $latestRun.prReviewStatus) { [string]$latestRun.prReviewStatus } else { [string]$latestRun.status } -eq 'up_to_date') {
+    if ($latestRun) {
+        $latestStatus = if ($null -ne $latestRun.prReviewStatus) { [string]$latestRun.prReviewStatus } else { [string]$latestRun.status }
+        if ($latestStatus -eq 'up_to_date') {
             Write-Host '  OK: latest run is up_to_date.'
+        }
+        else {
+            $failureDetail = [string]$latestRun.body
+            if ($failureDetail) {
+                $drift = Test-ReviewCommandInFailureDetail -ReviewCommand $expectedCommand -FailureDetail $failureDetail
+                if ($drift) {
+                    Write-Host ("  WARN: latest run failure detail does not mention expected script ({0}) - command drift?" -f $drift)
+                }
+                elseif (@('failed', 'cancelled') -contains $latestRun.status) {
+                    Write-Host '  WARN: latest run failed - read full body/failureDetail; do not treat zero findings as up_to_date.'
+                }
+            }
         }
     }
 }

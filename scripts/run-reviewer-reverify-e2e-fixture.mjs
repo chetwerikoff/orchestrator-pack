@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * End-to-end reviewer-flow fixture for checkpoint-2 (Issue #376 AC#13).
- * Requires the AO --execute reviewer path; mechanical-only runs do not pass.
+ * Requires live AO review trigger + reviewer command path; mechanical-only runs do not pass.
  *
  * Operator gate (prevents verify/vitest from spawning junk workers):
  *   OPK_REVERIFY_E2E_LIVE=1            — run the live AO path
@@ -154,63 +154,47 @@ function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
   });
 }
 
-function parseAoReviewRunJson(stdout) {
+function parseAoReviewTriggerJson(stdout) {
   const jsonStart = stdout.indexOf('{');
   if (jsonStart < 0) {
     return null;
   }
   try {
-    const payload = JSON.parse(stdout.slice(jsonStart));
-    return payload?.run ?? null;
+    return JSON.parse(stdout.slice(jsonStart));
   } catch {
     return null;
   }
 }
 
-function aoReviewExecuteFailed({ aoProc, run }) {
+function aoReviewTriggerFailed({ aoProc, trigger }) {
   if (aoProc.status !== 0) {
     return true;
   }
-  if (!run) {
-    return true;
-  }
-  if (run.status === 'failed') {
-    return true;
-  }
-  if (typeof run.body === 'string' && /Command failed:/i.test(run.body)) {
+  if (!trigger?.ok) {
     return true;
   }
   return false;
 }
 
-function runAoReviewExecute(sessionId) {
-  const scriptPath = path.join(packRoot, 'scripts/run-reviewer-reverify-ao-review-command.ps1');
-  const mechanicalCommand = [
-    'pwsh',
-    '-NoProfile',
-    '-File',
-    scriptPath,
-    '-RepoRoot',
-    packRoot,
-    '-FixtureDir',
-    'tests/fixtures/contract-evidence-reverify/e2e',
-    '-ManifestPath',
-    'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
-    '-ExplicitIssue',
-    '376',
-  ].join(' ');
-
+function runAoReviewTrigger(sessionId) {
   const aoProc = spawnSync(
-    'ao',
-    ['review', 'run', sessionId, '--execute', '--command', mechanicalCommand, '--json'],
+    'pwsh',
+    [
+      '-NoProfile',
+      '-File',
+      path.join(packRoot, 'scripts/ao-review.ps1'),
+      'run',
+      sessionId,
+      '--json',
+    ],
     {
       cwd: packRoot,
       encoding: 'utf8',
       env: liveE2eEnv(),
     },
   );
-  const run = parseAoReviewRunJson(aoProc.stdout ?? '');
-  return { aoProc, run };
+  const trigger = parseAoReviewTriggerJson(aoProc.stdout ?? '');
+  return { aoProc, trigger };
 }
 
 function finalizeReviewerSummary(output, summary) {
@@ -295,20 +279,20 @@ if (!sessionId) {
   process.exit(1);
 }
 
-const { aoProc, run: aoReviewRun } = runAoReviewExecute(sessionId);
-output.viaAoReviewExecute = !aoReviewExecuteFailed({ aoProc, run: aoReviewRun });
+const { aoProc, trigger: aoReviewTrigger } = runAoReviewTrigger(sessionId);
+output.viaAoReviewExecute = !aoReviewTriggerFailed({ aoProc, trigger: aoReviewTrigger });
 
 if (!output.viaAoReviewExecute) {
-  const detail = aoReviewRun?.body
-    ?? aoReviewRun?.status
+  const detail = aoReviewTrigger?.reason
+    ?? aoReviewTrigger?.detail
     ?? `exit ${aoProc.status ?? 'null'}`;
-  output.error = `AO --execute reviewer path failed (${detail})`;
-  output.summary = (aoProc.stdout ?? '').trim();
+  output.error = `AO review trigger path failed (${detail})`;
+  output.summary = (aoProc.stdout ?? aoProc.stderr ?? '').trim();
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);
 }
 
-const mechanicalProc = runReviewerReverifyCommand();
+const mechanicalProc = runReviewerReverifyCommand({ aoSessionId: sessionId });
 output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
 if (!output.viaMechanicalReviewerCommand) {
   output.error = `checkpoint-2 mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;
