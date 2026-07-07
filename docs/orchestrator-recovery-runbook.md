@@ -692,6 +692,53 @@ is orphan), the process logs:
 Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
 runs and never contacts workers.
 
+## Scripted review confirmed-delivery gate (Issue #669)
+
+After `ao review submit` in the pack scripted PR-review path, call:
+
+```powershell
+Get-Content review-message.txt -Raw |
+  pwsh -NoProfile -File scripts/invoke-scripted-review-post-submit-delivery.ps1 `
+    -SessionId <worker-session> -RunId <review-run-id> -BatchId <batch-id> `
+    -PrNumber <n> -TargetSha <head-sha> -Verdict changes_requested
+```
+
+For `approved` reviews, pass `-Verdict approved` (daemon auto-delivery is silent; explicit
+send remains the sole pack channel when the worker is live and head-owning).
+
+The gate polls `GET /api/v1/sessions/{id}/reviews` (via `Get-AoSessionReviewsJson` /
+`ao-review list --json`) until the bounded window elapses. It **never** reads `ao.db`.
+
+### Defaults and env overrides
+
+| Setting | Default | Env var |
+|---------|---------|---------|
+| Poll window after submit | **45** seconds | `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` (hard max **120**) |
+| Poll interval | **2** seconds | `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` |
+
+Daemon auto-delivery is confirmed **only** when `latestRun.status == "delivered"`. Terminal
+`complete` or `failed` without `delivered` is **not** confirmation — on window expiry the
+gate fires exactly one explicit `journaled-worker-send` when the worker is live and
+head-owning.
+
+### Escalation signature
+
+```
+[scripted-review-confirmed-delivery-gate] ESCALATION: <reason> for review run <run-id> (PR #<n>, session <session-id>). Operator remedy: ...
+```
+
+**Operator remedy:**
+
+1. Inspect `ao-review list <session> --json` — confirm `latestRun.status` and that the run
+   is attributable to the submitted head (`runId` / `batchId`).
+2. Confirm the linked worker is **live** and owns the PR head (`ao status --json --reports full`).
+3. If auto-delivery confirmed (`status=delivered`) but the worker did not receive findings,
+   treat as a daemon-side delivery bug — do **not** stack another pack-side send.
+4. If auto-delivery missed through window expiry, verify exactly one explicit send landed;
+   manual fallback: relay findings once via operator `ao send` on the live head-owning session.
+5. For ambiguous/overlapping same-head runs, escalate per Issue #171 — never double-send on
+   the pack path.
+
 ## Review-ready worker false stuck (Issue #174)
 
 A **live** worker that finished its task (`ready_for_review`, green required CI, clean

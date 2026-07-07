@@ -1,0 +1,9 @@
+{
+  "sourceCommand": "GET /api/v1/sessions/orchestrator-pack-23/reviews",
+  "toolVersion": "ao 0.10.2 daemon HTTP",
+  "capturedAt": "2026-07-07T20:13:53Z",
+  "context": "Live daemon capture; latestRun.status=complete (not delivered); no deliveredAt key on latestRun.",
+  "scrubLog": [
+    "body truncated in tests only"
+  ]
+}

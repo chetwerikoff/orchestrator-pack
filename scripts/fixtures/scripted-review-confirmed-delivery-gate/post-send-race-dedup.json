@@ -1,0 +1,9 @@
+{
+  "description": "Late auto-delivery race with dedup => dedup_or_escalate",
+  "input": {
+    "explicitSendOutcome": "race_late_auto_delivery",
+    "lateAutoDeliveryConfirmed": true,
+    "dedupApplied": true
+  },
+  "expectedTerminal": "dedup_or_escalate"
+}

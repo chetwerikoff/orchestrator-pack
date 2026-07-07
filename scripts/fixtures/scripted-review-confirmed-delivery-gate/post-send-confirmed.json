@@ -1,0 +1,7 @@
+{
+  "description": "Explicit send confirmed => delivered_once",
+  "input": {
+    "explicitSendOutcome": "confirmed"
+  },
+  "expectedTerminal": "delivered_once"
+}
