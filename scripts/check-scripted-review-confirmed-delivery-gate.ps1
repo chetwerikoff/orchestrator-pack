@@ -76,7 +76,7 @@ if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -an
     Write-Host 'invoke-pack-review.ps1 must route through invoke-scripted-review-post-submit-delivery seam'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'pwsh -NoProfile -File \$seamScript') {
+if ($postSubmitLibText -notmatch 'seamScript @gateArgs') {
     Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must launch invoke-scripted-review-post-submit-delivery.ps1'
     exit 1
 }
