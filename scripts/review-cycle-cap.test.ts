@@ -414,6 +414,22 @@ describe('review cycle cap scenario matrix', () => {
     expect(gate.prState?.cycleOpenedAtUtc).toBeTruthy();
   });
 
+
+  it('blocks new unreviewed head when distinct-head cap is spent (zero findings on head)', () => {
+    const heads = ['c1', 'c2'].map((h) => h.padEnd(40, 'x'));
+    const newHead = 'new-head'.padEnd(40, 'n');
+    const runs = heads.map((sha, idx) => ({
+      prNumber: pr,
+      targetSha: sha,
+      status: 'changes_requested',
+      openFindingCount: 1,
+      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
+    }));
+    const gate = run(pr, newHead, runs, { issueBody: '```complexity-tier\ntier: T1\n```' });
+    expect(gate.allowStart).toBe(false);
+    expect(gate.reason).toBe(TERMINAL_AT_CAP_OPEN_FINDINGS);
+    expect(gate.prState?.distinctHeadsReviewed).toHaveLength(2);
+  });
   it('at-cap head advance without clearance keeps terminal and suppresses starts', () => {
     const heads = ['c1', 'c2', 'c3', 'c4'].map((h) => h.padEnd(40, 'x'));
     const newHead = 'new-after-cap'.padEnd(40, 'z');

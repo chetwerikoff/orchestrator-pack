@@ -473,8 +473,10 @@ export function syncReviewCycleCapState(input) {
     prNumber,
     currentHeadSha,
   );
+  const currentHead = normalizeSha(currentHeadSha);
+  const alreadyConsumed = distinctHeads.includes(currentHead);
   const budgetExhausted = distinctHeads.length >= prState.cap;
-  if (budgetExhausted && openFindingCount > 0) {
+  if (budgetExhausted && (!alreadyConsumed || openFindingCount > 0)) {
     prState.terminal = TERMINAL_AT_CAP_OPEN_FINDINGS;
     prState.terminalHeadSha = currentHeadSha;
     prState.mergeEligible = false;
@@ -575,21 +577,42 @@ export function evaluateReviewCycleCapGate(input) {
   const budgetExhausted = prState.distinctHeadsReviewed.length >= prState.cap;
   if (budgetExhausted && !alreadyConsumed) {
     const openFindingCount = resolveCurrentHeadOpenFindingCount(
-      input.reviewRuns ?? [],
+      filterRunsWithinCycleBoundary(input.reviewRuns ?? [], prState.cycleOpenedAtUtc),
       prNumber,
       currentHeadSha,
     );
-    if (openFindingCount > 0) {
-      return {
-        allowStart: false,
-        reason: TERMINAL_AT_CAP_OPEN_FINDINGS,
-        terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
-        mergeEligible: false,
-        capState: synced.capState,
-        prState,
-        atCapRecord: prState.atCapRecord,
-      };
-    }
+    const atCapRecord =
+      prState.atCapRecord ??
+      buildAtCapOpenFindingsRecord({
+        prNumber,
+        headSha: currentHeadSha,
+        tier: prState.tier,
+        cap: prState.cap,
+        distinctHeadsReviewed: prState.distinctHeadsReviewed,
+        openFindingCount,
+        cycleOpenedAtUtc:
+          prState.cycleOpenedAtUtc ?? new Date(Number(input.nowMs ?? Date.now())).toISOString(),
+        terminatedAtUtc: new Date(Number(input.nowMs ?? Date.now())).toISOString(),
+        producer: input.producer ?? 'review-cycle-cap',
+        nowMs: input.nowMs,
+      });
+    const blockedPrState = {
+      ...prState,
+      terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
+      terminalHeadSha: currentHeadSha,
+      mergeEligible: false,
+      atCapRecord,
+    };
+    const blockedCapState = { ...synced.capState, [String(prNumber)]: blockedPrState };
+    return {
+      allowStart: false,
+      reason: TERMINAL_AT_CAP_OPEN_FINDINGS,
+      terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
+      mergeEligible: false,
+      capState: blockedCapState,
+      prState: blockedPrState,
+      atCapRecord,
+    };
   }
 
   return {

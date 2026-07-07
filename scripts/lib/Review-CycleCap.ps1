@@ -68,3 +68,62 @@ function Evaluate-ReviewCycleCapGate {
 
     return Invoke-ReviewCycleCapFilterCli -Subcommand 'evaluateGate' -Payload $Payload
 }
+
+function Get-ReviewCycleCapIssueBody {
+    param(
+        [Parameter(Mandatory)]
+        [int]$PrNumber,
+        [string]$RepoRoot,
+        [string]$HeadSha = '',
+        [string]$ProjectId = 'orchestrator-pack',
+        [hashtable]$FixtureSnapshot
+    )
+
+    if ($FixtureSnapshot -and $FixtureSnapshot['issueBody']) {
+        return [string]$FixtureSnapshot['issueBody']
+    }
+
+    $issueNumber = 0
+    if ($env:AO_ISSUE_NUMBER) {
+        [void][int]::TryParse([string]$env:AO_ISSUE_NUMBER, [ref]$issueNumber)
+    }
+    if ($issueNumber -le 0 -and $RepoRoot) {
+        . (Join-Path $PSScriptRoot 'Get-AutoReviewPrContext.ps1')
+        $fromDiff = Get-IssueNumberFromPrDiff -RepoRoot $RepoRoot -PrNumber $PrNumber
+        if ($fromDiff) {
+            $issueNumber = [int]$fromDiff
+        }
+    }
+
+    $normalizedHead = ([string]$HeadSha).Trim().ToLowerInvariant()
+    if ($issueNumber -gt 0 -and $normalizedHead) {
+        $resolver = Join-Path (Split-Path -Parent $PSScriptRoot) 'resolve-bound-issue-snapshot.ps1'
+        if (Test-Path -LiteralPath $resolver -PathType Leaf) {
+            try {
+                $snapshotPath = & pwsh -NoProfile -File $resolver -ProjectId $ProjectId `
+                    -PrNumber $PrNumber -PrHeadSha $normalizedHead -IssueNumber $issueNumber 2>$null
+                if ($snapshotPath -and (Test-Path -LiteralPath $snapshotPath -PathType Leaf)) {
+                    return Get-Content -LiteralPath $snapshotPath -Raw
+                }
+            }
+            catch {
+                # fall through to live issue body
+            }
+        }
+    }
+
+    if ($issueNumber -gt 0 -and (Get-Command gh -ErrorAction SilentlyContinue) -and $RepoRoot) {
+        Push-Location -LiteralPath $RepoRoot
+        try {
+            $raw = gh issue view $issueNumber --json body 2>$null
+            if ($raw) {
+                return [string](($raw | ConvertFrom-Json).body)
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+
+    return $null
+}

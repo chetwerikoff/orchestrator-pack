@@ -109,6 +109,15 @@ function Invoke-OrchestratorClaimedReviewRun {
     $snapshot = Get-OrchestratorClaimedReviewSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
     $prKey = [string]$PrNumber
     $capCycleState = if ($CapCycleState) { $CapCycleState } else { Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $Project) }
+    $openPr = @($snapshot.openPrs | Where-Object { [int]$_.number -eq $PrNumber } | Select-Object -First 1)
+    $prHeadSha = if ($openPr -and $openPr.headRefOid) {
+        [string]$openPr.headRefOid
+    }
+    else {
+        [string]$EventHeadSha
+    }
+    $issueBody = Get-ReviewCycleCapIssueBody -PrNumber $PrNumber -RepoRoot $RepoRoot -HeadSha $prHeadSha `
+        -ProjectId $Project -FixtureSnapshot $FixtureSnapshot
     $gatePayload = @{
         prNumber                    = $PrNumber
         eventHeadSha                = $EventHeadSha
@@ -122,6 +131,9 @@ function Invoke-OrchestratorClaimedReviewRun {
         claimWindow                 = 'free'
         provenanceAutonomous        = $true
         capCycleState               = $capCycleState
+    }
+    if ($issueBody) {
+        $gatePayload.issueBody = $issueBody
     }
     if ($snapshot.targetStateDenial) {
         $gatePayload.targetStateDenial = $snapshot.targetStateDenial
