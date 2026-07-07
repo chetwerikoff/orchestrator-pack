@@ -217,7 +217,73 @@ function Invoke-ScriptedReviewDeliveryGateExplicitSend {
     }
     Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
     Write-ScriptedReviewDeliveryGateLog "explicit send ok PR #$PrNumber session=$SessionId run=$RunId"
-    return @{ action = 'send'; sent = $true; reason = 'explicit_send_dispatched' }
+    return @{ action = 'send'; sent = $true; reason = 'explicit_send_dispatched'; dedupApplied = $true }
+}
+
+function Complete-ScriptedReviewDeliveryGateAfterExplicitSend {
+    param(
+        [bool]$SendSucceeded,
+        [bool]$DedupApplied = $false
+    )
+
+    $classifyInput = @{
+        reviews       = @()
+        runId         = $RunId
+        batchId       = $BatchId
+        prNumber      = $PrNumber
+        targetSha     = $TargetSha
+        sendSucceeded = $SendSucceeded
+    }
+    if ($SendSucceeded -and $Verdict -eq 'changes_requested') {
+        try {
+            $reviewsPayload = Get-ScriptedReviewDeliveryGateReviewsPayload
+            $classifyInput.reviews = @($reviewsPayload.reviews)
+        }
+        catch {
+            Write-ScriptedReviewDeliveryGateLog "post-send reviews read failed: $($_.Exception.Message)"
+        }
+    }
+
+    $classified = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'classify-post-send' -Payload $classifyInput
+    $composition = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'post-send' -Payload @{
+        explicitSendOutcome         = [string]$classified.explicitSendOutcome
+        lateAutoDeliveryConfirmed   = [bool]$classified.lateAutoDeliveryConfirmed
+        dedupApplied                = $DedupApplied
+        dedupFailed                 = $false
+    }
+
+    $terminal = [string]$composition.terminal
+    if ($terminal -eq 'escalate') {
+        Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$composition.reason) | Out-Null
+        return @{ ok = $false }
+    }
+    if ($terminal -eq 'dedup_or_escalate') {
+        Write-ScriptedReviewDeliveryGateLog "post-send late auto-delivery race; dedup applied ($($composition.reason))"
+    }
+    Write-ScriptedReviewDeliveryGateLog "post-send complete: $terminal ($($composition.reason))"
+    return @{ ok = $true; terminal = $terminal }
+}
+
+function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
+    param(
+        [hashtable]$SendResult
+    )
+
+    $sent = [bool]$SendResult.sent
+    $dedupApplied = [bool]$SendResult.dedupApplied
+    if ([string]$SendResult.action -eq 'escalate') {
+        exit 2
+    }
+    if (-not $sent) {
+        Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
+        exit 0
+    }
+
+    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'side_effect'
+    $postSend = Complete-ScriptedReviewDeliveryGateAfterExplicitSend -SendSucceeded $true -DedupApplied $dedupApplied
+    if (-not $postSend.ok) { exit 2 }
+    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
+    exit 0
 }
 
 $messageText = [Console]::In.ReadToEnd()
@@ -269,9 +335,7 @@ if ($Verdict -eq 'approved') {
             exit 2
         }
         $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
-        if ([string]$send.action -eq 'escalate') { exit 2 }
-        Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
-        exit 0
+        Exit-ScriptedReviewDeliveryGateAfterExplicitSend -SendResult $send
     }
 
     Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'approved_unexpected_terminal' | Out-Null
@@ -333,9 +397,7 @@ while ($true) {
             exit 2
         }
         $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
-        if ([string]$send.action -eq 'escalate') { exit 2 }
-        Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
-        exit 0
+        Exit-ScriptedReviewDeliveryGateAfterExplicitSend -SendResult $send
     }
 
     if (-not $step.shouldContinuePolling) {

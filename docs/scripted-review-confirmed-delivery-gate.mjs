@@ -284,6 +284,48 @@ export function evaluateGatePollStep(input) {
       prNumber: input.prNumber,
       targetSha: input.targetSha,
     });
+    const visibilityLag = findResult.reason === 'unattributable_latest_run';
+
+    if (visibilityLag && !windowExpired) {
+      const pollOutcome = { outcome: POLL_NOT_DELIVERED, reason: 'awaiting_run_visibility' };
+      const terminal = evaluateGateTerminalAction({
+        verdict: input.verdict,
+        pollOutcome,
+        liveness,
+        windowExpired: false,
+      });
+      return {
+        config,
+        elapsedMs,
+        windowExpired: false,
+        pollOutcome,
+        liveness,
+        terminal,
+        shouldContinuePolling:
+          terminal.action === null &&
+          input.verdict === 'changes_requested',
+      };
+    }
+
+    if (visibilityLag && windowExpired) {
+      const pollOutcome = { outcome: POLL_NOT_DELIVERED, reason: 'run_never_visible' };
+      const terminal = evaluateGateTerminalAction({
+        verdict: input.verdict,
+        pollOutcome,
+        liveness,
+        windowExpired: true,
+      });
+      return {
+        config,
+        elapsedMs,
+        windowExpired: true,
+        pollOutcome,
+        liveness,
+        terminal,
+        shouldContinuePolling: false,
+      };
+    }
+
     const terminal = evaluateGateTerminalAction({
       verdict: input.verdict,
       pollOutcome: { outcome: POLL_AMBIGUOUS, reason: findResult.reason },
@@ -342,6 +384,39 @@ export function evaluateGatePollStep(input) {
 /**
  * @param {object} input
  */
+
+/**
+ * @param {object} input
+ */
+export function classifyPostSendCompositionInput({
+  reviews,
+  runId,
+  batchId,
+  prNumber,
+  targetSha,
+  sendSucceeded = true,
+}) {
+  if (!sendSucceeded) {
+    return { explicitSendOutcome: 'failed', lateAutoDeliveryConfirmed: false };
+  }
+  const findResult = findReviewEntryForSubmit(reviews, {
+    runId,
+    batchId,
+    prNumber,
+    targetSha,
+  });
+  if (findResult.ok) {
+    const status = String(findResult.entry?.latestRun?.status ?? '').trim().toLowerCase();
+    if (isDaemonDeliveryConfirmed(status)) {
+      return {
+        explicitSendOutcome: 'race_late_auto_delivery',
+        lateAutoDeliveryConfirmed: true,
+      };
+    }
+  }
+  return { explicitSendOutcome: 'confirmed', lateAutoDeliveryConfirmed: false };
+}
+
 export function evaluatePostSendComposition({
   explicitSendOutcome,
   lateAutoDeliveryConfirmed = false,
@@ -406,6 +481,7 @@ runStdinJsonCli('scripted-review-confirmed-delivery-gate.mjs', {
     });
   },
   'post-send': () => evaluatePostSendComposition(readStdinJson()),
+  'classify-post-send': () => classifyPostSendCompositionInput(readStdinJson()),
   'build-escalation': () => {
     const payload = readStdinJson();
     return { message: buildGateEscalationMessage(payload) };

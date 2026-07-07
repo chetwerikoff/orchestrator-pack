@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   buildGateEscalationMessage,
+  classifyPostSendCompositionInput,
   evaluateGatePollStep,
   evaluateGateTerminalAction,
   evaluatePostSendComposition,
@@ -78,6 +79,55 @@ describe('gate decision matrix (AC#9)', () => {
     expect(step.terminal.action).toBe('send');
   });
 
+  it('unattributable run keeps polling before window expires', () => {
+    const step = evaluateGatePollStep({
+      verdict: 'changes_requested',
+      reviews: [],
+      runId: 'run-visibility-lag',
+      batchId: 'batch-1',
+      prNumber: 649,
+      targetSha: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea',
+      session: {
+        sessionId: 'orchestrator-pack-23',
+        prNumber: 649,
+        status: 'working',
+        ownedHeadSha: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea',
+      },
+      openPrs: [{ number: 649, headRefOid: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea' }],
+      startedAtMs: 1_000_000,
+      nowMs: 1_001_000,
+      config: { pollWindowSeconds: 45, pollIntervalSeconds: 2 },
+    });
+    expect(step.pollOutcome.reason).toBe('awaiting_run_visibility');
+    expect(step.terminal.action).toBeNull();
+    expect(step.shouldContinuePolling).toBe(true);
+    expect(step.windowExpired).toBe(false);
+  });
+
+  it('unattributable run sends after window expires on live head-owning session', () => {
+    const step = evaluateGatePollStep({
+      verdict: 'changes_requested',
+      reviews: [],
+      runId: 'run-visibility-lag',
+      batchId: 'batch-1',
+      prNumber: 649,
+      targetSha: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea',
+      session: {
+        sessionId: 'orchestrator-pack-23',
+        prNumber: 649,
+        status: 'working',
+        ownedHeadSha: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea',
+      },
+      openPrs: [{ number: 649, headRefOid: 'a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea' }],
+      startedAtMs: 1_000_000,
+      nowMs: 1_046_000,
+      config: { pollWindowSeconds: 45, pollIntervalSeconds: 2 },
+    });
+    expect(step.pollOutcome.reason).toBe('run_never_visible');
+    expect(step.terminal.action).toBe('send');
+    expect(step.windowExpired).toBe(true);
+  });
+
   it('cr-ambiguous-live escalates', () => {
     const scenario = loadScenario('cr-ambiguous-live-escalate.json');
     const step = evaluateGatePollStep(scenario.input);
@@ -143,6 +193,27 @@ describe('gate decision matrix (AC#9)', () => {
 });
 
 describe('post-send composition (AC#8)', () => {
+  it('classifies late auto-delivery race after explicit send', () => {
+    const capture = loadCapture('per-session-reviews-delivered-status');
+    const latestRun = capture.reviews[0].latestRun;
+    const classified = classifyPostSendCompositionInput({
+      reviews: capture.reviews,
+      runId: latestRun.id,
+      batchId: latestRun.batchId,
+      prNumber: capture.reviews[0].prNumber,
+      targetSha: latestRun.targetSha,
+      sendSucceeded: true,
+    });
+    expect(classified.explicitSendOutcome).toBe('race_late_auto_delivery');
+    expect(classified.lateAutoDeliveryConfirmed).toBe(true);
+    expect(
+      evaluatePostSendComposition({
+        ...classified,
+        dedupApplied: true,
+      }).terminal,
+    ).toBe('dedup_or_escalate');
+  });
+
   it('confirmed explicit send delivers once', () => {
     expect(
       evaluatePostSendComposition({ explicitSendOutcome: 'confirmed' }).terminal,
@@ -228,5 +299,15 @@ describe('post-submit seam wiring', () => {
     expect(approvedBlock).toBeTruthy();
     expect(approvedBlock![0]).not.toMatch(/Get-ScriptedReviewDeliveryGateReviewsPayload/);
     expect(approvedBlock![0]).toMatch(/skip daemon reviews poll/);
+  });
+
+  it('ps1 runs post-send composition after explicit send', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'),
+      'utf8',
+    );
+    expect(text).toMatch(/Complete-ScriptedReviewDeliveryGateAfterExplicitSend/);
+    expect(text).toMatch(/classify-post-send/);
+    expect(text).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
   });
 });

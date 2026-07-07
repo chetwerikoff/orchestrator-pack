@@ -1,5 +1,5 @@
 {
-  "description": "CR ambiguous attribution => escalate",
+  "description": "CR ambiguous overlapping runs on live head-owning session => escalate",
   "input": {
     "runId": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
     "batchId": "e44e7f86-34f5-4fe9-92dd-05a2edbe357f",
@@ -7,13 +7,36 @@
     "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
     "verdict": "changes_requested",
     "startedAtMs": 1000000,
-    "nowMs": 1050000,
+    "nowMs": 1003000,
     "initialObservedRunId": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
     "config": {
       "pollWindowSeconds": 45,
       "pollIntervalSeconds": 2
     },
-    "reviews": [],
+    "reviews": [
+      {
+        "prNumber": 651,
+        "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+        "latestRun": {
+          "id": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
+          "batchId": "e44e7f86-34f5-4fe9-92dd-05a2edbe357f",
+          "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+          "status": "complete",
+          "verdict": "changes_requested"
+        }
+      },
+      {
+        "prNumber": 651,
+        "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+        "latestRun": {
+          "id": "other-run-id-overlap",
+          "batchId": "other-batch-overlap",
+          "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+          "status": "complete",
+          "verdict": "changes_requested"
+        }
+      }
+    ],
     "session": {
       "sessionId": "orchestrator-pack-26",
       "role": "worker",

@@ -121,6 +121,17 @@ export declare function evaluatePostSendComposition(input: {
   dedupApplied?: boolean;
   dedupFailed?: boolean;
 }): PostSendCompositionResult;
+export declare function classifyPostSendCompositionInput(input: {
+  reviews?: unknown;
+  runId?: string;
+  batchId?: string;
+  prNumber?: number;
+  targetSha?: string;
+  sendSucceeded?: boolean;
+}): {
+  explicitSendOutcome: string;
+  lateAutoDeliveryConfirmed: boolean;
+};
 export declare function buildGateEscalationMessage(input: {
   runId?: string;
   sessionId?: string;
