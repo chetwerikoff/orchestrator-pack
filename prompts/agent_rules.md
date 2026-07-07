@@ -252,6 +252,11 @@ prompts** plus **side-process scripts** supervised by
   `scripts/review-finding-delivery-confirm.ps1`. `orchestratorRules` is
   **legacy-import-only** on AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** —
   retired `ao review send` / `execute` are **REMOVED**.
+- **Pack review stdout (issue #663):** On exit 0, `REVIEW_COMMAND` stdout is
+  non-empty terminal verdict JSON — see the behavior table in
+  `plugins/ao-codex-pr-reviewer/README.md`. Zero-length stdout on exit 0 is not a
+  valid success signal; when stdout parses as `verdict: clean`, treat the review as
+  terminal success and do not re-invoke on the same PR head.
 
 **Orchestrator escalation ack (issue #641):** invoke
 `scripts/lib/Orchestrator-Escalation.ps1` with validated tokens from the wake JSON.

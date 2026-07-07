@@ -1,0 +1,25 @@
+AO Reviews Board UI (Issue #628)
+
+This directory contains a fork of the Reviews board UI from:
+
+  ComposioHQ/agent-orchestrator @ v0.9.2
+  https://github.com/ComposioHQ/agent-orchestrator/tree/v0.9.2/packages/web
+
+Upstream files adapted (layout, column semantics, kanban structure):
+
+  - packages/web/src/components/ReviewDashboard.tsx
+  - packages/web/src/lib/review-types.ts
+
+Modifications in this pack:
+
+  - Replaced Next.js / server-only data loading with HTTP fetch to the pack
+    reviews-board runtime JSON (`GET /api/reviews` on the #627 server).
+  - Removed `@aoagents/ao-core` imports and all review write actions
+    (trigger, send, execute, findings fetch) — read-only v1.
+  - Column assignment uses producer-mapped `status` on board rows (#626), not
+    upstream `getReviewBoardColumn` on 0.9 review-run enums.
+  - Ported to a Vite static bundle served by the pack runtime server.
+  - Omitted 0.9-only card fields unless present on the #627 read contract.
+
+Copyright notices from the upstream repository are preserved in file headers
+where source was derived. See the upstream repository for its license terms.

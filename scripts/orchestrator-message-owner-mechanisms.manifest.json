@@ -27,7 +27,7 @@
       "defaultCoverage": {
         "recipientKeys": ["head-owning-worker", "specific-session"],
         "intentKeys": ["ci-failure-fix", "red-status"],
-        "messageClassIds": ["ci-failure-reaction-routed", "ci-failure-orchestrator-turn"]
+        "messageClassIds": ["ci-failure-reaction-routed", "ci-failure-reconcile-ping"]
       }
     },
     "issue-267": {

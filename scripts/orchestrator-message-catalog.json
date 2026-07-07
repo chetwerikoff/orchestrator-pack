@@ -81,7 +81,6 @@
         ],
         "messageClassIds": [
           "ci-failure-reaction-routed",
-          "ci-failure-orchestrator-turn",
           "ci-failure-reconcile-ping"
         ]
       },
@@ -115,7 +114,6 @@
         ],
         "messageClassIds": [
           "ci-failure-reaction-routed",
-          "ci-failure-orchestrator-turn",
           "ci-failure-reconcile-ping"
         ]
       },
@@ -124,40 +122,6 @@
         "function": "Invoke-AoSendViaMessage",
         "anchor": "helper-body",
         "predicateBodyHash": "2433763090919942"
-      }
-    },
-    {
-      "message_class_id": "ci-failure-orchestrator-turn",
-      "trigger": {
-        "summary": "Orchestrator turn records red-CI episode; reconcile evaluates SEND",
-        "event": "orchestrator_turn_ci_red"
-      },
-      "owning_process": "orchestrator-rules",
-      "recipient_key": "head-owning-worker",
-      "intent_key": "ci-failure-fix",
-      "mechanism": "ao-send",
-      "delivery_idempotency_owner": "none",
-      "semantic_dedup_owner": "issue-283",
-      "semanticDedupCoverage": {
-        "recipientKeys": [
-          "head-owning-worker",
-          "specific-session"
-        ],
-        "intentKeys": [
-          "ci-failure-fix",
-          "red-status"
-        ],
-        "messageClassIds": [
-          "ci-failure-reaction-routed",
-          "ci-failure-orchestrator-turn",
-          "ci-failure-reconcile-ping"
-        ]
-      },
-      "callsite": {
-        "file": "agent-orchestrator.yaml.example",
-        "function": "CI FAILURE DISCIPLINE",
-        "anchor": "orchestrator-rules",
-        "predicateBodyHash": "3d374368bdefbba9"
       }
     },
     {
@@ -436,24 +400,6 @@
       ],
       "evidenceKind": "trigger-mutual-exclusion",
       "evidence": "ci-green requires green required CI; ci-failure requires red required CI on the same episode"
-    },
-    {
-      "id": "ci-green-vs-ci-failure-turn-mutex",
-      "rationale": "CI green hand-off and orchestrator-turn CI failure ping are mutually exclusive on required CI state",
-      "reviewer": "issue-298",
-      "linkedIssue": 283,
-      "messageClassIds": [
-        "ci-green-worker-nudge",
-        "ci-failure-orchestrator-turn"
-      ],
-      "pairs": [
-        [
-          "ci-green-worker-nudge",
-          "ci-failure-orchestrator-turn"
-        ]
-      ],
-      "evidenceKind": "trigger-mutual-exclusion",
-      "evidence": "ci-green requires green required CI; orchestrator-turn ci-failure requires red required CI"
     },
     {
       "id": "ci-green-vs-ci-failure-reconcile-mutex",

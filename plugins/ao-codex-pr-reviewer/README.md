@@ -172,17 +172,23 @@ When a valid `exited_review_mode` event with `review_output` is present in the
 persisted session, that hydrated machine payload is the verdict source. The
 last-message file is fallback and diagnostics only for JSONL-enabled runs.
 
-| Verdict source | Condition | Wrapper exit | AO / worker effect |
-|----------------|-----------|--------------|-------------------|
-| Review-mode JSONL | `review_output` clean (`findings: []`, `overall_correctness: patch is correct`) | 0, empty stdout | `findingCount: 0`, run `clean` |
-| Review-mode JSONL | `review_output` with findings | 0 | Structured findings parsed into AO store (paths repo-relative) |
-| Review-mode JSONL | Split-channel recovery: empty `findings[]`, non-clean overall, pack JSON or exact `NO_FINDINGS` in `overall_explanation` and/or last message (shape-gated; see #135) | 0 | Findings or clean from secondary channel; broad JSONL-error → last-message fallback is **forbidden** |
-| Review-mode JSONL | Contradictory `review_output` (e.g. non-empty `findings[]` with patch-is-correct overall) | non-zero | Run `failed`; recovery **must not** run |
-| Last message | Exactly `NO_FINDINGS` (no valid review-mode output) | 0, empty stdout | `findingCount: 0`, run `clean` |
-| Last message | JSON `{"findings":[…]}` (no valid review-mode output) | 0 | Structured findings parsed into AO store |
-| Last message | Empty (no valid review-mode output) | non-zero | Run `failed`; log: `reviewer produced empty output` |
-| Last message | Legacy prose only (no valid review-mode output) | non-zero | Run `failed`; diagnostic snippet in log |
-| Review-mode JSONL | Missing, malformed, split-channel without recoverable secondary payload, or conflicting secondary channels | non-zero | Run `failed`; diagnostic snippet in log |
+**Terminal stdout contract (foreground CLI):** On every **exit 0** outcome, stdout
+is **non-empty** JSON — the pack terminal verdict record. Clean reviews emit
+`verdict: clean` with `findingCount: 0` (scope-warning-only clean may have a
+non-empty `findings[]`). Failure runs exit non-zero; stdout is empty or must not
+parse as a clean verdict. **Runner rule:** exit 0 + parseable clean verdict = terminal success; **do not re-invoke review** on the same PR head.
+
+| Verdict source | Condition | Wrapper exit | stdout on exit 0 | AO / worker effect |
+|----------------|-----------|--------------|------------------|-------------------|
+| Review-mode JSONL | `review_output` clean (`findings: []`, `overall_correctness: patch is correct`) | 0 | Terminal verdict JSON (`verdict: clean`, `findingCount: 0`) | `findingCount: 0`, run `clean` |
+| Review-mode JSONL | `review_output` with findings | 0 | Terminal verdict JSON (`verdict: findings`, populated `findings[]`) | Structured findings parsed into AO store (paths repo-relative) |
+| Review-mode JSONL | Split-channel recovery: empty `findings[]`, non-clean overall, pack JSON or exact `NO_FINDINGS` in `overall_explanation` and/or last message (shape-gated; see #135) | 0 | Terminal verdict JSON (clean or findings per recovery) | Findings or clean from secondary channel; broad JSONL-error → last-message fallback is **forbidden** |
+| Review-mode JSONL | Contradictory `review_output` (e.g. non-empty `findings[]` with patch-is-correct overall) | non-zero | empty or ignored | Run `failed`; recovery **must not** run |
+| Last message | Exactly `NO_FINDINGS` (no valid review-mode output) | 0 | Terminal verdict JSON (`verdict: clean`, `findingCount: 0`) | `findingCount: 0`, run `clean` |
+| Last message | JSON `{"findings":[…]}` (no valid review-mode output) | 0 | Terminal verdict JSON (`verdict: findings`) | Structured findings parsed into AO store |
+| Last message | Empty (no valid review-mode output) | non-zero | empty or ignored | Run `failed`; log: `reviewer produced empty output` |
+| Last message | Legacy prose only (no valid review-mode output) | non-zero | empty or ignored | Run `failed`; diagnostic snippet in log |
+| Review-mode JSONL | Missing, malformed, split-channel without recoverable secondary payload, or conflicting secondary channels | non-zero | empty or ignored | Run `failed`; diagnostic snippet in log |
 
 The wrapper always loads the pack-bundled `prompts/codex_review_prompt.md` (never
 a copy in the reviewed workspace), injects scope from the linked
