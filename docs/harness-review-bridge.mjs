@@ -202,8 +202,7 @@ export function validateMapperSubmitPayload(stdout) {
       return { ok: false, reason: 'prose_submit_markers' };
     }
     const hasPnTitle = PN_TITLE_PATTERN.test(title);
-    const hasScopeMarker = /\[scope-violation\]/i.test(title);
-    if (!hasPnTitle && !hasScopeMarker) {
+    if (!hasPnTitle) {
       return { ok: false, reason: 'finding_missing_pn_title_prefix' };
     }
     if (!/\bseverity:\s*(blocking|non-blocking)\b/i.test(body)) {

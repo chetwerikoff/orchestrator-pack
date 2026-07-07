@@ -7,7 +7,8 @@ reviewer sessions. It does **not** replace the trusted-root prompt or mapper cha
 
 1. Resolve trusted pack root (`AO_TRUSTED_PACK_ROOT` or operator main worktree).
 2. Run `scripts/harness-review-bridge.ps1` from that root with `-RunId` and `-TrustedBaseRoot`.
-3. Confirm stdout JSON carries `[P0]`–`[P3]` titles (or `[scope-violation]`) and
+3. Confirm stdout JSON carries `[P0]`–`[P3]` on every finding title (scope findings may
+   also include `[scope-violation]` but still require the priority prefix) and
    `severity: blocking|non-blocking` inside each finding body.
 
 ## Operator fallback

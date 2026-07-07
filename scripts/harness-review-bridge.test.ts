@@ -233,6 +233,27 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
     ).toThrow('finding_missing_pn_title_prefix');
   });
 
+  it('rejects scope-violation titles without a priority prefix', () => {
+    const payload = JSON.stringify({
+      verdict: 'findings',
+      findingCount: 1,
+      findings: [{ title: '[scope-violation] Out of scope file', body: 'severity: blocking' }],
+    });
+    expect(validateMapperSubmitPayload(payload)).toMatchObject({
+      ok: false,
+      reason: 'finding_missing_pn_title_prefix',
+    });
+    expect(() => buildHarnessSubmitPayload(payload)).toThrow('finding_missing_pn_title_prefix');
+  });
+
+  it('accepts scope-violation titles with a priority prefix', () => {
+    const payload = JSON.stringify({
+      verdict: 'findings',
+      findingCount: 1,
+      findings: [{ title: '[P2] [scope-violation] Out of scope file', body: 'severity: blocking' }],
+    });
+    expect(validateMapperSubmitPayload(payload).ok).toBe(true);
+  });
   it('maps mapper validation failures to stable harness failure classes', () => {
     const cases: Array<[string, string]> = [
       ['', 'empty_mapper_output'],
