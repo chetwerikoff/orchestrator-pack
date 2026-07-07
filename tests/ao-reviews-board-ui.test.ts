@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -32,6 +33,22 @@ function listUiSourceFiles(dir: string): string[] {
 
 describe('AO Reviews board UI fork (Issue #628)', () => {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as ReviewsBoardDocument;
+
+  it('renders seven column headers and one card per column via ReviewBoardView', () => {
+    const uiRoot = path.join(repoRoot, 'tests/ao-reviews-board-runtime/ui');
+    const result = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', 'render-board-view.harness.ts'],
+      {
+        cwd: uiRoot,
+        encoding: 'utf8',
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('PASS: seven-column-render');
+  });
 
   it('maps fixture board JSON into seven column buckets with one card each', () => {
     const grouped = groupRunsByColumn(fixture.runs);

@@ -22,6 +22,7 @@ $required = @(
     'docs/ao-reviews-board-runbook.md',
     'tests/ao-reviews-board.test.ts',
     'tests/ao-reviews-board-ui.test.ts',
+    'tests/ao-reviews-board-runtime/ui/render-board-view.harness.ts',
     'tests/fixtures/reviews-board-seven-columns.json',
     'tests/external-output-references/variants/ao-0-10-daemon/per-session-reviews-empty.json',
     'tests/external-output-references/captures/ao-0-10-daemon/per-session-reviews-empty.raw.json',
