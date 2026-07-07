@@ -82,22 +82,6 @@
       "path": "captures/ao-0-10-daemon/per-session-reviews-populated.raw.json",
       "contentHash": "sha256:59f9e7f1a6aeca931a8167a23d02d03978105a86c9e006506b18af45ef6c3b9e"
     },
-    "ao-0-10-daemon/per-session-reviews-latestRun-status": {
-      "id": "ao-0-10-daemon/per-session-reviews-latestRun-status",
-      "producer": "ao-0-10-daemon",
-      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
-      "kind": "structured",
-      "path": "captures/ao-0-10-daemon/per-session-reviews-latestRun-status.raw.json",
-      "contentHash": "sha256:5808e2bf35caa523af35b653c0853b4d3534cc0c30549d9217abde2ffebe615f"
-    },
-    "ao-0-10-daemon/per-session-reviews-delivered-status": {
-      "id": "ao-0-10-daemon/per-session-reviews-delivered-status",
-      "producer": "ao-0-10-daemon",
-      "sourceCommand": "GET /api/v1/sessions/{id}/reviews",
-      "kind": "structured",
-      "path": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json",
-      "contentHash": "sha256:1fa25250f6d2abc4a704919b24678542e7a339aefd271d1e2e130b6b6a350a47"
-    },
     "ao-0-10-daemon/projects-list": {
       "id": "ao-0-10-daemon/projects-list",
       "producer": "ao-0-10-daemon",
