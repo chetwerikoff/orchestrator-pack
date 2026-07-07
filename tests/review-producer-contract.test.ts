@@ -258,3 +258,5 @@ describe('review producer contract (Issue #626)', () => {
     }
   });
 });
+
+import './ao-reviews-board.test.ts';
