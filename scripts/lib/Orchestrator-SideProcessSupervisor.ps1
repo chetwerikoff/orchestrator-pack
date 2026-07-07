@@ -523,7 +523,7 @@ function Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity {
     )
 
     if ((-not $Tokens -or $Tokens.Count -eq 0) -and $CommandLine) {
-        $Tokens = @(Split-ProcessCommandLineTokens -CommandLine $CommandLine)
+        $Tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
     }
     if (-not $Tokens -or $Tokens.Count -eq 0) { return $false }
 
@@ -576,8 +576,8 @@ function Test-OrchestratorWakeSupervisorSupervisorIdentity {
     if ($ProcessId -le 0) { return $false }
     if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return $false }
 
-    $tokens = @(Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId)
-    if ($tokens.Count -eq 0) { return $false }
+    $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
+    if (-not $tokens -or $tokens.Count -eq 0) { return $false }
     return Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity -Tokens $tokens `
         -ProjectId $ProjectId -StateRoot $StateRoot
 }

@@ -87,9 +87,9 @@ function Get-OrchestratorWakeSupervisorProcessCommandLineTokens {
 
     $fixture = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
     if ($null -ne $fixture) {
-        return [string[]](Split-ProcessCommandLineTokens -CommandLine $fixture)
+        return Split-ProcessCommandLineTokens -CommandLine $fixture
     }
-    return [string[]](Get-ProcessCommandLinePartsById -ProcessId $ProcessId)
+    return Get-ProcessCommandLinePartsById -ProcessId $ProcessId
 }
 
 function Get-OrchestratorWakeSupervisorProcessCommandLine {
@@ -135,5 +135,5 @@ function Split-ProcessCommandLineTokens {
     if ($current.Length -gt 0) {
         $tokens.Add($current.ToString())
     }
-    return [string[]]$tokens.ToArray()
+    return ,@($tokens.ToArray())
 }
