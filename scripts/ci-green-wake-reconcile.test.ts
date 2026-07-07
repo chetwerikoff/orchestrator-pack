@@ -10,7 +10,6 @@ import {
   deriveGreenEpoch,
   evaluateCiGreenWakeCandidate,
   isPreHandOffWorkerForHead,
-  buildCiGreenWakeSendArgv,
   findForbiddenCiGreenWakeCommands,
   mergeBranchRequiredCheckNames,
   planCiGreenWakeActions,
@@ -616,15 +615,13 @@ describe('mergeLegacyNudgedWithPendingJournal', () => {
 });
 
 
-describe('buildCiGreenWakeSendArgv', () => {
-  it('builds AO 0.10.2 inline send argv', () => {
-    expect(buildCiGreenWakeSendArgv('op-1', 'hello')).toEqual([
-      'send',
-      '--message',
-      'hello',
-      '--session',
-      'op-1',
-    ]);
+describe('ci-green wake send argv (Issue #640)', () => {
+  it('uses AO 0.10.2 inline send argv in the production send path', () => {
+    const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ci-green-wake-reconcile.ps1');
+    const text = readFileSync(scriptPath, 'utf8');
+    expect(text).toMatch(/@\('send',\s*'--message'/);
+    expect(text).toMatch(/'--session',\s*\[string\]\$Action\.sessionId/);
+    expect(text).not.toMatch(/@\('send',\s*\[string\]\$Action\.sessionId,\s*\[string\]\$Action\.message/);
   });
 });
 
