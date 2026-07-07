@@ -250,8 +250,8 @@ function Record-ReviewStartEnvelopeLedgerTerminal {
                 -Surfaces @($entry.surfaces) -LogWriter $LogWriter | Out-Null
             Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-envelope-ledger' `
                 -SourceProcess 'review-start-claim-reaper' `
-                -CorrelationKey ("corr:envelope-ledger:$PrNumber:$HeadSha") `
-                -DedupeKey ("dedupe:envelope-ledger:$PrNumber:$HeadSha`:$consecutiveFailureCount") `
+                -CorrelationKey ("corr:envelope-ledger:${PrNumber}:${HeadSha}") `
+                -DedupeKey ("dedupe:envelope-ledger:${PrNumber}:${HeadSha}:$consecutiveFailureCount") `
                 -Diagnosis @{ prNumber = $PrNumber; headSha = $HeadSha; consecutiveFailureCount = $consecutiveFailureCount } | Out-Null
             $marked = Invoke-ReviewStartEnvelopeLedgerCli -Subcommand 'mark-escalated' -Payload @{
                 ledger   = $result.ledger

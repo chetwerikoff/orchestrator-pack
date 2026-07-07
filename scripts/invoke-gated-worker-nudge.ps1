@@ -40,7 +40,7 @@ function Invoke-GatedNudgeEscalationEmit {
         [switch]$DryRun
     )
     $corr = "corr:nudge:$TupleKey"
-    $dedupe = "dedupe:nudge:$TupleKey:$Reason"
+    $dedupe = "dedupe:nudge:${TupleKey}:${Reason}"
     Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-gated-nudge' `
         -SourceProcess 'ci-green-wake-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
         -Diagnosis @{ tupleKey = $TupleKey; reason = $Reason; diagnosis = $Diagnosis } -DryRun:$DryRun | Out-Null

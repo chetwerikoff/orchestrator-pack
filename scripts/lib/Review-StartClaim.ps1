@@ -752,8 +752,8 @@ function Get-ReviewStartClaimLostRaceResult {
             }
         }
     }
-    $corr = "corr:review-start-claim:$PrNumber:$HeadSha"
-        $dedupe = "dedupe:review-start-claim:$PrNumber:$HeadSha"
+    $corr = "corr:review-start-claim:${PrNumber}:${HeadSha}"
+    $dedupe = "dedupe:review-start-claim:${PrNumber}:${HeadSha}"
         Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-review-start-claim' `
             -SourceProcess 'review-start-claim-reaper' -CorrelationKey $corr -DedupeKey $dedupe `
             -Diagnosis @{ prNumber = $PrNumber; headSha = $HeadSha; reason = $reason } | Out-Null

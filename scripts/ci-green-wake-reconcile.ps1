@@ -37,8 +37,8 @@ function Invoke-CiGreenEscalationEmit {
     )
     $pr = [string]$Action.prNumber
     $head = [string]$Action.headSha
-    $corr = "corr:ci-green:$pr:$head"
-    $dedupe = "dedupe:ci-green:$pr:$head:claim"
+    $corr = "corr:ci-green:${pr}:${head}"
+    $dedupe = "dedupe:ci-green:${pr}:${head}:claim"
     Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-ci-green-claim-audit' `
         -SourceProcess 'ci-green-wake-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
         -Diagnosis @{ prNumber = $pr; headSha = $head; reason = $Reason; diagnosis = $Diagnosis } | Out-Null

@@ -265,8 +265,8 @@ function Invoke-PlannedCiFailureReconcileSend {
             diagnosis    = [string]$claim.diagnosis
         }
         if ($claim.escalate) {
-            $corr = "corr:ci-failure:$prNumber:$headSha"
-            $dedupe = "dedupe:ci-failure:$prNumber:$headSha`:notify"
+            $corr = "corr:ci-failure:${prNumber}:${headSha}"
+            $dedupe = "dedupe:ci-failure:${prNumber}:${headSha}`:notify"
             Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-ci-failure-notify' `
                 -SourceProcess 'ci-failure-notification-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
                 -Diagnosis @{ prNumber = $prNumber; headSha = $headSha; reason = $claim.reason; diagnosis = $claim.diagnosis } | Out-Null
