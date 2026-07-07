@@ -42,7 +42,7 @@
     "scripts/autonomous-spawn-worktree-gate.test.ts": "heavy",
     "scripts/autonomous-worker-nudge-boundary.test.ts": "heavy",
     "scripts/check-ci-pipeline-split.test.ts": "heavy",
-    "scripts/ci-failure-fixing-stint-orchestrator-turn.test.ts": "heavy",
+    "scripts/ci-failure-fixing-stint-reconcile.test.ts": "heavy",
     "scripts/ci-failure-notification.test.ts": "heavy",
     "scripts/ci-failure-progress-freshness.test.ts": "heavy",
     "scripts/ci-failure-progress-stale.test.ts": "heavy",

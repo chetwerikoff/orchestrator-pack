@@ -4052,7 +4052,6 @@ describe('issue #602 delivery source audit', () => {
     expect(bySource['reaction-routed']).toBe('journaled-worker-send');
     expect(bySource['ci-failure-nudge']).toBe('journaled-worker-send');
     expect(bySource['ci-green-nudge']).toBe('journaled-worker-send');
-    expect(bySource['orchestrator-turn-nudge']).toBe('journaled-worker-send');
     expect(bySource['submit-reconcile-backstop']).toBe('draft-submit');
   });
 });

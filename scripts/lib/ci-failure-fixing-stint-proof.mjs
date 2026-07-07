@@ -33,7 +33,7 @@ export function buildCiFailureFixingStintProofPayload() {
       buildEpisode(),
       fixtureDir,
     ),
-    surface: 'orchestrator-turn',
+    surface: 'ci-failure-notification-reconcile',
     nowMs: pins.freshEvaluationMs,
     config: { progressFreshnessMs: pins.defaultProgressFreshnessMs },
   });

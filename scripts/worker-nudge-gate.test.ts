@@ -1331,10 +1331,11 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(claimText).toMatch(/AllowOverwrite[\s\S]*Remove-Item -LiteralPath \$Path -Force/);
   });
 
-  it('keeps invoke-gated-worker-nudge PS 5.1-compatible without dot-sourcing PS7 common helpers', () => {
+  it('retires invoke-gated-worker-nudge ci-failure arm (Issue #645)', () => {
     const invokeText = readFileSync(invokePath, 'utf8');
     expect(invokeText).not.toMatch(/Ci-Failure-Notification-Common\.ps1/);
-    expect(invokeText).toMatch(/function Get-InvokeGatedWorkerNudgeCiFailureStoreDir/);
+    expect(invokeText).not.toMatch(/function Get-InvokeGatedWorkerNudgeCiFailureStoreDir/);
+    expect(invokeText).toMatch(/ci-failure intent retired from invoke-gated-worker-nudge/);
   });
 
   it('resolves ci-failure headSha from episodeKey when headSha is omitted', () => {
@@ -1354,8 +1355,8 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       targetId: 'opk-19',
       targetGeneration: 'gen-1',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: {
         sessions: [
           {
@@ -1392,8 +1393,8 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       targetId: 'opk-19',
       targetGeneration: 'gen-1',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: { sessions: [], openPrs: [{ number: 460, headRefOid: headSha }] },
       storePath: '/tmp/test-claims',
       claims: [],
@@ -1411,8 +1412,8 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       targetId: 'opk-19',
       targetGeneration: 'gen-1',
       intentClass: 'ci-failure',
-      source: 'orchestrator-turn',
-      surface: 'orchestrator-turn',
+      source: 'ci-failure-notification-reconcile',
+      surface: 'ci-failure-notification-reconcile',
       workerState: { sessions: [], openPrs: [] },
       storePath: '/tmp/test-claims',
       claims: [],
