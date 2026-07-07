@@ -116,6 +116,32 @@ describe('claim-pr classification', () => {
 });
 
 
+  it('classifies AO 0.10.2 recovery-shaped spawn argv (#638)', () => {
+    const spawnNew = [
+      'spawn',
+      '638',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'wr-i638',
+      '--issue',
+      '638',
+    ];
+    const claimPr = [
+      'spawn',
+      '--project',
+      'orchestrator-pack',
+      '--name',
+      'wr-pr589',
+      '--claim-pr',
+      '589',
+      '--no-takeover',
+    ];
+    expect(classifySpawnAction(spawnNew)).toBe('spawn-new');
+    expect(classifySpawnAction(claimPr)).toBe('claim-pr-resume');
+    expect(parseClaimPrNumberFromSpawnArgv(claimPr)).toBe(589);
+  });
+
   it('denies malformed claim-pr spawns with invalid_pr instead of spawn-new', () => {
     const malformed = evaluateAutonomousSpawnPolicyDecision({
       argv: ['spawn', '--claim-pr', 'abc'],
