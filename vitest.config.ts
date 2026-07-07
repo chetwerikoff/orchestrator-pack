@@ -5,6 +5,10 @@ const lightLane = process.env.VITEST_CI_LIGHT_LANE === '1';
 const lightMaxWorkers = Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '2');
 
 export default defineConfig({
+  esbuild: {
+    jsx: 'automatic',
+    jsxImportSource: 'react',
+  },
   test: {
     include: [
       'plugins/**/tests/**/*.test.ts',
