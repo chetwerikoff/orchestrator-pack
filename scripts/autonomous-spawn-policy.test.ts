@@ -119,6 +119,7 @@ describe('claim-pr classification', () => {
   it('classifies AO 0.10.2 recovery-shaped spawn argv (#638)', () => {
     const spawnNew = [
       'spawn',
+      '638',
       '--project',
       'orchestrator-pack',
       '--name',

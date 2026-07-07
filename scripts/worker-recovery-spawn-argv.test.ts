@@ -7,6 +7,7 @@ import {
   classifySpawnAction,
   parseClaimPrNumberFromSpawnArgv,
 } from '../docs/autonomous-orchestrator-boundary.mjs';
+import { parseSpawnTargetFromArgv } from '../docs/spawn-worktree-grant.mjs';
 import {
   AO_SPAWN_DISPLAY_NAME_MAX_LENGTH,
   validateRunnableSpawnCommand,
@@ -66,7 +67,7 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
     expect(validateRunnableSpawnCommand(`ao ${expectBuildOk(built).argv.join(' ')}`)).toEqual([]);
   });
 
-  it('builds spawn-new argv with --issue flag and no positional issue token', () => {
+  it('builds spawn-new argv with positional issue for grant parsing and --issue for AO CLI', () => {
     const built = buildRecoverySpawnArgv({
       spawnAction: 'spawn-new',
       projectId: 'orchestrator-pack',
@@ -76,11 +77,25 @@ describe('worker recovery AO 0.10.2 spawn argv (#638)', () => {
       ok: true,
       projectId: 'orchestrator-pack',
       displayName: 'wr-i638',
-      argv: ['spawn', '--project', 'orchestrator-pack', '--name', 'wr-i638', '--issue', '638'],
+      argv: [
+        'spawn',
+        '638',
+        '--project',
+        'orchestrator-pack',
+        '--name',
+        'wr-i638',
+        '--issue',
+        '638',
+      ],
     });
     const builtOk = expectBuildOk(built);
-    expect(builtOk.argv.includes('638')).toBe(true);
-    expect(builtOk.argv.indexOf('638')).toBe(builtOk.argv.indexOf('--issue') + 1);
+    expect(builtOk.argv[1]).toBe('638');
+    expect(builtOk.argv[builtOk.argv.indexOf('--issue') + 1]).toBe('638');
+    expect(parseSpawnTargetFromArgv(builtOk.argv)).toMatchObject({
+      action: 'spawn-new',
+      targetKey: '638',
+      issueTarget: '638',
+    });
     expect(validateRunnableSpawnCommand(`ao ${builtOk.argv.join(' ')}`)).toEqual([]);
   });
 

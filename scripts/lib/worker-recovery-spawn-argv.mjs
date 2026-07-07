@@ -69,20 +69,23 @@ export function buildRecoverySpawnArgv(input) {
   if (!nameResult.ok) {
     return { ok: false, reason: nameResult.reason };
   }
-  const argv = ['spawn', '--project', projectId, '--name', nameResult.name];
+  const argv = ['spawn'];
   if (action === 'claim-pr-resume') {
     const pr = Number.parseInt(String(input.prNumber ?? ''), 10);
     if (!Number.isFinite(pr) || pr <= 0) {
       return { ok: false, reason: 'missing_pr_number' };
     }
-    argv.push('--claim-pr', String(pr), '--no-takeover');
+    argv.push('--project', projectId, '--name', nameResult.name, '--claim-pr', String(pr), '--no-takeover');
   }
   else if (action === 'spawn-new') {
     const issue = Number.parseInt(String(input.issueNumber ?? ''), 10);
     if (!Number.isFinite(issue) || issue <= 0) {
       return { ok: false, reason: 'missing_issue_number' };
     }
-    argv.push('--issue', String(issue));
+    const issueToken = String(issue);
+    // Positional issue is required for spawn-worktree grant target parsing; --issue
+    // remains for AO 0.10.x spawn CLI binding.
+    argv.push(issueToken, '--project', projectId, '--name', nameResult.name, '--issue', issueToken);
   }
   else {
     return { ok: false, reason: 'unknown_spawn_action' };
