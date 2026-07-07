@@ -25,6 +25,7 @@ export interface NormalizedReviewRun {
   batchId?: string;
   createdAt?: string;
   updatedAt?: string;
+  completedAt?: string;
   retryEligible?: boolean;
   retryCount?: number;
 }
