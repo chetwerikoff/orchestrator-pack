@@ -11,7 +11,10 @@ import {
 } from '../lib/run_review.js';
 import {
   emitAoReviewPayload,
+  emitTerminalVerdictPayload,
   formatGithubComment,
+  isCleanTerminalVerdict,
+  parseTerminalVerdictPayload,
   toAoFindings,
 } from '../lib/emit.js';
 import {
@@ -1448,7 +1451,9 @@ describe('executeReview JSONL round-trip', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.aoStdout).toBe('');
+    expect(result.aoStdout.length).toBeGreaterThan(0);
+    const payload = parseTerminalVerdictPayload(result.aoStdout);
+    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 0, findings: [] });
     expect(result.structuredFindings).toHaveLength(0);
   });
 
@@ -1464,8 +1469,9 @@ describe('executeReview JSONL round-trip', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    const payload = JSON.parse(result.aoStdout) as { findings: unknown[] };
-    expect(payload.findings.length).toBeGreaterThan(0);
+    const payload = parseTerminalVerdictPayload(result.aoStdout);
+    expect(payload).toMatchObject({ verdict: 'findings' });
+    expect(payload!.findings.length).toBeGreaterThan(0);
   });
 
   it('emits repo-relative paths in AO payload for absolute JSONL code_location', () => {
@@ -1510,12 +1516,11 @@ describe('executeReview JSONL round-trip', () => {
     expect(result.exitCode).toBe(0);
     expect(result.structuredFindings[0]!.path).toBe(expectedRelative);
 
-    const payload = JSON.parse(result.aoStdout) as {
-      findings: Array<{ body: string; filePath?: string }>;
-    };
-    expect(payload.findings[0]!.filePath).toBe(expectedRelative);
-    expect(payload.findings[0]!.body).toContain(`path: ${expectedRelative}`);
-    expect(payload.findings[0]!.body).not.toContain(absolutePath);
+    const payload = parseTerminalVerdictPayload(result.aoStdout);
+    expect(payload).toMatchObject({ verdict: 'findings' });
+    expect(payload!.findings[0]!.filePath).toBe(expectedRelative);
+    expect(payload!.findings[0]!.body).toContain(`path: ${expectedRelative}`);
+    expect(payload!.findings[0]!.body).not.toContain(absolutePath);
   });
 });
 
@@ -1622,7 +1627,9 @@ describe('executeReview NO_FINDINGS round-trip', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.aoStdout).toBe('');
+    expect(isCleanTerminalVerdict(result.aoStdout)).toBe(true);
+    const payload = parseTerminalVerdictPayload(result.aoStdout);
+    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 0, findings: [] });
     expect(result.structuredFindings).toHaveLength(0);
   });
 
@@ -1636,8 +1643,9 @@ describe('executeReview NO_FINDINGS round-trip', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    const payload = JSON.parse(result.aoStdout) as { findings: unknown[] };
-    expect(payload.findings).toHaveLength(1);
+    const payload = parseTerminalVerdictPayload(result.aoStdout);
+    expect(payload).toMatchObject({ verdict: 'clean', findingCount: 1 });
+    expect(payload!.findings).toHaveLength(1);
   });
 
   it('writes scope-unavailable warning to GitHub comment on NO_FINDINGS', () => {
@@ -1672,6 +1680,7 @@ describe('executeReview NO_FINDINGS round-trip', () => {
     expect(result.exitCode).toBe(1);
     expect(result.logLines.join('\n')).toContain('legacy clean-review prose');
     expect(result.aoStdout).toBe('');
+    expect(isCleanTerminalVerdict(result.aoStdout)).toBe(false);
   });
 
   it('fails on empty stdout fixture', () => {
@@ -1684,6 +1693,28 @@ describe('executeReview NO_FINDINGS round-trip', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.logLines.join('\n')).toContain('reviewer produced empty output');
+    expect(isCleanTerminalVerdict(result.aoStdout)).toBe(false);
+  });
+});
+
+describe('terminal verdict stdout contract', () => {
+  it('emits clean terminal verdict payload helper', () => {
+    const stdout = emitTerminalVerdictPayload({ verdict: 'clean', findings: [] });
+    expect(parseTerminalVerdictPayload(stdout)).toMatchObject({
+      verdict: 'clean',
+      findingCount: 0,
+      findings: [],
+    });
+  });
+
+  it('documents non-empty stdout for exit-0 clean rows in README', () => {
+    const readme = readFileSync(
+      join(fileURLToPath(new URL('../README.md', import.meta.url))),
+      'utf8',
+    );
+    expect(readme).not.toMatch(/\|\s*0,\s*empty stdout\s*\|/);
+    expect(readme).toContain('exit 0 + parseable clean verdict = terminal success');
+    expect(readme).toContain('do not re-invoke review');
   });
 });
 
@@ -1863,11 +1894,12 @@ describe('toAoFindings', () => {
   });
 
   it('emits AO-parseable JSON payload', () => {
-    const payload = JSON.parse(
+    const payload = parseTerminalVerdictPayload(
       emitAoReviewPayload(
         toAoFindings([scopeUnavailableWarningFinding('codex-local')]),
       ),
-    ) as { findings: Array<{ body: string }> };
-    expect(payload.findings[0]!.body).toContain('scope-context-unavailable');
+    );
+    expect(payload).toMatchObject({ verdict: 'findings', findingCount: 1 });
+    expect(payload!.findings[0]!.body).toContain('scope-context-unavailable');
   });
 });
