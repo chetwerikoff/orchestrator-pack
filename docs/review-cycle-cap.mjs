@@ -249,6 +249,26 @@ function sortRunsByRecency(runs) {
  * @param {number} prNumber
  * @param {string} currentHeadSha
  */
+
+function resolveRunCompletionMs(run) {
+  return (
+    Date.parse(String(run?.completedAt ?? run?.updatedAt ?? run?.createdAt ?? run?.startedAt ?? '')) ||
+    0
+  );
+}
+
+/**
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
+ * @param {string | null | undefined} cycleOpenedAtUtc
+ */
+export function filterRunsWithinCycleBoundary(runs, cycleOpenedAtUtc) {
+  const boundaryMs = Date.parse(String(cycleOpenedAtUtc ?? '')) || 0;
+  if (!boundaryMs) {
+    return toArray(runs);
+  }
+  return toArray(runs).filter((run) => resolveRunCompletionMs(run) >= boundaryMs);
+}
+
 export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
   const forPr = toArray(runs).filter((run) => Number(run?.prNumber) === prNumber);
   /** @type {Map<string, { run: import('./review-trigger-reconcile.mjs').ReviewRun, runMs: number, classification: ReturnType<typeof classifyTerminalRun> }>} */
@@ -406,23 +426,28 @@ export function syncReviewCycleCapState(input) {
     return { capState: capStateRoot, prState };
   }
 
-  const budget = deriveDistinctHeadBudget(input.reviewRuns ?? [], prNumber, currentHeadSha);
-  const distinctHeads = budget.map((entry) => entry.targetSha);
-  const firstConsuming = budget[0];
-  if (!prState.cycleOpenedAtUtc && firstConsuming) {
-    const tierCap = resolveTierAndCap({
-      tier: input.tier,
-      issueBody: input.issueBody,
-      frozenTier: prState.tierFrozen ? prState.tier : null,
-    });
-    prState.tier = tierCap.tier;
-    prState.cap = tierCap.cap;
-    prState.cycleOpenedAtUtc =
-      firstConsuming.completedAt != null
-        ? new Date(Date.parse(String(firstConsuming.completedAt)) || nowMs).toISOString()
-        : nowIso;
-    prState.tierFrozen = true;
+  if (!prState.cycleOpenedAtUtc) {
+    const probeBudget = deriveDistinctHeadBudget(input.reviewRuns ?? [], prNumber, currentHeadSha);
+    const firstConsuming = probeBudget[0];
+    if (firstConsuming) {
+      const tierCap = resolveTierAndCap({
+        tier: input.tier,
+        issueBody: input.issueBody,
+        frozenTier: prState.tierFrozen ? prState.tier : null,
+      });
+      prState.tier = tierCap.tier;
+      prState.cap = tierCap.cap;
+      prState.cycleOpenedAtUtc =
+        firstConsuming.completedAt != null
+          ? new Date(Date.parse(String(firstConsuming.completedAt)) || nowMs).toISOString()
+          : nowIso;
+      prState.tierFrozen = true;
+    }
   }
+
+  const cycleRuns = filterRunsWithinCycleBoundary(input.reviewRuns ?? [], prState.cycleOpenedAtUtc);
+  const budget = deriveDistinctHeadBudget(cycleRuns, prNumber, currentHeadSha);
+  const distinctHeads = budget.map((entry) => entry.targetSha);
 
   prState.distinctHeadsReviewed = distinctHeads;
 
@@ -437,7 +462,7 @@ export function syncReviewCycleCapState(input) {
   }
 
   const openFindingCount = resolveCurrentHeadOpenFindingCount(
-    input.reviewRuns ?? [],
+    cycleRuns,
     prNumber,
     currentHeadSha,
   );

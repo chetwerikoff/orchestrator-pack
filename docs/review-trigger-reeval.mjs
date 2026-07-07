@@ -629,7 +629,7 @@ export function planDeferredWatchTick(input) {
         currentHeadSha: evaluation.planned.headSha,
         openPrs: toArray(input.openPrs),
         reviewRuns: toArray(input.reviewRuns),
-        capState: input.capCycleState ?? {},
+        capState: nextCapCycleState,
         issueBody: input.issueBody,
         producer: 'review-trigger-reeval',
         nowMs,

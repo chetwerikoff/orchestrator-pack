@@ -28,6 +28,10 @@ import {
   watchEntryKey,
   type ReevalWatchAction,
 } from '../docs/review-trigger-reeval.mjs';
+import {
+  evaluateReviewCycleCapGate,
+  TERMINAL_CLEAN_EARLY_STOP,
+} from '../docs/review-cycle-cap.mjs';
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 
 const fixturesDir = path.join(
@@ -104,6 +108,63 @@ function planFixtureTick(fixture: ReevalFixture) {
     snapshotErrorsByKey: fixture.snapshotErrorsByKey,
   });
 }
+
+describe('review-cycle cap state in deferred watch ticks', () => {
+  it('carries capCycleState across sequential cap gates in one tick', () => {
+    const pr = 672;
+    const cleanHead = 'cleanhead'.padEnd(40, 'c');
+    const nextHead = 'nexthead'.padEnd(40, 'n');
+    const reviewRuns = [
+      {
+        prNumber: pr,
+        targetSha: cleanHead,
+        status: 'up_to_date',
+        openFindingCount: 0,
+        completedAt: '2026-07-07T10:00:00Z',
+      },
+      {
+        prNumber: pr,
+        targetSha: 'hist'.padEnd(40, 'h'),
+        status: 'changes_requested',
+        openFindingCount: 1,
+        completedAt: '2026-06-01T00:00:00Z',
+      },
+    ];
+    const nowMs = Date.parse('2026-07-07T12:00:00Z');
+    const initialCap = {} as Record<string, unknown>;
+
+    const first = evaluateReviewCycleCapGate({
+      prNumber: pr,
+      currentHeadSha: cleanHead,
+      reviewRuns,
+      capState: initialCap,
+      nowMs,
+      producer: 'review-trigger-reeval',
+    });
+    expect(first.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+
+    const accumulated = evaluateReviewCycleCapGate({
+      prNumber: pr,
+      currentHeadSha: nextHead,
+      reviewRuns,
+      capState: first.capState,
+      nowMs,
+      producer: 'review-trigger-reeval',
+    });
+    const staleInput = evaluateReviewCycleCapGate({
+      prNumber: pr,
+      currentHeadSha: nextHead,
+      reviewRuns,
+      capState: initialCap,
+      nowMs,
+      producer: 'review-trigger-reeval',
+    });
+
+    expect(accumulated.allowStart).toBe(true);
+    expect(accumulated.prState?.distinctHeadsReviewed).toEqual([]);
+    expect(staleInput.prState?.distinctHeadsReviewed?.length).toBeGreaterThan(0);
+  });
+});
 
 describe('review-trigger-reeval constants and helpers', () => {
   it('documents incident delay and conformant watch window', () => {

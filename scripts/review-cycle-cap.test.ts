@@ -399,10 +399,19 @@ describe('review cycle cap scenario matrix', () => {
     const stopped = run(pr, oldHead, oldRuns);
     expect(stopped.terminal).toBe(TERMINAL_CLEAN_EARLY_STOP);
 
-    const gate = run(pr, newHead, [], { capState: stopped.capState });
+    const historicalRuns = [
+      ...oldRuns,
+      { prNumber: pr, targetSha: 'hist1'.padEnd(40, 'h'), status: 'changes_requested', openFindingCount: 1, completedAt: '2026-06-01T00:00:00Z' },
+      { prNumber: pr, targetSha: 'hist2'.padEnd(40, 'i'), status: 'changes_requested', openFindingCount: 1, completedAt: '2026-06-02T00:00:00Z' },
+    ];
+    const gate = run(pr, newHead, historicalRuns, {
+      capState: stopped.capState,
+      nowMs: Date.parse('2026-07-02T00:00:00Z'),
+    });
     expect(gate.terminal).not.toBe(TERMINAL_CLEAN_EARLY_STOP);
     expect(gate.allowStart).toBe(true);
     expect(gate.prState?.distinctHeadsReviewed).toEqual([]);
+    expect(gate.prState?.cycleOpenedAtUtc).toBeTruthy();
   });
 
   it('at-cap head advance without clearance keeps terminal and suppresses starts', () => {

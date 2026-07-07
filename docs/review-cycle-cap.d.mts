@@ -23,6 +23,7 @@ export interface PrCapCycleState {
   tier?: string;
   cap?: number;
   tierFrozen?: boolean;
+  cycleOpenedAtUtc?: string | null;
   distinctHeadsReviewed?: string[];
   terminal?: string | null;
   terminalHeadSha?: string | null;
@@ -87,6 +88,11 @@ export declare function deriveDistinctHeadBudget(
   completedAt: string | null;
   run: ReviewRun;
 }>;
+
+export declare function filterRunsWithinCycleBoundary(
+  runs: ReviewRun[],
+  cycleOpenedAtUtc: string | null | undefined,
+): ReviewRun[];
 
 export declare function resolveCurrentHeadOpenFindingCount(
   runs: ReviewRun[],
