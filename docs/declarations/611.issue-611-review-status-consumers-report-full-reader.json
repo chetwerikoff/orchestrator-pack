@@ -1,0 +1,23 @@
+{
+  "issue_number": 611,
+  "iteration_id": "issue-611-review-status-consumers-report-full-reader",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T06:41:44.610Z",
+  "baseline": {
+    "commit_sha": "881a39a76d5d2feee8d04aeb103d94f5acdb7f40",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c906171c5aaf641983a836303fc2012a497a69662d99c16ce37c885b9501cc8a"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example",
+    "prompts/agent_rules.md"
+  ],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**",
+    "tests/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}
