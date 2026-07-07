@@ -74,6 +74,17 @@ function testSupervisorCommandLineIdentityTokens(
   return result.stdout.trim() === 'True';
 }
 
+function testManagedChildIdentity(
+  fixturePath: string,
+  pid: number,
+  role: string,
+): boolean {
+  const result = runPwsh(
+    `$env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE='${fixturePath.replace(/'/g, "''")}'; . '${supervisorLib.replace(/'/g, "''")}'; Write-Output (Test-OrchestratorWakeSupervisorManagedProcess -ProcessId ${pid} -Role '${role.replace(/'/g, "''")}')`,
+  );
+  return result.stdout.trim() === 'True';
+}
+
 function makeStateDirWithSpacesInPath(): string {
   const base = makeStateDir();
   const stateDir = path.join(base, 'wake sup');
@@ -174,6 +185,48 @@ describe('Issue #613 orphan supervisor discovery (unit)', () => {
     expect(
       testSupervisorCommandLineIdentity(tokens.join(' '), 'orchestrator-pack', stateDir),
     ).toBe(false);
+  });
+
+  it('managed child identity preserves argv tokens for -File script paths', () => {
+    const stateDir = makeStateDir();
+    const fixturePath = path.join(stateDir, 'cmdline-fixture.json');
+    const listenerScript = path.join(repoRoot, 'scripts/orchestrator-wake-listener.ps1');
+    const livePid = process.pid;
+    const brokenJoined = `pwsh -NoProfile -File ${path.join(stateDir, 'wake')} listener.ps1`;
+
+    fs.writeFileSync(fixturePath, JSON.stringify({ [String(livePid)]: brokenJoined }));
+    expect(testManagedChildIdentity(fixturePath, livePid, 'listener')).toBe(false);
+
+    fs.writeFileSync(
+      fixturePath,
+      JSON.stringify({
+        [String(livePid)]: {
+          tokens: ['pwsh', '-NoProfile', '-File', listenerScript],
+        },
+      }),
+    );
+    expect(testManagedChildIdentity(fixturePath, livePid, 'listener')).toBe(true);
+  });
+
+  it('managed child identity matches test child role via argv -Role token', () => {
+    const stateDir = makeStateDir();
+    const fixturePath = path.join(stateDir, 'cmdline-fixture.json');
+    const testChildScript = path.join(
+      repoRoot,
+      'scripts/orchestrator-wake-supervisor-test-child.ps1',
+    );
+    const livePid = process.pid;
+
+    fs.writeFileSync(
+      fixturePath,
+      JSON.stringify({
+        [String(livePid)]: {
+          tokens: ['pwsh', '-NoProfile', '-File', testChildScript, '-Role', 'heartbeat'],
+        },
+      }),
+    );
+    expect(testManagedChildIdentity(fixturePath, livePid, 'heartbeat')).toBe(true);
+    expect(testManagedChildIdentity(fixturePath, livePid, 'listener')).toBe(false);
   });
 
   it('Resolve fails closed when supervisor.pid is valid but scan finds duplicate managed supervisors', () => {

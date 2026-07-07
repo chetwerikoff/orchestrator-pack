@@ -778,21 +778,24 @@ function Test-OrchestratorWakeSupervisorManagedProcess {
         return $false
     }
 
-    $commandLine = Get-OrchestratorWakeSupervisorProcessCommandLine -ProcessId $ProcessId
-    if (-not $commandLine) { return $false }
+    $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
+    if (-not $tokens -or $tokens.Count -eq 0) { return $false }
 
-    if ($commandLine -like '*orchestrator-wake-supervisor-test-child.ps1*') {
-        return $commandLine -match "-Role\s+$([regex]::Escape($Role))"
-    }
-
-    $scriptPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $entry.ScriptPath
-    $tokens = Split-ProcessCommandLineTokens -CommandLine $commandLine
+    $testChildPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $Script:OrchestratorSideProcessTestChildScript
     $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
     if ($scriptInCommand) {
-        return (Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand) -eq $scriptPath
+        $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
+        if ($normalizedScript -eq $testChildPath) {
+            $roleValue = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-Role'
+            return $roleValue -eq $Role
+        }
+
+        $scriptPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $entry.ScriptPath
+        return $normalizedScript -eq $scriptPath
     }
 
-    return $commandLine -like "*$marker*"
+    $joinedCommand = $tokens -join ' '
+    return $joinedCommand -like "*$marker*"
 }
 
 function Test-OrchestratorWakeSupervisorDaemonRunning {

@@ -76,18 +76,34 @@ function Get-OrchestratorWakeSupervisorProcessCommandLineFixture {
 
     $key = [string]$ProcessId
     if ($map.PSObject.Properties.Name -contains $key) {
-        return [string]$map.$key
+        return $map.$key
     }
     return $null
 }
 
+function Get-OrchestratorWakeSupervisorProcessCommandLineFixtureTokens {
+    param([int]$ProcessId)
+
+    $entry = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
+    if ($null -eq $entry) { return $null }
+    if ($entry -is [System.Array]) {
+        return ,@($entry | ForEach-Object { [string]$_ })
+    }
+    if ($entry.PSObject.Properties.Name -contains 'tokens') {
+        return ,@($entry.tokens | ForEach-Object { [string]$_ })
+    }
+    if ($entry.PSObject.Properties.Name -contains 'commandLine') {
+        return Split-ProcessCommandLineTokens -CommandLine ([string]$entry.commandLine)
+    }
+    return Split-ProcessCommandLineTokens -CommandLine ([string]$entry)
+}
 
 function Get-OrchestratorWakeSupervisorProcessCommandLineTokens {
     param([int]$ProcessId)
 
-    $fixture = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
-    if ($null -ne $fixture) {
-        return Split-ProcessCommandLineTokens -CommandLine $fixture
+    $fixtureTokens = Get-OrchestratorWakeSupervisorProcessCommandLineFixtureTokens -ProcessId $ProcessId
+    if ($null -ne $fixtureTokens) {
+        return $fixtureTokens
     }
     return Get-ProcessCommandLinePartsById -ProcessId $ProcessId
 }
@@ -97,7 +113,16 @@ function Get-OrchestratorWakeSupervisorProcessCommandLine {
 
     $fixture = Get-OrchestratorWakeSupervisorProcessCommandLineFixture -ProcessId $ProcessId
     if ($null -ne $fixture) {
-        return $fixture
+        if ($fixture -is [System.Array]) {
+            return ($fixture -join ' ')
+        }
+        if ($fixture.PSObject.Properties.Name -contains 'commandLine') {
+            return [string]$fixture.commandLine
+        }
+        if ($fixture.PSObject.Properties.Name -contains 'tokens') {
+            return ($fixture.tokens -join ' ')
+        }
+        return [string]$fixture
     }
     return Get-ProcessCommandLineById -ProcessId $ProcessId
 }
