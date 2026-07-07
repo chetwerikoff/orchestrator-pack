@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { InventoryRow } from '../docs/launch-argv-registry.mjs';
 import {
   auditLaunchArgvInventory,
   classifyDiscoveryHits,
@@ -77,10 +78,10 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
       files: ['scripts/new-unregistered-launch.ts'],
       testExclusions: JSON.parse(readFileSync(join(tmp, 'scripts/launch-argv-test-exclusions.manifest.json'), 'utf8')),
     });
-    const production = hits.filter((h) => h.classification === 'production');
+    const production = hits.filter((h: { classification: string }) => h.classification === 'production');
     expect(production.length).toBeGreaterThan(0);
     const { failures } = classifyDiscoveryHits(hits, [], []);
-    expect(failures.some((f) => f.includes('unmapped production launch site'))).toBe(true);
+    expect(failures.some((f: string) => f.includes('unmapped production launch site'))).toBe(true);
   });
 
   it('passes once the unregistered site is inventoried', () => {
@@ -142,12 +143,12 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
             calleeContractSourceClass: 'allowlist-only',
             coverageKind: 'validator-backed',
             validatorId: 'nonexistent-validator',
-          },
+          } satisfies InventoryRow,
         ],
       },
     };
     const violations = validateInventoryRows(broken, repoRoot);
-    expect(violations.some((v) => v.includes('unknown validatorId'))).toBe(true);
+    expect(violations.some((v: string) => v.includes('unknown validatorId'))).toBe(true);
   });
 
   it('references each shipped validator in inventory rows', () => {
@@ -160,8 +161,10 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
       'gh-inventory-static',
     ];
     for (const id of required) {
-      const referenced = bundle.inventory.rows.some((row) => row.validatorId === id);
-      const absorbed = (bundle.inventory.absorbedCoverage ?? []).some((rec) => rec.validatorId === id);
+      const referenced = bundle.inventory.rows.some((row: { validatorId?: string }) => row.validatorId === id);
+      const absorbed = (bundle.inventory.absorbedCoverage ?? []).some(
+        (rec: { validatorId: string }) => rec.validatorId === id,
+      );
       expect(referenced || absorbed, id).toBe(true);
     }
   });

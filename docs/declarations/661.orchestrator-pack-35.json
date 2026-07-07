@@ -5,11 +5,12 @@
   "supersedes": null,
   "created_at": "2026-07-07T20:10:00.000Z",
   "baseline": {
-    "commit_sha": "49172a89",
-    "worktree_dirty": true,
-    "active_scope_hash": "pending"
+    "commit_sha": "7e1c00a3b1b6f2acaba5c6bf307f4b18ce29e7b4",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9f5f12957f59e9912560556a35cbce85d80e21d32ebbeb8854306656a7652318"
   },
   "declared_paths": [
+    "docs/launch-argv-registry.d.mts",
     "docs/launch-argv-registry.mjs",
     "scripts/check-launch-argv-inventory.ps1",
     "scripts/launch-argv-inventory.json",

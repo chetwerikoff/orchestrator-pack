@@ -205,6 +205,7 @@ export function isDiscoveryNoiseLine(line, patternId) {
   const trimmed = line.trim();
   if (!trimmed) return true;
   if (/^\s*(\/\/|#|\*|\/\*)/.test(line)) return true;
+  if (/^\s*regex:\s*[/(]/.test(line)) return true;
   if (/new RegExp|\/\\bspawn|FORBIDDEN_|PATTERN|Write-Host\s+['"`].*spawn|throw\s+['"`].*spawn/i.test(line)) {
     return true;
   }
