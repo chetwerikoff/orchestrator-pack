@@ -2228,3 +2228,29 @@ unaffected (different runtime).
      must **allow**.
    - Write/Edit under `docs/issues_drafts/.review/618-probe/` must **allow** without either
      override env var.
+
+## Agent rules in-place restructure (Issue #654)
+
+**Operator adoption:** No `ao stop` / `ao start` required to pick up restructured worker rules.
+AO 0.10.2 does not inject `prompts/agent_rules.md` via `agentRulesFile`; changes take effect via
+**tracked worktree files** on the next worker spawn or `git pull`. Recycle live worker sessions
+when you want them to re-read rules immediately.
+
+**New reference docs:**
+
+- `docs/coworker-delegation.md` — coworker examples, PR-diff recipe, ordering rationale (worker core
+  stays in `prompts/agent_rules.md`).
+- `docs/tiering.md` — task complexity tier rubric and per-tier draft-review flow (architect/draft
+  author); worker pre-flight marker check remains in `prompts/agent_rules.md`.
+
+**Heading API (draft 224 coordination):** Post-restructure `##` headings in `prompts/agent_rules.md`
+are the extraction surface for draft 224's section generator. Renaming headings after 224 lands
+requires generator regeneration (fail-closed).
+
+**Check retarget log:** None — title-pinned substrings and mirror phrases preserved in place; no CI
+grep anchor moves in this PR.
+
+**Admission policy:** New worker-rule content must be a worker-LLM behavioral contract; script-owned
+documentation and architect policy belong in `docs/` with one-line pointers. New CI checks must not
+add mirror phrases to `prompts/agent_rules.md` (grandfathered checks only until phase-2
+`docs/review-pipeline.md` extraction).

@@ -1,212 +1,107 @@
 # Agent Rules
 
-These rules are intended to be injected through Composio AO `agentRulesFile`.
-They must be portable across AO-supported agents and must not rely on local
-`ai-orchestrator` internals.
+These rules are the **worker-LLM behavioral contract** for orchestrator-pack AO
+sessions. They reach agents via **tracked worktree files** — native `AGENTS.md`
+pickup and always-applied `.cursor/rules/*.mdc` pointers — not via any AO
+`agentRulesFile` injection channel (AO 0.10.2). After merge, pull `main`; live
+workers pick up on recycle. Do **not** prescribe `ao stop` / `ao start` solely to
+"reload" this file.
+
+**Admission policy.** Content belongs here **only** when an agent must read it to
+act correctly. Script-owned starter documentation stays in this file only while
+CI mirror phrases require it (trim to pinned substrings + one-line pointers).
+Architect/draft-author policy and coworker deep-dives live in `docs/` or skills
+with at most a pointer. **New CI checks must NOT require mirror phrases** in this
+file — pin `docs/` pages instead (grandfathered checks only until phase-2
+`docs/review-pipeline.md` extraction).
+
+Portable across AO-supported agents; do not rely on local `ai-orchestrator`
+internals.
 
 ## First action (AO pickup)
 
-After reading the initial task prompt, your **mandatory first action** in the
-AO worktree is:
+After reading the initial task prompt, your **mandatory first action** in the AO
+worktree is:
 
 ```powershell
 ao acknowledge
 ```
 
-Run this within **60 seconds** of session start — before `ao-declare`, file
-edits, research, commits, or PR work. AO's `reportWatcher` treats a missing
-pickup as `no_acknowledge` and marks the session `stuck` while the process is
-still alive.
-
-Skipping acknowledge blocks the orchestrator review loop and may trigger
-operator recovery or session kill per
+Run within **60 seconds** of session start — before `ao-declare`, file edits,
+research, commits, or PR work. Missing pickup is `no_acknowledge` and marks the
+session `stuck`. See
 [`docs/orchestrator-recovery-runbook.md`](../docs/orchestrator-recovery-runbook.md).
-
-## Local Codex review (active)
-
-Local Codex PR review **is active** in this pack. On AO 0.10 the live orchestrator
-review loop is **workspace-visible prompts** (this file) plus **side-process scripts**
-supervised by `scripts/orchestrator-wake-supervisor.ps1` — not AO-injected
-`orchestratorRules` prose.
-
-Mechanical surfaces (Issue #623 / #625):
-
-- **Trigger:** `ao-review run <worker-session-id>` via `scripts/ao-review.ps1`
-  (`POST /api/v1/sessions/{id}/reviews/trigger`).
-- **Discover / idempotency:** `Get-AoReviewRuns` fan-out (`GET /api/v1/sessions/{id}/reviews`
-  per worker session, normalized by pack helpers) or `ao-review list <session-id> --json`.
-- **Periodic trigger backstop:** `scripts/review-trigger-reconcile.ps1`.
-- **Delivery confirmation:** `scripts/review-finding-delivery-confirm.ps1` (#171).
-
-`orchestratorRules` in `agent-orchestrator.yaml` is **legacy-import-only** on AO 0.10 —
-operator reference when diffing `agent-orchestrator.yaml.example`; copy into live YAML for
-import/history, not as the injected turn procedure.
-
-Review uses Codex CLI with `gpt-5.5`. A `reviewer:` YAML block remains silently ignored —
-use **REVIEW_COMMAND**, **PACK_REVIEWER**, and the scripts above, not invented YAML fields.
-The retired `ao review send` / `ao review execute` CLI paths are **REMOVED** on AO 0.10;
-delivery is automatic on submit.
-
-## Orchestrator LLM role vs script-owned review (Issue #625)
-
-**The LLM orchestrator turn does not start or drive routine review rounds.** Routine
-`ao-review run` is owned by supervised side-process scripts — by name:
-
-- `scripts/review-trigger-reconcile.ps1` — periodic open-PR backstop (#163)
-- `scripts/review-trigger-reeval.ps1` — deferred-head re-evaluation (#235)
-- `scripts/orchestrator-wake-listener.ps1` — completion-wake fast path (#207)
-
-Those starters apply covered-head dedupe (#189), HEAD READY FOR REVIEW (#195), and the
-shared review-start claim (#267) before any automated `ao-review run`. Predicate
-implementation lives in `docs/review-orchestrator-loop.mjs`, `docs/review-head-ready.mjs`,
-and `docs/review-reconcile-primitives.mjs` — not as an LLM turn checklist.
-
-**Manual operator path:** operator-invoked `ao-review run` remains available and stays
-outside the automated claim.
-
-**Exception-only LLM handling:** contested protected findings (**E7**) and escalation
-wakes are handled per **issue #641**.
-
-**Orchestrator escalation ack (issue #641):** when a wake body contains
-`[orchestrator-escalation]` with `action=Write-OrchestratorEscalationAck`, after handling
-the incident invoke the shared helper (do not edit escalation state ad hoc):
-
-```powershell
-. scripts/lib/Orchestrator-Escalation.ps1
-Write-OrchestratorEscalationAck -EscalationId <escalation_id> -AckToken <ack_token>
-```
-
-Use the `escalation_id` and `ack_token` from the wake envelope JSON. Bogus or stale ack
-tokens must be rejected; redelivery continues until a validated ack is recorded.
-
-See also: [`README.md`](../README.md#local-codex-review-active), [`docs/architecture.md`](../docs/architecture.md#review-paths).
 
 ## Tracker and role policy
 
 - GitHub Issues are the task source of truth for this pack's AO setup.
-- Treat every GitHub Issue assigned to AO as the task specification.
-- Link every branch and PR back to its source issue; PR bodies must include
-  `Closes #N`, `Fixes #N`, or `Resolves #N` for the task issue.
-- Put the closing reference in the **first few lines** of the PR description
-  (immediately under `## Summary`), not only at the end of a long body. Scope
-  guard reads the full body via `gh`; early placement avoids operator confusion
-  when debugging CI.
-- If **PR scope guard** fails with `missing_issue_link` but the PR already shows
-  `Closes #N` in GitHub, re-check the closing line is present and re-run CI — do
-  not broaden scope or rewrite the declaration to bypass the guard.
-- Planning and coding sessions are expected to run through the Cursor CLI agent
-  unless the AO config explicitly overrides the role.
-- Do not use Vibe Kanban or Linear unless the config explicitly changes the tracker.
+- Link every branch and PR to its source issue; PR bodies must include
+  `Closes #N`, `Fixes #N`, or `Resolves #N` in the **first few lines** under
+  `## Summary`.
+- If **PR scope guard** fails with `missing_issue_link` but GitHub shows
+  `Closes #N`, re-check placement and re-run CI — do not broaden scope.
+- Planning/coding sessions run through the Cursor CLI agent unless AO config
+  overrides the role.
 
 ## Scope discipline
 
 - Do not touch files outside the declared active scope.
-- Every task must contain either:
-  - an explicit file/path scope, or
-  - a denylist that is validated before work starts.
-- Treat broad directory declarations such as `src/**` or `**/*` as suspicious.
-  Narrow them before editing unless the task explicitly justifies the breadth.
-- Normalize paths relative to the repository root before comparing them to scope.
-
-## Before commit
-
-Before staging or committing, compare modified and staged paths with the active
-scope:
-
-- inspect changed files with the repository's normal git status/diff commands;
-- verify every modified path is allowed and not denied;
-- stop and request/record a scoped amendment if any path is outside scope;
-- do not rely on PR CI as the first scope check.
+- Every task needs explicit file/path scope or a validated denylist.
+- Treat broad declarations (`src/**`, `**/*`) as suspicious; narrow first.
+- Normalize paths relative to the repository root before comparing to scope.
+- **Before commit:** inspect git status/diff; verify every modified path is
+  allowed and not denied; stop and record a scoped amendment if outside scope.
+  Do not rely on PR CI as the first scope check.
 
 ## Queued task specs
 
-- Do not delete queued task specs unless the deletion itself is explicitly in
-  scope.
+- Do not delete queued task specs unless deletion is in scope.
 - Do not rewrite another task's declaration to make the current diff pass.
-- If a task declaration needs to change, record one amendment for the current
-  iteration and keep the previous baseline auditable.
+- One amendment per iteration; keep the previous baseline auditable.
 
 ## Shared source of truth
 
-- If the same literal, prompt, path, policy, or command is needed in two places,
-  first extract a single source of truth.
-- Avoid paired script/template edits that can drift. Prefer generating one from
-  the other or referencing the same data file.
-- Do not duplicate safety-policy prompt text across agents when a shared prompt
-  file can be referenced instead.
+- Extract a single source of truth before duplicating literals, prompts, paths,
+  policies, or commands.
+- Prefer generation or shared data files over paired script/template edits.
 
 ## Upgrade-safe AO usage
 
 - Prefer plugin, config, prompt, wrapper, hook, or CI extensions over AO core
   patches.
-- Do not edit upstream `packages/core/` to satisfy a task.
-- If upstream behavior appears missing, write a contract or wrapper first and
-  escalate the need for a proper plugin/API only after confirming the gap.
+- Do not edit upstream `packages/core/`. Write a contract or wrapper first.
 
 ## Build the minimum (no unrequested abstraction)
 
-Build the **smallest** implementation that satisfies the issue's stated acceptance
-criteria. Prefer deletion or reuse of existing code over adding new code. Avoid
-**unrequested abstraction** — do not introduce indirection, a layer, a config knob,
-or a generalization that no acceptance criterion or carve-out below justifies.
+Build the **smallest** implementation that satisfies acceptance criteria. Avoid
+**unrequested abstraction** unless justified by an acceptance criterion, public
+boundary, cross-platform need, generated-drift prevention, risky-seam testability,
+or upgrade-safety. Rigor is not optional: validation, data-loss prevention,
+security, and required tests are never skimped for minimalism.
 
-**Not a hard second-caller rule.** "Minimum" is **not** "no abstraction until a
-second concrete caller exists." An abstraction, boundary, adapter, generator, or
-single-source layer is legitimate — not over-engineering — when justified by **any**
-of:
-
-- an issue **acceptance criterion**;
-- a **public** or **host boundary** (a contract other entrypoints consume);
-- **cross-platform** compatibility (e.g. Windows + Linux/WSL2);
-- **generated-drift** prevention (canonical source + generated pointers, drift guard);
-- **testability** of a **risky seam**;
-- **upgrade-safety** (thin pack-side seam keeping AO-core/vendor edits out).
-
-**Rigor is not optional.** Do not skimp, in the name of minimalism, on: input validation at trust boundaries; error handling that prevents **data loss**; **security**; or any **required test** the issue or Codex review demands. Less code never overrides correctness or the review/CI gate.
-
-**Scope.** This clause governs the AO **worker surface** only — rules injected via
-`agentRulesFile` from this file (`prompts/agent_rules.md`). It does not silently
-claim coverage of other agent surfaces (`AGENTS.md`, `.cursor/rules/`, etc.).
+This clause governs the AO **worker surface** only — rules in this file
+(`prompts/agent_rules.md`). It does not claim coverage of other agent surfaces
+(`AGENTS.md`, `.cursor/rules/`, etc.).
 
 ## Coworker CLI delegation
 
-Operating principle: **delegate I/O, keep reasoning**. Bulk reading and summarising
-go to the cheap model via the external `coworker` CLI (`coworker ask`, `coworker
-write`); analysis, judgment, and conclusions stay on the reasoning model. Where this
-section applies, that split is **mandatory** wherever there is no critical quality
-loss — not an optional optimisation. `coworker stats` is optional for cost
-observability. This policy covers `coworker` only; it does not replace in-session
-subagent / Task delegation rules when those are present. For the broader cost ladder,
-see
-[`docs/first_principles_5_operational_framework.md`](../docs/first_principles_5_operational_framework.md).
+Operating principle: **delegate I/O, keep reasoning**. Bulk reading goes to the
+external `coworker` CLI; analysis and conclusions stay on the reasoning model.
+Run `ao acknowledge` before the first `coworker` invocation.
 
-**Pickup before shell-out.** Run `ao acknowledge` (see **First action**) before the
-first `coworker` invocation in the session — same ordering as other implementation
-work.
+**Mandatory profiles.** Every `coworker ask` MUST pass `--profile code`. Every
+`coworker write` MUST pass `--profile write` unless the task issue names another.
 
-**Mandatory profiles.** Every `coworker ask` MUST pass `--profile code` (fixed; no
-per-task override). Every `coworker write` MUST pass `--profile write` unless the
-task issue explicitly names a different profile. Do not rely on operator or upstream
-CLI defaults.
-
-**Ask invocation shape.** Pass corpus files through `--paths`; do **not** append
-files as positional arguments after `--question` (current `coworker ask` rejects
-them as `unrecognized arguments`). Canonical repo-read form:
-`coworker ask --profile code [--allow-code] --paths <file1> <file2> ... --question "<question>"`.
+**Ask invocation shape.** Pass corpus via `--paths`; do **not** append files as
+positional arguments after `--question`. Canonical form:
+`coworker ask --profile code [--allow-code] --paths <files>... --question "..."`.
 Use `--allow-code` only under the upstream file gate below.
 
-**Invalid forms (do not use):** `--file`, `--stdin`, pipes (`git diff | coworker`),
-heredocs (`<<EOF`), or a bare question string without `--question`.
+**Invalid forms:** `--file`, `--stdin`, pipes, heredocs, or bare questions without
+`--question`.
 
-**PR diff recipe (reviewers).** When a diff exceeds the read-delegation floor,
-write it to a file first, then delegate — never pipe into coworker:
-
-```bash
-git diff <base-ref>...HEAD > /tmp/review.diff
-coworker ask --profile code --allow-code \
-  --paths /tmp/review.diff \
-  --question "Summarize this PR diff for a reviewer. List changed files and behavior changes. Do not make final review judgments."
-```
+Deep-dive examples, PR-diff recipe, and delegation-ladder rationale:
+[`docs/coworker-delegation.md`](../docs/coworker-delegation.md).
 
 **Contract-mapping pass (reviewers only).** When the diff is over the delegation
 floor **and** an authoritative task spec with testable acceptance criteria is
@@ -230,6 +125,12 @@ When preflight or mapping cannot complete (`skipped_no_spec`,
 the bounded status — mapping must not block review availability. Emit a
 structured status record (enum, PR head SHA, bound spec IDs/hashes, usability).
 
+**Upstream file gate.** Default corpus for `coworker ask` and context for
+`coworker write` is text/markdown only. Source-code input requires `--allow-code`
+or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
+requires code at the cheap provider; do not bypass the gate to force delegation on
+undeclared code.
+
 **Checkpoint-2 contract-evidence re-verification (reviewers only).** For every PR
 with a linked issue, run checkpoint-2 **after** contract-mapping (when applicable)
 and **before** final verdict. Use
@@ -243,825 +144,293 @@ checkpoint-2. Pass PR body and changed paths to the launcher. The helper emits *
 are integrity-checked-only. Surface every per-row status (including `unverified`,
 `verification-mode: not-run`, and zero-row `no-rows` runs) in review output.
 Independently validate each candidate against the diff, producer, and cited spec
-snapshot before assigning severity. For the canonical multi-line invoke example,
-see `prompts/codex_review_prompt.md` (Checkpoint-2 section). Required parameters:
-`-ReviewTargetRoot`, `-PrNumber`, `-SnapshotFile`, `-CurrentIssueFile`, `-PrBodyFile`,
-`-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
+snapshot before assigning severity. Required parameters include
+`-ReviewTargetRoot`, `-PrNumber`, `-SnapshotFile`, `-CurrentIssueFile`,
+`-PrBodyFile`, `-ExplicitIssue`, `-ChangedPathsFile`, `-Summary` (see
 `scripts/launch-contract-evidence-reverify.ps1` for the full parameter set).
 
-**Upstream file gate.** Default corpus for `coworker ask` and context for
-`coworker write` is text/markdown only. Source-code input requires `--allow-code`
-or `COWORKER_ALLOW_CODE=1` per upstream coworker — use only when the task explicitly
-requires code at the cheap provider; do not bypass the gate to force delegation on
-undeclared code.
-
-**Provider-input fence (sensitivity-gated, not origin-gated).** Material sent to the
-external provider — `coworker ask` corpus and `coworker write` context — MUST NOT
-include either class, **regardless of file origin**:
-
-- **Secrets/credentials** — API keys, tokens, passwords, private keys, auth
-  headers/cookies, raw `.env` values, or any string that grants access.
-- **Personal or third-party private data** — PII, customer/end-user data, and
-  private content belonging to anyone other than this system's own operation, unless
-  the task issue explicitly authorizes it.
-
-Subject to those prohibitions, **origin is not a gate**: any non-secret, non-personal
-material the task needs is sendable — tracked repo files, repo-derived `git diff` /
-`git log` / working-tree output, **and** this system's own out-of-tree operational
-evidence (runtime logs, process/tmux output, AO activity-DB query results, and
-similar local diagnostic captures). Internal operational detail (hostnames, paths,
-session IDs, our own reviewer findings) is not prohibited. Because logs and dumps
-routinely carry prohibited material, you are **accountable for the scrub** before
-shell-out: confirm the material is free of both prohibited classes, redact first, and
-send the **minimal excerpt** the question needs — not whole files wholesale. When in
-doubt, treat the material as prohibited (redacted excerpt or keep that portion on the
-reasoning model). The `--question` / `--spec` prompt is worker-authored task text and
-obeys the same prohibitions; it need not be a repo file. `coworker ask` performs no
-edit — its corpus may span repo context and permitted out-of-tree evidence beyond the
-editable declared scope under this fence. `coworker write --target` is an edit: every
-`--target` MUST stay inside the active declared scope.
+**Provider-input fence (sensitivity-gated, not origin-gated).** Material sent to
+coworker MUST NOT include secrets or personal/third-party private data unless the
+task explicitly authorizes it. After scrub, origin is not a gate — repo-derived
+diffs/logs and this system's scrubbed operational evidence (runtime logs, process/tmux
+output, AO activity-DB results) are permitted. Scrub logs and dumps; send minimal
+excerpts. `--target` for `coworker write` MUST stay inside declared scope.
 
 ### Read delegation (`coworker ask`)
 
-When **at least one** ask trigger below holds **and** the corpus can be made
-fence-clean **and** the work is not an excepted reasoning step (below), you **MUST**
-route the read through `coworker ask --profile code` rather than inline it on the
-reasoning model — on the **Claude and Codex surfaces**. On the **Cursor seat**, the
-same corpus is **advisory** (recommended, not mandatory) — see the carve-out below.
-Read delegation is a **floor** on Claude/Codex, not a ceiling: triggers bound when
-delegation becomes mandatory; they are not permission to decline for convenience.
-This MUST is a **prompt-level obligation** with **no pre-read hard block** in Phase 1 —
-backstops are visible delegation outcome (below), the **stop-time read-delegation audit**
-([`docs/coworker-read-delegation-audit.md`](../docs/coworker-read-delegation-audit.md)),
-reviewer judgment, and operator observation.
+When **at least one** ask trigger holds **and** corpus is fence-clean **and** work
+is not an excepted reasoning step, route the read through `coworker ask` on
+**Claude and Codex** (mandatory). On **Cursor**, advisory corpus is **SHOULD**,
+not MUST — see carve-outs below.
 
-**Bounded fallback.** Fall back to deterministic in-session reading — and **state the
-reason** in your final status — only when: `coworker` is missing, unavailable, or
-rate-limited; or the corpus cannot be made fence-clean (secrets or personal/third-party
-data cannot be scrubbed without losing the needed signal). Cost/size is **not** a
-fallback ground once a trigger holds.
+**Bounded fallback** only when `coworker` is missing/unavailable/rate-limited or
+corpus cannot be made fence-clean. Cost/size is **not** a fallback once a trigger
+fires.
 
-Ask triggers (any one is sufficient; count **delegable (out-of-index)** corpus you would
-otherwise read on the reasoning model, including out-of-tree operational evidence,
-subject only to the provider-input fence). **Index-covered in-tree source reads on
-Cursor do not count toward these floors** — see the carve-out below.
+Ask triggers (delegable out-of-index corpus):
 
 - Combined **delegable** corpus for one question is **more than 400 lines** across all
-  paths in that invocation (includes multi-file/bootstrap bulk reads that sum past this floor).
+  paths in that invocation.
 - **3 or more delegable files** under one question **only when** combined delegable corpus
-  is also **≥400 lines** (file count alone with a trivial line total does not fire).
+  is also **≥400 lines**.
 - Diff or log material to summarize is **more than 200 lines**.
 
-**Cursor index-coverage carve-out (Issue #309).** When this agent reads **tracked
-first-party source-code** in its own worktree through Cursor's semantic code index,
-that read owes **no** coworker delegation — regardless of file size. Classification keys
-to **corpus source**, not to a runtime retrieval signal: the index already performed
-targeted chunk retrieval; there is no bulk I/O to offload. This carve-out does **not**
-apply to corpus the code index does not serve. The following stay on the existing
-read-delegation triggers unchanged: CI/job logs, diffs, content fetched from external
-URLs/docs, vendored or generated dumps, and **tracked non-code bulk** (markdown/JSON/data
-— coworker's cheap-text delegable corpus). The provider-input fence (#52) is unchanged:
-secret or private-data corpus is never sent to coworker and never a delegation
-obligation, indexed or not.
+**Cursor index-coverage carve-out (Issue #309).** Tracked first-party source-code
+reads through Cursor's semantic index owe **no** coworker delegation regardless of
+size. Does **not** apply to CI/job logs, diffs, external URLs, vendored dumps, or
+**tracked non-code bulk** (markdown/JSON/data).
 
-**Cursor-seat advisory floor (Issue #359).** On the **Cursor seat** (identified by
-the same committed surface-spelling manifest as Issue #309), when an ask trigger
-fires for corpus **not** already exempt above — tracked non-code bulk
-(markdown/JSON/data), CI/job logs, external fetches, vendored/generated dumps, and
-other out-of-index material — read delegation is **recommended (SHOULD), not
-mandatory (MUST)**. Diffs remain read directly per Issue #337 and are **not** part of
-this advisory category. The mandatory floor on Claude and Codex is unchanged.
-
-**Recommended delegation ladder (Cursor seat, advisory corpus only).** Preferred
-order as **guidance**, not a mandated sequence (planner freedom preserved):
-
-1. `coworker ask --profile code --paths …` — cheap-model offload when fence-clean.
-2. A targeted `Read` with `offset`/`limit` — when only a slice is needed.
-
-Shell read-arounds (`head`, chunked `sed`/`grep`, python chunking) do not satisfy
-this ladder; the stop-time audit records them separately. Inline full-file reads on
-the reasoning model are permitted when advisory, but the ladder above is the cost
-intent.
+**Cursor-seat advisory floor (Issue #359).** For out-of-index advisory corpus on
+Cursor, delegation is recommended, not mandatory. Diffs stay direct per Issue #337.
 
 ### Write delegation (`coworker write`)
 
-Delegate `coworker write --profile write` only for **primary drafts**:
+Delegate only for **primary drafts** (README, install docs, LICENSE, `.gitignore`,
+CI skeletons) when target is in scope and replacement is authorized. Prefer
+`--stdout` when the target already exists.
 
-- README, install docs, configuration reference (first cut).
-- Standard boilerplate: LICENSE, `.gitignore`, CI workflow yaml skeletons.
+### Excepted reasoning steps
 
-Every `--target` MUST be inside the active declared scope. Any context/input obeys the
-provider-input fence above. Do not use `coworker write` for iterative refinement of
-in-scope implementation code. Delegate only when the target does **not** exist yet, or
-the task issue explicitly authorizes replacing that file. Upstream `coworker write`
-truncate-writes by default — do not overwrite an existing README, LICENSE, `.gitignore`,
-or workflow file unless replacement is in scope. Prefer `--stdout` and apply the diff
-yourself when the target already exists.
-
-### Excepted reasoning steps (not whole tasks)
-
-The closed list below governs the **reasoning/output step**, not the task category. A
-task that contains an excepted *step* may still have delegable *reading*. None of
-these items is a cost or volume threshold — a fired ask trigger is not overridden here.
-
-Keep on the reasoning model (independent of corpus size):
-
-- The **analysis, conclusions, and judgment** of debugging, root-cause analysis,
-  race reasoning, and safety-critical logic. (The *reading* that gathers evidence is
-  I/O — delegable whenever an ask trigger fires and the corpus is fence-clean.)
-- Architectural decisions and trade-off reasoning.
-- Edits requiring **exact line numbers** or surgical diffs in existing code.
-- Inferring user intent or clarifying ambiguous requirements.
-- **Review reasoning** — producing or shaping PR-review findings (correctness,
-  security, race, logic). The review path — canonical **REVIEW_COMMAND**,
-  **PACK_REVIEWER**, and the pack review wrapper it dispatches — MUST NOT be routed
-  through `coworker`. Nothing backstops reviewer judgment; “delegate I/O, keep
-  reasoning” does not license cheap review.
-
-**Worked example.** Root-cause work must read ~900 lines across `prompts/agent_rules.md`,
-a config file, and a runtime log. The 400-line and 3-file (≥400 combined) triggers fire.
-**Correct:**
-scrub the log fence-clean, then
-`coworker ask --profile code --paths prompts/agent_rules.md <config> <scrubbed-log> --question "extract the evidence relevant to ..."`
-extracts/summarises the minimal needed excerpt; you reason over the cheap-model
-summary and write the root-cause conclusion yourself. **Wrong:** append the file
-list after `--question` without `--paths`, or label the whole task “root-cause”
-and inline all 900 lines — the reasoning exception does not cover the reading.
+Keep on the reasoning model: analysis/conclusions of debugging and root-cause work;
+architectural trade-offs; surgical edits; intent clarification; **review reasoning**
+(REVIEW_COMMAND / PACK_REVIEWER path MUST NOT go through coworker).
 
 ### Ordering
 
-- When **no** ask trigger is met, use deterministic repo tools (search, read, diff,
-  tests) **instead of** `coworker ask` — do not delegate (CLI overhead exceeds benefit
-  below the floor). In this sub-threshold zone, work estimated **under 2000 tokens** of
-  real work stays in-session for the same reason; that heuristic **cannot override** a
-  fired ask trigger.
-- When an ask trigger **is** met and the corpus is fence-clean and the work is not an
-  excepted reasoning step: on **Claude and Codex**, delegation is **mandatory** — do
-  not inline the read on the reasoning model; on the **Cursor seat** for advisory
-  corpus (out-of-index / tracked non-code bulk, not #309- or #337-exempt), follow the
-  **SHOULD** ladder above — delegation is recommended, not required.
-- Your final status **states the delegation outcome**: either that `coworker` was used
-  for the bulk repo/log read, or the closed-list reason it was not (below the floor /
-  excepted reasoning step / corpus not fence-cleanable / `coworker` missing,
-  unavailable, or rate-limited). Silence is non-compliant.
+- Below floor: use repo tools instead of `coworker ask`.
+- Above floor on Claude/Codex: delegation mandatory for reads.
+- Final status **states the delegation outcome** or closed-list reason.
 
-**Accountability.** You remain responsible for verifying coworker output, scope,
-commits, and AO transitions. `coworker` must not run `ao-declare`, `ao report`, or
-open PRs.
+You remain responsible for verifying coworker output, scope, commits, and AO
+transitions. `coworker` must not run `ao-declare`, `ao report`, or open PRs.
 
-## RTK read-exploration (low-risk shapes; Issue #199)
+## RTK read-exploration
 
-On hosts with coworker RTK enabled, noisy read-only shell (`grep`, `find`, `cat`, `ls`,
-`wc`, `head`, and similar exploration where exact bytes are not decision-bearing) is a
-primary missed-savings opportunity — see
+On RTK-enabled hosts, prefer dedicated file tools (`Read`, `Grep`, `Glob`) for
+reads. Use RTK shell wrappers only for raw shell genuinely needed. See
 [`docs/rtk-missed-savings-inventory.md`](../docs/rtk-missed-savings-inventory.md).
 
-**For reads, prefer this agent's dedicated file tools** (`Read`, `Grep`, `Glob`, and
-equivalents on your entrypoint). **Reach for RTK shell wrappers only for raw shell that is
-genuinely needed** (pipelines, flags, or binaries without a first-class tool). Do not chase
-RTK adoption percentage; optimising net saved tokens on low-risk shapes is the goal.
-
-**Never compact** output that may carry secrets/credentials, private logs, raw declaration or
-scope file contents, or exact-byte decision-bearing config — regardless of command family.
-`ao` control/signal commands, `git diff`, and `gh pr checks` stay verbatim per §R passthrough;
-do not route them through RTK compaction.
+**Never compact** secrets, private logs, declaration/scope contents, or
+exact-byte decision-bearing config. `ao` control, `git diff`, and `gh pr checks`
+stay verbatim per §R passthrough.
 
 Architecture: §R.7 in
 [`docs/issues_drafts/00-architecture-decisions.md`](../docs/issues_drafts/00-architecture-decisions.md).
 
-## `gh` wrapper transport (Issues #431, #501)
+## `gh` wrapper transport
 
 On Linux-hosted surfaces with pack `scripts/` on PATH, **every GitHub read** MUST go through
-the pack `scripts/gh` wrapper using **inventory-listed canonical forms** (auto-REST). The wrapper
-routes listed read forms (`gh pr list/view/checks/diff`, `gh issue view --json …`, listed `--jq`
-patterns) to GitHub REST unconditionally. **Do not** hand-build REST replacements for those
-forms.
+pack `scripts/gh` using **inventory-listed canonical forms** (auto-REST). **Forbidden transports:**
+agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`, throwaway temporary
+`gh` shims (including `/tmp/gh-rest-bin/gh`), or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper.
+Uncovered argv: report for inventory extension via `scripts/check-gh-inventory-static.ps1`.
 
-**Forbidden transports:** agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`,
-throwaway temporary `gh` shims (including `/tmp/gh-rest-bin/gh`), or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper. Unknown `gh`
-argv passes through to native `gh`; if GraphQL quota is exhausted on an unlisted form, the native
-error is expected — use `gh api <REST path>` (REST endpoint only) for the needed datum, **report**
-the uncovered argv shape for inventory extension, and never fall back to GraphQL/curl/shim
-improvisation.
+Before recommending new pack-owned `gh` read argv shapes, verify classification via
+`scripts/check-gh-inventory-static.ps1`. Uncovered executable reads are an **inventory-extension
+report**, not permission to bypass the wrapper.
 
-**New GitHub read shapes (Issue #546):** before recommending or committing any new pack-owned
-`gh` read argv shape, verify it is already classified by pack `scripts/gh` inventory
-(`classifyArgv` / `scripts/check-gh-inventory-static.ps1`). An uncovered executable read form is
-an **inventory-extension report**, not permission to bypass the wrapper (see **Forbidden
-transports** above). Prefer extending the existing inventory route for the verified field set;
-explicit REST-only `gh api repos/...` reads and documented intentional passthrough exceptions
-remain the only other allowed shapes.
 
-## Command-runtime bootstrap (Issue #532)
+## Command-runtime bootstrap
 
-Before autonomous orchestrator command turns run side-effecting pack workflows, the command runtime
-must pass `scripts/orchestrator-command-runtime-preflight.ps1` (or the node bootstrap invoked from
-`scripts/autonomous-orchestrator-surface-bootstrap.sh`). That preflight verifies `pwsh`, `node`,
-pack `scripts/gh` on PATH ahead of other `gh` shims, and a resolvable native terminal `gh`.
+Before autonomous orchestrator command turns run side-effecting workflows, pass
+`scripts/orchestrator-command-runtime-preflight.ps1`. Missing `pwsh`/`node`/pack
+`scripts/gh` on PATH must **fail closed** — no dotfile edits or temp wrappers.
+Structured wrappers parse **stdout JSON only**. Uncovered `gh` reads: report and
+fail closed. Do not author `/tmp/gh-rest-bin/gh`, direct bash REST branches in `scripts/gh`, raw `curl
+api.github.com`, `gh api graphql`, or `unset GH_WRAPPER_ACTIVE` workarounds.
+Recovery belongs to Issues **#522/#527** — do not improvise alternate recipes.
 
-- Missing `pwsh`, `node`, or incomplete PATH must **fail closed** with the deterministic bootstrap
-  diagnostic — do not edit shell dotfiles, create temp wrappers, or bypass the command runtime.
-- Structured command wrappers must parse **stdout JSON only**; stderr must stay separate. Mixed
-  stderr/stdout is `structured_output_polluted`, not valid JSON.
-- Uncovered `gh` read forms: report the argv shape for inventory extension and fail closed. Do not
-  author `/tmp/gh-rest-bin/gh`, direct bash REST branches in `scripts/gh`, raw `curl
-  api.github.com`, `gh api graphql`, or `unset GH_WRAPPER_ACTIVE` workarounds.
-- Command-runtime failures that imply worker cleanup/respawn route to Issues **#522/#527** — do not
-  improvise `SURFACE=0`, raw git cleanup, `worktree remove`, or alternate recovery recipes here.
+## Review / CI / Handoff worker contract
 
-## Required CI (CI green)
+Local Codex PR review **is active**. On AO 0.10 the loop is **workspace-visible
+prompts** plus **side-process scripts** supervised by
+`scripts/orchestrator-wake-supervisor.ps1` — not AO-injected `orchestratorRules`.
 
-Worker `ready_for_review`, orchestrator CI pings, and operator recovery docs use
-**one** definition of which checks must pass:
+- **Trigger:** `ao-review run` via `scripts/ao-review.ps1`; discover via
+  `Get-AoReviewRuns` or `ao-review list --json`.
+- Backstops: `scripts/review-trigger-reconcile.ps1`,
+  `scripts/review-finding-delivery-confirm.ps1`. `orchestratorRules` is
+  **legacy-import-only** on AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** —
+  retired `ao review send` / `execute` are **REMOVED**.
 
-- **Preferred:** GitHub **required status checks** for the PR's base branch (branch
-  protection), when configured for this repository.
-- **Fallback:** when branch protection does not list required checks, **all checks**
-  reported for the PR head that belong to this pack's merge contract — workflow
-  `scope-guard` jobs such as **Verify orchestrator-pack structure**, **PR scope
-  guard**, **Run pack contract tests**, and **Self-architect lint** (see
-  `.github/workflows/scope-guard.yml`) — not every optional or third-party check on
-  the PR unless the repo already treats them as merge-blocking.
+**Orchestrator escalation ack (issue #641):** invoke
+`scripts/lib/Orchestrator-Escalation.ps1` with validated tokens from the wake JSON.
+
+### Required CI (CI green)
+
+One definition for worker `ready_for_review` and orchestrator CI pings:
+
+- **Preferred:** GitHub **required status checks** for the PR base branch.
+- **Fallback:** all pack merge-contract checks on the PR head (`scope-guard`
+  workflows) when branch protection lists none.
 
 Inspect with `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow,description`
-(or equivalent) against the **current PR head**.
-Do not treat the PR as CI-green while any required check is `fail`, `pending`, or
-missing for that head.
+against the **current PR head**. Not CI-green while any required check is
+`fail`, `pending`, or missing.
 
-## Worker CI gate (`ready_for_review` and self-fix)
+### Worker CI gate (`ready_for_review` and self-fix)
 
-**Self-fix is primary;** orchestrator `ao send` on red CI is recovery when the worker
-has gone idle — not a substitute for fixing CI yourself.
+**Self-fix is primary.** Do **not** `ao report ready_for_review` while required CI
+is not green. Before every report, check the **current** head; stale green on an
+earlier head does not count. **Red:** fix and stay in `fixing_ci`. **Pending:**
+stay in `fixing_ci` and remain engaged until green, red, or degraded-CI escalation.
+If CI fails after `ready_for_review`, immediately `ao report fixing_ci`.
 
-- Do **not** run `ao report ready_for_review` (or treat the task as done) while
-  required CI for the PR head is not green per the definition above.
-- **Before** every `ao report ready_for_review`, check required CI for the **current**
-  head; if any check is red or still running, stay in or move to
-  `ao report fixing_ci` — then act per the check state below. A `ready_for_review`
-  that validated an earlier head which has since moved is **stale** and does not
-  satisfy the obligation; re-check the current head and re-report.
-- **Red CI:** fix — push, re-run local verification, keep reporting `fixing_ci` as
-  needed; do not go idle on a red-CI PR expecting the orchestrator to drive the fix
-  unless you are blocked.
-- **Pending CI (still running):** stay in or move to `ao report fixing_ci` **and
-  remain actively engaged** — monitor required CI for the current head until it
-  reaches green (`ready_for_review`), red (fix path above), or degraded-CI escalation
-  (see **PR created hand-off**). Filing `fixing_ci` on a merely-pending head is the
-  required non-silent action; it is **not** a stopping point. Do **not** treat "CI is
-  still running", "I filed `fixing_ci`", or "done editing while CI runs" as
-  permission to go idle or treat the task as done.
-- If CI was green when you reported but fails on a later push, or you discover red CI
-  after reporting `ready_for_review`, immediately `ao report fixing_ci` and fix
-  **without waiting** for `ci-failed`, `report-stale`, or operator ping.
+### PR created hand-off (initial path)
 
-## Event-driven review trigger (Issue #207)
+**Worker self-drive is primary.** `pr_created` is transient — drive to hand-off
+before idling. **Stop categories:** (A) `ready_for_review` with green required CI,
+or terminal failure with reason; (B) evidence-backed degraded-CI escalation via
+`ao send`. Green CI alone is not exit. Forbidden: silent disengagement while PR
+lacks hand-off for current head.
 
-**Script-owned routine path:** `scripts/orchestrator-wake-listener.ps1` handles the
-`merge.ready` completion-wake low-latency trigger when a worker hands off a review-ready head
-(AO 0.9.x emits no dedicated `ready_for_review` webhook). LLM orchestrator turns do **not**
-start or drive routine review rounds.
+### Review feedback and AO review response
 
-On `merge.ready` (approved-and-green), `scripts/orchestrator-wake-listener.ps1` evaluates
-HEAD READY FOR REVIEW (#195) and covered-head dedupe (#189), acquires the shared
-review-start claim (#267), then may `ao-review run` **before** forwarding the merge-intent wake.
-The periodic `review-trigger-reconcile.ps1`
-(#163) and heartbeat remain backstops. Merge handling on that wake must **re-read** review
-run state afterward — a wake annotated `mergeable=false` is not permission to merge on a
-stale approved-and-green snapshot while review is in-flight / undelivered `changes_requested`.
+On `changes-requested` / `ci-failed`: smallest scoped fix; escalate contradictory
+feedback with evidence. On delivered findings: **must not** idle — use
+`addressing_reviews` → optional `fixing_ci` → `ready_for_review` when CI green.
+Use underscore state names. Do **not** `ao report completed` while open/delivered
+findings exist. Inspect via `Get-AoReviewRuns` / `ao-review list --json`.
 
-- This path issues **review run only** — never `ao spawn`, `--claim-pr`, `ao session kill`,
-  `ao send`, or merge.
-- Seconds-level convergence applies only when a completion wake actually reaches the
-  listener; pending CI with no wake still converges via CI-settle wake or the backstop.
-- The listener is a **side-effecting** supervised child (draft #71 registry); restart
-  waits for in-flight `ao-review run` to finish or fail closed.
+### Operator-only merge and failed runs
 
-## Deferred-head review re-evaluation (Issue #235)
-
-**Script-owned routine path:** `scripts/review-trigger-reeval.ps1` closes the
-wake-before-readiness ordering race (backstop: `review-trigger-reconcile.ps1`). LLM
-orchestrator turns do **not** run this watch.
-
-When a completion wake defers a head as `uncovered_not_ready` / `no_ready_for_review`
-(#212), a **scoped** supervised child watches that small deferred-head set and may
-acquire the shared review-start claim (#267) and `ao-review run` seconds-scale when #195
-readiness lands on the **current** head SHA — without a full open-PR sweep. Poll classification:
-`scoped_deferred_head_watch` (5-minute bounded window per head; incident delay ~77 s).
-
-- Persisted watch entries live under `{stateRoot}/review-trigger-reeval-watch.json`.
-- The wake listener records a watch on defer when `-SideEffectStateDir` / state root is set.
-- AO 0.9.x may emit `ready_for_review` at **info** priority (filtered by the listener);
-  re-evaluation is correct from observed report state either way.
-- This path issues **review run only** — never spawn, claim, kill, merge, or send.
-- Genuinely zero-signal heads (no wake **and** no in-progress report) remain
-  **backstop-only** via `review-trigger-reconcile.ps1`.
-
-## Review finding delivery (Issue #171 / #625)
-
-On AO 0.10, review findings **auto-deliver on submit** — there is no orchestrator or
-worker `ao review send` step. `scripts/review-send-reconcile.ps1` is **REMOVED** (stub exits 2).
-
-When a run reaches `changes_requested` with `deliveredAt` set and `deliveredFindingCount > 0`,
-findings are with the worker — report `ao report addressing_reviews` promptly; do not stay idle.
-
-- Bounded delivery confirmation and stuck-open recovery: `scripts/review-finding-delivery-confirm.ps1` (#171).
-- Undelivered `changes_requested` (`deliveredAt` null) is operator/diagnostic — not a worker send target.
-- Does **not** recover dead sessions (#98) — use `--claim-pr` / respawn discipline.
-
-
-## Review-status reader contract (Issue #611)
-
-When diagnosing or reporting whether a worker has handed off `ready_for_review`, **never**
-use plain `ao status --json` or `ao session ls` rows with empty `reports` as proof that no
-hand-off exists.
-
-- Use the shared report-full reader: `Get-AoStatusSessionsWithReports` (live workers) or
-  `Get-AoStatusSessionsWithReportsIncludingTerminated` when terminated/restored sessions
-  matter (#391 seed path).
-- Session rows live under **`$.data[]`** (fallback `$.sessions[]` on legacy captures). Do
-  not query a top-level `$.sessions` field that is absent on current AO output.
-- Name the report source in diagnostics, e.g. `$.data[?name==<session>].reports[*] from
-  ao status --json --reports full`, audit-backed `.agent-report-audit/<session>.ndjson`, or
-  the explicit fixture path.
-- Prefix-safe AO JSON: strip notifier/log lines before `{` (same contract as
-  `Invoke-AoCliJson`) — never call raw `ConvertFrom-Json` on undecorated `ao` stdout in
-  review-status consumers.
-
-Inventory: `docs/review-status-consumer-inventory.md`.
-
-## Report-state review-start seed (Issue #391)
-
-**Co-primary with #390** when AO accepts `ready_for_review` but no webhook handoff fires.
-`scripts/review-ready-report-state-seed.ps1` polls `ao status --json --reports full
---include-terminated`, binds accepted reports to the current resolved head per the poll
-invariant, seeds scoped #235 watches, and may start review with
-`startReason=report_state_seed` — not `handoff_wake`, `completion_wake`, or
-`periodic=reconcile`.
-
-
-## Autonomous dead-worker respawn (Option C; Issue #593)
-
-**Narrow rule:** background reconcilers may recover a **dead worker that was already
-assigned unfinished work** via the sanctioned `invoke-worker-recovery.ps1` path when
-capture-backed death evidence is present, operator kill/shutdown suppression does not
-apply, enablement gates pass, and retry/storm bounds allow. They **never** plan new
-work from open issues or the GitHub queue.
-
-- Default-OFF toggle: `docs/autonomous-respawn-policy.json` (`allowReconcileDeadWorkerRespawn`).
-  Operator adoption explicitly enables action-producing respawn only after #194/#522
-  checks, fixtures, and runtime policy are verified.
-- Operator `ao stop` / `session.kill_started` + `session.killed` with
-  `reason: manually_killed` suppress autonomous respawn. `ui.terminal_pty_lost` alone
-  is insufficient.
-- When gates fail or shapes are uncaptured, the reconciler **audits only** — no recovery
-  invocation.
-- Mechanical entrypoint: `scripts/dead-worker-reconcile.ps1` (registered side process).
-  Operator must apply `agent-orchestrator.yaml.example` deltas and restart AO
-  (`ao stop` / `ao start`) for daemon-cached rules.
-
-## CI-green orchestrator nudge (fast path; Issue #191)
-
-**Self-drive is primary;** the orchestrator CI-green nudge is recovery when you have gone
-idle after required CI turned green — not a substitute for reporting `ready_for_review`
-yourself.
-
-When required CI for the **current PR head** is green and you are still pre-hand-off
-(`fixing_ci`, `working`, or `pr_created` without `ready_for_review` accepted on that
-head), a background reconciler (`scripts/ci-green-wake-reconcile.ps1`, ~1-minute cadence)
-may `ao send` you to continue the hand-off. AO 0.9.x has no CI-green reaction; this path
-is independent of orchestrator LLM turns and is far faster than `report-stale` (~30 min).
-
-- On CI-green nudge: re-check `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow,description`
-  for the current head, then
-  `ao report ready_for_review` when criteria are met — do not stay idle.
-- The nudge does **not** apply once `ready_for_review` or `addressing_reviews` is
-  accepted for that head (review loop owns the next transitions).
-- It does **not** recover a dead session (#98) — if you exited, operator respawn /
-  `--claim-pr` still applies.
-
-## PR created hand-off (initial path)
-
-**Worker self-drive is primary;** orchestrator `report-stale` / CI-failure ping /
-CI-green nudge are recovery when the worker has gone idle — not a substitute for driving
-the PR yourself.
-
-**`pr_created` is a transient state, not completion.** Opening a PR for the task does
-not discharge your obligation. You must drive that PR to an explicit **hand-off**
-before you may go idle, stop, or treat the task as done.
-
-**Two stop categories — only these permit disengaging.** Distinguish states where
-you may **stop** from those where you must **stay actively engaged**:
-
-1. **Terminal hand-off (category A):** `ao report ready_for_review` once required CI
-   for the **current PR head** is green (see **Required CI** and **Worker CI gate** —
-   check the current head **before every** report; a `ready_for_review` that validated
-   an earlier head which has since moved is **stale** and does not satisfy the
-   obligation), **or** terminal failure with a reason via the existing convention
-   (`ao report completed --note "<reason>"` or `ao send`) when you genuinely cannot
-   reach a ready state.
-2. **Evidence-backed escalation (category B):** when required CI does **not** resolve
-   to green or red — checks missing or never triggered, a run `cancelled`, auth /
-   rate-limit / infrastructure failure, or CI pending past a reasonable bound —
-   escalate with evidence (e.g. `ao send` to the orchestrator describing the blocked
-   condition). This is a permitted non-silent hand-off: after escalating you may stop
-   active polling while remaining reachable for the orchestrator's response. Do **not**
-   poll indefinitely and do **not** report terminal failure for a transient CI delay.
-
-**Continued-engagement (not a stop category).** While required CI is still resolving on
-the current head, you stay in **Worker CI gate** reported handling (`fixing_ci` while
-red or pending) **and remain actively engaged**. Green CI alone is **not** an exit —
-you must still emit `ready_for_review`. Forbidden recurrence of the stranded-green-PR
-failure: filing `fixing_ci` on pending CI, then stopping while CI later goes green
-without ever reporting `ready_for_review`.
-
-**Forbidden silent disengagement.** You MUST NOT stop or treat the task as done while
-a PR you opened has **not** reached one of the two stop categories above for its
-**current head** — including when CI was still running when editing finished. This
-complements (does not replace) the **Worker CI gate** ban on premature
-`ready_for_review` while CI is red and the **AO review response** ban on idling on the
-review-feedback path; it closes the initial `pr_created` → first-review path those
-rules leave open.
-
-## Review feedback handling
-
-When AO sends review feedback through `changes-requested` or `ci-failed`:
-
-- Treat the feedback as a scoped correction for the same issue and chain.
-- Classify each finding as scope, spec, quality, test, CI, or security.
-- Make the smallest change that resolves the finding.
-- Do not broaden the declaration only to silence review feedback.
-- If feedback appears repetitive or contradictory, stop guessing and escalate
-  with evidence.
-- Report verification commands and unresolved findings before handing back.
-
-## AO review response contract (workers)
-
-When AO-local review findings land (via `changes-requested`, auto-delivery on
-submit, or the `report-stale` backstop), the worker MUST NOT go idle silently.
-
-**Required `ao report` transitions on the review path:**
-
-1. `ao report addressing_reviews` — as soon as you begin working on findings
-   (mandatory after findings are delivered; do not wait for a human ping).
-2. `ao report fixing_ci` — optional, while fixing CI triggered by review fixes.
-3. `ao report ready_for_review` — after pushing fixes and local verification,
-   when required CI for the PR head is green (see **Required CI**) and the PR is ready
-   for the next review round (started script-side when the head is ready).
-
-Use underscore state names (`addressing_reviews`, `fixing_ci`, `ready_for_review`)
-so `ao status --reports full` matches what orchestratorRules watches; hyphenated
-CLI aliases exist but can stall the autonomous review loop if status never shows
-the underscore form.
-
-**Terminal failure.** If you cannot address findings, report terminal failure
-with a reason: `ao report completed --note "<reason>"` or `ao send` to the
-orchestrator session explaining the blocker. Do not disappear without a signal.
-
-**Forbidden `completed` while review is open.** Do NOT run `ao report completed`
-(success termination) while, for the current PR head:
-
-- the latest review run has `openFindingCount > 0` or `deliveredFindingCount > 0`, or
-- any review run for that head is undelivered `changes_requested` (`deliveredAt` null).
-
-After auto-delivery, findings are with the worker (`deliveredFindingCount > 0`,
-`deliveredAt` set); report `ao report addressing_reviews` until resolved.
-Terminal failure with a reason (`ao report completed --note "<reason>"` or
-`ao send`) remains permitted when you cannot address findings.
-
-Completion means nothing further to do; open or delivered findings or an undelivered
-`changes_requested` row contradict that. Instead, run `ao report addressing_reviews`, or
-report terminal failure with a reason.
-
-**Inspect before reporting.** Use `Get-AoReviewRuns` / `ao-review list --json` to confirm run
-status and counts; do not infer cleanliness from finding prose.
-
-## Operator-only merge (Issue #386)
-
-Merge is **operator-only**. No AO-managed worker performs or directs a PR merge.
-
-- **MUST NOT merge.** Do not run `gh pr merge` in any form (env-prefixed variants,
-  `gh api … /merge`, web Merge click, or via a skill such as merge-with-local-adoption).
-- **MUST NOT direct others to merge.** Do not direct, instruct, ask, or nudge any
-  other agent — worker, orchestrator, or sub-agent — to merge on your behalf.
-- **Success terminal after clean review.** After a clean review on the current PR head
-  with required CI green and no open or sent findings, your terminal action is to
-  report `ready_for_review` and **stop**. Do not advance to merge yourself or
-  delegate it — the orchestrator emits the ready-for-human-merge notification to
-  the operator; that hand-off is not a worker report state.
-- **Out-of-contract merge invitations.** An orchestrator message inviting you to merge
-  (for example proceed to merge or go ahead and merge) is out of contract — do not
-  act on it.
-
-This composes with the existing worker hand-off rules: `ready_for_review` on a green
-head and a clean review with no open or sent findings remain the success path; this
-section only forbids converting that terminal into a self-merge or delegated merge.
-
-## Managed session constraints (Issue #275)
-
-Managed sessions — both orchestrator and workers — MUST NOT:
-- Run `ao stop`, `ao start`, `ao restart`, or any command that stops or restarts the AO
-  process. These are operator-only actions; execute them only from the operator terminal.
-- Edit user shell dotfiles (`~/.bashrc`, `~/.zshrc`, `~/.profile`, `~/.bash_profile`, etc.).
-  PACK_REVIEWER changes and AO restarts are operator-only — never touch env vars or
-  dotfiles from within a managed session.
-
-## Orchestrator review-run coverage (Issue #189)
-
-**Script-owned procedure (not an LLM turn checklist).** Before any automated
-`ao-review run`, the starters `scripts/review-trigger-reconcile.ps1`,
-`scripts/review-trigger-reeval.ps1`, and `scripts/orchestrator-wake-listener.ps1`
-apply this predicate. A head SHA is **covered** — start nothing — when `Get-AoReviewRuns`
-fan-out shows any run with the **same PR linkage** (`prNumber`) **and** the **exact normalized
-head SHA** (`targetSha`) that is in-flight (`queued` / `preparing` / `running` /
-`reviewing`) or covered terminal (`up_to_date` / `changes_requested`). Same SHA
-on a different PR, or same PR on a different SHA, does **not** count as coverage.
-
-`failed` / `cancelled` on the current head are **not** covered and are **not** plain
-uncovered either: read `latestRun.body` (failure detail), retry at most once after diagnosis, then
-escalate (EMPTY REVIEW TRAP).
-
-**AUTOMATED REVIEW-START CLAIM (#267):** every noninteractive automated starter
-(`review-trigger-reconcile.ps1`, `orchestrator-wake-listener.ps1`, and
-`review-trigger-reeval.ps1`) must acquire the shared machine-local claim for
-`(prNumber, full normalized targetSha)` before `ao-review run`. The in-claim pre-run
-coverage/head-ready recheck happens after acquisition. Claim/storage ambiguity fails
-closed with a visible escalation; claim losers log the key and holder identity. The claim
-is held until a covering run record is visible or a terminal claim outcome is recorded.
-Manual operator `ao-review run` remains outside the claim; automation consumes its visible
-run record as coverage, and a manual race inside AO registration lag is operator-owned.
-
-**PRE-RUN COVERAGE RE-CHECK:** immediately before emitting `ao-review run`, after holding
-the claim, re-read `Get-AoReviewRuns` and re-apply the covered-head predicate. The
-mechanical reconciler (`review-trigger-reconcile.ps1`) uses the same predicate; see
-`docs/review-orchestrator-loop.mjs`.
-
-## Head ready for review (Issue #195)
-
-The same automated starters (`review-trigger-reconcile.ps1`,
-`review-trigger-reeval.ps1`, `orchestrator-wake-listener.ps1`) apply **one** shared
-predicate before any automated `ao-review run` — implemented in
-`docs/review-head-ready.mjs` (no independent trigger conditions). LLM orchestrator
-turns do **not** apply this gate for routine rounds.
-
-Evaluate **failed/cancelled on the current head first** (EMPTY REVIEW TRAP — never the
-plain uncovered-ready path). Then a PR head SHA is **ready for review** only when ALL hold
-on one consistent snapshot:
-
-- the latest accepted worker report for that **exact current head SHA** is
-  `ready_for_review` (reuse #186 current-head-at-report-time semantics — stale reports for
-  an earlier head do not authorize a later head);
-- required CI on that head (see **Required CI** above) is **green** or **genuinely
-  pending/queued** against a known required-check set — explicitly **not** red/failing and
-  **not** missing/unknown/unresolvable (red **defers**; missing routes to the orchestrator/
-  reconciler degraded-CI branch below);
-- the head is **not** already covered per **Orchestrator review-run coverage** (#189); and
-- the current head has **no** `failed`/`cancelled` run awaiting EMPTY REVIEW TRAP handling.
-
-**Uncovered-but-not-ready** heads are left alone: no review run and no worker-lifecycle
-action from the reconciler. The gate defers only — `report-stale`, ping/respawn, and #191
-CI-green wake still converge idle or dead workers; the gate removes none of those backstops.
-
-**Worker degraded-CI hand-off** (#186 evidence-backed escalation, not `ready_for_review`)
-routes to the orchestrator/reconciler degraded-CI branch: bounded re-attempts to resolve
-required-check visibility for the head, then observable operator escalation — not generic
-uncovered-not-ready worker-liveness handling.
-
-**PRE-RUN HEAD-READY RE-CHECK** (widens #189): immediately before `ao-review run`, re-read
-current head SHA, latest accepted report, required-CI state, and coverage; abort if the
-predicate no longer holds.
-
-**Merged PR — prNumber-less runs.** A run with no `prNumber` is terminal when its
-linked worker session's PR is merged on GitHub (resolve via `linkedSessionId` in
-`ao status`, not the run record alone). When merge state cannot be resolved (linked
-session missing, restored under an unmatched id, ambiguous PR metadata), fail closed to
-inaction — no new review round, no worker-lifecycle action; surface
-the run for the operator.
-
-## AO review command and failed runs (workers)
-
-- Workers MUST NOT invent alternate review trigger or `--command` strings. Review
-  starts are driven by the script-owned starters above, manual operator `ao-review run`,
-  or the canonical **REVIEW_COMMAND** from project config — not by worker-initiated
-  triggers.
-- Workers MUST NOT treat a failed or cancelled review run as review completion,
-  even when `findingCount` is 0 or findings text is empty.
-- Workers MUST NOT report that Codex review passed when `Get-AoReviewRuns` /
-  `ao-review list --json` shows only `failed` or `cancelled` runs for the current PR head.
-- A run with `findingCount: 0` and `status: failed` or `cancelled` is an **empty
-  failed review** (reviewer infra/command failure), not `up_to_date`. Read
-  `latestRun.body` (failure detail); do not infer success from zero findings alone.
-
-## Task complexity tier rubric (Issue #574)
-
-Classify every incoming task into **T1**, **T2**, or **T3** before choosing
-authoring ceremony. The tier measures **how much ceremony** the task warrants —
-not implementation shape. **Orthogonal to behavior-kind (Issue #221):** both are
-intake declarations on one draft; behavior-kind classifies action shape, this
-rubric classifies complexity/ceremony. Neither replaces the other.
-
-**Below the ladder — no tier.** Reuse the **#237 design-analysis skip line**
-verbatim: operator/runtime steps, config or YAML changes, one-line spec or rule
-edits, typo/rename, and other small fixes carry **no tier** and no authoring
-ceremony. See `prompts/investigate_root_cause.md` (**Conditional design-analysis
-block** — *Skips when*).
-
-### Tier meanings (ceremony weight)
-
-- **T1** — light ceremony: small, obvious, self-contained (~1–2 files); text or
-  local cosmetics; little design judgment.
-- **T2** — moderate ceremony: one component needing real design judgment on
-  *how*; still a single coherent surface.
-- **T3** — full ceremony: subsystem behavior, system guarantees, or any red-flag
-  marker below — size does not discount danger.
-
-### Failure-type lens (apply first)
-
-Ask: **what is the worst thing this task can break?**
-
-- Text/cosmetics only → usually **T1** (after marker silence).
-- Local behavior of one function or module → usually **T2** (after marker silence).
-- A subsystem's behavior or a system guarantee (CI gate, recovery, durable state,
-  trust, concurrency, merge safety, operator evidence) → **T3**.
-
-The enumerated red-flag markers below are the **reference backstop** for this
-lens — not a substitute for reading it. Concrete examples live in the labeled
-calibration sample (`tests/fixtures/task-complexity-tier-calibration.json`), not
-here. That sample includes **on-ladder tasks only** — below-ladder work per the
-skip line above is intentionally omitted.
-
-### Classification order (hard precedence)
-
-1. **Red-flag markers → unconditional T3.** If **any** marker below is present,
-   the task is **T3** regardless of apparent size.
-2. **Only if every marker is silent — size.** Small, obvious, ~1–2 files,
-   self-contained → **T1**. One component needing real design judgment → **T2**.
-3. **Doubt escalates up (fail-up).** Between two tiers, take the **higher**.
-
-**Demote-only magnitude rule.** Numeric file/diff ceilings may only
-**disqualify** a task from a lower tier (push it up). They may **never qualify**
-a task into **T1**. Smallness is necessary but not sufficient for T1.
-
-### Red-flag markers (any one → T3)
-
-| Marker class | Present when the task… |
-|---|---|
-| **trust-boundary** | touches auth, permission, or trust-boundary surfaces |
-| **spawn-capability** | grants spawn, capability, or elevated execution |
-| **concurrency-state-retry** | changes concurrency, state-machine, event-ordering, or retry semantics |
-| **ci-review-gating** | changes required CI/review gating, branch protection, merge authorization, or fail-closed check aggregation |
-| **durable-state-evidence** | mutates durable state, evidence, provenance, ledgers, audit logs, or operator-visible snapshots |
-| **test-harness-correctness** | risks fixture isolation, real-vs-stub binaries, self-certifying tests, or fixtures touching live state |
-| **crash-recovery** | changes crash/recovery, restart mid-phase, orphaned claims/processes, duplicate execution, or liveness/kill-restart thresholds |
-| **external-api-transport** | **changes** external-API transport behavior (retry, fallback, rate-limit, timeout, response-shape assumptions) — not mere API presence |
-| **shared-contract-dependency** | introduces a new contract ≥2 future issues will depend on |
-| **multi-surface** | spans multiple otherwise-independent surfaces |
-| **ambiguity** | leaves genuine ambiguity in what is being asked |
+**MUST NOT merge** or direct others to merge. After clean review and green CI,
+report `ready_for_review` and **stop**. Do not invent review triggers; do not treat
+`failed`/`cancelled` runs as completion — read `latestRun.body` (failure detail).
 
 ### Worker pre-flight (blocking)
 
-Before implementation, the worker **re-runs the same marker check with fresh eyes**.
-If reality is larger than the assigned tier, **stop and escalate the tier upward**
-— never silently proceed, never demote.
+Before implementation, **re-run the tier marker check with fresh eyes**. If reality
+exceeds the assigned tier, **stop and escalate upward** — never silently proceed.
+Full rubric and draft-author ceremony:
+[`docs/tiering.md`](../docs/tiering.md). Guard:
+`scripts/check-tier-calibration-consistency.ps1`.
 
-Mechanical guard: `scripts/check-tier-calibration-consistency.ps1` over the
-committed calibration sample.
+## Script-owned review pipeline (documentation)
 
+**Orchestrator LLM role vs script-owned review.** Script-owned starters below are
+**not** LLM turn checklists. The LLM orchestrator does **not** start or drive routine
+review rounds (exception: issue #641).
 
-## Per-tier draft-review flow (Issue #575)
+Starters: `scripts/review-trigger-reconcile.ps1`,
+`scripts/review-trigger-reeval.ps1`, `scripts/orchestrator-wake-listener.ps1`.
+Predicates: `docs/review-orchestrator-loop.mjs`, `docs/review-head-ready.mjs`,
+`docs/review-reconcile-primitives.mjs`. Manual operator `ao-review run` stays
+outside automated claim. **Script-owned procedure** — do not re-derive inline.
 
-Governs **create-issue-draft spec review** only. Worker **PR-code** review
-(`prompts/codex_review_prompt.md`, orchestrator `ao-review run`) is unchanged.
+### Event-driven review trigger
 
-**Roles.** The **architect** authors the task brief, assigns intake tier, runs the
-T3 architect lens pass, and is the escalation target. The **draft author** — the
-Cursor drafting session working from that brief — authors the spec and runs the
-review loop. The draft author owns accept/reject on competitive and architectural
-stages; the architect does **not** re-decide accepted findings.
+On `merge.ready`, `scripts/orchestrator-wake-listener.ps1` applies #195/#189,
+claim #267, then may `ao-review run` — never `ao spawn`, `--claim-pr`, `ao session kill`, `ao send`, or merge.
 
-### Per-tier pipeline (ceilings, not quotas)
+### Deferred-head review re-evaluation
 
-Clean `NO_FINDINGS` ends a stage early. Stage caps compose with shipped contracts
-(#37 adversarial ≤3, architectural ≤4 + final 1 = 5 Codex iterations) — they do
-not override them.
+`scripts/review-trigger-reeval.ps1` watches deferred heads; **review run only**.
+Zero-signal heads: backstop via `review-trigger-reconcile.ps1`.
 
-| Tier | Stages |
-|------|--------|
-| **T1** | One light architectural (Codex) pass. |
-| **T2** | Architectural (Codex) review, up to **3** passes; first `NO_FINDINGS` ends and publishes. No competitive stage. Architect re-enters only on drift. |
-| **T3** | Competitive adversarial (**GPT** by default; **Codex** substitutes when GPT is unavailable — record substitution) up to **3** → architectural (Codex) up to **4** → **architect lens** pass **1** → final architectural (Codex) over architect edits **1**. |
+### Review finding delivery
 
-**T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
-in Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
-(cite by reference — do not restate). When T3-critical: competitive **+Codex is
-mandatory** (GPT and Codex together); draft must include rollback/migration note
-plus crash/race/stale-state test. Non-critical T3 uses the default pipeline above.
+AO 0.10 auto-delivers on submit. Report `addressing_reviews` when
+`deliveredFindingCount > 0`. Confirm via `scripts/review-finding-delivery-confirm.ps1`.
 
-### Finding-disposition ledger + normalization
+### Review-status reader contract
 
-Reviewers cannot be relied on for structured output. Per pass the draft author:
+Pack scripts read session/report state via `Get-AoStatusSessionsWithReports` (and
+`Get-AoStatusSessionsWithReportsIncludingTerminated` where terminated rows matter)
+from `scripts/lib/Invoke-AoCliJson.ps1` — not ad-hoc `ao status --reports full`
+shelling. `report-full` availability is gated by `Test-AoReportFullCliAvailable`.
 
-1. Captures **raw reviewer output verbatim** (audit anchor).
-2. **Normalizes** every emitted finding into a draft-bound disposition ledger with
-   stable `id`, `summary`, `type`, and `disposition` — `addressed` or `rejected`
-   plus one-line `rejectReason`.
+### Report-state review-start seed
 
-Ledger format: JSON at `docs/issues_drafts/.review/<draft-stem>/finding-disposition-ledger.json`
-(see `.claude/skills/create-issue-draft/SKILL.md`). Verbatim captures live alongside
-as `pass-NN-<stage>.capture.txt`.
+`scripts/review-ready-report-state-seed.ps1` polls report state, seeds #235 watches,
+may start review with `startReason=report_state_seed` when handoff wake is absent.
 
-**Completeness:** a finding present in capture but absent from the ledger is a
-silent drop — invalid. `NO_FINDINGS` passes owe no rows. Re-worded findings on
-later passes map to the carried-forward `id`, not a new row.
+### Autonomous dead-worker respawn
 
-### Non-rejectable carve-out
+Background reconcilers may recover a **dead worker already assigned unfinished work**
+via `invoke-worker-recovery.ps1` when gates pass — **never** plan new work from the
+queue. Default-OFF: `docs/autonomous-respawn-policy.json`
+(`allowReconcileDeadWorkerRespawn`). Operator kill suppresses respawn. Entrypoint:
+`scripts/dead-worker-reconcile.ps1`.
 
-Findings with `type: security` or `type: scope-violation` (#51 vocabulary) have
-exactly one valid disposition: `addressed`. The guard fails when a protected
-finding is `rejected` **or omitted** while present in capture. Contested protected
-findings **escalate to the architect** — never self-waivable by the draft author.
+### CI-green orchestrator nudge
 
-**Guard:** `scripts/check-finding-ledger-guard.ps1 -CapturesDir …` (or
-`check-draft-discipline.ps1 -Command finding-ledger`) validates **every**
-`*.capture.txt` under the draft review directory against the ledger — not only the
-final pass — and runs **pre-sync** alongside other draft-discipline checks; non-zero
-exit blocks issue sync/publish. Omission detection is layered and fails
-closed: typed `type:` tags are checked directly; conservative protected-signal
-hits in capture with no matching ledger row also fail (false positives escalate to
-the architect; unparseable prose never passes silently).
+`scripts/ci-green-wake-reconcile.ps1` (~1 min) may `ao send` when required CI is
+green and worker is pre-hand-off idle. AO 0.9.x has no CI-green reaction. Does not
+recover dead sessions.
 
-### Simplification lens
+### Orchestrator review-run coverage
 
-On competitive and architectural stages the reviewer prompt
-(`prompts/codex_draft_review_prompt.md`) mandates the four-question lens: what can
-be simplified / must not be simplified / is excess / is missing. Lens findings
-flow through the normal ledger and remain subject to the carve-out. The architect
-applies the same lens on the T3 lens pass.
+**Issue #189.** Before automated `ao-review run`, starters apply covered-head
+predicate via `Get-AoReviewRuns` fan-out. A head is **covered** with **same PR
+linkage** (`prNumber`) and **exact normalized head SHA** (`targetSha`) when
+in-flight or covered terminal (`up_to_date` / `changes_requested`). Different PR
+or SHA does **not** count. `failed` / `cancelled` on current head: read failure
+detail, retry once, escalate (EMPTY REVIEW TRAP).
 
-### Architect T3 lens pass
+**PRE-RUN COVERAGE RE-CHECK:** after claim, re-read `Get-AoReviewRuns` and
+re-apply predicate. **prNumber-less** runs: terminal when linked session's PR is
+merged; ambiguous metadata → **fail closed to** inaction.
 
-On T3 only, after architectural review converges: architect audits the ledger's
-**reject partition** (re-judges rejects; does **not** re-open accepts), may edit
-the draft, then one final architectural (Codex) pass verifies those edits.
+Claim (#267): shared machine-local claim per `(prNumber, normalized targetSha)`
+before `ao-review run`; held until covering run visible or terminal outcome.
 
-### Drift escalation
+### Head ready for review
 
-After review, tier is recomputed (draft C / Issue #189). Upward drift — including
-scope growth from accepted findings — escalates to the architect before publish.
-Downward drift is impossible (#574 monotonic rule).
+**Issue #195.** Starters apply one shared predicate from `docs/review-head-ready.mjs`.
+LLM orchestrator turns do **not** apply this gate for routine rounds.
 
-## RCA spec discipline (Issue #221)
+Ready when ALL hold on one snapshot: latest accepted `ready_for_review` for **exact
+current head SHA**; required CI green or genuinely pending (not red/missing);
+head not covered per #189; no `failed`/`cancelled` awaiting EMPTY REVIEW TRAP.
+**Uncovered-but-not-ready** heads: no review run, no worker-lifecycle action.
+**PRE-RUN HEAD-READY RE-CHECK** widens #189: re-read head, report, CI, coverage
+before `ao-review run`. **Merged PR — prNumber-less runs:** resolve via
+`linkedSessionId`; fail closed to inaction when ambiguous.
 
-Workers and architects share these invariants when authoring specs or
-investigating recurrence. Full procedure: `prompts/investigate_root_cause.md`
-(**recurrence-diagnostic**, **5-Whys stop condition**). Authoring/publish:
-`.claude/skills/create-issue-draft/SKILL.md` and `publish-issue-draft` (**behavior-kind**,
-**positive-outcome**, **parked-root-cause** fences).
+## Managed session constraints
+
+Managed sessions MUST NOT run `ao stop`, `ao start`, `ao restart`, or edit user
+shell dotfiles. PACK_REVIEWER and AO restarts are operator-only.
+
+## RCA spec discipline
+
+Workers and architects share these invariants. Full procedure:
+`prompts/investigate_root_cause.md` (**recurrence-diagnostic**, **5-Whys stop
+condition**). Authoring: `create-issue-draft` / `publish-issue-draft`
+(**behavior-kind**, **positive-outcome**, **parked-root-cause** fences).
 
 - **Positive-outcome acceptance:** action-producing specs MUST declare
-  `behavior-kind` and include a `positive-outcome` block with `input: realistic`
-  (or `external-tool-output` plus `capture-backed` / `sample-backed` provenance).
-  Negative-only defer/failure ACs are insufficient.
-- **No parked roots:** deferring a suspected root cause requires a
-  `parked-root-cause` structured block with cause, evidence, reason-deferred,
-  follow-up-issue, and resolution-policy; the tracking issue body MUST carry the
-  cause statement. Euphemistic deferral without the block is non-compliant.
-- **Operator adoption:** when this file changes, restart AO (`ao stop` /
-  `ao start`) so workers load the updated rules. (operator terminal only —
-  not from within a managed session)
+  `behavior-kind` and include `positive-outcome` with `input: realistic` (or
+  external-tool provenance). Negative-only ACs are insufficient.
+- **No parked roots:** deferring a root cause requires a `parked-root-cause` block
+  with cause, evidence, reason-deferred, follow-up-issue, resolution-policy.
+- **Operator adoption:** pull tracked rules on next spawn — no AO restart solely for
+  this file (operator terminal only for yaml/runtime adoption).
 
-Mechanical guards: `scripts/check-draft-discipline.ps1` (positive-outcome,
-parked-root, surfaces), `scripts/check-finding-ledger-guard.ps1` (protected
-finding carve-out on the disposition ledger). Architecture: §T in
-`docs/issues_drafts/00-architecture-decisions.md`.
+Guards: `scripts/check-draft-discipline.ps1`, `scripts/check-finding-ledger-guard.ps1`.
+Architecture: §T in `docs/issues_drafts/00-architecture-decisions.md`.
+
+## Task complexity tiering
+
+Architect/draft-author tier rubric and per-tier draft-review flow live in
+[`docs/tiering.md`](../docs/tiering.md). Workers use **Worker pre-flight
+(blocking)** above before implementation.
 
 ## Operator adoption handoff
 
-When a task changes **operator-facing surfaces** — `agent-orchestrator.yaml.example`
-(any block operators must mirror into live yaml), runbooks or go-live docs that
-introduce new operator processes (listeners, watchers, schedulers), documented
-operator env vars, machine-local config called out in the issue, or
-`orchestratorRules` / `reactions` that require `ao stop` / `ao start` — before
-reporting successful completion:
+When a task changes **operator-facing surfaces** — `agent-orchestrator.yaml.example`,
+runbooks introducing listeners/watchers, documented operator env vars, or
+`orchestratorRules` / `reactions` requiring `ao stop` / `ao start` for **yaml
+runtime** — before reporting completion:
 
-- Add **`## Operator adoption`** to the PR body (near the top, under `## Summary`)
-  with the post-merge checklist the operator must run.
-- Add or update a matching subsection in **`docs/migration_notes.md`**.
-- Do **not** run `ao report completed` (or treat the task as done) while the PR
-  lacks `## Operator adoption` when `.example` or operator-process docs changed
-  in scope.
+- Add **`## Operator adoption`** to the PR body with the post-merge checklist.
+- Add or update **`docs/migration_notes.md`**.
+- Do **not** `ao report completed` while adoption docs are missing when required.
 
-Workers **document** adoption; they do **not** execute it by default. Do not start
-listeners, edit secrets, or merge live `agent-orchestrator.yaml` from an AO
-worktree — worktree copies are not the operator checkout. Do not assume adoption
-is done unless the operator confirms.
+Workers **document** adoption; they do **not** execute it by default. Do not merge
+live yaml or start listeners from an AO worktree unless the issue explicitly asks
+in the primary checkout.
 
-**Optional helper only:** if the worker session runs in the **primary pack
-checkout** (not an `op-*` worktree) and the issue explicitly asks, the worker
-**may** merge `.example` deltas into live yaml and note that in the PR — still
-not a substitute for the operator checklist.
-
-Cosmetic-only `.example` edits with zero operator follow-up may use the exact PR-body
-waiver line on its own: `No operator adoption required` (CI enforces pairing;
-misuse should fail review). See **`docs/migration_notes.md`** (Operator adoption
-contract) and **`docs/orchestrator-autoloop-go-live.md`** for the umbrella
-operator checklist.
+Cosmetic-only `.example` edits may use: `No operator adoption required`. See
+`docs/migration_notes.md` and `docs/orchestrator-autoloop-go-live.md`.

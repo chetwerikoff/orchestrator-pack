@@ -12,18 +12,20 @@ Draft specs map to GitHub Issues via [`docs/issue_queue_index.md`](docs/issue_qu
 ## Coworker CLI delegation (canonical policy)
 
 Before shelling out to the external `coworker` CLI, read and follow the **Coworker CLI
-delegation** section in [`prompts/agent_rules.md`](prompts/agent_rules.md) (single source of
-truth: triggers, `--profile` usage, anti-delegation, reviewer carve-out, provider-input fence).
-Do not duplicate that policy here. Architecture: §S in
+delegation** worker core in [`prompts/agent_rules.md`](prompts/agent_rules.md) (triggers,
+`--profile` usage, anti-delegation, reviewer carve-out, provider-input fence). Examples, the
+PR-diff recipe, and ordering rationale live in
+[`docs/coworker-delegation.md`](docs/coworker-delegation.md) — do not duplicate either surface
+here. Architecture: §S in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
 ## RTK read-exploration (canonical policy)
 
-On RTK-enabled hosts, read and follow the **RTK read-exploration** section in
+On RTK-enabled hosts, read and follow the **RTK read-exploration** worker core in
 [`prompts/agent_rules.md`](prompts/agent_rules.md) (prefer dedicated file tools for reads;
-RTK shell wrappers only when raw shell is genuinely needed). Do not duplicate that guidance
-here. Inventory method: [`docs/rtk-missed-savings-inventory.md`](docs/rtk-missed-savings-inventory.md).
-Architecture: §R.7 in
+RTK shell wrappers only when raw shell is genuinely needed). Inventory method and savings
+methodology: [`docs/rtk-missed-savings-inventory.md`](docs/rtk-missed-savings-inventory.md).
+Do not duplicate the core contract here. Architecture: §R.7 in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
 ## Hard Rule

@@ -46,6 +46,15 @@ export function discoverVitestFiles(repoRoot = defaultRepoRoot) {
 
   walk(join(root, 'plugins'));
   walk(join(root, 'scripts'));
+
+  const supplementalVitestFiles = ['tests/agent-rules-line-budget.test.ts'];
+  for (const rel of supplementalVitestFiles) {
+    const absolute = join(root, rel);
+    if (existsSync(absolute) && !files.includes(rel)) {
+      files.push(rel);
+    }
+  }
+
   return files.sort();
 }
 
