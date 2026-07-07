@@ -16,6 +16,7 @@
 . (Join-Path $PSScriptRoot 'Get-ClaimedReviewStartSnapshot.ps1')
 . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
 . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
+. (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')
 
 $Script:OrchestratorPreRecheckFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-trigger-reconcile.mjs'
 
@@ -84,7 +85,8 @@ function Invoke-OrchestratorClaimedReviewRun {
         [switch]$DryRun,
         [scriptblock]$LogWriter = $null,
         [string]$StartReason = 'orchestrator_turn',
-        [string]$AuditRoot = ''
+        [string]$AuditRoot = '',
+        [hashtable]$CapCycleState = $null
     )
 
     if (-not $RepoRoot) {
@@ -106,6 +108,7 @@ function Invoke-OrchestratorClaimedReviewRun {
 
     $snapshot = Get-OrchestratorClaimedReviewSnapshot -PrNumber $PrNumber -Project $Project -RepoRoot $RepoRoot -FixtureSnapshot $FixtureSnapshot
     $prKey = [string]$PrNumber
+    $capCycleState = if ($CapCycleState) { $CapCycleState } else { Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $Project) }
     $gatePayload = @{
         prNumber                    = $PrNumber
         eventHeadSha                = $EventHeadSha
@@ -118,6 +121,7 @@ function Invoke-OrchestratorClaimedReviewRun {
         sessionId                   = $SessionId
         claimWindow                 = 'free'
         provenanceAutonomous        = $true
+        capCycleState               = $capCycleState
     }
     if ($snapshot.targetStateDenial) {
         $gatePayload.targetStateDenial = $snapshot.targetStateDenial
@@ -138,6 +142,9 @@ function Invoke-OrchestratorClaimedReviewRun {
                 -MarkerState 'head_unresolved' -PrNumber $PrNumber -HeadSha $refusalHead | Out-Null
         }
         & $writeLog "orchestrator-claimed-review-run: denied before claim PR #$PrNumber reason=$($preClaim.reason)"
+        if ($preClaim.capCycleState) {
+            Set-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $Project) -State $preClaim.capCycleState
+        }
         return @{ started = $false; reason = [string]$preClaim.reason; deniedBeforeClaim = $true; gate = $preClaim }
     }
 
@@ -242,6 +249,9 @@ function Invoke-OrchestratorClaimedReviewRun {
         -ResolveReviewRuns $resolveRuns -LogWriter $writeLog
     if (-not $complete.ok) {
         & $writeLog "orchestrator-claimed-review-run: ESCALATE claim completion PR #$PrNumber head=$headSha reason=$($complete.reason)"
+    }
+    if ($preClaim.capCycleState) {
+        Set-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $Project) -State $preClaim.capCycleState
     }
     return @{ started = $true; reason = 'started'; headSha = $headSha }
 }

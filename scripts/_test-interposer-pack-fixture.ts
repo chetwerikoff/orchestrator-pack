@@ -75,6 +75,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'review-mechanical-cli.mjs',
     'review-ready-stuck-guard.mjs',
     'review-reconcile-primitives.mjs',
+    'review-cycle-cap.mjs',
     'review-run-recovery.mjs',
     'review-start-envelope-external-io.mjs',
     'review-start-preflight-shield.mjs',

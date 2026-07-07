@@ -230,6 +230,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'review-head-ready.mjs',
   'review-ready-stuck-guard.mjs',
   'review-reconcile-primitives.mjs',
+  'review-cycle-cap.mjs',
   'review-trigger-reconcile.mjs',
   'session-runtime-liveness.mjs',
   'spawn-worktree-git-ref.mjs',

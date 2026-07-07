@@ -221,7 +221,7 @@ describe('Issue #235 acceptance criteria', () => {
   it('(5) dedupe: covered head produces no new run', () => {
     const fixture = loadFixture('dedupe-covered.json');
     expect(evaluateFixtureVerdict(fixture).triggerReviewRun).toBe(false);
-    expect(evaluateFixtureVerdict(fixture).reason).toBe('head_covered');
+    expect(evaluateFixtureVerdict(fixture).reason).toBe('clean_early_stop');
   });
 
   it('(5) concurrent observers: in-flight on correct head is benign no-op', () => {
@@ -312,7 +312,7 @@ describe('Issue #235 acceptance criteria', () => {
       entryPath: 'reapply',
     });
     expect(covered.triggerReviewRun).toBe(false);
-    expect(covered.reason).toBe('head_covered');
+    expect(covered.reason).toBe('clean_early_stop');
   });
 
   it('(14) dropped wake with in-progress seed converges seconds-scale', () => {

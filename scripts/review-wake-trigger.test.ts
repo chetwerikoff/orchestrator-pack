@@ -118,7 +118,7 @@ describe('evaluateWakeReviewTrigger', () => {
     const fixture = loadFixture('covered-head-skip.json');
     const result = evaluateFixture(fixture);
     expect(result.triggerReviewRun).toBe(false);
-    expect(result.reason).toBe('head_covered');
+    expect(result.reason).toBe('clean_early_stop');
   });
 
   it('Issue #207 (4): failed run precedence routes to EMPTY REVIEW TRAP', () => {

@@ -340,6 +340,17 @@ Pack scripts read session/report state via `Get-AoStatusSessionsWithReports` (an
 from `scripts/lib/Invoke-AoCliJson.ps1` — not ad-hoc `ao status --reports full`
 shelling. `report-full` availability is gated by `Test-AoReportFullCliAvailable`.
 
+
+### Review-cycle cap (Issue #646)
+
+Autonomous PR-code review starts consult `docs/review-cycle-cap.mjs` through
+`scripts/lib/Review-CycleCap.ps1` on every automated start surface (reconcile, reeval,
+wake listener, orchestrator turn, AO 0.10 trigger shim). Cap logic consumes pre-fetched
+`Get-AoReviewRuns` rows from the #611 read model — never `ao review list` on the decision
+path. Per-tier distinct-head budgets: T1 = 2, T2 = 4, T3 = 8 (default T2). First clean
+distinct head → `clean_early_stop` (merge-eligible). Budget exhausted with open findings
+→ `at_cap_open_findings` (hand off to Brief B triage; no auto merge).
+
 ### Report-state review-start seed
 
 `scripts/review-ready-report-state-seed.ps1` polls report state, seeds #235 watches,

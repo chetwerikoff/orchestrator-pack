@@ -39,6 +39,7 @@ $CiGreenWakeFilterCli = Join-Path $PackRoot 'docs/ci-green-wake-reconcile.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-TriggerReeval-Common.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-CycleCap.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewTriggerReeval.ps1')
 
@@ -180,6 +181,7 @@ function Invoke-ReviewTriggerReevalTick {
         }
     }
 
+    $capCycleState = Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId)
     $plan = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'planTick' -Payload @{
         watchEntries                  = $watchMap
         openPrs                       = @($snapshot.openPrs)
@@ -190,8 +192,12 @@ function Invoke-ReviewTriggerReevalTick {
         requiredCheckLookupFailedByPr = $snapshot.requiredCheckLookupFailedByPr
         nowMs                         = $nowMs
         snapshotErrorsByKey           = if ($FixturePayload.snapshotErrorsByKey) { $FixturePayload.snapshotErrorsByKey } else { @{} }
+        capCycleState                 = $capCycleState
     }
 
+    if ($plan.capCycleState) {
+        Set-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId) -State $plan.capCycleState
+    }
     $started = 0
     $watchEntriesToPersist = $plan.watchEntries
     foreach ($action in @($plan.actions)) {

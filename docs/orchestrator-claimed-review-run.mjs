@@ -31,6 +31,7 @@ import {
   validateCapabilityInventory,
 } from './autonomous-gate-preflight.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { evaluateReviewCycleCapGate } from './review-cycle-cap.mjs';
 export { validateCapabilityInventory };
 
 export const ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION =
@@ -295,6 +296,31 @@ export function evaluateOrchestratorTurnGate(input) {
     };
   }
 
+  const capGate = evaluateReviewCycleCapGate({
+    prNumber,
+    currentHeadSha: currentHead,
+    openPrs: input.openPrs,
+    reviewRuns: toArray(input.reviewRuns),
+    capState: input.capCycleState ?? {},
+    issueBody: input.issueBody,
+    mergedPrNumbers: input.mergedPrNumbers,
+    producer: 'orchestrator-turn',
+    nowMs: input.nowMs,
+  });
+  if (!capGate.allowStart) {
+    return {
+      launch: false,
+      reason: capGate.reason,
+      stage: 'review_cycle_cap',
+      auditShape: 'per_start_denial',
+      currentHeadSha: currentHead,
+      staleEventHead,
+      capCycleState: capGate.capState,
+      mergeEligible: capGate.mergeEligible,
+      atCapRecord: capGate.atCapRecord ?? undefined,
+    };
+  }
+
   const headReady = evaluateHeadReadyForReview({
     reviewRuns: toArray(input.reviewRuns),
     prNumber,
@@ -386,6 +412,8 @@ export function evaluateOrchestratorTurnGate(input) {
     currentHeadSha: currentHead,
     staleEventHead,
     sessionId: input.sessionId,
+    capCycleState: capGate.capState,
+    mergeEligible: capGate.mergeEligible,
   };
 }
 
