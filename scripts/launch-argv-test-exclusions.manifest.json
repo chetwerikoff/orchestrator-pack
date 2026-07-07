@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "description": "Explicit test-exclusion classes for launch-argv discovery (Issue #661 AC#5).",
+  "pathPatterns": [
+    "*.test.ts",
+    "*.test.mjs",
+    "*.test.ps1",
+    "*.Tests.ps1",
+    "**/*.test.ts",
+    "**/*.test.mjs",
+    "**/*.test.ps1",
+    "**/*.Tests.ps1",
+    "**/tests/**",
+    "**/fixtures/**",
+    "scripts/_test-*.ts",
+    "scripts/_test-*.mjs",
+    "scripts/*-test-helpers.ts",
+    "scripts/*-test-helpers.mjs",
+    "scripts/supervisor-recovery.test-helpers.ts",
+    "plugins/**/tests/**"
+  ],
+  "dedicatedTestHelperModules": [
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/_test-git-fixture.ts",
+    "scripts/_test-autonomous-ao-stub-fixture.ts",
+    "scripts/_test-spawn-budget-fixture.ts",
+    "scripts/_test-spawn-worktree-fixture.ts",
+    "scripts/_test-interposer-pack-fixture.ts",
+    "scripts/_test-stub-pack-import-closure.ts",
+    "scripts/_review-ready-seed-fixture-test-helpers.ts",
+    "plugins/_shared/lib/git_fixture.ts"
+  ]
+}
