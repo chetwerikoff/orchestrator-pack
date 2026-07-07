@@ -2,6 +2,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  buildReviewCycleCapCurrentHead,
+  buildReviewCycleCapPriorHeadRuns,
+  buildReviewCycleCapWorkerSession,
+  REVIEW_CYCLE_CAP_T1_ISSUE_BODY,
+  REVIEW_CYCLE_CAP_T2_ISSUE_BODY,
+} from './_review-cycle-cap-tier-fixture.js';
 import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
 import { planReconcileActions, unwrapReconcilePlanResult, type OpenPr } from '../docs/review-trigger-reconcile.mjs';
 import {
@@ -113,16 +120,8 @@ function planFixtureTick(fixture: ReevalFixture) {
 describe('deferred watch wake decision tier threading', () => {
   it('evaluateHeadReviewTriggerDecision honors per-PR tier before cap gate', () => {
     const pr = 672;
-    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
-    const current = 'a3'.padEnd(40, '1');
-    const runs = prior.map((sha, idx) => ({
-      prNumber: pr,
-      targetSha: sha,
-      status: 'changes_requested',
-      openFindingCount: 1,
-      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
-    }));
-    const t1Body = '```complexity-tier\ntier: T1\n```';
+    const current = buildReviewCycleCapCurrentHead();
+    const runs = buildReviewCycleCapPriorHeadRuns(pr);
     const base = {
       prNumber: pr,
       headSha: current,
@@ -131,28 +130,20 @@ describe('deferred watch wake decision tier threading', () => {
       nowMs: Date.parse('2026-07-03T01:00:05Z'),
       openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
       reviewRuns: runs,
-      sessions: [
-        {
-          sessionId: 'opk-672',
-          role: 'worker',
-          prNumber: pr,
-          status: 'working',
-          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
-        },
-      ],
+      sessions: [buildReviewCycleCapWorkerSession(pr, 'opk-672')],
       ciChecks: [{ name: 'verify', state: 'SUCCESS' }],
       requiredCheckNames: ['verify'],
       capCycleState: {},
     };
     const t2Verdict = evaluateHeadReviewTriggerDecision({
       ...base,
-      issueBodiesByPr: { [String(pr)]: '```complexity-tier\ntier: T2\n```' },
+      issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T2_ISSUE_BODY },
     });
     expect(t2Verdict.triggerReviewRun).toBe(true);
 
     const t1Verdict = evaluateHeadReviewTriggerDecision({
       ...base,
-      issueBodiesByPr: { [String(pr)]: t1Body },
+      issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T1_ISSUE_BODY },
     });
     expect(t1Verdict.triggerReviewRun).toBe(false);
     expect(t1Verdict.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);

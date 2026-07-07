@@ -7,6 +7,13 @@ import { evaluateOrchestratorTurnGate } from '../docs/orchestrator-claimed-revie
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 import { planDeferredWatchTick } from '../docs/review-trigger-reeval.mjs';
 import {
+  buildReviewCycleCapCurrentHead,
+  buildReviewCycleCapPriorHeadRuns,
+  buildReviewCycleCapWorkerSession,
+  REVIEW_CYCLE_CAP_T1_ISSUE_BODY,
+  REVIEW_CYCLE_CAP_T2_ISSUE_BODY,
+} from './_review-cycle-cap-tier-fixture.js';
+import {
   REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
   TERMINAL_AT_CAP_OPEN_FINDINGS,
   TERMINAL_CLEAN_EARLY_STOP,
@@ -204,10 +211,10 @@ describe('distinct head counting matrix', () => {
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: {},
     };
-    const t2Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: t2Body } });
+    const t2Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T2_ISSUE_BODY } });
     expect(t2Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
 
-    const t1Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: t1Body } });
+    const t1Plan = planReconcileActions({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T1_ISSUE_BODY } });
     expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
     expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED)).toBe(true);
   });
@@ -479,23 +486,9 @@ describe('review cycle cap scenario matrix', () => {
   });
 
   it('wake honors issue tier via issueBody', () => {
-    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
-    const current = 'a3'.padEnd(40, '1');
-    const runs = prior.map((sha, idx) => ({
-      prNumber: pr,
-      targetSha: sha,
-      status: 'changes_requested',
-      openFindingCount: 1,
-      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
-    }));
-    const t1Body = '```complexity-tier\ntier: T1\n```';
-    const session = {
-      sessionId: 'opk-646',
-      role: 'worker',
-      prNumber: pr,
-      status: 'working',
-      reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
-    };
+    const current = buildReviewCycleCapCurrentHead();
+    const runs = buildReviewCycleCapPriorHeadRuns(pr);
+    const session = buildReviewCycleCapWorkerSession(pr, 'opk-646');
     const base = {
       wakeKind: 'ready_for_review' as const,
       prNumber: pr,
@@ -509,26 +502,17 @@ describe('review cycle cap scenario matrix', () => {
       sessionId: 'opk-646',
       capCycleState: {},
     };
-    const t2Wake = evaluateWakeReviewTrigger({ ...base, issueBody: '```complexity-tier\ntier: T2\n```' });
+    const t2Wake = evaluateWakeReviewTrigger({ ...base, issueBody: REVIEW_CYCLE_CAP_T2_ISSUE_BODY });
     expect(t2Wake.triggerReviewRun).toBe(true);
 
-    const t1Wake = evaluateWakeReviewTrigger({ ...base, issueBody: t1Body });
+    const t1Wake = evaluateWakeReviewTrigger({ ...base, issueBody: REVIEW_CYCLE_CAP_T1_ISSUE_BODY });
     expect(t1Wake.triggerReviewRun).toBe(false);
     expect(t1Wake.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
   });
 
   it('reeval deferred watch honors per-PR tier via issueBodiesByPr', () => {
-    const prior = ['a1', 'a2'].map((h) => h.padEnd(40, '1'));
-    const current = 'a3'.padEnd(40, '1');
-    const runs = prior.map((sha, idx) => ({
-      prNumber: pr,
-      targetSha: sha,
-      status: 'changes_requested',
-      openFindingCount: 1,
-      completedAt: `2026-07-0${idx + 1}T00:00:00Z`,
-    }));
-    const t1Body = '```complexity-tier\ntier: T1\n```';
-    const t2Body = '```complexity-tier\ntier: T2\n```';
+    const current = buildReviewCycleCapCurrentHead();
+    const runs = buildReviewCycleCapPriorHeadRuns(pr);
     const base = {
       watchEntries: {
         [`${pr}:${current}`]: {
@@ -540,23 +524,15 @@ describe('review cycle cap scenario matrix', () => {
       },
       openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
       reviewRuns: runs,
-      sessions: [
-        {
-          sessionId: 'opk-646',
-          role: 'worker',
-          prNumber: pr,
-          status: 'working',
-          reports: [{ reportState: 'ready_for_review', reportedAt: '2026-07-03T01:00:00Z' }],
-        },
-      ],
+      sessions: [buildReviewCycleCapWorkerSession(pr, 'opk-646')],
       ciChecksByPr: { [pr]: [{ name: 'verify', state: 'SUCCESS' }] },
       requiredCheckNamesByPr: { [pr]: ['verify'] },
       capCycleState: {},
     };
-    const t2Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: t2Body } });
+    const t2Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T2_ISSUE_BODY } });
     expect(t2Plan.actions.some((a) => a.type === 'start_review')).toBe(true);
 
-    const t1Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: t1Body } });
+    const t1Plan = planDeferredWatchTick({ ...base, issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T1_ISSUE_BODY } });
     expect(t1Plan.actions.some((a) => a.type === 'start_review')).toBe(false);
     expect(t1Plan.actions.some((a) => a.type === 'skip' && a.reason === REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED)).toBe(true);
   });
