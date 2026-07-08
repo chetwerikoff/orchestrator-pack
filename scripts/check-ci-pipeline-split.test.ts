@@ -6,6 +6,10 @@ import {
   assignHeavyShards,
   buildLanePlan,
   discoverVitestFiles,
+  loadLanesConfig,
+  loadRuntimeHistory,
+  resolveHeavyFilePool,
+  resolveHeavyFileRunPlan,
   scanWorkerRpcSignatures,
   validateClassification,
 } from './lib/vitest-ci-lanes.mjs';
@@ -138,6 +142,32 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     );
     expect(shards[0].files.length + shards[1].files.length).toBe(2);
     expect(shards[0].totalRuntimeMs + shards[1].totalRuntimeMs).toBe(240_000);
+  });
+
+  it('selects forks pool for long-runtime heavy files', () => {
+    expect(
+      resolveHeavyFilePool(
+        'scripts/orchestrator-wake-supervisor-orphan-integration.test.ts',
+        { 'scripts/orchestrator-wake-supervisor-orphan-integration.test.ts': 120_000 },
+        120_000,
+        120_000,
+      ),
+    ).toBe('forks');
+    expect(resolveHeavyFilePool('scripts/fast-heavy.test.ts', {}, 120_000, 120_000)).toBe('threads');
+  });
+
+  it('plans per-test isolation for configured heavy subprocess files', () => {
+    const config = loadLanesConfig(repoRoot);
+    const runtimeHistory = loadRuntimeHistory(repoRoot);
+    const plan = resolveHeavyFileRunPlan(
+      'scripts/autonomous-orchestrator-boundary.test.ts',
+      config,
+      runtimeHistory,
+      repoRoot,
+    );
+    expect(plan.mode).toBe('tests');
+    expect(plan.pool).toBe('forks');
+    expect(plan.tests.length).toBeGreaterThan(0);
   });
 
   it('detects worker-RPC flake signatures in log text', () => {
