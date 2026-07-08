@@ -115,6 +115,68 @@ function Get-DeadWorkerLivePlanGates {
     }
 }
 
+function Get-DeadWorkerWorktreeDiscoveryPorcelain {
+    param([string]$RepoRoot)
+
+    if (-not $RepoRoot) { return '' }
+    $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
+    if ($LASTEXITCODE -ne 0) { return '' }
+    return (($porcelain | ForEach-Object { $_ }) -join "`n")
+}
+
+function Get-DeadWorkerAuditDiscoveryCandidates {
+    param([string]$ProjectId)
+
+    $auditDir = Get-AoAgentReportAuditDir -Project $ProjectId
+    if (-not (Test-Path -LiteralPath $auditDir -PathType Container)) {
+        return @()
+    }
+
+    $candidates = @()
+    foreach ($auditPath in @(Get-ChildItem -LiteralPath $auditDir -Filter '*.ndjson' -File -ErrorAction SilentlyContinue)) {
+        $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($auditPath.Name)
+        if (-not $sessionId) { continue }
+        $issueNumber = 0
+        $prNumber = 0
+        foreach ($line in @(Get-Content -LiteralPath $auditPath.FullName -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try {
+                $entry = $line | ConvertFrom-Json
+            }
+            catch {
+                continue
+            }
+            if ($entry.issueId) { [void][int]::TryParse([string]$entry.issueId, [ref]$issueNumber) }
+            if ($entry.issueNumber) { [void][int]::TryParse([string]$entry.issueNumber, [ref]$issueNumber) }
+            if ($entry.prNumber) { [void][int]::TryParse([string]$entry.prNumber, [ref]$prNumber) }
+            if ($entry.pr) { [void][int]::TryParse([string]$entry.pr, [ref]$prNumber) }
+        }
+        $candidates += @{
+            sessionId = $sessionId
+            issueNumber = $issueNumber
+            prNumber = $prNumber
+        }
+    }
+    return @($candidates)
+}
+
+function Get-DeadWorkerAbsentSessions {
+    param(
+        [object[]]$Sessions,
+        [string]$ProjectId,
+        [string]$RepoRoot,
+        [object[]]$OpenPrs = @()
+    )
+
+    $result = Invoke-DeadWorkerPlannerCli -Subcommand 'discover-absent-sessions' -Payload @{
+        sessions = @($Sessions)
+        worktreePorcelain = (Get-DeadWorkerWorktreeDiscoveryPorcelain -RepoRoot $RepoRoot)
+        auditCandidates = @(Get-DeadWorkerAuditDiscoveryCandidates -ProjectId $ProjectId)
+        openPrs = @($OpenPrs)
+    }
+    return @($result.absentSessions)
+}
+
 function Get-DeadWorkerLivePayload {
     $sessions = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
     return @{
@@ -286,10 +348,18 @@ function Invoke-DeadWorkerTick {
         $checks = Invoke-DeadWorkerPlannerCli -Subcommand 'probe-checks' -Payload @{ packRoot = $PackRoot }
         $gates = Get-DeadWorkerLivePlanGates
         $prSnapshot = Get-DeadWorkerPrSnapshot
+        $absentSessions = @(Get-DeadWorkerAbsentSessions -Sessions $live.sessions -ProjectId $ProjectId `
+            -RepoRoot $RepoRoot -OpenPrs $prSnapshot.openPrs)
+        $livenessProbeSessions = @($live.sessions) + @($absentSessions)
+        $livenessContext = @{
+            osLiveness = Get-WorkerOsLivenessMap -Sessions $livenessProbeSessions
+            sanctionedKillSurface = $live.livenessContext.sanctionedKillSurface
+        }
         $payload = @{
             sessions = @($live.sessions)
+            absentSessions = @($absentSessions)
             aoEvents = @($live.aoEvents)
-            livenessContext = $live.livenessContext
+            livenessContext = $livenessContext
             respawnPolicy = $gates.respawnPolicy
             tracking = $tracking
             recoveryChecks = $checks

@@ -10781,27 +10781,6 @@
       }
     },
     {
-      "rowId": "site-scripts-dead-worker-reconcile-ps1-190",
-      "caller": {
-        "file": "scripts/dead-worker-reconcile.ps1",
-        "line": 190
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/dead-worker-reconcile.ps1",
-        "line": 190,
-        "patternIds": [
-          "call-pwsh"
-        ]
-      }
-    },
-    {
       "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-243",
       "caller": {
         "file": "scripts/lib/Invoke-AoCliJson.ps1",
@@ -10844,48 +10823,6 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-313",
-      "caller": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 313
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 313,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-316",
-      "caller": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 316
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 316,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
       "rowId": "site-scripts-invoke-worker-recovery-ps1-55",
       "caller": {
         "file": "scripts/invoke-worker-recovery.ps1",
@@ -10909,6 +10846,69 @@
           "pwsh-file",
           "pwsh-noprofile",
           "call-pwsh",
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-dead-worker-reconcile-ps1-252",
+      "caller": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 252
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 252,
+        "patternIds": [
+          "call-pwsh"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-321",
+      "caller": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 321
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 321,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-324",
+      "caller": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 324
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 324,
+        "patternIds": [
           "ps-call-op"
         ]
       }

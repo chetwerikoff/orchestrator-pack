@@ -9,6 +9,8 @@ import {
   DEFAULT_DEAD_WORKER_MAX_ATTEMPTS,
   buildDeadWorkerReconcileKey,
   classifyWorkerDeathEvidence,
+  discoverAbsentSessions,
+  parseIssueNumberFromWorkerBranch,
   classifyWorkerLivenessEvidence,
   commitDeadWorkerAction,
   evaluateDeadWorkerInterval,
@@ -629,5 +631,36 @@ describe('dead-worker-reconciler (Issue #593)', () => {
 
   it('classifier version is exported', () => {
     expect(DEAD_WORKER_RECONCILER_VERSION).toMatch(/dead-worker-reconciler/);
+  });
+
+  it('discovers assigned workers absent from ao session ls via worktree and audit candidates', () => {
+    const absentSessions = discoverAbsentSessions({
+      sessions: [{ sessionId: 'orchestrator-pack-7', issueNumber: 619, status: 'active' }],
+      worktreeRecords: [{
+        sessionId: 'opk-688-absent-live',
+        worktree: '/home/test/.agent-orchestrator/projects/orchestrator-pack/worktrees/opk-688-absent-live',
+        branch: 'refs/heads/feat/issue-688-ao-010-event-consumer-rebind',
+      }],
+      auditCandidates: [{ sessionId: 'opk-688-audit-only', issueNumber: 688 }],
+    });
+    expect(absentSessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'opk-688-absent-live', issueNumber: 688, status: 'absent' }),
+      expect.objectContaining({ sessionId: 'opk-688-audit-only', issueNumber: 688, status: 'absent' }),
+    ]));
+    expect(absentSessions.find((row) => row.sessionId === 'orchestrator-pack-7')).toBeUndefined();
+  });
+
+  it('parses issue numbers from production worker branch shapes', () => {
+    expect(parseIssueNumberFromWorkerBranch('refs/heads/feat/issue-688-ao-010-event-consumer-rebind')).toBe(688);
+    expect(parseIssueNumberFromWorkerBranch('feat/593')).toBe(593);
+    expect(parseIssueNumberFromWorkerBranch('opk-522')).toBe(522);
+  });
+
+  it('live dead-worker reconcile populates absentSessions from discovery helpers', () => {
+    const src = readFileSync(join(repoRoot, 'scripts/dead-worker-reconcile.ps1'), 'utf8');
+    expect(src).toMatch(/function Get-DeadWorkerAbsentSessions/);
+    expect(src).toMatch(/discover-absent-sessions/);
+    expect(src).toMatch(/absentSessions = @\(\$absentSessions\)/);
+    expect(src).toMatch(/Get-WorkerOsLivenessMap -Sessions \$livenessProbeSessions/);
   });
 });

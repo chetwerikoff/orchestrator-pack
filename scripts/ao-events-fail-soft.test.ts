@@ -44,4 +44,25 @@ describe('ao events fail-soft wrapper (Issue #688)', () => {
     expect(parsed.degraded).toBe(true);
     expect(parsed.reason).toBe('removed_cli_surface');
   });
+  it('surfaces non-removed ao events failures instead of fail-soft empty events', () => {
+    const authStub = join(repoRoot, 'scripts/fixtures/ao-events-auth-fail-stub.ps1');
+    expect(() => {
+      execFileSync(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-Command',
+          `
+            . '${lib}'
+            $Script:AoEventsCliProbeState = $null
+            $Script:AoEventsDegradedClassification = $null
+            Get-AoEventsSince -SinceMinutes 60 -AoCommand '${authStub}' | Out-Null
+          `,
+        ],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+    }).toThrow();
+    expect(source).toContain('function Test-AoEventsRemovedCliSurfaceText');
+  });
+
 });

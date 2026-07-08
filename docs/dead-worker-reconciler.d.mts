@@ -210,6 +210,17 @@ export declare function evaluateDeadWorkerInterval(input: {
   intervalMs?: number;
 }): { ok: boolean; reason?: string; intervalMs: number };
 
+
+export declare function extractWorktreeSessionId(worktreePath: string): string;
+export declare function parseIssueNumberFromWorkerBranch(branch: string): number;
+export declare function discoverAbsentSessions(input?: {
+  sessions?: Array<Record<string, unknown>>;
+  worktreeRecords?: Array<Record<string, unknown>>;
+  worktreePorcelain?: string;
+  auditCandidates?: Array<Record<string, unknown>>;
+  openPrs?: Array<Record<string, unknown>>;
+}): Array<Record<string, unknown>>;
+
 export declare function probeRecoveryChecks(packRoot: string): {
   workerRecoveryAvailable: boolean;
   branchSafeRecoveryAvailable: boolean;
