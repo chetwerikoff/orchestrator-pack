@@ -162,8 +162,19 @@ jobs:
 
           $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
           $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
-          if (-not (Test-Path -LiteralPath $guardScript)) {
-            Write-Warning 'scope guard bootstrap: checker not on base ref yet; using PR head scripts (one-time until merge)'
+          $headChecker = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ts'
+          $baseChecker = Join-Path $trustedRoot 'scripts/pr-scope-check.ts'
+          $checkerUpdatedOnPr = $false
+          if ((Test-Path -LiteralPath $headChecker) -and (Test-Path -LiteralPath $baseChecker)) {
+            $checkerUpdatedOnPr =
+              (Get-FileHash -LiteralPath $headChecker).Hash -ne (Get-FileHash -LiteralPath $baseChecker).Hash
+          }
+          if (-not (Test-Path -LiteralPath $guardScript) -or $checkerUpdatedOnPr) {
+            if ($checkerUpdatedOnPr) {
+              Write-Warning 'scope guard bootstrap: PR head updates checker; using PR head scripts for this run'
+            } else {
+              Write-Warning 'scope guard bootstrap: checker not on base ref yet; using PR head scripts (one-time until merge)'
+            }
             $trustedRoot = $env:GITHUB_WORKSPACE
             $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
           }
