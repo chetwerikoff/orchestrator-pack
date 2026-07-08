@@ -9,6 +9,7 @@ import {
   repoRoot,
   runPwsh,
   runSupervisor,
+  waitForProcessesStopped,
 } from './supervisor-recovery.test-helpers.js';
 
 const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
@@ -89,11 +90,8 @@ describe('Issue #613 orphan supervisor discovery (integration)', () => {
 
       const stop = runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
       expect(stop.status).toBe(0);
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      expect(isAlive(supervisorPid)).toBe(false);
-      expect(isAlive(listenerBefore.pid)).toBe(false);
+      await waitForProcessesStopped([supervisorPid, listenerBefore.pid], 25_000);
 
-      await new Promise((resolve) => setTimeout(resolve, 2500));
       const statusAfter = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
       expect(statusAfter.stdout).toContain('supervisor: stopped');
       expect(statusAfter.stdout).toMatch(/listener:\s+stopped/);
