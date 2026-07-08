@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { readStdinJson, printJson } from './review-mechanical-cli.mjs';
 
 export const TRIAGE_SCHEMA_VERSION = 1;
 export const TERMINAL_AT_CAP_OPEN_FINDINGS = 'at_cap_open_findings';
@@ -275,6 +275,33 @@ function currentHeadOpenFindings(input = {}) {
   return findings;
 }
 
+function hasExplicitFindingsInput(input = {}) {
+  return input.findings !== undefined || input.openFindings !== undefined;
+}
+
+function hasExplicitProjectPath(input = {}) {
+  return Boolean(String(input.projectPath ?? '').trim());
+}
+
+function resolveOpenFindings(input = {}, { prNumber, headSha, requireSource = false } = {}) {
+  if (hasExplicitFindingsInput(input)) {
+    return currentHeadOpenFindings({ ...input, prNumber, headSha });
+  }
+  if (hasExplicitProjectPath(input)) {
+    const root = path.resolve(String(input.projectPath));
+    const dir = path.join(root, 'code-reviews', 'findings');
+    if (!existsSync(dir)) {
+      if (requireSource) throw new Error('finding store unavailable: missing findings directory');
+      return [];
+    }
+    return readPackFindingStore({ projectPath: root, prNumber, headSha });
+  }
+  if (requireSource) {
+    throw new Error('open findings require findings array or projectPath');
+  }
+  return readPackFindingStore({ projectPath: input.projectPath, prNumber, headSha });
+}
+
 export function readPackFindingStore({ projectPath, prNumber, headSha } = {}) {
   const root = path.resolve(projectPath ?? process.cwd());
   const dir = path.join(root, 'code-reviews', 'findings');
@@ -509,7 +536,13 @@ export function runMergeTriageGate(input = {}) {
   const atCapRecord = findAtCapRecord(input);
   if (!atCapRecord) return { ok: true, ran: false, reason: 'no_latched_at_cap_open_findings' };
   const gateRunId = input.gateRunId ?? `merge-triage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const findings = input.findings ? currentHeadOpenFindings(input) : readPackFindingStore({ projectPath: input.projectPath, prNumber, headSha });
+  let findings;
+  try {
+    findings = resolveOpenFindings(input, { prNumber, headSha, requireSource: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, ran: true, reason: 'open_findings_unavailable', message };
+  }
   const classifications = findings.map((finding) => classifyFinding(finding, markerList));
   for (let index = 0; index < findings.length; index += 1) {
     appendVerdictJournal({ paths, prNumber, headSha, gateRunId, finding: findings[index], classification: classifications[index] });
@@ -569,7 +602,12 @@ export function evaluateMergePolicy(input = {}) {
   if (Number(clearance.marker_list_version) !== markerList.schemaVersion || clearance.marker_list_hash !== markerList.markerListHash) {
     return { allow: false, reason: 'marker_list_drift' };
   }
-  const findings = input.findings ? currentHeadOpenFindings(input) : readPackFindingStore({ projectPath: input.projectPath, prNumber, headSha });
+  let findings;
+  try {
+    findings = resolveOpenFindings(input, { prNumber, headSha, requireSource: true });
+  } catch {
+    return { allow: false, reason: 'open_findings_unavailable' };
+  }
   const liveHash = computeOpenFindingsSnapshotHash(findings);
   if (liveHash !== clearance.open_findings_snapshot_hash) {
     return { allow: false, reason: 'open_findings_snapshot_drift', expected: clearance.open_findings_snapshot_hash, actual: liveHash };
@@ -664,9 +702,10 @@ export function adjudicateArchitectFinding(input = {}) {
   let clearance = null;
   if (verdict === VERDICT_DEFER) {
     const markerList = loadMarkerList(input.markerFile ?? DEFAULT_MARKER_FILE);
-    const openFindings = input.findings
-      ? currentHeadOpenFindings({ ...input, prNumber: inbox.pr_number, headSha: inbox.head_sha })
-      : readPackFindingStore({ projectPath: input.projectPath, prNumber: inbox.pr_number, headSha: inbox.head_sha });
+    const openFindings = resolveOpenFindings(
+      { ...input, prNumber: inbox.pr_number, headSha: inbox.head_sha },
+      { prNumber: inbox.pr_number, headSha: inbox.head_sha, requireSource: true },
+    );
     const openClassifications = openFindings.map((openFinding) =>
       resolveOpenFindingClassification({
         paths,
@@ -702,7 +741,7 @@ export function adjudicateArchitectFinding(input = {}) {
   return { ok: verdict === VERDICT_DEFER, verdict, clearance };
 }
 
-runStdinJsonCli('merge-triage-gate.mjs', {
+const MERGE_TRIAGE_CLI_HANDLERS = {
   classifyFinding: () => classifyFinding(readStdinJson()),
   runGate: () => runMergeTriageGate(readStdinJson()),
   evaluateMergePolicy: () => evaluateMergePolicy(readStdinJson()),
@@ -710,4 +749,29 @@ runStdinJsonCli('merge-triage-gate.mjs', {
   issueArchitectToken: () => issueArchitectProvenanceToken(readStdinJson()),
   fileWorkerAppeal: () => fileWorkerAppeal(readStdinJson()),
   adjudicateArchitectFinding: () => adjudicateArchitectFinding(readStdinJson()),
-});
+};
+
+function mergeTriageCliShouldExitNonZero(subcommand, result) {
+  return subcommand === 'runGate' && result && result.ok === false && result.ran === true;
+}
+
+const mergeTriageCliEntry = process.argv[1] ?? '';
+const isMergeTriageCli =
+  mergeTriageCliEntry.endsWith('merge-triage-gate.mjs') ||
+  mergeTriageCliEntry.endsWith('merge-triage-gate.js');
+if (isMergeTriageCli) {
+  const subcommand = process.argv[2];
+  const handler = MERGE_TRIAGE_CLI_HANDLERS[subcommand];
+  if (!handler) {
+    console.error(`Usage: node merge-triage-gate.mjs <${Object.keys(MERGE_TRIAGE_CLI_HANDLERS).join('|')}>`);
+    process.exit(2);
+  }
+  try {
+    const result = handler();
+    printJson(result);
+    process.exit(mergeTriageCliShouldExitNonZero(subcommand, result) ? 1 : 0);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}

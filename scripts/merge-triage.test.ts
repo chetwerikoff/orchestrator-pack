@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   adjudicateArchitectFinding,
@@ -19,6 +21,7 @@ import {
   VERDICT_PENDING_OPERATOR,
 } from '../docs/merge-triage-gate.mjs';
 
+const gatePath = fileURLToPath(new URL('../docs/merge-triage-gate.mjs', import.meta.url));
 const tempRoots: string[] = [];
 function stateRoot() {
   const root = mkdtempSync(join(tmpdir(), 'merge-triage-'));
@@ -233,6 +236,7 @@ describe('architect-adjudication', () => {
       adjudicationId: pending.adjudication_id,
       verdict: VERDICT_DEFER,
       finding: block,
+      findings: [block],
       adjudicationProvenanceToken: issuedToken.adjudication_provenance_token,
       actorSession: 'arch-1',
     });
@@ -484,3 +488,68 @@ describe('remediation-new-head', () => {
     expect(cleared.clearance?.head_sha).toBe('new');
   });
 });
+
+describe('open-findings-source-fail-closed and cli exit', () => {
+  it('runGate requires findings array or projectPath when at-cap is latched', () => {
+    const root = stateRoot();
+    expect(runMergeTriageGate({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+    })).toMatchObject({ ok: false, ran: true, reason: 'open_findings_unavailable' });
+  });
+
+  it('adjudicate DEFER without findings source does not emit clearance on empty cwd read', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending[0]!;
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    expect(() => adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: open[0],
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+      atCapRecord: atCap(),
+    })).toThrow(/findings array or projectPath/);
+  });
+
+  it('evaluateMergePolicy denies when clearance exists but open findings source is missing', () => {
+    const root = stateRoot();
+    const defer = finding('d1', 'TOCTOU');
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [defer] });
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+    })).toMatchObject({ allow: false, reason: 'open_findings_unavailable' });
+  });
+
+  it('runGate CLI exits non-zero on fail-closed gate results', () => {
+    const root = stateRoot();
+    const cli = spawnSync(process.execPath, [gatePath, 'runGate'], {
+      input: JSON.stringify({
+        stateRoot: root,
+        prNumber: 648,
+        headSha: 'abc123',
+        atCapRecord: atCap(),
+        findings: [finding('empty', '', { title: '', body: '' })],
+      }),
+      encoding: 'utf8',
+    });
+    expect(cli.status).toBe(1);
+    expect(JSON.parse(cli.stdout)).toMatchObject({ ok: false, ran: true });
+  });
+});
+
