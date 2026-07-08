@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * Runtime-history refresh producer: provenance-gated merge with smoothing (Issue #691).
+ * heavyShardCount is topology-derived (Issue #695).
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
