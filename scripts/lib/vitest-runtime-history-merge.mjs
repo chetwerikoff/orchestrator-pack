@@ -215,17 +215,6 @@ export function validateReportSet(shardReports, expectedCommitSha, repoRoot = de
     }
   }
 
-  const missingHeavy = heavy.filter((file) => !durations.has(file));
-  if (missingHeavy.length > 0) {
-    const preview = missingHeavy.slice(0, 5).join(', ');
-    const suffix =
-      missingHeavy.length > 5 ? `, ... (+${missingHeavy.length - 5} more)` : '';
-    errors.push(
-      `incomplete heavy-file coverage in shard reports: missing ${missingHeavy.length} classified heavy file(s): ${preview}${suffix}`,
-    );
-    return { ok: false, errors, durations: new Map(), heavy };
-  }
-
   return { ok: true, errors: [], durations, heavy };
 }
 

@@ -305,24 +305,32 @@ function runProvenanceGateFixtures() {
   });
   assert(unknown.rejected, 'unclassified path must be rejected');
 
-  const incompleteAssignments = new Map();
+  const partialTimingAssignments = new Map();
   for (let shard = 1; shard <= 7; shard += 1) {
-    incompleteAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
+    partialTimingAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
   }
-  const incompleteCoverage = refreshRuntimeHistory({
+  const uncoveredHeavy = 'scripts/orchestrator-wake-supervisor.test.ts';
+  const partialTiming = refreshRuntimeHistory({
     baseHistory: base,
-    shardReports: buildCompleteShardSet(dir, commitSha, incompleteAssignments),
+    shardReports: buildCompleteShardSet(dir, commitSha, partialTimingAssignments),
     expectedCommitSha: commitSha,
     repoRoot: defaultRepoRoot,
   });
-  assert(incompleteCoverage.rejected, 'incomplete heavy-file coverage must be rejected');
   assert(
-    historyBytes(incompleteCoverage.history) === baseBytes,
-    'incomplete heavy-file coverage must not mutate history',
+    partialTiming.ok && !partialTiming.rejected,
+    'valid partial per-file timing gaps must accept merge',
   );
   assert(
-    incompleteCoverage.errors.some((error) => error.includes('incomplete heavy-file coverage')),
-    'incomplete heavy-file coverage must surface validation error',
+    partialTiming.history.provenance[heavy[0]] === 'measured',
+    'covered heavy file must be measured after partial timing refresh',
+  );
+  assert(
+    partialTiming.history.files[uncoveredHeavy] === base.files[uncoveredHeavy],
+    'uncovered heavy file must retain prior recorded weight',
+  );
+  assert(
+    partialTiming.history.provenance[uncoveredHeavy] === 'seeded',
+    'uncovered heavy file must retain prior provenance',
   );
 
   rmSync(dir, { recursive: true, force: true });
