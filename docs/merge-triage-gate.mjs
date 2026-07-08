@@ -481,6 +481,15 @@ function readPendingInbox(paths, prNumber, headSha) {
   });
 }
 
+function architectJournalRowsForHead(rows, prNumber, headSha) {
+  return rows.filter((row) => {
+    if (row.actor !== 'architect') return false;
+    if (prNumber && Number(row.pr_number) !== Number(prNumber)) return false;
+    if (headSha && normalizeTriageText(row.head_sha) !== normalizeTriageText(headSha)) return false;
+    return true;
+  });
+}
+
 
 function canEmitMergeTriageClearance(openFindings, openClassifications, pendingInboxCount) {
   if (pendingInboxCount > 0) return false;
@@ -636,10 +645,10 @@ export function evaluateMergePolicy(input = {}) {
   if (liveHash !== clearance.open_findings_snapshot_hash) {
     return { allow: false, reason: 'open_findings_snapshot_drift', expected: clearance.open_findings_snapshot_hash, actual: liveHash };
   }
-  const rows = readJsonl(paths.journal);
-  const invalidArchitectRows = rows.filter((row) => row.actor === 'architect' && !row.adjudication_provenance_token_hash);
+  const architectRows = architectJournalRowsForHead(readJsonl(paths.journal), prNumber, headSha);
+  const invalidArchitectRows = architectRows.filter((row) => !row.adjudication_provenance_token_hash);
   if (invalidArchitectRows.length > 0) return { allow: false, reason: 'invalid_architect_provenance' };
-  const missingArchitectSession = rows.filter((row) => row.actor === 'architect' && !String(row.actor_session ?? '').trim());
+  const missingArchitectSession = architectRows.filter((row) => !String(row.actor_session ?? '').trim());
   if (missingArchitectSession.length > 0) return { allow: false, reason: 'invalid_architect_actor_session' };
   return { allow: true, reason: 'merge_triage_cleared', clearance };
 }

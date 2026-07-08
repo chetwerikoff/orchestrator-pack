@@ -405,6 +405,34 @@ describe('architect-adjudication', () => {
     }).reason).toBe('invalid_architect_actor_session');
   });
 
+  it('merge policy ignores malformed architect rows for other PRs or heads', () => {
+    const root = stateRoot();
+    const defer = finding('d1', 'TOCTOU');
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [defer] });
+    const journalPath = join(root, 'merge-triage/verdict-journal.jsonl');
+    const rows = readFileSync(journalPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    rows.push({
+      schema_version: 1,
+      actor: 'architect',
+      actor_session: '',
+      adjudication_provenance_token_hash: '',
+      pr_number: 999,
+      head_sha: 'otherhead',
+      reason: 'architect_adjudication',
+      verdict: VERDICT_DEFER,
+      finding_id: 'foreign',
+      fingerprint: 'fp-foreign',
+    });
+    writeFileSync(journalPath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: [defer],
+    })).toMatchObject({ allow: true, reason: 'merge_triage_cleared' });
+  });
+
   it('architect command with valid token is consumed by hidden-token gate and budget reaches PENDING_OPERATOR after two permissive verdicts', () => {
     const root = stateRoot();
     const result = runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [finding('amb1', 'text without seed marker')] });
