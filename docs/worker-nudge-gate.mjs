@@ -268,7 +268,7 @@ function deriveTargetGeneration(session) {
  * @param {string} headSha
  * @param {unknown[]} openPrs
  */
-function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPrs = []) {
+function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPrs = [], sessionDetailsById = {}) {
   if (headSha) {
     const owned = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
     if (owned) {
@@ -280,6 +280,7 @@ function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPr
     requireLive: true,
     isLive: isSessionAlive,
     getSessionId: getSessionIdentifier,
+    sessionDetailsById,
   });
   if (prBinding.failClosed) {
     return {
@@ -410,7 +411,8 @@ export function resolvePrOwnerSessionForNudge(input) {
   const sessions = toArray(input.sessions);
   const openPrs = toArray(input.openPrs);
 
-  const ownership = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+  const sessionDetailsById = input.sessionDetailsById ?? input.workerState?.sessionDetailsById ?? {};
+  const ownership = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, openPrs, sessionDetailsById);
   const ownerSessionId = ownership.sessionId;
   if (!ownerSessionId) {
     return { ok: false, reason: ownership.deferReason ?? 'pr_owner_unresolved' };
@@ -441,7 +443,8 @@ export function resolveWorkerTargetFromPrClaim(input) {
   }
   const claimRecord =
     prClaims.find((row) => Number(row?.prNumber) === prNumber) ?? input.claimRecord ?? null;
-  const ownership = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, input.openPrs);
+  const sessionDetailsById = input.sessionDetailsById ?? input.workerState?.sessionDetailsById ?? {};
+  const ownership = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, input.openPrs, sessionDetailsById);
   const ownerSessionId =
     String(claimRecord?.ownerSessionId ?? '').trim() || ownership.sessionId;
   if (!ownerSessionId) {

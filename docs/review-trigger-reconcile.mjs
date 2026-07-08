@@ -361,11 +361,16 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = [], opt
  * @param {number} prNumber
  */
 export function listWorkersForPr(sessions, prNumber, openPrs = [], options = {}) {
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   return toArray(sessions).filter((session) => {
     const role = String(session?.role ?? '').toLowerCase();
+    const sessionId = getSessionIdentifier(session);
     return (
       (role === 'worker' || role === 'coding') &&
-      sessionMatchesPr(session, prNumber, openPrs, options)
+      sessionMatchesPr(session, prNumber, openPrs, {
+        headSha: options.headSha,
+        sessionDetail: sessionId ? sessionDetailsById[sessionId] ?? null : null,
+      })
     );
   });
 }
@@ -379,9 +384,10 @@ export function listWorkersForPr(sessions, prNumber, openPrs = [], options = {})
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = []) {
+export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = [], options = {}) {
   const prList = toArray(openPrs);
-  const workers = listWorkersForPr(sessions, prNumber, prList, { headSha });
+  const sessionDetailsById = options.sessionDetailsById ?? {};
+  const workers = listWorkersForPr(sessions, prNumber, prList, { headSha, sessionDetailsById });
   const explicitOwners = workers.filter((session) =>
     sessionExplicitlyOwnsHead(session, headSha),
   );
@@ -416,7 +422,9 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
   const implicitOwners = workers.filter(
     (session) =>
       !sessionExplicitlyOwnsHead(session, headSha) &&
-      sessionOwnsRunHead(session, prNumber, headSha, prList),
+      sessionOwnsRunHead(session, prNumber, headSha, prList, {
+        sessionDetail: sessionDetailsById[getSessionIdentifier(session) ?? ''] ?? null,
+      }),
   );
   const liveImplicitOwners = implicitOwners.filter((session) =>
     isLiveWorkerSession(session),
@@ -463,14 +471,16 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, openPrs = []) {
+export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, openPrs = [], options = {}) {
   const sessionList = toArray(sessions);
   const prList = toArray(openPrs);
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   const ownerResolution = resolveStrictHeadOwningWorkerSession(
     sessionList,
     prNumber,
     headSha,
     prList,
+    { sessionDetailsById },
   );
 
   if (ownerResolution.failClosed) {
@@ -494,6 +504,7 @@ export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, o
     prNumber,
     headSha,
     prList,
+    { sessionDetailsById },
   );
   return {
     ownerResolution,
@@ -741,6 +752,7 @@ export function planReconcileActions({
   openPrs,
   reviewRuns,
   sessions,
+  sessionDetailsById = {},
   ciChecksByPr,
   requiredCheckNamesByPr,
   requiredCheckLookupFailedByPr,

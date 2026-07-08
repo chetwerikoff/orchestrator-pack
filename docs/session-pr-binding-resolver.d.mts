@@ -48,6 +48,14 @@ export interface PrSessionBindingResolution {
 
 export declare function getSessionIssueNumber(session: AoSession | null | undefined): number;
 export declare function getExplicitSessionPrNumber(session: AoSession | null | undefined): number;
+export declare function sessionDetailFromSessionGetPayload(
+  payload: unknown,
+): { displayName?: string } | null;
+export declare function shouldEnrichSessionDetailFromGet(session: AoSession | null | undefined): boolean;
+export declare function buildSessionDetailsById(
+  sessions: AoSession[],
+  sessionGetsById?: Record<string, unknown>,
+): Record<string, { displayName?: string }>;
 export declare function issueLinkedWorkerBranchLiterals(issueNumber: number): string[];
 export declare function headRefCorrelatesToIssue(
   headRefName: string,

@@ -8,8 +8,11 @@ import {
   DEFER_NO_ISSUE_BINDING,
   headRefCorrelatesToIssue,
   listIssueCorrelatedOpenPrs,
+  buildSessionDetailsById,
   resolvePrOwningWorkerSessionBinding,
   resolveSessionPrBinding,
+  sessionDetailFromSessionGetPayload,
+  shouldEnrichSessionDetailFromGet,
 } from '../docs/session-pr-binding-resolver.mjs';
 import {
   resolveHeadOwningWorkerSessionId,
@@ -304,8 +307,15 @@ describe('session-pr-binding-resolver branch patterns', () => {
 });
 
 describe('ci-failure reaction owner non-null', () => {
-  it('records pending episode when issue-only owner resolves', () => {
-    const sessions = [{ ...issueOnlyListRow, role: 'worker', status: 'working' }];
+  it('records pending episode when head-owning worker resolves', () => {
+    const sessions = [
+      {
+        ...issueOnlyListRow,
+        role: 'worker',
+        status: 'working',
+        ownedHeadSha: headSha,
+      },
+    ];
     const openPrs = [openPr690];
     const records = planCiFailureReactionRecords({
       repo: 'chetwerikoff/orchestrator-pack',
@@ -322,6 +332,42 @@ describe('ci-failure reaction owner non-null', () => {
     expect(records.records).toBeDefined();
     expect(records.records!.length).toBeGreaterThanOrEqual(1);
     expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
+  });
+
+  it('does not record episode for issue-only worker without head evidence', () => {
+    const sessions = [{ ...issueOnlyListRow, role: 'worker', status: 'working' }];
+    const records = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } },
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
+    expect(records.records).toEqual([]);
+  });
+});
+
+describe('session-get displayName enrichment', () => {
+  it('builds sessionDetailsById from ao session get payloads', () => {
+    const getPayload = readCapture('session-get-numeric-displayname.raw.json');
+    expect(sessionDetailFromSessionGetPayload(getPayload)).toEqual({ displayName: '690' });
+    expect(shouldEnrichSessionDetailFromGet(issueOnlyListRow)).toBe(true);
+    const details = buildSessionDetailsById([issueOnlyListRow], {
+      'orchestrator-pack-45': getPayload,
+    });
+    expect(details).toEqual({ 'orchestrator-pack-45': { displayName: '690' } });
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+      headSha,
+      sessionDetail: details['orchestrator-pack-45'],
+    });
+    expect(binding.source).toBe('display_name');
+    expect(binding.prNumber).toBe(690);
   });
 });
 

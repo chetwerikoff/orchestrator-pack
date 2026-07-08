@@ -66,6 +66,62 @@ export function getExplicitSessionPrNumber(session) {
   return parsed > 0 ? parsed : 0;
 }
 
+function getSessionIdentifier(session) {
+  return normalizeString(session?.sessionId ?? session?.id ?? session?.name) || null;
+}
+
+/**
+ * @param {unknown} payload ao session get JSON ({ session: ... } or bare session row)
+ */
+export function sessionDetailFromSessionGetPayload(payload) {
+  const session = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
+  const displayName = normalizeString(session?.displayName);
+  return displayName ? { displayName } : null;
+}
+
+/**
+ * @param {AoSession | null | undefined} session
+ */
+export function shouldEnrichSessionDetailFromGet(session) {
+  if (getExplicitSessionPrNumber(session) > 0) {
+    return false;
+  }
+  const rowDisplay = normalizeString(session?.displayName);
+  if (rowDisplay && /^\d+$/.test(rowDisplay)) {
+    return false;
+  }
+  const role = normalizeString(session?.role).toLowerCase();
+  if (role && role !== 'worker' && role !== 'coding') {
+    return false;
+  }
+  return Boolean(getSessionIdentifier(session));
+}
+
+/**
+ * @param {AoSession[]} sessions
+ * @param {Record<string, unknown>} [sessionGetsById]
+ */
+export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
+  /** @type {Record<string, { displayName?: string }>} */
+  const details = {};
+  for (const session of toArray(sessions)) {
+    const sessionId = getSessionIdentifier(session);
+    if (!sessionId) {
+      continue;
+    }
+    const rowDisplay = normalizeString(session?.displayName);
+    const rowDetail = rowDisplay ? { displayName: rowDisplay } : null;
+    const getDetail = sessionGetsById[sessionId]
+      ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
+      : null;
+    const merged = getDetail ?? rowDetail;
+    if (merged) {
+      details[sessionId] = merged;
+    }
+  }
+  return details;
+}
+
 function getSessionBranch(session) {
   return normalizeString(session?.branch ?? session?.headBranch ?? session?.headRefName);
 }
