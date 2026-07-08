@@ -615,6 +615,62 @@ describe('checkPrScope — implementation', () => {
       reason: 'missing_snapshot',
     });
   });
+
+  it('validates against issue allowed_roots when declaration snapshots are denylisted', () => {
+    const repoRoot = join(tmpdir(), `scope-guard-impl-${randomUUID()}`);
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #678',
+      issueBody: [
+        '```denylist',
+        'docs/declarations/**',
+        '```',
+        '',
+        '```allowed-roots',
+        'scripts/**',
+        '```',
+      ].join('\n'),
+      prPaths: ['scripts/pr-scope-check.ts'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'implementation',
+    });
+    if (result.ok && result.mode === 'implementation') {
+      expect(result.snapshot).toBeUndefined();
+      expect(result.warnings.some((warning) => warning.includes('issue-fence scope'))).toBe(true);
+    }
+  });
+
+  it('rejects denylisted control-artifact paths before skipping them', () => {
+    const repoRoot = join(tmpdir(), `scope-guard-impl-${randomUUID()}`);
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #678',
+      issueBody: [
+        '```denylist',
+        'docs/declarations/**',
+        '```',
+        '',
+        '```allowed-roots',
+        'AGENTS.md',
+        'scripts/**',
+        '```',
+      ].join('\n'),
+      prPaths: ['docs/declarations/678.test.json', 'AGENTS.md'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'scope_violation',
+    });
+    if (!result.ok && result.violations) {
+      expect(result.violations.denied).toContain('docs/declarations/678.test.json');
+    }
+  });
 });
 
 describe('classifySpecDocsPaths — skill markdown boundary', () => {
@@ -691,100 +747,3 @@ describe('resolveLatestCommittedSnapshot', () => {
   });
 });
 
-
-describe('checkPrScope — issue-fence fallback when declaration snapshot is denylisted', () => {
-  const repoRoot = join(tmpdir(), `scope-guard-issue-fence-${randomUUID()}`);
-
-  const issue679Body = [
-    'GitHub Issue: #679',
-    '',
-    '```denylist',
-    'vendor/**',
-    'packages/core/**',
-    '.ao/**',
-    'agent-orchestrator.yaml',
-    'docs/declarations/**',
-    '```',
-    '',
-    '```allowed-roots',
-    'scripts/**',
-    'tests/**',
-    '```',
-  ].join('\n');
-
-  it('passes implementation PRs scoped to issue allowed_roots without a committed declaration snapshot', () => {
-    const result = checkPrScope({
-      repoRoot,
-      prBody: 'Closes #679',
-      issueBody: issue679Body,
-      prPaths: [
-        'scripts/finding-ledger-guard.mjs',
-        'tests/fixtures/finding-ledger/scenario-matrix/echo-rubric.capture.txt',
-      ],
-      degradedMode: false,
-      forkPr: false,
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      mode: 'implementation',
-      issueNumber: 679,
-      checkedPaths: [
-        'scripts/finding-ledger-guard.mjs',
-        'tests/fixtures/finding-ledger/scenario-matrix/echo-rubric.capture.txt',
-      ],
-    });
-    if (result.ok) {
-      expect(result.snapshot).toBeUndefined();
-      expect(result.warnings.join(' ')).toMatch(/docs\/declarations/);
-    }
-  });
-
-  it('allows scope-guard workflow updates when the PR also updates the scope checker', () => {
-    const result = checkPrScope({
-      repoRoot,
-      prBody: 'Closes #679',
-      issueBody: issue679Body,
-      prPaths: [
-        'scripts/pr-scope-check.ts',
-        'scripts/pr-scope-check.ps1',
-        '.github/workflows/scope-guard.yml',
-      ],
-      degradedMode: false,
-      forkPr: false,
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      mode: 'implementation',
-      issueNumber: 679,
-      checkedPaths: [
-        'scripts/pr-scope-check.ts',
-        'scripts/pr-scope-check.ps1',
-        '.github/workflows/scope-guard.yml',
-      ],
-    });
-  });
-
-    it('fails when a denylisted control-artifact path is present in the PR diff', () => {
-    const result = checkPrScope({
-      repoRoot,
-      prBody: 'Closes #679',
-      issueBody: issue679Body,
-      prPaths: [
-        'scripts/finding-ledger-guard.mjs',
-        'docs/declarations/679.orchestrator-pack-41.json',
-      ],
-      degradedMode: false,
-      forkPr: false,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'scope_violation',
-    });
-    if (!result.ok) {
-      expect(result.violations?.denied).toContain('docs/declarations/679.orchestrator-pack-41.json');
-    }
-  });
-});

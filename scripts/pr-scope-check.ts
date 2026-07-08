@@ -6,19 +6,19 @@ import {
   validateDeclarationSnapshot,
   type DeclarationSnapshot,
 } from '@orchestrator-pack/shared/lib/declaration_schema.js';
-import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
+import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
+import {
+  parseIssueBody,
+  type IssueConstraints,
+} from '@orchestrator-pack/shared/lib/issue_parser.js';
 import { classifyScopedPaths } from '../plugins/ao-scope-guard/lib/check.js';
+import { pathMatchesAnyPattern } from '../plugins/ao-task-declaration/lib/glob_match.js';
 import { partitionControlArtifacts } from '../plugins/ao-scope-guard/lib/control_artifacts.js';
 import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.js';
-import {
-  globPatternsOverlap,
-  pathMatchesAnyPattern,
-} from '../plugins/ao-task-declaration/lib/glob_match.js';
 import {
   normalizeIssueConstraints,
   validateDeclaredScope,
 } from '../plugins/ao-task-declaration/lib/validate.js';
-import type { IssueConstraints } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   classifyNoCeremonyPaths,
   classifySpecDocsPaths,
@@ -37,6 +37,58 @@ import {
 export { resolveIssueNumberForFetch } from './pr-scope-contract.js';
 
 const SNAPSHOT_DIR = join('docs', 'declarations');
+const DECLARATION_SNAPSHOT_SAMPLE = join('docs', 'declarations', '0.sample.json');
+
+function issueBlocksCommittedDeclarationSnapshots(constraints: IssueConstraints): boolean {
+  return pathMatchesAnyPattern(DECLARATION_SNAPSHOT_SAMPLE, constraints.denylist);
+}
+
+function splitIssueAllowedRootsToDeclaredScope(allowedRoots: string[]): {
+  declared_paths: string[];
+  declared_globs: string[];
+} {
+  const declared_paths: string[] = [];
+  const declared_globs: string[] = [];
+
+  for (const root of allowedRoots) {
+    if (root.includes('*')) {
+      declared_globs.push(root);
+    } else {
+      declared_paths.push(root);
+    }
+  }
+
+  return { declared_paths, declared_globs };
+}
+
+function classifyDenylistedPrPaths(
+  prPaths: string[],
+  denylist: string[],
+): {
+  denied: string[];
+  invalidPaths: Array<{ path: string; reason: string }>;
+} {
+  const denied: string[] = [];
+  const invalidPaths: Array<{ path: string; reason: string }> = [];
+
+  if (denylist.length === 0) {
+    return { denied, invalidPaths };
+  }
+
+  for (const rawPath of prPaths) {
+    const normalized = normalizePath(rawPath);
+    if (!normalized.ok) {
+      invalidPaths.push({ path: rawPath, reason: normalized.reason });
+      continue;
+    }
+
+    if (pathMatchesAnyPattern(normalized.path, denylist)) {
+      denied.push(normalized.path);
+    }
+  }
+
+  return { denied, invalidPaths };
+}
 
 /** Re-export for backward compatibility. */
 export {
@@ -267,15 +319,54 @@ export function resolveLatestCommittedSnapshot(
   return { ok: true, snapshot: head.snapshot };
 }
 
-function checkPrPathsAgainstSnapshot(
+function checkPrPathsAgainstDeclaredScope(
   prPaths: string[],
-  snapshot: DeclarationSnapshot,
+  options: {
+    declaredPaths: string[];
+    declaredGlobs: string[];
+    denylist: string[];
+    outOfScopeMessage: string;
+  },
 ): PrPathSnapshotCheckResult {
+  const denylistPrecheck = classifyDenylistedPrPaths(prPaths, options.denylist);
   const { control, scoped } = partitionControlArtifacts(prPaths);
-  const { outOfScope, invalidPaths, checkedPaths } = classifyScopedPaths(scoped, {
-    denylist: [],
-    declaredPaths: snapshot.declared_paths,
-    declaredGlobs: snapshot.declared_globs,
+
+  if (denylistPrecheck.invalidPaths.length > 0) {
+    return {
+      ok: false,
+      reason: 'invalid_path',
+      message: 'one or more PR diff paths failed normalization',
+      violations: {
+        outOfScope: [],
+        denied: denylistPrecheck.denied,
+        declarationErrors: [],
+        invalidPaths: denylistPrecheck.invalidPaths,
+      },
+      checkedPaths: [],
+      skippedControlArtifacts: control,
+    };
+  }
+
+  if (denylistPrecheck.denied.length > 0) {
+    return {
+      ok: false,
+      reason: 'scope_violation',
+      message: 'PR diff includes denylisted paths from linked issue constraints',
+      violations: {
+        outOfScope: [],
+        denied: denylistPrecheck.denied,
+        declarationErrors: [],
+        invalidPaths: [],
+      },
+      checkedPaths: [],
+      skippedControlArtifacts: control,
+    };
+  }
+
+  const { outOfScope, denied, invalidPaths, checkedPaths } = classifyScopedPaths(scoped, {
+    denylist: options.denylist,
+    declaredPaths: options.declaredPaths,
+    declaredGlobs: options.declaredGlobs,
   });
 
   if (invalidPaths.length > 0) {
@@ -283,7 +374,18 @@ function checkPrPathsAgainstSnapshot(
       ok: false,
       reason: 'invalid_path',
       message: 'one or more PR diff paths failed normalization',
-      violations: { outOfScope, denied: [], declarationErrors: [], invalidPaths },
+      violations: { outOfScope, denied, declarationErrors: [], invalidPaths },
+      checkedPaths,
+      skippedControlArtifacts: control,
+    };
+  }
+
+  if (denied.length > 0) {
+    return {
+      ok: false,
+      reason: 'scope_violation',
+      message: 'PR diff includes denylisted paths from linked issue constraints',
+      violations: { outOfScope, denied, declarationErrors: [], invalidPaths: [] },
       checkedPaths,
       skippedControlArtifacts: control,
     };
@@ -293,7 +395,7 @@ function checkPrPathsAgainstSnapshot(
     return {
       ok: false,
       reason: 'scope_violation',
-      message: 'PR diff includes paths outside the committed declaration snapshot',
+      message: options.outOfScopeMessage,
       violations: { outOfScope, denied: [], declarationErrors: [], invalidPaths: [] },
       checkedPaths,
       skippedControlArtifacts: control,
@@ -301,6 +403,19 @@ function checkPrPathsAgainstSnapshot(
   }
 
   return { ok: true, checkedPaths, skippedControlArtifacts: control };
+}
+
+function checkPrPathsAgainstSnapshot(
+  prPaths: string[],
+  snapshot: DeclarationSnapshot,
+  issueDenylist: string[] = [],
+): PrPathSnapshotCheckResult {
+  return checkPrPathsAgainstDeclaredScope(prPaths, {
+    declaredPaths: snapshot.declared_paths,
+    declaredGlobs: snapshot.declared_globs,
+    denylist: issueDenylist,
+    outOfScopeMessage: 'PR diff includes paths outside the committed declaration snapshot',
+  });
 }
 
 function checkNoCeremonyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
@@ -424,111 +539,6 @@ function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   };
 }
 
-
-const DECLARATION_CONTROL_GLOB = 'docs/declarations/**';
-const SCOPE_GUARD_WORKFLOW_PATH = '.github/workflows/scope-guard.yml';
-
-function prUpdatesScopeChecker(prPaths: string[]): boolean {
-  return prPaths.some((path) =>
-    /^scripts\/pr-scope-check\.(ts|ps1)$/.test(path.replace(/\\/g, '/')),
-  );
-}
-
-function effectiveIssueFenceAllowedRoots(
-  constraints: IssueConstraints,
-  prPaths: string[],
-): string[] {
-  const roots = [...(constraints.allowed_roots ?? [])];
-  if (prUpdatesScopeChecker(prPaths)) {
-    roots.push(SCOPE_GUARD_WORKFLOW_PATH);
-  }
-  return roots;
-}
-
-function issueDenylistBlocksCommittedDeclarationSnapshot(
-  denylist: string[],
-): boolean {
-  return denylist.some((denied) => globPatternsOverlap(DECLARATION_CONTROL_GLOB, denied));
-}
-
-function checkImplementationPrScopeWithIssueFences(
-  input: PrScopeCheckInput,
-  issueNumber: number,
-  constraints: IssueConstraints,
-): PrScopeCheckResult {
-  const { control, scoped } = partitionControlArtifacts(input.prPaths);
-  const deniedControl = control.filter((path) =>
-    pathMatchesAnyPattern(path, constraints.denylist),
-  );
-  if (deniedControl.length > 0) {
-    return {
-      ok: false,
-      reason: 'scope_violation',
-      message: 'PR diff includes denylisted control-artifact paths',
-      violations: {
-        outOfScope: [],
-        denied: deniedControl,
-        declarationErrors: [],
-        invalidPaths: [],
-      },
-    };
-  }
-
-  if (!constraints.allowed_roots?.length) {
-    return {
-      ok: false,
-      reason: 'missing_snapshot',
-      message: `no declaration snapshots found under docs/declarations/${issueNumber}.*.json`,
-    };
-  }
-
-  const pathCheck = classifyScopedPaths(scoped, {
-    denylist: constraints.denylist,
-    declaredPaths: [],
-    declaredGlobs: effectiveIssueFenceAllowedRoots(constraints, input.prPaths),
-  });
-
-  if (pathCheck.invalidPaths.length > 0) {
-    return {
-      ok: false,
-      reason: 'invalid_path',
-      message: 'one or more PR diff paths failed normalization',
-      violations: {
-        outOfScope: pathCheck.outOfScope,
-        denied: pathCheck.denied,
-        declarationErrors: [],
-        invalidPaths: pathCheck.invalidPaths,
-      },
-    };
-  }
-
-  if (pathCheck.outOfScope.length > 0 || pathCheck.denied.length > 0) {
-    return {
-      ok: false,
-      reason: 'scope_violation',
-      message: 'PR diff includes paths outside issue allowed_roots or on issue denylist',
-      violations: {
-        outOfScope: pathCheck.outOfScope,
-        denied: pathCheck.denied,
-        declarationErrors: [],
-        invalidPaths: [],
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    mode: 'implementation',
-    issueNumber,
-    checkedPaths: pathCheck.checkedPaths,
-    skippedControlArtifacts: control,
-    unverifiedIssueConstraints: false,
-    warnings: [
-      'issue denylist includes docs/declarations/** — validated PR diff against issue allowed_roots without a committed declaration snapshot',
-    ],
-  };
-}
-
 function checkImplementationPrScope(
   input: PrScopeCheckInput,
   issueNumber: number,
@@ -536,38 +546,50 @@ function checkImplementationPrScope(
   const snapshotResult = resolveLatestCommittedSnapshot(input.repoRoot, issueNumber);
   const warnings: string[] = [];
   let unverifiedIssueConstraints = false;
+  let useIssueFenceScope = false;
+  let snapshot: DeclarationSnapshot | undefined;
+  let issueFenceConstraints: ReturnType<typeof normalizeIssueConstraints> | undefined;
 
-  if (!snapshotResult.ok) {
-    if (
-      snapshotResult.reason === 'missing_snapshot' &&
-      input.issueBody !== null &&
-      !input.degradedMode
-    ) {
-      let constraints;
-      try {
-        constraints = normalizeIssueConstraints(parseIssueBody(input.issueBody));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          ok: false,
-          reason: 'issue_parse_error',
-          message: `failed to parse linked issue constraints: ${message}`,
-        };
-      }
-
-      if (issueDenylistBlocksCommittedDeclarationSnapshot(constraints.denylist)) {
-        return checkImplementationPrScopeWithIssueFences(input, issueNumber, constraints);
-      }
+  if (snapshotResult.ok) {
+    snapshot = snapshotResult.snapshot;
+  } else if (
+    snapshotResult.reason === 'missing_snapshot' &&
+    input.issueBody !== null &&
+    !input.degradedMode
+  ) {
+    try {
+      issueFenceConstraints = normalizeIssueConstraints(parseIssueBody(input.issueBody));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        reason: 'issue_parse_error',
+        message: `failed to parse linked issue constraints: ${message}`,
+      };
     }
 
+    if (
+      issueFenceConstraints.allowed_roots !== undefined &&
+      issueBlocksCommittedDeclarationSnapshots(issueFenceConstraints)
+    ) {
+      useIssueFenceScope = true;
+      warnings.push(
+        'issue-fence scope: linked issue denylist blocks docs/declarations/**; validating PR diff against issue allowed_roots instead of a committed snapshot',
+      );
+    } else {
+      return {
+        ok: false,
+        reason: snapshotResult.reason,
+        message: snapshotResult.message,
+      };
+    }
+  } else {
     return {
       ok: false,
       reason: snapshotResult.reason,
       message: snapshotResult.message,
     };
   }
-
-  const snapshot = snapshotResult.snapshot;
 
   if (input.issueBody === null) {
     if (input.forkPr && !input.degradedMode) {
@@ -591,10 +613,13 @@ function checkImplementationPrScope(
         message: 'linked issue body could not be read',
       };
     }
-  } else if (!input.degradedMode) {
-    let constraints;
+  }
+
+  let issueConstraints: ReturnType<typeof normalizeIssueConstraints> | undefined;
+  if (input.issueBody !== null && !input.degradedMode) {
     try {
-      constraints = normalizeIssueConstraints(parseIssueBody(input.issueBody));
+      issueConstraints =
+        issueFenceConstraints ?? normalizeIssueConstraints(parseIssueBody(input.issueBody));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
@@ -604,35 +629,51 @@ function checkImplementationPrScope(
       };
     }
 
-    const declarationCheck = validateDeclaredScope(
-      {
-        declared_paths: snapshot.declared_paths,
-        declared_globs: snapshot.declared_globs,
-      },
-      constraints,
-    );
-
-    if (!declarationCheck.ok) {
-      return {
-        ok: false,
-        reason: 'scope_violation',
-        message: 'committed declaration snapshot violates linked issue constraints',
-        violations: {
-          outOfScope: [],
-          denied: [],
-          declarationErrors: declarationCheck.errors,
-          invalidPaths: [],
+    if (!useIssueFenceScope) {
+      const declarationCheck = validateDeclaredScope(
+        {
+          declared_paths: snapshot!.declared_paths,
+          declared_globs: snapshot!.declared_globs,
         },
-      };
+        issueConstraints,
+      );
+
+      if (!declarationCheck.ok) {
+        return {
+          ok: false,
+          reason: 'scope_violation',
+          message: 'committed declaration snapshot violates linked issue constraints',
+          violations: {
+            outOfScope: [],
+            denied: [],
+            declarationErrors: declarationCheck.errors,
+            invalidPaths: [],
+          },
+        };
+      }
     }
-  } else {
+  } else if (input.degradedMode) {
     unverifiedIssueConstraints = true;
     warnings.push(
       'degraded mode: denylist and allowed_roots constraints were not verified against the linked issue body',
     );
   }
 
-  const pathCheck = checkPrPathsAgainstSnapshot(input.prPaths, snapshot);
+  const issueDenylist = issueConstraints?.denylist ?? [];
+  const pathCheck = useIssueFenceScope
+    ? (() => {
+        const { declared_paths, declared_globs } = splitIssueAllowedRootsToDeclaredScope(
+          issueFenceConstraints!.allowed_roots!,
+        );
+        return checkPrPathsAgainstDeclaredScope(input.prPaths, {
+          declaredPaths: declared_paths,
+          declaredGlobs: declared_globs,
+          denylist: issueDenylist,
+          outOfScopeMessage:
+            'PR diff includes paths outside linked issue allowed_roots constraints',
+        });
+      })()
+    : checkPrPathsAgainstSnapshot(input.prPaths, snapshot!, issueDenylist);
   if (!pathCheck.ok) {
     return {
       ok: false,
@@ -710,9 +751,11 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     const lines = [
       '## Scope guard — passed',
       '',
-      result.snapshot
-        ? `Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``
-        : 'Validated against linked issue allowed_roots (no committed declaration snapshot; issue denylist blocks docs/declarations/**)',
+      ...(result.snapshot
+        ? [
+            `Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``,
+          ]
+        : ['Active snapshot: _none (issue-fence scope via allowed_roots)_']),
       `Checked paths: ${result.checkedPaths.length}`,
     ];
     if (result.skippedControlArtifacts.length > 0) {
