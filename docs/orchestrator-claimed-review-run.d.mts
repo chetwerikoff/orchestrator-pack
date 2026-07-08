@@ -35,6 +35,9 @@ export interface TurnGateResult {
   sessionId?: string;
   coverage?: CoverageVerdict;
   escalationReason?: string;
+  capCycleState?: Record<string, unknown>;
+  mergeEligible?: boolean;
+  atCapRecord?: Record<string, unknown>;
 }
 
 export interface BoundaryVerdict {
@@ -81,6 +84,10 @@ export declare function evaluateOrchestratorTurnGate(input: {
   provenanceAutonomous?: boolean;
   transportFailure?: Record<string, unknown>;
   targetStateDenial?: Record<string, unknown>;
+  capCycleState?: Record<string, unknown>;
+  issueBody?: string | null;
+  mergedPrNumbers?: number[];
+  nowMs?: number;
 }): TurnGateResult;
 export declare function containsRawReviewRunInvocation(commandLine: string): boolean;
 export declare function isClaimedReviewRunParentCommandLine(commandLine: string): boolean;

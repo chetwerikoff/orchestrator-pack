@@ -1,0 +1,8 @@
+{
+  "sourceCommand": "GET /api/v1/projects/orchestrator-pack/config",
+  "toolVersion": "ao 0.10.2 daemon HTTP",
+  "capturedAt": "2026-07-08T07:33:30.231Z",
+  "exitStatus": 405,
+  "context": "GET on /api/v1/projects/{id}/config returns METHOD_NOT_ALLOWED on AO 0.10.2 (Issue #682).",
+  "scrubLog": []
+}

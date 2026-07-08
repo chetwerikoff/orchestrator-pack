@@ -3035,31 +3035,6 @@
       }
     },
     {
-      "rowId": "site-scripts-invoke-pack-review-ps1-66",
-      "caller": {
-        "file": "scripts/invoke-pack-review.ps1",
-        "line": 66
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:7773220fc678b59abb6fc7bc704d3dcbb515b69cb8940b68e65be109b58db190",
-      "discoveryMatch": {
-        "file": "scripts/invoke-pack-review.ps1",
-        "line": 66,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
       "rowId": "site-scripts-invoke-reviewer-contract-mapping-ps1-67",
       "caller": {
         "file": "scripts/invoke-reviewer-contract-mapping.ps1",
@@ -3205,6 +3180,32 @@
       "discoveryMatch": {
         "file": "scripts/invoke-rtk-discover-inventory.ps1",
         "line": 26,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-invoke-scripted-review-post-submit-delivery-ps1-19",
+      "caller": {
+        "file": "scripts/invoke-scripted-review-post-submit-delivery.ps1",
+        "line": 19
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:8ab19c1355954d28bd27f3f66cc8eac71846d4987eda841a9b9e665db215eee8",
+      "discoveryMatch": {
+        "file": "scripts/invoke-scripted-review-post-submit-delivery.ps1",
+        "line": 19,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile"
@@ -3610,10 +3611,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-140",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-156",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 140
+        "line": 156
       },
       "callee": {
         "kind": "other-external",
@@ -3625,20 +3626,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:462fe7370006ce0eebd520bd450d8ec676caf71113210a5358ba784ae870d83d",
+      "hashPinnedSourceHash": "sha256:327a351ee5b07b4ce83db1abb6584d2a7844e4624b992829ce1dbb8e3463ea07",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 140,
+        "line": 156,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-149",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-168",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 149
+        "line": 168
       },
       "callee": {
         "kind": "other-external",
@@ -3653,17 +3654,17 @@
       "hashPinnedSourceHash": "sha256:e76075c1f59674307a53159c94c19a231eb483f336799311a04cc951e9404410",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 149,
+        "line": 168,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-160",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-179",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 160
+        "line": 179
       },
       "callee": {
         "kind": "other-external",
@@ -3678,17 +3679,17 @@
       "hashPinnedSourceHash": "sha256:3412cd762d0aa920862fbf6fc45f0beafdaaff3d50c7df8a04df2535f73924aa",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 160,
+        "line": 179,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-184",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-203",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 184
+        "line": 203
       },
       "callee": {
         "kind": "other-external",
@@ -3703,17 +3704,17 @@
       "hashPinnedSourceHash": "sha256:b44834d58fbce466bcc2386106d43cffa0d088392463470ca07be5fb4105f5c6",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 184,
+        "line": 203,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-198",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-217",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 198
+        "line": 217
       },
       "callee": {
         "kind": "other-external",
@@ -3728,17 +3729,17 @@
       "hashPinnedSourceHash": "sha256:b30d4fe94ab8a0236d334a5d418dadadee68efe3ee88caf6e487e87db19015d0",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 198,
+        "line": 217,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-201",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-220",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 201
+        "line": 220
       },
       "callee": {
         "kind": "other-external",
@@ -3753,17 +3754,17 @@
       "hashPinnedSourceHash": "sha256:c7e118934f85de597fefbd2963546c3ac969a77f9bfdc5180ec15efb5facf87b",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 201,
+        "line": 220,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-226",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-245",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 226
+        "line": 245
       },
       "callee": {
         "kind": "other-external",
@@ -3778,17 +3779,17 @@
       "hashPinnedSourceHash": "sha256:dbc0a067667907c0c0eb19cebea374022edf7bae924922267274cc63aadc704d",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 226,
+        "line": 245,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-244",
+      "rowId": "site-scripts-lib-Invoke-OrchestratorClaimedReviewRun-ps1-263",
       "caller": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 244
+        "line": 263
       },
       "callee": {
         "kind": "other-external",
@@ -3800,10 +3801,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:9e4db5cd597a427dc7d8191855badfdaac225170c194ff6771bc9c4d940415c6",
+      "hashPinnedSourceHash": "sha256:82094cf74188aead631a2c776f26c192b3535dbdb0dd82f810d11cc2c7540626",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1",
-        "line": 244,
+        "line": 263,
         "patternIds": [
           "ps-call-op"
         ]
@@ -4510,10 +4511,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-173",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-174",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 173
+        "line": 174
       },
       "callee": {
         "kind": "ao",
@@ -4524,17 +4525,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 173,
+        "line": 174,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-178",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-179",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 178
+        "line": 179
       },
       "callee": {
         "kind": "ao",
@@ -4545,17 +4546,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 178,
+        "line": 179,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-227",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-246",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 227
+        "line": 246
       },
       "callee": {
         "kind": "ao",
@@ -4566,17 +4567,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 227,
+        "line": 246,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-243",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-262",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 243
+        "line": 262
       },
       "callee": {
         "kind": "ao",
@@ -4587,17 +4588,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 243,
+        "line": 262,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-249",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-268",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 249
+        "line": 268
       },
       "callee": {
         "kind": "ao",
@@ -4608,17 +4609,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 249,
+        "line": 268,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-259",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-278",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 259
+        "line": 278
       },
       "callee": {
         "kind": "ao",
@@ -4629,17 +4630,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 259,
+        "line": 278,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-281",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-300",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 281
+        "line": 300
       },
       "callee": {
         "kind": "ao",
@@ -4650,17 +4651,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 281,
+        "line": 300,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-298",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-317",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 298
+        "line": 317
       },
       "callee": {
         "kind": "ao",
@@ -4671,17 +4672,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 298,
+        "line": 317,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-320",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-339",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 320
+        "line": 339
       },
       "callee": {
         "kind": "ao",
@@ -4692,17 +4693,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 320,
+        "line": 339,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-328",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-347",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 328
+        "line": 347
       },
       "callee": {
         "kind": "ao",
@@ -4713,17 +4714,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 328,
+        "line": 347,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-335",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-354",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 335
+        "line": 354
       },
       "callee": {
         "kind": "ao",
@@ -4734,17 +4735,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 335,
+        "line": 354,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-361",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-380",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 361
+        "line": 380
       },
       "callee": {
         "kind": "ao",
@@ -4755,17 +4756,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 361,
+        "line": 380,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-453",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-472",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 453
+        "line": 472
       },
       "callee": {
         "kind": "ao",
@@ -4776,17 +4777,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 453,
+        "line": 472,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-465",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-484",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 465
+        "line": 484
       },
       "callee": {
         "kind": "ao",
@@ -4797,17 +4798,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 465,
+        "line": 484,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-473",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-492",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 473
+        "line": 492
       },
       "callee": {
         "kind": "ao",
@@ -4818,17 +4819,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 473,
+        "line": 492,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-497",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-516",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 497
+        "line": 516
       },
       "callee": {
         "kind": "ao",
@@ -4839,17 +4840,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 497,
+        "line": 516,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-508",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-527",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 508
+        "line": 527
       },
       "callee": {
         "kind": "ao",
@@ -4860,17 +4861,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 508,
+        "line": 527,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-515",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-534",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 515
+        "line": 534
       },
       "callee": {
         "kind": "ao",
@@ -4881,17 +4882,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 515,
+        "line": 534,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-520",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-539",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 520
+        "line": 539
       },
       "callee": {
         "kind": "ao",
@@ -4902,17 +4903,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 520,
+        "line": 539,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-576",
+      "rowId": "site-scripts-lib-Invoke-ReviewWakeTrigger-ps1-595",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 576
+        "line": 595
       },
       "callee": {
         "kind": "ao",
@@ -4923,7 +4924,7 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
-        "line": 576,
+        "line": 595,
         "patternIds": [
           "ps-call-op"
         ]
@@ -4949,6 +4950,31 @@
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewerWorkspacePreflight.ps1",
         "line": 19,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryEscalation-ps1-31",
+      "caller": {
+        "file": "scripts/lib/Invoke-ScriptedReviewDeliveryEscalation.ps1",
+        "line": 31
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:fd69cb90575daed6d84a6f357c0d7332fdf2799ec3308445c318b567e138e51d",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-ScriptedReviewDeliveryEscalation.ps1",
+        "line": 31,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5704,6 +5730,33 @@
         "line": 526,
         "patternIds": [
           "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Review-CycleCap-ps1-136",
+      "caller": {
+        "file": "scripts/lib/Review-CycleCap.ps1",
+        "line": 136
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:869e74b1ee9daec7853a9725ce92ca09970641f9dbdd30e2e7f870842c7f8cd1",
+      "discoveryMatch": {
+        "file": "scripts/lib/Review-CycleCap.ps1",
+        "line": 136,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile",
+          "call-pwsh"
         ]
       }
     },
@@ -7651,6 +7704,32 @@
       }
     },
     {
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-189",
+      "caller": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 189
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:12be811369828c183334c390353fa1c95e8adb3ed9bc36dfadc1f38b449cb98a",
+      "discoveryMatch": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 189,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-set-pack-reviewer-ps1-50",
       "caller": {
         "file": "scripts/set-pack-reviewer.ps1",
@@ -8528,10 +8607,10 @@
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-721",
+      "rowId": "site-scripts-verify-ps1-723",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 721
+        "line": 723
       },
       "callee": {
         "kind": "other-external",
@@ -8543,10 +8622,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:c51709906a6fc722f4e719048165217c70d972940a7a83fde9f8266923123b4d",
+      "hashPinnedSourceHash": "sha256:421f70496a0a17ff4ed94a33d38050711df82829eba4069485f956860c68c2c8",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 721,
+        "line": 723,
         "patternIds": [
           "ps-call-op"
         ]
@@ -8568,7 +8647,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:18f40178ca75d6780e1df694b00e0068093d082def785724e34a2b9b5c11161c",
+      "hashPinnedSourceHash": "sha256:c51709906a6fc722f4e719048165217c70d972940a7a83fde9f8266923123b4d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 739,
@@ -8593,7 +8672,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:17883e9e3a6243046cfea76f91c2a97a71fe3a739ccbca372407b3d15070da62",
+      "hashPinnedSourceHash": "sha256:18f40178ca75d6780e1df694b00e0068093d082def785724e34a2b9b5c11161c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 757,
@@ -8603,10 +8682,60 @@
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-775",
+      "rowId": "site-scripts-verify-ps1-774",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 775
+        "line": 774
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:83b05fd76bbb675d6d423dd16894417155d5a99e1555d575c57d7a8d3355284d",
+      "discoveryMatch": {
+        "file": "scripts/verify.ps1",
+        "line": 774,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-verify-ps1-792",
+      "caller": {
+        "file": "scripts/verify.ps1",
+        "line": 792
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:17883e9e3a6243046cfea76f91c2a97a71fe3a739ccbca372407b3d15070da62",
+      "discoveryMatch": {
+        "file": "scripts/verify.ps1",
+        "line": 792,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-verify-ps1-810",
+      "caller": {
+        "file": "scripts/verify.ps1",
+        "line": 810
       },
       "callee": {
         "kind": "other-external",
@@ -8621,17 +8750,17 @@
       "hashPinnedSourceHash": "sha256:5c9ea9596785f7d17b3bc03e0dce9404bec3cb9b8cc45d312bd2916fd673954c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 775,
+        "line": 810,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-793",
+      "rowId": "site-scripts-verify-ps1-828",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 793
+        "line": 828
       },
       "callee": {
         "kind": "other-external",
@@ -8646,17 +8775,17 @@
       "hashPinnedSourceHash": "sha256:d35073a793640191993e504b0530320dd9e4a1d979055f1553a3a2a230068ac7",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 793,
+        "line": 828,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-802",
+      "rowId": "site-scripts-verify-ps1-837",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 802
+        "line": 837
       },
       "callee": {
         "kind": "other-external",
@@ -8671,17 +8800,17 @@
       "hashPinnedSourceHash": "sha256:6af46ae134cc9fdb089705e197012b440583a3bdfa641cc43649a3587322514d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 802,
+        "line": 837,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-821",
+      "rowId": "site-scripts-verify-ps1-856",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 821
+        "line": 856
       },
       "callee": {
         "kind": "other-external",
@@ -8696,17 +8825,17 @@
       "hashPinnedSourceHash": "sha256:20518f46428fb28534401d0e723e2168d1047a6d001972f79ff62dd266c6ede8",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 821,
+        "line": 856,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-839",
+      "rowId": "site-scripts-verify-ps1-874",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 839
+        "line": 874
       },
       "callee": {
         "kind": "other-external",
@@ -8721,17 +8850,17 @@
       "hashPinnedSourceHash": "sha256:72fdeeb1b74823b238e7a1c389042266519c8652405d5b171ae61d2747ab0cc5",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 839,
+        "line": 874,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-857",
+      "rowId": "site-scripts-verify-ps1-892",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 857
+        "line": 892
       },
       "callee": {
         "kind": "other-external",
@@ -8746,17 +8875,17 @@
       "hashPinnedSourceHash": "sha256:a5d5fd486f961d065db2a7520098a71f0d2f9ee4e91fcd75a34de15341a7e2a5",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 857,
+        "line": 892,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-875",
+      "rowId": "site-scripts-verify-ps1-910",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 875
+        "line": 910
       },
       "callee": {
         "kind": "other-external",
@@ -8771,17 +8900,17 @@
       "hashPinnedSourceHash": "sha256:8e4484d9ecb82d5c623e1f7edf8eb05e5a143ea0a517534bf21892351888c316",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 875,
+        "line": 910,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-893",
+      "rowId": "site-scripts-verify-ps1-928",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 893
+        "line": 928
       },
       "callee": {
         "kind": "other-external",
@@ -8796,17 +8925,17 @@
       "hashPinnedSourceHash": "sha256:1d337fad39e2fe1ec509e6b6c09cf33a952cd0442d7981ec5b3fdcf0adc56a40",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 893,
+        "line": 928,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-911",
+      "rowId": "site-scripts-verify-ps1-946",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 911
+        "line": 946
       },
       "callee": {
         "kind": "other-external",
@@ -8821,17 +8950,17 @@
       "hashPinnedSourceHash": "sha256:a490b3b05d112d53633ead2e24ac992f5b4c63b8cb4737fe2fad7a28af90aeda",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 911,
+        "line": 946,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-929",
+      "rowId": "site-scripts-verify-ps1-964",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 929
+        "line": 964
       },
       "callee": {
         "kind": "other-external",
@@ -8846,17 +8975,17 @@
       "hashPinnedSourceHash": "sha256:1ef4c467770792a6676abc806f17a424c0b16f06b9653544dfda805fb3859f9a",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 929,
+        "line": 964,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-947",
+      "rowId": "site-scripts-verify-ps1-982",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 947
+        "line": 982
       },
       "callee": {
         "kind": "other-external",
@@ -8871,17 +9000,17 @@
       "hashPinnedSourceHash": "sha256:cca022249a05fdfa50f1c60398cb0634ecf0a193fcf4aacc98a80ff9029a9644",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 947,
+        "line": 982,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-967",
+      "rowId": "site-scripts-verify-ps1-1002",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 967
+        "line": 1002
       },
       "callee": {
         "kind": "other-external",
@@ -8896,17 +9025,17 @@
       "hashPinnedSourceHash": "sha256:3e9f6cf310ea0ca762b0b0d09b2379a5a751466d5591b01bd00efb07cac38a1e",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 967,
+        "line": 1002,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-976",
+      "rowId": "site-scripts-verify-ps1-1011",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 976
+        "line": 1011
       },
       "callee": {
         "kind": "other-external",
@@ -8921,17 +9050,17 @@
       "hashPinnedSourceHash": "sha256:75884e7178d89ddc21c448d6c92610dae8d4e68c2cfe5e9bab96b44c007e0508",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 976,
+        "line": 1011,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1004",
+      "rowId": "site-scripts-verify-ps1-1039",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1004
+        "line": 1039
       },
       "callee": {
         "kind": "other-external",
@@ -8946,17 +9075,17 @@
       "hashPinnedSourceHash": "sha256:5925b70fdaea5ba0c24eb1487e3dda5f180538025f8d14dd2ebfe53f3d00fda7",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1004,
+        "line": 1039,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1007",
+      "rowId": "site-scripts-verify-ps1-1042",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1007
+        "line": 1042
       },
       "callee": {
         "kind": "other-external",
@@ -8971,17 +9100,17 @@
       "hashPinnedSourceHash": "sha256:73ffb603bfac959019232d051636221608f405f1a963480945637f73c74a9da5",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1007,
+        "line": 1042,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1019",
+      "rowId": "site-scripts-verify-ps1-1054",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1019
+        "line": 1054
       },
       "callee": {
         "kind": "other-external",
@@ -8996,17 +9125,17 @@
       "hashPinnedSourceHash": "sha256:26b67f1de5c1fb02471febf45584f6ec2340c24d65a74ea2bd5ad41222f8a11e",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1019,
+        "line": 1054,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1048",
+      "rowId": "site-scripts-verify-ps1-1083",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1048
+        "line": 1083
       },
       "callee": {
         "kind": "other-external",
@@ -9021,17 +9150,17 @@
       "hashPinnedSourceHash": "sha256:2e8ebe85b7b263de4d2f7626752944812f0bff362fa6293cac88f76ce2e0d13d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1048,
+        "line": 1083,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1051",
+      "rowId": "site-scripts-verify-ps1-1086",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1051
+        "line": 1086
       },
       "callee": {
         "kind": "other-external",
@@ -9046,17 +9175,17 @@
       "hashPinnedSourceHash": "sha256:d2a39df1b90c52cdb33adedc2b4278b45bf66765273cf547a3be3655cf0e0be0",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1051,
+        "line": 1086,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1071",
+      "rowId": "site-scripts-verify-ps1-1106",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1071
+        "line": 1106
       },
       "callee": {
         "kind": "other-external",
@@ -9071,17 +9200,17 @@
       "hashPinnedSourceHash": "sha256:1d5431260087a5b0af527073939ed59a79d4ff0ff95bdde6590d3a2ef3c72284",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1071,
+        "line": 1106,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1089",
+      "rowId": "site-scripts-verify-ps1-1124",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1089
+        "line": 1124
       },
       "callee": {
         "kind": "other-external",
@@ -9096,17 +9225,17 @@
       "hashPinnedSourceHash": "sha256:405f77e79db692677dc976e5e5fcb2f61df16a9e4c29614b0abccf27b4e0a99c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1089,
+        "line": 1124,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1105",
+      "rowId": "site-scripts-verify-ps1-1140",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1105
+        "line": 1140
       },
       "callee": {
         "kind": "other-external",
@@ -9121,17 +9250,17 @@
       "hashPinnedSourceHash": "sha256:1170bdf81c6f85de23a6af4e72c1e8800e4050d5a5ccc48356b84d2ac779ec37",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1105,
+        "line": 1140,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1123",
+      "rowId": "site-scripts-verify-ps1-1158",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1123
+        "line": 1158
       },
       "callee": {
         "kind": "other-external",
@@ -9146,17 +9275,17 @@
       "hashPinnedSourceHash": "sha256:b1a678ae143401b7075a913c291e625b95fd47ef060c6cff89ad046914771d58",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1123,
+        "line": 1158,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1144",
+      "rowId": "site-scripts-verify-ps1-1179",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1144
+        "line": 1179
       },
       "callee": {
         "kind": "other-external",
@@ -9171,17 +9300,17 @@
       "hashPinnedSourceHash": "sha256:f48414c1803f83808e5d58ba40ad4a93e589e78dc808c52c5463f61e6bf58960",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1144,
+        "line": 1179,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1164",
+      "rowId": "site-scripts-verify-ps1-1199",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1164
+        "line": 1199
       },
       "callee": {
         "kind": "other-external",
@@ -9196,17 +9325,17 @@
       "hashPinnedSourceHash": "sha256:546b1dc89f8df75285067d07b72aa6d4f0481dc77b2eb1de7c4f9f089239bdd8",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1164,
+        "line": 1199,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1184",
+      "rowId": "site-scripts-verify-ps1-1219",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1184
+        "line": 1219
       },
       "callee": {
         "kind": "other-external",
@@ -9221,17 +9350,17 @@
       "hashPinnedSourceHash": "sha256:09bb7e4a65993d391298bfd8994478d68e6d31e368b752adebf1d213b8b0bf0a",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1184,
+        "line": 1219,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1201",
+      "rowId": "site-scripts-verify-ps1-1236",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1201
+        "line": 1236
       },
       "callee": {
         "kind": "other-external",
@@ -9246,17 +9375,17 @@
       "hashPinnedSourceHash": "sha256:17025803a41c74c00a1a9de5030c42103d6bd23e3ecb29f5c8fc3ec36aa007b4",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1201,
+        "line": 1236,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1218",
+      "rowId": "site-scripts-verify-ps1-1253",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1218
+        "line": 1253
       },
       "callee": {
         "kind": "other-external",
@@ -9271,17 +9400,17 @@
       "hashPinnedSourceHash": "sha256:d8c9e5b8abc660a0506363b849eafe2710e1e838161c5e7d39322065a6530b75",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1218,
+        "line": 1253,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1248",
+      "rowId": "site-scripts-verify-ps1-1283",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1248
+        "line": 1283
       },
       "callee": {
         "kind": "other-external",
@@ -9296,17 +9425,17 @@
       "hashPinnedSourceHash": "sha256:b0dfd815dcd5e797e5731371692caea7b8cd71c09aa956ef3db356318d48a22b",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1248,
+        "line": 1283,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1270",
+      "rowId": "site-scripts-verify-ps1-1305",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1270
+        "line": 1305
       },
       "callee": {
         "kind": "other-external",
@@ -9321,17 +9450,17 @@
       "hashPinnedSourceHash": "sha256:784d9215bea74b7612d40273068bdd0281e531f268f8850021058595006bcfa0",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1270,
+        "line": 1305,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1273",
+      "rowId": "site-scripts-verify-ps1-1308",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1273
+        "line": 1308
       },
       "callee": {
         "kind": "other-external",
@@ -9346,17 +9475,17 @@
       "hashPinnedSourceHash": "sha256:376e3fa83e4c042f6b84e2dbc86a047a1eee04a1bd24df68ec8bb453f1be3ab8",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1273,
+        "line": 1308,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1299",
+      "rowId": "site-scripts-verify-ps1-1334",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1299
+        "line": 1334
       },
       "callee": {
         "kind": "other-external",
@@ -9371,57 +9500,7 @@
       "hashPinnedSourceHash": "sha256:f4eaa2c0778cb6544805d56b6fb0d82e03b87ea3e3dbb5b8ac3ca69f38c89486",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1299,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1326",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1326
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:80faed6512ed8b61db3574f74d68e02c467cb0889ccd80ea09bdd2f53112bf8a",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1326,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1342",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1342
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:276fd8045f6a0c7d9d302e2f87ba45550795341a34296ee78f51b1a16855133b",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1342,
+        "line": 1334,
         "patternIds": [
           "ps-call-op"
         ]
@@ -9443,7 +9522,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:ed1246fc08f4aa95bf70757a0756e898991a470e6c1b0e9110c35a0967f377e6",
+      "hashPinnedSourceHash": "sha256:80faed6512ed8b61db3574f74d68e02c467cb0889ccd80ea09bdd2f53112bf8a",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 1361,
@@ -9453,10 +9532,60 @@
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1367",
+      "rowId": "site-scripts-verify-ps1-1377",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1367
+        "line": 1377
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:276fd8045f6a0c7d9d302e2f87ba45550795341a34296ee78f51b1a16855133b",
+      "discoveryMatch": {
+        "file": "scripts/verify.ps1",
+        "line": 1377,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-verify-ps1-1396",
+      "caller": {
+        "file": "scripts/verify.ps1",
+        "line": 1396
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:ed1246fc08f4aa95bf70757a0756e898991a470e6c1b0e9110c35a0967f377e6",
+      "discoveryMatch": {
+        "file": "scripts/verify.ps1",
+        "line": 1396,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-verify-ps1-1402",
+      "caller": {
+        "file": "scripts/verify.ps1",
+        "line": 1402
       },
       "callee": {
         "kind": "other-external",
@@ -9471,17 +9600,17 @@
       "hashPinnedSourceHash": "sha256:4efaa51b05f2bc22286374d117cb8697478b81f047f15fadf3aef6a01d0a6f10",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1367,
+        "line": 1402,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1384",
+      "rowId": "site-scripts-verify-ps1-1419",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1384
+        "line": 1419
       },
       "callee": {
         "kind": "other-external",
@@ -9496,17 +9625,17 @@
       "hashPinnedSourceHash": "sha256:6e57cc7a7d0d62c95d2cc1d5dfb0929af38c32434e3329275a898aad49fd8e90",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1384,
+        "line": 1419,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1392",
+      "rowId": "site-scripts-verify-ps1-1427",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1392
+        "line": 1427
       },
       "callee": {
         "kind": "other-external",
@@ -9521,17 +9650,17 @@
       "hashPinnedSourceHash": "sha256:cd7212c7149849f9d25e3e1a53081ec1355a4892963ef42ffb7076ca3d916830",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1392,
+        "line": 1427,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1418",
+      "rowId": "site-scripts-verify-ps1-1453",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1418
+        "line": 1453
       },
       "callee": {
         "kind": "other-external",
@@ -9546,17 +9675,17 @@
       "hashPinnedSourceHash": "sha256:4b5402d4d1f2624067f6d6906b6fda8fe789acfe40a655acf0f73aa450ea71fb",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1418,
+        "line": 1453,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1436",
+      "rowId": "site-scripts-verify-ps1-1471",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1436
+        "line": 1471
       },
       "callee": {
         "kind": "other-external",
@@ -9571,17 +9700,17 @@
       "hashPinnedSourceHash": "sha256:af0743f9948036f26f55ee984757cc5b778812784e82a5d706f4c5dde343a1b7",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1436,
+        "line": 1471,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1454",
+      "rowId": "site-scripts-verify-ps1-1489",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1454
+        "line": 1489
       },
       "callee": {
         "kind": "other-external",
@@ -9596,17 +9725,17 @@
       "hashPinnedSourceHash": "sha256:3ae41c8a5e4997361ea80b565b15e1d9b3aa6276758e195b2b64e36e20365e21",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1454,
+        "line": 1489,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1456",
+      "rowId": "site-scripts-verify-ps1-1491",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1456
+        "line": 1491
       },
       "callee": {
         "kind": "other-external",
@@ -9621,17 +9750,17 @@
       "hashPinnedSourceHash": "sha256:3bcb6691053bc5248aa1a3f09e93363fbc2c5bd9e2995ca0dd7fde07aa4216ab",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1456,
+        "line": 1491,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1479",
+      "rowId": "site-scripts-verify-ps1-1514",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1479
+        "line": 1514
       },
       "callee": {
         "kind": "other-external",
@@ -9646,17 +9775,17 @@
       "hashPinnedSourceHash": "sha256:e59b3789072c48d46b43a6d11b898f594208cf3fe33370b8308b97d3426f5579",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1479,
+        "line": 1514,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1502",
+      "rowId": "site-scripts-verify-ps1-1537",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1502
+        "line": 1537
       },
       "callee": {
         "kind": "other-external",
@@ -9671,17 +9800,17 @@
       "hashPinnedSourceHash": "sha256:609515fea47fc6b85a6e1830e3715c2fbc19f467a6e23c75dadfe7976f07ddf3",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1502,
+        "line": 1537,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1519",
+      "rowId": "site-scripts-verify-ps1-1554",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1519
+        "line": 1554
       },
       "callee": {
         "kind": "other-external",
@@ -9696,17 +9825,17 @@
       "hashPinnedSourceHash": "sha256:63b27cd137bfe1a388b2d9a73400ff03221ca4c73c3462369f415e96dd239208",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1519,
+        "line": 1554,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1535",
+      "rowId": "site-scripts-verify-ps1-1570",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1535
+        "line": 1570
       },
       "callee": {
         "kind": "other-external",
@@ -9721,17 +9850,17 @@
       "hashPinnedSourceHash": "sha256:6c781d52cfc0e881b8372137d766924725d49f294fb93b0a9c8702718b6df966",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1535,
+        "line": 1570,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1553",
+      "rowId": "site-scripts-verify-ps1-1588",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1553
+        "line": 1588
       },
       "callee": {
         "kind": "other-external",
@@ -9746,17 +9875,17 @@
       "hashPinnedSourceHash": "sha256:a514d299e1b626fe546372f0864409c6c3033f9353a7f5cf185b825e1627f759",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1553,
+        "line": 1588,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1571",
+      "rowId": "site-scripts-verify-ps1-1606",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1571
+        "line": 1606
       },
       "callee": {
         "kind": "other-external",
@@ -9771,17 +9900,17 @@
       "hashPinnedSourceHash": "sha256:3c577ed9699a3d336c58635f3542859f1db4d54b3b44aa9ca273ac28b9d2b498",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1571,
+        "line": 1606,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1589",
+      "rowId": "site-scripts-verify-ps1-1624",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1589
+        "line": 1624
       },
       "callee": {
         "kind": "other-external",
@@ -9796,17 +9925,17 @@
       "hashPinnedSourceHash": "sha256:2ecb30b8a8a5430ea9f64a1a5f8dbc88e7b52cc40a5e97dddc96871036fa3061",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1589,
+        "line": 1624,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1607",
+      "rowId": "site-scripts-verify-ps1-1642",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1607
+        "line": 1642
       },
       "callee": {
         "kind": "other-external",
@@ -9821,17 +9950,17 @@
       "hashPinnedSourceHash": "sha256:0e43bd637a2b0ccbf363ea87e991a008cf7ad9d2b3f9cf5cd84ff8cec38665e4",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1607,
+        "line": 1642,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1623",
+      "rowId": "site-scripts-verify-ps1-1658",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1623
+        "line": 1658
       },
       "callee": {
         "kind": "other-external",
@@ -9846,17 +9975,17 @@
       "hashPinnedSourceHash": "sha256:93fda5cbfb5051287219885f6b84d939ae841d8082a3da57a5d9be496fab747e",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1623,
+        "line": 1658,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1641",
+      "rowId": "site-scripts-verify-ps1-1676",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1641
+        "line": 1676
       },
       "callee": {
         "kind": "other-external",
@@ -9871,17 +10000,17 @@
       "hashPinnedSourceHash": "sha256:9af2fabaf8d4defbc9ca86e4c3627423ddb357958dc91ce28a4fc6248cddcb82",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1641,
+        "line": 1676,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1659",
+      "rowId": "site-scripts-verify-ps1-1694",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1659
+        "line": 1694
       },
       "callee": {
         "kind": "other-external",
@@ -9896,17 +10025,17 @@
       "hashPinnedSourceHash": "sha256:1d9514909d551464239ca3be09559d7444e6d3bb57f1ebdd8635ace304a5d386",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1659,
+        "line": 1694,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1675",
+      "rowId": "site-scripts-verify-ps1-1710",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1675
+        "line": 1710
       },
       "callee": {
         "kind": "other-external",
@@ -9921,17 +10050,17 @@
       "hashPinnedSourceHash": "sha256:f45c5e3642c2144195df4062e7d09de75222ebc814abdb636715ab64c607e27c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1675,
+        "line": 1710,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1691",
+      "rowId": "site-scripts-verify-ps1-1726",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1691
+        "line": 1726
       },
       "callee": {
         "kind": "other-external",
@@ -9946,57 +10075,7 @@
       "hashPinnedSourceHash": "sha256:819a9285dd6093db9c9da8c43abef85fa2424fe275bfe967ae80497af8bf0852",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1691,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1707",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1707
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:c0a8cec3591210ae0e6999c0fd01c917bd97b0a0ad48d74a3b2a682bea117409",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1707,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1723",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1723
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:ad4bcd611a6b56a75a860c0a9819bcd5fb80f755f771b18d6bbc5354383af191",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1723,
+        "line": 1726,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10018,7 +10097,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:839c64878d539dbe000abd69f7eae799b0deee1c84e55337047ec66f6b0a107d",
+      "hashPinnedSourceHash": "sha256:c0a8cec3591210ae0e6999c0fd01c917bd97b0a0ad48d74a3b2a682bea117409",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 1742,
@@ -10028,10 +10107,60 @@
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1764",
+      "rowId": "site-scripts-verify-ps1-1758",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1764
+        "line": 1758
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:ad4bcd611a6b56a75a860c0a9819bcd5fb80f755f771b18d6bbc5354383af191",
+      "discoveryMatch": {
+        "file": "scripts/verify.ps1",
+        "line": 1758,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-verify-ps1-1777",
+      "caller": {
+        "file": "scripts/verify.ps1",
+        "line": 1777
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:839c64878d539dbe000abd69f7eae799b0deee1c84e55337047ec66f6b0a107d",
+      "discoveryMatch": {
+        "file": "scripts/verify.ps1",
+        "line": 1777,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-verify-ps1-1799",
+      "caller": {
+        "file": "scripts/verify.ps1",
+        "line": 1799
       },
       "callee": {
         "kind": "other-external",
@@ -10046,17 +10175,17 @@
       "hashPinnedSourceHash": "sha256:893c65eff44d9f062303bfc66c3e23d8d90cfcfc990966c18fd603fa559c9aee",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1764,
+        "line": 1799,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1783",
+      "rowId": "site-scripts-verify-ps1-1818",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1783
+        "line": 1818
       },
       "callee": {
         "kind": "other-external",
@@ -10071,17 +10200,17 @@
       "hashPinnedSourceHash": "sha256:b41ee620fa978608e3f07798eacc6708960f6b1daba4d827afae87d2d2e43662",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1783,
+        "line": 1818,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1805",
+      "rowId": "site-scripts-verify-ps1-1840",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1805
+        "line": 1840
       },
       "callee": {
         "kind": "other-external",
@@ -10096,17 +10225,17 @@
       "hashPinnedSourceHash": "sha256:c79c5dff19118c6adb728872d0bd4bf097eb837a9e49eae5ff1023c4cd8588ce",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1805,
+        "line": 1840,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1823",
+      "rowId": "site-scripts-verify-ps1-1858",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1823
+        "line": 1858
       },
       "callee": {
         "kind": "other-external",
@@ -10121,17 +10250,17 @@
       "hashPinnedSourceHash": "sha256:a7f57b112e7bdc9d97edbf657afb031533a0292fed4b50c0c552547d9d04b7c2",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1823,
+        "line": 1858,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1839",
+      "rowId": "site-scripts-verify-ps1-1874",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1839
+        "line": 1874
       },
       "callee": {
         "kind": "other-external",
@@ -10146,17 +10275,17 @@
       "hashPinnedSourceHash": "sha256:1a96dbeae0ca49556c04307305cc5a69faf48271a190886488af54660f1a8ec0",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1839,
+        "line": 1874,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1855",
+      "rowId": "site-scripts-verify-ps1-1890",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1855
+        "line": 1890
       },
       "callee": {
         "kind": "other-external",
@@ -10171,17 +10300,17 @@
       "hashPinnedSourceHash": "sha256:c98fe3d16ba97583c17c3a7d1885e96c462b1d872ecbe48fe130f164457899ca",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1855,
+        "line": 1890,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1872",
+      "rowId": "site-scripts-verify-ps1-1907",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1872
+        "line": 1907
       },
       "callee": {
         "kind": "other-external",
@@ -10196,17 +10325,17 @@
       "hashPinnedSourceHash": "sha256:bae3268467f52aa77c9f185985c975952f58884c62c977d3b121c65c20ebd4f3",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1872,
+        "line": 1907,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1888",
+      "rowId": "site-scripts-verify-ps1-1923",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1888
+        "line": 1923
       },
       "callee": {
         "kind": "other-external",
@@ -10221,17 +10350,17 @@
       "hashPinnedSourceHash": "sha256:d848c7e5ccf3abb14f6d42a05af34fb982ffe963e9f125ed4d32e149b039edec",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1888,
+        "line": 1923,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1904",
+      "rowId": "site-scripts-verify-ps1-1939",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1904
+        "line": 1939
       },
       "callee": {
         "kind": "other-external",
@@ -10246,17 +10375,17 @@
       "hashPinnedSourceHash": "sha256:c68ad4e612c143ec47b0083ca941c522a6231330a340a114da67895b3eab4cf2",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1904,
+        "line": 1939,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1922",
+      "rowId": "site-scripts-verify-ps1-1957",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1922
+        "line": 1957
       },
       "callee": {
         "kind": "other-external",
@@ -10271,17 +10400,17 @@
       "hashPinnedSourceHash": "sha256:fc573ee2cd005a6fd4c17635188e4477ad99d97a96b11299e1c22ef62085bb1b",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1922,
+        "line": 1957,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1944",
+      "rowId": "site-scripts-verify-ps1-1979",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1944
+        "line": 1979
       },
       "callee": {
         "kind": "other-external",
@@ -10296,7 +10425,7 @@
       "hashPinnedSourceHash": "sha256:67bc08b4941687977569e0199567e326bfc16959406693c23e96ab4cc395e631",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1944,
+        "line": 1979,
         "patternIds": [
           "ps-call-op"
         ]

@@ -31,6 +31,7 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 import { evaluateWakeReviewTrigger } from './review-wake-trigger.mjs';
+import { evaluateReviewCycleCapGate } from './review-cycle-cap.mjs';
 
 /** Captured incident wake→readiness delay (PR #234/opk-27 ~77 s). */
 export const INCIDENT_WAKE_TO_READINESS_DELAY_MS = 77_000;
@@ -445,6 +446,8 @@ export function evaluateHeadReviewTriggerDecision(input) {
     ciChecks: input.ciChecks,
     requiredCheckNames: input.requiredCheckNames,
     requiredCheckLookupFailed: input.requiredCheckLookupFailed,
+    capCycleState: input.capCycleState,
+    issueBody: input.issueBodiesByPr?.[String(prNumber)] ?? input.issueBody,
   });
 
   const retainWatch =
@@ -521,6 +524,9 @@ export function evaluateDeferredWatchEntry(input) {
     ciChecks,
     requiredCheckNames,
     requiredCheckLookupFailed,
+    capCycleState: input.capCycleState,
+    issueBody: input.issueBodiesByPr?.[prKey] ?? input.issueBody,
+    issueBodiesByPr: input.issueBodiesByPr,
     entryPath:
       String(entry.seedSource ?? '') === 'report_state_poll'
         ? 'report_state_seed'
@@ -567,6 +573,7 @@ export function evaluateDeferredWatchEntry(input) {
  */
 export function planDeferredWatchTick(input) {
   const nowMs = Number(input.nowMs ?? Date.now());
+  let nextCapCycleState = input.capCycleState ?? {};
   const rawEntries = input.watchEntries ?? {};
   /** @type {Array<object>} */
   const actions = [];
@@ -612,12 +619,36 @@ export function planDeferredWatchTick(input) {
       requiredCheckNamesByPr: input.requiredCheckNamesByPr,
       requiredCheckLookupFailedByPr: input.requiredCheckLookupFailedByPr,
       snapshotError: Boolean(input.snapshotErrorsByKey?.[key]),
+      issueBody: input.issueBody,
+      issueBodiesByPr: input.issueBodiesByPr,
       entryPath: 'scoped_deferred_head_watch',
     });
 
     nextEntries[key] = evaluation.nextEntry;
 
     if (evaluation.triggerReviewRun && evaluation.planned) {
+      const capGate = evaluateReviewCycleCapGate({
+        prNumber: evaluation.planned.prNumber,
+        currentHeadSha: evaluation.planned.headSha,
+        openPrs: toArray(input.openPrs),
+        reviewRuns: toArray(input.reviewRuns),
+        capState: nextCapCycleState,
+        issueBody: input.issueBodiesByPr?.[String(evaluation.planned.prNumber)] ?? input.issueBody,
+        producer: 'review-trigger-reeval',
+        nowMs,
+      });
+      nextCapCycleState = capGate.capState ?? nextCapCycleState;
+      if (!capGate.allowStart) {
+        actions.push({
+          type: 'skip',
+          prNumber: evaluation.planned.prNumber,
+          headSha: evaluation.planned.headSha,
+          reason: capGate.reason,
+          watchKey: key,
+        });
+        nextEntries[key] = { ...evaluation.nextEntry, status: 'watching', lastEvaluatedMs: nowMs };
+        continue;
+      }
       actions.push({
         type: 'start_review',
         prNumber: evaluation.planned.prNumber,
@@ -691,6 +722,7 @@ export function planDeferredWatchTick(input) {
     actions,
     watchEntries: nextEntries,
     pollClass: SCOPED_DEFERRED_HEAD_WATCH_POLL_CLASS,
+    capCycleState: nextCapCycleState,
   };
 }
 

@@ -177,6 +177,16 @@
       "passProjectId": true,
       "cadenceSeconds": 30,
       "stallGraceMultiplier": 4
+    },
+    {
+      "id": "scripted-review-confirmed-delivery-gate",
+      "script": "scripted-review-confirmed-delivery-gate.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "scripted-review-delivery-side-effect.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 300,
+      "stallGraceMultiplier": 4
     }
   ]
 }

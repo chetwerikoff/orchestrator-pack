@@ -575,11 +575,15 @@ projects:
       ask the operator. Intermediate commits while the worker is still fixing must not trigger
       a review run.
 
-      ROUND LIMIT (prompt-level stop). Count completed review runs for the current PR
-      from Get-AoReviewRuns where findingCount > 0 OR openFindingCount > 0.
-      After 20 such runs, stop initiating new review→fix cycles on that PR: emit a
-      human notification (notify-class action) with PR number and round count; do
-      not respawn or continue the loop.
+      REVIEW-CYCLE CAP (Issue #646 — tier-keyed distinct-head budget). Count budget
+      units by distinct reviewed head (normalized targetSha) from Get-AoReviewRuns rows,
+      not raw run count. Tier caps: T1 = 2, T2 = 4, T3 = 8 (default T2 when the bound
+      issue has no complexity-tier fence). First terminal clean run on a distinct head
+      records clean_early_stop and makes the PR merge-eligible — stop auto review starts
+      on that head until a new commit opens a fresh cycle. When the distinct-head budget
+      is exhausted with open findings, emit at_cap_open_findings and stop auto review
+      starts until operator/Brief-B triage clears the terminal. Same-sha infra retries
+      and zero-finding failed/cancelled runs do not consume budget.
 
       OPERATOR ADOPTION HANDOFF (Issue #101). When a worker PR is merge-ready or
       mergeable per the rules below (required CI green, up_to_date review, worker

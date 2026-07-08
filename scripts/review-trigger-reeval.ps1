@@ -39,6 +39,7 @@ $CiGreenWakeFilterCli = Join-Path $PackRoot 'docs/ci-green-wake-reconcile.mjs'
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-TriggerReeval-Common.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-CycleCap.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewTriggerReeval.ps1')
 
@@ -180,7 +181,19 @@ function Invoke-ReviewTriggerReevalTick {
         }
     }
 
-    $plan = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'planTick' -Payload @{
+    $fixtureSnapshot = $null
+    if ($FixturePayload) {
+        $fixtureSnapshot = @{}
+        if ($FixturePayload.issueBodiesByPr) {
+            $fixtureSnapshot.issueBodiesByPr = Copy-MechanicalJsonMap -Map $FixturePayload.issueBodiesByPr
+        }
+        if ($FixturePayload.issueBody) {
+            $fixtureSnapshot.issueBody = [string]$FixturePayload.issueBody
+        }
+    }
+
+    $capCycleState = Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId)
+    $planPayload = @{
         watchEntries                  = $watchMap
         openPrs                       = @($snapshot.openPrs)
         reviewRuns                    = @($snapshot.reviewRuns)
@@ -190,8 +203,18 @@ function Invoke-ReviewTriggerReevalTick {
         requiredCheckLookupFailedByPr = $snapshot.requiredCheckLookupFailedByPr
         nowMs                         = $nowMs
         snapshotErrorsByKey           = if ($FixturePayload.snapshotErrorsByKey) { $FixturePayload.snapshotErrorsByKey } else { @{} }
+        capCycleState                 = $capCycleState
     }
+    $issueBodiesByPr = Get-ReviewCycleCapIssueBodiesByPr -OpenPrs @($snapshot.openPrs) -RepoRoot $RepoRoot `
+        -ProjectId $ProjectId -FixtureSnapshot $fixtureSnapshot
+    if ($issueBodiesByPr.Count -gt 0) {
+        $planPayload.issueBodiesByPr = $issueBodiesByPr
+    }
+    $plan = Invoke-ReviewTriggerReevalFilterCli -Subcommand 'planTick' -Payload $planPayload
 
+    if ($plan.capCycleState) {
+        Set-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId) -State $plan.capCycleState
+    }
     $started = 0
     $watchEntriesToPersist = $plan.watchEntries
     foreach ($action in @($plan.actions)) {

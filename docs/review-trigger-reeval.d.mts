@@ -118,6 +118,9 @@ export declare function evaluateHeadReviewTriggerDecision(input: {
   ciChecks?: Array<{ name?: string; state?: string; conclusion?: string; status?: string }>;
   requiredCheckNames?: string[];
   requiredCheckLookupFailed?: boolean;
+  capCycleState?: Record<string, unknown>;
+  issueBody?: string;
+  issueBodiesByPr?: Record<string, string>;
   entryPath?: string;
 }): HeadReviewTriggerDecision;
 

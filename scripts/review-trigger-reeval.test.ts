@@ -2,6 +2,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  buildReviewCycleCapCurrentHead,
+  buildReviewCycleCapPriorHeadRuns,
+  buildReviewCycleCapWorkerSession,
+  REVIEW_CYCLE_CAP_T1_ISSUE_BODY,
+  REVIEW_CYCLE_CAP_T2_ISSUE_BODY,
+} from './_review-cycle-cap-tier-fixture.js';
 import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
 import { planReconcileActions, unwrapReconcilePlanResult, type OpenPr } from '../docs/review-trigger-reconcile.mjs';
 import {
@@ -28,6 +35,11 @@ import {
   watchEntryKey,
   type ReevalWatchAction,
 } from '../docs/review-trigger-reeval.mjs';
+import {
+  evaluateReviewCycleCapGate,
+  REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
+  TERMINAL_CLEAN_EARLY_STOP,
+} from '../docs/review-cycle-cap.mjs';
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 
 const fixturesDir = path.join(
@@ -104,6 +116,96 @@ function planFixtureTick(fixture: ReevalFixture) {
     snapshotErrorsByKey: fixture.snapshotErrorsByKey,
   });
 }
+
+describe('deferred watch wake decision tier threading', () => {
+  it('evaluateHeadReviewTriggerDecision honors per-PR tier before cap gate', () => {
+    const pr = 672;
+    const current = buildReviewCycleCapCurrentHead();
+    const runs = buildReviewCycleCapPriorHeadRuns(pr);
+    const base = {
+      prNumber: pr,
+      headSha: current,
+      sessionId: 'opk-672',
+      readinessObservedMs: Date.parse('2026-07-03T01:00:00Z'),
+      nowMs: Date.parse('2026-07-03T01:00:05Z'),
+      openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
+      reviewRuns: runs,
+      sessions: [buildReviewCycleCapWorkerSession(pr, 'opk-672')],
+      ciChecks: [{ name: 'verify', state: 'SUCCESS' }],
+      requiredCheckNames: ['verify'],
+      capCycleState: {},
+    };
+    const t2Verdict = evaluateHeadReviewTriggerDecision({
+      ...base,
+      issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T2_ISSUE_BODY },
+    });
+    expect(t2Verdict.triggerReviewRun).toBe(true);
+
+    const t1Verdict = evaluateHeadReviewTriggerDecision({
+      ...base,
+      issueBodiesByPr: { [String(pr)]: REVIEW_CYCLE_CAP_T1_ISSUE_BODY },
+    });
+    expect(t1Verdict.triggerReviewRun).toBe(false);
+    expect(t1Verdict.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
+  });
+});
+
+describe('review-cycle cap state in deferred watch ticks', () => {
+  it('carries capCycleState across sequential cap gates in one tick', () => {
+    const pr = 672;
+    const cleanHead = 'cleanhead'.padEnd(40, 'c');
+    const nextHead = 'nexthead'.padEnd(40, 'n');
+    const reviewRuns = [
+      {
+        prNumber: pr,
+        targetSha: cleanHead,
+        status: 'up_to_date',
+        openFindingCount: 0,
+        completedAt: '2026-07-07T10:00:00Z',
+      },
+      {
+        prNumber: pr,
+        targetSha: 'hist'.padEnd(40, 'h'),
+        status: 'changes_requested',
+        openFindingCount: 1,
+        completedAt: '2026-06-01T00:00:00Z',
+      },
+    ];
+    const nowMs = Date.parse('2026-07-07T12:00:00Z');
+    const initialCap = {} as Record<string, unknown>;
+
+    const first = evaluateReviewCycleCapGate({
+      prNumber: pr,
+      currentHeadSha: cleanHead,
+      reviewRuns,
+      capState: initialCap,
+      nowMs,
+      producer: 'review-trigger-reeval',
+    });
+    expect(first.reason).toBe(TERMINAL_CLEAN_EARLY_STOP);
+
+    const accumulated = evaluateReviewCycleCapGate({
+      prNumber: pr,
+      currentHeadSha: nextHead,
+      reviewRuns,
+      capState: first.capState,
+      nowMs,
+      producer: 'review-trigger-reeval',
+    });
+    const staleInput = evaluateReviewCycleCapGate({
+      prNumber: pr,
+      currentHeadSha: nextHead,
+      reviewRuns,
+      capState: initialCap,
+      nowMs,
+      producer: 'review-trigger-reeval',
+    });
+
+    expect(accumulated.allowStart).toBe(true);
+    expect(accumulated.prState?.distinctHeadsReviewed).toEqual([]);
+    expect(staleInput.prState?.distinctHeadsReviewed?.length).toBeGreaterThan(0);
+  });
+});
 
 describe('review-trigger-reeval constants and helpers', () => {
   it('documents incident delay and conformant watch window', () => {
@@ -221,7 +323,7 @@ describe('Issue #235 acceptance criteria', () => {
   it('(5) dedupe: covered head produces no new run', () => {
     const fixture = loadFixture('dedupe-covered.json');
     expect(evaluateFixtureVerdict(fixture).triggerReviewRun).toBe(false);
-    expect(evaluateFixtureVerdict(fixture).reason).toBe('head_covered');
+    expect(evaluateFixtureVerdict(fixture).reason).toBe('clean_early_stop');
   });
 
   it('(5) concurrent observers: in-flight on correct head is benign no-op', () => {
@@ -312,7 +414,7 @@ describe('Issue #235 acceptance criteria', () => {
       entryPath: 'reapply',
     });
     expect(covered.triggerReviewRun).toBe(false);
-    expect(covered.reason).toBe('head_covered');
+    expect(covered.reason).toBe('clean_early_stop');
   });
 
   it('(14) dropped wake with in-progress seed converges seconds-scale', () => {

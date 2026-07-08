@@ -44,6 +44,7 @@ import {
   NUDGE_EXPIRY_MS,
   CYCLE_SURFACE_READY_FOR_REVIEW,
 } from './worker-iteration-cycle.mjs';
+import { evaluateReviewCycleCapGate } from './review-cycle-cap.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string, findingCount?: number, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, body?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
@@ -712,6 +713,10 @@ export function planReconcileActions({
   sharedCycleState,
   legacyNudged,
   repoRoot,
+  capCycleState,
+  issueBody,
+  issueBodiesByPr,
+  mergedPrNumbers,
 }) {
   /** @type {Array<{ type: 'start_review', prNumber: number, headSha: string, sessionId: string, startReason?: string, quiescenceBasis?: Record<string, unknown> } | { type: 'skip', prNumber: number, headSha: string, reason: string } | { type: 'escalate_degraded_ci', prNumber: number, headSha: string, reason: string, message: string } | { type: 'track_degraded_ci', prNumber: number, headSha: string, attempts: number, lastAttemptMs: number }>} */
   const actions = [];
@@ -720,6 +725,7 @@ export function planReconcileActions({
   const sessionList = toArray(sessions);
   const maxDegradedAttempts = resolveMaxDegradedCiAttempts();
   const sharedNudged = legacyNudged ?? tracking?.legacyNudged ?? null;
+  let nextCapCycleState = capCycleState ?? tracking?.capCycleState ?? {};
   let nextCycleState = mergeSharedWorkerIterationCycleState(
     { ...(cycleState ?? tracking?.cycleState ?? {}) },
     sharedCycleState ?? tracking?.sharedCycleState ?? {},
@@ -915,6 +921,32 @@ export function planReconcileActions({
         continue;
       }
 
+      const capGate = evaluateReviewCycleCapGate({
+        prNumber,
+        currentHeadSha: headSha,
+        openPrs: prList,
+        reviewRuns: runList,
+        capState: nextCapCycleState,
+        issueBody: issueBodiesByPr?.[String(prNumber)] ?? issueBody,
+        mergedPrNumbers,
+        producer: 'review-trigger-reconcile',
+        nowMs,
+      });
+      nextCapCycleState = capGate.capState ?? nextCapCycleState;
+      if (!capGate.allowStart) {
+        actions.push({
+          type: 'skip',
+          prNumber,
+          headSha,
+          reason: capGate.reason,
+          record: buildNoStartDecisionRecord({
+            ...decisionRecordBase,
+            reason: capGate.reason,
+          }),
+        });
+        continue;
+      }
+
       const startAction = {
         type: 'start_review',
         prNumber,
@@ -987,7 +1019,7 @@ export function planReconcileActions({
     });
   }
 
-  return { actions, cycleState: nextCycleState };
+  return { actions, cycleState: nextCycleState, capCycleState: nextCapCycleState };
 }
 
 /**
@@ -1000,6 +1032,7 @@ export function unwrapReconcilePlanResult(result) {
   return {
     actions: toArray(result?.actions),
     cycleState: result?.cycleState ?? {},
+    capCycleState: result?.capCycleState ?? {},
   };
 }
 

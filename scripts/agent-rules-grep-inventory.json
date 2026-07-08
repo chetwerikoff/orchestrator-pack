@@ -27,6 +27,10 @@
       "kind": "guard"
     },
     {
+      "path": "scripts/check-review-cycle-cap.ps1",
+      "kind": "guard"
+    },
+    {
       "path": "scripts/check-orchestrator-review-head-coverage.ps1",
       "kind": "guard"
     },

@@ -1,0 +1,32 @@
+{
+  "description": "CR ambiguous + drift => escalate",
+  "input": {
+    "runId": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
+    "batchId": "e44e7f86-34f5-4fe9-92dd-05a2edbe357f",
+    "prNumber": 651,
+    "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+    "verdict": "changes_requested",
+    "startedAtMs": 1000000,
+    "nowMs": 1050000,
+    "initialObservedRunId": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
+    "config": {
+      "pollWindowSeconds": 45,
+      "pollIntervalSeconds": 2
+    },
+    "reviews": [],
+    "session": {
+      "sessionId": "opk-worker-drift",
+      "role": "worker",
+      "prNumber": 651,
+      "status": "working",
+      "ownedHeadSha": "deadbeef00000000000000000000000000000000"
+    },
+    "openPrs": [
+      {
+        "number": 651,
+        "headRefOid": "58903d11219d852c218d40de884f5a4b6d2686bd"
+      }
+    ]
+  },
+  "expectedAction": "escalate"
+}
