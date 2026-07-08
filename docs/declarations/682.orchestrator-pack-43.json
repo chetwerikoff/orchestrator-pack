@@ -1,0 +1,27 @@
+{
+  "issue_number": 682,
+  "iteration_id": "orchestrator-pack-43",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-08T07:54:14.692Z",
+  "baseline": {
+    "commit_sha": "68a6be218080af511d359cd37aa176f5251d961f",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:75db3c90961c91324c4b60950eac784fbc9929a9d2c34dc7b8a589602205a4f4"
+  },
+  "declared_paths": [
+    "scripts/lib/Invoke-AoReviewApi.ps1",
+    "scripts/lib/harness-pretrigger-config-read.test.ts",
+    "tests/external-output-references/capture-manifest.json",
+    "tests/external-output-references/captures/ao-0-10-daemon/project-single-reviewers.raw.json",
+    "tests/external-output-references/captures/ao-0-10-daemon/project-single-reviewers.provenance.json",
+    "tests/external-output-references/captures/ao-0-10-daemon/project-config-get-405.raw.json",
+    "tests/external-output-references/captures/ao-0-10-daemon/project-config-get-405.provenance.json"
+  ],
+  "declared_globs": [
+    "scripts/lib/**",
+    "tests/**",
+    "tests/external-output-references/**"
+  ],
+  "amendments": []
+}
