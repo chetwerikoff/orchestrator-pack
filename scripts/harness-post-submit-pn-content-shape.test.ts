@@ -9,6 +9,7 @@ import {
   evaluateHarnessContentShapeStage,
   evaluateHarnessLatestRunContentShape,
   mapContentShapeToGateTerminal,
+  shouldRunHarnessContentShapeStage,
 } from '../docs/harness-post-submit-pn-content-shape.mjs';
 import { evaluateGatePollStep } from '../docs/scripted-review-confirmed-delivery-gate.mjs';
 import { classifyReviewerHarnessAbort } from '../docs/harness-review-bridge.mjs';
@@ -171,12 +172,42 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
     expect(gate).toMatch(/Resolve-HarnessPnRetriggerCount/);
   });
 
+  it('limits content-shape stage to harness latestRun rows', () => {
+    expect(shouldRunHarnessContentShapeStage({ harnessContentShape: true }, { latestRun: { harness: 'codex' } })).toBe(true);
+    expect(shouldRunHarnessContentShapeStage({ harnessContentShape: true }, { latestRun: { harness: '' } })).toBe(false);
+    expect(shouldRunHarnessContentShapeStage({ harnessContentShape: true }, { latestRun: {} })).toBe(false);
+  });
+
+  it('does not reject non-harness prose inside the #669 poll step', () => {
+    const step = evaluateGatePollStep(gateInput({
+      id: 'run-non-harness',
+      status: 'complete',
+      verdict: 'changes_requested',
+      body: 'Finding: prose without Pn prefix',
+    }, { harnessContentShape: true }));
+    expect(step.contentShape?.reason).toBe('non_harness_run');
+    expect(step.terminal.action).not.toBe('reject_retrigger');
+  });
+
+  it('dispatches explicit delivery on content-valid send terminal', () => {
+    const gate = readFileSync(path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'), 'utf8');
+    const reconcile = readFileSync(path.join(repoRoot, 'scripts/harness-post-submit-pn-reconcile.ps1'), 'utf8');
+    const explicit = readFileSync(path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1'), 'utf8');
+    expect(explicit).toMatch(/Invoke-ScriptedReviewDeliveryExplicitSend/);
+    expect(reconcile).toMatch(/Invoke-HarnessPnReconcileExplicitSend/);
+    expect(reconcile).toMatch(/Complete-HarnessPnReconcileAfterExplicitSend/);
+    expect(reconcile).toMatch(/action -eq 'send'/);
+    expect(reconcile).not.toMatch(/suppress'\s+-or\s+\$action\s+-eq\s+'send'/);
+    expect(gate).toMatch(/-DeliveryMessage/);
+  });
+
   it('live smoke workflow fails closed instead of skipping PR runs', () => {
     const workflow = readFileSync(path.join(repoRoot, '.github/workflows/harness-pn-live-smoke.yml'), 'utf8');
     const liveSmoke = readFileSync(path.join(repoRoot, 'scripts/check-harness-post-submit-pn-live-smoke.ps1'), 'utf8');
     expect(workflow).not.toMatch(/^\s*if:\s*.*PACK_HARNESS_PN_SMOKE_ENABLED/m);
     expect(workflow).toMatch(/PACK_HARNESS_PN_SMOKE_ENABLED/);
-    expect(liveSmoke).toMatch(/Test-HarnessPnLiveSmokeRequired/);
+    expect(liveSmoke).not.toMatch(/\[SKIP\] live harness \[Pn\] smoke not operator-enabled/);
+    expect(liveSmoke).toMatch(/Get-AoDaemonHealthJson/);
     expect(workflow).toMatch(/check-harness-post-submit-pn-live-smoke\.ps1/);
   });
 });

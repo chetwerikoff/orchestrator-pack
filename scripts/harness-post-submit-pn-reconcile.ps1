@@ -22,6 +22,7 @@ param(
     [int]$PollWindowSeconds = 0,
     [int]$PollIntervalSeconds = 0,
     [int]$RetriggerCount = 0,
+    [string]$DeliveryMessage = '',
     [string]$FixtureReviewsPath = '',
     [string]$FixtureSessionsPath = '',
     [string]$FixtureOpenPrsPath = '',
@@ -42,9 +43,16 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
 . (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
 . (Join-Path $PSScriptRoot 'lib/Harness-PnRetriggerState.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
 $ContentShapeCli = Join-Path $PackRoot 'docs/harness-post-submit-pn-content-shape.mjs'
+$PostSubmitDeliveryCli = Join-Path $PackRoot 'docs/scripted-review-post-submit-delivery.mjs'
+$HarnessPnMaxRetriggerCount = 3
 
 function Write-HarnessPnReconcileLog {
     param([string]$Message)
@@ -136,6 +144,74 @@ function Invoke-HarnessPnInvalidContentRetrigger {
     return @{ ok = $true; trigger = $trigger }
 }
 
+function New-HarnessPnReconcilePollStepBase {
+    return @{
+        runId               = $RunId
+        batchId             = $BatchId
+        prNumber            = $PrNumber
+        targetSha           = $TargetSha
+        verdict             = $Verdict
+        harnessContentShape = $true
+        retriggerCount      = $currentRetriggerCount
+        maxRetriggerCount   = $HarnessPnMaxRetriggerCount
+    }
+}
+
+function Invoke-HarnessPnReconcileEscalationResult {
+    param([string]$Reason, [string]$Detail = '')
+    Invoke-HarnessPnReconcileEscalation -Reason $Reason -Detail $Detail | Out-Null
+    return @{ action = 'escalate'; reason = $Reason; detail = $Detail }
+}
+
+function Resolve-HarnessPnReconcileDeliveryMessage {
+    $messageText = [string]$DeliveryMessage
+    if ($messageText.Trim()) {
+        return $messageText.Trim()
+    }
+    $built = Invoke-MechanicalNodeFilterCli -FilterCliPath $PostSubmitDeliveryCli -Subcommand 'build-delivery-message' `
+        -Payload @{
+            prNumber    = $PrNumber
+            runId       = $RunId
+            gateVerdict = $Verdict
+        } -Label $Script:ReconcileLogPrefix -JsonDepth 20
+    if (-not $built.ok) {
+        return $null
+    }
+    return [string]$built.message
+}
+
+function Invoke-HarnessPnReconcileExplicitSend {
+    param([string]$MessageText)
+
+    return Invoke-ScriptedReviewDeliveryExplicitSend `
+        -SessionId $SessionId -RunId $RunId -PrNumber $PrNumber -TargetSha $TargetSha `
+        -ProjectId $ProjectId -MessageText $MessageText -GateFilterCli $GateFilterCli `
+        -LogPrefix $Script:ReconcileLogPrefix -ChildId $Script:ReconcileLogPrefix `
+        -PollStepBase (New-HarnessPnReconcilePollStepBase) `
+        -GetOpenPrs { Get-HarnessPnReconcileOpenPrs } `
+        -GetSessions { Get-HarnessPnReconcileSessions } `
+        -FindSession { param($sessions) Find-HarnessPnReconcileSession -Sessions $sessions } `
+        -WriteLog { param($Message) Write-HarnessPnReconcileLog $Message } `
+        -OnEscalation { param($Reason, $Detail) Invoke-HarnessPnReconcileEscalationResult $Reason $Detail } `
+        -DryRun:$DryRun
+}
+
+function Complete-HarnessPnReconcileAfterExplicitSend {
+    param(
+        [bool]$SendSucceeded,
+        [bool]$DedupApplied = $false
+    )
+
+    return Complete-ScriptedReviewDeliveryExplicitSend `
+        -SessionId $SessionId -RunId $RunId -BatchId $BatchId -PrNumber $PrNumber `
+        -TargetSha $TargetSha -Verdict $Verdict -GateFilterCli $GateFilterCli `
+        -LogPrefix $Script:ReconcileLogPrefix `
+        -GetReviewsPayload { Get-HarnessPnReconcileReviewsPayload } `
+        -WriteLog { param($Message) Write-HarnessPnReconcileLog $Message } `
+        -OnEscalation { param($Reason, $Detail) Invoke-HarnessPnReconcileEscalationResult $Reason $Detail } `
+        -SendSucceeded $SendSucceeded -DedupApplied $DedupApplied
+}
+
 $configPayload = @{ config = @{} }
 if ($PollWindowSeconds -gt 0) { $configPayload.config.pollWindowSeconds = $PollWindowSeconds }
 if ($PollIntervalSeconds -gt 0) { $configPayload.config.pollIntervalSeconds = $PollIntervalSeconds }
@@ -176,6 +252,7 @@ while ($true) {
         initialObservedRunId = $initialObservedRunId
         harnessContentShape  = $true
         retriggerCount       = $currentRetriggerCount
+        maxRetriggerCount    = $HarnessPnMaxRetriggerCount
         config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
@@ -201,9 +278,34 @@ while ($true) {
         Invoke-HarnessPnReconcileEscalation -Reason ([string]$terminal.reason) | Out-Null
         exit 2
     }
-    if ($action -eq 'suppress' -or $action -eq 'send' -or ($null -eq $action -and -not $step.shouldContinuePolling)) {
+    if ($action -eq 'suppress' -or ($null -eq $action -and -not $step.shouldContinuePolling)) {
         Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
         Write-HarnessPnReconcileLog "terminal content-valid state action=$action"
+        Write-OrchestratorSideProcessProgress -ChildId $Script:ReconcileLogPrefix -Phase 'complete'
+        exit 0
+    }
+    if ($action -eq 'send') {
+        $messageText = Resolve-HarnessPnReconcileDeliveryMessage
+        if (-not $messageText) {
+            Invoke-HarnessPnReconcileEscalation -Reason 'missing_delivery_message' | Out-Null
+            exit 2
+        }
+        $send = Invoke-HarnessPnReconcileExplicitSend -MessageText $messageText
+        if ([string]$send.action -eq 'escalate') {
+            exit 2
+        }
+        if ($DryRun) {
+            Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
+            Write-OrchestratorSideProcessProgress -ChildId $Script:ReconcileLogPrefix -Phase 'complete'
+            exit 0
+        }
+        $postSend = Complete-HarnessPnReconcileAfterExplicitSend -SendSucceeded ([bool]$send.sent) `
+            -DedupApplied ([bool]$send.dedupApplied)
+        if (-not $postSend.ok) {
+            exit 2
+        }
+        Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
+        Write-HarnessPnReconcileLog 'explicit delivery dispatched after content-valid reconcile'
         Write-OrchestratorSideProcessProgress -ChildId $Script:ReconcileLogPrefix -Phase 'complete'
         exit 0
     }

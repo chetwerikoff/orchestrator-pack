@@ -25,21 +25,6 @@ function Invoke-HarnessPnLiveSmokeCli {
         -Payload $Payload -Label 'harness-pn-live-smoke' -JsonDepth 20
 }
 
-function Test-HarnessPnLiveSmokeRequired {
-    if ($env:PACK_HARNESS_PN_SMOKE_ENABLED -eq 'true') {
-        return $true
-    }
-    if ($env:PACK_HARNESS_PN_SMOKE_SESSION) {
-        return $true
-    }
-    return $false
-}
-
-if (-not (Test-HarnessPnLiveSmokeRequired)) {
-    Write-Host '[SKIP] live harness [Pn] smoke not operator-enabled (PACK_HARNESS_PN_SMOKE_ENABLED unset and no session)'
-    exit 0
-}
-
 try {
     $health = Get-AoDaemonHealthJson
     $baseUrl = Get-AoDaemonApiBaseUrl -HealthPayload $health

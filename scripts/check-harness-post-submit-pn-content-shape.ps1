@@ -11,6 +11,7 @@ $required = @(
     'docs/scripted-review-confirmed-delivery-gate.mjs',
     'scripts/harness-post-submit-pn-reconcile.ps1',
     'scripts/lib/Harness-PnRetriggerState.ps1',
+    'scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1',
     'scripts/check-harness-post-submit-pn-live-smoke.ps1',
     'scripts/harness-post-submit-pn-content-shape.test.ts',
     '.github/workflows/harness-pn-live-smoke.yml',
@@ -66,6 +67,24 @@ if ($reconcile -notmatch 'Resolve-HarnessPnRetriggerCount') {
     Write-Host 'harness post-submit reconcile must restore persisted retrigger count'
     exit 1
 }
+if ($reconcile -notmatch "action -eq 'send'" -or $reconcile -match "suppress'\s+-or\s+\`$action\s+-eq\s+'send'") {
+    Write-Host 'harness post-submit reconcile must dispatch explicit delivery on send terminal'
+    exit 1
+}
+if ($reconcile -notmatch 'Invoke-HarnessPnReconcileExplicitSend' -or $reconcile -notmatch 'Complete-HarnessPnReconcileAfterExplicitSend') {
+    Write-Host 'harness post-submit reconcile must complete explicit send after content-valid reconcile'
+    exit 1
+}
+if ($gatePs1 -notmatch '-DeliveryMessage') {
+    Write-Host 'confirmed-delivery gate must forward delivery message to harness reconcile child'
+    exit 1
+}
+
+$shapeMjs = Get-Content -LiteralPath (Join-Path $Root 'docs/harness-post-submit-pn-content-shape.mjs') -Raw
+if ($shapeMjs -notmatch 'isHarnessLatestRun\(attribution\?\.latestRun\)') {
+    Write-Host 'content-shape stage must run only for harness latestRun rows'
+    exit 1
+}
 if ($reconcile -match '(?:Read-|Open-|sqlite3|SELECT\s+).{0,20}ao\.db') {
     Write-Host 'harness post-submit reconcile must not read ao.db directly'
     exit 1
@@ -76,8 +95,8 @@ if ($liveSmoke -notmatch 'Get-AoDaemonHealthJson' -or $liveSmoke -notmatch 'exit
     Write-Host 'live harness [Pn] smoke must require a real AO daemon and fail closed'
     exit 1
 }
-if ($liveSmoke -notmatch 'Test-HarnessPnLiveSmokeRequired' -or $liveSmoke -notmatch '\[SKIP\] live harness \[Pn\] smoke not operator-enabled') {
-    Write-Host 'live harness [Pn] smoke must skip only when operator has not enabled the check'
+if ($liveSmoke -match '\[SKIP\] live harness \[Pn\] smoke not operator-enabled' -or $liveSmoke -match 'Test-HarnessPnLiveSmokeRequired') {
+    Write-Host 'live harness [Pn] smoke must fail closed instead of skipping when operator env is unset'
     exit 1
 }
 $workflow = Get-Content -LiteralPath (Join-Path $Root '.github/workflows/harness-pn-live-smoke.yml') -Raw

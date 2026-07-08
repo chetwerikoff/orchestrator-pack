@@ -10503,10 +10503,10 @@
       }
     },
     {
-      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-310",
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-311",
       "caller": {
         "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 310
+        "line": 311
       },
       "callee": {
         "kind": "other-external",
@@ -10518,10 +10518,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:efeb5e0833dc6f561051516a837c5877092afd001e33485ebcd49e922e85433d",
+      "hashPinnedSourceHash": "sha256:cd54a0d262407c99a062bf376163241427024ef38abc6276b8f11630beb27330",
       "discoveryMatch": {
         "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 310,
+        "line": 311,
         "patternIds": [
           "call-pwsh",
           "ps-call-op"

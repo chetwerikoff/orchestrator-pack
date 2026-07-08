@@ -306,6 +306,7 @@ function Invoke-HarnessPostSubmitPnReconcileFromGate {
     if ($FixtureSessionsPath) { $args += '-FixtureSessionsPath', $FixtureSessionsPath }
     if ($FixtureOpenPrsPath) { $args += '-FixtureOpenPrsPath', $FixtureOpenPrsPath }
     if ($DryRun) { $args += '-DryRun' }
+    if ($messageText) { $args += '-DeliveryMessage', $messageText }
     Write-ScriptedReviewDeliveryGateLog "invalid harness content; invoking post-submit [Pn] reconcile reason=$Reason"
     & pwsh @args
     if ($LASTEXITCODE -ne 0) {
