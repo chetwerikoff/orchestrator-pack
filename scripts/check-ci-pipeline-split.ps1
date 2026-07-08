@@ -1,9 +1,9 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Static and live guard for Issue #487/#556 CI pipeline split: lane classification,
-  runtime-weighted heavy shards, bounded light parallelism, fail-closed aggregate,
-  worker-RPC regression guard, and current head/run binding.
+  Static and live guard for Issue #487/#556/#695 CI pipeline split: lane classification,
+  weight-derived heavy shards, bounded light parallelism, oversized-file floor guard,
+  fail-closed aggregate, worker-RPC regression guard, and current head/run binding.
 #>
 [CmdletBinding()]
 param(
@@ -29,11 +29,13 @@ $configPath = Join-Path $RepoRoot 'scripts/ci-pipeline-split.config.json'
 $lanesConfigPath = Join-Path $RepoRoot 'scripts/vitest-ci-lanes.config.json'
 $runtimeHistoryPath = Join-Path $RepoRoot 'scripts/vitest-runtime-history.json'
 $lanesLib = Join-Path $RepoRoot 'scripts/lib/vitest-ci-lanes.mjs'
+$topologyLib = Join-Path $RepoRoot 'scripts/lib/vitest-heavy-topology.mjs'
+$topologyEmitScript = Join-Path $RepoRoot 'scripts/emit-vitest-heavy-topology.mjs'
 $budgetConfigPath = Join-Path $RepoRoot 'scripts/test-runtime-budget.config.json'
 
 if (-not (Test-Path -LiteralPath $configPath)) {
     Add-Fail 'missing scripts/ci-pipeline-split.config.json'
-    $heavyShardCount = 7
+    $fallbackHeavyShardCount = 7
     $aggregateJobName = 'Run pack contract tests'
     $lightLaneJobName = 'Vitest light lane'
     $heavyShardJobPrefix = 'Vitest heavy shard'
@@ -42,14 +44,14 @@ if (-not (Test-Path -LiteralPath $configPath)) {
 }
 else {
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-    $heavyShardCount = [int]$config.heavyShardCount
+    $fallbackHeavyShardCount = [int]($config.fallbackHeavyShardCount ?? $config.heavyShardCount)
     $aggregateJobName = [string]$config.aggregateJobName
     $lightLaneJobName = [string]$config.lightLaneJobName
     $heavyShardJobPrefix = [string]$config.heavyShardJobPrefix
     $typecheckJobName = [string]$config.typecheckJobName
     $pesterJobName = [string]$config.pesterJobName
-    if ($heavyShardCount -lt 1) {
-        Add-Fail 'ci-pipeline-split.config.json heavyShardCount must be >= 1'
+    if ($fallbackHeavyShardCount -lt 1) {
+        Add-Fail 'ci-pipeline-split.config.json fallbackHeavyShardCount must be >= 1'
     }
 }
 
@@ -60,9 +62,9 @@ $lightLaneScript = Join-Path $RepoRoot 'scripts/run-vitest-light-lane.ps1'
 $heavyShardScript = Join-Path $RepoRoot 'scripts/run-vitest-heavy-shard.ps1'
 $rollbackDoc = Join-Path $RepoRoot 'docs/ci-pipeline-split.md'
 
-Write-Host '== CI pipeline split guard (Issues #487/#556) =='
+Write-Host '== CI pipeline split guard (Issues #487/#556/#695) =='
 
-foreach ($required in @($aggregateScript, $lightLaneScript, $heavyShardScript, $lanesConfigPath, $runtimeHistoryPath, $lanesLib, $rollbackDoc)) {
+foreach ($required in @($aggregateScript, $lightLaneScript, $heavyShardScript, $lanesConfigPath, $runtimeHistoryPath, $lanesLib, $topologyLib, $topologyEmitScript, $rollbackDoc)) {
     if (-not (Test-Path -LiteralPath $required)) {
         Add-Fail "missing required artifact: $(Split-Path -Leaf $required)"
     }
@@ -113,6 +115,9 @@ else {
         Add-Fail 'scope-guard.yml still defines monolithic tests job with test-all.ps1; use sharded pipeline (Issue #487)'
     }
 
+    if (-not $jobs.ContainsKey('plan-vitest-ci-topology')) {
+        Add-Fail 'scope-guard.yml missing plan-vitest-ci-topology job (Issue #695 derived heavy matrix)'
+    }
     if (-not $jobs.ContainsKey('test-vitest-light')) {
         Add-Fail 'scope-guard.yml missing test-vitest-light job'
     }
@@ -127,6 +132,22 @@ else {
     }
     if (-not $jobs.ContainsKey('test-aggregate')) {
         Add-Fail 'scope-guard.yml missing test-aggregate job'
+    }
+
+    if ($jobs.ContainsKey('plan-vitest-ci-topology')) {
+        $planJob = $jobs['plan-vitest-ci-topology']
+        if ($planJob -notmatch 'emit-vitest-heavy-topology\.mjs') {
+            Add-Fail 'plan-vitest-ci-topology job must invoke scripts/emit-vitest-heavy-topology.mjs'
+        }
+        if ($planJob -notmatch 'heavy_shard_count') {
+            Add-Fail 'plan-vitest-ci-topology job must expose heavy_shard_count output'
+        }
+        if ($planJob -notmatch 'heavy_shard_matrix') {
+            Add-Fail 'plan-vitest-ci-topology job must expose heavy_shard_matrix output'
+        }
+        if ($planJob -notmatch 'vitest-heavy-topology') {
+            Add-Fail 'plan-vitest-ci-topology job must upload vitest-heavy-topology artifact'
+        }
     }
 
     if ($jobs.ContainsKey('test-vitest-light')) {
@@ -154,27 +175,14 @@ else {
         if ($heavyJob -notmatch 'run-vitest-heavy-shard\.ps1') {
             Add-Fail 'test-vitest-heavy job must invoke scripts/run-vitest-heavy-shard.ps1'
         }
-        $matrixMatches = [regex]::Matches($heavyJob, '(?m)^\s*shard:\s*\[([^\]]+)\]')
-        if ($matrixMatches.Count -eq 0) {
-            Add-Fail 'test-vitest-heavy matrix must declare shard indices'
+        if ($heavyJob -notmatch 'plan-vitest-ci-topology') {
+            Add-Fail 'test-vitest-heavy job must need plan-vitest-ci-topology for derived matrix'
         }
-        else {
-            $indices = @()
-            foreach ($entry in ($matrixMatches[0].Groups[1].Value -split ',')) {
-                $trim = $entry.Trim()
-                if ($trim -match '^\d+$') {
-                    $indices += [int]$trim
-                }
-            }
-            if ($indices.Count -ne $heavyShardCount) {
-                Add-Fail "test-vitest-heavy matrix shard count ($($indices.Count)) does not match config ($heavyShardCount)"
-            }
-            $expected = 1..$heavyShardCount
-            foreach ($idx in $expected) {
-                if ($indices -notcontains $idx) {
-                    Add-Fail "test-vitest-heavy matrix missing shard index $idx"
-                }
-            }
+        if ($heavyJob -match 'shard:\s*\[1,\s*2,\s*3') {
+            Add-Fail 'test-vitest-heavy matrix must be derived from plan output, not hand-listed shard indices'
+        }
+        if ($heavyJob -notmatch 'fromJson\(needs\.plan-vitest-ci-topology\.outputs\.heavy_shard_matrix\)') {
+            Add-Fail 'test-vitest-heavy matrix must consume needs.plan-vitest-ci-topology.outputs.heavy_shard_matrix'
         }
         $displayName = Get-JobDisplayName -JobText $heavyJob
         if ($displayName -and $displayName -notmatch [regex]::Escape($heavyShardJobPrefix)) {
@@ -215,8 +223,14 @@ else {
         if ($aggregateJob -notmatch 'needs:.*test-vitest-light' -or $aggregateJob -notmatch 'needs:.*test-vitest-heavy' -or $aggregateJob -notmatch 'needs:.*test-typecheck' -or $aggregateJob -notmatch 'needs:.*test-pester') {
             Add-Fail 'test-aggregate job must need test-typecheck, test-vitest-light, test-vitest-heavy, and test-pester'
         }
+        if ($aggregateJob -notmatch 'plan-vitest-ci-topology') {
+            Add-Fail 'test-aggregate job must need plan-vitest-ci-topology (Issue #695)'
+        }
         if ($aggregateJob -notmatch 'VITEST_LIGHT_RESULT' -or $aggregateJob -notmatch 'VITEST_HEAVY_RESULT') {
             Add-Fail 'test-aggregate job must bind VITEST_LIGHT_RESULT and VITEST_HEAVY_RESULT'
+        }
+        if ($aggregateJob -notmatch 'VITEST_TOPOLOGY_PLAN_RESULT') {
+            Add-Fail 'test-aggregate job must bind VITEST_TOPOLOGY_PLAN_RESULT (Issue #695)'
         }
         if ($aggregateJob -notmatch 'GITHUB_SHA' -or $aggregateJob -notmatch 'GITHUB_RUN_ID') {
             Add-Fail 'test-aggregate job must bind GITHUB_SHA and GITHUB_RUN_ID for current head/run'
@@ -252,6 +266,62 @@ console.log(JSON.stringify(plan));
         throw $raw
     }
     return $raw | ConvertFrom-Json
+}
+
+function Invoke-HeavyTopology {
+    param([string[]]$ChangedFiles = @())
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) {
+        throw 'node is required for heavy topology validation'
+    }
+    $changedJson = if ($ChangedFiles.Count -eq 0) { '[]' } else { ($ChangedFiles | ConvertTo-Json -Compress) }
+    $raw = & node -e "
+import { buildHeavyTopology, formatOversizedGuardFailures } from './scripts/lib/vitest-heavy-topology.mjs';
+const changedFiles = $changedJson;
+const result = buildHeavyTopology('$($RepoRoot.Replace('\', '/'))', { changedFiles });
+if (!result.ok) {
+  console.log(JSON.stringify({ ok: false, errors: result.errors }));
+  process.exit(0);
+}
+const guardFailures = formatOversizedGuardFailures(result);
+console.log(JSON.stringify({ ok: true, topology: result.topology, guardFailures }));
+" 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw $raw
+    }
+    return $raw | ConvertFrom-Json
+}
+
+$derivedHeavyShardCount = $null
+if ((Test-Path -LiteralPath $topologyLib) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    try {
+        $topologyPayload = Invoke-HeavyTopology
+        if (-not $topologyPayload.ok) {
+            foreach ($err in $topologyPayload.errors) {
+                Add-Fail $err
+            }
+        }
+        else {
+            $derivedHeavyShardCount = [int]$topologyPayload.topology.heavyShardCount
+            $matrixLength = [int]$topologyPayload.topology.heavyShardMatrix.Count
+            if ($matrixLength -ne $derivedHeavyShardCount) {
+                Add-Fail "topology artifact matrix length ($matrixLength) does not match derived heavyShardCount ($derivedHeavyShardCount)"
+            }
+            if ($topologyPayload.topology.parity.count -ne $topologyPayload.topology.parity.matrixLength) {
+                Add-Fail 'topology artifact parity.count must equal parity.matrixLength'
+            }
+            Write-Host "  derived heavyShardCount: $derivedHeavyShardCount (fallbackClassification=$($topologyPayload.topology.fallbackClassification))"
+            if ($topologyPayload.topology.underProvisioned) {
+                Write-Host "  [WARN] topology under-provisioned: rawDerivedCount=$($topologyPayload.topology.rawDerivedCount) capped at maxShardCount"
+            }
+            foreach ($guardFailure in $topologyPayload.guardFailures) {
+                Add-Fail $guardFailure
+            }
+        }
+    }
+    catch {
+        Add-Fail "heavy topology validation failed: $_"
+    }
 }
 
 if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -292,8 +362,8 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
             foreach ($dup in $duplicates) {
                 Add-Fail "duplicate Vitest file across lanes/shards: $dup"
             }
-            if ($plan.heavyShards.Count -ne $heavyShardCount) {
-                Add-Fail "heavy shard assignment count ($($plan.heavyShards.Count)) does not match config ($heavyShardCount)"
+            if ($null -ne $derivedHeavyShardCount -and $plan.heavyShards.Count -ne $derivedHeavyShardCount) {
+                Add-Fail "heavy shard assignment count ($($plan.heavyShards.Count)) does not match derived topology ($derivedHeavyShardCount)"
             }
 
             # Negative fixture: heavy file cannot be classified light without review.
@@ -328,17 +398,18 @@ elseif (-not $SkipLiveCoverage) {
 # Negative aggregate fixture: fail-closed states must not pass
 $aggregateScriptPath = Join-Path $RepoRoot 'scripts/ci-test-aggregate.ps1'
 $negativeCases = @(
-    @{ TypecheckResult = 'failure'; VitestLightResult = 'success'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestLightResult = 'failure'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestLightResult = 'success'; VitestHeavyResult = 'cancelled'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestLightResult = 'skipped'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
-    @{ TypecheckResult = 'success'; VitestLightResult = 'success'; VitestHeavyResult = 'success'; PesterResult = 'success'; HeadSha = ''; RunId = '1' }
+    @{ TypecheckResult = 'failure'; VitestLightResult = 'success'; VitestHeavyResult = 'success'; VitestTopologyPlanResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'failure'; VitestHeavyResult = 'success'; VitestTopologyPlanResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'success'; VitestHeavyResult = 'cancelled'; VitestTopologyPlanResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'skipped'; VitestHeavyResult = 'success'; VitestTopologyPlanResult = 'success'; PesterResult = 'success'; HeadSha = 'abc'; RunId = '1' },
+    @{ TypecheckResult = 'success'; VitestLightResult = 'success'; VitestHeavyResult = 'success'; VitestTopologyPlanResult = 'success'; PesterResult = 'success'; HeadSha = ''; RunId = '1' }
 )
 foreach ($case in $negativeCases) {
     & $aggregateScriptPath `
         -TypecheckResult $case.TypecheckResult `
         -VitestLightResult $case.VitestLightResult `
         -VitestHeavyResult $case.VitestHeavyResult `
+        -VitestTopologyPlanResult $case.VitestTopologyPlanResult `
         -PesterResult $case.PesterResult `
         -HeadSha $case.HeadSha `
         -RunId $case.RunId 2>&1 | Out-Null
@@ -347,12 +418,10 @@ foreach ($case in $negativeCases) {
         break
     }
 }
-& $aggregateScriptPath -TypecheckResult 'success' -VitestLightResult 'success' -VitestHeavyResult 'success' -PesterResult 'success' -HeadSha 'abc' -RunId '1' 2>&1 | Out-Null
+& $aggregateScriptPath -TypecheckResult 'success' -VitestLightResult 'success' -VitestHeavyResult 'success' -VitestTopologyPlanResult 'success' -PesterResult 'success' -HeadSha 'abc' -RunId '1' 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Add-Fail 'ci-test-aggregate.ps1 must pass when all upstream lanes are success with head/run binding'
 }
-
-Write-Host '[PASS] CI pipeline split lane classification, weighted heavy shards, aggregate fail-closed, and worker-RPC guard OK.'
 
 # Issue #691 — runtime-history refresh producer guards
 Write-Host '== CI runtime-history refresh guard (Issue #691) =='
@@ -440,5 +509,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] CI runtime-history refresh producer guards OK.'
+Write-Host '[PASS] CI pipeline split lane classification, derived weighted heavy shards, oversized-file guard, runtime-history refresh producer guards, aggregate fail-closed, and worker-RPC guard OK.'
 exit 0

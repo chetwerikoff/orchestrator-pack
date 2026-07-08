@@ -2,10 +2,14 @@ export declare const defaultRepoRoot: string;
 
 export declare const workerRpcPatterns: RegExp[];
 
+export type { HeavyTopologyArtifact, HeavyTopologyPolicy } from './vitest-heavy-topology.mjs';
+
+import type { HeavyTopologyArtifact, HeavyTopologyPolicy } from './vitest-heavy-topology.mjs';
+
 export interface LanesConfig {
   lightMaxWorkers: number;
-  heavyShardCount: number;
   heavyDefaultRuntimeMs: number;
+  heavyTopology: HeavyTopologyPolicy;
   classification: Record<string, string>;
 }
 
@@ -23,13 +27,14 @@ export interface LanePlanSuccess {
   heavy: string[];
   heavyShards: HeavyShardAssignment[];
   runtimeHistory: Record<string, number>;
+  topology: HeavyTopologyArtifact;
 }
 
 export interface LanePlanFailure {
   ok: false;
   errors: string[];
   discovered: string[];
-  config: LanesConfig;
+  config?: LanesConfig;
 }
 
 export type LanePlan = LanePlanSuccess | LanePlanFailure;
@@ -59,5 +64,8 @@ export declare function assignHeavyShards(
   shardCount: number,
   defaultRuntimeMs: number,
 ): HeavyShardAssignment[];
-export declare function buildLanePlan(repoRoot?: string): LanePlan;
+export declare function buildLanePlan(
+  repoRoot?: string,
+  options?: { changedFiles?: string[]; preTopologyMeasurements?: Record<string, number> },
+): LanePlan;
 export declare function scanWorkerRpcSignatures(text: string): RegExp[];

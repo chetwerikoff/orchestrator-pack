@@ -10,6 +10,7 @@ param(
     [string]$VitestLightResult = $env:VITEST_LIGHT_RESULT,
     [string]$VitestHeavyResult = $env:VITEST_HEAVY_RESULT,
     [string]$PesterResult = $env:PESTER_RESULT,
+    [string]$VitestTopologyPlanResult = $env:VITEST_TOPOLOGY_PLAN_RESULT,
     [string]$HeadSha = $env:GITHUB_SHA,
     [string]$RunId = $env:GITHUB_RUN_ID
 )
@@ -47,6 +48,7 @@ Test-JobResult -Name 'typecheck' -Result $TypecheckResult
 Test-JobResult -Name 'vitest-light' -Result $VitestLightResult
 Test-JobResult -Name 'vitest-heavy-shards' -Result $VitestHeavyResult
 Test-JobResult -Name 'pester' -Result $PesterResult
+Test-JobResult -Name 'vitest-topology-plan' -Result $VitestTopologyPlanResult
 
 if ($failures.Count -gt 0) {
     Write-Host '[FAIL] full-regression aggregate:'

@@ -1,0 +1,17 @@
+{
+  "issue": 556,
+  "lightMaxWorkers": 2,
+  "heavyDefaultRuntimeMs": 120000,
+  "heavyTopology": {
+    "targetShardSeconds": 100,
+    "minShardCount": 1,
+    "maxShardCount": 3,
+    "fallbackHeavyShardCount": 7
+  },
+  "classification": {
+    "scripts/sample-heavy-a.test.ts": "heavy",
+    "scripts/sample-heavy-b.test.ts": "heavy",
+    "scripts/sample-oversized.test.ts": "heavy",
+    "scripts/sample-light.test.ts": "light"
+  }
+}

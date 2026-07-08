@@ -1,8 +1,15 @@
 {
   "issue": 556,
   "lightMaxWorkers": 2,
-  "heavyShardCount": 7,
   "heavyDefaultRuntimeMs": 120000,
+  "heavyTopology": {
+    "targetShardSeconds": 900,
+    "minShardCount": 1,
+    "maxShardCount": 14,
+    "fallbackHeavyShardCount": 7
+  },
+  "heavyVitestPerFilePool": "threads",
+  "heavyVitestPoolByFile": {},
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
     "plugins/_shared/tests/git_fixture.test.ts": "light",

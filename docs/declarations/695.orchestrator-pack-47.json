@@ -1,0 +1,67 @@
+{
+  "issue_number": 695,
+  "iteration_id": "orchestrator-pack-47",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-08T12:20:00.000Z",
+  "baseline": {
+    "commit_sha": "ee13b6909b3d9dce727e4d912e81f5a8d4fa9cc3",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9951157a5458ec6f75df5062804aa55f7afd27bbcc5cda1d2d9e2940adc06d28"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "docs/ci-pipeline-split.md",
+    "docs/declarations/695.orchestrator-pack-47.json",
+    "package-lock.json",
+    "package.json",
+    "scripts/check-ci-pipeline-split.ps1",
+    "scripts/check-ci-pipeline-split.test.ts",
+    "scripts/ci-pipeline-split.config.json",
+    "scripts/ci-test-aggregate.ps1",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/invoke-vitest-ci-lane-plan.mjs",
+    "scripts/launch-argv-inventory.json",
+    "scripts/lib/scan-vitest-worker-rpc.mjs",
+    "scripts/lib/vitest-ci-lanes.d.mts",
+    "scripts/lib/vitest-ci-lanes.mjs",
+    "scripts/lib/vitest-heavy-topology.d.mts",
+    "scripts/lib/vitest-heavy-topology.mjs",
+    "scripts/merge-vitest-json-reports.mjs",
+    "scripts/review-start-preflight-shield.test.ts",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
+    "tests/fixtures/vitest-heavy-topology/lanes-config.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-baseline-estimates.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-cap-hit.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-degenerate.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-empty.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-missing-provenance.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-moderate.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-oversized.json",
+    "tests/fixtures/vitest-heavy-topology/runtime-history-stale-sha.json",
+    "tests/fixtures/vitest-heavy-topology/scripts/sample-heavy-a.test.ts",
+    "tests/fixtures/vitest-heavy-topology/scripts/sample-heavy-b.test.ts",
+    "tests/fixtures/vitest-heavy-topology/scripts/sample-light.test.ts",
+    "tests/fixtures/vitest-heavy-topology/scripts/sample-oversized.test.ts",
+    "scripts/review-start-claim.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:d2dfc581c9dea6529bc3f4e6a03618d1832065e91f56c7b2f6f1dd9ad7bcfca9",
+      "new_active_scope_hash": "sha256:9951157a5458ec6f75df5062804aa55f7afd27bbcc5cda1d2d9e2940adc06d28",
+      "changed": {
+        "added": [
+          "scripts/review-start-claim.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "CI flake fix touches review-start-claim overlap test",
+      "actor": "orchestrator-pack-59",
+      "timestamp": "2026-07-08T22:25:27.204Z",
+      "applied": true
+    }
+  ]
+}

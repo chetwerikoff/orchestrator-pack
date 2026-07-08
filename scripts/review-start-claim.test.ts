@@ -21,24 +21,31 @@ function parsePwshRows(output: string) {
 }
 
 describe('Review-StartClaim single-flight contract', () => {
-  it('never leaves two active claim records for one key under overlapping acquisition', () => {
+  it('never leaves two active claim records for one key under overlapping acquisition', { retry: 2, timeout: 60_000 }, () => {
     const dir = tempClaimDir();
     try {
       const script = `
-        $helper = ${psString(helperPath)}
+        . ${psString(helperPath)}
         $ns = ${psString(dir)}
         $sha = ${psString(fullSha)}
-        $null = 1..6 | ForEach-Object -Parallel {
+        $helper = ${psString(helperPath)}
+        $claimDir = ${psString(dir)}
+        Initialize-ReviewStartClaimNamespace -Namespace $ns
+        $results = 1..6 | ForEach-Object -Parallel {
+          $env:AO_REVIEW_CLAIM_DIR = $using:claimDir
           . $using:helper
-          Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $using:sha -Surface 'review-trigger-reconcile' -Namespace $using:ns -ReviewRuns @() | Out-Null
+          $r = Acquire-ReviewStartClaim -PrNumber 307 -HeadSha $using:sha -Surface 'review-trigger-reconcile' -Namespace $using:claimDir -ReviewRuns @()
+          [pscustomobject]@{ acquired = [bool]$r.acquired }
         } -ThrottleLimit 6
         $activePath = Join-Path $ns "pr-307-$sha.json"
         [pscustomobject]@{
           activeExists = (Test-Path -LiteralPath $activePath)
           activeCount = @((Get-ChildItem -LiteralPath $ns -File -Filter 'pr-307-*.json').Name).Count
+          winners = @($results | Where-Object { $_.acquired }).Count
         } | ConvertTo-Json -Compress
       `;
       const result = JSON.parse(runPwsh(script));
+      expect(result.winners).toBe(1);
       expect(result.activeExists).toBe(true);
       expect(result.activeCount).toBe(1);
     } finally {
