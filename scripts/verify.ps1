@@ -750,6 +750,23 @@ else {
     Add-Failure 'Missing review-cycle cap check script (Issue #646)'
 }
 
+Write-Host '== merge triage gate (Issue #648) =='
+$mergeTriageCheck = Join-Path $Root 'scripts/check-merge-triage-gate.ps1'
+if (Test-Path -LiteralPath $mergeTriageCheck -PathType Leaf) {
+    & $mergeTriageCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-merge-triage-gate.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-merge-triage-gate.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'merge triage gate checks failed (Issue #648)'
+    }
+}
+else {
+    Write-Check 'scripts/check-merge-triage-gate.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing merge triage gate check script (Issue #648)'
+}
+
 $reviewTriggerReevalCheck = Join-Path $Root 'scripts/check-review-trigger-reeval.ps1'
 if (Test-Path -LiteralPath $reviewTriggerReevalCheck -PathType Leaf) {
     & $reviewTriggerReevalCheck

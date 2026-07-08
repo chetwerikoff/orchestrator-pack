@@ -17,6 +17,7 @@ $allowlist = @(
     'scripts/check-review-trigger-reconcile.ps1',
     'scripts/check-review-wake-trigger.ps1',
     'scripts/check-review-cycle-cap.ps1',
+    'scripts/check-merge-triage-gate.ps1',
     'scripts/lib/Review-MechanicalForbiddenCommand.ps1',
     'scripts/lib/Review-Send-MechanicalForbiddenCommand.ps1',
     'scripts/review-send-reconcile.ps1',

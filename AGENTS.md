@@ -347,6 +347,14 @@ reconcile/reeval/wake/turn surfaces; uses #611 pre-fetched runs only. Tier caps 
 (default T2): first clean head → `clean_early_stop`; at cap with findings → `at_cap_open_findings`
 (Brief B triage).
 
+#### At-cap merge triage (Issue #648)
+
+When `at_cap_open_findings` is latched, merge eligibility consults `docs/merge-triage-gate.mjs` /
+`scripts/lib/Merge-TriageGate.ps1`. Merge may proceed only on current-head `clean_early_stop` or
+validated `merge_triage_cleared` with matching marker-list and open-finding snapshot hashes; BLOCK
+and pending architect/operator adjudication deny merge. This helper is read-only merge policy
+input, not a merge executor.
+
 #### Worker pre-flight (blocking)
 
 Before implementation, **re-run the tier marker check with fresh eyes**. If reality exceeds the
