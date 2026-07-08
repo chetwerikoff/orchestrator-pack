@@ -446,6 +446,33 @@ export function resolveGateConfigFromEnv(env = process.env) {
   });
 }
 
+
+export const SUPERVISOR_PARENT_WAIT_GRACE_MS = 30 * 1000;
+
+/**
+ * Parent supervisor wait must cover the gate poll window, final poll interval, and side-effect send.
+ * @param {Record<string, unknown>} [config]
+ */
+export function resolveSupervisorParentWaitMs(config = {}) {
+  const resolved = resolveGateConfig(config);
+  return resolved.pollWindowMs + resolved.pollIntervalMs * 2 + SUPERVISOR_PARENT_WAIT_GRACE_MS;
+}
+
+/**
+ * Infer child exit when the process handle is already gone (fast successful exits).
+ * @param {unknown} logText
+ */
+export function inferSupervisorChildExitFromLogs(logText) {
+  const text = String(logText ?? '');
+  if (!text.trim()) {
+    return 0;
+  }
+  if (/ESCALATION:|explicit_send_failed|poll_loop_stalled|message_hash_persist_failed|missing_delivery_message/i.test(text)) {
+    return 2;
+  }
+  return 0;
+}
+
 runStdinJsonCli('scripted-review-confirmed-delivery-gate.mjs', {
   'resolve-config': () => {
     const payload = readStdinJson();
@@ -466,5 +493,13 @@ runStdinJsonCli('scripted-review-confirmed-delivery-gate.mjs', {
   'build-escalation': () => {
     const payload = readStdinJson();
     return { message: buildGateEscalationMessage(payload) };
+  },
+  'supervisor-parent-wait-ms': () => {
+    const payload = readStdinJson();
+    return { waitMs: resolveSupervisorParentWaitMs(payload.config ?? {}) };
+  },
+  'infer-supervisor-child-exit': () => {
+    const payload = readStdinJson();
+    return { exitCode: inferSupervisorChildExitFromLogs(payload.logText) };
   },
 });

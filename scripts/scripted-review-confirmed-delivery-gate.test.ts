@@ -11,7 +11,10 @@ import {
   findReviewEntryForSubmit,
   isDaemonDeliveryConfirmed,
   isTerminalNotDelivered,
+  inferSupervisorChildExitFromLogs,
   resolveGateConfig,
+  resolveSupervisorParentWaitMs,
+  SUPERVISOR_PARENT_WAIT_GRACE_MS,
 } from '../docs/scripted-review-confirmed-delivery-gate.mjs';
 import {
   buildScriptedReviewDeliveryMessage,
@@ -280,6 +283,21 @@ describe('attribution and overlapping runs (AC#7)', () => {
     expect(message).toContain('Operator remedy:');
   });
 });
+
+
+  it('parent supervisor wait honors configured poll window cap', () => {
+    expect(resolveSupervisorParentWaitMs({ pollWindowSeconds: 45, pollIntervalSeconds: 2 })).toBe(
+      45_000 + 2_000 * 2 + SUPERVISOR_PARENT_WAIT_GRACE_MS,
+    );
+    expect(resolveSupervisorParentWaitMs({ pollWindowSeconds: 300, pollIntervalSeconds: 2 })).toBe(
+      120_000 + 2_000 * 2 + SUPERVISOR_PARENT_WAIT_GRACE_MS,
+    );
+  });
+
+  it('infers fast successful supervisor child exit from logs', () => {
+    expect(inferSupervisorChildExitFromLogs('explicit send ok PR #673')).toBe(0);
+    expect(inferSupervisorChildExitFromLogs('[scripted-review-confirmed-delivery-gate] ESCALATION: x')).toBe(2);
+  });
 
 describe('supervisor compatibility (AC#10)', () => {
   it('registers scripted-review-confirmed-delivery-gate side-process progress id', () => {

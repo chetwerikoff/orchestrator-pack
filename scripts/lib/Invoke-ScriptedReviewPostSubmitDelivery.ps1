@@ -104,6 +104,65 @@ function Write-ScriptedReviewDeliveryGateSupervisorLogsToStderr {
     }
 }
 
+function Get-ScriptedReviewDeliveryGateResolvedConfig {
+    $payload = @{ config = @{} }
+    if ($env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS) {
+        $payload.config.pollWindowSeconds = [int]$env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS
+    }
+    if ($env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS) {
+        $payload.config.pollIntervalSeconds = [int]$env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS
+    }
+    return Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'resolve-config' -Payload $payload
+}
+
+function Read-ScriptedReviewDeliveryGateSupervisorLogText {
+    param([string]$LogPath)
+
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in @($LogPath, "${LogPath}.err")) {
+        if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        foreach ($line in (Get-Content -LiteralPath $path -ErrorAction SilentlyContinue)) {
+            $parts.Add([string]$line) | Out-Null
+        }
+    }
+    return ($parts -join "`n")
+}
+
+function Resolve-ScriptedReviewDeliveryGateChildExitCode {
+    param(
+        [int]$ChildPid,
+        [int]$WaitSeconds,
+        [string]$LogPath
+    )
+
+    $proc = $null
+    try {
+        $proc = [System.Diagnostics.Process]::GetProcessById($ChildPid)
+    }
+    catch {
+        $inferred = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'infer-supervisor-child-exit' -Payload @{
+            logText = (Read-ScriptedReviewDeliveryGateSupervisorLogText -LogPath $LogPath)
+        }
+        return [int]$inferred.exitCode
+    }
+
+    try {
+        if (-not $proc.WaitForExit($WaitSeconds * 1000)) {
+            try {
+                if (-not $proc.HasExited) {
+                    $proc.Kill()
+                }
+            }
+            catch { }
+            return 2
+        }
+        return [int]$proc.ExitCode
+    }
+    finally {
+        $proc.Dispose()
+    }
+}
+
 function Invoke-ScriptedReviewDeliveryGateProcess {
     param(
         [Parameter(Mandatory = $true)][hashtable]$GateParams,
@@ -138,11 +197,14 @@ function Invoke-ScriptedReviewDeliveryGateProcess {
         $extraArgs += '-DryRun'
     }
 
-    $gateConfig = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'resolve-config' -Payload @{
-        config = @{}
+    $gateConfig = Get-ScriptedReviewDeliveryGateResolvedConfig
+    $parentWait = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'supervisor-parent-wait-ms' -Payload @{
+        config = @{
+            pollWindowSeconds   = [Math]::Ceiling([int]$gateConfig.pollWindowMs / 1000.0)
+            pollIntervalSeconds = [Math]::Ceiling([int]$gateConfig.pollIntervalMs / 1000.0)
+        }
     }
-    $pollWindowMs = [Math]::Max(45000, [int]$gateConfig.pollWindowMs)
-    $waitSeconds = [Math]::Ceiling(($pollWindowMs / 1000.0) + 60)
+    $waitSeconds = [Math]::Ceiling([int]$parentWait.waitMs / 1000.0)
 
     $childPid = Start-OrchestratorWakeSupervisorChild -ChildId $childId -OrchestratorSessionId '' `
         -Paths $paths -ProjectId $ProjectId -ExtraChildArgs $extraArgs
@@ -150,25 +212,8 @@ function Invoke-ScriptedReviewDeliveryGateProcess {
         throw 'Failed to start scripted-review confirmed-delivery gate supervisor child'
     }
 
-    $deadline = (Get-Date).AddSeconds($waitSeconds)
-    $exitCode = 2
-    while ((Get-Date) -lt $deadline) {
-        $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
-        if (-not $proc) {
-            break
-        }
-        if ($proc.HasExited) {
-            $exitCode = $proc.ExitCode
-            break
-        }
-        Start-Sleep -Milliseconds 250
-    }
-
-    $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
-    if ($proc -and -not $proc.HasExited) {
-        try { $proc.Kill() } catch { }
-        $exitCode = 2
-    }
+    $exitCode = Resolve-ScriptedReviewDeliveryGateChildExitCode -ChildPid $childPid `
+        -WaitSeconds $waitSeconds -LogPath $logPath
 
     Write-ScriptedReviewDeliveryGateSupervisorLogsToStderr -LogPaths @($logPath, "${logPath}.err")
     return [int]$exitCode
