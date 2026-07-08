@@ -351,6 +351,48 @@ describe('ci-failure reaction owner non-null', () => {
     });
     expect(records.records).toEqual([]);
   });
+
+  it('records episode when session-get displayName binds PR and worker owns head', () => {
+    const sessions = [
+      {
+        id: 'orchestrator-pack-45',
+        sessionId: 'orchestrator-pack-45',
+        role: 'worker',
+        status: 'working',
+        branch: 'unrelated-branch',
+        ownedHeadSha: headSha,
+      },
+    ];
+    const withoutEnrichment = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
+    expect(withoutEnrichment.records).toEqual([]);
+
+    const withEnrichment = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } },
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
+    expect(withEnrichment.records).toHaveLength(1);
+    expect(withEnrichment.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
+  });
 });
 
 describe('session-get displayName enrichment', () => {

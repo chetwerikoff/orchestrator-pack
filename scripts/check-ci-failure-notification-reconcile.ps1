@@ -43,6 +43,28 @@ if ($reconcile -notmatch 'Test-CiFailureTransientPreSendHelperFailure') {
 if ($reconcile -notlike '*post-intent recovery must not run pre-send CI recheck*') {
   throw 'ci-failure-notification-reconcile.ps1 missing post-intent pre-send recheck guard'
 }
+if ($mjs -notlike '*resolveHeadOwningWorkerSessionId*') {
+  throw 'ci-failure-notification.mjs must resolve CI owners via head-owner binding'
+}
+if ($mjs -like '*resolvePrOwningWorkerSessionBinding*') {
+  throw 'ci-failure-notification.mjs must not use PR-only binding for CI owner resolution'
+}
+if ($mjs -notlike '*sessionDetailsById*') {
+  throw 'ci-failure-notification.mjs must thread session-get displayName evidence into owner resolution'
+}
+if ($reconcile -notlike '*Build-AoSessionDetailsById*') {
+  throw 'ci-failure-notification-reconcile.ps1 must enrich worker rows from ao session get'
+}
+if ($reconcile -notlike '*sessionDetailsById*') {
+  throw 'ci-failure-notification-reconcile.ps1 must pass sessionDetailsById into workerState'
+}
+$reaction = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notification-reaction.ps1') -Raw
+if ($reaction -notlike '*Build-AoSessionDetailsById*') {
+  throw 'ci-failure-notification-reaction.ps1 must enrich worker rows from ao session get'
+}
+if ($reaction -notlike '*sessionDetailsById*') {
+  throw 'ci-failure-notification-reaction.ps1 must pass sessionDetailsById into reaction-record-plan'
+}
 $registry = Get-Content -LiteralPath (Join-Path $Root 'scripts/orchestrator-side-process-registry.json') -Raw | ConvertFrom-Json
 if ($registry.requiredChildIds -notcontains 'ci-failure-notification-reconcile') {
   throw 'orchestrator-side-process-registry.json missing ci-failure-notification-reconcile'
