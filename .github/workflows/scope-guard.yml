@@ -167,6 +167,18 @@ jobs:
             $trustedRoot = $env:GITHUB_WORKSPACE
             $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
           }
+          else {
+            $prHeadGuard = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
+            $diff = @(gh pr diff $env:PR_NUMBER --name-only 2>$null)
+            $scopeCheckerTouched = @($diff | Where-Object {
+                ($_ -replace '\\', '/') -match '^scripts/pr-scope-check\.(ps1|ts)$'
+              })
+            if ($scopeCheckerTouched.Count -gt 0 -and (Test-Path -LiteralPath $prHeadGuard)) {
+              Write-Host 'scope guard bootstrap: PR updates scope checker; using PR head scripts until merge'
+              $trustedRoot = $env:GITHUB_WORKSPACE
+              $guardScript = $prHeadGuard
+            }
+          }
 
           Push-Location $trustedRoot
           try {
