@@ -226,6 +226,7 @@ const liveOperatorConfigPath = path.join(repoRoot, '.ao', 'autonomous-real-binar
 const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'autonomous-gate-preflight.mjs',
   'codex-reviewer-timeout-retry.mjs',
+  'dead-worker-reconciler.mjs',
   'review-finding-delivery-confirm.mjs',
   'review-head-ready.mjs',
   'review-ready-stuck-guard.mjs',
@@ -233,6 +234,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'review-orchestrator-loop.mjs',
   'review-cycle-cap.mjs',
   'review-trigger-reconcile.mjs',
+  'session-pr-binding-resolver.mjs',
   'session-runtime-liveness.mjs',
   'spawn-worktree-git-ref.mjs',
   'spawn-worktree-grant.mjs',
