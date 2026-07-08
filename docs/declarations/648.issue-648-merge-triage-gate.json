@@ -25,5 +25,10 @@
   "declared_globs": [
     "docs/declarations/648.issue-648-merge-triage-gate.json"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "path": "scripts/check-review-010-vocabulary.ps1",
+      "reason": "Allowlist merge-triage static guard negative ao review list pattern (Issue #648)"
+    }
+  ]
 }
