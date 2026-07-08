@@ -238,6 +238,18 @@ describe('architect-adjudication', () => {
       adjudicationProvenanceToken: 'unused',
       actorSession: 'arch-1',
     })).toThrow(/session kind/);
+    process.env.AO_SESSION_KIND = 'worker';
+    expect(() => issueArchitectProvenanceToken({ stateRoot: root, sessionKind: 'architect', adjudicationId: pending.adjudication_id, prNumber: 648, headSha: 'abc123' })).toThrow(/AO_SESSION_KIND/);
+    expect(() => adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: block,
+      adjudicationProvenanceToken: 'unused',
+      actorSession: 'arch-1',
+    })).toThrow(/AO_SESSION_KIND/);
+    delete process.env.AO_SESSION_KIND;
     const issuedToken = issueArchitectProvenanceToken({ stateRoot: root, sessionKind: 'architect', adjudicationId: pending.adjudication_id, prNumber: 648, headSha: 'abc123' });
     const adjudicated = adjudicateArchitectFinding({
       stateRoot: root,
@@ -705,6 +717,32 @@ describe('architect verdict text binding', () => {
       atCapRecord: atCap(),
       findings: changed,
     }).allow).toBe(false);
+  });
+});
+
+describe('architect provenance verification', () => {
+  it('denies merge policy when architect journal row has unverified provenance hash', () => {
+    const root = stateRoot();
+    const defer = finding('d1', 'TOCTOU');
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [defer] });
+    const journalPath = join(root, 'merge-triage/verdict-journal.jsonl');
+    const rows = readFileSync(journalPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    rows.push({
+      ...rows[rows.length - 1],
+      actor: 'architect',
+      actor_session: 'forged',
+      adjudication_provenance_token_hash: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      reason: 'architect_adjudication',
+      verdict: VERDICT_DEFER,
+    });
+    writeFileSync(journalPath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: [defer],
+    }).reason).toBe('invalid_architect_provenance');
   });
 });
 

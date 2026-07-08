@@ -401,6 +401,35 @@ function appendVerdictJournal({ paths, prNumber, headSha, gateRunId, finding, cl
   return row;
 }
 
+function resolveTrustedSessionKind(input = {}) {
+  const envKind = normalizeTriageText(process.env.AO_SESSION_KIND ?? '');
+  const payloadKind = normalizeTriageText(input.sessionKind ?? '');
+  if (envKind && payloadKind && envKind !== payloadKind) {
+    throw new Error('session kind disagrees with trusted AO_SESSION_KIND');
+  }
+  return envKind || payloadKind;
+}
+
+function readArchitectTokenRecords(paths) {
+  return existsSync(paths.tokens) ? readJsonFile(paths.tokens) : {};
+}
+
+function isVerifiedArchitectProvenanceHash(paths, provenanceHash, normalizedTextHash) {
+  const hash = String(provenanceHash ?? '').trim();
+  if (!hash) return false;
+  const records = readArchitectTokenRecords(paths);
+  return Object.values(records).some(
+    (record) => record.tokenHash === hash && record.normalizedTextHash === normalizedTextHash,
+  );
+}
+
+function isVerifiedArchitectJournalRow(paths, row) {
+  if (row.actor !== 'architect' && row.actor !== 'operator') return false;
+  if (row.reason !== 'architect_adjudication') return false;
+  if (row.actor === 'architect' && !String(row.actor_session ?? '').trim()) return false;
+  return isVerifiedArchitectProvenanceHash(paths, row.adjudication_provenance_token_hash, row.normalized_text_hash);
+}
+
 function latestArchitectAdjudicationRow(paths, prNumber, headSha, findingId, fingerprint) {
   const rows = readJsonl(paths.journal);
   for (let index = rows.length - 1; index >= 0; index -= 1) {
@@ -432,7 +461,11 @@ function resolveOpenFindingClassification({ paths, prNumber, headSha, finding, m
     };
   }
   const adjudicated = latestArchitectAdjudicationRow(paths, prNumber, headSha, findingId, fingerprint);
-  if (adjudicated && adjudicated.normalized_text_hash === base.normalizedTextHash) {
+  if (
+    adjudicated &&
+    adjudicated.normalized_text_hash === base.normalizedTextHash &&
+    isVerifiedArchitectJournalRow(paths, adjudicated)
+  ) {
     return {
       ...base,
       verdict: adjudicated.verdict,
@@ -646,10 +679,16 @@ export function evaluateMergePolicy(input = {}) {
     return { allow: false, reason: 'open_findings_snapshot_drift', expected: clearance.open_findings_snapshot_hash, actual: liveHash };
   }
   const architectRows = architectJournalRowsForHead(readJsonl(paths.journal), prNumber, headSha);
-  const invalidArchitectRows = architectRows.filter((row) => !row.adjudication_provenance_token_hash);
-  if (invalidArchitectRows.length > 0) return { allow: false, reason: 'invalid_architect_provenance' };
-  const missingArchitectSession = architectRows.filter((row) => !String(row.actor_session ?? '').trim());
-  if (missingArchitectSession.length > 0) return { allow: false, reason: 'invalid_architect_actor_session' };
+  const invalidArchitectRows = architectRows.filter((row) => !isVerifiedArchitectJournalRow(paths, row));
+  if (invalidArchitectRows.length > 0) {
+    const missingArchitectSession = invalidArchitectRows.some(
+      (row) => row.actor === 'architect' && !String(row.actor_session ?? '').trim(),
+    );
+    return {
+      allow: false,
+      reason: missingArchitectSession ? 'invalid_architect_actor_session' : 'invalid_architect_provenance',
+    };
+  }
   return { allow: true, reason: 'merge_triage_cleared', clearance };
 }
 
@@ -659,7 +698,7 @@ export function readArchitectInbox(input = {}) {
 }
 
 export function issueArchitectProvenanceToken(input = {}) {
-  const sessionKind = normalizeTriageText(input.sessionKind ?? process.env.AO_SESSION_KIND ?? '');
+  const sessionKind = resolveTrustedSessionKind(input);
   if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') {
     throw new Error('architect token rejected for worker/orchestrator session');
   }
@@ -698,7 +737,7 @@ export function fileWorkerAppeal(input = {}) {
 }
 
 export function adjudicateArchitectFinding(input = {}) {
-  const sessionKind = normalizeTriageText(input.sessionKind ?? process.env.AO_SESSION_KIND ?? '');
+  const sessionKind = resolveTrustedSessionKind(input);
   if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') {
     throw new Error('architect adjudication rejected for worker/orchestrator session');
   }
