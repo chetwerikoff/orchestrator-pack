@@ -386,14 +386,14 @@ On a trigger below (substring or clear paraphrase — best-effort discovery, not
 gate) follow the named skill immediately; no skill name required. Every skill has loader wrappers
 at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
 **Routing when several could match:** «с кодексом» / «придирчиво» → `adversarial-draft-review`;
-«с gpt» / «с gпт» → `discuss-with-gpt`; plain «создай драфт» → `create-issue-draft`.
+«с gpt» / «с гпт» → `discuss-with-gpt`; plain «создай драфт» → `create-issue-draft`.
 
 | Skill | Triggers (substring / paraphrase) | Action |
 |---|---|---|
 | `investigate-root-cause` | «разобраться с причиной», «в чём причина», «что это», «разберись», «почему упал», «что сломалось», «отладь», «что случилось», «почему не работает»; «root cause», «why did», «figure out why», «investigate the cause», «wtf» | follow [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md); skip pure implementation / external adoption |
 | `merge-with-local-adoption` | «мерж», «мерж 385», «мерж и пул», «смерж», «смержи», «замержи»; «merge», «merge 307», «merge and pull», «merge the PR» | operator executes merge + safe pull + local adoption on the live checkout — **see Operator-only merge above** |
 | `adversarial-draft-review` | «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход»; «draft with codex», «adversarial draft», «challenge the approach» | author draft → Codex challenge loop |
-| `discuss-with-gpt` | «с gpt», «с gпт», «обсуди с gpt», «обсуди с gpt», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; «draft with gpt», «discuss with gpt», «challenge with gpt» | author draft → GPT challenge loop |
+| `discuss-with-gpt` | «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; «draft with gpt», «discuss with gpt», «challenge with gpt» | author draft → GPT challenge loop |
 | `create-issue-draft` | authoring or rewriting `docs/issues_drafts/NN-*.md`, or syncing a new Issue spec | full create-issue-draft procedure |
 | `study-external-source` | «изучи <URL>», research an external repo/URL for adoption | external-source adoption triage |
 | `publish-issue-draft` | «опубликуй драфт», «закоммить драфт», «pr для драфта», «обнови драфт/issue и опубликуй», «смержи драфт»; «publish draft», «publish/update this draft»; after `create-issue-draft` | default **sync-only**; commit / PR / merge to `main` only on explicit ask |
