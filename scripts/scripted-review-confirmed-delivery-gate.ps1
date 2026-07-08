@@ -284,7 +284,7 @@ function Invoke-HarnessPostSubmitPnReconcileFromGate {
         '-TargetSha', $TargetSha,
         '-Verdict', $Verdict,
         '-Reason', $Reason,
-        '-RetriggerCount', ($HarnessPnRetriggerCount + 1)
+        '-RetriggerCount', $HarnessPnRetriggerCount
     )
     if ($DryRun) { $args += '-DryRun' }
     Write-ScriptedReviewDeliveryGateLog "invalid harness content; invoking post-submit [Pn] reconcile reason=$Reason"

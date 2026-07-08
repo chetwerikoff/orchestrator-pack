@@ -114,6 +114,26 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
     expect(evaluateHarnessLatestRunContentShape(cell!.latestRun).action).toBe(CONTENT_SHAPE_WAIT_RUNNING);
   });
 
+  it('bound allows retrigger at max-1 and escalates at max', () => {
+    const cell = loadMatrix().find((entry) => entry.name === 'prose-complete-reject-retrigger');
+    expect(cell).toBeDefined();
+    const atMaxMinusOne = evaluateHarnessContentShapeStage({
+      latestRun: cell!.latestRun,
+      attributionOk: true,
+      retriggerCount: 2,
+      maxRetriggerCount: 3,
+    });
+    expect(atMaxMinusOne.action).toBe(CONTENT_SHAPE_REJECT_RETRIGGER);
+    const atMax = evaluateHarnessContentShapeStage({
+      latestRun: cell!.latestRun,
+      attributionOk: true,
+      retriggerCount: 3,
+      maxRetriggerCount: 3,
+    });
+    expect(atMax.action).toBe(CONTENT_SHAPE_ESCALATE);
+    expect(atMax.reason).toBe('retrigger_bound_exhausted');
+  });
+
   it('kill-switch escalates rather than silently accepting prose', () => {
     const cell = loadMatrix().find((entry) => entry.name === 'prose-complete-reject-retrigger');
     expect(cell).toBeDefined();

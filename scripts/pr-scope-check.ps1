@@ -5,28 +5,11 @@ $ErrorActionPreference = 'Stop'
 $TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $CheckScript = Join-Path $TrustedRoot 'scripts/pr-scope-check.ts'
 $NodeRoot = $TrustedRoot
-$PrRoot = $TrustedRoot
-
 if ($env:PR_SCOPE_REPO_ROOT) {
     $PrRoot = (Resolve-Path $env:PR_SCOPE_REPO_ROOT).Path
-    $prHeadCheck = Join-Path $PrRoot 'scripts/pr-scope-check.ts'
-    if (Test-Path -LiteralPath $prHeadCheck) {
-        if (-not (Test-Path -LiteralPath $CheckScript)) {
-            $CheckScript = $prHeadCheck
-            $NodeRoot = $PrRoot
-        }
-        else {
-            $prHash = (Get-FileHash -LiteralPath $prHeadCheck -Algorithm SHA256).Hash
-            $trustedHash = (Get-FileHash -LiteralPath $CheckScript -Algorithm SHA256).Hash
-            if ($prHash -ne $trustedHash) {
-                $CheckScript = $prHeadCheck
-                $NodeRoot = $PrRoot
-            }
-        }
-    }
 }
 else {
-    $CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
+    $PrRoot = $TrustedRoot
 }
 
 function Write-ScopeGuardComment {

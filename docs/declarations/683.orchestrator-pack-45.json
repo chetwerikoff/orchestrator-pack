@@ -26,7 +26,6 @@
     "scripts/harness-post-submit-pn-reconcile.ps1",
     "scripts/launch-argv-inventory.json",
     "scripts/lib/Resolve-ScriptedReviewInitialObservedRunId.ps1",
-    "scripts/pr-scope-check.ps1",
     "scripts/scripted-review-confirmed-delivery-gate.ps1",
     "scripts/verify.ps1",
     "scripts/vitest-ci-lanes.config.json",

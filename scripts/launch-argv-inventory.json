@@ -6952,7 +6952,7 @@
       "rowId": "site-scripts-pr-scope-check-ps1-200",
       "caller": {
         "file": "scripts/pr-scope-check.ps1",
-        "line": 217
+        "line": 200
       },
       "callee": {
         "kind": "gh",
@@ -6963,7 +6963,7 @@
       "validatorId": "gh-inventory-static",
       "discoveryMatch": {
         "file": "scripts/pr-scope-check.ps1",
-        "line": 217,
+        "line": 200,
         "patternIds": [
           "ps-call-op"
         ]
