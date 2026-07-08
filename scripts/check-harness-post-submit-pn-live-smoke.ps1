@@ -25,9 +25,23 @@ function Invoke-HarnessPnLiveSmokeCli {
         -Payload $Payload -Label 'harness-pn-live-smoke' -JsonDepth 20
 }
 
-try {
+function Resolve-HarnessPnLiveSmokeDaemonBaseUrl {
+    if ($env:AO_DAEMON_BASE_URL) {
+        return $env:AO_DAEMON_BASE_URL.Trim().TrimEnd('/')
+    }
     $health = Get-AoDaemonHealthJson
-    $baseUrl = Get-AoDaemonApiBaseUrl -HealthPayload $health
+    return Get-AoDaemonApiBaseUrl -HealthPayload $health
+}
+
+function Test-HarnessPnLiveSmokeDaemonReachable {
+    param([Parameter(Mandatory = $true)][string]$BaseUrl)
+
+    Invoke-AoDaemonHttpJson -Method GET -Path '/api/v1/projects' -BaseUrl $BaseUrl -AllowedStatus @(200) | Out-Null
+}
+
+try {
+    $baseUrl = Resolve-HarnessPnLiveSmokeDaemonBaseUrl
+    Test-HarnessPnLiveSmokeDaemonReachable -BaseUrl $baseUrl
 }
 catch {
     Write-Host "[FAIL] AO daemon unavailable for live harness [Pn] smoke: $($_.Exception.Message)"
@@ -41,7 +55,7 @@ if (-not $sessionId) {
     exit 1
 }
 
-$reviews = Get-AoSessionReviewsJson -SessionId $sessionId -BaseUrl $baseUrl
+$reviews = Get-AoSessionReviewsJson -SessionId $sessionId -BaseUrl $baseUrl -HealthPayload $null
 $harnessRows = @($reviews.reviews | Where-Object {
         $lr = $_.latestRun
         $lr -and [string]$lr.harness -and @('complete', 'delivered') -contains [string]$lr.status

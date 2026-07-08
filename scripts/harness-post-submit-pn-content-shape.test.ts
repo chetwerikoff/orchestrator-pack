@@ -201,13 +201,15 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
     expect(gate).toMatch(/-DeliveryMessage/);
   });
 
-  it('live smoke workflow fails closed instead of skipping PR runs', () => {
+  it('live smoke workflow arms on session var and stays fail-closed in-script', () => {
     const workflow = readFileSync(path.join(repoRoot, '.github/workflows/harness-pn-live-smoke.yml'), 'utf8');
     const liveSmoke = readFileSync(path.join(repoRoot, 'scripts/check-harness-post-submit-pn-live-smoke.ps1'), 'utf8');
     expect(workflow).not.toMatch(/^\s*if:\s*.*PACK_HARNESS_PN_SMOKE_ENABLED/m);
+    expect(workflow).toMatch(/if:\s*\$\{\{\s*vars\.PACK_HARNESS_PN_SMOKE_SESSION/);
     expect(workflow).toMatch(/PACK_HARNESS_PN_SMOKE_ENABLED/);
+    expect(workflow).toMatch(/PACK_HARNESS_PN_SMOKE_SESSION/);
     expect(liveSmoke).not.toMatch(/\[SKIP\] live harness \[Pn\] smoke not operator-enabled/);
-    expect(liveSmoke).toMatch(/Get-AoDaemonHealthJson/);
+    expect(liveSmoke).toMatch(/Get-AoDaemonHealthJson|Resolve-HarnessPnLiveSmokeDaemonBaseUrl/);
     expect(workflow).toMatch(/pull_request:/);
     expect(workflow).toMatch(/check-harness-post-submit-pn-live-smoke\.ps1/);
   });

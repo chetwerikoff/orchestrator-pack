@@ -116,6 +116,14 @@ if ($workflow -notmatch 'pull_request:') {
     Write-Host 'live harness [Pn] smoke workflow must run on pull_request for merge-blocking PR checks'
     exit 1
 }
+if ($workflow -notmatch 'if:\s*\$\{\{\s*vars\.PACK_HARNESS_PN_SMOKE_SESSION') {
+    Write-Host 'live harness [Pn] smoke workflow must gate the job on PACK_HARNESS_PN_SMOKE_SESSION'
+    exit 1
+}
+if ($workflow -notmatch 'PACK_HARNESS_PN_SMOKE_SESSION') {
+    Write-Host 'live harness [Pn] smoke workflow must pass PACK_HARNESS_PN_SMOKE_SESSION to the script'
+    exit 1
+}
 
 $harnessAdoption = Get-Content -LiteralPath (Join-Path $Root 'docs/ao-0-10-review-harness-adoption.md') -Raw
 if ($harnessAdoption -match 'must run the pack JSONL bridge before') {
