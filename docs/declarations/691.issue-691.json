@@ -7,9 +7,10 @@
   "baseline": {
     "commit_sha": "c16ddc7228455bbc2e8e218c993c95f90e331fff",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:8a6de7930687065d4185db535ea714c1a44f6d1a7a28ce932c0068e64d562f58"
+    "active_scope_hash": "sha256:9cabd4bab93adf34b89f71fb983e5639719855e482e31a2a727db1b11f48c1f8"
   },
   "declared_paths": [
+    ".github/workflows/scope-guard.yml",
     ".github/workflows/vitest-runtime-history-refresh.yml",
     "docs/ci-pipeline-split.md",
     "docs/declarations/691.issue-691.json",
