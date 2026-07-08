@@ -132,6 +132,39 @@ function runMeasuredRefreshFixture() {
   rmSync(dir, { recursive: true, force: true });
 }
 
+function runIdenticalRerunIdempotentFixture() {
+  const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-rerun`);
+  mkdirSync(dir, { recursive: true });
+  const commitSha = 'deadbeef';
+  const shardReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
+  const base = seededHistory();
+  const first = refreshRuntimeHistory({
+    baseHistory: base,
+    shardReports,
+    expectedCommitSha: commitSha,
+    repoRoot: defaultRepoRoot,
+  });
+  assert(first.ok, 'first refresh must accept complete shard set');
+  assert(first.changed, 'first refresh must change history');
+  const firstBytes = historyBytes(first.history);
+
+  const second = refreshRuntimeHistory({
+    baseHistory: first.history,
+    shardReports,
+    expectedCommitSha: commitSha,
+    repoRoot: defaultRepoRoot,
+  });
+  assert(second.ok, 'identical rerun must accept the same shard set');
+  assert(second.idempotent, 'identical rerun must be idempotent');
+  assert(!second.changed, 'identical rerun must not report changed');
+  assert(
+    historyBytes(second.history) === firstBytes,
+    'identical rerun must leave history byte-unchanged',
+  );
+
+  rmSync(dir, { recursive: true, force: true });
+}
+
 function runMeasuredSourceWithoutWeightChangeFixture() {
   const base = seededHistory();
   const file = 'scripts/check-ci-pipeline-split.test.ts';
@@ -436,6 +469,7 @@ function runCoverageAndDurableProvenanceFixture() {
 export function runRuntimeHistoryRefreshFixtures() {
   failures.length = 0;
   runMeasuredRefreshFixture();
+  runIdenticalRerunIdempotentFixture();
   runMeasuredSourceWithoutWeightChangeFixture();
   runMetadataOnlyReconcileFixture();
   runStaleBaseReconcileFixture();

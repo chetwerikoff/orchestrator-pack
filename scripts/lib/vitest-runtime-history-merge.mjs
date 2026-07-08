@@ -254,6 +254,12 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
     const priorSamples = Array.isArray(history.recentSamples[file])
       ? history.recentSamples[file]
       : [];
+    if (
+      priorSamples.length > 0 &&
+      priorSamples[priorSamples.length - 1] === durationMs
+    ) {
+      continue;
+    }
     const samples = [...priorSamples, durationMs].slice(-MAX_RECENT_SAMPLES);
     const smoothed = medianMs(samples);
     if (smoothed == null) {
