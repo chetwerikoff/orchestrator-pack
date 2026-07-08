@@ -190,6 +190,36 @@ describe('session-pr-binding-resolver scenario matrix', () => {
     expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
   });
 
+  it('does not return PR-bound session as head owner when headSha is stale', () => {
+    const currentHead = 'cccccccccccccccccccccccccccccccccccccccc';
+    const staleHead = 'dddddddddddddddddddddddddddddddddddddddd';
+    const session = {
+      sessionId: 'orchestrator-pack-1',
+      role: 'worker',
+      status: 'working',
+      prNumber: 1,
+    };
+    const openPrs = [{ number: 1, headRefOid: currentHead, headRefName: 'issue-1' }];
+
+    expect(
+      resolveHeadOwningWorkerSessionId([session], 1, staleHead, openPrs),
+    ).toBeNull();
+    expect(
+      resolveWorkerSessionId([session], 1, {
+        openPrs,
+        headSha: staleHead,
+        ownsHead: (row) => sessionOwnsRunHead(row, 1, staleHead, openPrs),
+      }),
+    ).toBeNull();
+    expect(
+      resolvePrOwningWorkerSessionBinding([session], 1, openPrs, {
+        headSha: staleHead,
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      }).sessionId,
+    ).toBe('orchestrator-pack-1');
+  });
+
   it('scenario 4: many live sessions for one PR defers', () => {
     const resolution = resolvePrOwningWorkerSessionBinding(
       [
