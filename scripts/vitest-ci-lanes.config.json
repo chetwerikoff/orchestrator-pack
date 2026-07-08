@@ -140,6 +140,7 @@
     "scripts/test-runtime-budget.test.ts": "heavy",
     "scripts/trust-ao-worktree.test.ts": "light",
     "tests/agents-md-size-budget.test.ts": "light",
+    "tests/agents-md-relocation.test.ts": "light",
     "scripts/worker-iteration-cycle.test.ts": "heavy",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
     "scripts/worker-nudge-gate.test.ts": "heavy",
