@@ -142,6 +142,7 @@ describe('PowerShell must not duplicate closing-keyword regex', () => {
     const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');
     expect(ps1).toContain('--resolve-issue-number');
     expect(ps1).toContain("Join-Path $TrustedRoot 'scripts/pr-scope-check.ts'");
+    expect(ps1).toContain('SCOPE_GUARD_TRUSTED_ROOT');
     expect(ps1).toContain('Push-Location $NodeRoot');
     expect(ps1).not.toMatch(
       new RegExp(`\\\\b\\(?:${CLOSING_KEYWORD_ALTERNATION.replace(/\|/g, '\\|')}\\)`),

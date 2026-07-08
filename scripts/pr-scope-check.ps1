@@ -2,7 +2,12 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+if ($env:SCOPE_GUARD_TRUSTED_ROOT) {
+    $TrustedRoot = (Resolve-Path $env:SCOPE_GUARD_TRUSTED_ROOT).Path
+}
+else {
+    $TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+}
 $CheckScript = Join-Path $TrustedRoot 'scripts/pr-scope-check.ts'
 $NodeRoot = $TrustedRoot
 if ($env:PR_SCOPE_REPO_ROOT) {

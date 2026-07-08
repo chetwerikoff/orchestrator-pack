@@ -161,11 +161,14 @@ jobs:
           }
 
           $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
-          $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
+          $trustedCheckScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ts'
+          if (-not (Test-Path -LiteralPath $trustedCheckScript)) {
+            throw "trusted scope guard checker missing at $trustedCheckScript"
+          }
+          $env:SCOPE_GUARD_TRUSTED_ROOT = $trustedRoot
+          $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
           if (-not (Test-Path -LiteralPath $guardScript)) {
-            Write-Warning 'scope guard bootstrap: checker not on base ref yet; using PR head scripts (one-time until merge)'
-            $trustedRoot = $env:GITHUB_WORKSPACE
-            $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
+            throw "scope guard wrapper missing at $guardScript"
           }
 
           Push-Location $trustedRoot
