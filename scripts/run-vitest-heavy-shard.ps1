@@ -40,34 +40,50 @@ try {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $partialReports = [System.Collections.Generic.List[string]]::new()
     $failedExitCode = 0
+    $maxFileAttempts = if ($env:CI -eq 'true') { 3 } else { 1 }
 
     try {
         foreach ($file in $shardPlan.files) {
             $safeName = ($file -replace '[^\w.\-]+', '_')
             $partialReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-$safeName.json"
-            if (Test-Path -LiteralPath $partialReportPath) {
-                Remove-Item -LiteralPath $partialReportPath -Force
+            $filePassed = $false
+
+            for ($attempt = 1; $attempt -le $maxFileAttempts; $attempt++) {
+                if (Test-Path -LiteralPath $partialReportPath) {
+                    Remove-Item -LiteralPath $partialReportPath -Force
+                }
+
+                # Run one heavy file per Vitest invocation so long shard suites do not
+                # starve vitest-worker onTaskUpdate RPC (#487/#556; shard 6 flake class).
+                $output = & npm test -- $file --pool=threads --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
+                $text = ($output | Out-String)
+                Write-Host $text
+
+                if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
+                    if ($attempt -lt $maxFileAttempts) {
+                        Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard file $file (attempt $attempt/$maxFileAttempts); retrying..."
+                        continue
+                    }
+                    Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard (file: $file)"
+                    exit 1
+                }
+
+                if ($LASTEXITCODE -ne 0) {
+                    $failedExitCode = $LASTEXITCODE
+                    break
+                }
+
+                if (-not (Test-Path -LiteralPath $partialReportPath)) {
+                    Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
+                    exit 1
+                }
+
+                $filePassed = $true
+                break
             }
 
-            # Run one heavy file per Vitest invocation so long shard suites do not
-            # starve vitest-worker onTaskUpdate RPC (#487/#556; shard 6 flake class).
-            $output = & npm test -- $file --pool=threads --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
-            $text = ($output | Out-String)
-            Write-Host $text
-
-            if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
-                Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard (file: $file)"
-                exit 1
-            }
-
-            if ($LASTEXITCODE -ne 0) {
-                $failedExitCode = $LASTEXITCODE
+            if (-not $filePassed) {
                 continue
-            }
-
-            if (-not (Test-Path -LiteralPath $partialReportPath)) {
-                Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
-                exit 1
             }
 
             $partialReports.Add($partialReportPath) | Out-Null
