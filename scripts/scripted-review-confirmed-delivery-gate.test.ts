@@ -350,13 +350,18 @@ describe('post-submit seam wiring', () => {
   });
 
   it('ps1 runs post-send composition after explicit send', () => {
-    const text = readFileSync(
+    const gate = readFileSync(
       path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'),
       'utf8',
     );
-    expect(text).toMatch(/Complete-ScriptedReviewDeliveryGateAfterExplicitSend/);
-    expect(text).toMatch(/classify-post-send/);
-    expect(text).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
+    const explicit = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1'),
+      'utf8',
+    );
+    expect(gate).toMatch(/Complete-ScriptedReviewDeliveryGateAfterExplicitSend/);
+    expect(gate).toMatch(/Invoke-ScriptedReviewDeliveryExplicitSend/);
+    expect(explicit).toMatch(/classify-post-send/);
+    expect(gate).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
   });
 
   it('invoke-pack-review wires post-submit delivery after successful wrapper', () => {
