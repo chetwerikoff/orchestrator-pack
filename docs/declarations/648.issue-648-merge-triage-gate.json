@@ -24,9 +24,6 @@
     "scripts/verify.ps1",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/orchestrator-wake-supervisor.test.ts",
-    "scripts/lib/vitest-ci-lanes.mjs",
-    "scripts/merge-vitest-runtime-reports.mjs",
-    "scripts/run-vitest-heavy-shard.ps1",
     "scripts/supervisor-recovery.test-helpers.ts"
   ],
   "declared_globs": [
