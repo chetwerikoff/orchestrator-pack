@@ -243,6 +243,44 @@ describe('architect-adjudication', () => {
     }).reason).not.toBe('open_findings_snapshot_drift');
   });
 
+  it('architect DEFER adjudications accumulate and emit clearance after all pending findings are deferred', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker'), finding('amb2', 'another unmarked finding')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending;
+    expect(pending).toHaveLength(2);
+    let last = null;
+    for (const row of pending) {
+      const token = issueArchitectProvenanceToken({
+        stateRoot: root,
+        sessionKind: 'architect',
+        adjudicationId: row.adjudication_id,
+        prNumber: 648,
+        headSha: 'abc123',
+      });
+      const findingRow = open.find((item) => item.id === row.finding_id)!;
+      last = adjudicateArchitectFinding({
+        stateRoot: root,
+        sessionKind: 'architect',
+        adjudicationId: row.adjudication_id,
+        verdict: VERDICT_DEFER,
+        finding: findingRow,
+        findings: open,
+        adjudicationProvenanceToken: token.adjudication_provenance_token,
+        actorSession: 'arch-1',
+        atCapRecord: atCap(),
+      });
+    }
+    expect(last?.clearance).toMatchObject({ terminal: 'merge_triage_cleared', pr_number: 648, head_sha: 'abc123' });
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: open,
+    })).toMatchObject({ allow: true, reason: 'merge_triage_cleared' });
+  });
+
   it('architect DEFER does not emit clearance while BLOCK findings remain open', () => {
     const root = stateRoot();
     const open = [finding('amb1', 'text without seed marker'), finding('b1', 'parser error')];

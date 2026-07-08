@@ -374,6 +374,47 @@ function appendVerdictJournal({ paths, prNumber, headSha, gateRunId, finding, cl
   return row;
 }
 
+function latestArchitectAdjudicationRow(paths, prNumber, headSha, findingId, fingerprint) {
+  const rows = readJsonl(paths.journal);
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (Number(row.pr_number) !== Number(prNumber)) continue;
+    if (normalizeTriageText(row.head_sha) !== normalizeTriageText(headSha)) continue;
+    if (row.finding_id !== findingId || row.fingerprint !== fingerprint) continue;
+    if (row.actor !== 'architect' && row.actor !== 'operator') continue;
+    if (row.reason !== 'architect_adjudication') continue;
+    if (row.verdict !== VERDICT_BLOCK && row.verdict !== VERDICT_DEFER) continue;
+    return row;
+  }
+  return null;
+}
+
+function resolveOpenFindingClassification({ paths, prNumber, headSha, finding, markerList, overrideClassification = null }) {
+  const findingId = String(finding?.id ?? '');
+  const fingerprint = String(finding?.fingerprint ?? findingId);
+  const base = classifyFinding(finding, markerList);
+  if (
+    overrideClassification &&
+    overrideClassification.findingId === findingId &&
+    overrideClassification.fingerprint === fingerprint
+  ) {
+    return {
+      ...base,
+      verdict: overrideClassification.verdict,
+      reason: overrideClassification.reason,
+    };
+  }
+  const adjudicated = latestArchitectAdjudicationRow(paths, prNumber, headSha, findingId, fingerprint);
+  if (adjudicated) {
+    return {
+      ...base,
+      verdict: adjudicated.verdict,
+      reason: adjudicated.reason,
+    };
+  }
+  return base;
+}
+
 function appendArchitectInbox({ paths, prNumber, headSha, gateRunId, finding, classification, appealReason = '' }) {
   const adjudicationId = `adj-${sha256(`${prNumber}:${headSha}:${classification.fingerprint}:${classification.normalizedTextHash}`).slice(0, 24)}`;
   const token = randomUUID();
@@ -622,14 +663,16 @@ export function adjudicateArchitectFinding(input = {}) {
     const openFindings = input.findings
       ? currentHeadOpenFindings({ ...input, prNumber: inbox.pr_number, headSha: inbox.head_sha })
       : readPackFindingStore({ projectPath: input.projectPath, prNumber: inbox.pr_number, headSha: inbox.head_sha });
-    const openClassifications = openFindings.map((openFinding) => {
-      const openId = String(openFinding?.id ?? '');
-      const openFingerprint = String(openFinding?.fingerprint ?? openFinding?.id ?? '');
-      if (openId === classification.findingId && openFingerprint === classification.fingerprint) {
-        return classification;
-      }
-      return classifyFinding(openFinding, markerList);
-    });
+    const openClassifications = openFindings.map((openFinding) =>
+      resolveOpenFindingClassification({
+        paths,
+        prNumber: inbox.pr_number,
+        headSha: inbox.head_sha,
+        finding: openFinding,
+        markerList,
+        overrideClassification: classification,
+      }),
+    );
     writeDeferredCatalogRows({
       paths,
       prNumber: inbox.pr_number,
