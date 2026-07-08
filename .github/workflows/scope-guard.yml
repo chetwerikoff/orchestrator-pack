@@ -166,9 +166,9 @@ jobs:
             throw "trusted scope guard checker missing at $trustedCheckScript"
           }
           $env:SCOPE_GUARD_TRUSTED_ROOT = $trustedRoot
-          $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
+          $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
           if (-not (Test-Path -LiteralPath $guardScript)) {
-            throw "scope guard wrapper missing at $guardScript"
+            throw "trusted scope guard wrapper missing at $guardScript"
           }
 
           Push-Location $trustedRoot

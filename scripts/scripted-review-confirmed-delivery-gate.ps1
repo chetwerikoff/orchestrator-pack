@@ -63,6 +63,20 @@ function Invoke-ScriptedReviewDeliveryGateCli {
         -Subcommand $Subcommand -Payload $Payload -Label $Script:GateLogPrefix -JsonDepth 30
 }
 
+
+function New-ScriptedReviewDeliveryGatePollStepBase {
+    return @{
+        runId               = $RunId
+        batchId             = $BatchId
+        prNumber            = $PrNumber
+        targetSha           = $TargetSha
+        verdict             = $Verdict
+        harnessContentShape = $true
+        retriggerCount      = $HarnessPnRetriggerCount
+        maxRetriggerCount   = $HarnessPnMaxRetriggerCount
+    }
+}
+
 function Get-ScriptedReviewDeliveryGateConfig {
     $payload = @{
         config = @{
@@ -142,18 +156,13 @@ function Invoke-ScriptedReviewDeliveryGateExplicitSend {
     $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
     $sessions = @(Get-ScriptedReviewDeliveryGateSessions)
     $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
-        reviews   = @()
-        runId     = $RunId
-        batchId   = $BatchId
-        prNumber  = $PrNumber
-        targetSha = $TargetSha
-        verdict   = $Verdict
-        session   = $session
-        openPrs   = @($openPrs)
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
+        reviews     = @()
+        session     = $session
+        openPrs     = @($openPrs)
         startedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        nowMs     = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    }
+        nowMs       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    })
     $liveness = $step.liveness
     if ($liveness.liveness -ne 'live_head_owning') {
         return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$liveness.reason)
@@ -284,8 +293,15 @@ function Invoke-HarnessPostSubmitPnReconcileFromGate {
         '-TargetSha', $TargetSha,
         '-Verdict', $Verdict,
         '-Reason', $Reason,
+        '-ProjectId', $ProjectId,
         '-RetriggerCount', $HarnessPnRetriggerCount
     )
+    if ($RepoRoot) { $args += '-RepoRoot', $RepoRoot }
+    if ($PollWindowSeconds -gt 0) { $args += '-PollWindowSeconds', $PollWindowSeconds }
+    if ($PollIntervalSeconds -gt 0) { $args += '-PollIntervalSeconds', $PollIntervalSeconds }
+    if ($FixtureReviewsPath) { $args += '-FixtureReviewsPath', $FixtureReviewsPath }
+    if ($FixtureSessionsPath) { $args += '-FixtureSessionsPath', $FixtureSessionsPath }
+    if ($FixtureOpenPrsPath) { $args += '-FixtureOpenPrsPath', $FixtureOpenPrsPath }
     if ($DryRun) { $args += '-DryRun' }
     Write-ScriptedReviewDeliveryGateLog "invalid harness content; invoking post-submit [Pn] reconcile reason=$Reason"
     & pwsh @args
@@ -316,25 +332,18 @@ if ($Verdict -eq 'approved') {
     $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
     $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
         reviews              = @()
-        runId                = $RunId
-        batchId              = $BatchId
-        prNumber             = $PrNumber
-        targetSha            = $TargetSha
-        verdict              = $Verdict
         session              = $session
         openPrs              = @($openPrs)
         startedAtMs          = $startedAtMs
         nowMs                = $nowMs
         initialObservedRunId = ''
-        retriggerCount       = $HarnessPnRetriggerCount
-        maxRetriggerCount    = $HarnessPnMaxRetriggerCount
         config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
         }
-    }
+    })
 
     $terminal = $step.terminal
     $action = [string]$terminal.action
@@ -371,25 +380,18 @@ while ($true) {
         -Reviews @($reviewsPayload.reviews) `
         -PrNumber $PrNumber
 
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
-        reviews             = @($reviewsPayload.reviews)
-        runId               = $RunId
-        batchId             = $BatchId
-        prNumber            = $PrNumber
-        targetSha           = $TargetSha
-        verdict             = $Verdict
-        session             = $session
-        openPrs             = @($openPrs)
-        startedAtMs         = $startedAtMs
-        nowMs               = $nowMs
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
+        reviews              = @($reviewsPayload.reviews)
+        session              = $session
+        openPrs              = @($openPrs)
+        startedAtMs          = $startedAtMs
+        nowMs                = $nowMs
         initialObservedRunId = $initialObservedRunId
-        retriggerCount       = $HarnessPnRetriggerCount
-        maxRetriggerCount    = $HarnessPnMaxRetriggerCount
-        config              = @{
+        config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
         }
-    }
+    })
 
     $terminal = $step.terminal
     $action = [string]$terminal.action

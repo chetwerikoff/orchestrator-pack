@@ -39,6 +39,10 @@ if ($gateMjs -notmatch 'evaluateHarnessContentShapeStage' -or $gateMjs -notmatch
 }
 
 $gatePs1 = Get-Content -LiteralPath (Join-Path $Root 'scripts/scripted-review-confirmed-delivery-gate.ps1') -Raw
+if ($gatePs1 -notmatch 'harnessContentShape\s*=\s*\$true') {
+    Write-Host 'confirmed-delivery gate must enable harnessContentShape on poll-step payloads'
+    exit 1
+}
 if ($gatePs1 -notmatch 'harness-post-submit-pn-reconcile\.ps1') {
     Write-Host 'confirmed-delivery gate must delegate reject_retrigger to harness-post-submit-pn-reconcile.ps1'
     exit 1
