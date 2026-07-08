@@ -577,6 +577,8 @@ export function evaluateMergePolicy(input = {}) {
   const rows = readJsonl(paths.journal);
   const invalidArchitectRows = rows.filter((row) => row.actor === 'architect' && !row.adjudication_provenance_token_hash);
   if (invalidArchitectRows.length > 0) return { allow: false, reason: 'invalid_architect_provenance' };
+  const missingArchitectSession = rows.filter((row) => row.actor === 'architect' && !String(row.actor_session ?? '').trim());
+  if (missingArchitectSession.length > 0) return { allow: false, reason: 'invalid_architect_actor_session' };
   return { allow: true, reason: 'merge_triage_cleared', clearance };
 }
 
@@ -645,6 +647,8 @@ export function adjudicateArchitectFinding(input = {}) {
   classification.verdict = verdict;
   classification.reason = 'architect_adjudication';
   const actor = sessionKind === 'operator' ? 'operator' : 'architect';
+  const actorSession = String(input.actorSession ?? '').trim();
+  if (actor === 'architect' && !actorSession) throw new Error('architect adjudication requires actor_session');
   appendVerdictJournal({
     paths,
     prNumber: inbox.pr_number,
@@ -653,7 +657,7 @@ export function adjudicateArchitectFinding(input = {}) {
     finding,
     classification,
     actor,
-    actorSession: String(input.actorSession ?? ''),
+    actorSession,
     provenanceToken: String(input.adjudicationProvenanceToken ?? ''),
   });
   appendJsonl(paths.inbox, { ...inbox, status: 'resolved', resolved_verdict: verdict, resolved_at_utc: new Date().toISOString() });
@@ -678,8 +682,8 @@ export function adjudicateArchitectFinding(input = {}) {
       prNumber: inbox.pr_number,
       headSha: inbox.head_sha,
       gateRunId: inbox.gate_run_id,
-      findings: [finding],
-      classifications: [classification],
+      findings: openFindings,
+      classifications: openClassifications,
     });
     const pendingRemaining = readPendingInbox(paths, inbox.pr_number, inbox.head_sha);
     if (canEmitMergeTriageClearance(openFindings, openClassifications, pendingRemaining.length)) {

@@ -271,6 +271,8 @@ describe('architect-adjudication', () => {
         atCapRecord: atCap(),
       });
     }
+    const architectCatalog = readFileSync(join(root, 'deferred-findings/catalog.jsonl'), 'utf8').trim().split(/\r?\n/);
+    expect(architectCatalog).toHaveLength(2);
     expect(last?.clearance).toMatchObject({ terminal: 'merge_triage_cleared', pr_number: 648, head_sha: 'abc123' });
     expect(evaluateMergePolicy({
       stateRoot: root,
@@ -312,6 +314,53 @@ describe('architect-adjudication', () => {
       atCapRecord: atCap(),
       findings: open,
     }).allow).toBe(false);
+  });
+
+  it('rejects architect adjudication without actor_session', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending[0]!;
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    expect(() => adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: open[0],
+      findings: open,
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+    })).toThrow(/actor_session/);
+  });
+
+  it('merge policy denies clearance when architect journal rows lack actor_session', () => {
+    const root = stateRoot();
+    const defer = finding('d1', 'TOCTOU');
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [defer] });
+    const journalPath = join(root, 'merge-triage/verdict-journal.jsonl');
+    const rows = readFileSync(journalPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    rows.push({
+      ...rows[rows.length - 1],
+      actor: 'architect',
+      actor_session: '',
+      adjudication_provenance_token_hash: rows[rows.length - 1].adjudication_provenance_token_hash || 'abc',
+      reason: 'architect_adjudication',
+      verdict: VERDICT_DEFER,
+    });
+    writeFileSync(journalPath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: [defer],
+    }).reason).toBe('invalid_architect_actor_session');
   });
 
   it('architect command with valid token is consumed by hidden-token gate and budget reaches PENDING_OPERATOR after two permissive verdicts', () => {
