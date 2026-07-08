@@ -522,6 +522,23 @@ describe('dead-worker-reconciler (Issue #593)', () => {
   });
 
 
+  it('requires session-specific sanctioned kill records (issue-only records do not suppress)', () => {
+    const session = {
+      sessionId: 'opk-688-new-session',
+      issueNumber: 688,
+      status: 'terminated',
+    };
+    const evidence = classifyWorkerLivenessEvidence(session, {
+      osLiveness: { [session.sessionId]: 'pane-gone' },
+      sanctionedKillSurface: {
+        healthy: true,
+        records: [{ sessionId: 'opk-688-old-session', issueNumber: 688, prNumber: 0, killKind: 'manual', timestampMs: 1 }],
+      },
+    });
+    expect(evidence.verdict).toBe('dead');
+    expect(evidence.reason).toBe('session_row_and_os_liveness_dead');
+  });
+
   it('detects AO 0.10 terminated session row plus pane-gone as dead without ao events', () => {
     const capture = JSON.parse(readFileSync(join(repoRoot, 'tests/external-output-references/captures/ao-0-10-cli/session-get-terminated.raw.json'), 'utf8'));
     const session = {

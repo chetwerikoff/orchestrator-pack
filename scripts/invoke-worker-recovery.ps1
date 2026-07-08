@@ -35,6 +35,26 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Worker-Recovery.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 
+function Invoke-RecordSanctionedWorkerKillIfNeeded {
+    param(
+        [string]$Trigger,
+        [string]$SessionId,
+        [int]$IssueNumber,
+        [int]$PrNumber,
+        [switch]$DryRun
+    )
+
+    if ($DryRun -or -not $SessionId) { return }
+    if ($Trigger -notin @('operator_request', 'operator-recover')) { return }
+
+    $recordScript = Join-Path $PSScriptRoot 'record-sanctioned-worker-kill.ps1'
+    & pwsh -NoProfile -File $recordScript -SessionId $SessionId -IssueNumber $IssueNumber -PrNumber $PrNumber -KillKind 'manual' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "record-sanctioned-worker-kill failed session=$SessionId exit=$LASTEXITCODE"
+    }
+}
+
+
 $session = $null
 if ($FixtureSessionJson) {
     $session = $FixtureSessionJson | ConvertFrom-Json -AsHashtable
@@ -65,6 +85,10 @@ if ($Probe) {
 if (-not $WorktreePath) {
     throw 'WorktreePath is required unless -Probe is set.'
 }
+
+
+Invoke-RecordSanctionedWorkerKillIfNeeded -Trigger $Trigger -SessionId $SessionId `
+    -IssueNumber $IssueNumber -PrNumber $PrNumber -DryRun:$DryRun
 
 $recoveryParams = @{
     Trigger      = $Trigger
