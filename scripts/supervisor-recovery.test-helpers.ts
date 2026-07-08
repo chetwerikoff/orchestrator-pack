@@ -271,6 +271,20 @@ export function isAlive(pid: number): boolean {
   }
 }
 
+export async function waitForProcessesStopped(
+  pids: number[],
+  timeoutMs = 25_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pids.every((pid) => !isAlive(pid))) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`timed out waiting for processes to stop: ${pids.join(', ')}`);
+}
+
 export function countLogMatches(log: string, pattern: RegExp): number {
   return (log.match(pattern) ?? []).length;
 }
