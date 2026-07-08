@@ -59,6 +59,14 @@ if ($ps1 -notmatch 'Write-OrchestratorSideProcessProgress') {
     Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must report supervised side-process progress'
     exit 1
 }
+if ($ps1 -match 'New-ScriptedReviewDeliveryGatePollStepBase \+ @\{') {
+    Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must build poll-step payloads in statement mode'
+    exit 1
+}
+if ($ps1 -notmatch 'New-ScriptedReviewDeliveryGatePollStepPayload') {
+    Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must merge poll-step fields via New-ScriptedReviewDeliveryGatePollStepPayload'
+    exit 1
+}
 
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $invokePackReview = Join-Path $Root 'scripts/invoke-pack-review.ps1'

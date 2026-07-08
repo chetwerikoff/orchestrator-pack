@@ -79,6 +79,14 @@ function New-ScriptedReviewDeliveryGatePollStepBase {
     }
 }
 
+
+function New-ScriptedReviewDeliveryGatePollStepPayload {
+    param([Parameter(Mandatory = $true)][hashtable]$Extra)
+
+    $base = New-ScriptedReviewDeliveryGatePollStepBase
+    return $base + $Extra
+}
+
 function Get-ScriptedReviewDeliveryGateConfig {
     $payload = @{
         config = @{
@@ -154,11 +162,12 @@ function Invoke-ScriptedReviewDeliveryGateEscalation {
 function Invoke-ScriptedReviewDeliveryGateExplicitSend {
     param([string]$MessageText)
 
+    $pollStepBase = New-ScriptedReviewDeliveryGatePollStepBase
     return Invoke-ScriptedReviewDeliveryExplicitSend `
         -SessionId $SessionId -RunId $RunId -PrNumber $PrNumber -TargetSha $TargetSha `
         -ProjectId $ProjectId -MessageText $MessageText -GateFilterCli $GateFilterCli `
         -LogPrefix $Script:GateLogPrefix -ChildId $Script:GateLogPrefix `
-        -PollStepBase (New-ScriptedReviewDeliveryGatePollStepBase) `
+        -PollStepBase $pollStepBase `
         -GetOpenPrs { Get-ScriptedReviewDeliveryGateOpenPrs } `
         -GetSessions { Get-ScriptedReviewDeliveryGateSessions } `
         -FindSession { param($sessions) Find-ScriptedReviewDeliveryGateSession -Sessions $sessions } `
@@ -269,7 +278,7 @@ if ($Verdict -eq 'approved') {
         -Reviews @($reviewsPayload.reviews) `
         -PrNumber $PrNumber
     Write-ScriptedReviewDeliveryGateLog 'approved verdict: poll daemon reviews for harness content-shape'
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
+    $pollStepPayload = New-ScriptedReviewDeliveryGatePollStepPayload -Extra @{
         reviews              = @($reviewsPayload.reviews)
         session              = $session
         openPrs              = @($openPrs)
@@ -280,7 +289,8 @@ if ($Verdict -eq 'approved') {
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
         }
-    })
+    }
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload $pollStepPayload
 
     $terminal = $step.terminal
     $action = [string]$terminal.action
@@ -317,7 +327,7 @@ while ($true) {
         -Reviews @($reviewsPayload.reviews) `
         -PrNumber $PrNumber
 
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
+    $pollStepPayload = New-ScriptedReviewDeliveryGatePollStepPayload -Extra @{
         reviews              = @($reviewsPayload.reviews)
         session              = $session
         openPrs              = @($openPrs)
@@ -328,7 +338,8 @@ while ($true) {
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
         }
-    })
+    }
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload $pollStepPayload
 
     $terminal = $step.terminal
     $action = [string]$terminal.action

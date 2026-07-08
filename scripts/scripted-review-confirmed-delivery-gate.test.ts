@@ -348,6 +348,12 @@ describe('post-submit seam wiring', () => {
     expect(text).toMatch(/scripted-review-confirmed-delivery-gate\.ps1/);
   });
 
+  it('builds poll-step payloads in statement mode', () => {
+    const text = readFileSync(path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'), 'utf8');
+    expect(text).toMatch(/New-ScriptedReviewDeliveryGatePollStepPayload/);
+    expect(text).not.toMatch(/New-ScriptedReviewDeliveryGatePollStepBase \+ @\{/);
+  });
+
   it('approved ps1 path polls daemon reviews before send when content-shape is armed', () => {
     const text = readFileSync(
       path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'),

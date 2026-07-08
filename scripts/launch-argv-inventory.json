@@ -10653,10 +10653,10 @@
       }
     },
     {
-      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-236",
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-245",
       "caller": {
         "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 236
+        "line": 245
       },
       "callee": {
         "kind": "other-external",
@@ -10671,7 +10671,7 @@
       "hashPinnedSourceHash": "sha256:cd54a0d262407c99a062bf376163241427024ef38abc6276b8f11630beb27330",
       "discoveryMatch": {
         "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 236,
+        "line": 245,
         "patternIds": [
           "call-pwsh",
           "ps-call-op"

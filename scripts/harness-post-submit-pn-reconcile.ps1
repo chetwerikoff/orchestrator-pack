@@ -183,11 +183,12 @@ function Resolve-HarnessPnReconcileDeliveryMessage {
 function Invoke-HarnessPnReconcileExplicitSend {
     param([string]$MessageText)
 
+    $pollStepBase = New-HarnessPnReconcilePollStepBase
     return Invoke-ScriptedReviewDeliveryExplicitSend `
         -SessionId $SessionId -RunId $RunId -PrNumber $PrNumber -TargetSha $TargetSha `
         -ProjectId $ProjectId -MessageText $MessageText -GateFilterCli $GateFilterCli `
         -LogPrefix $Script:ReconcileLogPrefix -ChildId $Script:ReconcileLogPrefix `
-        -PollStepBase (New-HarnessPnReconcilePollStepBase) `
+        -PollStepBase $pollStepBase `
         -GetOpenPrs { Get-HarnessPnReconcileOpenPrs } `
         -GetSessions { Get-HarnessPnReconcileSessions } `
         -FindSession { param($sessions) Find-HarnessPnReconcileSession -Sessions $sessions } `
