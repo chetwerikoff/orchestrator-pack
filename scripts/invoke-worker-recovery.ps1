@@ -41,11 +41,15 @@ function Invoke-RecordSanctionedWorkerKillIfNeeded {
         [string]$SessionId,
         [int]$IssueNumber,
         [int]$PrNumber,
+        [object]$RecoveryResult,
         [switch]$DryRun
     )
 
     if ($DryRun -or -not $SessionId) { return }
     if ($Trigger -notin @('operator_request', 'operator-recover')) { return }
+
+    $audit = $RecoveryResult.audit
+    if (-not $audit -or [string]$audit.claimOutcome -ne 'claim_acquired') { return }
 
     $recordScript = Join-Path $PSScriptRoot 'record-sanctioned-worker-kill.ps1'
     & pwsh -NoProfile -File $recordScript -SessionId $SessionId -IssueNumber $IssueNumber -PrNumber $PrNumber -KillKind 'manual' | Out-Null
@@ -87,9 +91,6 @@ if (-not $WorktreePath) {
 }
 
 
-Invoke-RecordSanctionedWorkerKillIfNeeded -Trigger $Trigger -SessionId $SessionId `
-    -IssueNumber $IssueNumber -PrNumber $PrNumber -DryRun:$DryRun
-
 $recoveryParams = @{
     Trigger      = $Trigger
     SessionId    = $SessionId
@@ -115,6 +116,9 @@ if ($PSBoundParameters.ContainsKey('WorktreePresent') -or $Probe) {
 else {
     $result = Invoke-WorkerRecovery @recoveryParams
 }
+
+Invoke-RecordSanctionedWorkerKillIfNeeded -Trigger $Trigger -SessionId $SessionId `
+    -IssueNumber $IssueNumber -PrNumber $PrNumber -RecoveryResult $result -DryRun:$DryRun
 
 if ($result.outcome -in @('skipped_ambiguous', 'skipped_live', 'spawn_denied', 'partial_failure', 'escalated')) {
     $sessionId = [string]$SessionId

@@ -777,6 +777,8 @@ describe('invoke-worker-recovery entrypoint', () => {
     );
     expect(entryText).toMatch(/record-sanctioned-worker-kill\.ps1/);
     expect(entryText).toMatch(/\$Trigger -notin @\('operator_request', 'operator-recover'\)/);
+    expect(entryText).toMatch(/claimOutcome -ne 'claim_acquired'/);
+    expect(entryText).toMatch(/Invoke-WorkerRecovery @recoveryParams[\s\S]*Invoke-RecordSanctionedWorkerKillIfNeeded/);
   });
 
   it('invoke-worker-recovery forwards WorktreePresent only when caller bound the switch', () => {
