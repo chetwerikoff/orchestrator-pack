@@ -5,9 +5,9 @@
   "supersedes": null,
   "created_at": "2026-07-08T10:30:00.000Z",
   "baseline": {
-    "commit_sha": "79a7518fede9925e94023d54ce1d5d7861f9241e",
-    "worktree_dirty": true,
-    "active_scope_hash": "sha256:pending-after-commit"
+    "commit_sha": "d4a2169b47c80bdc9a53c3b0f1bf6be40d277fbd",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1585ada9f8185aedaec37f2b6723c433f25bee9edc8841880a08956bb7470665"
   },
   "declared_paths": [
     "docs/merge-triage-gate.d.mts",
@@ -15,6 +15,7 @@
     "docs/merge-triage-markers.v1.json",
     "AGENTS.md",
     "scripts/check-merge-triage-gate.ps1",
+    "scripts/check-review-010-vocabulary.ps1",
     "scripts/launch-argv-inventory.json",
     "scripts/lib/Merge-TriageGate.ps1",
     "scripts/merge-triage-gate.ps1",
@@ -25,10 +26,5 @@
   "declared_globs": [
     "docs/declarations/648.issue-648-merge-triage-gate.json"
   ],
-  "amendments": [
-    {
-      "path": "scripts/check-review-010-vocabulary.ps1",
-      "reason": "Allowlist merge-triage static guard negative ao review list pattern (Issue #648)"
-    }
-  ]
+  "amendments": []
 }
