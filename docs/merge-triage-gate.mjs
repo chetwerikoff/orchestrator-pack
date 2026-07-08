@@ -109,10 +109,19 @@ function hasCrashMoveBetweenQualifier(normalizedText) {
   return normalizedText.includes('between') && /(crash|move|moved|head|cut|switch|advance)/i.test(normalizedText);
 }
 
+function bodyEncodesScopeViolation(normalizedText) {
+  return /\bcategory:\s*scope-violation\b/.test(normalizedText) || /\btype:\s*scope-violation\b/.test(normalizedText);
+}
+
 function isScopeViolation(finding, normalizedText) {
   const category = normalizeTriageText(finding?.category ?? '');
   const type = normalizeTriageText(finding?.type ?? '');
-  return category === 'scope-violation' || type === 'scope-violation' || normalizedText.includes('[scope-violation]');
+  return (
+    category === 'scope-violation' ||
+    type === 'scope-violation' ||
+    normalizedText.includes('[scope-violation]') ||
+    bodyEncodesScopeViolation(normalizedText)
+  );
 }
 
 function denylistMarkerMatchesText(normalizedText, marker) {
@@ -576,11 +585,21 @@ function emitClearance({ paths, prNumber, headSha, gateRunId, markerList, atCapR
   return record;
 }
 
+function isClearanceRecordForHead(clearance, prNumber, headSha) {
+  if (!clearance) return false;
+  if (clearance.terminal !== TERMINAL_MERGE_TRIAGE_CLEARED) return false;
+  if (Number(clearance.pr_number) !== Number(prNumber)) return false;
+  return normalizeTriageText(clearance.head_sha) === normalizeTriageText(headSha);
+}
+
 function loadClearance(paths, prNumber, headSha, input = {}) {
-  if (input.clearanceRecord) return input.clearanceRecord;
+  if (input.clearanceRecord) {
+    return isClearanceRecordForHead(input.clearanceRecord, prNumber, headSha) ? input.clearanceRecord : null;
+  }
   const file = path.join(paths.clearanceDir, `pr-${prNumber}-${headSha || 'unknown'}.json`);
   if (!existsSync(file)) return null;
-  return readJsonFile(file);
+  const loaded = readJsonFile(file);
+  return isClearanceRecordForHead(loaded, prNumber, headSha) ? loaded : null;
 }
 
 function isPermissiveArchitectVerdict(row) {

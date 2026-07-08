@@ -111,6 +111,17 @@ describe('marker-classification', () => {
     expect(classifyFinding(finding('scope-d', '[scope-violation] touched packages/core/lib/foo.ts', { category: 'scope-violation' })).verdict).toBe(VERDICT_BLOCK);
     expect(classifyFinding(finding('scope-e', '[scope-violation] wrote .ao/sessions/state.json', { category: 'scope-violation' })).verdict).toBe(VERDICT_BLOCK);
   });
+  it('honors body-encoded scope-violation category without structured fields or title marker', () => {
+    expect(classifyFinding(finding('scope-body', 'declaration missing', {
+      title: 'declaration missing',
+      body: 'severity: blocking\ncategory: scope-violation\ndeclaration missing',
+    })).verdict).toBe(VERDICT_DEFER);
+    expect(classifyFinding(finding('scope-body-deny', 'touched vendor/**', {
+      title: 'scope issue',
+      body: 'severity: blocking\ntype: scope-violation\ntouched vendor/**',
+    })).verdict).toBe(VERDICT_BLOCK);
+  });
+
 });
 
 describe('ambiguity-fail-closed', () => {
@@ -239,6 +250,29 @@ describe('merge-policy-hook', () => {
     writeFileSync(markerFile, JSON.stringify({ schema_version: 1, block_markers: markers.blockMarkers, defer_markers: [...markers.deferMarkers, 'new marker'] }));
     expect(evaluateMergePolicy({ stateRoot: root, markerFile, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [defer] }).reason).toBe('marker_list_drift');
   });
+  it('rejects supplied clearance records for a different head or PR', () => {
+    const root = stateRoot();
+    const defer = finding('d1', 'TOCTOU');
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [defer] });
+    const clearance = JSON.parse(readFileSync(join(root, 'merge-triage/clearance/pr-648-abc123.json'), 'utf8'));
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'newhead',
+      atCapRecord: atCap(648, 'newhead'),
+      findings: [finding('d1', 'TOCTOU', { headSha: 'newhead' })],
+      clearanceRecord: clearance,
+    }).allow).toBe(false);
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 999,
+      headSha: 'abc123',
+      atCapRecord: atCap(999, 'abc123'),
+      findings: [defer],
+      clearanceRecord: clearance,
+    }).allow).toBe(false);
+  });
+
 });
 
 describe('architect-adjudication', () => {
