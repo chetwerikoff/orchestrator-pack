@@ -581,7 +581,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         sanctionedKillSurface: { healthy: true, records: [] },
       },
     }));
-    expect(plan.actions.some((a: { type: string; sessionId: string }) => a.type === 'attempt_started' && a.sessionId === 'opk-688-absent')).toBe(true);
+    expect(plan.actions.some((a) => a.type === 'attempt_started' && a.sessionId === 'opk-688-absent')).toBe(true);
 
     const unreadable = planDeadWorkerReconcile(enabledPlanInput({
       sessions: [{ sessionId: 'opk-688-unreadable', issueNumber: 688, status: 'terminated' }],

@@ -10,8 +10,10 @@ export declare const DEFAULT_SHUTDOWN_SUPPRESSION_WINDOW_MS: number;
 export interface DeathEvidence {
   verdict: 'suppressed' | 'dead' | 'audit_only' | 'live_or_unknown';
   reason: string;
+  escalate?: boolean;
   event?: Record<string, unknown> | null;
   matchedEvents?: Array<Record<string, unknown>>;
+  evidence?: Record<string, unknown>;
 }
 
 export interface RecoveryRoute {
@@ -38,6 +40,7 @@ export interface DeadWorkerReconcileAction {
   type: string;
   outcome: string;
   reason: string;
+  escalate?: boolean;
   sessionId?: string;
   issueNumber?: number;
   prNumber?: number;
@@ -62,6 +65,8 @@ export interface DeadWorkerReconcileAction {
 
 export interface PlanDeadWorkerReconcileInput {
   sessions?: Array<Record<string, unknown>>;
+  absentSessions?: Array<Record<string, unknown>>;
+  livenessContext?: Record<string, unknown>;
   aoEvents?: Array<Record<string, unknown>>;
   respawnPolicy?: Record<string, unknown>;
   recoveryChecks?: {
@@ -111,6 +116,11 @@ export declare function classifyWorkerDeathEvidence(
   aoEvents?: Array<Record<string, unknown>>,
   nowMs?: number,
   options?: { respawnPolicy?: Record<string, unknown> },
+): DeathEvidence;
+
+export declare function classifyWorkerLivenessEvidence(
+  session: Record<string, unknown>,
+  livenessContext?: Record<string, unknown>,
 ): DeathEvidence;
 
 export declare function resolveShutdownSuppressionWindowMs(policy: unknown): number;
