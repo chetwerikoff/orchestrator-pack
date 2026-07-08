@@ -82,11 +82,15 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
     throw new Error('vitest-ci-lanes.config.json heavyDefaultRuntimeMs must be positive');
   }
   const classification = raw.classification ?? {};
+  const isolatedHeavyFiles = Array.isArray(raw.isolatedHeavyFiles)
+    ? raw.isolatedHeavyFiles.map((entry) => String(entry).replace(/\\/g, '/'))
+    : [];
   return {
     lightMaxWorkers,
     heavyShardCount,
     heavyDefaultRuntimeMs,
     classification,
+    isolatedHeavyFiles,
   };
 }
 

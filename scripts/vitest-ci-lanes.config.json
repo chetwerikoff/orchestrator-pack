@@ -3,6 +3,12 @@
   "lightMaxWorkers": 2,
   "heavyShardCount": 7,
   "heavyDefaultRuntimeMs": 120000,
+  "isolatedHeavyFiles": [
+    "scripts/orchestrator-wake-supervisor-orphan-integration.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/review-start-preflight-shield.test.ts",
+    "scripts/supervisor-fault-boundary.test.ts"
+  ],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
     "plugins/_shared/tests/git_fixture.test.ts": "light",
