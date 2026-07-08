@@ -105,6 +105,14 @@ if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalat
     Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate unattributed submit failures'
     exit 1
 }
+if ($postSubmitLibText -notmatch 'Get-ScriptedReviewSubmitVisibilityResolvedConfig') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must resolve submit visibility from AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS'
+    exit 1
+}
+if ($postSubmitLibText -match "resolve-submit-visibility-config' -Payload @\{ env = @\{\}") {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must not pass empty env to resolve-submit-visibility-config'
+    exit 1
+}
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
 $gateChild = @($registry.children | Where-Object { $_.id -eq 'scripted-review-confirmed-delivery-gate' })

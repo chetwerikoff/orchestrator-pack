@@ -546,4 +546,10 @@ describe('post-submit resolver (Issue #669 wiring)', () => {
   it('defaults submit visibility window to 30s', () => {
     expect(resolveSubmitVisibilityConfig({})).toMatchObject({ visibilityMs: 30_000, intervalMs: 1000 });
   });
+
+  it('honors AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS override', () => {
+    expect(
+      resolveSubmitVisibilityConfig({ AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS: '90' }),
+    ).toMatchObject({ visibilityMs: 90_000, intervalMs: 1000 });
+  });
 });

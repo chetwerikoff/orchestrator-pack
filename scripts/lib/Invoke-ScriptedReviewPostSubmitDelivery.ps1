@@ -57,6 +57,18 @@ function Invoke-ScriptedReviewPostSubmitDeliveryEscalation {
         -WriteLog { param($Message) [Console]::Error.WriteLine($Message) }
 }
 
+function Get-ScriptedReviewSubmitVisibilityResolvedConfig {
+    $payload = @{}
+    if ($env:AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS) {
+        $payload = @{
+            env = @{
+                AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS = [string]$env:AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS
+            }
+        }
+    }
+    return Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'resolve-submit-visibility-config' -Payload $payload
+}
+
 function Wait-ScriptedReviewSubmittedRun {
     param(
         [int]$PrNumber,
@@ -68,7 +80,7 @@ function Wait-ScriptedReviewSubmittedRun {
 
     . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
     $config = if ($VisibilityConfig) { $VisibilityConfig } else {
-        Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'resolve-submit-visibility-config' -Payload @{ env = @{} }
+        Get-ScriptedReviewSubmitVisibilityResolvedConfig
     }
     $deadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + [int]$config.visibilityMs
     $intervalMs = [Math]::Max(200, [int]$config.intervalMs)
