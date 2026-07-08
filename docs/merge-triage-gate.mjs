@@ -114,8 +114,18 @@ function isScopeViolation(finding, normalizedText) {
   return category === 'scope-violation' || type === 'scope-violation' || normalizedText.includes('[scope-violation]');
 }
 
+function denylistMarkerMatchesText(normalizedText, marker) {
+  const normalizedMarker = normalizeMarker(marker);
+  if (!normalizedMarker) return false;
+  if (normalizedMarker.endsWith('/**')) {
+    const prefix = normalizedMarker.slice(0, -3);
+    return normalizedText.includes(`${prefix}/`);
+  }
+  return normalizedText.includes(normalizedMarker);
+}
+
 function hasDenylistPath(normalizedText, markerList) {
-  return markerList.denylistPathMarkers.some((marker) => normalizedText.includes(normalizeMarker(marker)));
+  return markerList.denylistPathMarkers.some((marker) => denylistMarkerMatchesText(normalizedText, marker));
 }
 
 export function classifyFinding(finding, markerList = loadMarkerList()) {
@@ -277,7 +287,8 @@ export function readPackFindingStore({ projectPath, prNumber, headSha } = {}) {
     const parsed = readJsonFile(full);
     for (const finding of toArray(Array.isArray(parsed) ? parsed : parsed.findings ?? [parsed])) {
       const matchesPr = !prNumber || Number(finding?.pr_number ?? finding?.prNumber ?? prNumber) === Number(prNumber);
-      const matchesHead = !headSha || !finding?.headSha || normalizeTriageText(finding.headSha) === normalizeTriageText(headSha);
+      const findingHead = normalizeTriageText(finding?.head_sha ?? finding?.headSha ?? finding?.targetSha ?? '');
+      const matchesHead = !headSha || !findingHead || findingHead === normalizeTriageText(headSha);
       if (matchesPr && matchesHead && normalizeTriageText(finding?.status ?? 'open') === 'open') results.push(finding);
     }
   }
@@ -600,6 +611,18 @@ export function adjudicateArchitectFinding(input = {}) {
   appendJsonl(paths.inbox, { ...inbox, status: 'resolved', resolved_verdict: verdict, resolved_at_utc: new Date().toISOString() });
   let clearance = null;
   if (verdict === VERDICT_DEFER) {
+    const markerList = loadMarkerList(input.markerFile ?? DEFAULT_MARKER_FILE);
+    const openFindings = input.findings
+      ? currentHeadOpenFindings({ ...input, prNumber: inbox.pr_number, headSha: inbox.head_sha })
+      : readPackFindingStore({ projectPath: input.projectPath, prNumber: inbox.pr_number, headSha: inbox.head_sha });
+    const openClassifications = openFindings.map((openFinding) => {
+      const openId = String(openFinding?.id ?? '');
+      const openFingerprint = String(openFinding?.fingerprint ?? openFinding?.id ?? '');
+      if (openId === classification.findingId && openFingerprint === classification.fingerprint) {
+        return classification;
+      }
+      return classifyFinding(openFinding, markerList);
+    });
     writeDeferredCatalogRows({
       paths,
       prNumber: inbox.pr_number,
@@ -613,10 +636,10 @@ export function adjudicateArchitectFinding(input = {}) {
       prNumber: inbox.pr_number,
       headSha: inbox.head_sha,
       gateRunId: inbox.gate_run_id,
-      markerList: loadMarkerList(input.markerFile ?? DEFAULT_MARKER_FILE),
+      markerList,
       atCapRecord: input.atCapRecord ?? { terminal: TERMINAL_AT_CAP_OPEN_FINDINGS, pr_number: inbox.pr_number, head_sha: inbox.head_sha },
-      findings: [finding],
-      classifications: [classification],
+      findings: openFindings,
+      classifications: openClassifications,
     });
   }
   return { ok: verdict === VERDICT_DEFER, verdict, clearance };

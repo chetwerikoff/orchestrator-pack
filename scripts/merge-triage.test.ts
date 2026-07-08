@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,7 @@ import {
   issueArchitectProvenanceToken,
   loadMarkerList,
   readArchitectInbox,
+  readPackFindingStore,
   runMergeTriageGate,
   VERDICT_BLOCK,
   VERDICT_DEFER,
@@ -101,6 +102,9 @@ describe('marker-classification', () => {
   it('scope-violation denylist path is BLOCK while declaration class is DEFER', () => {
     expect(classifyFinding(finding('scope-a', '[scope-violation]', { category: 'scope-violation' })).verdict).toBe(VERDICT_DEFER);
     expect(classifyFinding(finding('scope-b', '[scope-violation] touched vendor/**', { category: 'scope-violation' })).verdict).toBe(VERDICT_BLOCK);
+    expect(classifyFinding(finding('scope-c', '[scope-violation] edited vendor/agent-orchestrator/foo', { category: 'scope-violation' })).verdict).toBe(VERDICT_BLOCK);
+    expect(classifyFinding(finding('scope-d', '[scope-violation] touched packages/core/lib/foo.ts', { category: 'scope-violation' })).verdict).toBe(VERDICT_BLOCK);
+    expect(classifyFinding(finding('scope-e', '[scope-violation] wrote .ao/sessions/state.json', { category: 'scope-violation' })).verdict).toBe(VERDICT_BLOCK);
   });
 });
 
@@ -199,6 +203,46 @@ describe('architect-adjudication', () => {
     expect(issued.inbox).not.toHaveProperty('adjudication_provenance_token');
   });
 
+  it('architect DEFER clearance snapshots the full open set when other findings remain', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker'), finding('amb2', 'another unmarked finding')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending;
+    expect(pending).toHaveLength(2);
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending[0]!.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    const adjudicated = adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending[0]!.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: open[0],
+      findings: open,
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+    });
+    expect(adjudicated.clearance?.open_findings_snapshot_hash).toBeTruthy();
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: open,
+    }).reason).toBe('pending_architect_adjudication');
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: open,
+    }).reason).not.toBe('open_findings_snapshot_drift');
+  });
+
   it('architect command with valid token is consumed by hidden-token gate and budget reaches PENDING_OPERATOR after two permissive verdicts', () => {
     const root = stateRoot();
     const result = runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [finding('amb1', 'text without seed marker')] });
@@ -256,6 +300,19 @@ describe('crash/restart idempotency and fail-closed parse', () => {
     const result = runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [finding('empty', '', { title: '', body: '' })] });
     expect(result.ok).toBe(false);
     expect(result.classifications?.[0].verdict).toBe(VERDICT_PENDING_ARCHITECT);
+  });
+});
+
+describe('pack-finding-store-head-filter', () => {
+  it('filters open findings by snake_case head_sha from the store reader', () => {
+    const root = stateRoot();
+    const findingsDir = join(root, 'code-reviews', 'findings');
+    mkdirSync(findingsDir, { recursive: true });
+    writeFileSync(join(findingsDir, 'a.json'), JSON.stringify([
+      { id: 'old', fingerprint: 'fp-old', status: 'open', head_sha: 'oldhead', title: 'old', body: 'TOCTOU' },
+      { id: 'new', fingerprint: 'fp-new', status: 'open', head_sha: 'newhead', title: 'new', body: 'TOCTOU' },
+    ]));
+    expect(readPackFindingStore({ projectPath: root, prNumber: 648, headSha: 'newhead' }).map((row) => row.id)).toEqual(['new']);
   });
 });
 
