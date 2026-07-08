@@ -151,6 +151,10 @@ export function findSubmittedReviewRun(reviewRuns, submit) {
       return String(right?.id ?? right?.runId ?? '').localeCompare(String(left?.id ?? left?.runId ?? ''));
     });
 
+  if (matches.length > 1) {
+    return { ok: false, reason: 'ambiguous_overlapping_submits', matchCount: matches.length };
+  }
+
   const run = matches[0];
   if (!run) {
     return { ok: false, reason: 'run_not_visible' };

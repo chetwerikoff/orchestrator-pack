@@ -101,6 +101,10 @@ if ($postSubmitMjsText -notmatch 'resolveSubmittedRunTerminalStatus') {
     Write-Host 'scripted-review-post-submit-delivery.mjs must prefer latestRunStatus for terminal run lookup'
     exit 1
 }
+if ($postSubmitMjsText -notmatch 'ambiguous_overlapping_submits') {
+    Write-Host 'scripted-review-post-submit-delivery.mjs must escalate ambiguous concurrent same-head submits'
+    exit 1
+}
 if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalation') {
     Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate unattributed submit failures'
     exit 1

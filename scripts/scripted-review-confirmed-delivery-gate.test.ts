@@ -456,6 +456,36 @@ describe('post-submit resolver (Issue #669 wiring)', () => {
     expect(resolveSubmitRunEpochMs({ createdAt: '2026-07-08T04:59:30.000Z' })).toBe(createdMs);
   });
 
+  it('escalates when two fresh terminal runs match the same-head submit lookback', () => {
+    const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-a',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'complete',
+          updatedAt: '2026-07-08T05:00:05.000Z',
+        },
+        {
+          id: 'run-b',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'complete',
+          updatedAt: '2026-07-08T05:00:06.000Z',
+        },
+      ],
+      {
+        prNumber: 673,
+        targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+        submitObservedAfterMs,
+      },
+    );
+    expect(found).toMatchObject({ ok: false, reason: 'ambiguous_overlapping_submits', matchCount: 2 });
+  });
+
   it('binds slow-complete run using updatedAt for submit lookback', () => {
     const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
     const found = findSubmittedReviewRun(

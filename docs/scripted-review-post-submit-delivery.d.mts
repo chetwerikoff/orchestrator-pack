@@ -27,6 +27,7 @@ export declare function findSubmittedReviewRun(
 ): {
   ok: boolean;
   reason?: string;
+  matchCount?: number;
   runId?: string;
   batchId?: string;
   sessionId?: string;
