@@ -9,9 +9,7 @@
     "worktree_dirty": false,
     "active_scope_hash": "sha256:issue699sessionprbindingresolver"
   },
-  "declared_paths": [
-    "vitest.config.ts"
-  ],
+  "declared_paths": [],
   "declared_globs": [
     "docs/**",
     "scripts/**",
