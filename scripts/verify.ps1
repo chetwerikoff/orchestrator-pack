@@ -437,6 +437,22 @@ else {
 
 Write-Host ''
 Write-Host '== review-trigger reconciliation (Issue #163) =='
+$sessionPrBindingCheck = Join-Path $Root 'scripts/check-session-pr-binding-sole-path.ps1'
+if (Test-Path -LiteralPath $sessionPrBindingCheck -PathType Leaf) {
+    & $sessionPrBindingCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-session-pr-binding-sole-path.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-session-pr-binding-sole-path.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Session PR binding sole-path contract failed (Issue #699)'
+    }
+}
+else {
+    Write-Check 'scripts/check-session-pr-binding-sole-path.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing session PR binding sole-path check (Issue #699)'
+}
+
 $reviewReconcileCheck = Join-Path $Root 'scripts/check-review-trigger-reconcile.ps1'
 if (Test-Path -LiteralPath $reviewReconcileCheck -PathType Leaf) {
     & $reviewReconcileCheck

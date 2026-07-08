@@ -1,0 +1,13 @@
+{
+  "allowedFields": [
+    "session"
+  ],
+  "forbiddenFields": [
+    "prs",
+    "reports",
+    "prNumber",
+    "pr"
+  ],
+  "captureRef": "captures/ao-0-10-cli/session-get-numeric-displayname.raw.json",
+  "provenanceRef": "captures/ao-0-10-cli/session-get-numeric-displayname.provenance.json"
+}

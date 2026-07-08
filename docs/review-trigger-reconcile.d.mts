@@ -32,7 +32,12 @@ export declare function findSessionByIdForReconcile(
   sessionId: string,
 ): AoSession | null;
 
-export declare function sessionMatchesPr(session: AoSession, prNumber: number): boolean;
+export declare function sessionMatchesPr(
+  session: AoSession,
+  prNumber: number,
+  openPrs?: OpenPr[],
+  options?: { headSha?: string; sessionDetail?: { displayName?: string } | null },
+): boolean;
 
 export interface OpenPr {
   number: number;
@@ -42,6 +47,8 @@ export interface OpenPr {
   head_commit_committed_at?: string | number;
   baseRefName?: string;
   baseRef?: string;
+  headRefName?: string;
+  head?: string;
 }
 
 export interface ReviewRun {
@@ -250,7 +257,12 @@ export declare function formatDecisionRecordForLog(
 export declare function resolveWorkerSessionId(
   sessions: AoSession[],
   prNumber: number,
-  options?: { ownsHead?: (session: AoSession) => boolean },
+  options?: {
+    ownsHead?: (session: AoSession) => boolean;
+    openPrs?: OpenPr[];
+    headSha?: string;
+    sessionDetailsById?: Record<string, { displayName?: string }>;
+  },
 ): string | null;
 
 export declare function getStoredReportHeadSha(report: Record<string, unknown>): string;
@@ -271,11 +283,14 @@ export declare function sessionOwnsRunHead(
   prNumber: number,
   headSha: string,
   openPrs?: OpenPr[],
+  options?: { sessionDetail?: { displayName?: string } | null },
 ): boolean;
 
 export declare function listWorkersForPr(
   sessions: AoSession[],
   prNumber: number,
+  openPrs?: OpenPr[],
+  options?: { headSha?: string; sessionDetail?: { displayName?: string } | null },
 ): AoSession[];
 
 export declare function resolveStrictHeadOwningWorkerSession(
@@ -309,6 +324,7 @@ export declare function resolveHeadOwningWorkerSessionId(
   prNumber: number,
   headSha: string,
   openPrs?: OpenPr[],
+  options?: { sessionDetailsById?: Record<string, { displayName?: string }> },
 ): string | null;
 
 export declare function planReconcileActions(input: PlanReconcileInput): ReconcilePlanResult;

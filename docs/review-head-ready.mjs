@@ -770,6 +770,20 @@ export function evaluateHeadReadyForReview({
         route: 'defer',
       };
     }
+    if (ownerResolution?.reason === AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON) {
+      return {
+        eligible: false,
+        reason: 'ambiguous_head_owner',
+        route: 'defer',
+      };
+    }
+    if (ownerResolution?.reason === 'ambiguous_head_owner') {
+      return {
+        eligible: false,
+        reason: 'ambiguous_head_owner',
+        route: 'defer',
+      };
+    }
     return { eligible: false, reason: 'no_worker_session', route: 'none' };
   }
 

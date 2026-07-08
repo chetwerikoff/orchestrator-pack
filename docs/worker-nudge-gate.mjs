@@ -276,7 +276,7 @@ function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPr
   }
   const matches = toArray(sessions).filter((session) => {
     const role = String(session?.role ?? '').toLowerCase();
-    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber);
+    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber, openPrs);
   });
   if (matches.length === 0) {
     return null;
@@ -414,7 +414,7 @@ export function resolvePrOwnerSessionForNudge(input) {
   }
   if (sessionId && !headSha) {
     const sessionOk = sessions.some(
-      (session) => getSessionIdentifier(session) === sessionId && sessionMatchesPr(session, prNumber),
+      (session) => getSessionIdentifier(session) === sessionId && sessionMatchesPr(session, prNumber, openPrs),
     );
     if (!sessionOk) {
       return { ok: false, reason: 'pr_session_mismatch' };
