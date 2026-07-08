@@ -28,6 +28,10 @@ export function detectUntypedFindingsInCapture(capture: string): Array<{
   summary: string;
 }>;
 
+export function stripMarkdownFencedCodeBlocks(text: string): string;
+
+export function extractFindingsScanText(capture: string): string;
+
 export function mergeCaptureFindings(captures: string[]): {
   findings: ReturnType<typeof detectTypedFindingsInCapture>;
   errors: string[];

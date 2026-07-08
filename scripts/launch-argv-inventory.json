@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -2080,7 +2080,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:b092fe02653e24965c136232303457201645c79d20fdb054b2899f3b48537beb",
+      "hashPinnedSourceHash": "sha256:27348ed881f18bb3f74c2d73b30eb64fcb35a6096001151cb39cffb84d6247ae",
       "discoveryMatch": {
         "file": "scripts/check-finding-ledger-guard.ps1",
         "line": 33,

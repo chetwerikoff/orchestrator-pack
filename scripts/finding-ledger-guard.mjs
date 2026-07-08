@@ -9,20 +9,23 @@ import path from 'node:path';
 export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 
 const PROTECTED_TYPE_PATTERN =
-  /\btype:\s*(security|scope-violation)\b/gi;
-const ANY_TYPE_PATTERN = /\btype:\s*([a-z][a-z0-9-]*)\b/gi;
-const FINDING_ID_PATTERN = /\bid:\s*([A-Za-z0-9._-]+)\b/gi;
-const FINDING_ID_EXTRACT = /\bid:\s*([A-Za-z0-9._-]+)\b/i;
+  /(?<!binding-)\btype:\s*(security|scope-violation)\b/gi;
+const ANY_TYPE_PATTERN = /(?<!binding-)\btype:\s*([a-z][a-z0-9-]*)\b/gi;
+const FINDING_ID_PATTERN = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/gi;
+const FINDING_ID_EXTRACT = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/i;
 const UNTYPED_FINDING_LINE =
   /^(?:\s*)(?:\[(P[0-3])\]|(P[0-3]))\s*[-–—:]\s*(.+)$/;
+const ECHOED_ARTIFACT_MARKER = /^--- ARTIFACT\s/m;
+const ECHOED_DRAFT_REVIEW_PROMPT = /^#\s+Codex draft\/spec review prompt/m;
 
 export function detectUntypedFindingsInCapture(capture) {
-  if (isCleanNoFindings(capture)) {
+  const scanText = extractFindingsScanText(capture);
+  if (isCleanNoFindings(scanText) || scanText.length === 0) {
     return [];
   }
 
   const findings = [];
-  const lines = capture.split('\n');
+  const lines = scanText.split('\n');
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -77,6 +80,69 @@ function isCleanNoFindings(capture) {
   return capture.trim() === 'NO_FINDINGS';
 }
 
+/** Remove fenced code blocks so echoed draft/spec fences do not trigger detection. */
+export function stripMarkdownFencedCodeBlocks(text) {
+  return text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
+}
+
+function hasEchoedReviewContext(text) {
+  return ECHOED_ARTIFACT_MARKER.test(text) || ECHOED_DRAFT_REVIEW_PROMPT.test(text);
+}
+
+function isReviewerFindingLine(line) {
+  const trimmed = line.trim();
+  if (trimmed === 'NO_FINDINGS') {
+    return true;
+  }
+  return /^P[0-3]\s+[—–—\-]\s+\S/.test(trimmed);
+}
+
+function indexOfFirstReviewerFindingLine(text, fromIndex = 0) {
+  const lines = text.slice(fromIndex).split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    if (isReviewerFindingLine(lines[index])) {
+      const prefix = lines.slice(0, index).join('\n');
+      return fromIndex + prefix.length + (index > 0 ? 1 : 0);
+    }
+  }
+  return -1;
+}
+
+/** Scope parsing to reviewer findings — skip echoed rubric, draft body, and fenced blocks. */
+export function extractFindingsScanText(capture) {
+  const withoutFences = stripMarkdownFencedCodeBlocks(capture);
+  if (isCleanNoFindings(withoutFences)) {
+    return withoutFences;
+  }
+
+  if (!hasEchoedReviewContext(withoutFences)) {
+    return withoutFences;
+  }
+
+  let scanFrom = 0;
+  const artifactMatch = withoutFences.match(ECHOED_ARTIFACT_MARKER);
+  if (artifactMatch?.index !== undefined) {
+    scanFrom = artifactMatch.index;
+  } else {
+    const headerMatch = withoutFences.match(ECHOED_DRAFT_REVIEW_PROMPT);
+    if (headerMatch?.index !== undefined) {
+      scanFrom = headerMatch.index;
+    }
+  }
+
+  const findingStart = indexOfFirstReviewerFindingLine(withoutFences, scanFrom);
+  if (findingStart < 0) {
+    return '';
+  }
+
+  const tail = withoutFences.slice(findingStart).trimStart();
+  if (tail === 'NO_FINDINGS') {
+    return 'NO_FINDINGS';
+  }
+
+  return withoutFences.slice(findingStart);
+}
+
 export function parseLedger(ledgerText) {
   let parsed;
   try {
@@ -129,7 +195,8 @@ export function parseLedger(ledgerText) {
 }
 
 export function detectTypedFindingsInCapture(capture) {
-  if (isCleanNoFindings(capture)) {
+  const scanText = extractFindingsScanText(capture);
+  if (isCleanNoFindings(scanText) || scanText.length === 0) {
     return [];
   }
 
@@ -138,7 +205,7 @@ export function detectTypedFindingsInCapture(capture) {
   let match;
 
   ANY_TYPE_PATTERN.lastIndex = 0;
-  while ((match = ANY_TYPE_PATTERN.exec(capture)) !== null) {
+  while ((match = ANY_TYPE_PATTERN.exec(scanText)) !== null) {
     const type = match[1].toLowerCase();
     const key = `type:${type}@${match.index}`;
     if (seen.has(key)) {
@@ -147,9 +214,9 @@ export function detectTypedFindingsInCapture(capture) {
     seen.add(key);
 
     const windowStart = Math.max(0, match.index - 400);
-    const windowEnd = Math.min(capture.length, match.index + 120);
-    const before = capture.slice(windowStart, match.index);
-    const after = capture.slice(match.index, windowEnd);
+    const windowEnd = Math.min(scanText.length, match.index + 120);
+    const before = scanText.slice(windowStart, match.index);
+    const after = scanText.slice(match.index, windowEnd);
     const idMatch = after.match(FINDING_ID_EXTRACT) ?? [...before.matchAll(FINDING_ID_PATTERN)].at(-1);
     const hasCaptureId = Boolean(idMatch);
     const id = idMatch ? idMatch[1] : `capture-${type}@${match.index}`;
@@ -167,13 +234,14 @@ export function detectTypedFindingsInCapture(capture) {
 }
 
 export function detectProtectedSignalsInCapture(capture) {
-  if (isCleanNoFindings(capture)) {
+  const scanText = extractFindingsScanText(capture);
+  if (isCleanNoFindings(scanText) || scanText.length === 0) {
     return [];
   }
 
   const signals = [];
   for (const { type, pattern } of PROTECTED_SIGNAL_PATTERNS) {
-    if (pattern.test(capture)) {
+    if (pattern.test(scanText)) {
       signals.push(type);
     }
     pattern.lastIndex = 0;
