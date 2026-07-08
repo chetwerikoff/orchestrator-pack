@@ -543,7 +543,31 @@ export function runMergeTriageGate(input = {}) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, ran: true, reason: 'open_findings_unavailable', message };
   }
-  const classifications = findings.map((finding) => classifyFinding(finding, markerList));
+  const classifications = findings.map((finding) =>
+    resolveOpenFindingClassification({ paths, prNumber, headSha, finding, markerList }),
+  );
+  const existingClearance = loadClearance(paths, prNumber, headSha, input);
+  if (existingClearance) {
+    const pendingInbox = readPendingInbox(paths, prNumber, headSha);
+    const snapshotHash = computeOpenFindingsSnapshotHash(findings, classifications);
+    if (
+      pendingInbox.length === 0 &&
+      Number(existingClearance.marker_list_version) === markerList.schemaVersion &&
+      existingClearance.marker_list_hash === markerList.markerListHash &&
+      existingClearance.open_findings_snapshot_hash === snapshotHash
+    ) {
+      return {
+        ok: true,
+        ran: true,
+        aggregate: VERDICT_DEFER,
+        gateRunId: existingClearance.gate_run_id ?? gateRunId,
+        classifications,
+        clearance: existingClearance,
+        reason: 'existing_merge_triage_clearance',
+        catalogPath: paths.catalog,
+      };
+    }
+  }
   for (let index = 0; index < findings.length; index += 1) {
     appendVerdictJournal({ paths, prNumber, headSha, gateRunId, finding: findings[index], classification: classifications[index] });
   }
@@ -752,7 +776,16 @@ const MERGE_TRIAGE_CLI_HANDLERS = {
 };
 
 function mergeTriageCliShouldExitNonZero(subcommand, result) {
-  return subcommand === 'runGate' && result && result.ok === false && result.ran === true;
+  if (subcommand !== 'runGate' || !result || result.ok !== false || result.ran !== true) {
+    return false;
+  }
+  if (result.reason === 'open_findings_unavailable') {
+    return true;
+  }
+  if (toArray(result.classifications).some((classification) => classification?.reason === 'empty_finding_text')) {
+    return true;
+  }
+  return false;
 }
 
 const mergeTriageCliEntry = process.argv[1] ?? '';

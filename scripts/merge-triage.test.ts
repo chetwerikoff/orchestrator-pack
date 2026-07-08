@@ -551,5 +551,76 @@ describe('open-findings-source-fail-closed and cli exit', () => {
     expect(cli.status).toBe(1);
     expect(JSON.parse(cli.stdout)).toMatchObject({ ok: false, ran: true });
   });
+
+  it('runGate CLI exits zero for structured BLOCK and PENDING_ARCHITECT outcomes', () => {
+    const root = stateRoot();
+    const blockCli = spawnSync(process.execPath, [gatePath, 'runGate'], {
+      input: JSON.stringify({
+        stateRoot: root,
+        prNumber: 648,
+        headSha: 'abc123',
+        atCapRecord: atCap(),
+        findings: [finding('b1', 'parser error')],
+      }),
+      encoding: 'utf8',
+    });
+    expect(blockCli.status).toBe(0);
+    expect(JSON.parse(blockCli.stdout)).toMatchObject({ ok: false, aggregate: VERDICT_BLOCK });
+    expect(JSON.parse(blockCli.stdout).blockDelivery).toHaveLength(1);
+
+    const pendingRoot = stateRoot();
+    const pendingCli = spawnSync(process.execPath, [gatePath, 'runGate'], {
+      input: JSON.stringify({
+        stateRoot: pendingRoot,
+        prNumber: 648,
+        headSha: 'abc123',
+        atCapRecord: atCap(),
+        findings: [finding('amb1', 'text without seed marker')],
+      }),
+      encoding: 'utf8',
+    });
+    expect(pendingCli.status).toBe(0);
+    expect(JSON.parse(pendingCli.stdout)).toMatchObject({ ok: false, aggregate: VERDICT_PENDING_ARCHITECT });
+    expect(JSON.parse(pendingCli.stdout).pendingArchitect).toHaveLength(1);
+  });
+});
+
+describe('gate rerun after architect clearance', () => {
+  it('reuses journaled architect DEFER verdicts and preserves merge_triage_cleared on retry', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending[0]!;
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    const adjudicated = adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: open[0],
+      findings: open,
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+      atCapRecord: atCap(),
+    });
+    expect(adjudicated.clearance).toMatchObject({ terminal: 'merge_triage_cleared' });
+    const rerun = runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    expect(rerun.ok).toBe(true);
+    expect(rerun.reason).toBe('existing_merge_triage_clearance');
+    expect(readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending).toHaveLength(0);
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: open,
+    })).toMatchObject({ allow: true, reason: 'merge_triage_cleared' });
+  });
 });
 
