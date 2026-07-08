@@ -352,6 +352,86 @@ if ($LASTEXITCODE -ne 0) {
     Add-Fail 'ci-test-aggregate.ps1 must pass when all upstream lanes are success with head/run binding'
 }
 
+Write-Host '[PASS] CI pipeline split lane classification, weighted heavy shards, aggregate fail-closed, and worker-RPC guard OK.'
+
+# Issue #691 — runtime-history refresh producer guards
+Write-Host '== CI runtime-history refresh guard (Issue #691) =='
+
+$refreshMergeFixture = Join-Path $RepoRoot 'scripts/lib/vitest-runtime-history-merge.fixture.mjs'
+$refreshWorkflowPath = Join-Path $RepoRoot '.github/workflows/vitest-runtime-history-refresh.yml'
+$refreshScriptPath = Join-Path $RepoRoot 'scripts/refresh-vitest-runtime-history.mjs'
+
+foreach ($required in @($refreshMergeFixture, $refreshWorkflowPath, $refreshScriptPath)) {
+    if (-not (Test-Path -LiteralPath $required)) {
+        Add-Fail "missing runtime-history refresh artifact: $(Split-Path -Leaf $required)"
+    }
+}
+
+if (Test-Path -LiteralPath $refreshMergeFixture) {
+    $fixtureOutput = & node $refreshMergeFixture 2>&1 | Out-String
+    Write-Host $fixtureOutput
+    if ($LASTEXITCODE -ne 0) {
+        Add-Fail 'runtime-history refresh fixture suite failed'
+    }
+}
+
+if (Test-Path -LiteralPath $refreshWorkflowPath) {
+    $refreshText = Get-Content -LiteralPath $refreshWorkflowPath -Raw
+    if ($refreshText -match '(?m)^on:\s*[\s\S]*pull_request:') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must not trigger on pull_request'
+    }
+    if ($refreshText -notmatch '(?m)^\s*push:\s*' -or $refreshText -notmatch 'branches:\s*[\s\S]*main') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must trigger on push to main'
+    }
+    if ($refreshText -notmatch 'schedule:') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must declare a schedule trigger'
+    }
+    if ($refreshText -notmatch 'workflow_dispatch:') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must declare workflow_dispatch'
+    }
+    if ($refreshText -notmatch 'concurrency:') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must declare a concurrency guard'
+    }
+    if ($refreshText -notmatch "refs/heads/main" -or $refreshText -notmatch 'workflow_dispatch') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must restrict workflow_dispatch to refs/heads/main'
+    }
+
+    $refreshJobs = Get-YamlJobs -Text $refreshText
+    if (-not $refreshJobs.ContainsKey('test-vitest-heavy')) {
+        Add-Fail 'vitest-runtime-history-refresh.yml missing test-vitest-heavy job'
+    }
+    if (-not $refreshJobs.ContainsKey('refresh-runtime-history')) {
+        Add-Fail 'vitest-runtime-history-refresh.yml missing refresh-runtime-history job'
+    }
+    if ($refreshJobs.ContainsKey('refresh-runtime-history')) {
+        $refreshJob = $refreshJobs['refresh-runtime-history']
+        if ($refreshJob -notmatch 'needs:.*test-vitest-heavy') {
+            Add-Fail 'refresh-runtime-history job must need test-vitest-heavy'
+        }
+        if ($refreshJob -notmatch 'download-artifact@v4' -or $refreshJob -notmatch 'vitest-heavy-report') {
+            Add-Fail 'refresh-runtime-history job must download heavy-shard JSON artifacts'
+        }
+        if ($refreshJob -notmatch 'refresh-vitest-runtime-history\.ps1') {
+            Add-Fail 'refresh-runtime-history job must invoke scripts/refresh-vitest-runtime-history.ps1'
+        }
+    }
+    if ($refreshJobs.ContainsKey('test-vitest-heavy')) {
+        $heavyRefreshJob = $refreshJobs['test-vitest-heavy']
+        if ($heavyRefreshJob -notmatch 'upload-artifact@v4' -or $heavyRefreshJob -notmatch 'vitest-heavy-report') {
+            Add-Fail 'test-vitest-heavy refresh workflow job must upload heavy shard runtime reports'
+        }
+        if ($heavyRefreshJob -notmatch 'include-hidden-files:\s*true') {
+            Add-Fail 'test-vitest-heavy refresh workflow upload must set include-hidden-files: true (reports are dotfiles)'
+        }
+        if ($heavyRefreshJob -notmatch 'if-no-files-found:\s*error') {
+            Add-Fail 'test-vitest-heavy refresh workflow upload must set if-no-files-found: error'
+        }
+        if ($heavyRefreshJob -notmatch 'run-vitest-heavy-shard\.ps1') {
+            Add-Fail 'test-vitest-heavy refresh workflow job must invoke run-vitest-heavy-shard.ps1'
+        }
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Host '[FAIL] CI pipeline split guard:'
     foreach ($item in $failures) {
@@ -360,5 +440,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] CI pipeline split lane classification, weighted heavy shards, aggregate fail-closed, and worker-RPC guard OK.'
+Write-Host '[PASS] CI runtime-history refresh producer guards OK.'
 exit 0

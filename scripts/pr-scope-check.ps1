@@ -2,20 +2,15 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-if ($env:SCOPE_GUARD_TRUSTED_ROOT) {
-    $TrustedRoot = (Resolve-Path $env:SCOPE_GUARD_TRUSTED_ROOT).Path
-}
-else {
-    $TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
-}
-$CheckScript = Join-Path $TrustedRoot 'scripts/pr-scope-check.ts'
-$NodeRoot = $TrustedRoot
+$TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 if ($env:PR_SCOPE_REPO_ROOT) {
     $PrRoot = (Resolve-Path $env:PR_SCOPE_REPO_ROOT).Path
 }
 else {
     $PrRoot = $TrustedRoot
 }
+# Trusted/base checker only; PR head supplies repoRoot for snapshots/diff (Issue #6 / #691).
+$CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
 
 function Write-ScopeGuardComment {
     param(
@@ -45,7 +40,7 @@ function Format-ScopeGuardComment {
     $payloadFile = New-TemporaryFile
     try {
         $Result | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        Push-Location $NodeRoot
+        Push-Location $TrustedRoot
         try {
             return node --import tsx $CheckScript --format-comment --input $payloadFile.FullName
         }
@@ -110,7 +105,7 @@ function Invoke-PrScopeCheckCore {
     $payloadFile = New-TemporaryFile
     try {
         $InputJson | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        Push-Location $NodeRoot
+        Push-Location $TrustedRoot
         try {
             $output = node --import tsx $CheckScript --input $payloadFile.FullName
         }
@@ -147,7 +142,7 @@ function Get-ScopeGuardIssueNumber {
     $payloadFile = New-TemporaryFile
     try {
         (@{ prBody = $Body } | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        Push-Location $NodeRoot
+        Push-Location $TrustedRoot
         try {
             $output = node --import tsx $CheckScript --resolve-issue-number --input $payloadFile.FullName
         }

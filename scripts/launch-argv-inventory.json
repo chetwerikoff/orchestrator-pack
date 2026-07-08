@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -4981,7 +4981,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-43",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-43",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 43
@@ -5006,7 +5006,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-72",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-72",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 72
@@ -5032,7 +5032,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-83",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-83",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 83
@@ -5057,7 +5057,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-118",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-118",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 118
@@ -5082,7 +5082,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-133",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-133",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 133
@@ -5107,7 +5107,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-137",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-137",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 137
@@ -5132,7 +5132,7 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend.ps1-139",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewDeliveryExplicitSend-ps1-139",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1",
         "line": 139
@@ -7125,6 +7125,27 @@
       }
     },
     {
+      "rowId": "site-scripts-pr-scope-check-ps1-200",
+      "caller": {
+        "file": "scripts/pr-scope-check.ps1",
+        "line": 200
+      },
+      "callee": {
+        "kind": "gh",
+        "identity": "scripts/gh pack wrapper"
+      },
+      "calleeContractSourceClass": "gh-inventory-route",
+      "coverageKind": "validator-backed",
+      "validatorId": "gh-inventory-static",
+      "discoveryMatch": {
+        "file": "scripts/pr-scope-check.ps1",
+        "line": 200,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-publish-issue-body-sync-ps1-33",
       "caller": {
         "file": "scripts/publish-issue-body-sync.ps1",
@@ -7194,6 +7215,56 @@
       "discoveryMatch": {
         "file": "scripts/record-review-pipeline-spawn-tick.ps1",
         "line": 15,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-refresh-vitest-runtime-history-ps1-60",
+      "caller": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 60
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:e64fc8110ebca946abe86a64efea1bae562b52a43767c8b228b8786330aef3bf",
+      "discoveryMatch": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 60,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-refresh-vitest-runtime-history-ps1-75",
+      "caller": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 75
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:2c9ca68970619ec0b5c0bb4b91d2efadf1affd2481bdba6226d6c3440831f854",
+      "discoveryMatch": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 75,
         "patternIds": [
           "ps-call-op"
         ]
@@ -7780,6 +7851,56 @@
       }
     },
     {
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-105",
+      "caller": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 105
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:1d18c359a9aa0c34807e9d95c8fc5b7b3159d19d77c975af4e3b8effb6d12c21",
+      "discoveryMatch": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 105,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-128",
+      "caller": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 128
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:f311937ef036838ab07cf3c89aa006e11b019e58029f397e07fa545805a2abea",
+      "discoveryMatch": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 128,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-run-vitest-light-lane-ps1-63",
       "caller": {
         "file": "scripts/run-vitest-light-lane.ps1",
@@ -7825,6 +7946,32 @@
         "file": "scripts/run-vitest-shard.ps1",
         "line": 53,
         "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-245",
+      "caller": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 245
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:cd54a0d262407c99a062bf376163241427024ef38abc6276b8f11630beb27330",
+      "discoveryMatch": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 245,
+        "patternIds": [
+          "call-pwsh",
           "ps-call-op"
         ]
       }
@@ -8551,77 +8698,6 @@
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 601,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-pr-scope-check-ps1-205",
-      "caller": {
-        "file": "scripts/pr-scope-check.ps1",
-        "line": 205
-      },
-      "callee": {
-        "kind": "gh",
-        "identity": "scripts/gh pack wrapper"
-      },
-      "calleeContractSourceClass": "gh-inventory-route",
-      "coverageKind": "validator-backed",
-      "validatorId": "gh-inventory-static",
-      "discoveryMatch": {
-        "file": "scripts/pr-scope-check.ps1",
-        "line": 205,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-96",
-      "caller": {
-        "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 96
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:dc5e648c77ac99aecf3cf163db1e38e01ce8a03bbe3f26febde164b42750d3d5",
-      "discoveryMatch": {
-        "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 96,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-113",
-      "caller": {
-        "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 113
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:55d7479bef96e93d96db778a2a1b9af25f22ed30d199bcd2325f1c8ec2d2dbae",
-      "discoveryMatch": {
-        "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 113,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10648,32 +10724,6 @@
         "file": "scripts/verify.ps1",
         "line": 2012,
         "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-245",
-      "caller": {
-        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 245
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:cd54a0d262407c99a062bf376163241427024ef38abc6276b8f11630beb27330",
-      "discoveryMatch": {
-        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 245,
-        "patternIds": [
-          "call-pwsh",
           "ps-call-op"
         ]
       }

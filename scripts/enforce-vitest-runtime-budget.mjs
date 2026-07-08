@@ -4,6 +4,7 @@
  * Reads Vitest JSON output and reports actionable slow file/test violations.
  */
 import { readFileSync, existsSync } from 'node:fs';
+import { collectFromVitestJson, normalizeFilePath } from './lib/vitest-json-report.mjs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,83 +28,6 @@ function loadConfig() {
   return { perTestMs, perFileMs };
 }
 
-function normalizeFilePath(file) {
-  const normalized = String(file ?? 'unknown').replace(/\\/g, '/');
-  const root = repoRoot.replace(/\\/g, '/');
-  if (normalized.startsWith(`${root}/`)) {
-    return normalized.slice(root.length + 1);
-  }
-  return normalized;
-}
-
-function sumAssertionDurationMs(assertions) {
-  let total = 0;
-  for (const assertion of assertions) {
-    const durationMs = Number(assertion.duration ?? 0);
-    if (Number.isFinite(durationMs)) {
-      total += durationMs;
-    }
-  }
-  return total;
-}
-
-function resolveFileDurationMs(fileResult) {
-  const start = Number(fileResult.startTime);
-  const end = Number(fileResult.endTime);
-  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-    return end - start;
-  }
-  return sumAssertionDurationMs(fileResult.assertionResults ?? []);
-}
-
-function collectFromVitestJson(payload) {
-  const results = payload?.testResults;
-  if (!Array.isArray(results)) {
-    return null;
-  }
-
-  const tests = [];
-  const files = [];
-
-  for (const fileResult of results) {
-    const file = normalizeFilePath(fileResult.name);
-    const assertions = fileResult.assertionResults ?? [];
-    const fileDurationMs = resolveFileDurationMs(fileResult);
-
-    files.push({
-      file,
-      durationMs: fileDurationMs,
-      testCount: assertions.length,
-      timingSource:
-        Number.isFinite(Number(fileResult.startTime)) &&
-        Number.isFinite(Number(fileResult.endTime)) &&
-        Number(fileResult.endTime) >= Number(fileResult.startTime)
-          ? 'file-wall'
-          : 'assertion-sum',
-    });
-
-    for (const assertion of assertions) {
-      const titleParts = [];
-      if (Array.isArray(assertion.ancestorTitles) && assertion.ancestorTitles.length > 0) {
-        titleParts.push(...assertion.ancestorTitles);
-      }
-      if (assertion.title) {
-        titleParts.push(assertion.title);
-      }
-      const name = titleParts.join(' > ') || assertion.fullName || 'unnamed test';
-      const durationMs = Number(assertion.duration ?? 0);
-      tests.push({
-        kind: 'test',
-        name,
-        file,
-        durationMs: Number.isFinite(durationMs) ? durationMs : 0,
-      });
-    }
-  }
-
-  return { tests, files };
-}
-
 function collectResults(node, out) {
   if (!node || typeof node !== 'object') {
     return;
@@ -120,7 +44,7 @@ function collectResults(node, out) {
     out.push({
       kind: 'test',
       name: node.name,
-      file: normalizeFilePath(file),
+      file: normalizeFilePath(file, repoRoot),
       durationMs: Number.isFinite(duration) ? duration : 0,
     });
     return;
@@ -149,7 +73,7 @@ function main() {
   }
 
   const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
-  const collected = collectFromVitestJson(payload);
+  const collected = collectFromVitestJson(payload, repoRoot);
   const tests = collected?.tests ?? [];
   const files =
     collected?.files ??
