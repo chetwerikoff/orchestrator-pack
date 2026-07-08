@@ -31,6 +31,9 @@ export interface WakeReviewTriggerResult {
   wakeKind?: string;
   auditLine?: string;
   cycleBlocked?: boolean;
+  capCycleState?: Record<string, unknown>;
+  mergeEligible?: boolean;
+  atCapRecord?: Record<string, unknown>;
 }
 
 export interface MergeIntentAfterReviewResult {

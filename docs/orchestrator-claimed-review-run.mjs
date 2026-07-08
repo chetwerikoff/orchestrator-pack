@@ -350,6 +350,7 @@ export function evaluateOrchestratorTurnGate(input) {
         currentHeadSha: currentHead,
         staleEventHead,
         escalationReason: retryState.escalationReason ?? undefined,
+        capCycleState: capGate.capState,
       };
     }
   } else if (!headReady.eligible) {
@@ -360,6 +361,7 @@ export function evaluateOrchestratorTurnGate(input) {
       auditShape: 'per_start_denial',
       currentHeadSha: currentHead,
       staleEventHead,
+      capCycleState: capGate.capState,
     };
   }
 
@@ -379,6 +381,7 @@ export function evaluateOrchestratorTurnGate(input) {
       currentHeadSha: currentHead,
       staleEventHead,
       coverage: matrix.coverage,
+      capCycleState: capGate.capState,
     };
   }
 
@@ -401,6 +404,7 @@ export function evaluateOrchestratorTurnGate(input) {
       auditShape: 'per_start_denial',
       currentHeadSha: currentHead,
       staleEventHead,
+      capCycleState: capGate.capState,
     };
   }
 

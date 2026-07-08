@@ -308,6 +308,7 @@ export function evaluateWakeReviewTrigger(input) {
       route: decision.route ?? 'none',
       processingMs,
       withinLatencyBound,
+      capCycleState: capGate.capState,
     };
   }
 
@@ -335,6 +336,7 @@ export function evaluateWakeReviewTrigger(input) {
         withinLatencyBound: isHandoffWake ? withinReceiptBound : withinLatencyBound,
         withinReceiptBound,
         cycleBlocked: true,
+        capCycleState: capGate.capState,
       };
     }
   }
@@ -346,6 +348,7 @@ export function evaluateWakeReviewTrigger(input) {
       processingMs,
       withinLatencyBound: withinReceiptBound,
       withinReceiptBound,
+      capCycleState: capGate.capState,
     };
   }
   const planned = {

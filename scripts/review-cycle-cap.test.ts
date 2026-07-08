@@ -47,6 +47,57 @@ function run(prNumber: number, headSha: string, reviewRuns: Array<Record<string,
   });
 }
 
+
+describe('cap state persistence on later denials', () => {
+  it('orchestrator turn denial after cap sync returns capCycleState', () => {
+    const pr = 646;
+    const head = 'turn-deny'.padEnd(40, 't');
+    const runs = [
+      { prNumber: pr, targetSha: head, status: 'changes_requested', openFindingCount: 1, completedAt: '2026-07-01T00:00:00Z' },
+    ];
+    const result = evaluateOrchestratorTurnGate({
+      prNumber: pr,
+      eventHeadSha: head,
+      openPrs: [{ number: pr, headRefOid: head }],
+      reviewRuns: runs,
+      sessions: [{ sessionId: 'opk-646', role: 'worker', prNumber: pr }],
+      ciChecks: [{ name: 'verify', state: 'pending' }],
+      requiredCheckNames: ['verify'],
+      sessionId: 'opk-646',
+      provenanceAutonomous: true,
+      claimWindow: 'free',
+      capCycleState: {},
+    });
+    expect(result.launch).toBe(false);
+    expect(result.stage).toBe('review_ready');
+    expect((result.capCycleState?.[String(pr)] as { cycleOpenedAtUtc?: string } | undefined)?.cycleOpenedAtUtc).toBeTruthy();
+  });
+
+  it('wake denial after cap sync returns capCycleState', () => {
+    const pr = 646;
+    const current = buildReviewCycleCapCurrentHead('wake');
+    const runs = buildReviewCycleCapPriorHeadRuns(pr);
+    const session = buildReviewCycleCapWorkerSession(pr, 'opk-646');
+    const result = evaluateWakeReviewTrigger({
+      wakeKind: 'merge.ready',
+      sessionId: 'opk-646',
+      prNumber: pr,
+      openPrs: [{ number: pr, headRefOid: current, headCommittedAt: '2026-07-03T00:00:00Z' }],
+      reviewRuns: runs,
+      sessions: [session],
+      ciChecks: [
+        { name: 'verify', state: 'FAILURE', conclusion: 'failure' },
+        { name: 'scope', state: 'SUCCESS', conclusion: 'success' },
+      ],
+      requiredCheckNames: ['verify', 'scope'],
+      capCycleState: {},
+    });
+    expect(result.triggerReviewRun).toBe(false);
+    expect(result.reason).toBe('ci_red_defer');
+    expect((result.capCycleState?.[String(pr)] as { cycleOpenedAtUtc?: string } | undefined)?.cycleOpenedAtUtc).toBeTruthy();
+  });
+});
+
 describe('cap gate uses review status reader', () => {
   it('cap gate module imports review run rows only (no ao review list argv)', () => {
     expect(capModuleSource).not.toMatch(/\bao\s+review\s+list\b/i);
