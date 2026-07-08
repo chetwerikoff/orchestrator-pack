@@ -7045,6 +7045,31 @@
       }
     },
     {
+      "rowId": "site-scripts-refresh-vitest-runtime-history-ps1-40",
+      "caller": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 40
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:f0efb6638217841260fffd3a79c0422ba50fdc20e6035c0afc58f2a029c0e508",
+      "discoveryMatch": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 40,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-resolve-bound-issue-snapshot-ps1-38",
       "caller": {
         "file": "scripts/resolve-bound-issue-snapshot.ps1",
