@@ -66,6 +66,23 @@
       "path": "captures/ao-0-10-daemon/per-session-reviews-populated.raw.json",
       "contentHash": "sha256:59f9e7f1a6aeca931a8167a23d02d03978105a86c9e006506b18af45ef6c3b9e"
     },
+    "ao-0-10-daemon/project-config-get-405": {
+      "id": "ao-0-10-daemon/project-config-get-405",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/projects/orchestrator-pack/config",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/project-config-get-405.raw.json",
+      "contentHash": "sha256:1bc80a54a5379e203f88df35ef7729a04fa4a3793a339379ce660771bb2e2257",
+      "exitStatus": 405
+    },
+    "ao-0-10-daemon/project-single-reviewers": {
+      "id": "ao-0-10-daemon/project-single-reviewers",
+      "producer": "ao-0-10-daemon",
+      "sourceCommand": "GET /api/v1/projects/orchestrator-pack",
+      "kind": "structured",
+      "path": "captures/ao-0-10-daemon/project-single-reviewers.raw.json",
+      "contentHash": "sha256:037cbe9d059351b6cf86294573eb5f83c79a66a2fc2dd2f341deb5ae594c1305"
+    },
     "ao-0-10-daemon/projects-list": {
       "id": "ao-0-10-daemon/projects-list",
       "producer": "ao-0-10-daemon",
