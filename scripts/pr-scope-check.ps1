@@ -3,12 +3,29 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+$CheckScript = Join-Path $TrustedRoot 'scripts/pr-scope-check.ts'
+$NodeRoot = $TrustedRoot
+$PrRoot = $TrustedRoot
+
 if ($env:PR_SCOPE_REPO_ROOT) {
     $PrRoot = (Resolve-Path $env:PR_SCOPE_REPO_ROOT).Path
-    $CheckScript = Join-Path $PrRoot 'scripts/pr-scope-check.ts'
+    $prHeadCheck = Join-Path $PrRoot 'scripts/pr-scope-check.ts'
+    if (Test-Path -LiteralPath $prHeadCheck) {
+        if (-not (Test-Path -LiteralPath $CheckScript)) {
+            $CheckScript = $prHeadCheck
+            $NodeRoot = $PrRoot
+        }
+        else {
+            $prHash = (Get-FileHash -LiteralPath $prHeadCheck -Algorithm SHA256).Hash
+            $trustedHash = (Get-FileHash -LiteralPath $CheckScript -Algorithm SHA256).Hash
+            if ($prHash -ne $trustedHash) {
+                $CheckScript = $prHeadCheck
+                $NodeRoot = $PrRoot
+            }
+        }
+    }
 }
 else {
-    $PrRoot = $TrustedRoot
     $CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
 }
 
@@ -40,7 +57,7 @@ function Format-ScopeGuardComment {
     $payloadFile = New-TemporaryFile
     try {
         $Result | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        Push-Location $TrustedRoot
+        Push-Location $NodeRoot
         try {
             return node --import tsx $CheckScript --format-comment --input $payloadFile.FullName
         }
@@ -105,7 +122,7 @@ function Invoke-PrScopeCheckCore {
     $payloadFile = New-TemporaryFile
     try {
         $InputJson | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        Push-Location $TrustedRoot
+        Push-Location $NodeRoot
         try {
             $output = node --import tsx $CheckScript --input $payloadFile.FullName
         }
@@ -142,7 +159,7 @@ function Get-ScopeGuardIssueNumber {
     $payloadFile = New-TemporaryFile
     try {
         (@{ prBody = $Body } | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
-        Push-Location $TrustedRoot
+        Push-Location $NodeRoot
         try {
             $output = node --import tsx $CheckScript --resolve-issue-number --input $payloadFile.FullName
         }

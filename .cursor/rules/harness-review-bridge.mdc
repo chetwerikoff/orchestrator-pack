@@ -1,29 +1,20 @@
 ---
-description: AO 0.10 codex harness reviewer structured [Pn] findings (Issue #658, revised #683)
+description: AO 0.10 codex harness reviewer must run pack JSONL bridge before submit (Issue #658)
 globs:
   - code-reviews/workspaces/**
 alwaysApply: false
 ---
 
-# Harness review bridge (Issue #658 / #683)
+# Harness review bridge (Issue #658)
 
-When AO spawns you as the **codex harness reviewer** for a worker PR, submit
-findings using pack-contract structured JSON with `[P0]`–`[P3]` title prefixes
-and `severity: blocking|non-blocking` in finding bodies — not prose `Finding:` /
-`BLOCKING:` headings.
+When AO spawns you as the **codex harness reviewer** for a worker PR, you MUST NOT
+improvise prose review findings or call `ao review submit` with markdown headings like
+`Finding:` / `BLOCKING:`.
 
-## Post-submit enforcement (Issue #683)
+## Mandatory pre-submit pipeline
 
-Pack enforcement is **post-submit**: after AO auto-submits your run, the pack
-validates `latestRun.body` on the daemon poll loop (#669 substrate). Prose or
-non-mapper bodies are rejected and the review is re-triggered until the terminal
-state converges to `[Pn]`/mapper shape or escalates. Do not rely on this rule
-file reaching your session — correctness is enforced on the observable run body.
-
-## Optional bridge (mapper helper)
-
-You may run the pack-owned harness bridge from the **trusted pack root** before
-submit to produce mapper-shaped JSON (best-effort; not the enforcement seam):
+Before `ao review submit`, run the pack-owned harness bridge from the **trusted pack
+root** (never a worker-worktree copy of `scripts/**`):
 
 ```powershell
 pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `

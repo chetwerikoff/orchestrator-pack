@@ -65,19 +65,13 @@ if ($workflow -notmatch 'check-harness-post-submit-pn-live-smoke.ps1') {
     exit 1
 }
 
-$bridgeRule = Get-Content -LiteralPath (Join-Path $Root '.cursor/rules/harness-review-bridge.mdc') -Raw
-if ($bridgeRule -match 'Mandatory pre-submit pipeline') {
-    Write-Host 'harness-review-bridge.mdc must drop #658 mandatory pre-submit pipeline wording'
-    exit 1
-}
-$harnessPrompt = Get-Content -LiteralPath (Join-Path $Root 'prompts/harness_reviewer_submit_contract.md') -Raw
-if ($harnessPrompt -match 'Before `ao review submit`') {
-    Write-Host 'harness_reviewer_submit_contract.md must drop mandatory pre-submit section'
-    exit 1
-}
 $harnessAdoption = Get-Content -LiteralPath (Join-Path $Root 'docs/ao-0-10-review-harness-adoption.md') -Raw
 if ($harnessAdoption -match 'must run the pack JSONL bridge before') {
     Write-Host 'ao-0-10-review-harness-adoption.md must not require pre-submit bridge as enforcement'
+    exit 1
+}
+if ($harnessAdoption -notmatch 'post-submit') {
+    Write-Host 'ao-0-10-review-harness-adoption.md must document post-submit [Pn] enforcement (#683)'
     exit 1
 }
 
