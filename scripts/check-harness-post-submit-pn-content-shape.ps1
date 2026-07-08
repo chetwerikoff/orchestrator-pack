@@ -76,9 +76,17 @@ if ($liveSmoke -notmatch 'Get-AoDaemonHealthJson' -or $liveSmoke -notmatch 'exit
     Write-Host 'live harness [Pn] smoke must require a real AO daemon and fail closed'
     exit 1
 }
+if ($liveSmoke -notmatch 'Test-HarnessPnLiveSmokeRequired' -or $liveSmoke -notmatch '\[SKIP\] live harness \[Pn\] smoke not operator-enabled') {
+    Write-Host 'live harness [Pn] smoke must skip only when operator has not enabled the check'
+    exit 1
+}
 $workflow = Get-Content -LiteralPath (Join-Path $Root '.github/workflows/harness-pn-live-smoke.yml') -Raw
-if ($workflow -match 'PACK_HARNESS_PN_SMOKE_ENABLED') {
-    Write-Host 'live harness [Pn] smoke workflow must not skip PR runs via operator-only if guard'
+if ($workflow -match '(?m)^\s*if:\s*.*PACK_HARNESS_PN_SMOKE_ENABLED') {
+    Write-Host 'live harness [Pn] smoke workflow must not skip the job via operator-only if guard'
+    exit 1
+}
+if ($workflow -notmatch 'PACK_HARNESS_PN_SMOKE_ENABLED') {
+    Write-Host 'live harness [Pn] smoke workflow must pass PACK_HARNESS_PN_SMOKE_ENABLED to the script'
     exit 1
 }
 if ($workflow -notmatch 'check-harness-post-submit-pn-live-smoke.ps1') {

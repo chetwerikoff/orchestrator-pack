@@ -173,7 +173,10 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
 
   it('live smoke workflow fails closed instead of skipping PR runs', () => {
     const workflow = readFileSync(path.join(repoRoot, '.github/workflows/harness-pn-live-smoke.yml'), 'utf8');
-    expect(workflow).not.toMatch(/PACK_HARNESS_PN_SMOKE_ENABLED/);
+    const liveSmoke = readFileSync(path.join(repoRoot, 'scripts/check-harness-post-submit-pn-live-smoke.ps1'), 'utf8');
+    expect(workflow).not.toMatch(/^\s*if:\s*.*PACK_HARNESS_PN_SMOKE_ENABLED/m);
+    expect(workflow).toMatch(/PACK_HARNESS_PN_SMOKE_ENABLED/);
+    expect(liveSmoke).toMatch(/Test-HarnessPnLiveSmokeRequired/);
     expect(workflow).toMatch(/check-harness-post-submit-pn-live-smoke\.ps1/);
   });
 });

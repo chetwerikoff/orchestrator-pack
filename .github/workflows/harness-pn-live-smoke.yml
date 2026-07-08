@@ -28,6 +28,7 @@ jobs:
       - name: Run live smoke (fail-closed without AO daemon)
         shell: pwsh
         env:
+          PACK_HARNESS_PN_SMOKE_ENABLED: ${{ vars.PACK_HARNESS_PN_SMOKE_ENABLED }}
           PACK_HARNESS_PN_SMOKE_SESSION: ${{ vars.PACK_HARNESS_PN_SMOKE_SESSION }}
           PACK_HARNESS_PN_SMOKE_PROJECT: ${{ vars.PACK_HARNESS_PN_SMOKE_PROJECT }}
         run: ./scripts/check-harness-post-submit-pn-live-smoke.ps1
