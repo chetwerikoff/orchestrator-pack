@@ -138,11 +138,35 @@ export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = 
 }
 
 /**
- * @param {OpenPr[]} openPrs
- * @param {number} prNumber
+ * Numeric displayName is enriched evidence only when available head/issue signals corroborate.
+ *
+ * @param {AoSession | null | undefined} session
+ * @param {OpenPr} pr
+ * @param {{ headSha?: string }} [options]
  */
-function openPrExists(openPrs, prNumber) {
-  return toArray(openPrs).some((pr) => numberOrZero(pr?.number) === prNumber);
+function numericDisplayNameCorroboratesPr(session, pr, options = {}) {
+  const issueNumber = getSessionIssueNumber(session);
+  const headSha = normalizeSha(options.headSha);
+  let hasSignal = false;
+  let corroborated = true;
+
+  if (headSha) {
+    hasSignal = true;
+    const prHead = normalizeSha(pr?.headRefOid);
+    if (!prHead || prHead !== headSha) {
+      corroborated = false;
+    }
+  }
+
+  if (issueNumber > 0) {
+    hasSignal = true;
+    const headName = normalizeString(pr?.headRefName ?? pr?.head);
+    if (!headRefCorrelatesToIssue(headName, issueNumber, session)) {
+      corroborated = false;
+    }
+  }
+
+  return hasSignal && corroborated;
 }
 
 /**
@@ -166,7 +190,12 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
   const displayName = normalizeString(options.sessionDetail?.displayName ?? session?.displayName);
   if (displayName && /^\d+$/.test(displayName)) {
     const displayPr = numberOrZero(displayName);
-    if (displayPr > 0 && openPrExists(prList, displayPr)) {
+    const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
+    if (
+      displayPr > 0 &&
+      displayPrRow &&
+      numericDisplayNameCorroboratesPr(session, displayPrRow, options)
+    ) {
       return {
         bound: true,
         prNumber: displayPr,

@@ -269,6 +269,27 @@ describe('session-pr-binding-resolver scenario matrix', () => {
     });
     expect(binding.source).toBe('issue_correlation');
   });
+
+  it('scenario 8b: stale numeric displayName does not bind without head/issue corroboration', () => {
+    const staleHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690, { number: 704, headRefOid: staleHead, headRefName: 'issue-704-other' }], {
+      headSha,
+      sessionDetail: { displayName: '704' },
+    });
+    expect(binding.source).not.toBe('display_name');
+    expect(binding.bound).toBe(true);
+    expect(binding.prNumber).toBe(690);
+    expect(binding.source).toBe('issue_correlation');
+  });
+
+  it('scenario 8c: numeric displayName fails closed when headSha contradicts display PR', () => {
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      sessionDetail: { displayName: '690' },
+    });
+    expect(binding.source).not.toBe('display_name');
+    expect(binding.bound).toBe(false);
+  });
 });
 
 describe('session-pr-binding-resolver branch patterns', () => {
