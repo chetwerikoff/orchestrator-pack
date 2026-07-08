@@ -121,5 +121,5 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] scripted review confirmed-delivery gate wiring (Issue #669)'
+Write-Host '[PASS] scripted review confirmed-delivery gate wiring (Issue #669, supervisor child AC#10)'
 exit 0
