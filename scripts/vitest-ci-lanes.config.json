@@ -93,6 +93,7 @@
     "scripts/review-bulk-send-diagnose.test.ts": "light",
     "scripts/review-finding-delivery-confirm.test.ts": "light",
     "scripts/review-finding-delivery-submit.test.ts": "heavy",
+    "scripts/scripted-review-confirmed-delivery-gate.test.ts": "light",
     "scripts/review-handoff-wake-trigger.test.ts": "heavy",
     "scripts/review-head-ready.test.ts": "heavy",
     "scripts/review-orchestrator-loop.test.ts": "heavy",

@@ -1,0 +1,6 @@
+{
+  "error": "method_not_allowed",
+  "code": "METHOD_NOT_ALLOWED",
+  "message": "GET not allowed on /api/v1/projects/orchestrator-pack/config",
+  "requestId": "DESKTOP-JHP3H0V/jMRhU1dkPQ-111690"
+}

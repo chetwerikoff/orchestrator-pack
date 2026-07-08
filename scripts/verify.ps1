@@ -768,6 +768,23 @@ else {
     Add-Failure 'Missing review-finding delivery confirmation check script (Issue #171)'
 }
 
+Write-Host '== scripted review confirmed-delivery gate (Issue #669) =='
+$scriptedDeliveryGateCheck = Join-Path $Root 'scripts/check-scripted-review-confirmed-delivery-gate.ps1'
+if (Test-Path -LiteralPath $scriptedDeliveryGateCheck -PathType Leaf) {
+    & $scriptedDeliveryGateCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-scripted-review-confirmed-delivery-gate.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-scripted-review-confirmed-delivery-gate.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'scripted review confirmed-delivery gate checks failed (Issue #669)'
+    }
+}
+else {
+    Write-Check 'scripts/check-scripted-review-confirmed-delivery-gate.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'
+}
+
 Write-Host ''
 Write-Host '== worker message submit reconcile (Issue #232) =='
 $workerSubmitCheck = Join-Path $Root 'scripts/check-worker-message-submit-reconcile.ps1'

@@ -1,0 +1,53 @@
+{
+  "description": "approved-drift-escalate.json",
+  "input": {
+    "runId": "aa2fbe6e-2a41-455d-b7e6-7f1357f3ec81",
+    "batchId": "3c2fc1d2-8160-464f-9ba9-8f0217ba728f",
+    "prNumber": 649,
+    "targetSha": "a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea",
+    "verdict": "approved",
+    "startedAtMs": 1000000,
+    "nowMs": 1001000,
+    "initialObservedRunId": "aa2fbe6e-2a41-455d-b7e6-7f1357f3ec81",
+    "config": {
+      "pollWindowSeconds": 45,
+      "pollIntervalSeconds": 2
+    },
+    "reviews": [
+      {
+        "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/649",
+        "prNumber": 649,
+        "title": "Fix fleet audit retention resolver surviving repeated writes (#610)",
+        "targetSha": "a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea",
+        "status": "ineligible",
+        "latestRun": {
+          "id": "aa2fbe6e-2a41-455d-b7e6-7f1357f3ec81",
+          "reviewId": "cdc4631b-8c1b-4e02-8905-adf1ad868840",
+          "sessionId": "orchestrator-pack-23",
+          "batchId": "3c2fc1d2-8160-464f-9ba9-8f0217ba728f",
+          "harness": "codex",
+          "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/649",
+          "targetSha": "a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea",
+          "status": "complete",
+          "verdict": "approved",
+          "body": "Approved: no findings.\n\nI reviewed the PR diff for Issue #610. The guarded in-function dot-source pattern is removed from both affected PowerShell modules, and the new regression check covers repeated fleet audit writes, repeated stale-lock checks, and audit-only failure isolation. Verification passed: focused `scripts/check-audit-retention-guarded-dotsource.ps1`, `git diff --check origin/main...HEAD`, `scripts/verify.ps1`, and `scripts/check-reusable.ps1`.\n\nKB note: local KB search did not find pack-specific guidance for Issue #610; general notes on Commit stage / Automated testing support the added fast self-checking regression gate.\n\nVerdict: approved.",
+          "githubReviewId": "4642388238",
+          "createdAt": "2026-07-07T06:32:26.956471247Z"
+        }
+      }
+    ],
+    "session": {
+      "sessionId": "opk-worker-drift",
+      "role": "worker",
+      "prNumber": 649,
+      "status": "working",
+      "ownedHeadSha": "deadbeef00000000000000000000000000000000"
+    },
+    "openPrs": [
+      {
+        "number": 649,
+        "headRefOid": "a1afe0a4d21dff36999cfc6d6c14e9aae2d548ea"
+      }
+    ]
+  }
+}

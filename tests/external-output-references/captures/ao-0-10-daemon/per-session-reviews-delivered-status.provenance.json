@@ -1,0 +1,9 @@
+{
+  "sourceCommand": "GET /api/v1/sessions/{id}/reviews + live ao.db review_run crosswalk",
+  "toolVersion": "ao 0.10.2 daemon HTTP",
+  "capturedAt": "2026-07-07T20:13:53Z",
+  "context": "HTTP latestRun envelope from live GET orchestrator-pack-23; delivered row fields from live ao.db review_run status=delivered at capture time.",
+  "scrubLog": [
+    "body truncated in tests only"
+  ]
+}

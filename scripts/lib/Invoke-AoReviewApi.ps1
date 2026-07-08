@@ -232,6 +232,14 @@ function Get-AoReviewRunsFromWorkerSessions {
     return $allRuns
 }
 
+function Unwrap-AoProjectConfigPayload {
+    param($Payload)
+
+    if ($null -eq $Payload) { return $Payload }
+    if ($Payload.project) { return $Payload.project }
+    return $Payload
+}
+
 function Get-AoProjectConfigJson {
     param(
         [Parameter(Mandatory = $true)][string]$ProjectId,
@@ -240,9 +248,12 @@ function Get-AoProjectConfigJson {
         $FixturePayload = $null
     )
 
-    if ($FixturePayload) { return $FixturePayload }
-    $path = "/api/v1/projects/$([uri]::EscapeDataString($ProjectId))/config"
-    return Invoke-AoDaemonHttpJson -Method GET -Path $path -BaseUrl $BaseUrl -HealthPayload $HealthPayload
+    if ($FixturePayload) {
+        return Unwrap-AoProjectConfigPayload -Payload $FixturePayload
+    }
+    $path = "/api/v1/projects/$([uri]::EscapeDataString($ProjectId))"
+    $result = Invoke-AoDaemonHttpJson -Method GET -Path $path -BaseUrl $BaseUrl -HealthPayload $HealthPayload
+    return Unwrap-AoProjectConfigPayload -Payload $result
 }
 
 function Set-AoProjectReviewerHarness {
@@ -308,7 +319,7 @@ function Invoke-AoReviewTriggerForWorker {
 
     if (-not $SkipHarnessGuard -and -not $FixturePayload) {
         if ($null -ne $ProjectConfigFixture) {
-            $projectConfig = $ProjectConfigFixture
+            $projectConfig = Unwrap-AoProjectConfigPayload -Payload $ProjectConfigFixture
         }
         else {
             $projectConfig = Get-AoProjectConfigJson -ProjectId $ProjectId -BaseUrl $BaseUrl -HealthPayload $HealthPayload

@@ -1,0 +1,54 @@
+{
+  "description": "CR delivered in window + live head-owning => suppress",
+  "input": {
+    "runId": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
+    "batchId": "e44e7f86-34f5-4fe9-92dd-05a2edbe357f",
+    "prNumber": 651,
+    "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+    "verdict": "changes_requested",
+    "startedAtMs": 1000000,
+    "nowMs": 1003000,
+    "initialObservedRunId": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
+    "config": {
+      "pollWindowSeconds": 45,
+      "pollIntervalSeconds": 2
+    },
+    "reviews": [
+      {
+        "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/651",
+        "prNumber": 651,
+        "title": "Captured delivered latestRun shape (live ao.db row crosswalk)",
+        "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+        "status": "changes_requested",
+        "latestRun": {
+          "id": "8f187f1a-5cf4-4dd8-94f1-207d2fb91d73",
+          "reviewId": "f662b07a-6bb6-49d1-9d77-545a90955203",
+          "sessionId": "orchestrator-pack-26",
+          "batchId": "e44e7f86-34f5-4fe9-92dd-05a2edbe357f",
+          "harness": "codex",
+          "prUrl": "https://github.com/chetwerikoff/orchestrator-pack/pull/651",
+          "targetSha": "58903d11219d852c218d40de884f5a4b6d2686bd",
+          "status": "delivered",
+          "verdict": "changes_requested",
+          "body": "Changes requested.\n\nI found one blocking reliability regression in the new fail-closed escalation path. The project KB did not have pack-specific Issue 641 notes; the relevant general notes were Guaranteed Delivery and Dead Letter Channel, both pointing to the same requirement here: an undeliverable escalation must still be persisted without the fallback path throwing.\n\nInline finding:\n\n- scripts/lib/Orchestrator-Escalation.ps1:186: This Write-Error breaks the fail-closed guarantee in the production scripts, because they set $ErrorActionPreference = Stop. In that mode, when both LLM delivery and operator inbox writing fail, this line throws before the function can return { ok = false, healthSpoolPath = ... }; the outer Publish-OrchestratorEscalation catch is interrupted before it persists the fail_closed record. I reproduced it with forced send/inbox failures: the call threw orchestrator escalation operator inbox failed... and the state file was missing. Use non-terminating logging here, or otherwise suppress/contain this error so the fallback result is returned and persisted under ErrorActionPreference=Stop.\n\nI also noticed a non-blocking diagnostic bug in scripts/lib/Review-StartEnvelopeLedger.ps1:254 where $consecutiveFailureCount is never assigned, so the dedupe key and payload omit the actual count. That should be cleaned up, but the inline finding above is the release blocker.\n\nVerification performed: reproduced the failure with $ErrorActionPreference=Stop using forced send and inbox failures; the call threw and no state file was written. git diff --check passed.\n\nCoworker status: installed, but the mandatory large-diff summarization attempt was rejected by the approval policy as external provider data sharing, so I reviewed locally.",
+          "githubReviewId": "4642791424",
+          "createdAt": "2026-07-07T07:36:16.802339821Z"
+        }
+      }
+    ],
+    "session": {
+      "sessionId": "orchestrator-pack-26",
+      "role": "worker",
+      "prNumber": 651,
+      "status": "working",
+      "ownedHeadSha": "58903d11219d852c218d40de884f5a4b6d2686bd"
+    },
+    "openPrs": [
+      {
+        "number": 651,
+        "headRefOid": "58903d11219d852c218d40de884f5a4b6d2686bd"
+      }
+    ]
+  },
+  "expectedAction": "suppress"
+}

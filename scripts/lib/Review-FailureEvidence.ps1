@@ -170,7 +170,9 @@ function Invoke-PackReviewWrapperWithFailureEvidence {
         [hashtable]$EvidenceHandle
     )
 
-    Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'wrapper_started' | Out-Null
+    if ($EvidenceHandle -and $EvidenceHandle.ok) {
+        Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'wrapper_started' | Out-Null
+    }
 
     $process = $null
     try {
@@ -185,18 +187,24 @@ function Invoke-PackReviewWrapperWithFailureEvidence {
         $stderr = $streams.Stderr
         $exitCode = $process.ExitCode
 
-        Update-ReviewFailureEvidenceOutput -Handle $EvidenceHandle -Stdout $stdout -Stderr $stderr | Out-Null
-        Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'reviewer_output_observed' | Out-Null
+        if ($EvidenceHandle -and $EvidenceHandle.ok) {
+            Update-ReviewFailureEvidenceOutput -Handle $EvidenceHandle -Stdout $stdout -Stderr $stderr | Out-Null
+            Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'reviewer_output_observed' | Out-Null
 
-        $termination = Resolve-ReviewWrapperTerminationSignal -ExitCode $exitCode
-        $completionStatus = if ($exitCode -eq 0) { 'normal' } else { 'abnormal' }
-        Complete-ReviewFailureEvidence -Handle $EvidenceHandle -ExitCode $exitCode -Signal $termination.signal -SignalDetail $termination.signalDetail -Stdout $stdout -Stderr $stderr -CompletionStatus $completionStatus | Out-Null
-        Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'wrapper_exited' | Out-Null
+            $termination = Resolve-ReviewWrapperTerminationSignal -ExitCode $exitCode
+            $completionStatus = if ($exitCode -eq 0) { 'normal' } else { 'abnormal' }
+            Complete-ReviewFailureEvidence -Handle $EvidenceHandle -ExitCode $exitCode -Signal $termination.signal -SignalDetail $termination.signalDetail -Stdout $stdout -Stderr $stderr -CompletionStatus $completionStatus | Out-Null
+            Update-ReviewFailureEvidencePhase -Handle $EvidenceHandle -Phase 'wrapper_exited' | Out-Null
+        }
 
         if ($stdout) { [Console]::Out.Write($stdout) }
         if ($stderr) { [Console]::Error.Write($stderr) }
 
-        return [int]$exitCode
+        return @{
+            exitCode = [int]$exitCode
+            stdout   = $stdout
+            stderr   = $stderr
+        }
     }
     finally {
         if ($process -and -not $process.HasExited) {
