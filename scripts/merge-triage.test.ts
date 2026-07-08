@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -134,6 +134,44 @@ describe('catalog-durability', () => {
     const failRoot = stateRoot();
     process.env.MERGE_TRIAGE_SIMULATE_CATALOG_ERROR = '1';
     expect(() => runMergeTriageGate({ stateRoot: failRoot, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [item] })).toThrow(/catalog/);
+  });
+
+  it('catalogs gate-classified DEFER findings when architect clearance follows mixed pending run', () => {
+    const root = stateRoot();
+    const open = [finding('defer1', 'TOCTOU window'), finding('amb1', 'text without seed marker')];
+    const gate = runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    expect(gate.aggregate).toBe(VERDICT_PENDING_ARCHITECT);
+    expect(existsSync(join(root, 'deferred-findings/catalog.jsonl'))).toBe(false);
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending[0]!;
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    const findingRow = open.find((item) => item.id === pending.finding_id)!;
+    const adjudicated = adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: findingRow,
+      findings: open,
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+      atCapRecord: atCap(),
+    });
+    const catalog = readFileSync(join(root, 'deferred-findings/catalog.jsonl'), 'utf8').trim().split(/\r?\n/);
+    expect(catalog).toHaveLength(2);
+    expect(adjudicated.clearance).toMatchObject({ terminal: 'merge_triage_cleared' });
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: open,
+    })).toMatchObject({ allow: true, reason: 'merge_triage_cleared' });
   });
 
   it('cross-PR fingerprint collision keeps separate rows', () => {
