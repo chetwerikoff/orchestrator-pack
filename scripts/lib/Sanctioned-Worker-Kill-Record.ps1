@@ -70,6 +70,6 @@ function Add-SanctionedWorkerKillRecord {
     if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    $records | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding utf8
+    [pscustomobject]@{ records = @($records) } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding utf8
     return [pscustomobject]@{ healthy = $true; records = @($records) }
 }

@@ -50,6 +50,7 @@ function Invoke-RecordSanctionedWorkerKillIfNeeded {
 
     $audit = $RecoveryResult.audit
     if (-not $audit -or [string]$audit.claimOutcome -ne 'claim_acquired') { return }
+    if ($RecoveryResult.cleanup -ne $true) { return }
 
     $recordScript = Join-Path $PSScriptRoot 'record-sanctioned-worker-kill.ps1'
     & pwsh -NoProfile -File $recordScript -SessionId $SessionId -IssueNumber $IssueNumber -PrNumber $PrNumber -KillKind 'manual' | Out-Null

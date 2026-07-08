@@ -1,6 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   appendSanctionedWorkerKillRecord,
@@ -49,4 +51,25 @@ describe('sanctioned worker kill record surface (Issue #688 AC#4)', () => {
     expect(surface.records).toHaveLength(1);
     expect(JSON.parse(readFileSync(path, 'utf8'))).toHaveLength(1);
   });
+  it('PowerShell writer preserves records array shape for a single entry', () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const path = tempRecordPath();
+    const lib = join(repoRoot, 'scripts/lib/Sanctioned-Worker-Kill-Record.ps1');
+    execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `. '${lib}'; Add-SanctionedWorkerKillRecord -SessionId 'opk-688-ps-single' -IssueNumber 688 -Path '${path.replace(/'/g, "''")}' | Out-Null`,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    const surface = readSanctionedWorkerKillSurface(path);
+    expect(Array.isArray(parsed.records)).toBe(true);
+    expect(parsed.records).toHaveLength(1);
+    expect(surface.records).toHaveLength(1);
+    expect(surface.records[0]?.sessionId).toBe('opk-688-ps-single');
+  });
+
 });
