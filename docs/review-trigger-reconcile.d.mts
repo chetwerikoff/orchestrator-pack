@@ -9,6 +9,8 @@ export declare const FORBIDDEN_LIFECYCLE_PATTERNS: readonly RegExp[];
 
 export declare const AMBIGUOUS_IMPLICIT_HEAD_OWNER_REASON: 'ambiguous_implicit_head_owner';
 
+export type SessionDetailsById = Record<string, { displayName?: string }>;
+
 export declare function isLiveWorkerSession(session: AoSession): boolean;
 
 export declare function getSessionIdentifier(session: AoSession): string | null;
@@ -171,6 +173,7 @@ export interface PlanReconcileInput {
   openPrs: OpenPr[];
   reviewRuns: ReviewRun[];
   sessions: AoSession[];
+  sessionDetailsById?: SessionDetailsById;
   ciChecksByPr?:
     | Record<string, CiCheck[]>
     | Array<{ prNumber: number; checks: CiCheck[] }>;
@@ -261,7 +264,7 @@ export declare function resolveWorkerSessionId(
     ownsHead?: (session: AoSession) => boolean;
     openPrs?: OpenPr[];
     headSha?: string;
-    sessionDetailsById?: Record<string, { displayName?: string }>;
+    sessionDetailsById?: SessionDetailsById;
   },
 ): string | null;
 
@@ -290,7 +293,7 @@ export declare function listWorkersForPr(
   sessions: AoSession[],
   prNumber: number,
   openPrs?: OpenPr[],
-  options?: { headSha?: string; sessionDetail?: { displayName?: string } | null },
+  options?: { headSha?: string; sessionDetailsById?: SessionDetailsById },
 ): AoSession[];
 
 export declare function resolveStrictHeadOwningWorkerSession(
@@ -298,6 +301,7 @@ export declare function resolveStrictHeadOwningWorkerSession(
   prNumber: number,
   headSha: string,
   openPrs?: OpenPr[],
+  options?: { sessionDetailsById?: SessionDetailsById },
 ): {
   sessionId: string | null;
   reason: string;
@@ -309,6 +313,7 @@ export declare function resolveReconcileEvaluationSession(
   prNumber: number,
   headSha: string,
   openPrs?: OpenPr[],
+  options?: { sessionDetailsById?: SessionDetailsById },
 ): {
   ownerResolution: {
     sessionId: string | null;
@@ -324,7 +329,7 @@ export declare function resolveHeadOwningWorkerSessionId(
   prNumber: number,
   headSha: string,
   openPrs?: OpenPr[],
-  options?: { sessionDetailsById?: Record<string, { displayName?: string }> },
+  options?: { sessionDetailsById?: SessionDetailsById },
 ): string | null;
 
 export declare function planReconcileActions(input: PlanReconcileInput): ReconcilePlanResult;
