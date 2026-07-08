@@ -173,10 +173,23 @@ function normalizeOsLiveness(value) {
   return 'unknown';
 }
 
-function hasMatchingSanctionedKill(session, records = []) {
+export function hasMatchingSanctionedKill(session, records = []) {
   const sessionId = getSessionId(session);
   if (!sessionId) return false;
-  return toArray(records).some((record) => normalizeString(record?.sessionId) === sessionId);
+  const sessionIssue = getIssueNumber(session);
+  const sessionPr = getPrNumber(session);
+  return toArray(records).some((record) => {
+    if (normalizeString(record?.sessionId) !== sessionId) return false;
+    const recordIssue = numberOrZero(record?.issueNumber ?? record?.issue);
+    const recordPr = numberOrZero(record?.prNumber ?? record?.pr);
+    if (recordPr > 0) {
+      return sessionPr > 0 && sessionPr === recordPr;
+    }
+    if (recordIssue > 0) {
+      return sessionIssue > 0 && sessionIssue === recordIssue;
+    }
+    return sessionIssue <= 0 && sessionPr <= 0;
+  });
 }
 
 export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {

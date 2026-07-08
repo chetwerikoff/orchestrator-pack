@@ -524,7 +524,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
   });
 
 
-  it('requires session-specific sanctioned kill records (issue-only records do not suppress)', () => {
+  it('requires issue/PR-bound sanctioned kill records (sessionId-only entries do not suppress)', () => {
     const session = {
       sessionId: 'opk-688-new-session',
       issueNumber: 688,
@@ -539,6 +539,40 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     });
     expect(evidence.verdict).toBe('dead');
     expect(evidence.reason).toBe('session_row_and_os_liveness_dead');
+  });
+
+  it('does not suppress reused sessionId when kill record issue binding differs', () => {
+    const session = {
+      sessionId: 'opk-reused',
+      issueNumber: 689,
+      status: 'terminated',
+    };
+    const evidence = classifyWorkerLivenessEvidence(session, {
+      osLiveness: { [session.sessionId]: 'pane-gone' },
+      sanctionedKillSurface: {
+        healthy: true,
+        records: [{ sessionId: 'opk-reused', issueNumber: 688, prNumber: 0, killKind: 'manual', timestampMs: 1 }],
+      },
+    });
+    expect(evidence.verdict).toBe('dead');
+    expect(evidence.reason).toBe('session_row_and_os_liveness_dead');
+  });
+
+  it('suppresses when sessionId and issue binding both match', () => {
+    const session = {
+      sessionId: 'opk-reused',
+      issueNumber: 688,
+      status: 'terminated',
+    };
+    const evidence = classifyWorkerLivenessEvidence(session, {
+      osLiveness: { [session.sessionId]: 'pane-gone' },
+      sanctionedKillSurface: {
+        healthy: true,
+        records: [{ sessionId: 'opk-reused', issueNumber: 688, prNumber: 0, killKind: 'manual', timestampMs: 1 }],
+      },
+    });
+    expect(evidence.verdict).toBe('suppressed');
+    expect(evidence.reason).toBe('sanctioned_kill');
   });
 
   it('detects AO 0.10 terminated session row plus pane-gone as dead without ao events', () => {
