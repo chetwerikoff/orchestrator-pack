@@ -53,6 +53,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-CycleCap.ps1')
 
 function Get-ReconcileIntervalMinutes {
     if ($IntervalMinutes -gt 0) { return $IntervalMinutes }
@@ -334,6 +335,9 @@ function Merge-ReconcileTrackingIntoPlanPayload {
     }
     if ($TrackingState.ContainsKey('legacyNudged')) {
         $PlanPayload.legacyNudged = $TrackingState.legacyNudged
+    }
+    if ($TrackingState.ContainsKey('capCycleState')) {
+        $PlanPayload.capCycleState = $TrackingState.capCycleState
     }
 }
 
@@ -637,6 +641,8 @@ function Invoke-ReconcileTick {
             sharedCycleState              = $payload.sharedCycleState
             legacyNudged                  = $payload.legacyNudged
             repoRoot                      = $RepoRoot
+            capCycleState                 = if ($payload.capCycleState) { Copy-MechanicalJsonMap -Map $payload.capCycleState } else { @{} }
+            issueBodiesByPr               = if ($payload.issueBodiesByPr) { Copy-MechanicalJsonMap -Map $payload.issueBodiesByPr } else { @{} }
         }
     }
     else {
@@ -674,6 +680,7 @@ function Invoke-ReconcileTick {
             started    = 0
             plan       = @()
             cycleState = @{}
+            capCycleState = if ($TrackingState.capCycleState) { $TrackingState.capCycleState } else { @{} }
             deferred   = 1
         }
     }
@@ -683,14 +690,23 @@ function Invoke-ReconcileTick {
     $planPayload.nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     Merge-ReconcileTrackingIntoPlanPayload -PlanPayload $planPayload -TrackingState $TrackingState
     $planPayload.repoRoot = $RepoRoot
+    $issueBodiesByPr = Get-ReviewCycleCapIssueBodiesByPr -OpenPrs @($planPayload.openPrs) -RepoRoot $RepoRoot `
+        -ProjectId $Project -FixtureSnapshot $fixtureSnapshot
+    if ($issueBodiesByPr.Count -gt 0) {
+        $planPayload.issueBodiesByPr = $issueBodiesByPr
+    }
 
     $planResult = Invoke-ReconcileFilterCli -Subcommand 'plan' -Payload $planPayload
     $plan = @()
     $cycleState = @{}
+    $capCycleState = if ($TrackingState.capCycleState) { Copy-MechanicalJsonMap -Map $TrackingState.capCycleState } else { @{} }
     if ($planResult.actions) {
         $plan = @($planResult.actions)
         if ($planResult.cycleState) {
             $cycleState = $planResult.cycleState
+        }
+        if ($planResult.capCycleState) {
+            $capCycleState = $planResult.capCycleState
         }
     }
     else {
@@ -755,6 +771,7 @@ function Invoke-ReconcileTick {
         started    = $started
         plan       = @($plan)
         cycleState = $cycleState
+        capCycleState = $capCycleState
     }
 }
 
@@ -805,9 +822,12 @@ try {
             }
             else {
             $sharedEvidence = Get-CiGreenWakeSharedCycleEvidence -Path $ciGreenWakeStatePath
+            $capStatePath = Get-ReviewCycleCapStatePath -ProjectId $ProjectId
+            $capCycleState = Get-ReviewCycleCapState -Path $capStatePath
             $tickTracking = @{
                 degradedCi         = (Copy-MechanicalJsonMap -Map $state.degradedCi)
                 cycleState         = $state.cycleState
+                capCycleState      = $capCycleState
                 sharedCycleState   = $sharedEvidence.sharedCycleState
                 legacyNudged       = $sharedEvidence.legacyNudged
             }
@@ -833,6 +853,10 @@ try {
                     if ($result -and $result.cycleState) {
                         $cycleState = $result.cycleState
                     }
+                    if ($result -and $result.capCycleState) {
+                        $capCycleState = $result.capCycleState
+                    }
+                    Set-ReviewCycleCapState -Path $capStatePath -State $capCycleState
                     Set-ReconcileState -Path $statePath -State @{
                         lastTickMs = $nowMs
                         degradedCi = $degradedCi

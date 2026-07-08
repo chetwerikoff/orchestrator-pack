@@ -716,6 +716,24 @@ else {
     $script:VerifyFailed = $true
 }
 
+
+Write-Host '== review-cycle cap (Issue #646) =='
+$reviewCycleCapCheck = Join-Path $Root 'scripts/check-review-cycle-cap.ps1'
+if (Test-Path -LiteralPath $reviewCycleCapCheck -PathType Leaf) {
+    & $reviewCycleCapCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-review-cycle-cap.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-review-cycle-cap.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review-cycle cap checks failed (Issue #646)'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-cycle-cap.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review-cycle cap check script (Issue #646)'
+}
+
 $reviewTriggerReevalCheck = Join-Path $Root 'scripts/check-review-trigger-reeval.ps1'
 if (Test-Path -LiteralPath $reviewTriggerReevalCheck -PathType Leaf) {
     & $reviewTriggerReevalCheck

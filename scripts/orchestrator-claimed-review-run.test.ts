@@ -77,7 +77,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     const fixture = loadFixture('positive-covered-clean.json');
     const result = evaluateFixtureTurnGate(fixture);
     expect(result.launch).toBe(false);
-    expect(result.reason).toMatch(/head_covered|covered/);
+    expect(result.reason).toMatch(/head_covered|covered|clean_early_stop/);
   });
 
   it('mixed-row fixture ignores stale superseded-head clean row', () => {
@@ -331,7 +331,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     `);
     const parsed = JSON.parse(output.trim());
     expect(parsed.started).toBe(false);
-    expect(String(parsed.reason)).toMatch(/head_covered|covered/);
+    expect(String(parsed.reason)).toMatch(/head_covered|covered|clean_early_stop/);
   });
 
   it('probe mode runs without SessionId or PrNumber', () => {
@@ -340,7 +340,7 @@ describe('orchestrator claimed review-run gate (#318)', () => {
     `);
     const parsed = JSON.parse(output.trim());
     expect(parsed.started).toBe(false);
-    expect(String(parsed.reason)).toMatch(/head_covered|covered/);
+    expect(String(parsed.reason)).toMatch(/head_covered|covered|clean_early_stop/);
   });
 
   it('autonomous guard denies raw ao review run when surface marker is set', () => {

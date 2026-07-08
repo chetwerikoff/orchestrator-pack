@@ -42,6 +42,7 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 import { evaluateWorkerIterationCycleForPr } from './worker-iteration-cycle.mjs';
+import { evaluateReviewCycleCapGate } from './review-cycle-cap.mjs';
 
 /** Completion-time AO wake that may carry merge intent (approved-and-green → merge.ready). */
 export const COMPLETION_MERGE_INTENT_WAKE_KINDS = new Set(['merge.ready']);
@@ -263,6 +264,31 @@ export function evaluateWakeReviewTrigger(input) {
     };
   }
 
+  const capGate = evaluateReviewCycleCapGate({
+    prNumber,
+    currentHeadSha: normalizeSha(headSha),
+    openPrs,
+    reviewRuns,
+    capState: input.capCycleState ?? {},
+    issueBody: input.issueBody,
+    mergedPrNumbers: input.mergedPrNumbers,
+    producer: isHandoffWake ? 'wake-handoff' : 'wake-completion',
+    nowMs,
+  });
+  if (!capGate.allowStart) {
+    return {
+      triggerReviewRun: false,
+      reason: capGate.reason,
+      route: 'none',
+      processingMs,
+      withinLatencyBound: isHandoffWake ? withinReceiptBound : withinLatencyBound,
+      withinReceiptBound,
+      capCycleState: capGate.capState,
+      mergeEligible: capGate.mergeEligible,
+      atCapRecord: capGate.atCapRecord ?? undefined,
+    };
+  }
+
   const decision = evaluateHeadReadyForReview({
     reviewRuns,
     prNumber,
@@ -282,6 +308,7 @@ export function evaluateWakeReviewTrigger(input) {
       route: decision.route ?? 'none',
       processingMs,
       withinLatencyBound,
+      capCycleState: capGate.capState,
     };
   }
 
@@ -309,6 +336,7 @@ export function evaluateWakeReviewTrigger(input) {
         withinLatencyBound: isHandoffWake ? withinReceiptBound : withinLatencyBound,
         withinReceiptBound,
         cycleBlocked: true,
+        capCycleState: capGate.capState,
       };
     }
   }
@@ -320,6 +348,7 @@ export function evaluateWakeReviewTrigger(input) {
       processingMs,
       withinLatencyBound: withinReceiptBound,
       withinReceiptBound,
+      capCycleState: capGate.capState,
     };
   }
   const planned = {
@@ -348,6 +377,8 @@ export function evaluateWakeReviewTrigger(input) {
     withinReceiptBound,
     wakeKind,
     auditLine,
+    capCycleState: capGate.capState,
+    mergeEligible: capGate.mergeEligible,
   };
 }
 

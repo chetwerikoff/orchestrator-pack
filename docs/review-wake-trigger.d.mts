@@ -31,6 +31,9 @@ export interface WakeReviewTriggerResult {
   wakeKind?: string;
   auditLine?: string;
   cycleBlocked?: boolean;
+  capCycleState?: Record<string, unknown>;
+  mergeEligible?: boolean;
+  atCapRecord?: Record<string, unknown>;
 }
 
 export interface MergeIntentAfterReviewResult {
@@ -65,6 +68,9 @@ export declare function evaluateWakeReviewTrigger(input: {
   admittedBaseRef?: string;
   admittedHeadSha?: string;
   cycleState?: Record<string, unknown>;
+  capCycleState?: Record<string, unknown>;
+  issueBody?: string | null;
+  mergedPrNumbers?: number[];
   repoRoot?: string;
   receiptToRunBoundMs?: number;
 }): WakeReviewTriggerResult;

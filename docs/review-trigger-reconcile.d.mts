@@ -156,6 +156,7 @@ export interface DegradedCiTrackingState {
   degradedCi?: Record<string, DegradedCiRecord>;
   cycleState?: Record<string, unknown>;
   sharedCycleState?: Record<string, unknown>;
+  capCycleState?: Record<string, unknown>;
   legacyNudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
 }
 
@@ -180,13 +181,18 @@ export interface PlanReconcileInput {
   reactionMessages?: Record<string, string>;
   cycleState?: Record<string, unknown>;
   sharedCycleState?: Record<string, unknown>;
+  capCycleState?: Record<string, unknown>;
   legacyNudged?: Record<string, { sessionId?: string; sentAtMs?: number }>;
   repoRoot?: string;
+  issueBody?: string | null;
+  issueBodiesByPr?: Record<string, string>;
+  mergedPrNumbers?: number[];
 }
 
 export interface ReconcilePlanResult {
   actions: ReconcileAction[];
   cycleState: Record<string, unknown>;
+  capCycleState: Record<string, unknown>;
 }
 
 export interface ReconcileIntervalAccept {
