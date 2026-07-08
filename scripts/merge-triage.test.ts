@@ -746,3 +746,55 @@ describe('architect provenance verification', () => {
   });
 });
 
+describe('adjudication replay protection', () => {
+  it('rejects a second verdict after adjudication is resolved and consumes the token', () => {
+    const root = stateRoot();
+    const block = finding('b1', 'parser error');
+    fileWorkerAppeal({ stateRoot: root, prNumber: 648, headSha: 'abc123', finding: block, appealReason: 'conditional in context' });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending[0]!;
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    const blocked = adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_BLOCK,
+      finding: block,
+      findings: [block],
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+    });
+    expect(blocked.verdict).toBe(VERDICT_BLOCK);
+    expect(() => issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    })).toThrow(/resolved/);
+    expect(() => adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: block,
+      findings: [block],
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+      atCapRecord: atCap(),
+    })).toThrow(/resolved|provenance/);
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: [block],
+    }).allow).toBe(false);
+  });
+});
+

@@ -501,6 +501,15 @@ function appendArchitectInbox({ paths, prNumber, headSha, gateRunId, finding, cl
   return { ...publicRow, adjudication_provenance_token: token };
 }
 
+function readLatestInboxRow(paths, adjudicationId) {
+  let latest = null;
+  for (const row of readJsonl(paths.inbox)) {
+    if (row.adjudication_id !== adjudicationId) continue;
+    latest = row;
+  }
+  return latest;
+}
+
 function readPendingInbox(paths, prNumber, headSha) {
   const latestById = new Map();
   for (const row of readJsonl(paths.inbox)) {
@@ -707,11 +716,13 @@ export function issueArchitectProvenanceToken(input = {}) {
   }
   const paths = statePaths(resolveStateRoot(input));
   const adjudicationId = String(input.adjudicationId ?? '');
-  const inbox = readPendingInbox(paths, input.prNumber, input.headSha).find((row) => row.adjudication_id === adjudicationId);
+  const inbox = readLatestInboxRow(paths, adjudicationId);
   if (!inbox) throw new Error('pending adjudication not found');
+  if (inbox.status !== 'pending') throw new Error('adjudication already resolved');
   const tokens = existsSync(paths.tokens) ? readJsonFile(paths.tokens) : {};
   const tokenRecord = tokens[adjudicationId];
   if (!tokenRecord?.token || tokenRecord.normalizedTextHash !== inbox.normalized_text_hash) throw new Error('adjudication token unavailable');
+  if (tokenRecord.consumedAt) throw new Error('adjudication token already consumed');
   return {
     adjudication_id: adjudicationId,
     adjudication_provenance_token: tokenRecord.token,
@@ -753,12 +764,13 @@ export function adjudicateArchitectFinding(input = {}) {
     return { ok: false, verdict: VERDICT_PENDING_OPERATOR, reason: 'architect_permissive_budget_exhausted' };
   }
   const adjudicationId = String(input.adjudicationId ?? '');
-  const inboxRows = readJsonl(paths.inbox);
-  const inbox = [...inboxRows].reverse().find((row) => row.adjudication_id === adjudicationId && row.status === 'pending');
+  const inbox = readLatestInboxRow(paths, adjudicationId);
   if (!inbox) throw new Error('pending adjudication not found');
+  if (inbox.status !== 'pending') throw new Error('adjudication already resolved');
   const tokens = existsSync(paths.tokens) ? readJsonFile(paths.tokens) : {};
   const tokenRecord = tokens[adjudicationId];
-  if (!tokenRecord || tokenRecord.tokenHash !== sha256(input.adjudicationProvenanceToken ?? '')) throw new Error('invalid adjudication provenance token');
+  if (!tokenRecord || tokenRecord.consumedAt) throw new Error('invalid adjudication provenance token');
+  if (tokenRecord.tokenHash !== sha256(input.adjudicationProvenanceToken ?? '')) throw new Error('invalid adjudication provenance token');
   const finding = input.finding;
   const normalizedTextHash = sha256(normalizeTriageText(buildFindingText(finding)));
   if (normalizedTextHash !== inbox.normalized_text_hash || normalizedTextHash !== tokenRecord.normalizedTextHash) throw new Error('stale finding text for adjudication');
@@ -782,6 +794,8 @@ export function adjudicateArchitectFinding(input = {}) {
     provenanceToken: String(input.adjudicationProvenanceToken ?? ''),
   });
   appendJsonl(paths.inbox, { ...inbox, status: 'resolved', resolved_verdict: verdict, resolved_at_utc: new Date().toISOString() });
+  tokens[adjudicationId] = { ...tokenRecord, consumedAt: new Date().toISOString() };
+  writeJsonFile(paths.tokens, tokens);
   let clearance = null;
   if (verdict === VERDICT_DEFER) {
     const markerList = loadMarkerList(input.markerFile ?? DEFAULT_MARKER_FILE);
