@@ -1,0 +1,27 @@
+{
+  "issue_number": 648,
+  "iteration_id": "issue-648-merge-triage-gate",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-08T10:30:00.000Z",
+  "baseline": {
+    "commit_sha": "79a7518fede9925e94023d54ce1d5d7861f9241e",
+    "worktree_dirty": true,
+    "active_scope_hash": "sha256:pending-after-commit"
+  },
+  "declared_paths": [
+    "docs/merge-triage-gate.mjs",
+    "docs/merge-triage-markers.v1.json",
+    "AGENTS.md",
+    "scripts/check-merge-triage-gate.ps1",
+    "scripts/lib/Merge-TriageGate.ps1",
+    "scripts/merge-triage-gate.ps1",
+    "scripts/merge-triage.test.ts",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "docs/declarations/648.issue-648-merge-triage-gate.json"
+  ],
+  "amendments": []
+}
