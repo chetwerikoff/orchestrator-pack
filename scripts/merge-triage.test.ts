@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  acknowledgeArchitectPermissiveBudget,
   adjudicateArchitectFinding,
   classifyFinding,
   DEFAULT_MARKER_FILE,
@@ -18,6 +19,7 @@ import {
   VERDICT_BLOCK,
   VERDICT_DEFER,
   VERDICT_PENDING_ARCHITECT,
+  VERDICT_ACK_RESET,
   VERDICT_PENDING_OPERATOR,
 } from '../docs/merge-triage-gate.mjs';
 
@@ -125,6 +127,26 @@ describe('ambiguity-fail-closed', () => {
 });
 
 describe('catalog-durability', () => {
+  it('persists catalog metadata updates when the same fingerprint is re-gated', () => {
+    const root = stateRoot();
+    const item = { ...finding('d1', 'TOCTOU window'), runId: 'run-a' };
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: [item], gateRunId: 'gate-run-1' });
+    const firstRow = JSON.parse(readFileSync(join(root, 'deferred-findings/catalog.jsonl'), 'utf8').trim());
+    runMergeTriageGate({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: [{ ...item, runId: 'run-b' }],
+      gateRunId: 'gate-run-2',
+    });
+    const secondRow = JSON.parse(readFileSync(join(root, 'deferred-findings/catalog.jsonl'), 'utf8').trim());
+    expect(secondRow.gate_run_id).toBe('gate-run-2');
+    expect(secondRow.deferred_at_utc).toBe(firstRow.deferred_at_utc);
+    expect(secondRow.run_ids).toEqual(expect.arrayContaining(['run-a', 'run-b']));
+    expect(secondRow.last_seen_at_utc >= firstRow.last_seen_at_utc).toBe(true);
+  });
+
   it('dedups deferred catalog by pr_number and aborts clearance on write failure', () => {
     const root = stateRoot();
     const item = finding('d1', 'TOCTOU window');
@@ -470,6 +492,18 @@ describe('architect-adjudication', () => {
     writeFileSync(join(root2, 'merge-triage/verdict-journal.jsonl'), `${JSON.stringify({ actor: 'architect', verdict: VERDICT_DEFER })}\n${JSON.stringify({ actor: 'architect', verdict: VERDICT_DEFER })}\n`, { flag: 'a' });
     const pending = readArchitectInbox({ stateRoot: root2 }).pending[0]!;
     expect(adjudicateArchitectFinding({ stateRoot: root2, sessionKind: 'architect', adjudicationId: pending.adjudication_id, verdict: VERDICT_DEFER, finding: finding('a1', 'no marker one'), adjudicationProvenanceToken: 'unused', actorSession: 'arch-1' }).verdict).toBe(VERDICT_PENDING_OPERATOR);
+    expect(acknowledgeArchitectPermissiveBudget({ stateRoot: root2, sessionKind: 'operator', actorSession: 'op-1', prNumber: 1, headSha: 'abc123' })).toMatchObject({ ok: true, verdict: VERDICT_ACK_RESET });
+    const token = issueArchitectProvenanceToken({ stateRoot: root2, sessionKind: 'architect', adjudicationId: pending.adjudication_id, prNumber: 1, headSha: 'abc123' });
+    expect(adjudicateArchitectFinding({
+      stateRoot: root2,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: finding('a1', 'no marker one'),
+      findings: [finding('a1', 'no marker one')],
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+    }).verdict).toBe(VERDICT_DEFER);
     expect(p1.ok).toBe(false);
     expect(p2.ok).toBe(false);
   });

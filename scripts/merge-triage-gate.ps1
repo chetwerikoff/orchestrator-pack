@@ -1,6 +1,6 @@
 #requires -Version 5.1
 param(
-    [Parameter(Mandatory)][ValidateSet('run-gate','policy','architect-inbox','architect-token','architect-adjudicate','worker-appeal')]
+    [Parameter(Mandatory)][ValidateSet('run-gate','policy','architect-inbox','architect-token','architect-adjudicate','worker-appeal','operator-ack-reset')]
     [string]$Command,
     [string]$PayloadJson = '{}'
 )
@@ -14,4 +14,5 @@ switch ($Command) {
     'architect-token' { New-MergeTriageArchitectToken -Payload $payload }
     'architect-adjudicate' { Submit-MergeTriageArchitectVerdict -Payload $payload }
     'worker-appeal' { Submit-MergeTriageWorkerAppeal -Payload $payload }
+    'operator-ack-reset' { Submit-MergeTriageOperatorBudgetReset -Payload $payload }
 }

@@ -106,3 +106,4 @@ export declare function readArchitectInbox(input?: Record<string, unknown>): {
 export declare function issueArchitectProvenanceToken(input?: Record<string, unknown>): Record<string, unknown>;
 export declare function fileWorkerAppeal(input?: Record<string, unknown>): Record<string, unknown>;
 export declare function adjudicateArchitectFinding(input?: Record<string, unknown>): Record<string, unknown>;
+export declare function acknowledgeArchitectPermissiveBudget(input?: Record<string, unknown>): Record<string, unknown>;

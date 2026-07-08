@@ -44,3 +44,9 @@ function Submit-MergeTriageWorkerAppeal {
     param([hashtable]$Payload)
     return Invoke-MergeTriageCli -Subcommand 'fileWorkerAppeal' -Payload $Payload
 }
+
+function Submit-MergeTriageOperatorBudgetReset {
+    param([hashtable]$Payload)
+    return Invoke-MergeTriageCli -Subcommand 'acknowledgeArchitectBudget' -Payload $Payload
+}
+

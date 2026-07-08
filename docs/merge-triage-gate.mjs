@@ -17,6 +17,7 @@ export const VERDICT_BLOCK = 'BLOCK';
 export const VERDICT_DEFER = 'DEFER';
 export const VERDICT_PENDING_ARCHITECT = 'PENDING_ARCHITECT';
 export const VERDICT_PENDING_OPERATOR = 'PENDING_OPERATOR';
+export const VERDICT_ACK_RESET = 'ACK_RESET';
 export const DEFAULT_MARKER_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'merge-triage-markers.v1.json');
 
 function toArray(value) {
@@ -340,12 +341,21 @@ function catalogRowsByKey(existingRows) {
   return byKey;
 }
 
+function rewriteDeferredCatalog(paths, byKey) {
+  ensureDir(path.dirname(paths.catalog));
+  const rows = Array.from(byKey.values()).sort((left, right) =>
+    `${left.pr_number}:${left.fingerprint}`.localeCompare(`${right.pr_number}:${right.fingerprint}`),
+  );
+  const text = rows.length > 0 ? `${rows.map((row) => JSON.stringify(row)).join('\n')}\n` : '';
+  writeFileSync(paths.catalog, text, { mode: 0o600 });
+}
+
 function writeDeferredCatalogRows({ paths, prNumber, headSha, gateRunId, findings, classifications }) {
   if (process.env.MERGE_TRIAGE_SIMULATE_CATALOG_ERROR === '1') throw new Error('simulated catalog write failure');
   const existing = readJsonl(paths.catalog);
   const byKey = catalogRowsByKey(existing);
   const now = new Date().toISOString();
-  const newRows = [];
+  let catalogUpdated = false;
   for (let index = 0; index < findings.length; index += 1) {
     const finding = findings[index];
     const classification = classifications[index];
@@ -371,10 +381,19 @@ function writeDeferredCatalogRows({ paths, prNumber, headSha, gateRunId, finding
       marker_hits: classification.matchedMarkers,
       promoted_issue: previous?.promoted_issue ?? null,
     };
+    if (!previous) {
+      catalogUpdated = true;
+    } else if (
+      previous.last_seen_at_utc !== row.last_seen_at_utc ||
+      previous.gate_run_id !== row.gate_run_id ||
+      previous.head_sha !== row.head_sha ||
+      stableJson(previous.run_ids ?? []) !== stableJson(row.run_ids)
+    ) {
+      catalogUpdated = true;
+    }
     byKey.set(key, row);
-    if (!previous) newRows.push(row);
   }
-  for (const row of newRows) appendJsonl(paths.catalog, row);
+  if (catalogUpdated) rewriteDeferredCatalog(paths, byKey);
   return Array.from(byKey.values()).filter((row) => Number(row.pr_number) === Number(prNumber));
 }
 
@@ -572,7 +591,7 @@ function permissiveBudgetExhausted(paths) {
   const rows = readJsonl(paths.journal);
   let count = 0;
   for (const row of rows) {
-    if (row.actor === 'operator' && row.verdict === 'ACK_RESET') count = 0;
+    if (row.actor === 'operator' && row.verdict === VERDICT_ACK_RESET) count = 0;
     else if (isPermissiveArchitectVerdict(row)) count += 1;
   }
   return count >= 2;
@@ -607,6 +626,7 @@ export function runMergeTriageGate(input = {}) {
       existingClearance.marker_list_hash === markerList.markerListHash &&
       existingClearance.open_findings_snapshot_hash === snapshotHash
     ) {
+      writeDeferredCatalogRows({ paths, prNumber, headSha, gateRunId, findings, classifications });
       return {
         ok: true,
         ran: true,
@@ -747,6 +767,38 @@ export function fileWorkerAppeal(input = {}) {
   return { ok: false, verdict: VERDICT_PENDING_ARCHITECT, inbox: publicInbox };
 }
 
+export function acknowledgeArchitectPermissiveBudget(input = {}) {
+  const sessionKind = resolveTrustedSessionKind(input);
+  if (sessionKind !== 'operator') {
+    throw new Error('architect permissive budget reset requires operator session');
+  }
+  const actorSession = String(input.actorSession ?? '').trim();
+  if (!actorSession) throw new Error('operator budget reset requires actor_session');
+  const stateRoot = resolveStateRoot(input);
+  const paths = statePaths(stateRoot);
+  const prNumber = Number(input.prNumber ?? 0);
+  const headSha = normalizeTriageText(input.headSha ?? input.currentHeadSha ?? '');
+  appendJsonl(paths.journal, {
+    schema_version: TRIAGE_SCHEMA_VERSION,
+    event: 'merge_triage_verdict',
+    gate_run_id: input.gateRunId ?? `merge-triage-ack-reset-${Date.now()}`,
+    finding_id: 'architect-permissive-budget-reset',
+    fingerprint: 'architect-permissive-budget-reset',
+    pr_number: prNumber,
+    head_sha: headSha,
+    verdict: VERDICT_ACK_RESET,
+    matched_markers: [],
+    reason: 'operator_permissive_budget_reset',
+    actor: 'operator',
+    actor_session: actorSession,
+    adjudication_provenance_token_hash: '',
+    normalized_text_hash: sha256(''),
+    title: '',
+    timestamp_utc: new Date().toISOString(),
+  });
+  return { ok: true, verdict: VERDICT_ACK_RESET };
+}
+
 export function adjudicateArchitectFinding(input = {}) {
   const sessionKind = resolveTrustedSessionKind(input);
   if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') {
@@ -846,6 +898,7 @@ const MERGE_TRIAGE_CLI_HANDLERS = {
   issueArchitectToken: () => issueArchitectProvenanceToken(readStdinJson()),
   fileWorkerAppeal: () => fileWorkerAppeal(readStdinJson()),
   adjudicateArchitectFinding: () => adjudicateArchitectFinding(readStdinJson()),
+  acknowledgeArchitectBudget: () => acknowledgeArchitectPermissiveBudget(readStdinJson()),
 };
 
 function mergeTriageCliShouldExitNonZero(subcommand, result) {
