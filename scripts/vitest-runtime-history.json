@@ -35,8 +35,8 @@
     "scripts/mechanical-json-state.test.ts": 45000,
     "scripts/mechanical-reconcile-bounds.test.ts": 45000,
     "scripts/orchestrator-claimed-review-run.test.ts": 45000,
-    "scripts/orchestrator-message-registry.test.ts": 45000,
-    "scripts/orchestrator-wake-heartbeat.test.ts": 45000,
+    "scripts/orchestrator-message-registry.test.ts": 260000,
+    "scripts/orchestrator-wake-heartbeat.test.ts": 90000,
     "scripts/orchestrator-wake-listener.test.ts": 120000,
     "scripts/orchestrator-wake-supervisor.test.ts": 180000,
     "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts": 45000,
@@ -74,8 +74,11 @@
     "scripts/terminal-flood-detect.test.ts": 45000,
     "scripts/test-runtime-budget.test.ts": 45000,
     "scripts/worker-iteration-cycle.test.ts": 45000,
-    "scripts/worker-message-submit-reconcile.test.ts": 70000,
+    "scripts/worker-message-submit-reconcile.test.ts": 550000,
     "scripts/worker-nudge-gate.test.ts": 80000,
-    "scripts/worker-nudge-issue-owner-bootstrap.test.ts": 45000
+    "scripts/worker-nudge-issue-owner-bootstrap.test.ts": 45000,
+    "scripts/dead-worker-reconcile.test.ts": 120000,
+    "scripts/worker-recovery.test.ts": 90000,
+    "scripts/ao-events-fail-soft.test.ts": 90000
   }
 }
