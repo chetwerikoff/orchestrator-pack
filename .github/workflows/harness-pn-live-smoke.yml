@@ -1,6 +1,8 @@
 name: harness-pn-live-smoke
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   push:
     branches:
       - main
@@ -17,8 +19,7 @@ permissions:
 jobs:
   live-smoke:
     name: Live harness [Pn] smoke
-    # Merge-blocking once AO infra is wired: re-enable pull_request after a self-hosted
-    # runner with `ao` on PATH and PACK_HARNESS_PN_SMOKE_SESSION repo var are configured.
+    # Merge-blocking on pull_request: script fail-closes when AO daemon/session are unavailable.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

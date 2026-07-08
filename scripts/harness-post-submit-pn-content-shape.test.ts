@@ -208,6 +208,7 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
     expect(workflow).toMatch(/PACK_HARNESS_PN_SMOKE_ENABLED/);
     expect(liveSmoke).not.toMatch(/\[SKIP\] live harness \[Pn\] smoke not operator-enabled/);
     expect(liveSmoke).toMatch(/Get-AoDaemonHealthJson/);
+    expect(workflow).toMatch(/pull_request:/);
     expect(workflow).toMatch(/check-harness-post-submit-pn-live-smoke\.ps1/);
   });
 });

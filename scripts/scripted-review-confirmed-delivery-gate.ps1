@@ -259,18 +259,23 @@ Write-ScriptedReviewDeliveryGateLog "starting session=$SessionId PR #$PrNumber r
 
 if ($Verdict -eq 'approved') {
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'poll'
-    Write-ScriptedReviewDeliveryGateLog 'approved verdict: skip daemon reviews poll'
+    $reviewsPayload = Get-ScriptedReviewDeliveryGateReviewsPayload
     $sessions = @(Get-ScriptedReviewDeliveryGateSessions)
     $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
     $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $initialObservedRunId = Resolve-ScriptedReviewInitialObservedRunId `
+        -CurrentInitialObservedRunId '' `
+        -Reviews @($reviewsPayload.reviews) `
+        -PrNumber $PrNumber
+    Write-ScriptedReviewDeliveryGateLog 'approved verdict: poll daemon reviews for harness content-shape'
     $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
-        reviews              = @()
+        reviews              = @($reviewsPayload.reviews)
         session              = $session
         openPrs              = @($openPrs)
         startedAtMs          = $startedAtMs
         nowMs                = $nowMs
-        initialObservedRunId = ''
+        initialObservedRunId = $initialObservedRunId
         config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)

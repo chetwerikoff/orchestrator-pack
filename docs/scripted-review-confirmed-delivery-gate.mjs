@@ -253,7 +253,7 @@ export function evaluateGatePollStep(input) {
   const windowExpired = elapsedMs >= config.pollWindowMs;
   const normalizedVerdict = String(input.verdict ?? '').trim().toLowerCase();
 
-  if (normalizedVerdict === 'approved') {
+  if (normalizedVerdict === 'approved' && input.harnessContentShape !== true) {
     const liveness = classifyWorkerLiveness({
       session: input.session,
       openPrs: input.openPrs,
