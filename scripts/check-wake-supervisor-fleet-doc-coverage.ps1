@@ -3,24 +3,10 @@
 .SYNOPSIS
   Registry children[].id must appear in the wake-supervisor fleet operator reference (Issue #702).
 #>
-[CmdletBinding()]
-param(
-    [string]$Root = '',
-    [string]$RegistryPath = '',
-    [string]$DocPath = ''
-)
-
 $ErrorActionPreference = 'Stop'
-
-if (-not $Root) {
-    $Root = Split-Path -Parent $PSScriptRoot
-}
-if (-not $RegistryPath) {
-    $RegistryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
-}
-if (-not $DocPath) {
-    $DocPath = Join-Path $Root 'docs/wake-supervisor-fleet-operator-reference.md'
-}
+$Root = Split-Path -Parent $PSScriptRoot
+$RegistryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
+$DocPath = Join-Path $Root 'docs/wake-supervisor-fleet-operator-reference.md'
 
 if (-not (Test-Path -LiteralPath $RegistryPath -PathType Leaf)) {
     Write-Host "[FAIL] missing registry: $RegistryPath"
