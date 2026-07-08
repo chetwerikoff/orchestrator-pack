@@ -1,4 +1,5 @@
 import type { CiCheck } from './ci-green-wake-reconcile.d.mts';
+import type { AoSession as BindingAoSession } from './session-pr-binding-resolver.d.mts';
 
 export declare const DEFAULT_RECONCILE_INTERVAL_MS: number;
 
@@ -90,23 +91,7 @@ export interface WorkerReport {
   handoffKind?: string;
 }
 
-export interface AoSession {
-  name?: string;
-  sessionId?: string;
-  id?: string;
-  role?: string;
-  prNumber?: number | null;
-  pr?: string | null;
-  issue?: string | number | null;
-  issueId?: string | number | null;
-  issueNumber?: number | null;
-  displayName?: string;
-  branch?: string;
-  headBranch?: string;
-  headRefName?: string;
-  ownedHeadSha?: string;
-  headRefOid?: string;
-  status?: string;
+export interface AoSession extends BindingAoSession {
   runtime?: string;
   reports?: WorkerReport[];
 }
