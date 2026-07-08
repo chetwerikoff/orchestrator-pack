@@ -18,6 +18,7 @@ permissions:
 jobs:
   test-vitest-heavy:
     name: Vitest heavy shard ${{ matrix.shard }}/7
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -57,7 +58,9 @@ jobs:
   refresh-runtime-history:
     name: Refresh vitest runtime-history
     needs: test-vitest-heavy
-    if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    if: >-
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     permissions:
       contents: write

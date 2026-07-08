@@ -392,6 +392,9 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
     if ($refreshText -notmatch 'concurrency:') {
         Add-Fail 'vitest-runtime-history-refresh.yml must declare a concurrency guard'
     }
+    if ($refreshText -notmatch "refs/heads/main" -or $refreshText -notmatch 'workflow_dispatch') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must restrict workflow_dispatch to refs/heads/main'
+    }
 
     $refreshJobs = Get-YamlJobs -Text $refreshText
     if (-not $refreshJobs.ContainsKey('test-vitest-heavy')) {
