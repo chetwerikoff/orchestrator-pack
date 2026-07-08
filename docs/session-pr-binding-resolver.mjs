@@ -358,6 +358,7 @@ export function resolvePrOwningWorkerSessionBinding(
 
   /** @type {Array<{ session: AoSession, binding: SessionPrBinding, sessionId: string }>} */
   const matches = [];
+  let sawIssueAmbiguityDefer = false;
   for (const session of toArray(sessions)) {
     const role = normalizeString(session?.role).toLowerCase();
     if (role !== 'worker' && role !== 'coding') {
@@ -371,6 +372,9 @@ export function resolvePrOwningWorkerSessionBinding(
       headSha: options.headSha,
       sessionDetail: sessionDetailsById[sessionId] ?? null,
     });
+    if (binding.deferReason === DEFER_AMBIGUOUS_ISSUE_PR_BINDING) {
+      sawIssueAmbiguityDefer = true;
+    }
     if (!binding.bound || numberOrZero(binding.prNumber) !== targetPr) {
       continue;
     }
@@ -393,6 +397,15 @@ export function resolvePrOwningWorkerSessionBinding(
       sessionId: matches[0].sessionId,
       reason: 'resolved',
       failClosed: false,
+    };
+  }
+
+  if (matches.length === 0 && sawIssueAmbiguityDefer) {
+    return {
+      sessionId: null,
+      reason: 'ambiguous_issue_pr_binding',
+      failClosed: true,
+      deferReason: DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
     };
   }
 

@@ -49,6 +49,9 @@ if ($mjs -notlike '*resolveHeadOwningWorkerSessionId*') {
 if ($mjs -like '*resolvePrOwningWorkerSessionBinding*') {
   throw 'ci-failure-notification.mjs must not use PR-only binding for CI owner resolution'
 }
+if ($mjs -notlike '*fresh?.sessionDetailsById*') {
+  throw 'ci-failure-notification.mjs must thread sessionDetailsById through pre-send recheck'
+}
 if ($mjs -notlike '*sessionDetailsById*') {
   throw 'ci-failure-notification.mjs must thread session-get displayName evidence into owner resolution'
 }

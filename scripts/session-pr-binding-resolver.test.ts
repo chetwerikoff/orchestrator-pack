@@ -111,6 +111,22 @@ describe('session-pr-binding-resolver ambiguity axes', () => {
     expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
   });
 
+  it('surfaces issue ambiguity defer instead of no_worker_session', () => {
+    const resolution = resolvePrOwningWorkerSessionBinding(
+      [{ ...issueOnlyListRow, role: 'worker', status: 'working' }],
+      690,
+      [openPr690, { ...openPr690, number: 691, headRefName: 'issue-690-alt' }],
+      {
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      },
+    );
+    expect(resolution.sessionId).toBeNull();
+    expect(resolution.failClosed).toBe(true);
+    expect(resolution.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
+    expect(resolution.reason).toBe('ambiguous_issue_pr_binding');
+  });
+
   it('fails closed when multiple live sessions claim the same PR', () => {
     const resolution = resolvePrOwningWorkerSessionBinding(
       [

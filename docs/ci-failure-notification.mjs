@@ -1200,6 +1200,7 @@ export function preSendCiRedRecheck(episode, fresh) {
   const workerState = {
     sessions: toArray(fresh?.sessions),
     openPrs: toArray(fresh?.openPrs),
+    sessionDetailsById: fresh?.sessionDetailsById ?? {},
   };
   const ownerResolution = resolveLivePrOwner({ workerState, episode: ep });
   if (!ownerResolution.ok) {

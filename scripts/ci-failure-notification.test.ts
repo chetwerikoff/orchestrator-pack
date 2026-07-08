@@ -233,6 +233,49 @@ describe('CI failure notification predicate (Issue #283 regressions)', () => {
     }
   });
 
+  it('pre-send CI recheck threads session-get displayName into owner resolution', () => {
+    const headSha = 'cccccccccccccccccccccccccccccccccccccccc';
+    const targetId = 'orchestrator-pack-45';
+    const ep = {
+      repo: 'chetwerikoff/orchestrator-pack',
+      prNumber: 690,
+      headSha,
+      redPeriod: 'suite-1',
+      targetId,
+      targetGeneration: targetId,
+    };
+    const session = {
+      id: targetId,
+      sessionId: targetId,
+      role: 'worker',
+      status: 'working',
+      branch: 'unrelated-branch',
+      ownedHeadSha: headSha,
+    };
+    const openPrs = [{ number: 690, headRefOid: headSha, headRefName: 'issue-690-branch' }];
+    const checks = {
+      ciChecksByPr: [{ prNumber: 690, checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }] }],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+      requiredCheckLookupFailedByPr: [],
+    };
+    const withoutEnrichment = preSendCiRedRecheck(ep, {
+      openPrs,
+      sessions: [session],
+      ...checks,
+    });
+    expect(withoutEnrichment.ok).toBe(false);
+    expect(withoutEnrichment.reason).toBe('abandoned-no-live-owner');
+
+    const withEnrichment = preSendCiRedRecheck(ep, {
+      openPrs,
+      sessions: [session],
+      sessionDetailsById: { [targetId]: { displayName: '690' } },
+      ...checks,
+    });
+    expect(withEnrichment.ok).toBe(true);
+    expect(withEnrichment.reason).toBe('ci_still_red');
+  });
+
   it('pre-send CI recheck rejects when required CI is no longer red', () => {
     const recheck = preSendCiRedRecheck(episode, {
       openPrs: [{ number: episode.prNumber, headRefOid: episode.headSha }],
