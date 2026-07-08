@@ -426,6 +426,24 @@ function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
 
 
 const DECLARATION_CONTROL_GLOB = 'docs/declarations/**';
+const SCOPE_GUARD_WORKFLOW_PATH = '.github/workflows/scope-guard.yml';
+
+function prUpdatesScopeChecker(prPaths: string[]): boolean {
+  return prPaths.some((path) =>
+    /^scripts\/pr-scope-check\.(ts|ps1)$/.test(path.replace(/\\/g, '/')),
+  );
+}
+
+function effectiveIssueFenceAllowedRoots(
+  constraints: IssueConstraints,
+  prPaths: string[],
+): string[] {
+  const roots = [...(constraints.allowed_roots ?? [])];
+  if (prUpdatesScopeChecker(prPaths)) {
+    roots.push(SCOPE_GUARD_WORKFLOW_PATH);
+  }
+  return roots;
+}
 
 function issueDenylistBlocksCommittedDeclarationSnapshot(
   denylist: string[],
@@ -467,7 +485,7 @@ function checkImplementationPrScopeWithIssueFences(
   const pathCheck = classifyScopedPaths(scoped, {
     denylist: constraints.denylist,
     declaredPaths: [],
-    declaredGlobs: constraints.allowed_roots,
+    declaredGlobs: effectiveIssueFenceAllowedRoots(constraints, input.prPaths),
   });
 
   if (pathCheck.invalidPaths.length > 0) {
