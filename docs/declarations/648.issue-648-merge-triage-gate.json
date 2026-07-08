@@ -10,10 +10,12 @@
     "active_scope_hash": "sha256:pending-after-commit"
   },
   "declared_paths": [
+    "docs/merge-triage-gate.d.mts",
     "docs/merge-triage-gate.mjs",
     "docs/merge-triage-markers.v1.json",
     "AGENTS.md",
     "scripts/check-merge-triage-gate.ps1",
+    "scripts/launch-argv-inventory.json",
     "scripts/lib/Merge-TriageGate.ps1",
     "scripts/merge-triage-gate.ps1",
     "scripts/merge-triage.test.ts",
