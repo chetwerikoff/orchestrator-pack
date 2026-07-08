@@ -226,7 +226,7 @@ describe('architect-adjudication', () => {
       adjudicationProvenanceToken: token.adjudication_provenance_token,
       actorSession: 'arch-1',
     });
-    expect(adjudicated.clearance?.open_findings_snapshot_hash).toBeTruthy();
+    expect((adjudicated.clearance as { open_findings_snapshot_hash?: string })?.open_findings_snapshot_hash).toBeTruthy();
     expect(evaluateMergePolicy({
       stateRoot: root,
       prNumber: 648,
