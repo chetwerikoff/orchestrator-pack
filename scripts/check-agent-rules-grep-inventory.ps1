@@ -15,7 +15,10 @@ $RepoRoot = $gate.RepoRoot
 $excludePrefixes = @(
     'docs/declarations/',
     'docs/issues_drafts/',
-    '.ao/'
+    '.ao/',
+    '.git/',
+    'node_modules/',
+    'trusted-scope-guard/'
 )
 
 $patterns = @(
