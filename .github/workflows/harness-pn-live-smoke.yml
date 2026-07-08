@@ -8,6 +8,11 @@ on:
       - main
   workflow_dispatch:
 
+# Superseded pull-request runs cancel per PR number; push-to-main runs never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
