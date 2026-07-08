@@ -1,7 +1,8 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Fail-closed live-reference guard: no normative prompts/agent_rules.md references (Issue #678).
+  Fail-closed live-reference guard: no normative prompts/agent_rules.md or bare
+  agent_rules.md references (Issue #678).
 #>
 param(
     [string]$RepoRoot
@@ -13,12 +14,14 @@ $RepoRoot = $gate.RepoRoot
 
 $excludePrefixes = @(
     'docs/declarations/',
-    'docs/issues_drafts/'
+    'docs/issues_drafts/',
+    '.ao/'
 )
 
 $patterns = @(
     'prompts/agent_rules\.md',
-    'prompts\\agent_rules\.md'
+    'prompts\\agent_rules\.md',
+    '(?<![\w/\\])agent_rules\.md'
 )
 
 $failures = [System.Collections.Generic.List[string]]::new()
@@ -49,19 +52,19 @@ Get-ChildItem -LiteralPath $RepoRoot -Recurse -File |
         }
         foreach ($pattern in $patterns) {
             if ($text -match $pattern) {
-                $failures.Add("$rel references retired prompts/agent_rules.md")
+                $failures.Add("$rel references retired agent_rules.md")
                 break
             }
         }
     }
 
 if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] live references to retired prompts/agent_rules.md:'
+    Write-Host '[FAIL] live references to retired agent_rules.md:'
     foreach ($item in $failures) {
         Write-Host " - $item"
     }
     exit 1
 }
 
-Write-Host '[PASS] no live normative references to prompts/agent_rules.md'
+Write-Host '[PASS] no live normative references to agent_rules.md'
 exit 0

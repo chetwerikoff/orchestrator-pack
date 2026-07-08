@@ -40,15 +40,16 @@ describe('agent rules relocation completeness', () => {
 });
 
 describe('agent rules live-reference gate', () => {
-  it('finds no live prompts/agent_rules.md references outside excluded paths', () => {
+  it('finds no live agent_rules.md references outside excluded paths', () => {
     const excludedPrefixes = ['docs/declarations/', 'docs/issues_drafts/'];
+    const retiredRef = /(?<![\w/\\])agent_rules\.md/;
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSafe(dir)) {
         const full = path.join(dir, entry.name);
         const rel = path.relative(repoRoot, full).split(path.sep).join('/');
         if (entry.isDirectory()) {
-          if (entry.name === '.git' || entry.name === 'node_modules') continue;
+          if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.ao') continue;
           walk(full);
           continue;
         }
@@ -57,7 +58,7 @@ describe('agent rules live-reference gate', () => {
         if (rel === 'tests/agents-md-relocation.test.ts') continue;
         if (rel === 'tests/fixtures/agent-rules-relocation-musts.json') continue;
         const text = readFileSync(full, 'utf8');
-        if (/prompts\/agent_rules\.md/.test(text)) {
+        if (retiredRef.test(text)) {
           offenders.push(rel);
         }
       }
