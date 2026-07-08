@@ -7,10 +7,9 @@
   "baseline": {
     "commit_sha": "c16ddc7228455bbc2e8e218c993c95f90e331fff",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:c9787cad2f4081cf378e6119edd51aa4e6360f0cc4cfdfa2d993a0474f0853b7"
+    "active_scope_hash": "sha256:8a6de7930687065d4185db535ea714c1a44f6d1a7a28ce932c0068e64d562f58"
   },
   "declared_paths": [
-    ".github/workflows/scope-guard.yml",
     ".github/workflows/vitest-runtime-history-refresh.yml",
     "docs/ci-pipeline-split.md",
     "docs/declarations/691.issue-691.json",
@@ -21,6 +20,8 @@
     "scripts/lib/vitest-json-report.mjs",
     "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
     "scripts/lib/vitest-runtime-history-merge.mjs",
+    "scripts/pr-scope-check.ps1",
+    "scripts/pr-scope-check.test.ts",
     "scripts/refresh-vitest-runtime-history.mjs",
     "scripts/refresh-vitest-runtime-history.ps1",
     "scripts/run-vitest-heavy-shard.ps1"
