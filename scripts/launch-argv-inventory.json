@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -6896,21 +6896,25 @@
       }
     },
     {
-      "rowId": "site-scripts-pr-scope-check-ps1-199",
+      "rowId": "site-scripts-pr-scope-check-ps1-200",
       "caller": {
         "file": "scripts/pr-scope-check.ps1",
-        "line": 199
+        "line": 200
       },
       "callee": {
-        "kind": "gh",
-        "identity": "scripts/gh pack wrapper"
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
       },
-      "calleeContractSourceClass": "gh-inventory-route",
-      "coverageKind": "validator-backed",
-      "validatorId": "gh-inventory-static",
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:581741546a549b655bf858e6a863cbbef077a23774f6bca60c01be8ec0d54806",
       "discoveryMatch": {
         "file": "scripts/pr-scope-check.ps1",
-        "line": 199,
+        "line": 200,
         "patternIds": [
           "ps-call-op"
         ]
