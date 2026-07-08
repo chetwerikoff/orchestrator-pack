@@ -94,7 +94,7 @@ function isReviewerFindingLine(line) {
   if (trimmed === 'NO_FINDINGS') {
     return true;
   }
-  return /^P[0-3]\s+[—–—\-]\s+\S/.test(trimmed);
+  return UNTYPED_FINDING_LINE.test(line);
 }
 
 function indexOfFirstReviewerFindingLine(text, fromIndex = 0) {

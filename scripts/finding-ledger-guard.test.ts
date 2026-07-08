@@ -166,6 +166,13 @@ describe('finding-ledger guard scenario matrix (#679)', () => {
     expect(result.errors.join(' ')).toMatch(/sec-spawn-grant|security/);
   });
 
+  it('3b. still catches bracketed [P1] - security finding headers after echoed artifact', () => {
+    const { capture, ledger } = loadScenarioFixture('genuine-security-bracketed');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/sec-bracketed|security/);
+  });
+
   it('4. still catches a genuine reviewer type: scope-violation finding absent from the ledger', () => {
     const { capture, ledger } = loadScenarioFixture('genuine-scope-violation');
     const result = checkFindingLedgerGuard(capture, ledger);
