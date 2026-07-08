@@ -238,8 +238,9 @@ describe('ci-failure reaction owner non-null', () => {
       ],
       requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
     });
-    expect(records.records.length).toBeGreaterThanOrEqual(1);
-    expect(records.records[0]?.episode?.targetId).toBe('orchestrator-pack-45');
+    expect(records.records).toBeDefined();
+    expect(records.records!.length).toBeGreaterThanOrEqual(1);
+    expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
   });
 });
 
