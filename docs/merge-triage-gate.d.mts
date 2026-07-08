@@ -6,6 +6,7 @@ export declare const VERDICT_BLOCK: string;
 export declare const VERDICT_DEFER: string;
 export declare const VERDICT_PENDING_ARCHITECT: string;
 export declare const VERDICT_PENDING_OPERATOR: string;
+export declare const VERDICT_ACK_RESET: string;
 export declare const DEFAULT_MARKER_FILE: string;
 
 export interface MergeTriageFinding {
