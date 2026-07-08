@@ -60,7 +60,8 @@ AO already provides:
 - dashboard/status UX;
 - legacy YAML import from `agent-orchestrator.yaml` (AO 0.10 live config is
   per-project ProjectConfig in the daemon store, managed with `ao project get/set-config`);
-- `agentRules` / `agentRulesFile` prompt injection;
+- `agentRules` / `agentRulesFile` prompt injection (retired on AO 0.10.2+; native
+  `AGENTS.md` worktree pickup);
 - session metadata and flat-file state;
 - plugin slots for runtime, agent, workspace, tracker, SCM, notifier, and
   terminal integrations.
@@ -716,8 +717,8 @@ To adopt on an existing live `agent-orchestrator.yaml`:
    literal for your project (under `projects.<id>.orchestratorRules`).
 2. Merge the `report-stale` entry under top-level `reactions` (keep your other
    reaction entries; do not duplicate keys).
-3. Ensure `agentRulesFile: AGENTS.md` (or equivalent path) so workers
-   receive the review response contract.
+3. Pull tracked `AGENTS.md` into worker worktrees (native pickup on AO 0.10.2+ — no
+   `agentRulesFile` key); recycle live worker sessions after merge.
 4. Restart AO so prompts reload: `ao stop` then `ao start`.
 
 Until restart, the orchestrator and workers keep prior prompt text. The live YAML
@@ -737,9 +738,9 @@ To adopt:
 1. Merge the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
    (REQUIRED CI, CI FAILURE DISCIPLINE, and review-loop ordering) into live
    `agent-orchestrator.yaml`.
-2. Pull the merged repo and confirm `AGENTS.md` includes the Required CI
-   and Worker CI gate sections (git-tracked — no manual copy). Ensure live
-   `agentRulesFile` points at that path.
+2. Pull the merged repo and confirm tracked `AGENTS.md` is present in worker
+   worktrees (Required CI and Worker CI gate sections). Recycle live worker
+   sessions after merge (no `agentRulesFile` on AO 0.10.2+).
 3. Restart AO: `ao stop` then `ao start`.
 
 Behavioural acceptance: on the next real red-CI PR episode, confirm in
@@ -802,8 +803,8 @@ To adopt:
 
 1. Merge the updated `orchestratorRules` block (STATE-DERIVED FIRST REVIEW SEND) from
    `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
-2. Pull `AGENTS.md` (first-send review delivery section) and confirm
-   `agentRulesFile` points at it.
+2. Pull `AGENTS.md` (first-send review delivery section) into worker worktrees;
+   recycle live worker sessions after merge (no `agentRulesFile` on AO 0.10.2+).
 3. Restart the wake supervisor so it manages the third child:
    `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
    `-Action Start` (or start standalone `scripts/review-send-reconcile.ps1` for debugging).
@@ -826,8 +827,8 @@ To adopt:
 
 1. Merge the updated `orchestratorRules` block (STATE-DERIVED CI-GREEN WORKER WAKE) from
    `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
-2. Pull `AGENTS.md` (CI-green orchestrator nudge section) and confirm
-   `agentRulesFile` points at it.
+2. Pull `AGENTS.md` (CI-green orchestrator nudge section) into worker worktrees;
+   recycle live worker sessions after merge (no `agentRulesFile` on AO 0.10.2+).
 3. Start the reconciler in a dedicated terminal (see `docs/orchestrator-autoloop-go-live.md`
    Terminal F): `pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1`
 4. Restart AO: `ao stop` then `ao start` (orchestratorRules reload).
@@ -843,8 +844,9 @@ the run stays `waiting_update`. Operators must refresh both surfaces:
 
 1. Copy the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
    into live `agent-orchestrator.yaml` (under `projects.<id>.orchestratorRules`).
-2. Ensure `agentRulesFile` points at the updated `AGENTS.md` (pull
-   the repo or sync that file into your deployment).
+2. Pull the merged repo so worker worktrees include the updated tracked
+   `AGENTS.md`; recycle live worker sessions after merge (no `agentRulesFile` on
+   AO 0.10.2+).
 3. Restart AO so prompts and rules reload: `ao stop` then `ao start`.
 
 Skipping the YAML merge leaves the orchestrator treating `waiting_update` as idle
@@ -1751,8 +1753,8 @@ in-flight state first:
    one-screen snapshot before escalation.
 
 If a **worker** (not the orchestrator) exits within ~1–2 minutes of spawn with no
-PR, see **Worker prompt-delivery launch failure (Issue #63)** and check live
-`agentRulesFile` points at an on-disk file — do not apply orchestrator stuck
+PR, see **Worker prompt-delivery launch failure (Issue #63)** and confirm tracked
+`AGENTS.md` is present in the worker worktree — do not apply orchestrator stuck
 recovery to that worker.
 
 After recovery, the orchestrator re-applies `orchestratorRules` from your live
@@ -2096,9 +2098,9 @@ wake is an operator-addressed ready-for-human-merge hand-off, not a cue to merge
 1. Merge the updated **NO MERGE BY ORCHESTRATOR** prose from
    `agent-orchestrator.yaml.example` into the live `orchestratorRules` block in
    `agent-orchestrator.yaml`.
-2. Pull the merged repo so live `agentRulesFile` loads the updated
-   `AGENTS.md` (git-tracked — no manual copy if the path is already
-   wired).
+2. Pull the merged repo so worker worktrees include the updated tracked
+   `AGENTS.md` (git-tracked — recycle live worker sessions after merge; no
+   `agentRulesFile` on AO 0.10.2+).
 3. Restart AO from the operator terminal: `ao stop` then `ao start` (managed
    sessions must not run these commands).
 4. Verify the orchestrator forwards an approved-and-green head as a
