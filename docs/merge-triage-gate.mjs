@@ -413,6 +413,13 @@ function readPendingInbox(paths, prNumber, headSha) {
   });
 }
 
+
+function canEmitMergeTriageClearance(openFindings, openClassifications, pendingInboxCount) {
+  if (pendingInboxCount > 0) return false;
+  if (openFindings.length === 0) return true;
+  return openClassifications.every((classification) => classification.verdict === VERDICT_DEFER);
+}
+
 function emitClearance({ paths, prNumber, headSha, gateRunId, markerList, atCapRecord, findings, classifications }) {
   const record = {
     schema_version: TRIAGE_SCHEMA_VERSION,
@@ -631,16 +638,19 @@ export function adjudicateArchitectFinding(input = {}) {
       findings: [finding],
       classifications: [classification],
     });
-    clearance = emitClearance({
-      paths,
-      prNumber: inbox.pr_number,
-      headSha: inbox.head_sha,
-      gateRunId: inbox.gate_run_id,
-      markerList,
-      atCapRecord: input.atCapRecord ?? { terminal: TERMINAL_AT_CAP_OPEN_FINDINGS, pr_number: inbox.pr_number, head_sha: inbox.head_sha },
-      findings: openFindings,
-      classifications: openClassifications,
-    });
+    const pendingRemaining = readPendingInbox(paths, inbox.pr_number, inbox.head_sha);
+    if (canEmitMergeTriageClearance(openFindings, openClassifications, pendingRemaining.length)) {
+      clearance = emitClearance({
+        paths,
+        prNumber: inbox.pr_number,
+        headSha: inbox.head_sha,
+        gateRunId: inbox.gate_run_id,
+        markerList,
+        atCapRecord: input.atCapRecord ?? { terminal: TERMINAL_AT_CAP_OPEN_FINDINGS, pr_number: inbox.pr_number, head_sha: inbox.head_sha },
+        findings: openFindings,
+        classifications: openClassifications,
+      });
+    }
   }
   return { ok: verdict === VERDICT_DEFER, verdict, clearance };
 }

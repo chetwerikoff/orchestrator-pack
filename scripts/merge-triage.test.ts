@@ -226,7 +226,7 @@ describe('architect-adjudication', () => {
       adjudicationProvenanceToken: token.adjudication_provenance_token,
       actorSession: 'arch-1',
     });
-    expect((adjudicated.clearance as { open_findings_snapshot_hash?: string })?.open_findings_snapshot_hash).toBeTruthy();
+    expect(adjudicated.clearance).toBeNull();
     expect(evaluateMergePolicy({
       stateRoot: root,
       prNumber: 648,
@@ -241,6 +241,39 @@ describe('architect-adjudication', () => {
       atCapRecord: atCap(),
       findings: open,
     }).reason).not.toBe('open_findings_snapshot_drift');
+  });
+
+  it('architect DEFER does not emit clearance while BLOCK findings remain open', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker'), finding('b1', 'parser error')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending;
+    expect(pending).toHaveLength(1);
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending[0]!.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    const adjudicated = adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending[0]!.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: open[0],
+      findings: open,
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+    });
+    expect(adjudicated.clearance).toBeNull();
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: open,
+    }).allow).toBe(false);
   });
 
   it('architect command with valid token is consumed by hidden-token gate and budget reaches PENDING_OPERATOR after two permissive verdicts', () => {
