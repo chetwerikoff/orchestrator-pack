@@ -45,6 +45,10 @@ if ($ps1 -notmatch 'journaled-worker-send\.ps1') {
     Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must use journaled-worker-send for explicit send'
     exit 1
 }
+if ($ps1 -notmatch '\[string\]\$DeliveryMessage') {
+    Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must declare -DeliveryMessage for supervised launch'
+    exit 1
+}
 if ($ps1 -notmatch 'Write-OrchestratorSideProcessProgress') {
     Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must report supervised side-process progress'
     exit 1

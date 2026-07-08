@@ -8,8 +8,8 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 export const DEFAULT_SUBMIT_VISIBILITY_MS = 30 * 1000;
 export const DEFAULT_SUBMIT_VISIBILITY_INTERVAL_MS = 1000;
 export const ENV_SUBMIT_VISIBILITY_SECONDS = 'AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS';
-
-const TERMINAL_RUN_STATUSES = new Set(['complete', 'delivered', 'failed']);
+export const SUBMIT_BIND_TERMINAL_STATUSES = new Set(['complete', 'failed']);
+export const SUBMIT_BIND_LOOKBACK_MS = 15 * 1000;
 
 /**
  * Terminal status for submit visibility — prefer latestRunStatus (daemon run row)
@@ -22,6 +22,30 @@ export function resolveSubmittedRunTerminalStatus(run) {
     return latest;
   }
   return String(run?.status ?? '').trim();
+}
+
+/**
+ * @param {string | undefined} iso
+ */
+export function parseSubmitRunIsoMs(iso) {
+  if (!iso) {
+    return null;
+  }
+  const ms = Date.parse(String(iso));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * @param {Record<string, unknown> | undefined | null} run
+ */
+export function resolveSubmitRunEpochMs(run) {
+  return (
+    parseSubmitRunIsoMs(run?.createdAt) ??
+    parseSubmitRunIsoMs(run?.updatedAt) ??
+    parseSubmitRunIsoMs(run?.startedAt) ??
+    parseSubmitRunIsoMs(run?.submittedAt) ??
+    null
+  );
 }
 
 /**
@@ -85,12 +109,16 @@ export function buildScriptedReviewDeliveryMessage(input) {
 }
 
 /**
+ * Bind the review run created by the just-finished ao review submit.
+ * Ignores prior delivered rows and stale same-head terminal rows from earlier cycles.
+ *
  * @param {Array<Record<string, unknown>>} reviewRuns
- * @param {{ prNumber?: number, targetSha?: string }} submit
+ * @param {{ prNumber?: number, targetSha?: string, submitObservedAfterMs?: number }} submit
  */
 export function findSubmittedReviewRun(reviewRuns, submit) {
   const prNumber = Number(submit.prNumber ?? 0);
   const targetSha = normalizeSha(submit.targetSha);
+  const submitObservedAfterMs = Number(submit.submitObservedAfterMs ?? 0);
   if (!prNumber || !targetSha) {
     return { ok: false, reason: 'missing_pr_or_head' };
   }
@@ -98,8 +126,25 @@ export function findSubmittedReviewRun(reviewRuns, submit) {
   const matches = (Array.isArray(reviewRuns) ? reviewRuns : [])
     .filter((run) => Number(run?.prNumber ?? 0) === prNumber)
     .filter((run) => normalizeSha(run?.targetSha) === targetSha)
-    .filter((run) => TERMINAL_RUN_STATUSES.has(resolveSubmittedRunTerminalStatus(run)))
-    .sort((left, right) => String(right?.createdAt ?? right?.updatedAt ?? '').localeCompare(String(left?.createdAt ?? left?.updatedAt ?? '')));
+    .filter((run) => SUBMIT_BIND_TERMINAL_STATUSES.has(resolveSubmittedRunTerminalStatus(run)))
+    .filter((run) => {
+      if (!submitObservedAfterMs) {
+        return true;
+      }
+      const epochMs = resolveSubmitRunEpochMs(run);
+      if (epochMs === null) {
+        return false;
+      }
+      return epochMs >= submitObservedAfterMs - SUBMIT_BIND_LOOKBACK_MS;
+    })
+    .sort((left, right) => {
+      const leftMs = resolveSubmitRunEpochMs(left) ?? 0;
+      const rightMs = resolveSubmitRunEpochMs(right) ?? 0;
+      if (rightMs !== leftMs) {
+        return rightMs - leftMs;
+      }
+      return String(right?.id ?? right?.runId ?? '').localeCompare(String(left?.id ?? left?.runId ?? ''));
+    });
 
   const run = matches[0];
   if (!run) {

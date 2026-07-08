@@ -23,6 +23,7 @@ param(
     [string]$FixtureReviewsPath = '',
     [string]$FixtureSessionsPath = '',
     [string]$FixtureOpenPrsPath = '',
+    [string]$DeliveryMessage = '',
     [switch]$DryRun
 )
 

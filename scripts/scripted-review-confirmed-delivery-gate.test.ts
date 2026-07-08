@@ -16,6 +16,7 @@ import {
 import {
   buildScriptedReviewDeliveryMessage,
   findSubmittedReviewRun,
+  SUBMIT_BIND_LOOKBACK_MS,
   parsePackReviewTerminalStdout,
   resolveSubmitVisibilityConfig,
   resolveSubmittedRunTerminalStatus,
@@ -285,6 +286,7 @@ describe('supervisor compatibility (AC#10)', () => {
     const text = readFileSync(path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'), 'utf8');
     expect(text).toMatch(/scripted-review-confirmed-delivery-gate/);
     expect(text).toMatch(/Write-OrchestratorSideProcessProgress/);
+    expect(text).toMatch(/\[string\]\$DeliveryMessage/);
   });
 
   it('registers gate child in orchestrator-side-process-registry.json', () => {
@@ -402,25 +404,86 @@ describe('post-submit resolver (Issue #669 wiring)', () => {
     expect(found).toMatchObject({ ok: true, runId: 'run-new', sessionId: 'orchestrator-pack-5' });
   });
 
-  it('prefers latestRunStatus over PR status when locating delivered runs', () => {
-    expect(resolveSubmittedRunTerminalStatus({ status: 'changes_requested', latestRunStatus: 'delivered' })).toBe(
-      'delivered',
+  it('prefers latestRunStatus over PR status when locating fresh complete runs', () => {
+    expect(resolveSubmittedRunTerminalStatus({ status: 'changes_requested', latestRunStatus: 'complete' })).toBe(
+      'complete',
     );
     const found = findSubmittedReviewRun(
       [
         {
-          id: 'run-delivered',
+          id: 'run-complete',
           prNumber: 673,
           targetSha: 'c81b171a9544b72144213f4e2e4f922ff3acac60',
           linkedSessionId: 'orchestrator-pack-36',
           status: 'changes_requested',
-          latestRunStatus: 'delivered',
+          latestRunStatus: 'complete',
           createdAt: '2026-07-07T23:14:18.226Z',
         },
       ],
       { prNumber: 673, targetSha: 'c81b171a9544b72144213f4e2e4f922ff3acac60' },
     );
-    expect(found).toMatchObject({ ok: true, runId: 'run-delivered', status: 'delivered' });
+    expect(found).toMatchObject({ ok: true, runId: 'run-complete', status: 'complete' });
+  });
+
+  it('ignores stale delivered same-head run while waiting for fresh submit', () => {
+    const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-delivered-old',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'delivered',
+          createdAt: '2026-07-07T22:00:00.000Z',
+        },
+        {
+          id: 'run-complete-fresh',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'complete',
+          createdAt: '2026-07-08T05:00:05.000Z',
+        },
+      ],
+      {
+        prNumber: 673,
+        targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+        submitObservedAfterMs,
+      },
+    );
+    expect(found).toMatchObject({ ok: true, runId: 'run-complete-fresh', status: 'complete' });
+  });
+
+  it('returns run_not_visible when only pre-submit complete rows exist on the head', () => {
+    const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-complete-old',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'complete',
+          createdAt: '2026-07-07T22:00:00.000Z',
+        },
+        {
+          id: 'run-delivered-old',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'delivered',
+          createdAt: '2026-07-07T21:00:00.000Z',
+        },
+      ],
+      {
+        prNumber: 673,
+        targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+        submitObservedAfterMs,
+      },
+    );
+    expect(found).toMatchObject({ ok: false, reason: 'run_not_visible' });
+    expect(SUBMIT_BIND_LOOKBACK_MS).toBeGreaterThan(0);
   });
 
   it('builds non-empty delivery messages for approved and changes_requested', () => {

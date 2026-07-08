@@ -15,9 +15,15 @@ export declare function resolveSubmittedRunTerminalStatus(
   run: Record<string, unknown> | undefined | null,
 ): string;
 
+export declare function parseSubmitRunIsoMs(iso: string | undefined): number | null;
+
+export declare function resolveSubmitRunEpochMs(
+  run: Record<string, unknown> | undefined | null,
+): number | null;
+
 export declare function findSubmittedReviewRun(
   reviewRuns: Array<Record<string, unknown>>,
-  submit: { prNumber?: number; targetSha?: string },
+  submit: { prNumber?: number; targetSha?: string; submitObservedAfterMs?: number },
 ): {
   ok: boolean;
   reason?: string;
@@ -34,3 +40,5 @@ export declare function resolveSubmitVisibilityConfig(
 export declare const DEFAULT_SUBMIT_VISIBILITY_MS: number;
 export declare const DEFAULT_SUBMIT_VISIBILITY_INTERVAL_MS: number;
 export declare const ENV_SUBMIT_VISIBILITY_SECONDS: string;
+export declare const SUBMIT_BIND_TERMINAL_STATUSES: Set<string>;
+export declare const SUBMIT_BIND_LOOKBACK_MS: number;

@@ -91,6 +91,7 @@ function Wait-ScriptedReviewSubmittedRun {
         [int]$PrNumber,
         [string]$TargetSha,
         [string]$ProjectId = 'orchestrator-pack',
+        [long]$SubmitObservedAfterMs = 0,
         [hashtable]$VisibilityConfig = $null
     )
 
@@ -104,9 +105,10 @@ function Wait-ScriptedReviewSubmittedRun {
     while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $deadline) {
         $runs = @(Get-AoReviewRunsFromWorkerSessions -Project $ProjectId)
         $found = Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'find-submitted-run' -Payload @{
-            reviewRuns = @($runs)
-            prNumber   = $PrNumber
-            targetSha  = $TargetSha
+            reviewRuns            = @($runs)
+            prNumber              = $PrNumber
+            targetSha             = $TargetSha
+            submitObservedAfterMs = $SubmitObservedAfterMs
         }
         if ($found.ok) {
             return $found
@@ -239,7 +241,9 @@ function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
     }
 
     try {
-        $submitted = Wait-ScriptedReviewSubmittedRun -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId
+        $submitObservedAfterMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $submitted = Wait-ScriptedReviewSubmittedRun -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId `
+            -SubmitObservedAfterMs $submitObservedAfterMs
     }
     catch {
         return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'review_runs_unavailable' -PrNumber $prNumber `
