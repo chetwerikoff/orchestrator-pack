@@ -1,0 +1,8 @@
+{
+  "id": "ao-0-10-daemon/per-session-reviews-delivered-status",
+  "command": "GET /api/v1/sessions/{id}/reviews",
+  "variant": "per-session-reviews-delivered-status",
+  "extends": "_shared.json",
+  "captureRef": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json",
+  "provenanceRef": "captures/ao-0-10-daemon/per-session-reviews-delivered-status.provenance.json"
+}

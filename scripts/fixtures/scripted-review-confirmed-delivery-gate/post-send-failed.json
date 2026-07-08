@@ -1,0 +1,7 @@
+{
+  "description": "Explicit send failed => escalate",
+  "input": {
+    "explicitSendOutcome": "failed"
+  },
+  "expectedTerminal": "escalate"
+}
