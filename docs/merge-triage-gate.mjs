@@ -432,7 +432,7 @@ function resolveOpenFindingClassification({ paths, prNumber, headSha, finding, m
     };
   }
   const adjudicated = latestArchitectAdjudicationRow(paths, prNumber, headSha, findingId, fingerprint);
-  if (adjudicated) {
+  if (adjudicated && adjudicated.normalized_text_hash === base.normalizedTextHash) {
     return {
       ...base,
       verdict: adjudicated.verdict,
@@ -660,8 +660,12 @@ export function readArchitectInbox(input = {}) {
 
 export function issueArchitectProvenanceToken(input = {}) {
   const sessionKind = normalizeTriageText(input.sessionKind ?? process.env.AO_SESSION_KIND ?? '');
-  if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') throw new Error('architect token rejected for worker/orchestrator session');
-  if (sessionKind && sessionKind !== 'architect') throw new Error(`unsupported architect token session kind: ${sessionKind}`);
+  if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') {
+    throw new Error('architect token rejected for worker/orchestrator session');
+  }
+  if (sessionKind !== 'architect') {
+    throw new Error(sessionKind ? `unsupported architect token session kind: ${sessionKind}` : 'architect token requires architect session');
+  }
   const paths = statePaths(resolveStateRoot(input));
   const adjudicationId = String(input.adjudicationId ?? '');
   const inbox = readPendingInbox(paths, input.prNumber, input.headSha).find((row) => row.adjudication_id === adjudicationId);
@@ -695,8 +699,15 @@ export function fileWorkerAppeal(input = {}) {
 
 export function adjudicateArchitectFinding(input = {}) {
   const sessionKind = normalizeTriageText(input.sessionKind ?? process.env.AO_SESSION_KIND ?? '');
-  if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') throw new Error('architect adjudication rejected for worker/orchestrator session');
-  if (sessionKind && sessionKind !== 'architect' && sessionKind !== 'operator') throw new Error(`unsupported adjudication session kind: ${sessionKind}`);
+  if (sessionKind === 'worker' || sessionKind === 'orchestrator-planner') {
+    throw new Error('architect adjudication rejected for worker/orchestrator session');
+  }
+  if (!sessionKind) {
+    throw new Error('architect adjudication requires session kind');
+  }
+  if (sessionKind !== 'architect' && sessionKind !== 'operator') {
+    throw new Error(`unsupported adjudication session kind: ${sessionKind}`);
+  }
   const stateRoot = resolveStateRoot(input);
   const paths = statePaths(stateRoot);
   if (sessionKind === 'architect' && permissiveBudgetExhausted(paths) && input.verdict === VERDICT_DEFER) {

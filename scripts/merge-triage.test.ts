@@ -229,6 +229,15 @@ describe('architect-adjudication', () => {
     expect(() => adjudicateArchitectFinding({ stateRoot: root, sessionKind: 'worker', adjudicationId: pending.adjudication_id, verdict: VERDICT_DEFER, finding: block })).toThrow(/rejected/);
     expect(() => adjudicateArchitectFinding({ stateRoot: root, sessionKind: 'architect', adjudicationId: pending.adjudication_id, verdict: VERDICT_DEFER, finding: { ...block, body: 'changed' }, adjudicationProvenanceToken: 'bad', actorSession: 'arch-1' })).toThrow(/token/);
     expect(() => issueArchitectProvenanceToken({ stateRoot: root, sessionKind: 'worker', adjudicationId: pending.adjudication_id })).toThrow(/rejected/);
+    expect(() => issueArchitectProvenanceToken({ stateRoot: root, adjudicationId: pending.adjudication_id, prNumber: 648, headSha: 'abc123' })).toThrow(/architect session/);
+    expect(() => adjudicateArchitectFinding({
+      stateRoot: root,
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: block,
+      adjudicationProvenanceToken: 'unused',
+      actorSession: 'arch-1',
+    })).toThrow(/session kind/);
     const issuedToken = issueArchitectProvenanceToken({ stateRoot: root, sessionKind: 'architect', adjudicationId: pending.adjudication_id, prNumber: 648, headSha: 'abc123' });
     const adjudicated = adjudicateArchitectFinding({
       stateRoot: root,
@@ -649,6 +658,53 @@ describe('gate rerun after architect clearance', () => {
       atCapRecord: atCap(),
       findings: open,
     })).toMatchObject({ allow: true, reason: 'merge_triage_cleared' });
+  });
+});
+
+describe('architect verdict text binding', () => {
+  it('does not reuse architect DEFER when finding text changes on the same head', () => {
+    const root = stateRoot();
+    const open = [finding('amb1', 'text without seed marker')];
+    runMergeTriageGate({ stateRoot: root, prNumber: 648, headSha: 'abc123', atCapRecord: atCap(), findings: open });
+    const pending = readArchitectInbox({ stateRoot: root, prNumber: 648, headSha: 'abc123' }).pending[0]!;
+    const token = issueArchitectProvenanceToken({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      prNumber: 648,
+      headSha: 'abc123',
+    });
+    adjudicateArchitectFinding({
+      stateRoot: root,
+      sessionKind: 'architect',
+      adjudicationId: pending.adjudication_id,
+      verdict: VERDICT_DEFER,
+      finding: open[0],
+      findings: open,
+      adjudicationProvenanceToken: token.adjudication_provenance_token,
+      actorSession: 'arch-1',
+      atCapRecord: atCap(),
+    });
+    const changed = [{
+      ...open[0],
+      body: 'severity: blocking\ncategory: correctness\nchanged text without seed marker',
+    }];
+    const rerun = runMergeTriageGate({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: changed,
+    });
+    expect(rerun.ok).toBe(false);
+    expect(rerun.aggregate).toBe(VERDICT_PENDING_ARCHITECT);
+    expect(evaluateMergePolicy({
+      stateRoot: root,
+      prNumber: 648,
+      headSha: 'abc123',
+      atCapRecord: atCap(),
+      findings: changed,
+    }).allow).toBe(false);
   });
 });
 
