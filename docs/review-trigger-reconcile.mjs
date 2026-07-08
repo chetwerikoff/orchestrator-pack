@@ -804,6 +804,7 @@ export function planReconcileActions({
       prNumber,
       headSha,
       prList,
+      { sessionDetailsById },
     );
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
     const requiredCheckNames = getRequiredCheckNamesForPr(requiredCheckNamesByPr, prNumber);

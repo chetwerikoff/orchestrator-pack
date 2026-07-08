@@ -64,5 +64,14 @@ if ($reconcilePs1 -match "Join-Path \$PackRoot 'agent-orchestrator\.yaml\.exampl
     exit 1
 }
 
+if ($mjs -notmatch 'resolveReconcileEvaluationSession\([\s\S]{0,240}sessionDetailsById') {
+    Write-Host 'docs/review-trigger-reconcile.mjs must pass sessionDetailsById into resolveReconcileEvaluationSession'
+    exit 1
+}
+if ($reconcilePs1 -notlike '*sessionDetailsById*') {
+    Write-Host 'scripts/review-trigger-reconcile.ps1 must thread session-get displayName into reconcile snapshots'
+    exit 1
+}
+
 Write-Host '[PASS] review-trigger reconciliation entrypoint and example wiring (Issue #163)'
 exit 0

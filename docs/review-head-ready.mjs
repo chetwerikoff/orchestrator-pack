@@ -962,6 +962,7 @@ export function preRunHeadReadyRecheck(planned, fresh) {
           prNumber,
           currentHead,
           toArray(fresh.openPrs),
+          { sessionDetailsById: fresh?.sessionDetailsById ?? {} },
         );
   const ownerResolution = resolved.ownerResolution;
   const session = resolved.session;
