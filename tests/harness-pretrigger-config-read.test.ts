@@ -6,9 +6,9 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyReviewerHarnessAbort,
   evaluateProjectReviewerHarness,
-} from '../../docs/ao-0-10-review-api.mjs';
+} from '../docs/ao-0-10-review-api.mjs';
 
-const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const reviewApiLib = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
 const daemonCapturesDir = path.join(
   repoRoot,
@@ -19,7 +19,7 @@ const legacyConfigCapture = path.join(
   'tests/external-output-references/captures/ao-0-10-review-api/project-config.raw.json',
 );
 
-function loadJson(filePath: string): Record<string, unknown> {
+function loadHarnessJson(filePath: string): Record<string, unknown> {
   return JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
 }
 
@@ -35,7 +35,7 @@ describe('harness pre-trigger project-config read (Issue #682)', () => {
   });
 
   it('live-shape capture selects reviewers at .project.config.reviewers after unwrap', () => {
-    const live = loadJson(path.join(daemonCapturesDir, 'project-single-reviewers.raw.json'));
+    const live = loadHarnessJson(path.join(daemonCapturesDir, 'project-single-reviewers.raw.json'));
     expect(evaluateProjectReviewerHarness(live, 'codex')).toMatchObject({
       ok: false,
       harness: '',
@@ -50,7 +50,7 @@ describe('harness pre-trigger project-config read (Issue #682)', () => {
   });
 
   it('old /config top-level reviewers shape does not satisfy live envelope selector', () => {
-    const legacy = loadJson(legacyConfigCapture);
+    const legacy = loadHarnessJson(legacyConfigCapture);
     const wrongEnvelope = { status: 'ok', project: legacy };
     expect(classifyReviewerHarnessAbort(wrongEnvelope, 'codex').abort).toBe(true);
     expect(classifyReviewerHarnessAbort(legacy, 'codex').abort).toBe(false);
@@ -85,7 +85,7 @@ describe('harness pre-trigger project-config read (Issue #682)', () => {
   });
 
   it('GET /config 405 capture binds METHOD_NOT_ALLOWED selector', () => {
-    const body = loadJson(path.join(daemonCapturesDir, 'project-config-get-405.raw.json'));
+    const body = loadHarnessJson(path.join(daemonCapturesDir, 'project-config-get-405.raw.json'));
     expect(body.code).toBe('METHOD_NOT_ALLOWED');
   });
 
