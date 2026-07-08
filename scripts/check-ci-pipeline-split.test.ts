@@ -166,6 +166,9 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
       repoRoot,
     );
     expect(plan.mode).toBe('tests');
+    if (plan.mode !== 'tests') {
+      throw new Error('expected per-test isolation plan');
+    }
     expect(plan.pool).toBe('forks');
     expect(plan.tests.length).toBeGreaterThan(0);
   });
