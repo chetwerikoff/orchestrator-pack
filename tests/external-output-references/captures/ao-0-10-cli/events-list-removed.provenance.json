@@ -1,0 +1,8 @@
+{
+  "sourceCommand": "ao events list --since 60m --limit 500 --json",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-08T12:34:00.000Z",
+  "exitStatus": 1,
+  "context": "AO 0.10 removed ao events subcommand — unknown-command stderr at exit 1.",
+  "scrubLog": []
+}

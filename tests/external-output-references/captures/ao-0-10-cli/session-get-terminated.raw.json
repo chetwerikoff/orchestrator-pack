@@ -1,0 +1,18 @@
+{
+  "session": {
+    "id": "orchestrator-pack-2",
+    "projectId": "orchestrator-pack",
+    "issueId": "609",
+    "kind": "worker",
+    "harness": "cursor",
+    "displayName": "seed-snapshot",
+    "activity": {
+      "state": "exited",
+      "lastActivityAt": "2026-07-06T01:57:30.068444785Z"
+    },
+    "isTerminated": true,
+    "createdAt": "2026-07-06T01:42:35.672993683Z",
+    "updatedAt": "2026-07-06T01:57:30.068444785Z",
+    "status": "terminated"
+  }
+}

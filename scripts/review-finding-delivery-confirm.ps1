@@ -37,6 +37,7 @@ $Script:DefaultIntervalMinutes = 5
 $Script:DefaultConfirmationWindowMinutes = 5
 $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
@@ -338,6 +339,7 @@ function Invoke-DeliveryTick {
         $now = $NowMs
         $tickConfig = $Config
         $aoEvents = Get-AoEventsSince -SinceMinutes 30
+        Write-AoEventsCorrelationDegraded -Surface 'review-finding-delivery-confirm' -LogPrefix 'review-finding-delivery-confirm'
         $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
     }
 

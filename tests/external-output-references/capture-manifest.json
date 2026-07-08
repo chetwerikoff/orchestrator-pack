@@ -10,6 +10,15 @@
       "path": "captures/ao-0-10-cli/daemon-status.raw.json",
       "contentHash": "sha256:8ea233c60df13d65c497f74452b45645179d188bcc7e50db46358667d1a0dbf2"
     },
+    "ao-0-10-cli/events-list-removed": {
+      "id": "ao-0-10-cli/events-list-removed",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao events list --since 60m --limit 500 --json",
+      "kind": "unstructured",
+      "path": "captures/ao-0-10-cli/events-list-removed.raw.txt",
+      "contentHash": "sha256:99811ac3d8b416157f64fddee67b3926871d09cd034cd915037d0943dff6efc7",
+      "exitStatus": 1
+    },
     "ao-0-10-cli/orchestrator-ls": {
       "id": "ao-0-10-cli/orchestrator-ls",
       "producer": "ao-0-10-cli",
@@ -33,6 +42,14 @@
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-get-numeric-displayname.raw.json",
       "contentHash": "sha256:fa065d82f482319517a225faba9f968cef3faeda4e6dc62a85c47f56fc19a287"
+    },
+    "ao-0-10-cli/session-get-terminated": {
+      "id": "ao-0-10-cli/session-get-terminated",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao session get orchestrator-pack-2 --json -p orchestrator-pack",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/session-get-terminated.raw.json",
+      "contentHash": "sha256:f5f97c7a6da74513bd735a22b703e82dea0b874adfd1e7f596f76cd367405e64"
     },
     "ao-0-10-cli/session-get-worker": {
       "id": "ao-0-10-cli/session-get-worker",

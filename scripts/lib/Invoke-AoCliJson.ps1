@@ -8,6 +8,8 @@
 $Script:AoSessionAdapterValidRoles = @('worker', 'orchestrator')
 $Script:AoSessionAdapterReportSurfaceError = 'ao status --json --reports full unavailable on AO 0.10 (GitHub #611): report-surface-unavailable'
 $Script:AoReportFullCliProbeState = $null
+$Script:AoEventsCliProbeState = $null
+$Script:AoEventsDegradedClassification = $null
 $Script:AoReportFullSourceCli = 'ao status --json --reports full'
 $Script:AoReportFullSourceCliTerminated = 'ao status --json --reports full --include-terminated'
 $Script:AoReportFullSourceAudit = '$.agent-report-audit/<session>.ndjson'
@@ -256,6 +258,79 @@ function Test-AoReportFullCliAvailable {
     }
     catch {
         $Script:AoReportFullCliProbeState = $false
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function New-AoEventsDegradedClassification {
+    param(
+        [string]$Reason = 'removed_cli_surface',
+        [string]$Detail = ''
+    )
+    return [pscustomobject]@{
+        degraded = $true
+        reason = $Reason
+        classification = $Reason
+        detail = $Detail
+    }
+}
+
+function Set-AoEventsDegradedClassification {
+    param(
+        [string]$Reason = 'removed_cli_surface',
+        [string]$Detail = ''
+    )
+    $Script:AoEventsDegradedClassification = New-AoEventsDegradedClassification -Reason $Reason -Detail $Detail
+    return $Script:AoEventsDegradedClassification
+}
+
+function Get-AoEventsDegradedClassification {
+    if ($null -eq $Script:AoEventsDegradedClassification) {
+        return [pscustomobject]@{
+            degraded = $false
+            reason = ''
+            classification = ''
+            detail = ''
+        }
+    }
+    return $Script:AoEventsDegradedClassification
+}
+
+function Test-AoEventsCliAvailable {
+    param([string]$AoCommand = 'ao')
+
+    if ($null -ne $Script:AoEventsCliProbeState) {
+        return [bool]$Script:AoEventsCliProbeState
+    }
+
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = if ($AoCommand -eq 'ao') {
+            & ao events list --since 1m --limit 1 --json 2>&1
+        }
+        else {
+            & $AoCommand events list --since 1m --limit 1 --json 2>&1
+        }
+        $text = ($raw | ForEach-Object {
+                if ($_ -is [string]) { $_ }
+                elseif ($null -ne $_) { $_.ToString() }
+            }) -join "`n"
+        if ($LASTEXITCODE -ne 0 -or $text -match '(unknown|unrecognized|invalid).*(command|subcommand|events)') {
+            $Script:AoEventsCliProbeState = $false
+            Set-AoEventsDegradedClassification -Reason 'removed_cli_surface' -Detail $text | Out-Null
+            return $false
+        }
+        $Script:AoEventsCliProbeState = $true
+        $Script:AoEventsDegradedClassification = $null
+        return $true
+    }
+    catch {
+        $Script:AoEventsCliProbeState = $false
+        Set-AoEventsDegradedClassification -Reason 'removed_cli_surface' -Detail $_.Exception.Message | Out-Null
         return $false
     }
     finally {
@@ -778,10 +853,34 @@ function Resolve-AoOrchestratorSessionId {
 }
 
 function Get-AoEventsSince {
-    param([int]$SinceMinutes = 30)
+    param(
+        [int]$SinceMinutes = 30,
+        [string]$AoCommand = 'ao'
+    )
 
-    $payload = Invoke-AoCliJson -AoArgs @(
+    if (-not (Test-AoEventsCliAvailable -AoCommand $AoCommand)) {
+        $classification = Get-AoEventsDegradedClassification
+        if ($classification.degraded) {
+            $detail = [string]$classification.detail
+            if ($detail) {
+                Write-Host "[ao-events] removed_cli_surface: $detail"
+            }
+            else {
+                Write-Host '[ao-events] removed_cli_surface: ao events list unavailable'
+            }
+        }
+        return @()
+    }
+
+    try {
+        $payload = Invoke-AoCliJson -AoArgs @(
         'events', 'list', '--since', "${SinceMinutes}m", '--limit', '500', '--json'
-    ) -FailureLabel 'ao events list'
-    return @($payload.events)
+        ) -FailureLabel 'ao events list' -AoCommand $AoCommand
+        $Script:AoEventsDegradedClassification = $null
+        return @($payload.events)
+    }
+    catch {
+        Set-AoEventsDegradedClassification -Reason 'removed_cli_surface' -Detail $_.Exception.Message | Out-Null
+        return @()
+    }
 }

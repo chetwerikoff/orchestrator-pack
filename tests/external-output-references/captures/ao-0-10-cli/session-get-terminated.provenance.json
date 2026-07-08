@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao session get orchestrator-pack-2 --json -p orchestrator-pack",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-08T12:34:00.000Z",
+  "context": "Terminated worker session row with activity.state exited — AO 0.10 death discriminator fields.",
+  "scrubLog": []
+}

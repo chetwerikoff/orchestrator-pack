@@ -35,6 +35,8 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/Get-OrchestratorYamlRules.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-WorkerOsLiveness.ps1')
+. (Join-Path $PSScriptRoot 'lib/Sanctioned-Worker-Kill-Record.ps1')
 
 $Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
 
@@ -114,9 +116,14 @@ function Get-DeadWorkerLivePlanGates {
 }
 
 function Get-DeadWorkerLivePayload {
+    $sessions = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
     return @{
-        sessions = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
+        sessions = $sessions
         aoEvents = @(Get-AoEventsSince -SinceMinutes 60)
+        livenessContext = @{
+            osLiveness = Get-WorkerOsLivenessMap -Sessions $sessions
+            sanctionedKillSurface = Read-SanctionedWorkerKillSurface
+        }
     }
 }
 
@@ -137,7 +144,9 @@ function Get-DeadWorkerFixturePayload {
     if ($null -ne $fixture.issueOnlyPrAmbiguous) { $issueOnlyPrAmbiguous = [bool]$fixture.issueOnlyPrAmbiguous }
     return @{
         sessions = @($fixture.sessions)
+        absentSessions = @($fixture.absentSessions)
         aoEvents = @($fixture.aoEvents)
+        livenessContext = $fixture.livenessContext
         respawnPolicy = $respawnPolicy
         tracking = $fixture.tracking
         recoveryChecks = $fixture.recoveryChecks
@@ -280,6 +289,7 @@ function Invoke-DeadWorkerTick {
         $payload = @{
             sessions = @($live.sessions)
             aoEvents = @($live.aoEvents)
+            livenessContext = $live.livenessContext
             respawnPolicy = $gates.respawnPolicy
             tracking = $tracking
             recoveryChecks = $checks

@@ -35,6 +35,7 @@ $BusyDispatchSmokeMarkerPath = Join-Path $PackRoot 'docs/worker-message-submit-b
 $Script:DefaultIntervalSeconds = 30
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
@@ -516,6 +517,7 @@ function Invoke-SubmitReconcileTick {
     else {
         $sessions = Get-AoStatusSessionsWithReports
         $aoEvents = Get-AoEventsSince -SinceMinutes 30
+        Write-AoEventsCorrelationDegraded -Surface 'worker-message-submit-reconcile' -LogPrefix $Script:ReconcileLogPrefix
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         $tracking = Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath

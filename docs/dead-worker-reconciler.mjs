@@ -155,6 +155,82 @@ function hasAssignedTask(session) {
   return getIssueNumber(session) > 0 || getPrNumber(session) > 0;
 }
 
+function normalizeSessionRowState(session) {
+  if (!session) return 'absent';
+  const status = normalizeLower(session.status ?? session.reportState ?? session.runtime);
+  if (status === 'absent') return 'absent';
+  if (session.isTerminated === true) return 'terminated';
+  const activityState = normalizeLower(session.activity?.state);
+  if (activityState === 'exited') return 'terminated';
+  if (['terminated', 'failed', 'completed', 'stopped', 'exited', 'dead'].includes(status)) return 'terminated';
+  return 'active';
+}
+
+function normalizeOsLiveness(value) {
+  const normalized = normalizeLower(value);
+  if (['pane-alive', 'pane-gone', 'unknown'].includes(normalized)) return normalized;
+  return 'unknown';
+}
+
+function hasMatchingSanctionedKill(session, records = []) {
+  const sessionId = getSessionId(session);
+  const issueNumber = getIssueNumber(session);
+  const prNumber = getPrNumber(session);
+  return toArray(records).some((record) => {
+    const recordSession = normalizeString(record?.sessionId);
+    const recordIssue = numberOrZero(record?.issueNumber);
+    const recordPr = numberOrZero(record?.prNumber);
+    if (recordSession && recordSession === sessionId) return true;
+    if (recordIssue > 0 && recordIssue === issueNumber) return true;
+    if (recordPr > 0 && recordPr === prNumber) return true;
+    return false;
+  });
+}
+
+export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
+  const killSurface = livenessContext.sanctionedKillSurface ?? { healthy: true, records: [] };
+  if (killSurface.healthy === false) {
+    return {
+      verdict: 'audit_only',
+      reason: 'sanctioned_kill_record_unreadable',
+      escalate: true,
+      event: null,
+      matchedEvents: [],
+    };
+  }
+
+  const sessionId = getSessionId(session);
+  const sessionRowState = normalizeSessionRowState(session);
+  const osMap = livenessContext.osLiveness ?? {};
+  const osLiveness = normalizeOsLiveness(osMap[sessionId] ?? session?.osLiveness ?? livenessContext.defaultOsLiveness);
+  const sanctionedKillPresent = hasMatchingSanctionedKill(session, killSurface.records);
+  const evidence = {
+    sessionRowState,
+    osLiveness,
+    sanctionedKillPresent,
+  };
+
+  if (sanctionedKillPresent && sessionRowState === 'active' && osLiveness === 'pane-alive') {
+    return { verdict: 'live_or_unknown', reason: 'sanctioned_kill_present_but_worker_alive', event: null, matchedEvents: [], evidence };
+  }
+  if (sanctionedKillPresent) {
+    return { verdict: 'suppressed', reason: 'sanctioned_kill', event: null, matchedEvents: [], evidence };
+  }
+  if ((sessionRowState === 'terminated' || sessionRowState === 'absent') && osLiveness === 'pane-gone') {
+    return {
+      verdict: 'dead',
+      reason: 'session_row_and_os_liveness_dead',
+      event: { id: `liveness:${sessionId || 'absent'}`, type: 'liveness.probed_dead', timestampMs: 0 },
+      matchedEvents: [],
+      evidence,
+    };
+  }
+  if (sessionRowState === 'active' && osLiveness === 'pane-alive') {
+    return { verdict: 'live_or_unknown', reason: 'worker_alive', event: null, matchedEvents: [], evidence };
+  }
+  return { verdict: 'audit_only', reason: 'liveness_evidence_inconclusive', event: null, matchedEvents: [], evidence };
+}
+
 export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date.now(), options = {}) {
   const sessionId = getSessionId(session);
   const events = toArray(aoEvents);
@@ -522,14 +598,16 @@ export function planDeadWorkerReconcile(input = {}) {
   let planningTracking = tracking;
   const actions = [];
   const gates = validateDeadWorkerGates(input);
-  const sessions = toArray(input.sessions);
+  const sessions = [...toArray(input.sessions), ...toArray(input.absentSessions).map((session) => ({ ...session, status: 'absent' }))];
 
   for (const session of sessions) {
     const sessionId = getSessionId(session);
     if (!sessionId || !hasAssignedTask(session)) {
       continue;
     }
-    const evidence = classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
+    const evidence = input.livenessContext
+      ? classifyWorkerLivenessEvidence(session, input.livenessContext)
+      : classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
     if (evidence.verdict === 'live_or_unknown') {
       continue;
     }
@@ -564,7 +642,13 @@ export function planDeadWorkerReconcile(input = {}) {
       continue;
     }
     if (evidence.verdict !== 'dead') {
-      actions.push({ ...base, type: 'audit_only', outcome: 'audit-only', reason: evidence.reason });
+      actions.push({
+        ...base,
+        type: 'audit_only',
+        outcome: 'audit-only',
+        reason: evidence.reason,
+        escalate: Boolean(evidence.escalate),
+      });
       continue;
     }
     if (!route.ok) {
@@ -825,5 +909,9 @@ runStdinJsonCli('dead-worker-reconciler.mjs', {
     return resolveDeadWorkerBounds(payload.policy, payload.bounds ?? null);
   },
   'evaluate-adoption': () => evaluateDeadWorkerRuntimeAdoption(readStdinJson()),
+  'classify-liveness': () => {
+    const payload = readStdinJson();
+    return classifyWorkerLivenessEvidence(payload.session, payload.livenessContext);
+  },
   'parse-recovery-output': () => parseAndClassifyDeadWorkerRecoveryOutput(readStdinJson().output),
 });
