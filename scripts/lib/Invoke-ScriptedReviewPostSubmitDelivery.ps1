@@ -170,7 +170,7 @@ function Invoke-ScriptedReviewDeliveryGateProcess {
     $gateConfig = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'resolve-config' -Payload @{
         config = @{}
     }
-    $pollWindowMs = [Math]::Max(45_000, [int]$gateConfig.pollWindowMs)
+    $pollWindowMs = [Math]::Max(45000, [int]$gateConfig.pollWindowMs)
     $waitSeconds = [Math]::Ceiling(($pollWindowMs / 1000.0) + 60)
 
     $childPid = Start-OrchestratorWakeSupervisorChild -ChildId $childId -OrchestratorSessionId '' `
