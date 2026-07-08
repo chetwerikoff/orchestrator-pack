@@ -56,7 +56,6 @@ describe('agent rules live-reference gate', () => {
         if (rel === 'scripts/check-agent-rules-grep-inventory.ps1') continue;
         if (rel === 'tests/agents-md-relocation.test.ts') continue;
         if (rel === 'tests/fixtures/agent-rules-relocation-musts.json') continue;
-        if (rel === 'prompts/investigate_root_cause.md') continue;
         const text = readFileSync(full, 'utf8');
         if (/prompts\/agent_rules\.md/.test(text)) {
           offenders.push(rel);

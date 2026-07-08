@@ -43,9 +43,6 @@ Get-ChildItem -LiteralPath $RepoRoot -Recurse -File |
         if ($rel -eq 'tests/agents-md-relocation.test.ts') {
             return
         }
-        if ($rel -eq 'prompts/investigate_root_cause.md') {
-            return
-        }
         $text = Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue
         if ([string]::IsNullOrEmpty($text)) {
             return
