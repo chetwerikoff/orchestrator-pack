@@ -36,14 +36,18 @@ export function parseSubmitRunIsoMs(iso) {
 }
 
 /**
+ * Bind epoch for submit lookback/sort — prefer completion time over creation time so
+ * runs that finish >15s after row creation still bind within submitObservedAfterMs lookback.
  * @param {Record<string, unknown> | undefined | null} run
  */
 export function resolveSubmitRunEpochMs(run) {
   return (
-    parseSubmitRunIsoMs(run?.createdAt) ??
     parseSubmitRunIsoMs(run?.updatedAt) ??
-    parseSubmitRunIsoMs(run?.startedAt) ??
     parseSubmitRunIsoMs(run?.submittedAt) ??
+    parseSubmitRunIsoMs(run?.completedAt) ??
+    parseSubmitRunIsoMs(run?.completedAtUtc) ??
+    parseSubmitRunIsoMs(run?.startedAt) ??
+    parseSubmitRunIsoMs(run?.createdAt) ??
     null
   );
 }

@@ -23,6 +23,7 @@ import {
   parsePackReviewTerminalStdout,
   resolveSubmitVisibilityConfig,
   resolveSubmittedRunTerminalStatus,
+  resolveSubmitRunEpochMs,
 } from '../docs/scripted-review-post-submit-delivery.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -441,6 +442,41 @@ describe('post-submit resolver (Issue #669 wiring)', () => {
       { prNumber: 673, targetSha: 'c81b171a9544b72144213f4e2e4f922ff3acac60' },
     );
     expect(found).toMatchObject({ ok: true, runId: 'run-complete', status: 'complete' });
+  });
+
+  it('prefers completion timestamps over createdAt for submit bind epoch', () => {
+    const createdMs = Date.parse('2026-07-08T04:59:30.000Z');
+    const updatedMs = Date.parse('2026-07-08T05:00:20.000Z');
+    expect(
+      resolveSubmitRunEpochMs({
+        createdAt: '2026-07-08T04:59:30.000Z',
+        updatedAt: '2026-07-08T05:00:20.000Z',
+      }),
+    ).toBe(updatedMs);
+    expect(resolveSubmitRunEpochMs({ createdAt: '2026-07-08T04:59:30.000Z' })).toBe(createdMs);
+  });
+
+  it('binds slow-complete run using updatedAt for submit lookback', () => {
+    const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-slow-complete',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'complete',
+          createdAt: '2026-07-08T04:59:30.000Z',
+          updatedAt: '2026-07-08T05:00:20.000Z',
+        },
+      ],
+      {
+        prNumber: 673,
+        targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+        submitObservedAfterMs,
+      },
+    );
+    expect(found).toMatchObject({ ok: true, runId: 'run-slow-complete', status: 'complete' });
   });
 
   it('binds already-delivered run from fast auto-delivery on current head', () => {
