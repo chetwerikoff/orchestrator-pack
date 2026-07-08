@@ -22,7 +22,9 @@
     "scripts/merge-triage.test.ts",
     "scripts/audit-jsonl-retention.test.ts",
     "scripts/verify.ps1",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/supervisor-recovery.test-helpers.ts"
   ],
   "declared_globs": [
     "docs/declarations/648.issue-648-merge-triage-gate.json"
