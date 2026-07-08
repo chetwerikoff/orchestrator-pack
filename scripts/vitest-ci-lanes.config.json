@@ -36,7 +36,7 @@
     "scripts/_test-stub-pack-import-closure.test.ts": "light",
     "scripts/ao-events-correlation-degraded.test.ts": "light",
     "scripts/ao-events-fail-soft.test.ts": "heavy",
-    "scripts/audit-jsonl-retention.test.ts": "light",
+    "scripts/audit-jsonl-retention.test.ts": "heavy",
     "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",
     "scripts/ao-session-adapter.test.ts": "light",
     "scripts/ao-0-10-review-trigger.test.ts": "light",

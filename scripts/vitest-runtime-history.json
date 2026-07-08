@@ -79,6 +79,7 @@
     "scripts/worker-nudge-issue-owner-bootstrap.test.ts": 45000,
     "scripts/dead-worker-reconcile.test.ts": 120000,
     "scripts/worker-recovery.test.ts": 90000,
-    "scripts/ao-events-fail-soft.test.ts": 90000
+    "scripts/ao-events-fail-soft.test.ts": 90000,
+    "scripts/audit-jsonl-retention.test.ts": 90000
   }
 }
