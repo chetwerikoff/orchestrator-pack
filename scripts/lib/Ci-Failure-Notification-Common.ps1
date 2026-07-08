@@ -50,6 +50,28 @@ function Invoke-CiFailureHelper {
     return ($output | Out-String).Trim() | ConvertFrom-Json
 }
 
+function ConvertTo-GhOutputLines {
+    param($Raw)
+    return @($Raw | ForEach-Object {
+            if ($_ -is [string]) { $_ }
+            elseif ($null -ne $_) { $_.ToString() }
+        })
+}
+
+function ConvertTo-RepoSlugFromGhOutput {
+    # Isolate the owner/repo slug from a merged `gh ... 2>&1` stream. The stream may
+    # contain non-string records (e.g. ErrorRecord from stderr under 2>&1) and/or a
+    # warning line alongside the stdout slug; return the slug alone, never calling
+    # .Trim() on a non-string record and never embedding warning text.
+    param($Raw)
+    $lines = ConvertTo-GhOutputLines -Raw $Raw
+    $slug = $lines | Where-Object { $_ -match '^\s*[^/\s]+/[^/\s]+\s*$' } | Select-Object -First 1
+    if (-not $slug) {
+        $slug = $lines | Where-Object { $_ -and $_.Trim() } | Select-Object -Last 1
+    }
+    return ([string]$slug).Trim()
+}
+
 function Get-RepoIdentity {
     if (-not $RepoRoot) {
         throw 'RepoRoot is required for Get-RepoIdentity'
@@ -57,8 +79,10 @@ function Get-RepoIdentity {
     Push-Location -LiteralPath $RepoRoot
     try {
         $raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "gh repo view failed: $raw" }
-        return [string]$raw.Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh repo view failed: $((ConvertTo-GhOutputLines -Raw $raw) -join "`n")"
+        }
+        return (ConvertTo-RepoSlugFromGhOutput -Raw $raw)
     }
     finally {
         Pop-Location
