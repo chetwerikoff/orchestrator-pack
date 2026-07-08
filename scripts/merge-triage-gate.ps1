@@ -1,10 +1,10 @@
 #requires -Version 5.1
-$ErrorActionPreference = 'Stop'
 param(
     [Parameter(Mandatory)][ValidateSet('run-gate','policy','architect-inbox','architect-token','architect-adjudicate','worker-appeal')]
     [string]$Command,
     [string]$PayloadJson = '{}'
 )
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Merge-TriageGate.ps1')
 $payload = ConvertFrom-Json -InputObject $PayloadJson -AsHashtable
 switch ($Command) {

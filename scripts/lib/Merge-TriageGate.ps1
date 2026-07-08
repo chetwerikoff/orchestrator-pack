@@ -4,7 +4,7 @@
   Pack-owned at-cap merge triage gate wrapper (Issue #648).
 #>
 $Script:MergeTriageFilterCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/merge-triage-gate.mjs'
-. (Join-Path $PSScriptRoot 'Invoke-MechanicalNodeFilterCli.ps1')
+. (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 
 function Invoke-MergeTriageCli {
     param(
