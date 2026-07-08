@@ -8452,58 +8452,6 @@
       }
     },
     {
-      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-201",
-      "caller": {
-        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 201
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:12be811369828c183334c390353fa1c95e8adb3ed9bc36dfadc1f38b449cb98a",
-      "discoveryMatch": {
-        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 201,
-        "patternIds": [
-          "pwsh-file",
-          "pwsh-noprofile"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-307",
-      "caller": {
-        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 307
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:efeb5e0833dc6f561051516a837c5877092afd001e33485ebcd49e922e85433d",
-      "discoveryMatch": {
-        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 307,
-        "patternIds": [
-          "call-pwsh",
-          "ps-call-op"
-        ]
-      }
-    },
-    {
       "rowId": "site-scripts-verify-ps1-617",
       "caller": {
         "file": "scripts/verify.ps1",
@@ -10524,6 +10472,58 @@
         "file": "scripts/verify.ps1",
         "line": 2012,
         "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-202",
+      "caller": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 202
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:12be811369828c183334c390353fa1c95e8adb3ed9bc36dfadc1f38b449cb98a",
+      "discoveryMatch": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 202,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-310",
+      "caller": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 310
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:efeb5e0833dc6f561051516a837c5877092afd001e33485ebcd49e922e85433d",
+      "discoveryMatch": {
+        "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
+        "line": 310,
+        "patternIds": [
+          "call-pwsh",
           "ps-call-op"
         ]
       }
