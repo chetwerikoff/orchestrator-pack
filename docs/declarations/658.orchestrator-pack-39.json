@@ -1,0 +1,41 @@
+{
+  "issue_number": 658,
+  "iteration_id": "orchestrator-pack-39",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-07T21:40:00.000Z",
+  "baseline": {
+    "commit_sha": "8f961cb3ff1025a131a09045afdec99e84f03bc6",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending-worker-declare"
+  },
+  "declared_paths": [
+    ".cursor/rules/harness-review-bridge.mdc",
+    "docs/ao-0-10-review-api.d.mts",
+    "docs/ao-0-10-review-api.mjs",
+    "docs/ao-0-10-review-harness-adoption.md",
+    "docs/harness-review-bridge.d.mts",
+    "docs/harness-review-bridge.mjs",
+    "prompts/harness_reviewer_submit_contract.md",
+    "scripts/check-harness-review-bridge.ps1",
+    "scripts/harness-review-bridge.ps1",
+    "scripts/harness-review-bridge.test.ts",
+    "scripts/harness-review-bridge.ts",
+    "scripts/lib/Invoke-AoReviewApi.ps1",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/fixtures/harness-review-bridge/claude-harness-guard.json",
+    "tests/fixtures/harness-review-bridge/invoke-pack-review-mapper-golden.json",
+    "tests/fixtures/harness-review-bridge/unset-reviewers-guard.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "plugins/ao-codex-pr-reviewer/**",
+    "prompts/**",
+    ".cursor/rules/**",
+    "tests/**",
+    "tests/external-output-references/**",
+    "docs/**"
+  ],
+  "amendments": []
+}

@@ -170,6 +170,31 @@ export function evaluateProjectReviewerHarness(configPayload, expectedHarness = 
 }
 
 /**
+ * @param {unknown} configPayload
+ * @param {string} [expectedHarness]
+ */
+export function classifyReviewerHarnessAbort(configPayload, expectedHarness = 'codex') {
+  const evaluation = evaluateProjectReviewerHarness(configPayload, expectedHarness);
+  if (!evaluation.ok || !evaluation.matchesExpected) {
+    return {
+      abort: true,
+      reason: 'reviewers_harness_misconfig',
+      harness: evaluation.harness || null,
+      expectedHarness,
+      httpStatus: 0,
+      classified: true,
+    };
+  }
+  return {
+    abort: false,
+    reason: '',
+    harness: evaluation.harness,
+    expectedHarness,
+    classified: false,
+  };
+}
+
+/**
  * @param {string[]} commandLines
  */
 export function findForbiddenLegacyReviewRunCommands(commandLines) {
@@ -202,6 +227,10 @@ runStdinJsonCli('ao-0-10-review-api.mjs', {
   'harness-eval': () => {
     const payload = readStdinJson();
     return evaluateProjectReviewerHarness(payload.payload, String(payload.expectedHarness ?? 'codex'));
+  },
+  'harness-guard': () => {
+    const payload = readStdinJson();
+    return classifyReviewerHarnessAbort(payload.payload, String(payload.expectedHarness ?? 'codex'));
   },
   forbidden: () => {
     const payload = readStdinJson();

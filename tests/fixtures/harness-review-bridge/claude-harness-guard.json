@@ -1,0 +1,11 @@
+{
+  "description": "Claude harness misconfig — trigger must abort",
+  "projectConfig": {
+    "reviewers": [{ "harness": "claude-code" }]
+  },
+  "expect": {
+    "abort": true,
+    "reason": "reviewers_harness_misconfig",
+    "harness": "claude-code"
+  }
+}
