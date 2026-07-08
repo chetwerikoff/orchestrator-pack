@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -7045,10 +7045,10 @@
       }
     },
     {
-      "rowId": "site-scripts-refresh-vitest-runtime-history-ps1-40",
+      "rowId": "site-scripts-refresh-vitest-runtime-history-ps1-60",
       "caller": {
         "file": "scripts/refresh-vitest-runtime-history.ps1",
-        "line": 40
+        "line": 60
       },
       "callee": {
         "kind": "other-external",
@@ -7060,10 +7060,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:f0efb6638217841260fffd3a79c0422ba50fdc20e6035c0afc58f2a029c0e508",
+      "hashPinnedSourceHash": "sha256:e64fc8110ebca946abe86a64efea1bae562b52a43767c8b228b8786330aef3bf",
       "discoveryMatch": {
         "file": "scripts/refresh-vitest-runtime-history.ps1",
-        "line": 40,
+        "line": 60,
         "patternIds": [
           "ps-call-op"
         ]
@@ -7650,10 +7650,10 @@
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-76",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-109",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 76
+        "line": 109
       },
       "callee": {
         "kind": "other-external",
@@ -7668,7 +7668,7 @@
       "hashPinnedSourceHash": "sha256:f311937ef036838ab07cf3c89aa006e11b019e58029f397e07fa545805a2abea",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 76,
+        "line": 109,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10472,6 +10472,56 @@
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 1996,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-refresh-vitest-runtime-history-ps1-75",
+      "caller": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 75
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:2c9ca68970619ec0b5c0bb4b91d2efadf1affd2481bdba6226d6c3440831f854",
+      "discoveryMatch": {
+        "file": "scripts/refresh-vitest-runtime-history.ps1",
+        "line": 75,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-86",
+      "caller": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 86
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:1d18c359a9aa0c34807e9d95c8fc5b7b3159d19d77c975af4e3b8effb6d12c21",
+      "discoveryMatch": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 86,
         "patternIds": [
           "ps-call-op"
         ]

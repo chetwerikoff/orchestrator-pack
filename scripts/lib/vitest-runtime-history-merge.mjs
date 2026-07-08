@@ -248,6 +248,7 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
   const history = normalizeHistory(baseHistory);
   const beforeBytes = historyBytes(history);
   let anyWeightChanged = false;
+  let anyMeasuredAccepted = false;
 
   for (const [file, durationMs] of durations) {
     const priorSamples = Array.isArray(history.recentSamples[file])
@@ -262,6 +263,7 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
     const previousWeight = history.files[file];
     history.recentSamples[file] = samples;
     history.provenance[file] = 'measured';
+    anyMeasuredAccepted = true;
 
     if (previousWeight !== smoothed) {
       history.files[file] = smoothed;
@@ -273,6 +275,8 @@ export function mergeValidatedDurations(baseHistory, durations, heavyFiles) {
   if (anyWeightChanged) {
     history.source = MEASURED_SOURCE;
     history.dataChangedAt = new Date().toISOString();
+  } else if (anyMeasuredAccepted) {
+    history.source = MEASURED_SOURCE;
   }
 
   history.smoothingRule = SMOOTHING_RULE;
@@ -337,6 +341,10 @@ export function refreshRuntimeHistory({
     coverage: merged.coverage,
     rejected: false,
   };
+}
+
+export function reconcileProposedHistoryAgainstRemote(proposedHistory, remoteHistory) {
+  return mergeConcurrentRefreshes(remoteHistory, [proposedHistory]);
 }
 
 export function mergeConcurrentRefreshes(baseHistory, updates) {

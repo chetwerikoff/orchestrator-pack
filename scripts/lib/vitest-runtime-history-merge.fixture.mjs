@@ -15,6 +15,7 @@ import {
   historyBytes,
   medianMs,
   mergeConcurrentRefreshes,
+  reconcileProposedHistoryAgainstRemote,
   mergeValidatedDurations,
   normalizeHistory,
   refreshRuntimeHistory,
@@ -129,6 +130,55 @@ function runMeasuredRefreshFixture() {
     'provenance must be measured for refreshed file',
   );
   rmSync(dir, { recursive: true, force: true });
+}
+
+function runMeasuredSourceWithoutWeightChangeFixture() {
+  const base = seededHistory();
+  const file = 'scripts/check-ci-pipeline-split.test.ts';
+  base.recentSamples[file] = [44000, 45000, 46000];
+  const merged = mergeValidatedDurations(base, new Map([[file, 45000]]), [file]);
+  assert(
+    merged.history.source === MEASURED_SOURCE,
+    'source must switch to measured when samples accepted without weight change',
+  );
+  assert(
+    merged.history.files[file] === 45000,
+    'weight unchanged when smoothed equals seeded placeholder',
+  );
+  assert(merged.history.provenance[file] === 'measured');
+}
+
+function runStaleBaseReconcileFixture() {
+  const base = seededHistory();
+  const remote = normalizeHistory(base);
+  remote.files['scripts/orchestrator-wake-supervisor.test.ts'] = 99000;
+  remote.provenance['scripts/orchestrator-wake-supervisor.test.ts'] = 'measured';
+  remote.recentSamples['scripts/orchestrator-wake-supervisor.test.ts'] = [99000];
+  remote.fileChangedAt = {
+    'scripts/orchestrator-wake-supervisor.test.ts': '2026-07-02T00:00:00.000Z',
+  };
+  remote.source = MEASURED_SOURCE;
+  remote.dataChangedAt = '2026-07-02T00:00:00.000Z';
+
+  const proposed = normalizeHistory(base);
+  proposed.files['scripts/check-ci-pipeline-split.test.ts'] = 21000;
+  proposed.provenance['scripts/check-ci-pipeline-split.test.ts'] = 'measured';
+  proposed.recentSamples['scripts/check-ci-pipeline-split.test.ts'] = [21000];
+  proposed.fileChangedAt = {
+    'scripts/check-ci-pipeline-split.test.ts': '2026-07-03T00:00:00.000Z',
+  };
+  proposed.source = MEASURED_SOURCE;
+  proposed.dataChangedAt = '2026-07-03T00:00:00.000Z';
+
+  const merged = reconcileProposedHistoryAgainstRemote(proposed, remote);
+  assert(
+    merged.files['scripts/check-ci-pipeline-split.test.ts'] === 21000,
+    'stale-base reconcile must retain proposed measurement',
+  );
+  assert(
+    merged.files['scripts/orchestrator-wake-supervisor.test.ts'] === 99000,
+    'stale-base reconcile must retain newer remote measurement',
+  );
 }
 
 function runSmoothingFixture() {
@@ -362,6 +412,8 @@ function runCoverageAndDurableProvenanceFixture() {
 export function runRuntimeHistoryRefreshFixtures() {
   failures.length = 0;
   runMeasuredRefreshFixture();
+  runMeasuredSourceWithoutWeightChangeFixture();
+  runStaleBaseReconcileFixture();
   runSmoothingFixture();
   runCorruptInputFixtures();
   runRaceSafeFixture();
