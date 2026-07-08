@@ -7625,10 +7625,10 @@
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-67",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-76",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 67
+        "line": 76
       },
       "callee": {
         "kind": "other-external",
@@ -7640,10 +7640,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:55d7479bef96e93d96db778a2a1b9af25f22ed30d199bcd2325f1c8ec2d2dbae",
+      "hashPinnedSourceHash": "sha256:f311937ef036838ab07cf3c89aa006e11b019e58029f397e07fa545805a2abea",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 67,
+        "line": 76,
         "patternIds": [
           "ps-call-op"
         ]

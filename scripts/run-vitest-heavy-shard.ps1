@@ -64,6 +64,15 @@ try {
         exit 1
     }
 
+    $metaPath = "$RuntimeReportPath.meta.json"
+    $meta = @{
+        commitSha = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { '' }
+        shard     = $Shard
+        success   = $true
+        runId     = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { '' }
+    }
+    $meta | ConvertTo-Json -Compress | Set-Content -LiteralPath $metaPath -Encoding utf8
+
     & node (Join-Path $Root 'scripts/enforce-vitest-runtime-budget.mjs') $RuntimeReportPath
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FAIL] Vitest runtime budget exceeded on heavy shard $Shard"
