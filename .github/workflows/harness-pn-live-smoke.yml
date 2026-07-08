@@ -19,9 +19,7 @@ permissions:
 jobs:
   live-smoke:
     name: Live harness [Pn] smoke
-    # Operator-enabled only: requires a real AO daemon + PACK_HARNESS_PN_SMOKE_SESSION.
-    # Skipped on default GitHub-hosted CI (not fixture-satisfied — job does not run).
-    if: vars.PACK_HARNESS_PN_SMOKE_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    # Merge-blocking on pull_request: the script fail-closes when AO daemon/session are unavailable.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -10,6 +10,7 @@ $required = @(
     'docs/harness-post-submit-pn-content-shape.mjs',
     'docs/scripted-review-confirmed-delivery-gate.mjs',
     'scripts/harness-post-submit-pn-reconcile.ps1',
+    'scripts/lib/Harness-PnRetriggerState.ps1',
     'scripts/check-harness-post-submit-pn-live-smoke.ps1',
     'scripts/harness-post-submit-pn-content-shape.test.ts',
     '.github/workflows/harness-pn-live-smoke.yml',
@@ -43,6 +44,10 @@ if ($gatePs1 -notmatch 'harnessContentShape\s*=\s*\$true') {
     Write-Host 'confirmed-delivery gate must enable harnessContentShape on poll-step payloads'
     exit 1
 }
+if ($gatePs1 -notmatch 'Resolve-HarnessPnRetriggerCount') {
+    Write-Host 'confirmed-delivery gate must restore persisted harness retrigger count'
+    exit 1
+}
 if ($gatePs1 -notmatch 'harness-post-submit-pn-reconcile\.ps1') {
     Write-Host 'confirmed-delivery gate must delegate reject_retrigger to harness-post-submit-pn-reconcile.ps1'
     exit 1
@@ -51,6 +56,14 @@ if ($gatePs1 -notmatch 'harness-post-submit-pn-reconcile\.ps1') {
 $reconcile = Get-Content -LiteralPath (Join-Path $Root 'scripts/harness-post-submit-pn-reconcile.ps1') -Raw
 if ($reconcile -notmatch 'Get-AoSessionReviewsJson' -or $reconcile -notmatch 'Invoke-AoReviewTriggerForWorker') {
     Write-Host 'harness post-submit reconcile must use AO HTTP review list/trigger helpers'
+    exit 1
+}
+if ($reconcile -notmatch 'Set-HarnessPnRetriggerCount') {
+    Write-Host 'harness post-submit reconcile must persist retrigger count across reruns'
+    exit 1
+}
+if ($reconcile -notmatch 'Resolve-HarnessPnRetriggerCount') {
+    Write-Host 'harness post-submit reconcile must restore persisted retrigger count'
     exit 1
 }
 if ($reconcile -match '(?:Read-|Open-|sqlite3|SELECT\s+).{0,20}ao\.db') {
@@ -64,6 +77,10 @@ if ($liveSmoke -notmatch 'Get-AoDaemonHealthJson' -or $liveSmoke -notmatch 'exit
     exit 1
 }
 $workflow = Get-Content -LiteralPath (Join-Path $Root '.github/workflows/harness-pn-live-smoke.yml') -Raw
+if ($workflow -match 'PACK_HARNESS_PN_SMOKE_ENABLED') {
+    Write-Host 'live harness [Pn] smoke workflow must not skip PR runs via operator-only if guard'
+    exit 1
+}
 if ($workflow -notmatch 'check-harness-post-submit-pn-live-smoke.ps1') {
     Write-Host 'live harness [Pn] smoke workflow must run the live smoke script'
     exit 1

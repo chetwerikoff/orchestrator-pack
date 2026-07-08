@@ -41,6 +41,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
 . (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
+. (Join-Path $PSScriptRoot 'lib/Harness-PnRetriggerState.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
 $ContentShapeCli = Join-Path $PackRoot 'docs/harness-post-submit-pn-content-shape.mjs'
@@ -143,7 +144,8 @@ $pollWindowMs = [int]$config.pollWindowMs
 $pollIntervalMs = [int]$config.pollIntervalMs
 $startedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $initialObservedRunId = ''
-$currentRetriggerCount = [int]$RetriggerCount
+$currentRetriggerCount = Resolve-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber `
+    -TargetSha $TargetSha -ExplicitCount $RetriggerCount
 
 Write-HarnessPnReconcileLog "starting session=$SessionId PR #$PrNumber run=$RunId verdict=$Verdict reason=$Reason retriggerCount=$currentRetriggerCount"
 
@@ -189,6 +191,8 @@ while ($true) {
             exit 2
         }
         $currentRetriggerCount += 1
+        Set-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha `
+            -Count $currentRetriggerCount
         Write-HarnessPnReconcileLog "re-trigger issued count=$currentRetriggerCount reason=$($terminal.reason)"
         Write-OrchestratorSideProcessProgress -ChildId $Script:ReconcileLogPrefix -Phase 'complete'
         exit 0
@@ -198,6 +202,7 @@ while ($true) {
         exit 2
     }
     if ($action -eq 'suppress' -or $action -eq 'send' -or ($null -eq $action -and -not $step.shouldContinuePolling)) {
+        Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
         Write-HarnessPnReconcileLog "terminal content-valid state action=$action"
         Write-OrchestratorSideProcessProgress -ChildId $Script:ReconcileLogPrefix -Phase 'complete'
         exit 0

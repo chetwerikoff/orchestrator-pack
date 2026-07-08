@@ -45,6 +45,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryEscalation.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
 . (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
+. (Join-Path $PSScriptRoot 'lib/Harness-PnRetriggerState.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
 
@@ -268,6 +269,7 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
         exit 2
     }
     if (-not $sent) {
+        Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
         Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
         exit 0
     }
@@ -275,6 +277,7 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'side_effect'
     $postSend = Complete-ScriptedReviewDeliveryGateAfterExplicitSend -SendSucceeded $true -DedupApplied $dedupApplied
     if (-not $postSend.ok) { exit 2 }
+    Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
     exit 0
 }
@@ -316,6 +319,9 @@ function Invoke-HarnessPostSubmitPnReconcileFromGate {
 $messageText = if ($DeliveryMessage) { $DeliveryMessage.Trim() } else { [Console]::In.ReadToEnd() }
 if ($null -eq $messageText) { $messageText = '' }
 $messageText = $messageText.Trim()
+
+$HarnessPnRetriggerCount = Resolve-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber `
+    -TargetSha $TargetSha -ExplicitCount $HarnessPnRetriggerCount
 
 $config = Get-ScriptedReviewDeliveryGateConfig
 $pollWindowMs = [int]$config.pollWindowMs
@@ -397,6 +403,7 @@ while ($true) {
     $action = [string]$terminal.action
     if ($action -eq 'suppress') {
         Write-ScriptedReviewDeliveryGateLog "suppress explicit send (daemon delivery confirmed) PR #$PrNumber run=$RunId"
+        Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
         Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
         exit 0
     }

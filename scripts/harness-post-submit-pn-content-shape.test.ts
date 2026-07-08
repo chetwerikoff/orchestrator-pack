@@ -160,4 +160,20 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
     const text = readFileSync(path.join(fixtureDir, 'matrix.json'), 'utf8');
     expect(text).not.toMatch(/soft instruction|best effort|warn-only|may accept/i);
   });
+
+  it('persists harness retrigger count across gate reruns', () => {
+    const gate = readFileSync(path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'), 'utf8');
+    const reconcile = readFileSync(path.join(repoRoot, 'scripts/harness-post-submit-pn-reconcile.ps1'), 'utf8');
+    const state = readFileSync(path.join(repoRoot, 'scripts/lib/Harness-PnRetriggerState.ps1'), 'utf8');
+    expect(state).toMatch(/Set-HarnessPnRetriggerCount/);
+    expect(state).toMatch(/Resolve-HarnessPnRetriggerCount/);
+    expect(reconcile).toMatch(/Set-HarnessPnRetriggerCount/);
+    expect(gate).toMatch(/Resolve-HarnessPnRetriggerCount/);
+  });
+
+  it('live smoke workflow fails closed instead of skipping PR runs', () => {
+    const workflow = readFileSync(path.join(repoRoot, '.github/workflows/harness-pn-live-smoke.yml'), 'utf8');
+    expect(workflow).not.toMatch(/PACK_HARNESS_PN_SMOKE_ENABLED/);
+    expect(workflow).toMatch(/check-harness-post-submit-pn-live-smoke\.ps1/);
+  });
 });
