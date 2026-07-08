@@ -19,7 +19,11 @@ import {
   resolveHarnessExecutionSurfaces,
   validateMapperSubmitPayload,
 } from '../docs/harness-review-bridge.mjs';
-import { classifyReviewTriggerResponse } from '../docs/ao-0-10-review-api.mjs';
+import {
+  classifyReviewTriggerResponse,
+  classifyReviewerHarnessAbort,
+  evaluateProjectReviewerHarness,
+} from '../docs/ao-0-10-review-api.mjs';
 import {
   HARNESS_BRIDGE_KILL_SWITCH,
   buildHarnessSubmitPayload,
@@ -31,6 +35,11 @@ const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureDir = path.join(repoRoot, 'plugins/ao-codex-pr-reviewer/tests/fixtures');
 const harnessFixtures = path.join(repoRoot, 'tests/fixtures/harness-review-bridge');
 const capturesDir = path.join(repoRoot, 'tests/external-output-references/captures/ao-0-10-review-api');
+const daemonCapturesDir = path.join(
+  repoRoot,
+  'tests/external-output-references/captures/ao-0-10-daemon',
+);
+const legacyConfigCapture = path.join(capturesDir, 'project-config.raw.json');
 const reviewApiLib = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
 const SCOPED_ISSUE_NUMBER = 9;
 const tempRoots: string[] = [];
@@ -191,6 +200,70 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('reviewers_harness_misconfig');
     expect(result.classified).toBe(true);
+  });
+
+  it('Get-AoProjectConfigJson reads GET /api/v1/projects/{id} not /config (Issue #682)', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    const fnStart = text.indexOf('function Get-AoProjectConfigJson');
+    const fnEnd = text.indexOf('function Set-AoProjectReviewerHarness');
+    const body = text.slice(fnStart, fnEnd);
+    expect(body).toMatch(/\/api\/v1\/projects\/\$\(\[uri\]::EscapeDataString\(\$ProjectId\)\)"/);
+    expect(body).not.toMatch(/\/config"/);
+    expect(body).toMatch(/Unwrap-AoProjectConfigPayload/);
+  });
+
+  it('live-shape capture selects reviewers at .project.config.reviewers after unwrap (Issue #682)', () => {
+    const live = JSON.parse(
+      readFileSync(path.join(daemonCapturesDir, 'project-single-reviewers.raw.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(evaluateProjectReviewerHarness(live, 'codex')).toMatchObject({
+      ok: false,
+      harness: '',
+      matchesExpected: false,
+    });
+    const project = live.project as Record<string, unknown>;
+    expect(evaluateProjectReviewerHarness(project, 'codex')).toMatchObject({
+      ok: true,
+      harness: 'codex',
+      matchesExpected: true,
+    });
+  });
+
+  it('old /config top-level reviewers shape does not satisfy live envelope selector (Issue #682)', () => {
+    const legacy = JSON.parse(readFileSync(legacyConfigCapture, 'utf8')) as Record<string, unknown>;
+    const wrongEnvelope = { status: 'ok', project: legacy };
+    expect(classifyReviewerHarnessAbort(wrongEnvelope, 'codex').abort).toBe(true);
+    expect(classifyReviewerHarnessAbort(legacy, 'codex').abort).toBe(false);
+  });
+
+  it('Invoke-AoReviewTriggerForWorker allows live-shape fixture harness guard (Issue #682)', () => {
+    const livePath = path.join(daemonCapturesDir, 'project-single-reviewers.raw.json');
+    const out = execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `. '${reviewApiLib}'; $live = Get-Content '${livePath}' -Raw | ConvertFrom-Json; $guard = Invoke-AoReviewApiCli -Subcommand 'harness-guard' -Payload @{ payload = (Unwrap-AoProjectConfigPayload -Payload $live); expectedHarness = 'codex' }; $guard | ConvertTo-Json -Compress -Depth 5`,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim();
+    expect(JSON.parse(out)).toMatchObject({ abort: false, harness: 'codex' });
+  });
+
+  it('GET /config 405 capture binds METHOD_NOT_ALLOWED selector (Issue #682)', () => {
+    const body = JSON.parse(
+      readFileSync(path.join(daemonCapturesDir, 'project-config-get-405.raw.json'), 'utf8'),
+    ) as { code: string };
+    expect(body.code).toBe('METHOD_NOT_ALLOWED');
+  });
+
+  it('Set-AoProjectReviewerHarness reviewer-write path remains PUT /config (Issue #682)', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    const fnStart = text.indexOf('function Set-AoProjectReviewerHarness');
+    const fnEnd = text.indexOf('function Test-ReviewBeforeCleanupGate');
+    const body = text.slice(fnStart, fnEnd);
+    expect(body).toMatch(/Method PUT/);
+    expect(body).toMatch(/\/config"/);
   });
 
   it('ao-review trigger classify unchanged for capture payloads', () => {

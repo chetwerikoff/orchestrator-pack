@@ -1,0 +1,9 @@
+{
+  "sourceCommand": "GET /api/v1/projects/orchestrator-pack",
+  "toolVersion": "ao 0.10.2 daemon HTTP",
+  "capturedAt": "2026-07-08T07:33:30.231Z",
+  "context": "Single-project response with reviewers nested at .project.config.reviewers for harness pre-trigger guard (Issue #682).",
+  "scrubLog": [
+    "Redacted embedded GitHub token in .project.repo URL"
+  ]
+}
