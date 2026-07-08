@@ -14,6 +14,19 @@ This complements [`ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrad
 AO 0.10 selects the reviewer agent via typed `ProjectConfig.reviewers` — not
 `REVIEW_COMMAND` / `--command` on `ao review run` (removed).
 
+**Important (2026-07-07 incident):** use the raw project GET endpoint to verify
+`reviewers`; `ao project get` hides `reviewers`, and `GET …/projects/{id}/config`
+may be unavailable on some builds. Prefer:
+
+```bash
+curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/projects/orchestrator-pack" \
+  | jq '.config.reviewers // .reviewers'
+```
+
+Set harness with a **full config replace** only when you intend to overwrite the
+entire project config. Partial `ao project set-config` JSON can clobber unrelated
+keys (including `reviewers`):
+
 ```bash
 ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'
 ```
@@ -88,9 +101,44 @@ pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
 
 Do **not** edit live `agent-orchestrator.yaml` from automation — harness adoption is operator-only.
 
+## 6. Unified harness path — structured [Pn] findings (Issue #658)
+
+After #658, the codex harness reviewer must run the pack JSONL bridge before
+`ao review submit`:
+
+```powershell
+pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
+  -RunId <review-run-id> `
+  -RepoRoot . `
+  -Base origin/main `
+  -TrustedBaseRoot <trusted-pack-root>
+```
+
+Smoke proof: trigger a harness review, then confirm `latestRun.body` (and worker
+auto-delivery) contains JSON with `[P0]`–`[P3]` titles — not prose `Finding:` /
+`BLOCKING:` headings.
+
+### Kill-switch (rollback)
+
+Set `PACK_HARNESS_BRIDGE_DISABLED=1` before the harness reviewer turn. The bridge
+aborts before mapper/submit (classified failure). Complete review manually:
+
+```powershell
+pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
+```
+
+Then operator submits via the normal AO path. Do not rely on warn-only skip — the
+bridge must fail closed.
+
+### Unset reviewers trap
+
+When `reviewers` is missing, AO defaults to `claude-code`. Pack trigger entry refuses
+batch trigger until `reviewers:[{harness:codex}]` is configured (classified abort).
+
 ## Related
 
 - Issue **#623** — harness + trigger loop
+- Issue **#658** — harness bridge + [Pn] structured submit contract
 - Issue **#624** — stuck `running` review-run reaper
 - Issue **#619** — session identity readers
 - Issues **#213–#215** — review producer contract and board consumers

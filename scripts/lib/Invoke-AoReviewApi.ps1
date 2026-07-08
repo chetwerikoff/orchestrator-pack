@@ -298,10 +298,35 @@ function Assert-ReviewBeforeCleanupGate {
 function Invoke-AoReviewTriggerForWorker {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
+        [string]$ProjectId = 'orchestrator-pack',
         [string]$BaseUrl = '',
         [hashtable]$HealthPayload = $null,
-        $FixturePayload = $null
+        $FixturePayload = $null,
+        $ProjectConfigFixture = $null,
+        [switch]$SkipHarnessGuard
     )
+
+    if (-not $SkipHarnessGuard -and -not $FixturePayload) {
+        if ($null -ne $ProjectConfigFixture) {
+            $projectConfig = $ProjectConfigFixture
+        }
+        else {
+            $projectConfig = Get-AoProjectConfigJson -ProjectId $ProjectId -BaseUrl $BaseUrl -HealthPayload $HealthPayload
+        }
+        $guard = Invoke-AoReviewApiCli -Subcommand 'harness-guard' -Payload @{
+            payload         = $projectConfig
+            expectedHarness = 'codex'
+        }
+        if ($guard.abort) {
+            return @{
+                ok         = $false
+                httpStatus = 0
+                reason     = [string]$guard.reason
+                classified = $true
+                harness    = $guard.harness
+            }
+        }
+    }
 
     $response = if ($FixturePayload) { $FixturePayload } else {
         Invoke-AoSessionReviewTrigger -SessionId $SessionId -BaseUrl $BaseUrl -HealthPayload $HealthPayload

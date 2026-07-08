@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { expect } from 'vitest';
+import { applyOpkVitestHarnessEscalationEnv } from './test-harness-escalation-env.js';
 
 export const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -28,6 +29,9 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
   const managedAoBaseDir = inheritedAoBaseDir || explicitAoBaseDir
     ? null
     : mkdtempSync(path.join(tmpdir(), 'opk-vitest-ao-base-'));
+  if (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.AO_ORCHESTRATOR_ESCALATION_STATE) {
+    applyOpkVitestHarnessEscalationEnv();
+  }
   try {
     const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
       cwd: repoRoot,
@@ -35,6 +39,10 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
       env: {
         ...process.env,
         AO_BASE_DIR: managedAoBaseDir ?? inheritedAoBaseDir ?? '',
+        OPK_VITEST_HARNESS: '1',
+        AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
+        AO_OPERATOR_ESCALATION_INBOX: process.env.AO_OPERATOR_ESCALATION_INBOX ?? '',
+        AO_ESCALATION_HEALTH_SPOOL: process.env.AO_ESCALATION_HEALTH_SPOOL ?? '',
         ...extraEnv,
       },
     });

@@ -16,6 +16,8 @@ $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 
 $env:CI = 'true'
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
+. (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
+Set-OpkVitestHarnessEnv | Out-Null
 
 Push-Location $Root
 try {

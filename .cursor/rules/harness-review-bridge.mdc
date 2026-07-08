@@ -1,0 +1,35 @@
+---
+description: AO 0.10 codex harness reviewer must run pack JSONL bridge before submit (Issue #658)
+globs:
+  - code-reviews/workspaces/**
+alwaysApply: false
+---
+
+# Harness review bridge (Issue #658)
+
+When AO spawns you as the **codex harness reviewer** for a worker PR, you MUST NOT
+improvise prose review findings or call `ao review submit` with markdown headings like
+`Finding:` / `BLOCKING:`.
+
+## Mandatory pre-submit pipeline
+
+Before `ao review submit`, run the pack-owned harness bridge from the **trusted pack
+root** (never a worker-worktree copy of `scripts/**`):
+
+```powershell
+pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
+  -RunId <review-run-id> `
+  -RepoRoot . `
+  -Base origin/main `
+  -TrustedBaseRoot <trusted-pack-root>
+```
+
+`<trusted-pack-root>` is `AO_TRUSTED_PACK_ROOT`, an origin/main pack worktree, or the
+operator's live pack checkout — **not** the PR head worktree under review.
+
+Set `PACK_HARNESS_BRIDGE_DISABLED=1` to abort before submit (classified failure).
+
+## Clean reviews
+
+Zero-finding reviews must submit the shipped clean contract (`verdict: clean`,
+`findingCount: 0`) — never an empty body or prose `LGTM`.

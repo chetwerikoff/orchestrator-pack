@@ -594,6 +594,24 @@ else {
     Add-Failure 'Missing AO 0.10 review harness + trigger loop check script (Issue #623)'
 }
 
+Write-Host ''
+Write-Host '== AO 0.10 harness review bridge + [Pn] contract (Issue #658) =='
+$harnessBridgeCheck = Join-Path $Root 'scripts/check-harness-review-bridge.ps1'
+if (Test-Path -LiteralPath $harnessBridgeCheck -PathType Leaf) {
+    & $harnessBridgeCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-harness-review-bridge.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-harness-review-bridge.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'AO 0.10 harness review bridge checks failed (Issue #658)'
+    }
+}
+else {
+    Write-Check 'scripts/check-harness-review-bridge.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing AO 0.10 harness review bridge check script (Issue #658)'
+}
+
 
 Write-Host ''
 Write-Host '== AO 0.10 review producer data contract (Issue #626) =='
