@@ -1,0 +1,32 @@
+{
+  "issue_number": 678,
+  "iteration_id": "issue-678-worker-agent-rules-delivery",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-08T06:35:00.000Z",
+  "baseline": {
+    "commit_sha": "9a55653db41b6aa57c4dbeac7f664ac1b1e12b46",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7c259152e35523da3d9b70ce42c409f2a1a52fbeefc5d4a40bfd1a26899a83c9"
+  },
+  "declared_paths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "agent-orchestrator.yaml.example",
+    "prompts/agent_rules.md",
+    "prompts/investigate_root_cause.md",
+    "docs/script-owned-review-pipeline.md",
+    "docs/migration_notes.md",
+    "docs/architecture.md",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [
+    "docs/**",
+    "scripts/**",
+    "tests/**",
+    ".cursor/rules/**",
+    ".claude/skills/**"
+  ],
+  "amendments": []
+}
