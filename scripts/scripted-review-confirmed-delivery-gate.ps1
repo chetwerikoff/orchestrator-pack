@@ -46,6 +46,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
 . (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
 . (Join-Path $PSScriptRoot 'lib/Harness-PnRetriggerState.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
 
@@ -153,65 +154,17 @@ function Invoke-ScriptedReviewDeliveryGateEscalation {
 function Invoke-ScriptedReviewDeliveryGateExplicitSend {
     param([string]$MessageText)
 
-    $session = $null
-    $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
-    $sessions = @(Get-ScriptedReviewDeliveryGateSessions)
-    $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload (New-ScriptedReviewDeliveryGatePollStepBase + @{
-        reviews     = @()
-        session     = $session
-        openPrs     = @($openPrs)
-        startedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        nowMs       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    })
-    $liveness = $step.liveness
-    if ($liveness.liveness -ne 'live_head_owning') {
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$liveness.reason)
-    }
-
-    if ($DryRun) {
-        Write-ScriptedReviewDeliveryGateLog "dry-run would send explicit review findings to $SessionId (PR #$PrNumber run=$RunId)"
-        return @{ action = 'send'; sent = $false; reason = 'dry_run' }
-    }
-
-    $cycleKey = "run:$RunId"
-    $resolve = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
-        -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
-    if (-not $resolve.ok) {
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$resolve.reason)
-    }
-    $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass 'review-findings' `
-        -WorkerTarget $resolve.workerTarget -SessionId $SessionId `
-        -Surface $Script:GateLogPrefix -ProjectId $ProjectId -Message $MessageText
-    if (-not $claim.acquired) {
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$claim.reason)
-    }
-
-    $hashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $MessageText }
-    $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash ([string]$hashResult.messageContentHash)
-    if (-not $hashPersist.ok) {
-        Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'message_hash_persist_failed' -Detail ([string]$hashPersist.reason)
-    }
-    $claimToken = New-WorkerNudgeClaimToken -ClaimResult $claim
-    $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
-    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'scripted-review-delivery-side-effect.lock'
-    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'side_effect'
-    $sendExitCapture = @{ exitCode = 0 }
-    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        $MessageText | pwsh -NoProfile -File $journaledScript $SessionId `
-            -Source 'pack-send' -SourceKey "scripted-review:$RunId" `
-            -ClaimToken $claimToken -GatedNudge -NoWait
-        $sendExitCapture.exitCode = $LASTEXITCODE
-    }
-    $sendExitCode = [int]$sendExitCapture.exitCode
-    if (-not $fenced.ok -or $sendExitCode -ne 0) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ exitCode = $sendExitCode } | Out-Null
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'explicit_send_failed' -Detail "exit=$sendExitCode"
-    }
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
-    Write-ScriptedReviewDeliveryGateLog "explicit send ok PR #$PrNumber session=$SessionId run=$RunId"
-    return @{ action = 'send'; sent = $true; reason = 'explicit_send_dispatched'; dedupApplied = $true }
+    return Invoke-ScriptedReviewDeliveryExplicitSend `
+        -SessionId $SessionId -RunId $RunId -PrNumber $PrNumber -TargetSha $TargetSha `
+        -ProjectId $ProjectId -MessageText $MessageText -GateFilterCli $GateFilterCli `
+        -LogPrefix $Script:GateLogPrefix -ChildId $Script:GateLogPrefix `
+        -PollStepBase (New-ScriptedReviewDeliveryGatePollStepBase) `
+        -GetOpenPrs { Get-ScriptedReviewDeliveryGateOpenPrs } `
+        -GetSessions { Get-ScriptedReviewDeliveryGateSessions } `
+        -FindSession { param($sessions) Find-ScriptedReviewDeliveryGateSession -Sessions $sessions } `
+        -WriteLog { param($Message) Write-ScriptedReviewDeliveryGateLog $Message } `
+        -OnEscalation { param($Reason, $Detail) Invoke-ScriptedReviewDeliveryGateEscalation -Reason $Reason -Detail $Detail } `
+        -DryRun:$DryRun
 }
 
 function Complete-ScriptedReviewDeliveryGateAfterExplicitSend {
@@ -220,42 +173,14 @@ function Complete-ScriptedReviewDeliveryGateAfterExplicitSend {
         [bool]$DedupApplied = $false
     )
 
-    $classifyInput = @{
-        reviews       = @()
-        runId         = $RunId
-        batchId       = $BatchId
-        prNumber      = $PrNumber
-        targetSha     = $TargetSha
-        sendSucceeded = $SendSucceeded
-    }
-    if ($SendSucceeded -and $Verdict -eq 'changes_requested') {
-        try {
-            $reviewsPayload = Get-ScriptedReviewDeliveryGateReviewsPayload
-            $classifyInput.reviews = @($reviewsPayload.reviews)
-        }
-        catch {
-            Write-ScriptedReviewDeliveryGateLog "post-send reviews read failed: $($_.Exception.Message)"
-        }
-    }
-
-    $classified = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'classify-post-send' -Payload $classifyInput
-    $composition = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'post-send' -Payload @{
-        explicitSendOutcome         = [string]$classified.explicitSendOutcome
-        lateAutoDeliveryConfirmed   = [bool]$classified.lateAutoDeliveryConfirmed
-        dedupApplied                = $DedupApplied
-        dedupFailed                 = $false
-    }
-
-    $terminal = [string]$composition.terminal
-    if ($terminal -eq 'escalate') {
-        Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$composition.reason) | Out-Null
-        return @{ ok = $false }
-    }
-    if ($terminal -eq 'dedup_or_escalate') {
-        Write-ScriptedReviewDeliveryGateLog "post-send late auto-delivery race; dedup applied ($($composition.reason))"
-    }
-    Write-ScriptedReviewDeliveryGateLog "post-send complete: $terminal ($($composition.reason))"
-    return @{ ok = $true; terminal = $terminal }
+    return Complete-ScriptedReviewDeliveryExplicitSend `
+        -SessionId $SessionId -RunId $RunId -BatchId $BatchId -PrNumber $PrNumber `
+        -TargetSha $TargetSha -Verdict $Verdict -GateFilterCli $GateFilterCli `
+        -LogPrefix $Script:GateLogPrefix `
+        -GetReviewsPayload { Get-ScriptedReviewDeliveryGateReviewsPayload } `
+        -WriteLog { param($Message) Write-ScriptedReviewDeliveryGateLog $Message } `
+        -OnEscalation { param($Reason, $Detail) Invoke-ScriptedReviewDeliveryGateEscalation -Reason $Reason -Detail $Detail } `
+        -SendSucceeded $SendSucceeded -DedupApplied $DedupApplied
 }
 
 function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
