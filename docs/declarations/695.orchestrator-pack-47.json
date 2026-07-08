@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "ee13b6909b3d9dce727e4d912e81f5a8d4fa9cc3",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9951157a5458ec6f75df5062804aa55f7afd27bbcc5cda1d2d9e2940adc06d28"
+    "active_scope_hash": "sha256:9992619c90d4de22818d1acc2839175a610760ed8813dcc7635740c8969a3507"
   },
   "declared_paths": [
     ".github/workflows/scope-guard.yml",
@@ -27,7 +27,10 @@
     "scripts/lib/vitest-ci-lanes.mjs",
     "scripts/lib/vitest-heavy-topology.d.mts",
     "scripts/lib/vitest-heavy-topology.mjs",
+    "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
     "scripts/merge-vitest-json-reports.mjs",
+    "scripts/refresh-vitest-runtime-history.mjs",
     "scripts/review-start-preflight-shield.test.ts",
     "scripts/run-vitest-heavy-shard.ps1",
     "scripts/vitest-ci-lanes.config.json",
@@ -61,6 +64,22 @@
       "reason": "CI flake fix touches review-start-claim overlap test",
       "actor": "orchestrator-pack-59",
       "timestamp": "2026-07-08T22:25:27.204Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:9951157a5458ec6f75df5062804aa55f7afd27bbcc5cda1d2d9e2940adc06d28",
+      "new_active_scope_hash": "sha256:9992619c90d4de22818d1acc2839175a610760ed8813dcc7635740c8969a3507",
+      "changed": {
+        "added": [
+          "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
+          "scripts/lib/vitest-runtime-history-merge.mjs",
+          "scripts/refresh-vitest-runtime-history.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Runtime-history refresh shard-count fix touches #691 merge producer paths",
+      "actor": "orchestrator-pack-59",
+      "timestamp": "2026-07-08T23:42:00.000Z",
       "applied": true
     }
   ]
