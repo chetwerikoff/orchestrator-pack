@@ -103,6 +103,10 @@ external state files. They must not patch AO core.
 
 ### Review paths
 
+**Wake-supervisor fleet reference (Issue #702).** Per-child triggers, verify commands,
+known-broken flags, and fleet scenarios F1/F1b/F2:
+[`wake-supervisor-fleet-operator-reference.md`](wake-supervisor-fleet-operator-reference.md).
+
 **Event-driven first review (Issue #381).** The orchestrator wake listener admits
 `ready_for_review` hand-off notifications on the **hand-off semantic envelope**
 (`notification` + `session.working` + `ready_for_review` + PR subject), not on

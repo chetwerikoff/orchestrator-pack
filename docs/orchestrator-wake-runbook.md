@@ -1,5 +1,8 @@
 # Orchestrator wake listener and heartbeat runbook
 
+For the full supervised fleet (16 registry children + crash/stall/adoption scenarios), see
+[`wake-supervisor-fleet-operator-reference.md`](wake-supervisor-fleet-operator-reference.md).
+
 **Event path:** AO `webhook` notifier → loopback HTTP POST →
 `ao send <orchestrator-session-id> <wake message>`.
 

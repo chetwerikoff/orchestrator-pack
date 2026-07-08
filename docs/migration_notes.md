@@ -1,5 +1,10 @@
 # Migration notes
 
+**Wake-supervisor operator reference (Issue #702):** for live fleet triage (16 registry
+children, F1/F1b/F2, known-broken flags), use
+[`wake-supervisor-fleet-operator-reference.md`](wake-supervisor-fleet-operator-reference.md)
+instead of dated local investigation memos.
+
 > **AO 0.10.2 precedence note (2026-07-06):** older entries below may describe
 > pre-0.10 live YAML adoption (`agent-orchestrator.yaml`, `orchestratorRules`,
 > `reactions`, `notifiers`, `notificationRouting`) and daemon reloads with
