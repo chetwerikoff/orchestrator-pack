@@ -111,7 +111,7 @@ describe('gate decision matrix (AC#9)', () => {
     expect(step.windowExpired).toBe(false);
   });
 
-  it('unattributable run sends after window expires on live head-owning session', () => {
+  it('unattributable run escalates after window expires on live head-owning session', () => {
     const step = evaluateGatePollStep({
       verdict: 'changes_requested',
       reviews: [],
@@ -130,8 +130,8 @@ describe('gate decision matrix (AC#9)', () => {
       nowMs: 1_046_000,
       config: { pollWindowSeconds: 45, pollIntervalSeconds: 2 },
     });
-    expect(step.pollOutcome.reason).toBe('run_never_visible');
-    expect(step.terminal.action).toBe('send');
+    expect(step.pollOutcome.reason).toBe('unattributable_latest_run');
+    expect(step.terminal.action).toBe('escalate');
     expect(step.windowExpired).toBe(true);
   });
 
@@ -286,6 +286,26 @@ describe('supervisor compatibility (AC#10)', () => {
     expect(text).toMatch(/scripted-review-confirmed-delivery-gate/);
     expect(text).toMatch(/Write-OrchestratorSideProcessProgress/);
   });
+
+  it('registers gate child in orchestrator-side-process-registry.json', () => {
+    const registry = JSON.parse(
+      readFileSync(path.join(repoRoot, 'scripts/orchestrator-side-process-registry.json'), 'utf8'),
+    );
+    const child = registry.children.find((entry: { id: string }) => entry.id === 'scripted-review-confirmed-delivery-gate');
+    expect(child).toBeTruthy();
+    expect(child?.script).toBe('scripted-review-confirmed-delivery-gate.ps1');
+    expect(registry.requiredChildIds).not.toContain('scripted-review-confirmed-delivery-gate');
+  });
+
+  it('post-submit lib launches gate via wake supervisor child', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'),
+      'utf8',
+    );
+    expect(text).toMatch(/Start-OrchestratorWakeSupervisorChild/);
+    expect(text).toMatch(/scripted-review-confirmed-delivery-gate/);
+    expect(text).not.toMatch(/Get-PackReviewWrapperProcessStartInfo/);
+  });
 });
 
 describe('post-submit seam wiring', () => {
@@ -330,11 +350,12 @@ describe('post-submit seam wiring', () => {
       path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'),
       'utf8',
     );
-    expect(text).toMatch(/invoke-scripted-review-post-submit-delivery\.ps1/);
     expect(text).toMatch(/Wait-ScriptedReviewSubmittedRun/);
     expect(text).toMatch(/Invoke-ScriptedReviewDeliveryGateProcess/);
-    expect(text).toMatch(/Get-PackReviewWrapperProcessStartInfo/);
+    expect(text).toMatch(/Start-OrchestratorWakeSupervisorChild/);
+    expect(text).toMatch(/Invoke-ScriptedReviewPostSubmitDeliveryEscalation/);
     expect(text).toMatch(/\[Console\]::Error\.WriteLine/);
+    expect(text).not.toMatch(/Get-PackReviewWrapperProcessStartInfo/);
     expect(text).not.toMatch(/\[string\]\$message\.message \| pwsh/);
   });
 });

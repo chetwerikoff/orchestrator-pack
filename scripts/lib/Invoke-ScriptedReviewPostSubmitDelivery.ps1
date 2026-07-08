@@ -16,6 +16,18 @@ function Invoke-ScriptedReviewPostSubmitDeliveryCli {
         -Payload $Payload -Label 'scripted-review-post-submit-delivery' -JsonDepth 20
 }
 
+function Invoke-ScriptedReviewDeliveryGateCli {
+    param(
+        [Parameter(Mandatory = $true)][string]$Subcommand,
+        [hashtable]$Payload = @{}
+    )
+    $packRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $cli = Join-Path $packRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
+    . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $cli -Subcommand $Subcommand `
+        -Payload $Payload -Label 'scripted-review-confirmed-delivery-gate' -JsonDepth 20
+}
+
 function Get-PackReviewHeadSha {
     param([string]$RepoRoot)
     Push-Location -LiteralPath $RepoRoot
@@ -24,6 +36,53 @@ function Get-PackReviewHeadSha {
     }
     finally {
         Pop-Location
+    }
+}
+
+function Invoke-ScriptedReviewPostSubmitDeliveryEscalation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [string]$Detail = '',
+        [string]$RunId = '',
+        [string]$SessionId = '',
+        [int]$PrNumber = 0
+    )
+
+    . (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
+    $builtResult = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'build-escalation' -Payload @{
+        runId     = $RunId
+        sessionId = $SessionId
+        prNumber  = $PrNumber
+        reason    = $Reason
+    }
+    $built = [string]$builtResult.message
+    if ($Detail) {
+        $built = "$built Detail: $Detail"
+    }
+    [Console]::Error.WriteLine($built)
+
+    $corr = if ($RunId) { "corr:scripted-review-delivery:$RunId" } else { 'corr:scripted-review-delivery:unattributed' }
+    $dedupe = if ($RunId) {
+        "dedupe:scripted-review-delivery:$RunId`:$Reason"
+    }
+    else {
+        "dedupe:scripted-review-delivery:unattributed:$Reason"
+    }
+    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-pipeline-failure' `
+        -SourceProcess 'scripted-review-post-submit-delivery' -CorrelationKey $corr -DedupeKey $dedupe `
+        -Diagnosis @{
+            runId     = $RunId
+            sessionId = $SessionId
+            prNumber  = $PrNumber
+            reason    = $Reason
+            detail    = $Detail
+        } | Out-Null
+
+    return @{
+        ok        = $false
+        escalated = $true
+        reason    = $Reason
+        detail    = $Detail
     }
 }
 
@@ -58,46 +117,88 @@ function Wait-ScriptedReviewSubmittedRun {
     return @{ ok = $false; reason = 'submit_visibility_timeout' }
 }
 
-function Invoke-ScriptedReviewDeliveryGateProcess {
-    param(
-        [Parameter(Mandatory = $true)][string]$SeamScript,
-        [Parameter(Mandatory = $true)][string[]]$GateArgs,
-        [string]$MessageText = ''
-    )
+function Write-ScriptedReviewDeliveryGateSupervisorLogsToStderr {
+    param([string[]]$LogPaths)
 
-    . (Join-Path $PSScriptRoot 'Review-FailureEvidence.ps1')
-    $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
-    $psi = Get-PackReviewWrapperProcessStartInfo -PwshPath $pwsh -WrapperPath $SeamScript -WrapperArgs $GateArgs
-    $psi.RedirectStandardInput = $true
-
-    $process = [System.Diagnostics.Process]::Start($psi)
-    if (-not $process) {
-        throw 'Failed to start scripted-review delivery gate process'
-    }
-
-    try {
-        if ($MessageText) {
-            $process.StandardInput.Write($MessageText)
-        }
-        $process.StandardInput.Close()
-        $streams = Read-PackReviewProcessStreams -Process $process
-        foreach ($line in @($streams.Stdout, $streams.Stderr)) {
-            if (-not $line) { continue }
-            foreach ($row in ($line -split "`n")) {
-                $trimmed = $row.TrimEnd()
-                if ($trimmed) {
-                    [Console]::Error.WriteLine($trimmed)
-                }
+    foreach ($logPath in @($LogPaths)) {
+        if (-not $logPath -or -not (Test-Path -LiteralPath $logPath -PathType Leaf)) { continue }
+        foreach ($line in (Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue)) {
+            $trimmed = [string]$line
+            if ($trimmed) {
+                [Console]::Error.WriteLine($trimmed)
             }
         }
-        return [int]$process.ExitCode
     }
-    finally {
-        if ($process -and -not $process.HasExited) {
-            try { $process.Kill() } catch { }
+}
+
+function Invoke-ScriptedReviewDeliveryGateProcess {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$GateParams,
+        [string]$MessageText = '',
+        [string]$ProjectId = 'orchestrator-pack'
+    )
+
+    $childId = 'scripted-review-confirmed-delivery-gate'
+    . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisor.ps1')
+    $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
+    if (-not (Test-Path -LiteralPath $stateRoot)) {
+        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+    }
+    $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
+    $logPath = Get-OrchestratorWakeSupervisorChildLogPath -Paths $paths -ChildId $childId
+
+    $extraArgs = @(
+        '-SessionId', [string]$GateParams.SessionId,
+        '-RunId', [string]$GateParams.RunId,
+        '-PrNumber', [int]$GateParams.PrNumber,
+        '-TargetSha', [string]$GateParams.TargetSha,
+        '-Verdict', [string]$GateParams.Verdict,
+        '-RepoRoot', [string]$GateParams.RepoRoot
+    )
+    if ($GateParams.BatchId) {
+        $extraArgs += @('-BatchId', [string]$GateParams.BatchId)
+    }
+    if ($MessageText) {
+        $extraArgs += @('-DeliveryMessage', $MessageText)
+    }
+    if ($GateParams.DryRun) {
+        $extraArgs += '-DryRun'
+    }
+
+    $gateConfig = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'resolve-config' -Payload @{
+        config = @{}
+    }
+    $pollWindowMs = [Math]::Max(45_000, [int]$gateConfig.pollWindowMs)
+    $waitSeconds = [Math]::Ceiling(($pollWindowMs / 1000.0) + 60)
+
+    $childPid = Start-OrchestratorWakeSupervisorChild -ChildId $childId -OrchestratorSessionId '' `
+        -Paths $paths -ProjectId $ProjectId -ExtraChildArgs $extraArgs
+    if ($childPid -le 0) {
+        throw 'Failed to start scripted-review confirmed-delivery gate supervisor child'
+    }
+
+    $deadline = (Get-Date).AddSeconds($waitSeconds)
+    $exitCode = 2
+    while ((Get-Date) -lt $deadline) {
+        $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+        if (-not $proc) {
+            break
         }
-        if ($process) { $process.Dispose() }
+        if ($proc.HasExited) {
+            $exitCode = $proc.ExitCode
+            break
+        }
+        Start-Sleep -Milliseconds 250
     }
+
+    $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+    if ($proc -and -not $proc.HasExited) {
+        try { $proc.Kill() } catch { }
+        $exitCode = 2
+    }
+
+    Write-ScriptedReviewDeliveryGateSupervisorLogsToStderr -LogPaths @($logPath, "${logPath}.err")
+    return [int]$exitCode
 }
 
 function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
@@ -128,23 +229,26 @@ function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
     $ctx = Get-AutoReviewPrContext -RepoRoot $RepoRoot
     $prNumber = [int]$ctx.PrNumber
     if ($prNumber -le 0) {
-        return @{ ok = $false; skipped = $true; reason = 'pr_unresolved' }
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'pr_unresolved' -Detail "repoRoot=$RepoRoot"
     }
 
     $targetSha = Get-PackReviewHeadSha -RepoRoot $RepoRoot
     if (-not $targetSha) {
-        return @{ ok = $false; skipped = $true; reason = 'head_unresolved' }
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'head_unresolved' -PrNumber $prNumber `
+            -Detail "repoRoot=$RepoRoot"
     }
 
     try {
         $submitted = Wait-ScriptedReviewSubmittedRun -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId
     }
     catch {
-        return @{ ok = $false; skipped = $true; reason = 'review_runs_unavailable'; detail = $_.Exception.Message }
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'review_runs_unavailable' -PrNumber $prNumber `
+            -Detail $_.Exception.Message
     }
 
     if (-not $submitted.ok) {
-        return @{ ok = $false; skipped = $true; reason = [string]$submitted.reason }
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$submitted.reason) -PrNumber $prNumber `
+            -Detail "targetSha=$targetSha"
     }
 
     $message = Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'build-delivery-message' -Payload @{
@@ -153,37 +257,30 @@ function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
         gateVerdict = [string]$parsed.gateVerdict
     }
     if (-not $message.ok) {
-        return @{ ok = $false; skipped = $true; reason = [string]$message.reason }
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$message.reason) `
+            -RunId ([string]$submitted.runId) -SessionId ([string]$submitted.sessionId) -PrNumber $prNumber
     }
 
-    $seamScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'invoke-scripted-review-post-submit-delivery.ps1'
-    if (-not (Test-Path -LiteralPath $seamScript -PathType Leaf)) {
-        return @{ ok = $false; skipped = $true; reason = 'missing_seam_script' }
+    $gateParams = @{
+        SessionId = [string]$submitted.sessionId
+        RunId     = [string]$submitted.runId
+        BatchId   = [string]$submitted.batchId
+        PrNumber  = $prNumber
+        TargetSha = $targetSha
+        Verdict   = [string]$parsed.gateVerdict
+        RepoRoot  = $RepoRoot
+        DryRun    = [bool]$DryRun
     }
 
-    $gateArgs = @(
-        '-SessionId', [string]$submitted.sessionId,
-        '-RunId', [string]$submitted.runId,
-        '-PrNumber', $prNumber,
-        '-TargetSha', $targetSha,
-        '-Verdict', [string]$parsed.gateVerdict,
-        '-ProjectId', $ProjectId,
-        '-RepoRoot', $RepoRoot
-    )
-    if ($submitted.batchId) {
-        $gateArgs += @('-BatchId', [string]$submitted.batchId)
-    }
-    if ($DryRun) {
-        $gateArgs += '-DryRun'
-    }
-
-    $gateExit = Invoke-ScriptedReviewDeliveryGateProcess -SeamScript $seamScript -GateArgs $gateArgs -MessageText ([string]$message.message)
+    $gateExit = Invoke-ScriptedReviewDeliveryGateProcess -GateParams $gateParams `
+        -MessageText ([string]$message.message) -ProjectId $ProjectId
     return @{
-        ok       = ($gateExit -eq 0)
-        skipped  = $false
-        gateExit = $gateExit
-        runId    = [string]$submitted.runId
+        ok        = ($gateExit -eq 0)
+        skipped   = $false
+        escalated = ($gateExit -ne 0)
+        gateExit  = $gateExit
+        runId     = [string]$submitted.runId
         sessionId = [string]$submitted.sessionId
-        verdict  = [string]$parsed.gateVerdict
+        verdict   = [string]$parsed.gateVerdict
     }
 }

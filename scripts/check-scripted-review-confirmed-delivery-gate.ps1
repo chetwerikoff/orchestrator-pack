@@ -78,11 +78,15 @@ if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -an
     exit 1
 }
 if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewDeliveryGateProcess') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must run delivery gate with redirected stdout'
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must run delivery gate as a supervised child'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'Get-PackReviewWrapperProcessStartInfo') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must redirect delivery gate stdout off REVIEW_COMMAND'
+if ($postSubmitLibText -notmatch 'Start-OrchestratorWakeSupervisorChild') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must launch delivery gate via wake supervisor (AC#10)'
+    exit 1
+}
+if ($postSubmitLibText -match 'Get-PackReviewWrapperProcessStartInfo') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must not bypass wake supervisor with raw Process.Start'
     exit 1
 }
 if ($postSubmitLibText -match '\[string\]\$message\.message \| pwsh') {
@@ -93,8 +97,15 @@ if ($postSubmitMjsText -notmatch 'resolveSubmittedRunTerminalStatus') {
     Write-Host 'scripted-review-post-submit-delivery.mjs must prefer latestRunStatus for terminal run lookup'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must call invoke-scripted-review-post-submit-delivery seam'
+if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalation') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate unattributed submit failures'
+    exit 1
+}
+$registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
+$registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+$gateChild = @($registry.children | Where-Object { $_.id -eq 'scripted-review-confirmed-delivery-gate' })
+if ($gateChild.Count -ne 1) {
+    Write-Host 'orchestrator-side-process-registry.json must register scripted-review-confirmed-delivery-gate child (AC#10)'
     exit 1
 }
 

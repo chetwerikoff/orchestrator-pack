@@ -307,25 +307,6 @@ export function evaluateGatePollStep(input) {
       };
     }
 
-    if (visibilityLag && windowExpired) {
-      const pollOutcome = { outcome: POLL_NOT_DELIVERED, reason: 'run_never_visible' };
-      const terminal = evaluateGateTerminalAction({
-        verdict: input.verdict,
-        pollOutcome,
-        liveness,
-        windowExpired: true,
-      });
-      return {
-        config,
-        elapsedMs,
-        windowExpired: true,
-        pollOutcome,
-        liveness,
-        terminal,
-        shouldContinuePolling: false,
-      };
-    }
-
     const terminal = evaluateGateTerminalAction({
       verdict: input.verdict,
       pollOutcome: { outcome: POLL_AMBIGUOUS, reason: findResult.reason },

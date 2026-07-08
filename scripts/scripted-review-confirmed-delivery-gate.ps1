@@ -286,7 +286,7 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
     exit 0
 }
 
-$messageText = [Console]::In.ReadToEnd()
+$messageText = if ($DeliveryMessage) { $DeliveryMessage.Trim() } else { [Console]::In.ReadToEnd() }
 if ($null -eq $messageText) { $messageText = '' }
 $messageText = $messageText.Trim()
 
