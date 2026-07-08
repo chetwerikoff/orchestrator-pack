@@ -40,7 +40,7 @@ try {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $partialReports = [System.Collections.Generic.List[string]]::new()
     $failedExitCode = 0
-    $maxFileAttempts = if ($env:CI -eq 'true') { 3 } else { 1 }
+    $maxFileAttempts = if ($env:CI -eq 'true') { 5 } else { 1 }
 
     try {
         foreach ($file in $shardPlan.files) {
@@ -55,13 +55,16 @@ try {
 
                 # Run one heavy file per Vitest invocation so long shard suites do not
                 # starve vitest-worker onTaskUpdate RPC (#487/#556; shard 6 flake class).
-                $output = & npm test -- $file --pool=threads --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
+                # Pool comes from vitest.config.ts (forks, serial heavy lane) — do not
+                # override with --pool=threads; that pool class reintroduces RPC timeouts.
+                $output = & npm test -- $file --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
                 $text = ($output | Out-String)
                 Write-Host $text
 
                 if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
                     if ($attempt -lt $maxFileAttempts) {
                         Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard file $file (attempt $attempt/$maxFileAttempts); retrying..."
+                        Start-Sleep -Seconds 5
                         continue
                     }
                     Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard (file: $file)"
