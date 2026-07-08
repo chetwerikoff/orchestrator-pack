@@ -848,6 +848,23 @@ else {
     Add-Failure 'Missing side-process launch-contract guard (Issue #659)'
 }
 
+Write-Host ''
+Write-Host '== wake-supervisor fleet doc coverage (Issue #702) =='
+$fleetDocCoverageCheck = Join-Path $Root 'scripts/check-wake-supervisor-fleet-doc-coverage.ps1'
+if (Test-Path -LiteralPath $fleetDocCoverageCheck -PathType Leaf) {
+    & $fleetDocCoverageCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-wake-supervisor-fleet-doc-coverage.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-wake-supervisor-fleet-doc-coverage.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'wake-supervisor fleet doc coverage guard failed (Issue #702)'
+    }
+}
+else {
+    Write-Check 'scripts/check-wake-supervisor-fleet-doc-coverage.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing wake-supervisor fleet doc coverage guard (Issue #702)'
+}
 
 Write-Host ''
 Write-Host '== launch-argv contract inventory (Issue #661) =='
