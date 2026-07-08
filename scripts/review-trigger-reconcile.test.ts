@@ -245,8 +245,8 @@ describe('resolveReconcileEvaluationSession displayName enrichment', () => {
       sessionId,
       role: 'worker',
       status: 'working',
+      issueId: '690',
       branch: 'unrelated-branch',
-      ownedHeadSha: headSha,
     }];
     const without = resolveReconcileEvaluationSession(sessions, 690, headSha, openPrs);
     expect(without.sessionId).toBeNull();

@@ -71,13 +71,13 @@ describe('session-pr-binding-resolver positive outcome', () => {
     expect(owner.sessionId).toBe('orchestrator-pack-45');
     expect(
       resolveHeadOwningWorkerSessionId(
-        [{ ...issueOnlyListRow, role: 'worker', status: 'working' }],
+        [{ ...issueOnlyListRow, role: 'worker', status: 'working', branch: 'unrelated-branch' }],
         690,
         headSha,
         [openPr690],
         { sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } } },
       ),
-    ).toBeNull();
+    ).toBe('orchestrator-pack-45');
   });
 
   it('resolves owner via unique issue branch correlation when displayName is non-numeric', () => {
@@ -151,6 +151,26 @@ describe('session-pr-binding-resolver ambiguity axes', () => {
         55,
       ),
     ).toBeNull();
+  });
+});
+
+describe('session-pr-binding-resolver displayName head ownership', () => {
+  it('grants head ownership for display_name binding corroborated by PR head', () => {
+    const session = { ...issueOnlyListRow, role: 'worker', branch: 'unrelated-branch' };
+    expect(
+      sessionOwnsRunHead(session, 690, headSha, [openPr690], {
+        sessionDetail: { displayName: '690' },
+      }),
+    ).toBe(true);
+    expect(
+      resolveHeadOwningWorkerSessionId(
+        [session],
+        690,
+        headSha,
+        [openPr690],
+        { sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } } },
+      ),
+    ).toBe('orchestrator-pack-45');
   });
 });
 
@@ -350,8 +370,27 @@ describe('ci-failure reaction owner non-null', () => {
     expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
   });
 
-  it('does not record episode for issue-only worker without head evidence', () => {
+  it('does not record episode for issue-correlation bind without explicit head evidence', () => {
     const sessions = [{ ...issueOnlyListRow, role: 'worker', status: 'working' }];
+    const records = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
+    expect(records.records).toEqual([]);
+  });
+
+  it('records episode when displayName corroborated by PR head resolves as owner', () => {
+    const sessions = [
+      { ...issueOnlyListRow, role: 'worker', status: 'working', branch: 'unrelated-branch' },
+    ];
     const records = planCiFailureReactionRecords({
       repo: 'chetwerikoff/orchestrator-pack',
       sessions,
@@ -365,18 +404,19 @@ describe('ci-failure reaction owner non-null', () => {
       ],
       requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
     });
-    expect(records.records).toEqual([]);
+    expect(records.records).toHaveLength(1);
+    expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
   });
 
-  it('records episode when session-get displayName binds PR and worker owns head', () => {
+  it('records episode when session-get displayName binds PR without list-row head fields', () => {
     const sessions = [
       {
         id: 'orchestrator-pack-45',
         sessionId: 'orchestrator-pack-45',
         role: 'worker',
         status: 'working',
+        issueId: '690',
         branch: 'unrelated-branch',
-        ownedHeadSha: headSha,
       },
     ];
     const withoutEnrichment = planCiFailureReactionRecords({

@@ -249,8 +249,8 @@ describe('CI failure notification predicate (Issue #283 regressions)', () => {
       sessionId: targetId,
       role: 'worker',
       status: 'working',
+      issueId: '690',
       branch: 'unrelated-branch',
-      ownedHeadSha: headSha,
     };
     const openPrs = [{ number: 690, headRefOid: headSha, headRefName: 'issue-690-branch' }];
     const checks = {

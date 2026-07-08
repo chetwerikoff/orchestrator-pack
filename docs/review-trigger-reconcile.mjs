@@ -348,6 +348,13 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = [], opt
   }
 
   if (isEnrichedPrBinding(binding)) {
+    if (
+      binding.source === 'display_name' &&
+      currentHead &&
+      currentHead === target
+    ) {
+      return true;
+    }
     return false;
   }
 
