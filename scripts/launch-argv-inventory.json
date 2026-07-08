@@ -7648,10 +7648,10 @@
       }
     },
     {
-      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-208",
+      "rowId": "site-scripts-scripted-review-confirmed-delivery-gate-ps1-209",
       "caller": {
         "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 208
+        "line": 209
       },
       "callee": {
         "kind": "other-external",
@@ -7666,7 +7666,7 @@
       "hashPinnedSourceHash": "sha256:12be811369828c183334c390353fa1c95e8adb3ed9bc36dfadc1f38b449cb98a",
       "discoveryMatch": {
         "file": "scripts/scripted-review-confirmed-delivery-gate.ps1",
-        "line": 208,
+        "line": 209,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile"
@@ -8576,10 +8576,10 @@
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-738",
+      "rowId": "site-scripts-verify-ps1-739",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 738
+        "line": 739
       },
       "callee": {
         "kind": "other-external",
@@ -8591,10 +8591,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:83b05fd76bbb675d6d423dd16894417155d5a99e1555d575c57d7a8d3355284d",
+      "hashPinnedSourceHash": "sha256:18f40178ca75d6780e1df694b00e0068093d082def785724e34a2b9b5c11161c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 738,
+        "line": 739,
         "patternIds": [
           "ps-call-op"
         ]
@@ -8616,7 +8616,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:18f40178ca75d6780e1df694b00e0068093d082def785724e34a2b9b5c11161c",
+      "hashPinnedSourceHash": "sha256:83b05fd76bbb675d6d423dd16894417155d5a99e1555d575c57d7a8d3355284d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 756,
@@ -8676,11 +8676,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-793",
+      "rowId": "site-scripts-verify-ps1-810",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 793
+        "line": 810
       },
       "callee": {
         "kind": "other-external",
@@ -8695,23 +8694,17 @@
       "hashPinnedSourceHash": "sha256:d35073a793640191993e504b0530320dd9e4a1d979055f1553a3a2a230068ac7",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 793,
+        "line": 810,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-802",
+      "rowId": "site-scripts-verify-ps1-819",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 802
-=======
-      "rowId": "site-scripts-verify-ps1-801",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 801
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 819
       },
       "callee": {
         "kind": "other-external",
@@ -8726,36 +8719,7 @@
       "hashPinnedSourceHash": "sha256:6af46ae134cc9fdb089705e197012b440583a3bdfa641cc43649a3587322514d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 802,
-=======
-        "line": 801,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-820",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 820
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:20518f46428fb28534401d0e723e2168d1047a6d001972f79ff62dd266c6ede8",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 820,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 819,
         "patternIds": [
           "ps-call-op"
         ]
@@ -8937,11 +8901,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-947",
+      "rowId": "site-scripts-verify-ps1-964",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 947
+        "line": 964
       },
       "callee": {
         "kind": "other-external",
@@ -8956,23 +8919,17 @@
       "hashPinnedSourceHash": "sha256:cca022249a05fdfa50f1c60398cb0634ecf0a193fcf4aacc98a80ff9029a9644",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 947,
+        "line": 964,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-967",
+      "rowId": "site-scripts-verify-ps1-984",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 967
-=======
-      "rowId": "site-scripts-verify-ps1-966",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 966
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 984
       },
       "callee": {
         "kind": "other-external",
@@ -8987,28 +8944,17 @@
       "hashPinnedSourceHash": "sha256:3e9f6cf310ea0ca762b0b0d09b2379a5a751466d5591b01bd00efb07cac38a1e",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 967,
-=======
-        "line": 966,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 984,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-976",
+      "rowId": "site-scripts-verify-ps1-993",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 976
-=======
-      "rowId": "site-scripts-verify-ps1-975",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 975
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 993
       },
       "callee": {
         "kind": "other-external",
@@ -9023,28 +8969,17 @@
       "hashPinnedSourceHash": "sha256:75884e7178d89ddc21c448d6c92610dae8d4e68c2cfe5e9bab96b44c007e0508",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 976,
-=======
-        "line": 975,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 993,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1004",
+      "rowId": "site-scripts-verify-ps1-1021",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1004
-=======
-      "rowId": "site-scripts-verify-ps1-1003",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1003
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1021
       },
       "callee": {
         "kind": "other-external",
@@ -9059,28 +8994,17 @@
       "hashPinnedSourceHash": "sha256:5925b70fdaea5ba0c24eb1487e3dda5f180538025f8d14dd2ebfe53f3d00fda7",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1004,
-=======
-        "line": 1003,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1021,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1007",
+      "rowId": "site-scripts-verify-ps1-1024",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1007
-=======
-      "rowId": "site-scripts-verify-ps1-1006",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1006
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1024
       },
       "callee": {
         "kind": "other-external",
@@ -9095,28 +9019,17 @@
       "hashPinnedSourceHash": "sha256:73ffb603bfac959019232d051636221608f405f1a963480945637f73c74a9da5",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1007,
-=======
-        "line": 1006,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1024,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1019",
+      "rowId": "site-scripts-verify-ps1-1036",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1019
-=======
-      "rowId": "site-scripts-verify-ps1-1018",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1018
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1036
       },
       "callee": {
         "kind": "other-external",
@@ -9131,28 +9044,17 @@
       "hashPinnedSourceHash": "sha256:26b67f1de5c1fb02471febf45584f6ec2340c24d65a74ea2bd5ad41222f8a11e",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1019,
-=======
-        "line": 1018,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1036,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1048",
+      "rowId": "site-scripts-verify-ps1-1065",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1048
-=======
-      "rowId": "site-scripts-verify-ps1-1047",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1047
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1065
       },
       "callee": {
         "kind": "other-external",
@@ -9167,28 +9069,17 @@
       "hashPinnedSourceHash": "sha256:2e8ebe85b7b263de4d2f7626752944812f0bff362fa6293cac88f76ce2e0d13d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1048,
-=======
-        "line": 1047,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1065,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1051",
+      "rowId": "site-scripts-verify-ps1-1068",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1051
-=======
-      "rowId": "site-scripts-verify-ps1-1050",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1050
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1068
       },
       "callee": {
         "kind": "other-external",
@@ -9203,36 +9094,7 @@
       "hashPinnedSourceHash": "sha256:d2a39df1b90c52cdb33adedc2b4278b45bf66765273cf547a3be3655cf0e0be0",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1051,
-=======
-        "line": 1050,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1070",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1070
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:1d5431260087a5b0af527073939ed59a79d4ff0ff95bdde6590d3a2ef3c72284",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1070,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1068,
         "patternIds": [
           "ps-call-op"
         ]
@@ -9264,17 +9126,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1089",
+      "rowId": "site-scripts-verify-ps1-1106",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1089
-=======
-      "rowId": "site-scripts-verify-ps1-1104",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1104
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1106
       },
       "callee": {
         "kind": "other-external",
@@ -9289,11 +9144,7 @@
       "hashPinnedSourceHash": "sha256:405f77e79db692677dc976e5e5fcb2f61df16a9e4c29614b0abccf27b4e0a99c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1089,
-=======
-        "line": 1104,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1106,
         "patternIds": [
           "ps-call-op"
         ]
@@ -9325,11 +9176,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1123",
+      "rowId": "site-scripts-verify-ps1-1140",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1123
+        "line": 1140
       },
       "callee": {
         "kind": "other-external",
@@ -9344,23 +9194,17 @@
       "hashPinnedSourceHash": "sha256:b1a678ae143401b7075a913c291e625b95fd47ef060c6cff89ad046914771d58",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1123,
+        "line": 1140,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1144",
+      "rowId": "site-scripts-verify-ps1-1161",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1144
-=======
-      "rowId": "site-scripts-verify-ps1-1143",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1143
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1161
       },
       "callee": {
         "kind": "other-external",
@@ -9375,28 +9219,17 @@
       "hashPinnedSourceHash": "sha256:f48414c1803f83808e5d58ba40ad4a93e589e78dc808c52c5463f61e6bf58960",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1144,
-=======
-        "line": 1143,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1161,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1164",
+      "rowId": "site-scripts-verify-ps1-1181",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1164
-=======
-      "rowId": "site-scripts-verify-ps1-1163",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1163
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1181
       },
       "callee": {
         "kind": "other-external",
@@ -9411,36 +9244,7 @@
       "hashPinnedSourceHash": "sha256:546b1dc89f8df75285067d07b72aa6d4f0481dc77b2eb1de7c4f9f089239bdd8",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1164,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1184",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1184
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:09bb7e4a65993d391298bfd8994478d68e6d31e368b752adebf1d213b8b0bf0a",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1184,
-=======
-        "line": 1163,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1181,
         "patternIds": [
           "ps-call-op"
         ]
@@ -9497,16 +9301,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1248",
+      "rowId": "site-scripts-verify-ps1-1235",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1248
-=======
-      "rowId": "site-scripts-verify-ps1-1217",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1217
+        "line": 1235
       },
       "callee": {
         "kind": "other-external",
@@ -9521,18 +9319,17 @@
       "hashPinnedSourceHash": "sha256:d8c9e5b8abc660a0506363b849eafe2710e1e838161c5e7d39322065a6530b75",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1217,
+        "line": 1235,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1247",
+      "rowId": "site-scripts-verify-ps1-1265",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1247
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1265
       },
       "callee": {
         "kind": "other-external",
@@ -9547,28 +9344,17 @@
       "hashPinnedSourceHash": "sha256:b0dfd815dcd5e797e5731371692caea7b8cd71c09aa956ef3db356318d48a22b",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1248,
-=======
-        "line": 1247,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1265,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1270",
+      "rowId": "site-scripts-verify-ps1-1287",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1270
-=======
-      "rowId": "site-scripts-verify-ps1-1269",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1269
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1287
       },
       "callee": {
         "kind": "other-external",
@@ -9583,28 +9369,17 @@
       "hashPinnedSourceHash": "sha256:784d9215bea74b7612d40273068bdd0281e531f268f8850021058595006bcfa0",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1270,
-=======
-        "line": 1269,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1287,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1273",
+      "rowId": "site-scripts-verify-ps1-1290",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1273
-=======
-      "rowId": "site-scripts-verify-ps1-1272",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1272
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1290
       },
       "callee": {
         "kind": "other-external",
@@ -9619,28 +9394,17 @@
       "hashPinnedSourceHash": "sha256:376e3fa83e4c042f6b84e2dbc86a047a1eee04a1bd24df68ec8bb453f1be3ab8",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1273,
-=======
-        "line": 1272,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1290,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1299",
+      "rowId": "site-scripts-verify-ps1-1316",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1299
-=======
-      "rowId": "site-scripts-verify-ps1-1298",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1298
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1316
       },
       "callee": {
         "kind": "other-external",
@@ -9655,28 +9419,17 @@
       "hashPinnedSourceHash": "sha256:f4eaa2c0778cb6544805d56b6fb0d82e03b87ea3e3dbb5b8ac3ca69f38c89486",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1299,
-=======
-        "line": 1298,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1316,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1326",
+      "rowId": "site-scripts-verify-ps1-1343",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1326
-=======
-      "rowId": "site-scripts-verify-ps1-1325",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1325
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1343
       },
       "callee": {
         "kind": "other-external",
@@ -9691,28 +9444,17 @@
       "hashPinnedSourceHash": "sha256:80faed6512ed8b61db3574f74d68e02c467cb0889ccd80ea09bdd2f53112bf8a",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1326,
-=======
-        "line": 1325,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1343,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1342",
+      "rowId": "site-scripts-verify-ps1-1359",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1342
-=======
-      "rowId": "site-scripts-verify-ps1-1341",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1341
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1359
       },
       "callee": {
         "kind": "other-external",
@@ -9727,28 +9469,17 @@
       "hashPinnedSourceHash": "sha256:276fd8045f6a0c7d9d302e2f87ba45550795341a34296ee78f51b1a16855133b",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1342,
-=======
-        "line": 1341,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1359,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1361",
+      "rowId": "site-scripts-verify-ps1-1378",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1361
-=======
-      "rowId": "site-scripts-verify-ps1-1360",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1360
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1378
       },
       "callee": {
         "kind": "other-external",
@@ -9763,36 +9494,7 @@
       "hashPinnedSourceHash": "sha256:ed1246fc08f4aa95bf70757a0756e898991a470e6c1b0e9110c35a0967f377e6",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1361,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1367",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1367
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:4efaa51b05f2bc22286374d117cb8697478b81f047f15fadf3aef6a01d0a6f10",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1367,
-=======
-        "line": 1360,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1378,
         "patternIds": [
           "ps-call-op"
         ]
@@ -9824,16 +9526,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1392",
+      "rowId": "site-scripts-verify-ps1-1401",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1392
-=======
-      "rowId": "site-scripts-verify-ps1-1383",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1383
+        "line": 1401
       },
       "callee": {
         "kind": "other-external",
@@ -9848,18 +9544,17 @@
       "hashPinnedSourceHash": "sha256:6e57cc7a7d0d62c95d2cc1d5dfb0929af38c32434e3329275a898aad49fd8e90",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1383,
+        "line": 1401,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1391",
+      "rowId": "site-scripts-verify-ps1-1409",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1391
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1409
       },
       "callee": {
         "kind": "other-external",
@@ -9874,36 +9569,7 @@
       "hashPinnedSourceHash": "sha256:cd7212c7149849f9d25e3e1a53081ec1355a4892963ef42ffb7076ca3d916830",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1392,
-=======
-        "line": 1391,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1417",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1417
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:4b5402d4d1f2624067f6d6906b6fda8fe789acfe40a655acf0f73aa450ea71fb",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1417,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1409,
         "patternIds": [
           "ps-call-op"
         ]
@@ -9960,11 +9626,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1454",
+      "rowId": "site-scripts-verify-ps1-1471",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1454
+        "line": 1471
       },
       "callee": {
         "kind": "other-external",
@@ -9979,23 +9644,17 @@
       "hashPinnedSourceHash": "sha256:3ae41c8a5e4997361ea80b565b15e1d9b3aa6276758e195b2b64e36e20365e21",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1454,
+        "line": 1471,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1456",
+      "rowId": "site-scripts-verify-ps1-1473",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1456
-=======
-      "rowId": "site-scripts-verify-ps1-1455",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1455
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1473
       },
       "callee": {
         "kind": "other-external",
@@ -10010,28 +9669,17 @@
       "hashPinnedSourceHash": "sha256:3bcb6691053bc5248aa1a3f09e93363fbc2c5bd9e2995ca0dd7fde07aa4216ab",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1456,
-=======
-        "line": 1455,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1473,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1479",
+      "rowId": "site-scripts-verify-ps1-1496",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1479
-=======
-      "rowId": "site-scripts-verify-ps1-1478",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1478
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1496
       },
       "callee": {
         "kind": "other-external",
@@ -10046,36 +9694,7 @@
       "hashPinnedSourceHash": "sha256:e59b3789072c48d46b43a6d11b898f594208cf3fe33370b8308b97d3426f5579",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1479,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1502",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1502
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:609515fea47fc6b85a6e1830e3715c2fbc19f467a6e23c75dadfe7976f07ddf3",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1502,
-=======
-        "line": 1478,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1496,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10100,20 +9719,17 @@
       "hashPinnedSourceHash": "sha256:609515fea47fc6b85a6e1830e3715c2fbc19f467a6e23c75dadfe7976f07ddf3",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
         "line": 1519,
-=======
-        "line": 1501,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1518",
+      "rowId": "site-scripts-verify-ps1-1536",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1518
+        "line": 1536
       },
       "callee": {
         "kind": "other-external",
@@ -10128,33 +9744,7 @@
       "hashPinnedSourceHash": "sha256:63b27cd137bfe1a388b2d9a73400ff03221ca4c73c3462369f415e96dd239208",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1518,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1534",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1534
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:6c781d52cfc0e881b8372137d766924725d49f294fb93b0a9c8702718b6df966",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1534,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1536,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10261,17 +9851,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1607",
+      "rowId": "site-scripts-verify-ps1-1624",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1607
-=======
-      "rowId": "site-scripts-verify-ps1-1622",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1622
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1624
       },
       "callee": {
         "kind": "other-external",
@@ -10286,11 +9869,7 @@
       "hashPinnedSourceHash": "sha256:0e43bd637a2b0ccbf363ea87e991a008cf7ad9d2b3f9cf5cd84ff8cec38665e4",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1607,
-=======
-        "line": 1622,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1624,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10347,11 +9926,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1659",
+      "rowId": "site-scripts-verify-ps1-1676",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1659
+        "line": 1676
       },
       "callee": {
         "kind": "other-external",
@@ -10366,23 +9944,17 @@
       "hashPinnedSourceHash": "sha256:1d9514909d551464239ca3be09559d7444e6d3bb57f1ebdd8635ace304a5d386",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1659,
+        "line": 1676,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1675",
+      "rowId": "site-scripts-verify-ps1-1692",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1675
-=======
-      "rowId": "site-scripts-verify-ps1-1674",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1674
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1692
       },
       "callee": {
         "kind": "other-external",
@@ -10397,28 +9969,17 @@
       "hashPinnedSourceHash": "sha256:f45c5e3642c2144195df4062e7d09de75222ebc814abdb636715ab64c607e27c",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1675,
-=======
-        "line": 1674,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1692,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1691",
+      "rowId": "site-scripts-verify-ps1-1708",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1691
-=======
-      "rowId": "site-scripts-verify-ps1-1690",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1690
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1708
       },
       "callee": {
         "kind": "other-external",
@@ -10433,28 +9994,17 @@
       "hashPinnedSourceHash": "sha256:819a9285dd6093db9c9da8c43abef85fa2424fe275bfe967ae80497af8bf0852",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1691,
-=======
-        "line": 1690,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1708,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1707",
+      "rowId": "site-scripts-verify-ps1-1724",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1707
-=======
-      "rowId": "site-scripts-verify-ps1-1706",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1706
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1724
       },
       "callee": {
         "kind": "other-external",
@@ -10469,28 +10019,17 @@
       "hashPinnedSourceHash": "sha256:c0a8cec3591210ae0e6999c0fd01c917bd97b0a0ad48d74a3b2a682bea117409",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1707,
-=======
-        "line": 1706,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1724,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1723",
+      "rowId": "site-scripts-verify-ps1-1740",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1723
-=======
-      "rowId": "site-scripts-verify-ps1-1722",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1722
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1740
       },
       "callee": {
         "kind": "other-external",
@@ -10505,28 +10044,17 @@
       "hashPinnedSourceHash": "sha256:ad4bcd611a6b56a75a860c0a9819bcd5fb80f755f771b18d6bbc5354383af191",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1723,
-=======
-        "line": 1722,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1740,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1742",
+      "rowId": "site-scripts-verify-ps1-1759",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1742
-=======
-      "rowId": "site-scripts-verify-ps1-1741",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1741
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1759
       },
       "callee": {
         "kind": "other-external",
@@ -10541,28 +10069,17 @@
       "hashPinnedSourceHash": "sha256:839c64878d539dbe000abd69f7eae799b0deee1c84e55337047ec66f6b0a107d",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1742,
-=======
-        "line": 1741,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1759,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1764",
+      "rowId": "site-scripts-verify-ps1-1781",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1764
-=======
-      "rowId": "site-scripts-verify-ps1-1763",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1763
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1781
       },
       "callee": {
         "kind": "other-external",
@@ -10577,28 +10094,17 @@
       "hashPinnedSourceHash": "sha256:893c65eff44d9f062303bfc66c3e23d8d90cfcfc990966c18fd603fa559c9aee",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1764,
-=======
-        "line": 1763,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1781,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1783",
+      "rowId": "site-scripts-verify-ps1-1800",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1783
-=======
-      "rowId": "site-scripts-verify-ps1-1782",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1782
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1800
       },
       "callee": {
         "kind": "other-external",
@@ -10613,36 +10119,7 @@
       "hashPinnedSourceHash": "sha256:b41ee620fa978608e3f07798eacc6708960f6b1daba4d827afae87d2d2e43662",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1783,
-=======
-        "line": 1782,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1804",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1804
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:c79c5dff19118c6adb728872d0bd4bf097eb837a9e49eae5ff1023c4cd8588ce",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1804,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1800,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10674,11 +10151,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1823",
+      "rowId": "site-scripts-verify-ps1-1840",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1823
+        "line": 1840
       },
       "callee": {
         "kind": "other-external",
@@ -10693,23 +10169,17 @@
       "hashPinnedSourceHash": "sha256:a7f57b112e7bdc9d97edbf657afb031533a0292fed4b50c0c552547d9d04b7c2",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1823,
+        "line": 1840,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1839",
+      "rowId": "site-scripts-verify-ps1-1856",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1839
-=======
-      "rowId": "site-scripts-verify-ps1-1838",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1838
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1856
       },
       "callee": {
         "kind": "other-external",
@@ -10724,36 +10194,7 @@
       "hashPinnedSourceHash": "sha256:1a96dbeae0ca49556c04307305cc5a69faf48271a190886488af54660f1a8ec0",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1839,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1855",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1855
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:c98fe3d16ba97583c17c3a7d1885e96c462b1d872ecbe48fe130f164457899ca",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1855,
-=======
-        "line": 1838,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1856,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10785,16 +10226,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1888",
+      "rowId": "site-scripts-verify-ps1-1889",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1888
-=======
-      "rowId": "site-scripts-verify-ps1-1871",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1871
+        "line": 1889
       },
       "callee": {
         "kind": "other-external",
@@ -10809,18 +10244,17 @@
       "hashPinnedSourceHash": "sha256:bae3268467f52aa77c9f185985c975952f58884c62c977d3b121c65c20ebd4f3",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1871,
+        "line": 1889,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1887",
+      "rowId": "site-scripts-verify-ps1-1905",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1887
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1905
       },
       "callee": {
         "kind": "other-external",
@@ -10835,36 +10269,7 @@
       "hashPinnedSourceHash": "sha256:d848c7e5ccf3abb14f6d42a05af34fb982ffe963e9f125ed4d32e149b039edec",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1888,
-=======
-        "line": 1887,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-verify-ps1-1903",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1903
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:c68ad4e612c143ec47b0083ca941c522a6231330a340a114da67895b3eab4cf2",
-      "discoveryMatch": {
-        "file": "scripts/verify.ps1",
-        "line": 1903,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1905,
         "patternIds": [
           "ps-call-op"
         ]
@@ -10896,11 +10301,10 @@
       }
     },
     {
-<<<<<<< HEAD
-      "rowId": "site-scripts-verify-ps1-1922",
+      "rowId": "site-scripts-verify-ps1-1939",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1922
+        "line": 1939
       },
       "callee": {
         "kind": "other-external",
@@ -10915,23 +10319,17 @@
       "hashPinnedSourceHash": "sha256:fc573ee2cd005a6fd4c17635188e4477ad99d97a96b11299e1c22ef62085bb1b",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 1922,
+        "line": 1939,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-1944",
+      "rowId": "site-scripts-verify-ps1-1961",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 1944
-=======
-      "rowId": "site-scripts-verify-ps1-1943",
-      "caller": {
-        "file": "scripts/verify.ps1",
-        "line": 1943
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1961
       },
       "callee": {
         "kind": "other-external",
@@ -10946,11 +10344,7 @@
       "hashPinnedSourceHash": "sha256:67bc08b4941687977569e0199567e326bfc16959406693c23e96ab4cc395e631",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-<<<<<<< HEAD
-        "line": 1944,
-=======
-        "line": 1943,
->>>>>>> 4dc6075a (Refresh launch-argv inventory for post-submit delivery wiring.)
+        "line": 1961,
         "patternIds": [
           "ps-call-op"
         ]
