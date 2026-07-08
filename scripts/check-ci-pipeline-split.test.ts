@@ -159,6 +159,8 @@ describe('vitest runtime-history refresh workflow binding (#691)', () => {
     expect(yaml).toMatch(/needs:.*test-vitest-heavy/);
     expect(yaml).toMatch(/download-artifact@v4/);
     expect(yaml).toMatch(/upload-artifact@v4/);
+    expect(yaml).toMatch(/include-hidden-files:\s*true/);
+    expect(yaml).toMatch(/if-no-files-found:\s*error/);
     expect(yaml).toMatch(/refresh-vitest-runtime-history\.ps1/);
   });
 });

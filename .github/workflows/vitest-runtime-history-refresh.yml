@@ -50,6 +50,8 @@ jobs:
           path: |
             .vitest-runtime-report-heavy-${{ matrix.shard }}.json
             .vitest-runtime-report-heavy-${{ matrix.shard }}.json.meta.json
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
 
   refresh-runtime-history:

@@ -417,6 +417,12 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
         if ($heavyRefreshJob -notmatch 'upload-artifact@v4' -or $heavyRefreshJob -notmatch 'vitest-heavy-report') {
             Add-Fail 'test-vitest-heavy refresh workflow job must upload heavy shard runtime reports'
         }
+        if ($heavyRefreshJob -notmatch 'include-hidden-files:\s*true') {
+            Add-Fail 'test-vitest-heavy refresh workflow upload must set include-hidden-files: true (reports are dotfiles)'
+        }
+        if ($heavyRefreshJob -notmatch 'if-no-files-found:\s*error') {
+            Add-Fail 'test-vitest-heavy refresh workflow upload must set if-no-files-found: error'
+        }
         if ($heavyRefreshJob -notmatch 'run-vitest-heavy-shard\.ps1') {
             Add-Fail 'test-vitest-heavy refresh workflow job must invoke run-vitest-heavy-shard.ps1'
         }
