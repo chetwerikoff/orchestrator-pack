@@ -3544,48 +3544,6 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-241",
-      "caller": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 241
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 241,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-244",
-      "caller": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 244
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Invoke-AoCliJson.ps1",
-        "line": 244,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
       "rowId": "site-scripts-lib-Invoke-DraftTextGuard-ps1-22",
       "caller": {
         "file": "scripts/lib/Invoke-DraftTextGuard.ps1",
@@ -10773,6 +10731,155 @@
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 2045,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-ci-failure-notification-reconcile-ps1-302",
+      "caller": {
+        "file": "scripts/ci-failure-notification-reconcile.ps1",
+        "line": 302
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/ci-failure-notification-reconcile.ps1",
+        "line": 302,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-ci-green-wake-reconcile-ps1-416",
+      "caller": {
+        "file": "scripts/ci-green-wake-reconcile.ps1",
+        "line": 416
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/ci-green-wake-reconcile.ps1",
+        "line": 416,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-dead-worker-reconcile-ps1-190",
+      "caller": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 190
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 190,
+        "patternIds": [
+          "call-pwsh"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-243",
+      "caller": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 243
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 243,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-246",
+      "caller": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 246
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 246,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-313",
+      "caller": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 313
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 313,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-AoCliJson-ps1-316",
+      "caller": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 316
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-AoCliJson.ps1",
+        "line": 316,
         "patternIds": [
           "ps-call-op"
         ]
