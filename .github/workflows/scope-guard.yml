@@ -171,6 +171,14 @@ jobs:
           Push-Location $trustedRoot
           try {
             npm ci --include=dev
+            # PR-head pr-scope-check.ts imports workspace packages; resolve them from the
+            # trusted base install without running npm (and lifecycle scripts) on PR head.
+            $trustedNodeModules = Join-Path $trustedRoot 'node_modules'
+            $prNodeModules = Join-Path $env:GITHUB_WORKSPACE 'node_modules'
+            if (Test-Path -LiteralPath $prNodeModules) {
+              Remove-Item -LiteralPath $prNodeModules -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType SymbolicLink -Path $prNodeModules -Target $trustedNodeModules -Force | Out-Null
             & $guardScript
           }
           finally {

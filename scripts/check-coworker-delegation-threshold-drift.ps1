@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Drift guard for coworker delegation T1 volume floor (Issue #255).
+  Drift guard for coworker delegation T1 volume floor (Issue #255, retarget #678).
 #>
 param(
     [string]$RepoRoot
@@ -11,15 +11,15 @@ param(
 $gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
 $RepoRoot = $gate.RepoRoot
 
-$canonical = Join-Path $RepoRoot 'prompts/agent_rules.md'
+$canonical = Join-Path $RepoRoot 'AGENTS.md'
 if (-not (Test-Path -LiteralPath $canonical)) {
-    Write-Host "[FAIL] missing canonical policy: prompts/agent_rules.md"
+    Write-Host "[FAIL] missing canonical policy: AGENTS.md"
     exit 1
 }
 
 $canonicalText = Get-Content -LiteralPath $canonical -Raw
 if ($canonicalText -notmatch 'more than 400 lines') {
-    Write-Host '[FAIL] prompts/agent_rules.md must state T1 volume floor of 400 lines'
+    Write-Host '[FAIL] AGENTS.md must state T1 volume floor of 400 lines'
     exit 1
 }
 
@@ -30,11 +30,8 @@ $staleVolumePatterns = @(
 )
 
 $trackedPolicyGlobs = @(
-    'prompts/agent_rules.md',
     'AGENTS.md',
-    'CLAUDE.md',
-    '.cursor/rules/coworker-delegation.mdc',
-    '.cursor/rules/coworker-rtk-read-exploration.mdc'
+    'CLAUDE.md'
 )
 
 $failures = [System.Collections.Generic.List[string]]::new()

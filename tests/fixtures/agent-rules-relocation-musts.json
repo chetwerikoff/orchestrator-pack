@@ -1,0 +1,206 @@
+{
+  "description": "Worker-normative MUST/trigger/skip-case phrases from pre-PR prompts/agent_rules.md (Issue #678 AC#2). Generated from merge-base snapshot; mustPhrases must appear in AGENTS.md verbatim.",
+  "mustPhrases": [
+    "First action (AO pickup)",
+    "Tracker and role policy",
+    "Scope discipline",
+    "Queued task specs",
+    "Shared source of truth",
+    "Upgrade-safe AO usage",
+    "Build the minimum (no unrequested abstraction)",
+    "Coworker CLI delegation",
+    "RTK read-exploration",
+    "`gh` wrapper transport",
+    "Command-runtime bootstrap",
+    "Review / CI / Handoff worker contract",
+    "Managed session constraints",
+    "Task complexity tiering",
+    "Operator adoption handoff",
+    "Read delegation (`coworker ask`)",
+    "Write delegation (`coworker write`)",
+    "Excepted reasoning steps",
+    "Mandatory profiles",
+    "Ask triggers (delegable out-of-index corpus)",
+    "Required CI (CI green)",
+    "Worker CI gate (`ready_for_review` and self-fix)",
+    "PR created hand-off (initial path)",
+    "Review feedback and AO review response",
+    "Review-cycle cap (Issue #646)",
+    "Worker pre-flight (blocking)",
+    "Operator-only merge and failed runs",
+    "ao acknowledge",
+    "Self-fix is primary",
+    "ready_for_review",
+    "stop and escalate upward",
+    "never silently proceed",
+    "index-coverage carve-out",
+    "Cursor-seat advisory floor",
+    "more than 400 lines",
+    "more than 200 lines",
+    "delegate I/O, keep reasoning",
+    "Never compact",
+    "MUST pass `--profile code`",
+    "MUST pass `--profile write`",
+    "MUST go through pack\n`scripts/gh`",
+    "MUST NOT improvise raw `curl`",
+    "MUST NOT merge",
+    "**must not** idle",
+    "fail closed",
+    "Managed sessions MUST NOT run `ao stop`",
+    "PACK_REVIEWER path MUST NOT go through coworker",
+    "Closes #N",
+    "do not broaden scope",
+    "scrubbed diff/spec artifacts",
+    "mapping_pending",
+    "mapping must not block review availability",
+    "cheap provider",
+    "resolve-bound-issue-snapshot",
+    "candidate evidence only",
+    "secrets or personal/third-party private data",
+    "must not run `ao-declare`",
+    "inventory-listed canonical forms",
+    "no dotfile edits or temp wrappers",
+    "/tmp/gh-rest-bin/gh",
+    "#522/#527",
+    "Green CI alone is not exit",
+    "silent disengagement",
+    "Do not invent review triggers",
+    "Orchestrator escalation ack (issue #641)",
+    "REMOVED",
+    "clean_early_stop",
+    "at_cap_open_findings",
+    "fixing_ci",
+    "addressing_reviews",
+    "Before autonomous orchestrator command turns",
+    "Local Codex PR review **is active**",
+    "Script-owned orchestrator review starters and predicates",
+    "Do not author `/tmp/gh-rest-bin/gh`",
+    "unset GH_WRAPPER_ACTIVE",
+    "gh api graphql",
+    "Do **not** `ao report ready_for_review` while required CI is not green",
+    "Worker self-drive is primary",
+    "- Link every branch and PR to its source issue; PR bodies must include",
+    "**Mandatory profiles.** Every `coworker ask` MUST pass `--profile code`. Every",
+    "`coworker write` MUST pass `--profile write` unless the task issue names another.",
+    "excerpts. `--target` for `coworker write` MUST stay inside declared scope.",
+    "not MUST — see carve-outs below.",
+    "On Linux-hosted surfaces with pack `scripts/` on PATH, **every GitHub read** MUST go through",
+    "agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`, throwaway temporary",
+    "**MUST NOT merge** or direct others to merge. After clean review and green CI,",
+    "Managed sessions MUST NOT run `ao stop`, `ao start`, `ao restart`, or edit user"
+  ],
+  "docsOnlyPhrases": [
+    {
+      "phrase": "event-driven review trigger",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "PRE-RUN COVERAGE RE-CHECK",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "PRE-RUN HEAD-READY RE-CHECK",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Deferred-head review re-evaluation",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Review finding delivery",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Review-status reader contract",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Report-state review-start seed",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Autonomous dead-worker respawn",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "CI-green orchestrator nudge",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Orchestrator review-run coverage",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Head ready for review",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "EMPTY REVIEW TRAP",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "Script-owned procedure",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "never `ao spawn`",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "review-head-ready.mjs",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "startReason=report_state_seed",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "allowReconcileDeadWorkerRespawn",
+      "path": "docs/script-owned-review-pipeline.md"
+    }
+  ],
+  "pointerOnlyPhrases": [
+    {
+      "phrase": "recurrence-diagnostic",
+      "paths": [
+        "prompts/investigate_root_cause.md",
+        ".cursor/rules/rca-spec-discipline.mdc"
+      ]
+    },
+    {
+      "phrase": "5-Whys stop condition",
+      "paths": [
+        "prompts/investigate_root_cause.md",
+        ".cursor/rules/rca-spec-discipline.mdc"
+      ]
+    },
+    {
+      "phrase": "behavior-kind",
+      "paths": [
+        "prompts/investigate_root_cause.md",
+        ".cursor/rules/rca-spec-discipline.mdc"
+      ]
+    },
+    {
+      "phrase": "positive-outcome",
+      "paths": [
+        "prompts/investigate_root_cause.md",
+        ".cursor/rules/rca-spec-discipline.mdc"
+      ]
+    },
+    {
+      "phrase": "parked-root-cause",
+      "paths": [
+        "prompts/investigate_root_cause.md",
+        ".cursor/rules/rca-spec-discipline.mdc"
+      ]
+    },
+    {
+      "phrase": "terminal root cause",
+      "paths": [
+        "prompts/investigate_root_cause.md",
+        ".cursor/rules/rca-spec-discipline.mdc"
+      ]
+    }
+  ]
+}

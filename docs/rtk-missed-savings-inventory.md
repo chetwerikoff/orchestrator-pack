@@ -203,7 +203,7 @@ If a future **go** decision lands after §6 is green:
 ## 8. Low-risk guidance (AC4)
 
 Source attribution is unavailable (§1). Guidance is a **single caller-independent canonical
-rule** in [`prompts/agent_rules.md`](../prompts/agent_rules.md) (**RTK read-exploration**)
+rule** in [`AGENTS.md`](../AGENTS.md) (**RTK read-exploration**)
 with #149-style thin pointers from `AGENTS.md` and `.cursor/rules/`.
 
 **Rule (summary):** for read-only file exploration, prefer the agent's dedicated file tools
@@ -214,7 +214,7 @@ needed. Chasing RTK adoption % is explicitly out of scope.
 
 1. Regenerate this inventory on the operator host (§2) and archive the markdown/JSON if useful.
 2. No passthrough or enablement change is required for the **no-go** path.
-3. Workers load updated read-exploration guidance via `agentRulesFile` after `ao stop` /
-   `ao start` when `prompts/agent_rules.md` changed.
+3. Pull tracked `AGENTS.md` into worker worktrees (native pickup on AO 0.10.2+ — no
+   `agentRulesFile` key); recycle live worker sessions after merge.
 
 See also [migration_notes.md](migration_notes.md) (RTK net-savings #199).

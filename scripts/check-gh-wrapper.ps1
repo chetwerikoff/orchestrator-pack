@@ -48,10 +48,10 @@ foreach ($item in $required) {
     }
 }
 
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
-$rulesText = Get-Content -LiteralPath $agentRules -Raw
+$agentsMd = Join-Path $Root 'AGENTS.md'
+$rulesText = Get-Content -LiteralPath $agentsMd -Raw
 if ($rulesText -notmatch 'scripts/gh') {
-    Write-Host 'prompts/agent_rules.md must document scripts/gh REST inventory routing'
+    Write-Host 'AGENTS.md must document scripts/gh REST inventory routing'
     exit 1
 }
 

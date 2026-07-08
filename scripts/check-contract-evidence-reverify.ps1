@@ -508,7 +508,7 @@ function Invoke-Ac13ReviewerFlowE2e {
 }
 
 $requiredPaths = @(
-    (Join-Path $Root 'prompts/agent_rules.md'),
+    (Join-Path $Root 'AGENTS.md'),
     (Join-Path $Root 'prompts/codex_review_prompt.md'),
     (Join-Path $Root 'scripts/invoke-contract-evidence-reverify.ps1'),
     (Join-Path $Root 'scripts/launch-contract-evidence-reverify.ps1'),
@@ -526,7 +526,7 @@ Test-ReviewerPolicyRequiredFiles -Root $Root -RequiredPaths $requiredPaths -Fail
 
 if ($failures.Count -eq 0) {
     $prompts = Get-ReviewerPolicyPromptTexts -Root $Root
-    Test-ReviewerPolicyPromptPhrases -Label 'prompts/agent_rules.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
+    Test-ReviewerPolicyPromptPhrases -Label 'AGENTS.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
         'Checkpoint-2 contract-evidence re-verification',
         'candidate evidence only',
         'launch-contract-evidence-reverify.ps1',

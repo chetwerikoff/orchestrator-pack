@@ -1,16 +1,16 @@
 # CLAUDE.md
 
 > For Claude Code sessions only. Rules surface by entrypoint — do not assume every tool reads
-> `prompts/agent_rules.md` natively: **Codex** → [`AGENTS.md`](AGENTS.md); **standalone Cursor CLI**
-> → [`.cursor/rules/`](.cursor/rules/) (always-applied project rules); **AO-injected workers** →
-> [`prompts/agent_rules.md`](prompts/agent_rules.md) via `agentRulesFile`. Task specs come from the
-> GitHub issue body. Do not duplicate universal worker policy here.
+> the same file natively: **Codex and AO workers** → [`AGENTS.md`](AGENTS.md); **standalone Cursor CLI**
+> → [`.cursor/rules/`](.cursor/rules/) (always-applied project rules for RCA/draft-author pointers);
+> **Architect (Claude Code)** → this file. Task specs come from the GitHub issue body. Do not duplicate
+> universal worker policy here.
 
 ## Coworker CLI delegation (canonical policy)
 
 Before delegating work to the external `coworker` CLI, read and follow the **Coworker CLI
-delegation** section in [`prompts/agent_rules.md`](prompts/agent_rules.md) (single source of
-truth). Do not paste or paraphrase the full policy in this file. Fan-out surfaces: §S in
+delegation** section in [`AGENTS.md`](AGENTS.md) (single source of truth). Do not paste or
+paraphrase the full policy in this file. Fan-out surfaces: §S in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
 ## Review wiring
@@ -18,7 +18,7 @@ truth). Do not paste or paraphrase the full policy in this file. Fan-out surface
 Local Codex PR review **is active**. AO runs it via `ao review run`, `send`,
 `list`, and `execute`; orchestration lives in `orchestratorRules` in
 `agent-orchestrator.yaml`. See [`README.md`](README.md#local-codex-review-active),
-[`prompts/agent_rules.md`](prompts/agent_rules.md), and
+[`AGENTS.md`](AGENTS.md), and
 [`docs/architecture.md`](docs/architecture.md#review-paths). On AO 0.9.x, a
 `reviewer:` YAML block is silently ignored (no schema error) — use
 `orchestratorRules` and the `ao review` CLI instead.
@@ -99,7 +99,7 @@ what gets built, in what order, with what boundaries. The planner
 - Bypass the review loop (`gh pr merge` without Codex review completing).
 - Touch `packages/core/**` or `vendor/**`.
 - Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.
-  Fix the spec or `prompts/agent_rules.md` instead.
+  Fix the spec or `AGENTS.md` instead.
 
 ## Sources of truth (priority order)
 
@@ -108,7 +108,7 @@ what gets built, in what order, with what boundaries. The planner
 3. **`docs/issues_drafts/`** — canonical local drafts (edit here first).
 4. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
 5. **`agent-orchestrator.yaml`** (local, gitignored) — current AO wiring.
-6. **`prompts/agent_rules.md`** — universal rules every agent sees.
+6. **`AGENTS.md`** — universal worker/agent rules (Cursor + Codex workers).
 7. **`ao review list`** + `code-reviews/findings/` — freshest reviewer signal.
 
 ## Planner freedom (non-negotiable)
@@ -141,5 +141,5 @@ produces churn:
 3. Fix at the spec / contract / rule level. The planner re-converges on
    the next iteration; never hand-patch merged code as the durable fix.
 4. Capture the lesson as an acceptance criterion in the upstream draft,
-   a `prompts/agent_rules.md` clause, or a memory entry — the smallest
+   an `AGENTS.md` clause, or a memory entry — the smallest
    durable change that prevents recurrence.

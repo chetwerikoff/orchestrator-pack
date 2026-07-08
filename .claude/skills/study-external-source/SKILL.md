@@ -27,7 +27,7 @@ The bulk reading of an external source is exactly the I/O this pack delegates:
 **you do not read the source yourself — `coworker` does.** Keep the judgment,
 conclusions, and adoption decisions on the main reasoning model; push the
 fetch-and-summarise legwork to the cheap model. See the **Coworker CLI
-delegation** policy in [`prompts/agent_rules.md`](../../../prompts/agent_rules.md)
+delegation** policy in [`AGENTS.md`](../../../AGENTS.md)
 (single source of truth) for the profile and code-gate rules.
 
 **Critical: `coworker` has no network.** `coworker ask` reads only local files

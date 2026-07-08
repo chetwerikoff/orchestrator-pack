@@ -29,7 +29,7 @@ On AO 0.9.x there is no `reviewer:` YAML role that AO reads — if you add
 it; wire review through `orchestratorRules` and `ao review`, not a `reviewer:`
 key.
 
-See also: [`prompts/agent_rules.md`](prompts/agent_rules.md),
+See also: [`AGENTS.md`](AGENTS.md),
 [`docs/architecture.md`](docs/architecture.md#review-paths),
 [`docs/github_issues_cursor_codex_setup.md`](docs/github_issues_cursor_codex_setup.md),
 and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/README.md).
@@ -37,8 +37,7 @@ and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/READ
 ## What this pack adds
 
 - `agent-orchestrator.yaml.example` — Linux-first AO config example (Ubuntu / WSL2, pwsh 7+).
-- `prompts/agent_rules.md` — portable safety rules injected through
-  `agentRulesFile`.
+- `AGENTS.md` — portable safety rules for AO workers (native pickup on AO 0.10.2+).
 - `prompts/self_architect_check.md` — concise self-review block for agents.
 - `plugins/*/README.md` — external plugin contracts only; no core patches.
 - `scripts/bootstrap.ps1` — safe helper for checking prerequisites and optionally
@@ -236,10 +235,11 @@ Copy-Item agent-orchestrator.yaml.example agent-orchestrator.yaml
 # edit with your preferred editor, e.g. nano or $EDITOR on Linux
 ```
 
-Keep this line in the project block so AO injects the pack's portable rules:
+Keep worker rules in the tracked `AGENTS.md` file — AO 0.10.2+ workers pick it up natively
+from the worktree (recycle worker sessions after merge; no `agentRulesFile` key):
 
 ```yaml
-agentRulesFile: prompts/agent_rules.md
+# Worker rules: AGENTS.md (native pickup — no agentRulesFile on AO 0.10.2+)
 ```
 
 The example deliberately sets:

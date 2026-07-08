@@ -199,7 +199,7 @@ $requiredFiles = @(
     'docs/github_issues_cursor_codex_setup.md',
     'docs/repository_policy.md',
     'prompts/self_architect_check.md',
-    'prompts/agent_rules.md',
+    'AGENTS.md',
     'plugins/README.md',
     'plugins/ao-task-declaration/README.md',
     'plugins/ao-scope-guard/README.md',
@@ -223,11 +223,11 @@ $promptFiles = @()
 if (Test-Path -LiteralPath $promptDir -PathType Container) {
     $promptFiles = @(Get-ChildItem -LiteralPath $promptDir -Filter '*.md' -File -ErrorAction SilentlyContinue)
 }
-if ($promptFiles.Count -ge 2) {
+if ($promptFiles.Count -ge 1) {
     Write-Check 'prompts/*.md' 'PASS' (('{0} prompt files found: {1}' -f $promptFiles.Count, (($promptFiles | ForEach-Object { $_.Name }) -join ', ')))
 }
 else {
-    Write-Check 'prompts/*.md' 'FAIL' 'expected at least agent_rules.md and self_architect_check.md'
+    Write-Check 'prompts/*.md' 'FAIL' 'expected at least self_architect_check.md'
     Add-Failure 'Missing prompt markdown files'
 }
 
@@ -242,7 +242,7 @@ Write-Host ''
 Write-Host '== Operator adoption example guard (Issue #101) =='
 $operatorAdoptionCheck = Join-Path $Root 'scripts/check-operator-adoption-example.ps1'
 if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
-    & $operatorAdoptionCheck -ChangedPaths @('prompts/agent_rules.md') -PrBody ''
+    & $operatorAdoptionCheck -ChangedPaths @('AGENTS.md') -PrBody ''
     if ($LASTEXITCODE -ne 0) {
         Write-Check 'operator-adoption/skip-no-example' 'FAIL' "exit=$LASTEXITCODE"
         Add-Failure 'Operator adoption guard: expected pass when example not in diff'
@@ -1543,11 +1543,11 @@ else {
 }
 
 Write-Host ''
-Write-Host '== Agent rules restructure guards (Issue #654) =='
+Write-Host '== AGENTS.md delivery guards (Issue #678) =='
 foreach ($check in @(
-        @{ Path = 'scripts/check-agent-rules-line-budget.ps1'; Label = 'agent-rules line budget (Issue #654)' },
-        @{ Path = 'scripts/check-agent-rules-moved-content.ps1'; Label = 'agent-rules moved-content guard (Issue #654)' },
-        @{ Path = 'scripts/check-agent-rules-grep-inventory.ps1'; Label = 'agent-rules grep-consumer inventory (Issue #654)' }
+        @{ Path = 'scripts/check-agent-rules-line-budget.ps1'; Label = 'AGENTS.md size budget (Issue #678)' },
+        @{ Path = 'scripts/check-agent-rules-moved-content.ps1'; Label = 'AGENTS.md moved-content guard (Issue #678)' },
+        @{ Path = 'scripts/check-agent-rules-grep-inventory.ps1'; Label = 'AGENTS.md live-ref guard (Issue #678)' }
     )) {
     $scriptPath = Join-Path $Root $check.Path
     if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {

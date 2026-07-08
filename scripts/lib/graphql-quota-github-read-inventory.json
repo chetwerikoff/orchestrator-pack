@@ -16,7 +16,7 @@
       "scripts/pr-scope-check.ps1"
     ],
     "rules": [
-      "prompts/agent_rules.md",
+      "AGENTS.md",
       "prompts/investigate_root_cause.md",
       "agent-orchestrator.yaml.example"
     ]

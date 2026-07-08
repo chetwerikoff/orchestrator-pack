@@ -1,7 +1,8 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Fail-closed inventory guard for prompts/agent_rules.md grep consumers (Issue #654).
+  Fail-closed live-reference guard: no normative prompts/agent_rules.md or bare
+  agent_rules.md references (Issue #678).
 #>
 param(
     [string]$RepoRoot
@@ -11,61 +12,62 @@ param(
 $gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
 $RepoRoot = $gate.RepoRoot
 
-$inventoryPath = Join-Path $RepoRoot 'scripts/agent-rules-grep-inventory.json'
-if (-not (Test-Path -LiteralPath $inventoryPath)) {
-    Write-Host '[FAIL] missing scripts/agent-rules-grep-inventory.json'
-    exit 1
-}
-
-$inventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
-$allowed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($row in @($inventory.consumers)) {
-    [void]$allowed.Add([string]$row.path)
-}
-
-$scriptsRoot = Join-Path $RepoRoot 'scripts'
-$patterns = @(
-    'agent_rules\.md',
-    "Join-Path[^\n]*agent_rules",
-    'Get-Content[^\n]*agent_rules',
-    'prompts/agent_rules'
+$excludePrefixes = @(
+    'docs/declarations/',
+    'docs/issues_drafts/',
+    '.ao/',
+    '.git/',
+    'node_modules/',
+    'trusted-scope-guard/'
 )
 
-$discovered = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-Get-ChildItem -LiteralPath $scriptsRoot -Recurse -File |
-    Where-Object { $_.Extension -in '.ps1', '.mjs', '.ts', '.js' } |
+$patterns = @(
+    'prompts/agent_rules\.md',
+    'prompts\\agent_rules\.md',
+    '(?<![\w/\\])agent_rules\.md'
+)
+
+$failures = [System.Collections.Generic.List[string]]::new()
+Get-ChildItem -LiteralPath $RepoRoot -Recurse -File |
+    Where-Object {
+        $rel = $_.FullName.Substring($RepoRoot.Length).TrimStart('/', '\') -replace '\\', '/'
+        foreach ($prefix in $excludePrefixes) {
+            if ($rel.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                return $false
+            }
+        }
+        return $true
+    } |
     ForEach-Object {
         $rel = $_.FullName.Substring($RepoRoot.Length).TrimStart('/', '\') -replace '\\', '/'
-        $text = Get-Content -LiteralPath $_.FullName -Raw
+        if ($rel -eq 'scripts/check-agent-rules-grep-inventory.ps1') {
+            return
+        }
+        if ($rel.StartsWith('tests/fixtures/', [StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+        if ($rel -eq 'tests/agents-md-relocation.test.ts') {
+            return
+        }
+        $text = Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue
+        if ([string]::IsNullOrEmpty($text)) {
+            return
+        }
         foreach ($pattern in $patterns) {
             if ($text -match $pattern) {
-                [void]$discovered.Add($rel)
+                $failures.Add("$rel references retired agent_rules.md")
                 break
             }
         }
     }
 
-$failures = [System.Collections.Generic.List[string]]::new()
-foreach ($consumer in $discovered) {
-    if (-not $allowed.Contains($consumer)) {
-        $failures.Add("uninventoried agent_rules consumer: $consumer")
-    }
-}
-
-foreach ($row in @($inventory.consumers)) {
-    $path = Join-Path $RepoRoot ([string]$row.path)
-    if (-not (Test-Path -LiteralPath $path)) {
-        $failures.Add("inventory row missing on disk: $($row.path)")
-    }
-}
-
 if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] agent-rules grep-consumer inventory:'
+    Write-Host '[FAIL] live references to retired agent_rules.md:'
     foreach ($item in $failures) {
         Write-Host " - $item"
     }
     exit 1
 }
 
-Write-Host "[PASS] agent-rules grep-consumer inventory ($($discovered.Count) consumers inventoried)"
+Write-Host '[PASS] no live normative references to agent_rules.md'
 exit 0

@@ -95,7 +95,7 @@ problem, not probe failure.
 
 ## Red CI with idle worker (Issue #109)
 
-**Required CI** matches `prompts/agent_rules.md` and `orchestratorRules` in
+**Required CI** matches `AGENTS.md` and `orchestratorRules` in
 `agent-orchestrator.yaml.example`: GitHub **required status checks** for the PR base
 when branch protection lists them; otherwise all pack merge-contract checks on the
 PR head (`scope-guard` jobs: Verify orchestrator-pack structure, PR scope guard, Run
@@ -757,7 +757,7 @@ hold on the **same** head:
 |-----------|--------|
 | Session owns PR current head | `ownedHeadSha` / PR head match |
 | Runtime alive | `runtime: alive` (not `exited` / `process_missing`) |
-| Required merge-contract CI green | Same definition as `ready_for_review` in `agent_rules.md` |
+| Required merge-contract CI green | Same definition as `ready_for_review` in `AGENTS.md` |
 | Last `ready_for_review` for that head | Report `headRefOid` matches current head |
 | Covering **clean** run | `status: clean`, `findingCount: 0`, same head + `linkedSessionId` |
 

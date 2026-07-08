@@ -14,7 +14,7 @@ documented below alongside the event listener.
 
 **AO 0.10 adoption (#623 / #625):** use `scripts/orchestrator-wake-supervisor.ps1` to supervise
 all reconcile children; restart the supervisor (or `ao stop` / `ao start` when registry changes)
-after merging harness updates. Live procedure is `prompts/agent_rules.md` + side-process scripts —
+after merging harness updates. Live procedure is `AGENTS.md` + side-process scripts —
 `orchestratorRules` in live YAML is legacy-import reference only.
 
 After each merged worker PR, run that PR's **`## Operator adoption`** checklist
@@ -27,7 +27,7 @@ and the matching steps in
 | Capability | Where |
 |------------|--------|
 | Autonomous loop rules (legacy reference) | `agent-orchestrator.yaml.example` → `orchestratorRules` |
-| Live worker + orchestrator review contract | `prompts/agent_rules.md` |
+| Live worker + orchestrator review contract | `AGENTS.md` |
 | Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
 | AO 0.10 review shim | `scripts/ao-review.ps1` (`run` / `list`; `send`/`execute` REMOVED) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |

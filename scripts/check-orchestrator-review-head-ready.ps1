@@ -7,15 +7,15 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $headReadyMjs = Join-Path $Root 'docs/review-head-ready.mjs'
 $loopMjs = Join-Path $Root 'docs/review-orchestrator-loop.mjs'
 $reconcileMjs = Join-Path $Root 'docs/review-trigger-reconcile.mjs'
 
-Assert-RequiredPathsExist -Paths @($example, $agentRules, $headReadyMjs, $loopMjs, $reconcileMjs)
+Assert-RequiredPathsExist -Paths @($example, $scriptOwnedDoc, $headReadyMjs, $loopMjs, $reconcileMjs)
 
 $exampleText = Get-Content -LiteralPath $example -Raw
-$rulesText = Get-Content -LiteralPath $agentRules -Raw
+$rulesText = Get-Content -LiteralPath $scriptOwnedDoc -Raw
 
 $requiredExample = @(
     'HEAD READY FOR REVIEW',
@@ -53,7 +53,7 @@ $requiredRules = @(
 
 $missingRules = @($requiredRules | Where-Object { $rulesText -notlike "*$_*" })
 if ($missingRules.Count -gt 0) {
-    Write-Host ("prompts/agent_rules.md missing Issue #195 mirror phrases: {0}" -f ($missingRules -join ', '))
+    Write-Host ("docs/script-owned-review-pipeline.md missing Issue #195 mirror phrases: {0}" -f ($missingRules -join ', '))
     exit 1
 }
 

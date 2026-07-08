@@ -8,11 +8,11 @@ $Root = Split-Path -Parent $PSScriptRoot
 $inventory = Join-Path $Root 'docs/review-status-consumer-inventory.md'
 $aoCli = Join-Path $Root 'scripts/lib/Invoke-AoCliJson.ps1'
 $testFile = Join-Path $Root 'scripts/review-status-consumer.test.ts'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $exampleYaml = Join-Path $Root 'agent-orchestrator.yaml.example'
 $diagnose = Join-Path $Root 'scripts/orchestrator-diagnose.ps1'
 
-foreach ($path in @($inventory, $aoCli, $testFile, $agentRules, $exampleYaml, $diagnose)) {
+foreach ($path in @($inventory, $aoCli, $testFile, $scriptOwnedDoc, $exampleYaml, $diagnose)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Write-Host "Missing required file: $path"
         exit 1
@@ -66,10 +66,10 @@ if ($diagnoseRaw -notmatch 'reportSourcePath') {
     exit 1
 }
 
-$rulesRaw = Get-Content -LiteralPath $agentRules -Raw
+$rulesRaw = Get-Content -LiteralPath $scriptOwnedDoc -Raw
 if ($rulesRaw -notlike '*Review-status reader contract*' -or
     $rulesRaw -notlike '*Get-AoStatusSessionsWithReports*') {
-    Write-Host 'prompts/agent_rules.md missing review-status reader contract section'
+    Write-Host 'docs/script-owned-review-pipeline.md missing review-status reader contract section'
     exit 1
 }
 
