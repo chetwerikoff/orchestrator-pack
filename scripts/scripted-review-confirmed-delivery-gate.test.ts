@@ -443,6 +443,28 @@ describe('post-submit resolver (Issue #669 wiring)', () => {
     expect(found).toMatchObject({ ok: true, runId: 'run-complete', status: 'complete' });
   });
 
+  it('binds already-delivered run from fast auto-delivery on current head', () => {
+    const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
+    const found = findSubmittedReviewRun(
+      [
+        {
+          id: 'run-delivered-fresh',
+          prNumber: 673,
+          targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+          linkedSessionId: 'orchestrator-pack-36',
+          latestRunStatus: 'delivered',
+          createdAt: '2026-07-08T05:00:05.000Z',
+        },
+      ],
+      {
+        prNumber: 673,
+        targetSha: 'af610b671378b266ea0c4f8ce95b2e38ff2c334e',
+        submitObservedAfterMs,
+      },
+    );
+    expect(found).toMatchObject({ ok: true, runId: 'run-delivered-fresh', status: 'delivered' });
+  });
+
   it('ignores stale delivered same-head run while waiting for fresh submit', () => {
     const submitObservedAfterMs = Date.parse('2026-07-08T05:00:00.000Z');
     const found = findSubmittedReviewRun(

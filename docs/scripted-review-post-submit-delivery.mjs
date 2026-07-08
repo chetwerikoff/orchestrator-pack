@@ -8,7 +8,7 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 export const DEFAULT_SUBMIT_VISIBILITY_MS = 30 * 1000;
 export const DEFAULT_SUBMIT_VISIBILITY_INTERVAL_MS = 1000;
 export const ENV_SUBMIT_VISIBILITY_SECONDS = 'AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS';
-export const SUBMIT_BIND_TERMINAL_STATUSES = new Set(['complete', 'failed']);
+export const SUBMIT_BIND_TERMINAL_STATUSES = new Set(['complete', 'failed', 'delivered']);
 export const SUBMIT_BIND_LOOKBACK_MS = 15 * 1000;
 
 /**
@@ -110,7 +110,8 @@ export function buildScriptedReviewDeliveryMessage(input) {
 
 /**
  * Bind the review run created by the just-finished ao review submit.
- * Ignores prior delivered rows and stale same-head terminal rows from earlier cycles.
+ * Accepts complete, failed, and delivered terminal rows; stale same-head rows from
+ * earlier cycles are excluded by submitObservedAfterMs lookback.
  *
  * @param {Array<Record<string, unknown>>} reviewRuns
  * @param {{ prNumber?: number, targetSha?: string, submitObservedAfterMs?: number }} submit
