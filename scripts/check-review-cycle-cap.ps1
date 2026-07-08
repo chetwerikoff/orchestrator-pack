@@ -142,9 +142,9 @@ if ($exampleYaml -notmatch 'T1.*2|T2.*4|T3.*8|distinct-head') {
     exit 1
 }
 
-$agentRules = Get-Content -LiteralPath (Join-Path $Root 'prompts/agent_rules.md') -Raw
+$agentRules = Get-Content -LiteralPath (Join-Path $Root 'AGENTS.md') -Raw
 if ($agentRules -notlike '*review-cycle-cap*' -and $agentRules -notlike '*review cycle cap*') {
-    Write-Host 'prompts/agent_rules.md missing review-cycle-cap pointer'
+    Write-Host 'AGENTS.md missing review-cycle-cap pointer'
     exit 1
 }
 

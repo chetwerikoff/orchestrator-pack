@@ -340,6 +340,13 @@ evidence. On delivered findings: **must not** idle — use `addressing_reviews` 
 Script-owned orchestrator review starters and predicates:
 [`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
 
+#### Review-cycle cap (Issue #646)
+
+Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on
+reconcile/reeval/wake/turn surfaces; uses #611 pre-fetched runs only. Tier caps T1=2/T2=4/T3=8
+(default T2): first clean head → `clean_early_stop`; at cap with findings → `at_cap_open_findings`
+(Brief B triage).
+
 #### Worker pre-flight (blocking)
 
 Before implementation, **re-run the tier marker check with fresh eyes**. If reality exceeds the
