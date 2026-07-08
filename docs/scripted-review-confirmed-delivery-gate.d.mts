@@ -141,3 +141,7 @@ export declare function buildGateEscalationMessage(input: {
 export declare function resolveGateConfigFromEnv(
   env?: Record<string, string | undefined>,
 ): GateConfig;
+
+export declare const SUPERVISOR_PARENT_WAIT_GRACE_MS: number;
+export declare function resolveSupervisorParentWaitMs(config?: Record<string, unknown>): number;
+export declare function inferSupervisorChildExitFromLogs(logText: unknown): number;
