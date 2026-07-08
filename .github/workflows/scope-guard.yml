@@ -168,6 +168,14 @@ jobs:
             $guardScript = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
           }
 
+          Push-Location $env:GITHUB_WORKSPACE
+          try {
+            npm ci --include=dev
+          }
+          finally {
+            Pop-Location
+          }
+
           Push-Location $trustedRoot
           try {
             npm ci --include=dev
