@@ -422,9 +422,11 @@ export function syncReviewCycleCapState(input) {
   let prState = normalizePrCapCycleState(capStateRoot, prNumber);
 
   if (
-    prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
-    prState.terminalHeadSha &&
-    prState.terminalHeadSha !== currentHeadSha
+    (prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
+      prState.terminalHeadSha &&
+      prState.terminalHeadSha !== currentHeadSha) ||
+    (prState.mergeEligible &&
+      (!prState.terminalHeadSha || prState.terminalHeadSha !== currentHeadSha))
   ) {
     prState = openFreshCycle({ ...input, prNumber, nowMs });
   }
@@ -460,7 +462,7 @@ export function syncReviewCycleCapState(input) {
   prState.distinctHeadsReviewed = distinctHeads;
 
   const cleanEntry = [...budget].reverse().find((entry) => entry.classification.kind === 'clean');
-  if (cleanEntry) {
+  if (cleanEntry && cleanEntry.targetSha === currentHeadSha) {
     prState.terminal = TERMINAL_CLEAN_EARLY_STOP;
     prState.terminalHeadSha = cleanEntry.targetSha;
     prState.mergeEligible = true;
@@ -630,7 +632,9 @@ export function evaluateReviewCycleCapGate(input) {
     allowStart: true,
     reason: 'cap_gate_open',
     terminal: null,
-    mergeEligible: prState.mergeEligible,
+    mergeEligible:
+      prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
+      prState.terminalHeadSha === currentHeadSha,
     capState: synced.capState,
     prState,
   };

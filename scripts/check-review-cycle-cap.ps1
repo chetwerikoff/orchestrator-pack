@@ -51,6 +51,18 @@ if ($capPs -match '\$env:AO_ISSUE_NUMBER[\s\S]*Get-IssueNumberFromPrDiff') {
     Write-Host 'Get-ReviewCycleCapIssueBody must resolve per-PR issue via Get-IssueNumberFromPrDiff before AO_ISSUE_NUMBER'
     exit 1
 }
+if ($capPs -notmatch 'Get-ReviewCycleCapWorkerPrNumber') {
+    Write-Host 'Review-CycleCap.ps1 must scope AO_ISSUE_NUMBER to the active worker PR'
+    exit 1
+}
+if ($capPs -notmatch 'workerPr -gt 0 -and \$workerPr -eq \$PrNumber') {
+    Write-Host 'Get-ReviewCycleCapIssueBody must apply AO_ISSUE_NUMBER only when worker PR matches'
+    exit 1
+}
+if ($capMjs -notmatch 'cleanEntry\.targetSha === currentHeadSha') {
+    Write-Host 'review-cycle-cap.mjs must only inherit clean_early_stop merge eligibility on the current head'
+    exit 1
+}
 
 $claimedRunPs = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1') -Raw
 if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {

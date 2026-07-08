@@ -69,6 +69,20 @@ function Evaluate-ReviewCycleCapGate {
     return Invoke-ReviewCycleCapFilterCli -Subcommand 'evaluateGate' -Payload $Payload
 }
 
+function Get-ReviewCycleCapWorkerPrNumber {
+    $workerPr = 0
+    if ($env:AO_PR_NUMBER) {
+        [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$workerPr)
+    }
+    elseif ($env:GITHUB_PULL_REQUEST_NUMBER) {
+        [void][int]::TryParse([string]$env:GITHUB_PULL_REQUEST_NUMBER, [ref]$workerPr)
+    }
+    elseif ($env:GITHUB_PR_NUMBER) {
+        [void][int]::TryParse([string]$env:GITHUB_PR_NUMBER, [ref]$workerPr)
+    }
+    return $workerPr
+}
+
 function Get-ReviewCycleCapIssueBody {
     param(
         [Parameter(Mandatory)]
@@ -98,9 +112,20 @@ function Get-ReviewCycleCapIssueBody {
         if ($fromDiff) {
             $issueNumber = [int]$fromDiff
         }
+        if ($issueNumber -le 0 -and (Get-Command gh -ErrorAction SilentlyContinue)) {
+            $prView = Get-GhPrContextFromView -RepoRoot $RepoRoot -PrNumber $PrNumber
+            $ctx = [pscustomobject]@{ PrNumber = $null; IssueNumber = $null }
+            Set-AutoReviewResultFromPrView -Result $ctx -PrView $prView
+            if ($ctx.IssueNumber) {
+                $issueNumber = [int]$ctx.IssueNumber
+            }
+        }
     }
     if ($issueNumber -le 0 -and $env:AO_ISSUE_NUMBER) {
-        [void][int]::TryParse([string]$env:AO_ISSUE_NUMBER, [ref]$issueNumber)
+        $workerPr = Get-ReviewCycleCapWorkerPrNumber
+        if ($workerPr -gt 0 -and $workerPr -eq $PrNumber) {
+            [void][int]::TryParse([string]$env:AO_ISSUE_NUMBER, [ref]$issueNumber)
+        }
     }
 
     $normalizedHead = ([string]$HeadSha).Trim().ToLowerInvariant()

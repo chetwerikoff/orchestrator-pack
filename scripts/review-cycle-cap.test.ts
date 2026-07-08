@@ -109,6 +109,12 @@ describe('cap gate uses review status reader', () => {
     expect(capPsHelperSource).toMatch(/review-cycle-cap\.mjs/);
     expect(capPsHelperSource).not.toMatch(/\bao\s+review\s+list\b/i);
   });
+
+  it('Review-CycleCap.ps1 scopes AO_ISSUE_NUMBER to worker PR only', () => {
+    expect(capPsHelperSource).toMatch(/Get-ReviewCycleCapWorkerPrNumber/);
+    expect(capPsHelperSource).toMatch(/workerPr -gt 0 -and \$workerPr -eq \$PrNumber/);
+    expect(capPsHelperSource).toMatch(/Get-GhPrContextFromView/);
+  });
 });
 
 describe('tier default T2 cap 4', () => {
@@ -513,6 +519,38 @@ describe('review cycle cap scenario matrix', () => {
     expect(gate.allowStart).toBe(true);
     expect(gate.prState?.distinctHeadsReviewed).toEqual([]);
     expect(gate.prState?.cycleOpenedAtUtc).toBeTruthy();
+  });
+
+  it('absent cap state does not inherit mergeEligible from historical clean on prior head', () => {
+    const oldHead = 'old-clean'.padEnd(40, 'o');
+    const newHead = 'new-head'.padEnd(40, 'n');
+    const runs = [
+      { prNumber: pr, targetSha: oldHead, status: 'up_to_date', openFindingCount: 0, completedAt: '2026-07-01T00:00:00Z' },
+    ];
+    const gate = run(pr, newHead, runs, { capState: {}, nowMs: Date.parse('2026-07-02T00:00:00Z') });
+    expect(gate.mergeEligible).toBe(false);
+    expect(gate.terminal).not.toBe(TERMINAL_CLEAN_EARLY_STOP);
+    expect(gate.allowStart).toBe(true);
+  });
+
+  it('stale mergeEligible on prior clean head resets before evaluating new head', () => {
+    const oldHead = 'old-clean'.padEnd(40, 'o');
+    const newHead = 'new-head'.padEnd(40, 'n');
+    const runs = [
+      { prNumber: pr, targetSha: oldHead, status: 'up_to_date', openFindingCount: 0, completedAt: '2026-07-01T00:00:00Z' },
+    ];
+    const gate = run(pr, newHead, runs, {
+      capState: {
+        [String(pr)]: {
+          mergeEligible: true,
+          terminalHeadSha: oldHead,
+          terminal: TERMINAL_CLEAN_EARLY_STOP,
+        },
+      },
+      nowMs: Date.parse('2026-07-02T00:00:00Z'),
+    });
+    expect(gate.mergeEligible).toBe(false);
+    expect(gate.allowStart).toBe(true);
   });
 
 
