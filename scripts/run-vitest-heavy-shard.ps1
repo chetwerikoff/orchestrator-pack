@@ -38,30 +38,63 @@ try {
     }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $fileArgs = @()
-    foreach ($file in $shardPlan.files) {
-        $fileArgs += $file
+    $partialReports = [System.Collections.Generic.List[string]]::new()
+    $failedExitCode = 0
+
+    try {
+        foreach ($file in $shardPlan.files) {
+            $safeName = ($file -replace '[^\w.\-]+', '_')
+            $partialReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-$safeName.json"
+            if (Test-Path -LiteralPath $partialReportPath) {
+                Remove-Item -LiteralPath $partialReportPath -Force
+            }
+
+            # Run one heavy file per Vitest invocation so long shard suites do not
+            # starve vitest-worker onTaskUpdate RPC (#487/#556; shard 6 flake class).
+            $output = & npm test -- $file --pool=threads --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
+            $text = ($output | Out-String)
+            Write-Host $text
+
+            if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
+                Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard (file: $file)"
+                exit 1
+            }
+
+            if ($LASTEXITCODE -ne 0) {
+                $failedExitCode = $LASTEXITCODE
+                continue
+            }
+
+            if (-not (Test-Path -LiteralPath $partialReportPath)) {
+                Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
+                exit 1
+            }
+
+            $partialReports.Add($partialReportPath) | Out-Null
+        }
+
+        if ($failedExitCode -ne 0) {
+            exit $failedExitCode
+        }
+
+        $mergeArgs = @(
+            (Join-Path $Root 'scripts/lib/vitest-json-report.mjs'),
+            'merge',
+            '--output',
+            $RuntimeReportPath
+        ) + $partialReports
+        & node @mergeArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Vitest heavy shard $Shard failed to merge per-file JSON reports"
+            exit 1
+        }
     }
-
-    # forks pool + long subprocess suites (e.g. review-start-preflight-shield from #597)
-    # starve vitest-worker onTaskUpdate RPC; threads stays serial via maxWorkers=1 in config.
-    $output = & npm test -- @fileArgs --pool=threads --reporter=default --reporter=json --outputFile=$RuntimeReportPath 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = ($output | Out-String)
-    Write-Host $text
-
-    if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
-        Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard"
-        exit 1
-    }
-
-    if ($exitCode -ne 0) {
-        exit $exitCode
-    }
-
-    if (-not (Test-Path -LiteralPath $RuntimeReportPath)) {
-        Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard"
-        exit 1
+    finally {
+        foreach ($partialReportPath in $partialReports) {
+            if (Test-Path -LiteralPath $partialReportPath) {
+                Remove-Item -LiteralPath $partialReportPath -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     $metaPath = "$RuntimeReportPath.meta.json"

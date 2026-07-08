@@ -2,7 +2,7 @@
 /**
  * Shared Vitest --reporter=json per-file duration parsing (Issues #488, #691).
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 export function normalizeFilePath(file, repoRoot) {
   const normalized = String(file ?? 'unknown').replace(/\\/g, '/');
@@ -81,4 +81,53 @@ export function collectFromVitestJson(payload, repoRoot) {
 export function parseVitestReportFile(reportPath, repoRoot) {
   const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
   return collectFromVitestJson(payload, repoRoot);
+}
+
+export function mergeVitestJsonPayloads(payloads) {
+  const testResults = [];
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== 'object') {
+      continue;
+    }
+    if (Array.isArray(payload.testResults)) {
+      testResults.push(...payload.testResults);
+    }
+  }
+  return { testResults };
+}
+
+export function mergeVitestReportFiles(reportPaths, outputPath) {
+  const payloads = reportPaths.map((reportPath) =>
+    JSON.parse(readFileSync(reportPath, 'utf8')),
+  );
+  const merged = mergeVitestJsonPayloads(payloads);
+  writeFileSync(outputPath, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  return merged;
+}
+
+function parseMergeCli(argv) {
+  if (argv[0] !== 'merge') {
+    return null;
+  }
+  let outputPath = '';
+  const reportPaths = [];
+  for (let index = 1; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--output') {
+      outputPath = argv[++index] ?? '';
+      continue;
+    }
+    reportPaths.push(arg);
+  }
+  if (!outputPath || reportPaths.length === 0) {
+    throw new Error('usage: node vitest-json-report.mjs merge --output <path> <report>...');
+  }
+  return { outputPath, reportPaths };
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const cli = parseMergeCli(process.argv.slice(2));
+  if (cli) {
+    mergeVitestReportFiles(cli.reportPaths, cli.outputPath);
+  }
 }
