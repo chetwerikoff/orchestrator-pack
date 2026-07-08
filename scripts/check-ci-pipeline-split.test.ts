@@ -145,3 +145,22 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     expect(hits.length).toBeGreaterThan(0);
   });
 });
+
+describe('vitest runtime-history refresh workflow binding (#691)', () => {
+  it('refresh workflow is main-only with concurrency and artifact handoff', () => {
+    const refreshWorkflow = join(repoRoot, '.github/workflows/vitest-runtime-history-refresh.yml');
+    const yaml = readFileSync(refreshWorkflow, 'utf8');
+    expect(yaml).toMatch(/push:[\s\S]*branches:[\s\S]*main/);
+    expect(yaml).toMatch(/schedule:/);
+    expect(yaml).toMatch(/workflow_dispatch:/);
+    expect(yaml).not.toMatch(/pull_request:/);
+    expect(yaml).toMatch(/concurrency:/);
+    expect(yaml).toMatch(/refresh-runtime-history:/);
+    expect(yaml).toMatch(/needs:.*test-vitest-heavy/);
+    expect(yaml).toMatch(/download-artifact@v4/);
+    expect(yaml).toMatch(/upload-artifact@v4/);
+    expect(yaml).toMatch(/include-hidden-files:\s*true/);
+    expect(yaml).toMatch(/if-no-files-found:\s*error/);
+    expect(yaml).toMatch(/refresh-vitest-runtime-history\.ps1/);
+  });
+});

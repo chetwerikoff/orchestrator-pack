@@ -107,6 +107,24 @@ See Issue #487 rollback in git history — restore monolithic `tests` job with
 - **Promotion:** aggregate job keeps **Run pack contract tests**.
 - **Rollback:** see above; aggregate name and fail-closed semantics stay constant.
 
+## Runtime-history refresh (Issue #691)
+
+Measured per-file durations from heavy-shard Vitest JSON reports refresh
+`scripts/vitest-runtime-history.json` on **main push**, **weekly schedule**, and
+**workflow_dispatch** via `.github/workflows/vitest-runtime-history-refresh.yml`.
+The refresh does **not** run on ordinary PR events.
+
+- Smoothing rule: `median-of-last-5-samples` (spike-resistant; not last-run-wins)
+- Provenance gate: all heavy shards must succeed at a matching commit; partial,
+  failed, mismatched, or unclassified paths are rejected without mutating history
+- Race-safe single-writer commit-back with idempotent no-op when data is unchanged
+- Durable per-entry provenance (`measured` / `seeded` / `fallback`) sits beside the
+  numeric `files` map consumed by Issue #556 LPT assignment
+- `dataChangedAt` records when a file weight last changed (not validation-only reruns)
+
+Guards and fixtures live in `scripts/check-ci-pipeline-split.ps1` and
+`scripts/lib/vitest-runtime-history-merge.fixture.mjs`.
+
 ## Verification
 
 ```powershell
