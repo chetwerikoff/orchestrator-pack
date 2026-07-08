@@ -614,6 +614,62 @@ describe('checkPrScope — implementation', () => {
       reason: 'missing_snapshot',
     });
   });
+
+  it('validates against issue allowed_roots when declaration snapshots are denylisted', () => {
+    const repoRoot = join(tmpdir(), `scope-guard-impl-${randomUUID()}`);
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #678',
+      issueBody: [
+        '```denylist',
+        'docs/declarations/**',
+        '```',
+        '',
+        '```allowed-roots',
+        'scripts/**',
+        '```',
+      ].join('\n'),
+      prPaths: ['scripts/pr-scope-check.ts'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'implementation',
+    });
+    if (result.ok && result.mode === 'implementation') {
+      expect(result.snapshot).toBeUndefined();
+      expect(result.warnings.some((warning) => warning.includes('issue-fence scope'))).toBe(true);
+    }
+  });
+
+  it('rejects denylisted control-artifact paths before skipping them', () => {
+    const repoRoot = join(tmpdir(), `scope-guard-impl-${randomUUID()}`);
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #678',
+      issueBody: [
+        '```denylist',
+        'docs/declarations/**',
+        '```',
+        '',
+        '```allowed-roots',
+        'AGENTS.md',
+        'scripts/**',
+        '```',
+      ].join('\n'),
+      prPaths: ['docs/declarations/678.test.json', 'AGENTS.md'],
+      degradedMode: false,
+      forkPr: false,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'scope_violation',
+    });
+    if (!result.ok && result.violations) {
+      expect(result.violations.denied).toContain('docs/declarations/678.test.json');
+    }
+  });
 });
 
 describe('classifySpecDocsPaths — skill markdown boundary', () => {
