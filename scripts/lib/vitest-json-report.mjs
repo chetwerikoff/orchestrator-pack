@@ -78,6 +78,22 @@ export function collectFromVitestJson(payload, repoRoot) {
   return { tests, files };
 }
 
+export function isCleanVitestJsonReport(payload) {
+  return payload?.success === true && Number(payload?.numFailedTests ?? 1) === 0;
+}
+
+export function isCleanVitestJsonReportFile(reportPath) {
+  if (!reportPath) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
+    return isCleanVitestJsonReport(payload);
+  } catch {
+    return false;
+  }
+}
+
 export function parseVitestReportFile(reportPath, repoRoot) {
   const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
   return collectFromVitestJson(payload, repoRoot);
@@ -106,6 +122,11 @@ export function mergeVitestReportFiles(reportPaths, outputPath) {
 }
 
 function parseMergeCli(argv) {
+  if (argv[0] === 'is-clean') {
+    const reportPath = argv[1] ?? '';
+    process.stdout.write(isCleanVitestJsonReportFile(reportPath) ? '1\n' : '0\n');
+    process.exit(0);
+  }
   if (argv[0] !== 'merge') {
     return null;
   }

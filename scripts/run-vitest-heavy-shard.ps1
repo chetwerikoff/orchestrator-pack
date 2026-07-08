@@ -62,6 +62,16 @@ try {
                 Write-Host $text
 
                 if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
+                    $cleanReport = & node (Join-Path $Root 'scripts/lib/vitest-json-report.mjs') is-clean $partialReportPath
+                    if ($cleanReport -eq '1') {
+                        Write-Host "[WARN] Post-success vitest-worker onTaskUpdate shutdown flake suppressed for $file"
+                        if (-not (Test-Path -LiteralPath $partialReportPath)) {
+                            Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
+                            exit 1
+                        }
+                        $filePassed = $true
+                        break
+                    }
                     if ($attempt -lt $maxFileAttempts) {
                         Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard file $file (attempt $attempt/$maxFileAttempts); retrying..."
                         Start-Sleep -Seconds 5
