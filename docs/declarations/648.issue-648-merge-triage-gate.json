@@ -20,6 +20,7 @@
     "scripts/lib/Merge-TriageGate.ps1",
     "scripts/merge-triage-gate.ps1",
     "scripts/merge-triage.test.ts",
+    "scripts/audit-jsonl-retention.test.ts",
     "scripts/verify.ps1",
     "scripts/vitest-ci-lanes.config.json"
   ],
