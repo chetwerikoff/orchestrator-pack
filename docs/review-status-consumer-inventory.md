@@ -24,7 +24,7 @@ the live-only invariant when terminated sessions are excluded.
 | `scripts/lib/Worker-Recovery.ps1` | not a worker-report consumer | recovery spawn identity | n/a |
 | `scripts/ci-failure-notification-reconcile.ps1` | not a worker-report consumer | CI failure reaction routing | n/a |
 | `agent-orchestrator.yaml.example` orchestrator rules | ad-hoc prompt diagnostic (governed) | Must use `$.data[]` + report-full reader contract prose | n/a |
-| `prompts/agent_rules.md` review-status section | ad-hoc prompt diagnostic (governed) | Must use `Get-AoStatusSessionsWithReports` / explicit audit path | n/a |
+| `AGENTS.md` review-status section | ad-hoc prompt diagnostic (governed) | Must use `Get-AoStatusSessionsWithReports` / explicit audit path | n/a |
 
 ## Reader contract
 

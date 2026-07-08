@@ -10,7 +10,7 @@ $triggerMjs = Join-Path $Root 'docs/review-wake-trigger.mjs'
 $triggerLib = Join-Path $Root 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'
 $supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $wakeRunbook = Join-Path $Root 'docs/orchestrator-wake-runbook.md'
 
 foreach ($path in @($listenerScript, $triggerMjs, $triggerLib)) {
@@ -157,8 +157,8 @@ if ($supervisor -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
     exit 1
 }
 
-if ((Get-Content -LiteralPath $agentRules -Raw) -notlike '*event-driven review trigger*') {
-    Write-Host 'prompts/agent_rules.md missing event-driven review trigger section'
+if ((Get-Content -LiteralPath $scriptOwnedDoc -Raw) -notlike '*event-driven review trigger*') {
+    Write-Host 'docs/script-owned-review-pipeline.md missing event-driven review trigger section'
     exit 1
 }
 

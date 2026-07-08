@@ -58,10 +58,10 @@ Get-ChildItem -LiteralPath $rulesDir -Filter '*.mdc' -File | ForEach-Object {
     }
 }
 
-$canonical = Join-Path $RepoRoot 'prompts/agent_rules.md'
+$canonical = Join-Path $RepoRoot 'AGENTS.md'
 $canonicalText = Get-Content -LiteralPath $canonical -Raw
 if ($canonicalText -notmatch 'index-coverage carve-out') {
-    $failures.Add('prompts/agent_rules.md missing index-coverage carve-out prose')
+    $failures.Add('AGENTS.md missing index-coverage carve-out prose')
 }
 
 if ($failures.Count -gt 0) {

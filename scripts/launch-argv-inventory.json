@@ -7922,7 +7922,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:3b22b03d1bd9478f452933a3f6637fbb7f5629907e5b0dc42d41f575b2ecde05",
+      "hashPinnedSourceHash": "sha256:4e824e090b4a953f01b7cf8cbd110d7074768f3c29b9628563c212e136f71669",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
         "line": 245,

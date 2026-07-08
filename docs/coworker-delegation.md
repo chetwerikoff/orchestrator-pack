@@ -1,6 +1,6 @@
 # Coworker CLI delegation (deep-dive)
 
-Worker **core contract** lives in [`prompts/agent_rules.md`](../prompts/agent_rules.md) (**Coworker CLI delegation**). This page holds examples, the PR-diff recipe, and rationale — not duplicate enforcement prose.
+Worker **core contract** lives in [`AGENTS.md`](../AGENTS.md) (**Coworker CLI delegation**). This page holds examples, the PR-diff recipe, and rationale — not duplicate enforcement prose.
 
 ## PR diff recipe (reviewers)
 
@@ -15,10 +15,10 @@ coworker ask --profile code --allow-code \
 
 ## Worked example (read delegation)
 
-Root-cause work must read ~900 lines across `prompts/agent_rules.md`, a config file, and a runtime log. The 400-line and 3-file (≥400 combined) triggers fire.
+Root-cause work must read ~900 lines across `AGENTS.md`, a config file, and a runtime log. The 400-line and 3-file (≥400 combined) triggers fire.
 
 **Correct:** scrub the log fence-clean, then
-`coworker ask --profile code --paths prompts/agent_rules.md <config> <scrubbed-log> --question "extract the evidence relevant to ..."`
+`coworker ask --profile code --paths AGENTS.md <config> <scrubbed-log> --question "extract the evidence relevant to ..."`
 extracts/summarises the minimal needed excerpt; you reason over the cheap-model summary and write the root-cause conclusion yourself.
 
 **Wrong:** append the file list after `--question` without `--paths`, or label the whole task “root-cause” and inline all 900 lines — the reasoning exception does not cover the reading.

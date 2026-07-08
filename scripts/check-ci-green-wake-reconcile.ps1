@@ -6,9 +6,9 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $text = Get-Content -LiteralPath $example -Raw
-$rules = Get-Content -LiteralPath $agentRules -Raw
+$rules = Get-Content -LiteralPath $scriptOwnedDoc -Raw
 $wakeScript = Join-Path $Root 'scripts/ci-green-wake-reconcile.ps1'
 $wakeMjs = Join-Path $Root 'docs/ci-green-wake-reconcile.mjs'
 
@@ -41,7 +41,7 @@ if ($missing.Count -gt 0) {
 }
 
 if ($rules -notlike '*CI-green orchestrator nudge*') {
-    Write-Host 'prompts/agent_rules.md missing CI-green orchestrator nudge section'
+    Write-Host 'docs/script-owned-review-pipeline.md missing CI-green orchestrator nudge section'
     exit 1
 }
 

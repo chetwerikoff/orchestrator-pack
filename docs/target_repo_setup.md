@@ -77,10 +77,12 @@ notepad agent-orchestrator.yaml
 ```
 
 Edit the `projects:` block for your repository: set `repo`, `path`, and
-`defaultBranch`. Keep:
+`defaultBranch`. Worker rules live in tracked `AGENTS.md` — AO 0.10.2+ workers
+pick it up natively from the worktree (recycle worker sessions after merge; no
+`agentRulesFile` key):
 
 ```yaml
-agentRulesFile: prompts/agent_rules.md
+# Worker rules: AGENTS.md (native pickup — no agentRulesFile on AO 0.10.2+)
 ```
 
 Do not add unsupported YAML fields (for example a top-level `reviewer:` role).

@@ -32,7 +32,7 @@ instead (same safety rules, different entrypoint).
 
 **Managed-session guard:** run AO session lifecycle commands and worktree probes only
 from the **operator terminal** (this Cursor skill). AO-managed worker sessions MUST NOT
-run lifecycle or git commands inside AO worktrees (`prompts/agent_rules.md`).
+run lifecycle or git commands inside AO worktrees (`AGENTS.md`).
 
 ---
 
@@ -144,7 +144,7 @@ Stop without merging if:
 
 Optional when AO review is in play: `ao review list orchestrator-pack --json` for
 the PR head — do not merge on open/sent findings or empty failed runs (see
-`prompts/agent_rules.md`).
+`AGENTS.md`).
 
 ---
 

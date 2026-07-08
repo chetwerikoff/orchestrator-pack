@@ -39,7 +39,7 @@ $reconcileRoots = @(
 )
 
 $ruleSurfaceRoots = @(
-    (Join-Path $Root 'prompts/agent_rules.md'),
+    (Join-Path $Root 'AGENTS.md'),
     (Join-Path $Root 'prompts/investigate_root_cause.md'),
     (Join-Path $Root 'agent-orchestrator.yaml.example')
 )

@@ -77,7 +77,6 @@ projects:
       agent: cursor
       agentConfig:
         permissions: permissionless
-    agentRulesFile: prompts/agent_rules.md
     orchestratorRules: |
       Use GitHub Issues as the task source of truth.
       Plan from open GitHub Issues, spawn coding workers with the Cursor CLI agent,
@@ -86,7 +85,7 @@ projects:
       Do not add unsupported reviewer fields to this YAML — drive review through CLI.
 
       REVIEW DRIVING — AO 0.10 does not auto-trigger Codex review on PR open.
-      Live procedure: prompts/agent_rules.md + side-process scripts (orchestratorRules below is legacy-import reference only).
+      Live procedure: AGENTS.md + side-process scripts (orchestratorRules below is legacy-import reference only).
       The orchestrator and reconcile loops jump the gaps via ao-review run / Get-AoReviewRuns.
 
       Always invoke review through the pack wrapper (Issue #9 / NO_FINDINGS contract).
@@ -123,7 +122,7 @@ projects:
       orchestrator turn, not independently enforced timers. There is no background
       watchdog. The 30-minute AO report-stale reaction is a long-tail backstop only.
 
-      REQUIRED CI (CI green) — same definition as prompts/agent_rules.md:
+      REQUIRED CI (CI green) — same definition as AGENTS.md:
         Preferred: GitHub required status checks for the PR base branch when branch
         protection lists them.
         Fallback: when no required checks are configured, all checks on the PR head
@@ -376,7 +375,7 @@ projects:
         - latest accepted worker report for that exact current head SHA is ready_for_review
           (a ready_for_review for an earlier head does not authorize a later head — reuse #186
           current-head-at-report-time semantics);
-        - required CI on that head (same Required CI definition as prompts/agent_rules.md) is
+        - required CI on that head (same Required CI definition as AGENTS.md) is
           green or genuinely pending/queued against a known required-check set — explicitly NOT
           red/failing and NOT missing/unknown/unresolvable (red defers; missing routes to the
           degraded-CI orchestrator branch below);

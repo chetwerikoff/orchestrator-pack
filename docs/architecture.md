@@ -23,7 +23,7 @@ state with `gh issue view`, never from draft-file presence alone.
 Local Codex PR review **is active**. AO drives it via `ao review run`, `send`,
 `list`, and `execute`; orchestration lives in `orchestratorRules` in
 `agent-orchestrator.yaml`. See [`README.md`](../README.md#local-codex-review-active),
-[`prompts/agent_rules.md`](../prompts/agent_rules.md), and
+[`AGENTS.md`](../AGENTS.md), and
 [`docs/github_issues_cursor_codex_setup.md`](github_issues_cursor_codex_setup.md).
 
 ## Layout
@@ -54,6 +54,13 @@ Rules for `vendor/agent-orchestrator`:
 
 ## Extension layers
 
+### Worker rule delivery (AO 0.10.2+)
+
+AO workers receive normative policy from tracked [`AGENTS.md`](../AGENTS.md) in the worktree —
+native pickup for Cursor and Codex workers. There is no `agentRulesFile` injection channel on
+AO 0.10.2. After merge, **recycle live worker AO sessions** so worktrees pick up the new file;
+AO restart alone is not required for worker rule delivery.
+
 ### Config layer
 
 `agent-orchestrator.yaml.example` demonstrates stock AO settings:
@@ -64,7 +71,7 @@ Rules for `vendor/agent-orchestrator`:
 - worktree isolation;
 - desktop notifications;
 - explicit GitHub Issues tracker and GitHub SCM config;
-- `agentRulesFile` pointing to `prompts/agent_rules.md`;
+- worktree isolation and native worker rule pickup via tracked `AGENTS.md`;
 - safe reactions that do not auto-merge.
 
 Local Codex review is wired through `orchestratorRules` and the `ao review` CLI
@@ -75,8 +82,9 @@ silently ignored; never patch AO core to add reviewer routing.
 
 ### Prompt layer
 
-`prompts/agent_rules.md` provides portable guardrails that any AO-supported agent
-can receive through `agentRulesFile`.
+[`AGENTS.md`](../AGENTS.md) is the single worker/agent rulebook — native pickup in AO
+0.10.2+ worktrees (Cursor and Codex workers). Script-owned orchestrator review
+documentation lives in [`script-owned-review-pipeline.md`](script-owned-review-pipeline.md).
 
 `prompts/self_architect_check.md` is a small reusable review block to reduce
 unnecessary subsystems, duplicate prompt literals, and broad scope declarations.

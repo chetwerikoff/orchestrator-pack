@@ -11,7 +11,7 @@ $invokeLib = Join-Path $Root 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1'
 $recordLib = Join-Path $Root 'scripts/lib/Record-ReviewReadyReportStateSeed.ps1'
 $reevalLib = Join-Path $Root 'scripts/lib/Invoke-ReviewTriggerReeval.ps1'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $wakeRunbook = Join-Path $Root 'docs/orchestrator-wake-runbook.md'
 $migrationNotes = Join-Path $Root 'docs/migration_notes.md'
 $capturePath = Join-Path $Root 'tests/external-output-references/captures/ao-status-sessions/ready_for_review_on_head.raw.json'
@@ -128,8 +128,8 @@ if (-not (Test-Path -LiteralPath $revalidationTest -PathType Leaf)) {
     exit 1
 }
 
-if ((Get-Content -LiteralPath $agentRules -Raw) -notlike '*Report-state review-start seed*') {
-    Write-Host 'prompts/agent_rules.md missing report-state seed section'
+if ((Get-Content -LiteralPath $scriptOwnedDoc -Raw) -notlike '*Report-state review-start seed*') {
+    Write-Host 'docs/script-owned-review-pipeline.md missing report-state seed section'
     exit 1
 }
 
