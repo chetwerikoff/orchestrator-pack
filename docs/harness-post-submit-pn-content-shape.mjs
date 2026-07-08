@@ -188,10 +188,7 @@ export function shouldRunHarnessContentShapeStage(input, attribution) {
   if (input.harnessContentShape === false) {
     return false;
   }
-  if (input.harnessContentShape === true) {
-    return true;
-  }
-  return isHarnessLatestRun(attribution?.latestRun);
+  return input.harnessContentShape === true;
 }
 
 runStdinJsonCli('harness-post-submit-pn-content-shape.mjs', {

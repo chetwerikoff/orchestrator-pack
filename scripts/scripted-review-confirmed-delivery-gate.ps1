@@ -44,6 +44,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryEscalation.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
+. (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
 
@@ -365,17 +366,10 @@ while ($true) {
     $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
     $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
 
-    if (-not $initialObservedRunId -and $reviewsPayload.reviews) {
-        foreach ($entry in @($reviewsPayload.reviews)) {
-            if ([int]$entry.prNumber -eq $PrNumber) {
-                $lr = $entry.latestRun
-                if ($lr -and [string]$lr.id) {
-                    $initialObservedRunId = [string]$lr.id
-                    break
-                }
-            }
-        }
-    }
+    $initialObservedRunId = Resolve-ScriptedReviewInitialObservedRunId `
+        -CurrentInitialObservedRunId $initialObservedRunId `
+        -Reviews @($reviewsPayload.reviews) `
+        -PrNumber $PrNumber
 
     $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
         reviews             = @($reviewsPayload.reviews)

@@ -21,7 +21,15 @@ function loadJson(relativePath: string) {
   return JSON.parse(readFileSync(path.join(repoRoot, relativePath), 'utf8'));
 }
 
-function loadMatrix() {
+function loadMatrix(): Array<{
+  name: string;
+  latestRun: Record<string, unknown>;
+  expectedAction: string;
+  expectedReason?: string;
+  expectedNeedsSupersede?: boolean;
+  retriggerCount?: number;
+  maxRetriggerCount?: number;
+}> {
   return JSON.parse(readFileSync(path.join(fixtureDir, 'matrix.json'), 'utf8')).cases;
 }
 
@@ -57,17 +65,19 @@ function gateInput(latestRun: Record<string, unknown>, overrides: Record<string,
 }
 
 describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
-  it.each(loadMatrix())('$name', (cell) => {
-    const stage = evaluateHarnessContentShapeStage({
-      latestRun: cell.latestRun,
-      attributionOk: true,
-      retriggerCount: cell.retriggerCount ?? 0,
-      maxRetriggerCount: cell.maxRetriggerCount ?? 3,
+  for (const cell of loadMatrix()) {
+    it(cell.name, () => {
+      const stage = evaluateHarnessContentShapeStage({
+        latestRun: cell.latestRun,
+        attributionOk: true,
+        retriggerCount: cell.retriggerCount ?? 0,
+        maxRetriggerCount: cell.maxRetriggerCount ?? 3,
+      });
+      expect(stage.action).toBe(cell.expectedAction);
+      if (cell.expectedReason) expect(stage.reason).toBe(cell.expectedReason);
+      if (cell.expectedNeedsSupersede) expect(stage.needsSupersede).toBe(true);
     });
-    expect(stage.action).toBe(cell.expectedAction);
-    if (cell.expectedReason) expect(stage.reason).toBe(cell.expectedReason);
-    if (cell.expectedNeedsSupersede) expect(stage.needsSupersede).toBe(true);
-  });
+  }
 
   it('runs inside the #669 poll step before delivered suppression', () => {
     const delivered = loadJson('tests/external-output-references/captures/ao-0-10-daemon/per-session-reviews-delivered-status.raw.json');
@@ -87,7 +97,7 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
       },
       reviews: delivered.reviews,
     }));
-    expect(step.contentShape.action).toBe(CONTENT_SHAPE_REJECT_RETRIGGER);
+    expect(step.contentShape?.action).toBe(CONTENT_SHAPE_REJECT_RETRIGGER);
     expect(step.terminal.action).toBe('reject_retrigger');
   });
 
@@ -97,18 +107,20 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
   });
 
   it('keeps running rows waiting for #624 rather than accepting on body shape', () => {
-    const cell = loadMatrix().find((entry: { name: string }) => entry.name === 'running-wait-624');
-    const mapped = mapContentShapeToGateTerminal(evaluateHarnessLatestRunContentShape(cell.latestRun));
+    const cell = loadMatrix().find((entry) => entry.name === 'running-wait-624');
+    expect(cell).toBeDefined();
+    const mapped = mapContentShapeToGateTerminal(evaluateHarnessLatestRunContentShape(cell!.latestRun));
     expect(mapped.action).toBeNull();
-    expect(evaluateHarnessLatestRunContentShape(cell.latestRun).action).toBe(CONTENT_SHAPE_WAIT_RUNNING);
+    expect(evaluateHarnessLatestRunContentShape(cell!.latestRun).action).toBe(CONTENT_SHAPE_WAIT_RUNNING);
   });
 
   it('kill-switch escalates rather than silently accepting prose', () => {
-    const cell = loadMatrix().find((entry: { name: string }) => entry.name === 'prose-complete-reject-retrigger');
+    const cell = loadMatrix().find((entry) => entry.name === 'prose-complete-reject-retrigger');
+    expect(cell).toBeDefined();
     const prior = process.env.PACK_HARNESS_PN_CONTENT_SHAPE_DISABLED;
     process.env.PACK_HARNESS_PN_CONTENT_SHAPE_DISABLED = '1';
     try {
-      const stage = evaluateHarnessContentShapeStage({ latestRun: cell.latestRun, attributionOk: true });
+      const stage = evaluateHarnessContentShapeStage({ latestRun: cell!.latestRun, attributionOk: true });
       expect(stage.action).toBe(CONTENT_SHAPE_ESCALATE);
       expect(stage.reason).toBe('content_shape_kill_switch');
     } finally {
