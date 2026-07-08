@@ -48,42 +48,13 @@ function Invoke-ScriptedReviewPostSubmitDeliveryEscalation {
         [int]$PrNumber = 0
     )
 
-    . (Join-Path $PSScriptRoot 'Invoke-OrchestratorEscalationEmit.ps1')
-    $builtResult = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'build-escalation' -Payload @{
-        runId     = $RunId
-        sessionId = $SessionId
-        prNumber  = $PrNumber
-        reason    = $Reason
-    }
-    $built = [string]$builtResult.message
-    if ($Detail) {
-        $built = "$built Detail: $Detail"
-    }
-    [Console]::Error.WriteLine($built)
-
-    $corr = if ($RunId) { "corr:scripted-review-delivery:$RunId" } else { 'corr:scripted-review-delivery:unattributed' }
-    $dedupe = if ($RunId) {
-        "dedupe:scripted-review-delivery:$RunId`:$Reason"
-    }
-    else {
-        "dedupe:scripted-review-delivery:unattributed:$Reason"
-    }
-    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-pipeline-failure' `
-        -SourceProcess 'scripted-review-post-submit-delivery' -CorrelationKey $corr -DedupeKey $dedupe `
-        -Diagnosis @{
-            runId     = $RunId
-            sessionId = $SessionId
-            prNumber  = $PrNumber
-            reason    = $Reason
-            detail    = $Detail
-        } | Out-Null
-
-    return @{
-        ok        = $false
-        escalated = $true
-        reason    = $Reason
-        detail    = $Detail
-    }
+    . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewDeliveryEscalation.ps1')
+    $packRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $gateCli = Join-Path $packRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
+    return Invoke-ScriptedReviewDeliveryEscalationEmit -Reason $Reason -Detail $Detail `
+        -RunId $RunId -SessionId $SessionId -PrNumber $PrNumber `
+        -SourceProcess 'scripted-review-post-submit-delivery' -GateFilterCli $gateCli `
+        -WriteLog { param($Message) [Console]::Error.WriteLine($Message) }
 }
 
 function Wait-ScriptedReviewSubmittedRun {

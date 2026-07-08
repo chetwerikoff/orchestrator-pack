@@ -40,6 +40,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryEscalation.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
@@ -124,32 +125,11 @@ function Invoke-ScriptedReviewDeliveryGateEscalation {
         [string]$Reason,
         [string]$Detail = ''
     )
-    $builtResult = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'build-escalation' -Payload @{
-        runId     = $RunId
-        sessionId = $SessionId
-        prNumber  = $PrNumber
-        reason    = $Reason
-    }
-    $built = [string]$builtResult.message
-    if ($Detail) {
-        $built = "$built Detail: $Detail"
-    }
-    Write-ScriptedReviewDeliveryGateLog $built
-    $corr = "corr:scripted-review-delivery:$RunId"
-    $dedupe = "dedupe:scripted-review-delivery:$RunId`:$Reason"
-    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-pipeline-failure' `
-        -SourceProcess $Script:GateLogPrefix -CorrelationKey $corr -DedupeKey $dedupe `
-        -Diagnosis @{
-            runId      = $RunId
-            sessionId  = $SessionId
-            prNumber   = $PrNumber
-            targetSha  = $TargetSha
-            verdict    = $Verdict
-            reason     = $Reason
-            detail     = $Detail
-            diagnosis  = $built
-        } -Message $built -DryRun:$DryRun | Out-Null
-    return @{ action = 'escalate'; reason = $Reason; message = $built }
+    return Invoke-ScriptedReviewDeliveryEscalationEmit -Reason $Reason -Detail $Detail `
+        -RunId $RunId -SessionId $SessionId -PrNumber $PrNumber `
+        -SourceProcess $Script:GateLogPrefix -GateFilterCli $GateFilterCli -DryRun:$DryRun `
+        -ExtraDiagnosis @{ targetSha = $TargetSha; verdict = $Verdict } `
+        -WriteLog { param($Message) Write-ScriptedReviewDeliveryGateLog $Message }
 }
 
 function Invoke-ScriptedReviewDeliveryGateExplicitSend {
