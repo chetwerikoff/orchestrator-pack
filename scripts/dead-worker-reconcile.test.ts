@@ -592,6 +592,16 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     }));
     expect(unreadable.actions[0]?.type).toBe('audit_only');
     expect(unreadable.actions[0]?.escalate).toBe(true);
+
+    const absentSurface = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [{ sessionId: 'opk-688-absent-surface', issueNumber: 688, status: 'terminated' }],
+      livenessContext: {
+        osLiveness: { 'opk-688-absent-surface': 'pane-gone' },
+        sanctionedKillSurface: { healthy: false, reason: 'sanctioned_kill_record_surface_absent' },
+      },
+    }));
+    expect(absentSurface.actions[0]?.type).toBe('audit_only');
+    expect(absentSurface.actions[0]?.escalate).toBe(true);
   });
 
   it('interval gate defaults to one minute', () => {

@@ -192,7 +192,7 @@ export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
   if (killSurface.healthy === false) {
     return {
       verdict: 'audit_only',
-      reason: 'sanctioned_kill_record_unreadable',
+      reason: killSurface.reason || 'sanctioned_kill_record_unreadable',
       escalate: true,
       event: null,
       matchedEvents: [],

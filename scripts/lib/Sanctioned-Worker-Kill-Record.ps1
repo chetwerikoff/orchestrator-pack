@@ -13,7 +13,11 @@ function Read-SanctionedWorkerKillSurface {
 
     if (-not $Path) { $Path = Get-SanctionedWorkerKillRecordPath }
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return [pscustomobject]@{ healthy = $true; records = @() }
+        return [pscustomobject]@{
+            healthy = $false
+            reason = 'sanctioned_kill_record_surface_absent'
+            records = @()
+        }
     }
     try {
         $raw = Get-Content -LiteralPath $Path -Raw
@@ -44,8 +48,17 @@ function Add-SanctionedWorkerKillRecord {
     if (-not $Path) { $Path = Get-SanctionedWorkerKillRecordPath }
     if ($TimestampMs -le 0) { $TimestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
     $surface = Read-SanctionedWorkerKillSurface -Path $Path
-    if (-not $surface.healthy) { throw $surface.detail }
-    $records = @($surface.records)
+    if (-not $surface.healthy) {
+        if ($surface.reason -eq 'sanctioned_kill_record_surface_absent') {
+            $records = @()
+        }
+        else {
+            throw ($surface.detail ?? $surface.reason)
+        }
+    }
+    else {
+        $records = @($surface.records)
+    }
     $records += [pscustomobject]@{
         sessionId = $SessionId
         issueNumber = $IssueNumber

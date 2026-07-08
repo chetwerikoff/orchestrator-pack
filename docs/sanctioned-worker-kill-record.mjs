@@ -29,7 +29,7 @@ export function readSanctionedWorkerKillSurface(path) {
     return { healthy: true, records: records.map((row) => normalizeSanctionedWorkerKillRecord(row)) };
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      return { healthy: true, records: [] };
+      return { healthy: false, reason: 'sanctioned_kill_record_surface_absent', records: [] };
     }
     return { healthy: false, reason: 'sanctioned_kill_record_unreadable', detail: error?.message ?? String(error), records: [] };
   }
@@ -37,7 +37,12 @@ export function readSanctionedWorkerKillSurface(path) {
 
 export function appendSanctionedWorkerKillRecord(path, record, nowMs = Date.now()) {
   const surface = readSanctionedWorkerKillSurface(path);
-  const records = surface.healthy ? surface.records : [];
+  let records = [];
+  if (surface.healthy) {
+    records = surface.records;
+  } else if (surface.reason !== 'sanctioned_kill_record_surface_absent') {
+    throw new Error(surface.detail || surface.reason || 'sanctioned_kill_record_unreadable');
+  }
   const next = [...records, normalizeSanctionedWorkerKillRecord(record, nowMs)];
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);

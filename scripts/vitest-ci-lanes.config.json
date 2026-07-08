@@ -84,6 +84,7 @@
     "scripts/orchestrator-escalation.test.ts": "light",
     "scripts/escalation-state-test-isolation.test.ts": "light",
     "scripts/event-consumer-rebind-scenario-matrix.test.ts": "light",
+    "scripts/sanctioned-worker-kill-record.test.ts": "light",
     "scripts/side-process-launch-contract.test.ts": "heavy",
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
