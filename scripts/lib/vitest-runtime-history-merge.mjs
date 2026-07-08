@@ -10,6 +10,7 @@ import {
   partitionByLane,
   discoverVitestFiles,
 } from './vitest-ci-lanes.mjs';
+import { buildHeavyTopology } from './vitest-heavy-topology.mjs';
 import { parseVitestReportFile } from './vitest-json-report.mjs';
 
 const libDir = dirname(fileURLToPath(import.meta.url));
@@ -117,10 +118,14 @@ export function classifyHeavyFiles(repoRoot = defaultRepoRoot) {
   const config = loadLanesConfig(repoRoot);
   const discovered = discoverVitestFiles(repoRoot);
   const { heavy } = partitionByLane(discovered, config.classification);
+  const topologyResult = buildHeavyTopology(repoRoot);
+  if (!topologyResult.ok) {
+    throw new Error(topologyResult.errors.join('; '));
+  }
   return {
     heavy: [...heavy].sort(),
     classification: config.classification,
-    heavyShardCount: config.heavyShardCount,
+    heavyShardCount: topologyResult.topology.heavyShardCount,
   };
 }
 
