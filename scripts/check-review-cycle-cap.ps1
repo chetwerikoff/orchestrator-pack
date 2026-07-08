@@ -47,6 +47,10 @@ if ($capPs -notmatch 'Get-ReviewCycleCapIssueBodiesByPr') {
     Write-Host 'Review-CycleCap.ps1 missing Get-ReviewCycleCapIssueBodiesByPr helper'
     exit 1
 }
+if ($capPs -match '\$env:AO_ISSUE_NUMBER[\s\S]*Get-IssueNumberFromPrDiff') {
+    Write-Host 'Get-ReviewCycleCapIssueBody must resolve per-PR issue via Get-IssueNumberFromPrDiff before AO_ISSUE_NUMBER'
+    exit 1
+}
 
 $claimedRunPs = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1') -Raw
 if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {

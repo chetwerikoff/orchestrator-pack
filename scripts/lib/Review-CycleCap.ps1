@@ -89,16 +89,18 @@ function Get-ReviewCycleCapIssueBody {
         return [string]$FixtureSnapshot['issueBody']
     }
 
+    # Per-PR declaration diff first — reconcile/reeval iterate many open PRs; AO_ISSUE_NUMBER
+    # is the active worker session and must not override other PRs' tier budgets.
     $issueNumber = 0
-    if ($env:AO_ISSUE_NUMBER) {
-        [void][int]::TryParse([string]$env:AO_ISSUE_NUMBER, [ref]$issueNumber)
-    }
-    if ($issueNumber -le 0 -and $RepoRoot) {
+    if ($RepoRoot -and $PrNumber -gt 0) {
         . (Join-Path $PSScriptRoot 'Get-AutoReviewPrContext.ps1')
         $fromDiff = Get-IssueNumberFromPrDiff -RepoRoot $RepoRoot -PrNumber $PrNumber
         if ($fromDiff) {
             $issueNumber = [int]$fromDiff
         }
+    }
+    if ($issueNumber -le 0 -and $env:AO_ISSUE_NUMBER) {
+        [void][int]::TryParse([string]$env:AO_ISSUE_NUMBER, [ref]$issueNumber)
     }
 
     $normalizedHead = ([string]$HeadSha).Trim().ToLowerInvariant()
