@@ -689,3 +689,75 @@ describe('resolveLatestCommittedSnapshot', () => {
     }
   });
 });
+
+
+describe('checkPrScope — issue-fence fallback when declaration snapshot is denylisted', () => {
+  const repoRoot = join(tmpdir(), `scope-guard-issue-fence-${randomUUID()}`);
+
+  const issue679Body = [
+    'GitHub Issue: #679',
+    '',
+    '```denylist',
+    'vendor/**',
+    'packages/core/**',
+    '.ao/**',
+    'agent-orchestrator.yaml',
+    'docs/declarations/**',
+    '```',
+    '',
+    '```allowed-roots',
+    'scripts/**',
+    'tests/**',
+    '```',
+  ].join('\n');
+
+  it('passes implementation PRs scoped to issue allowed_roots without a committed declaration snapshot', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #679',
+      issueBody: issue679Body,
+      prPaths: [
+        'scripts/finding-ledger-guard.mjs',
+        'tests/fixtures/finding-ledger/scenario-matrix/echo-rubric.capture.txt',
+      ],
+      degradedMode: false,
+      forkPr: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: 'implementation',
+      issueNumber: 679,
+      checkedPaths: [
+        'scripts/finding-ledger-guard.mjs',
+        'tests/fixtures/finding-ledger/scenario-matrix/echo-rubric.capture.txt',
+      ],
+    });
+    if (result.ok) {
+      expect(result.snapshot).toBeUndefined();
+      expect(result.warnings.join(' ')).toMatch(/docs\/declarations/);
+    }
+  });
+
+  it('fails when a denylisted control-artifact path is present in the PR diff', () => {
+    const result = checkPrScope({
+      repoRoot,
+      prBody: 'Closes #679',
+      issueBody: issue679Body,
+      prPaths: [
+        'scripts/finding-ledger-guard.mjs',
+        'docs/declarations/679.orchestrator-pack-41.json',
+      ],
+      degradedMode: false,
+      forkPr: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'scope_violation',
+    });
+    if (!result.ok) {
+      expect(result.violations?.denied).toContain('docs/declarations/679.orchestrator-pack-41.json');
+    }
+  });
+});

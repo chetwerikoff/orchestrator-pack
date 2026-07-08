@@ -89,12 +89,17 @@ function hasEchoedReviewContext(text) {
   return ECHOED_ARTIFACT_MARKER.test(text) || ECHOED_DRAFT_REVIEW_PROMPT.test(text);
 }
 
+const TYPED_FINDING_LINE = /^(?<!binding-)\btype:\s*[a-z][a-z0-9-]*\b/i;
+
 function isReviewerFindingLine(line) {
   const trimmed = line.trim();
   if (trimmed === 'NO_FINDINGS') {
     return true;
   }
-  return UNTYPED_FINDING_LINE.test(line);
+  if (UNTYPED_FINDING_LINE.test(line)) {
+    return true;
+  }
+  return TYPED_FINDING_LINE.test(trimmed);
 }
 
 function indexOfFirstReviewerFindingLine(text, fromIndex = 0) {
