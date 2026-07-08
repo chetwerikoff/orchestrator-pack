@@ -20,18 +20,22 @@ if (-not $CapturePath -and -not $CapturesDir) {
     exit 2
 }
 
-$args = @('--ledger', (Resolve-Path $LedgerPath).Path)
+$guardArgs = @('--ledger', (Resolve-Path $LedgerPath).Path)
 if ($CapturesDir) {
-    $args += '--captures-dir', (Resolve-Path $CapturesDir).Path
+    $guardArgs += '--captures-dir', (Resolve-Path $CapturesDir).Path
 }
 if ($CapturePath) {
-    $args += '--capture', (Resolve-Path $CapturePath).Path
+    $guardArgs += '--capture', (Resolve-Path $CapturePath).Path
 }
 
 Push-Location $Root
 try {
-    & node $GuardScript @args
-    exit $LASTEXITCODE
+    & node $GuardScript @guardArgs
+    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) {
+        $exitCode = if ($?) { 0 } else { 1 }
+    }
+    exit $exitCode
 }
 finally {
     Pop-Location

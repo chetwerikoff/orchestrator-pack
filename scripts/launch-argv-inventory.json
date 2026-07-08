@@ -2080,7 +2080,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:b092fe02653e24965c136232303457201645c79d20fdb054b2899f3b48537beb",
+      "hashPinnedSourceHash": "sha256:27348ed881f18bb3f74c2d73b30eb64fcb35a6096001151cb39cffb84d6247ae",
       "discoveryMatch": {
         "file": "scripts/check-finding-ledger-guard.ps1",
         "line": 33,
@@ -6949,21 +6949,25 @@
       }
     },
     {
-      "rowId": "site-scripts-pr-scope-check-ps1-199",
+      "rowId": "site-scripts-pr-scope-check-ps1-200",
       "caller": {
         "file": "scripts/pr-scope-check.ps1",
-        "line": 199
+        "line": 200
       },
       "callee": {
-        "kind": "gh",
-        "identity": "scripts/gh pack wrapper"
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
       },
-      "calleeContractSourceClass": "gh-inventory-route",
-      "coverageKind": "validator-backed",
-      "validatorId": "gh-inventory-static",
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:581741546a549b655bf858e6a863cbbef077a23774f6bca60c01be8ec0d54806",
       "discoveryMatch": {
         "file": "scripts/pr-scope-check.ps1",
-        "line": 199,
+        "line": 200,
         "patternIds": [
           "ps-call-op"
         ]

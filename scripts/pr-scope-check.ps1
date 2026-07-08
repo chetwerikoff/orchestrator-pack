@@ -5,11 +5,12 @@ $ErrorActionPreference = 'Stop'
 $TrustedRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 if ($env:PR_SCOPE_REPO_ROOT) {
     $PrRoot = (Resolve-Path $env:PR_SCOPE_REPO_ROOT).Path
+    $CheckScript = Join-Path $PrRoot 'scripts/pr-scope-check.ts'
 }
 else {
     $PrRoot = $TrustedRoot
+    $CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
 }
-$CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
 
 function Write-ScopeGuardComment {
     param(
