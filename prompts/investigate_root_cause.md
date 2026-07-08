@@ -122,7 +122,7 @@ Follow the architect-side loop in [`CLAUDE.md`](../CLAUDE.md) § **Failure respo
 lesson) — that section is the single source for the sequence; do not invent a
 parallel loop here.
 
-Stop at **spec / contract / rule** level (issue body, draft, `AGENTS.md`,
+Stop at **spec / contract / rule** level (issue body, draft, `prompts/agent_rules.md`,
 declaration, CI guard), not at symptom patches on merged code.
 
 #### 5-Whys stop condition (reject intermediate artifacts)
@@ -253,7 +253,7 @@ instead of a fabricated cause chain.
 | 3 | **Что уже сделано** | **Already done** | Mitigations in the repo; label each: worked / partial / failed or wrong. |
 | 4 | **Что будет сделано** | **Planned** | **Only after ship check:** open GitHub Issues whose acceptance criteria are **not** already on `main`. One line per survivor: `#N` + what **remains** outstanding. **Status only** — no action steps. Empty §4 with an explicit “none” line is valid. Never list closed issues, merged PRs, or work already in **§3**. Do not repeat steps from §5–§6. |
 | 5 | **Что сделать сейчас** | **What to do now** | **Numbered steps** (1., 2., …): everything that should happen **soon** — fix, unblock, verify, operator steps (restart, env, local YAML), and **optional** near-term improvements that are not durable prevention. Skip items already fully covered by §4 unless you add a net-new step. One concrete action per step; say who/what executes (you, architect, `ao spawn`, operator). |
-| 6 | **Чтобы не повторялось** / **Чтобы работало стабильно** | **So it does not recur** / **So it stays stable** | **Numbered steps** (1., 2., …): everything **durable** — spec/draft/issue, `AGENTS.md`, CI guard, config contract, follow-up drafts, ranked gaps not covered by §3 and §4; not one-off patches to merged code. Skip items already fully covered by §4 unless you add a net-new step. Pick the heading that matches the ask (recurrence vs steady-state correctness); use both headings only if both apply. |
+| 6 | **Чтобы не повторялось** / **Чтобы работало стабильно** | **So it does not recur** / **So it stays stable** | **Numbered steps** (1., 2., …): everything **durable** — spec/draft/issue, `prompts/agent_rules.md`, CI guard, config contract, follow-up drafts, ranked gaps not covered by §3 and §4; not one-off patches to merged code. Skip items already fully covered by §4 unless you add a net-new step. Pick the heading that matches the ask (recurrence vs steady-state correctness); use both headings only if both apply. |
 
 Sections **5** and **6** must be actionable checklists, not prose summaries. If a step
 belongs in a worker PR, say so (`ao spawn` / open draft) instead of implying a

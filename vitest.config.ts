@@ -10,7 +10,7 @@ export default defineConfig({
     include: [
       'plugins/**/tests/**/*.test.ts',
       'scripts/**/*.test.ts',
-      'tests/agents-md-size-budget.test.ts',
+      'tests/agent-rules-line-budget.test.ts',
     ],
     environment: 'node',
     // Issue #488 slow-test budget: per-test ceiling must not be below 120s in CI.
