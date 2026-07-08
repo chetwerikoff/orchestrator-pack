@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { buildLanePlan } from './vitest-ci-lanes.mjs';
 import { defaultRepoRoot, classifyHeavyFiles } from './vitest-runtime-history-merge.mjs';
 import {
   SMOOTHING_RULE,
@@ -79,29 +80,36 @@ function buildCompleteShardSet(dir, commitSha, fileAssignments) {
   return shardReports;
 }
 
+function buildLanePlanShardReports(dir, commitSha, repoRoot, durationForFile = () => 12000) {
+  const plan = buildLanePlan(repoRoot);
+  if (!plan.ok) {
+    throw new Error(plan.errors.join('; '));
+  }
+  const assignments = new Map();
+  for (const shardPlan of plan.heavyShards) {
+    assignments.set(
+      shardPlan.shard,
+      shardPlan.files.map((file) => ({
+        file,
+        durationMs:
+          typeof durationForFile === 'function' ? durationForFile(file) : durationForFile,
+      })),
+    );
+  }
+  return buildCompleteShardSet(dir, commitSha, assignments);
+}
+
 function runMeasuredRefreshFixture() {
   const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-measured`);
   mkdirSync(dir, { recursive: true });
   const commitSha = 'deadbeef';
   const targetFile = 'scripts/check-ci-pipeline-split.test.ts';
-  const assignments = new Map([
-    [1, [{ file: targetFile, durationMs: 22000 }]],
-    [2, []],
-    [3, []],
-    [4, []],
-    [5, []],
-    [6, []],
-    [7, []],
-  ]);
-
-  for (let shard = 2; shard <= 7; shard += 1) {
-    const filler = classifyHeavyFiles(defaultRepoRoot).heavy.find(
-      (file) => file !== targetFile,
-    );
-    assignments.set(shard, [{ file: filler, durationMs: 15000 + shard * 100 }]);
-  }
-
-  const shardReports = buildCompleteShardSet(dir, commitSha, assignments);
+  const shardReports = buildLanePlanShardReports(
+    dir,
+    commitSha,
+    defaultRepoRoot,
+    (file) => (file === targetFile ? 22000 : 12000),
+  );
   const base = seededHistory();
   const result = refreshRuntimeHistory({
     baseHistory: base,
@@ -166,12 +174,7 @@ function runCorruptInputFixtures() {
     {
       name: 'truncated json',
       build() {
-        const assignments = new Map();
-        for (let shard = 1; shard <= 7; shard += 1) {
-          const filler = classifyHeavyFiles(defaultRepoRoot).heavy[shard - 1];
-          assignments.set(shard, [{ file: filler, durationMs: 12000 }]);
-        }
-        const shardReports = buildCompleteShardSet(dir, commitSha, assignments);
+        const shardReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
         writeFileSync(join(dir, 'shard-2.json'), '{not-json', 'utf8');
         return shardReports;
       },
@@ -179,12 +182,7 @@ function runCorruptInputFixtures() {
     {
       name: 'zero-file report',
       build() {
-        const assignments = new Map();
-        for (let shard = 1; shard <= 7; shard += 1) {
-          const filler = classifyHeavyFiles(defaultRepoRoot).heavy[shard - 1];
-          assignments.set(shard, [{ file: filler, durationMs: 12000 }]);
-        }
-        const shardReports = buildCompleteShardSet(dir, commitSha, assignments);
+        const shardReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
         writeFileSync(join(dir, 'shard-4.json'), stableStringify({ testResults: [] }), 'utf8');
         return shardReports;
       },
@@ -278,11 +276,7 @@ function runProvenanceGateFixtures() {
   assert(partial.rejected, 'partial shard set must be rejected');
   assert(historyBytes(partial.history) === baseBytes, 'partial shard set must not mutate history');
 
-  const mismatchAssignments = new Map();
-  for (let shard = 1; shard <= 7; shard += 1) {
-    mismatchAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
-  }
-  const mismatchReports = buildCompleteShardSet(dir, commitSha, mismatchAssignments);
+  const mismatchReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
   mismatchReports.get(2).meta = { commitSha: 'badsha', shard: 2, success: true };
   const mismatch = refreshRuntimeHistory({
     baseHistory: base,
@@ -292,23 +286,44 @@ function runProvenanceGateFixtures() {
   });
   assert(mismatch.rejected, 'commit mismatch must be rejected');
 
-  const unknownAssignments = new Map();
-  for (let shard = 1; shard <= 7; shard += 1) {
-    if (shard === 1) {
-      unknownAssignments.set(shard, [
+  const unknownReports = buildLanePlanShardReports(dir, commitSha, defaultRepoRoot);
+  const unknownShard1 = unknownReports.get(1);
+  writeFileSync(
+    unknownShard1.reportPath,
+    stableStringify(
+      buildSyntheticVitestReport([
         { file: 'scripts/__classification_required_fixture__.test.ts', durationMs: 12000 },
-      ]);
-      continue;
-    }
-    unknownAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
-  }
+      ]),
+    ),
+    'utf8',
+  );
   const unknown = refreshRuntimeHistory({
     baseHistory: base,
-    shardReports: buildCompleteShardSet(dir, commitSha, unknownAssignments),
+    shardReports: unknownReports,
     expectedCommitSha: commitSha,
     repoRoot: defaultRepoRoot,
   });
   assert(unknown.rejected, 'unclassified path must be rejected');
+
+  const incompleteAssignments = new Map();
+  for (let shard = 1; shard <= 7; shard += 1) {
+    incompleteAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
+  }
+  const incompleteCoverage = refreshRuntimeHistory({
+    baseHistory: base,
+    shardReports: buildCompleteShardSet(dir, commitSha, incompleteAssignments),
+    expectedCommitSha: commitSha,
+    repoRoot: defaultRepoRoot,
+  });
+  assert(incompleteCoverage.rejected, 'incomplete heavy-file coverage must be rejected');
+  assert(
+    historyBytes(incompleteCoverage.history) === baseBytes,
+    'incomplete heavy-file coverage must not mutate history',
+  );
+  assert(
+    incompleteCoverage.errors.some((error) => error.includes('incomplete heavy-file coverage')),
+    'incomplete heavy-file coverage must surface validation error',
+  );
 
   rmSync(dir, { recursive: true, force: true });
 }
