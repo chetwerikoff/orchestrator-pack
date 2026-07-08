@@ -19,7 +19,7 @@ function Write-AoEventsCorrelationDegraded {
     $surfaceText = if ($Surface) { " surface=$Surface" } else { '' }
     $message = "degraded_correlation reason=$reason$surfaceText"
     if ($LogPrefix) {
-        Write-Host "$LogPrefix: $message"
+        Write-Host "${LogPrefix}: $message"
     }
     else {
         Write-Host $message
