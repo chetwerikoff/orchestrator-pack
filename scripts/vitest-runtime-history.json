@@ -236,7 +236,7 @@
     "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts": "6eeba3317eab3e763ee0de4f763d39d193340a3ff16d0a6d5068eeb09eab4fea",
     "scripts/orchestrator-wake-supervisor-orphan-integration.test.ts": "50708c5e7ae4abbe9035748c8298723b0b70b8400f10aef9cccaf06ff8dc1588",
     "scripts/orchestrator-wake-supervisor.test.ts": "dc06046d33d851f988a1505ef88477348c62e085000db5a471136295f8d57158",
-    "scripts/pr-scope-check.test.ts": "eee355b62e26e5c626dfca05753f0b274c3979f85c4128799f6a0ba91876d734",
+    "scripts/pr-scope-check.test.ts": "32b8f0e0a65607301a127b50395d888e8b45b9fe91d883f319452d1d1157a9fe",
     "scripts/publish-issue-body-sync.test.ts": "ba4de1f3f8bcacc53bd6166dc995731337ca5f9ac3277f5b45083bddff7b1a11",
     "scripts/reaction-config-messages.test.ts": "2cfbf645290a6f45e04c4d0bd2fdc928e42c7596193f7a526107628e7bcbd85c",
     "scripts/read-delegation-audit.test.ts": "841c5d7d79d77518e981b84698c54ee30000ff12c5f1556de6138cd9ede6b60b",
