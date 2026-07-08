@@ -1,7 +1,7 @@
 # Task complexity tiering (architect / draft-author)
 
 Worker **pre-flight** (blocking marker check before implementation) lives in
-[`prompts/agent_rules.md`](../prompts/agent_rules.md) (**Review / CI / Handoff worker contract**).
+[`AGENTS.md`](../AGENTS.md) (**Review / CI / Handoff worker contract**).
 This page holds the full tier rubric and per-tier draft-review flow for architects and draft authors.
 
 ## Task complexity tier rubric

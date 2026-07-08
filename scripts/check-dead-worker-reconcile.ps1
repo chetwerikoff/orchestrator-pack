@@ -6,7 +6,7 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $reconcileScript = Join-Path $Root 'scripts/dead-worker-reconcile.ps1'
 $reconcileMjs = Join-Path $Root 'docs/dead-worker-reconciler.mjs'
 $policyPath = Join-Path $Root 'docs/autonomous-respawn-policy.json'
@@ -42,8 +42,8 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-if ((Get-Content -LiteralPath $agentRules -Raw) -notlike '*Autonomous dead-worker respawn*') {
-    Write-Host 'prompts/agent_rules.md missing autonomous dead-worker respawn section'
+if ((Get-Content -LiteralPath $scriptOwnedDoc -Raw) -notlike '*Autonomous dead-worker respawn*') {
+    Write-Host 'docs/script-owned-review-pipeline.md missing autonomous dead-worker respawn section'
     exit 1
 }
 

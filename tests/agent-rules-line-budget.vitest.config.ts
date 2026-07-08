@@ -5,7 +5,7 @@ export default mergeConfig(
   baseConfig,
   defineConfig({
     test: {
-      include: ['tests/agent-rules-line-budget.test.ts'],
+      include: ['tests/agents-md-size-budget.test.ts'],
     },
   }),
 );

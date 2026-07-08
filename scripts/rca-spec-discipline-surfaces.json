@@ -1,5 +1,5 @@
 {
-  "description": "Per-rule loader surface map for RCA spec discipline (Issue #221). Consumed by check-rca-spec-discipline-surfaces.ts.",
+  "description": "Per-rule loader surface map for RCA spec discipline (Issue #221). Consumed by check-draft-discipline.ps1 surfaces command.",
   "rules": [
     {
       "id": "positive-outcome",
@@ -9,8 +9,7 @@
       ],
       "surfaces": [
         ".claude/skills/create-issue-draft/SKILL.md",
-        ".claude/skills/publish-issue-draft/SKILL.md",
-        "prompts/agent_rules.md"
+        ".claude/skills/publish-issue-draft/SKILL.md"
       ]
     },
     {
@@ -43,8 +42,7 @@
       ],
       "surfaces": [
         ".claude/skills/create-issue-draft/SKILL.md",
-        ".claude/skills/publish-issue-draft/SKILL.md",
-        "prompts/agent_rules.md"
+        ".claude/skills/publish-issue-draft/SKILL.md"
       ]
     },
     {

@@ -35,7 +35,7 @@ function Get-ReviewerPolicyPromptTexts {
     param([string]$Root)
 
     return @{
-        AgentRules = Get-Content -LiteralPath (Join-Path $Root 'prompts/agent_rules.md') -Raw
+        AgentRules = Get-Content -LiteralPath (Join-Path $Root 'AGENTS.md') -Raw
         CodexPrompt = Get-Content -LiteralPath (Join-Path $Root 'prompts/codex_review_prompt.md') -Raw
     }
 }

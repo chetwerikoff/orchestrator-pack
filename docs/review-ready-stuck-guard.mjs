@@ -174,7 +174,7 @@ export function isMergeContractCiGreen(checks, options = {}) {
 /** @typedef {'green' | 'red' | 'pending'} CiLevel */
 
 /**
- * Required CI per prompts/agent_rules.md: branch-protection contexts when configured,
+ * Required CI per AGENTS.md: branch-protection contexts when configured,
  * else pack merge-contract fallback via isMergeContractCiGreen default names.
  *
  * @param {CiCheck[]} checks

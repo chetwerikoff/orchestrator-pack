@@ -51,7 +51,7 @@ Reviewer: Codex CLI with `gpt-5.5`, authenticated via **ChatGPT OAuth**
 (`codex login`).
 
 See also: [`README.md`](../README.md#local-codex-review-active),
-[`prompts/agent_rules.md`](../prompts/agent_rules.md), and
+[`AGENTS.md`](../AGENTS.md), and
 [`docs/architecture.md`](architecture.md#review-paths).
 
 On AO 0.9.x there is no `reviewer:` YAML role that AO reads — if you add

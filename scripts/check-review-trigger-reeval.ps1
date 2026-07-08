@@ -11,7 +11,7 @@ $reevalLib = Join-Path $Root 'scripts/lib/Invoke-ReviewTriggerReeval.ps1'
 $recordLib = Join-Path $Root 'scripts/lib/Record-ReviewTriggerReevalWatch.ps1'
 $wakeLib = Join-Path $Root 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
-$agentRules = Join-Path $Root 'prompts/agent_rules.md'
+$scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $wakeRunbook = Join-Path $Root 'docs/orchestrator-wake-runbook.md'
 $migrationNotes = Join-Path $Root 'docs/migration_notes.md'
 $capturePath = Join-Path $Root 'tests/external-output-references/captures/ao-webhook-notification/ready_for_review.raw.json'
@@ -66,8 +66,8 @@ if (-not ($child.extraArgs -contains '-StateDir') -or -not ($child.extraArgs -co
     exit 1
 }
 
-if ((Get-Content -LiteralPath $agentRules -Raw) -notlike '*Deferred-head review re-evaluation*') {
-    Write-Host 'prompts/agent_rules.md missing deferred-head review re-evaluation section'
+if ((Get-Content -LiteralPath $scriptOwnedDoc -Raw) -notlike '*Deferred-head review re-evaluation*') {
+    Write-Host 'docs/script-owned-review-pipeline.md missing deferred-head review re-evaluation section'
     exit 1
 }
 

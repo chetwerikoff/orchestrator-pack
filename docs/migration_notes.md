@@ -31,12 +31,12 @@ After merging the #625 vocabulary migration:
 1. **Dead CLI retired:** production scripts use `ao-review run` / `Get-AoReviewRuns` fan-out — not `ao review run|list|send|execute`.
 2. **`review-send-reconcile.ps1` REMOVED:** auto-delivery on submit supersedes first-send `ao review send`; drop the child from wake-supervisor if still registered locally.
 3. **Status vocabulary:** `needs_triage` / `waiting_update` / `sentFindingCount` / `terminationReason` → `changes_requested` / `deliveredAt` / `deliveredFindingCount` / `latestRun.body`.
-4. **Live orchestration:** `orchestratorRules` yaml is legacy-import-only at 0.10; follow `prompts/agent_rules.md` + side-process scripts (`review-trigger-reconcile.ps1`, `review-finding-delivery-confirm.ps1`).
+4. **Live orchestration:** `orchestratorRules` yaml is legacy-import-only at 0.10; follow `AGENTS.md` + side-process scripts (`review-trigger-reconcile.ps1`, `review-finding-delivery-confirm.ps1`).
 5. **Operator adoption (AC#6):**
    - Apply #210 `reviewers` harness via project-config API.
    - Restart wake-supervisor children (`scripts/orchestrator-wake-supervisor.ps1`).
    - Verify a **routine review round triggered script-side** (e.g. `review-trigger-reconcile.ps1 -Once -DryRun` then live tick, or wake-listener on a ready head) while the **orchestrator LLM session is idle** — not from an LLM turn procedure.
-   - Confirm `prompts/agent_rules.md` contains **no routine-turn review procedure** (script-owned starters + #641 exception pointer only).
+   - Confirm `AGENTS.md` contains **no routine-turn review procedure** (script-owned starters + #641 exception pointer only).
 
 
 ## Issue queue index (2026-05)
@@ -238,9 +238,9 @@ remains readable after restart for incident reconstruction.
 Extends #431 inventory with merge-verify `gh pr view <n> --json state,mergedAt` (REST
 `pulls/{n}` → `merged_at` mapped to `mergedAt`) and aligns orchestrator CI-read instructions
 with the inventory-covered `gh pr checks … --json` form. Adds a classifier-derived static guard
-(`scripts/check-gh-inventory-static.ps1`) over `prompts/agent_rules.md` and
+(`scripts/check-gh-inventory-static.ps1`) over `AGENTS.md` and
 `agent-orchestrator.yaml.example` so agent-facing gh read-forms cannot drift from REST coverage.
-`prompts/agent_rules.md` carries the universal wrapper-transport rule (forbidden: raw curl,
+`AGENTS.md` carries the universal wrapper-transport rule (forbidden: raw curl,
 `gh api graphql`, throwaway shims, `unset GH_WRAPPER_ACTIVE`).
 
 Operator adoption after merge:
@@ -708,7 +708,7 @@ Do not port:
 
 Issue #28 ships the canonical autonomous review-loop contract in
 `agent-orchestrator.yaml.example` (`orchestratorRules` block and
-`reactions.report-stale` backstop) plus worker rules in `prompts/agent_rules.md`.
+`reactions.report-stale` backstop) plus worker rules in `AGENTS.md`.
 
 To adopt on an existing live `agent-orchestrator.yaml`:
 
@@ -716,7 +716,7 @@ To adopt on an existing live `agent-orchestrator.yaml`:
    literal for your project (under `projects.<id>.orchestratorRules`).
 2. Merge the `report-stale` entry under top-level `reactions` (keep your other
    reaction entries; do not duplicate keys).
-3. Ensure `agentRulesFile: prompts/agent_rules.md` (or equivalent path) so workers
+3. Ensure `agentRulesFile: AGENTS.md` (or equivalent path) so workers
    receive the review response contract.
 4. Restart AO so prompts reload: `ao stop` then `ao start`.
 
@@ -728,7 +728,7 @@ the worker rules without updating `orchestratorRules`.
 
 Issue #109 adds turn-aware **CI failure discipline** to `orchestratorRules` (orchestrator
 `ao send` on each turn that sees red required CI, with episode dedupe) and worker **CI
-gate** rules in `prompts/agent_rules.md` (no `ready_for_review` on red CI; self-fix in
+gate** rules in `AGENTS.md` (no `ready_for_review` on red CI; self-fix in
 `fixing_ci`). `reactions.report-stale` and `reactions.ci-failed` stay unchanged as upstream
 long-tail backstops.
 
@@ -737,7 +737,7 @@ To adopt:
 1. Merge the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
    (REQUIRED CI, CI FAILURE DISCIPLINE, and review-loop ordering) into live
    `agent-orchestrator.yaml`.
-2. Pull the merged repo and confirm `prompts/agent_rules.md` includes the Required CI
+2. Pull the merged repo and confirm `AGENTS.md` includes the Required CI
    and Worker CI gate sections (git-tracked — no manual copy). Ensure live
    `agentRulesFile` points at that path.
 3. Restart AO: `ao stop` then `ao start`.
@@ -758,7 +758,7 @@ up the behaviour and side-effect fencing:
 
 1. Merge updated `orchestratorRules` (EVENT-DRIVEN REVIEW TRIGGER) from
    `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
-2. Pull `prompts/agent_rules.md` (event-driven review trigger section).
+2. Pull `AGENTS.md` (event-driven review trigger section).
 3. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
    `-Action Start`.
 4. Verify: on worker `ready_for_review` + green CI, listener log shows
@@ -780,7 +780,7 @@ wake edge and #163 periodic reconcile backstop.
 
 To adopt:
 
-1. Pull `prompts/agent_rules.md` (Deferred-head review re-evaluation section) and
+1. Pull `AGENTS.md` (Deferred-head review re-evaluation section) and
    `docs/orchestrator-wake-runbook.md`.
 2. Restart the wake supervisor so it manages the new child:
    `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
@@ -802,7 +802,7 @@ To adopt:
 
 1. Merge the updated `orchestratorRules` block (STATE-DERIVED FIRST REVIEW SEND) from
    `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
-2. Pull `prompts/agent_rules.md` (first-send review delivery section) and confirm
+2. Pull `AGENTS.md` (first-send review delivery section) and confirm
    `agentRulesFile` points at it.
 3. Restart the wake supervisor so it manages the third child:
    `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` then
@@ -826,7 +826,7 @@ To adopt:
 
 1. Merge the updated `orchestratorRules` block (STATE-DERIVED CI-GREEN WORKER WAKE) from
    `agent-orchestrator.yaml.example` into live `agent-orchestrator.yaml`.
-2. Pull `prompts/agent_rules.md` (CI-green orchestrator nudge section) and confirm
+2. Pull `AGENTS.md` (CI-green orchestrator nudge section) and confirm
    `agentRulesFile` points at it.
 3. Start the reconciler in a dedicated terminal (see `docs/orchestrator-autoloop-go-live.md`
    Terminal F): `pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1`
@@ -843,7 +843,7 @@ the run stays `waiting_update`. Operators must refresh both surfaces:
 
 1. Copy the updated `orchestratorRules` block from `agent-orchestrator.yaml.example`
    into live `agent-orchestrator.yaml` (under `projects.<id>.orchestratorRules`).
-2. Ensure `agentRulesFile` points at the updated `prompts/agent_rules.md` (pull
+2. Ensure `agentRulesFile` points at the updated `AGENTS.md` (pull
    the repo or sync that file into your deployment).
 3. Restart AO so prompts and rules reload: `ao stop` then `ao start`.
 
@@ -1340,7 +1340,7 @@ the **orchestrator agent**`).
 | Surface | Typical failure today | Fix layer |
 |---------|---------------------|-----------|
 | **Orchestrator** | Bootstrap-only or dead session after kill/collision; `ao spawn` does not revive | This section + worktree preflight + explicit `ao stop`/`ao start`; attach PTY |
-| **Worker** | Missing `agentRulesFile` target (e.g. `prompts/agent_rules_spawn_stub.md` removed by pull while live YAML still references it) | Set `agentRulesFile: prompts/agent_rules.md` in live YAML; worker #2074 file patch |
+| **Worker** | Missing `agentRulesFile` target (e.g. `prompts/agent_rules_spawn_stub.md` removed by pull while live YAML still references it) | Recycle live worker AO sessions; tracked `AGENTS.md` — no `agentRulesFile` on AO 0.10.2+ |
 
 Plugin #2074 diff touches **worker** `printf` inlining only; orchestrator uses
 cat-only launch. A/B revert of `index.js` → `.orig` did not restore full-prompt
@@ -1437,7 +1437,7 @@ Measured missed-savings follow-up to #145. No passthrough manifest change on the
    `-AllProjects -SinceDays 90`). Archive output if useful — numbers are machine-local.
 2. No RTK enable/disable or passthrough change required for **no-go** (broad `ao ` unchanged).
 3. Restart AO (`ao stop` / `ao start`) so workers load updated **RTK read-exploration**
-   guidance in `prompts/agent_rules.md`.
+   guidance in `AGENTS.md`.
 
 Full method: [`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-inventory.md).
 
@@ -1578,7 +1578,7 @@ To adopt after merge:
 1. Merge the **HEAD READY FOR REVIEW** block from `agent-orchestrator.yaml.example` into
    live `orchestratorRules` (including updated TRIGGER REVIEW, STATE-DERIVED REVIEW TRIGGER,
    and ROUND PROGRESSION sections).
-2. Pull `prompts/agent_rules.md` (**Head ready for review** section).
+2. Pull `AGENTS.md` (**Head ready for review** section).
 3. Restart AO: `ao stop` then `ao start`.
 4. Restart `scripts/review-trigger-reconcile.ps1` if it runs as a standalone loop (the script
    now fetches `gh pr checks` and branch-protection required-check names per tick).
@@ -1769,7 +1769,7 @@ Cursor (`stop`). The audit flags missed bulk reads; it does **not** block reads.
 [`docs/coworker-read-delegation-audit.md`](coworker-read-delegation-audit.md)):
 
 1. Resync machine-local policy mirrors (`~/agent-rules/coworker-policy.md`,
-   `~/.codex/AGENTS.md`, `~/.cursor-global`) from `prompts/agent_rules.md`.
+   `~/.codex/AGENTS.md`, `~/.cursor-global`) from `AGENTS.md`.
 2. Add `scripts/invoke-read-delegation-audit-stop.ps1` to `~/.cursor/hooks.json` (`stop`)
    and `.claude/settings.json` (`Stop`) using the documented JSON snippets.
 3. Verify `~/.orchestrator-pack/read-delegation-audit.jsonl` receives `work_unit_verdict`
@@ -1781,7 +1781,7 @@ Cursor (`stop`). The audit flags missed bulk reads; it does **not** block reads.
 After merge of the worker PR that adds RCA/spec discipline rules and
 `check-draft-discipline` guards:
 
-1. Pull `prompts/agent_rules.md` (**RCA spec discipline** section),
+1. Pull `AGENTS.md` (**RCA spec discipline** section),
    `prompts/investigate_root_cause.md`, and the updated architect skills.
 2. Restart AO so workers load the new rules: `ao stop` then `ao start`.
 3. Optional: run `pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command surfaces -RepoRoot .`
@@ -2087,7 +2087,7 @@ Enforcement runs from `.github/workflows/contract-evidence-legacy-list-guard.yml
 
 Issue #386 tightens the existing NO MERGE BY ORCHESTRATOR clause in
 `agent-orchestrator.yaml.example` and adds a worker-facing operator-only-merge
-rule in `prompts/agent_rules.md`. Merge is operator-only; no AO-managed agent
+rule in `AGENTS.md`. Merge is operator-only; no AO-managed agent
 performs or directs a PR merge. The approved-and-green / `merge.ready` completion
 wake is an operator-addressed ready-for-human-merge hand-off, not a cue to merge.
 
@@ -2097,7 +2097,7 @@ wake is an operator-addressed ready-for-human-merge hand-off, not a cue to merge
    `agent-orchestrator.yaml.example` into the live `orchestratorRules` block in
    `agent-orchestrator.yaml`.
 2. Pull the merged repo so live `agentRulesFile` loads the updated
-   `prompts/agent_rules.md` (git-tracked — no manual copy if the path is already
+   `AGENTS.md` (git-tracked — no manual copy if the path is already
    wired).
 3. Restart AO from the operator terminal: `ao stop` then `ao start` (managed
    sessions must not run these commands).
@@ -2132,7 +2132,7 @@ Release gate: `npm test -- review-ready-seed-liveness`.
 
 ## Issue #575 — per-tier draft-review flow and finding-ledger guard
 
-**What changed:** `prompts/agent_rules.md` documents per-tier draft/spec review
+**What changed:** `AGENTS.md` documents per-tier draft/spec review
 (T1/T2/T3), draft-author finding ownership, disposition ledger normalization,
 protected security/scope carve-out, T3 architect lens, and drift escalation.
 `prompts/codex_draft_review_prompt.md` adds the draft reviewer finding bar plus
@@ -2232,18 +2232,18 @@ unaffected (different runtime).
 ## Agent rules in-place restructure (Issue #654)
 
 **Operator adoption:** No `ao stop` / `ao start` required to pick up restructured worker rules.
-AO 0.10.2 does not inject `prompts/agent_rules.md` via `agentRulesFile`; changes take effect via
+AO 0.10.2 does not inject `AGENTS.md` via `agentRulesFile`; changes take effect via
 **tracked worktree files** on the next worker spawn or `git pull`. Recycle live worker sessions
 when you want them to re-read rules immediately.
 
 **New reference docs:**
 
 - `docs/coworker-delegation.md` — coworker examples, PR-diff recipe, ordering rationale (worker core
-  stays in `prompts/agent_rules.md`).
+  stays in `AGENTS.md`).
 - `docs/tiering.md` — task complexity tier rubric and per-tier draft-review flow (architect/draft
-  author); worker pre-flight marker check remains in `prompts/agent_rules.md`.
+  author); worker pre-flight marker check remains in `AGENTS.md`.
 
-**Heading API (draft 224 coordination):** Post-restructure `##` headings in `prompts/agent_rules.md`
+**Heading API (draft 224 coordination):** Post-restructure `##` headings in `AGENTS.md`
 are the extraction surface for draft 224's section generator. Renaming headings after 224 lands
 requires generator regeneration (fail-closed).
 
@@ -2252,7 +2252,7 @@ grep anchor moves in this PR.
 
 **Admission policy:** New worker-rule content must be a worker-LLM behavioral contract; script-owned
 documentation and architect policy belong in `docs/` with one-line pointers. New CI checks must not
-add mirror phrases to `prompts/agent_rules.md` (grandfathered checks only until phase-2
+add mirror phrases to `AGENTS.md` (grandfathered checks only until phase-2
 `docs/review-pipeline.md` extraction).
 ## Issue #613 — wake supervisor orphan discovery (Stop/Status/Start)
 

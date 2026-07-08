@@ -157,7 +157,7 @@ const GH_INVENTORY_SCAN_FILES = [
   'scripts/lib/Autonomous-SpawnWorktreeGate.ps1',
   'scripts/lib/Ci-Failure-Notification-Common.ps1',
   'scripts/pr-scope-check.ps1',
-  'prompts/agent_rules.md',
+  'AGENTS.md',
   'prompts/investigate_root_cause.md',
   'agent-orchestrator.yaml.example',
 ];

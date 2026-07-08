@@ -95,7 +95,7 @@ problem, not probe failure.
 
 ## Red CI with idle worker (Issue #109)
 
-**Required CI** matches `prompts/agent_rules.md` and `orchestratorRules` in
+**Required CI** matches `AGENTS.md` and `orchestratorRules` in
 `agent-orchestrator.yaml.example`: GitHub **required status checks** for the PR base
 when branch protection lists them; otherwise all pack merge-contract checks on the
 PR head (`scope-guard` jobs: Verify orchestrator-pack structure, PR scope guard, Run

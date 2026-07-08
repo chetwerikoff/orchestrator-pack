@@ -1,0 +1,44 @@
+{
+  "description": "Worker-normative MUST/trigger/skip-case phrases from pre-PR prompts/agent_rules.md (Issue #678 AC#2).",
+  "mustPhrases": [
+    "ao acknowledge",
+    "MUST pass `--profile code`",
+    "MUST pass `--profile write`",
+    "more than 400 lines",
+    "more than 200 lines",
+    "index-coverage carve-out",
+    "Cursor-seat advisory floor",
+    "MUST NOT merge",
+    "ready_for_review",
+    "Self-fix is primary",
+    "must not idle",
+    "stop and escalate upward",
+    "MUST go through pack `scripts/gh`",
+    "MUST NOT improvise raw `curl`",
+    "fail closed",
+    "Managed sessions MUST NOT run `ao stop`",
+    "delegate I/O, keep reasoning",
+    "Never compact",
+    "Worker pre-flight (blocking)"
+  ],
+  "docsOnlyPhrases": [
+    {
+      "phrase": "event-driven review trigger",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "PRE-RUN COVERAGE RE-CHECK",
+      "path": "docs/script-owned-review-pipeline.md"
+    },
+    {
+      "phrase": "PRE-RUN HEAD-READY RE-CHECK",
+      "path": "docs/script-owned-review-pipeline.md"
+    }
+  ],
+  "pointerOnlyPhrases": [
+    {
+      "phrase": "recurrence-diagnostic",
+      "paths": ["prompts/investigate_root_cause.md", ".cursor/rules/rca-spec-discipline.mdc"]
+    }
+  ]
+}

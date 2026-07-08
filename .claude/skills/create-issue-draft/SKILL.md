@@ -598,7 +598,7 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
      architectural (Codex) review per #575.
    - **T2:** light design pass; architectural review only (no competitive stage).
    - **T3:** full #237 design-analysis gate + #575 T3 pipeline (counts authoritative
-     in `prompts/agent_rules.md` — do not restate here).
+     in `AGENTS.md` — do not restate here).
 4. **Never-skipped floor (every tier):** worker-safety contract (Goal,
    denylist/allowed-roots, Acceptance criteria, Verification), #366 contract-evidence,
    #221 behavior-kind, #575 finding-ledger/carve-out guard — invoked, not rebuilt.
@@ -636,7 +636,7 @@ assignment or skipped design/adversarial stages. Emits a passing **tier-fence** 
 **Tier is gate authority, not brief say-so.** The tier gate (above) already
 recomputed tier and selected stages. This section governs **spec review only** —
 worker PR-code review is unchanged. Pipeline counts remain authoritative in
-`prompts/agent_rules.md` (**Per-tier draft-review flow**, Issue #575).
+`AGENTS.md` (**Per-tier draft-review flow**, Issue #575).
 
 **Roles (per #579 relocation):** the **draft-author session** (Cursor default;
 Codex or Sonnet 5 on explicit user request only) authors the spec from the
@@ -645,7 +645,7 @@ pass, normalizes findings into the disposition ledger, and owns accept/reject.
 The **architect** does not re-decide accepted findings; on T3 they run one lens
 pass over the reject partition only, then review the draft before sync.
 
-Full contract: `prompts/agent_rules.md` (**Per-tier draft-review flow**, Issue
+Full contract: `AGENTS.md` (**Per-tier draft-review flow**, Issue
 #575).
 
 ### Review artifact layout

@@ -192,11 +192,11 @@ low-risk guidance + inventory only. Re-evaluate when regeneration shows high-ris
 ≥ 15% per the inventory doc.
 
 Worker read-exploration guidance (prefer file tools for reads): **RTK read-exploration** in
-[`prompts/agent_rules.md`](../prompts/agent_rules.md).
+[`AGENTS.md`](../AGENTS.md).
 
 ## Related docs
 
 - [RTK missed-savings inventory](rtk-missed-savings-inventory.md)
 - [Ubuntu / WSL2 setup](ubuntu-setup-runbook.md)
-- [Coworker CLI delegation](../prompts/agent_rules.md) (separate from RTK)
+- [Coworker CLI delegation](../AGENTS.md) (separate from RTK)
 - Upstream RTK plugin: https://github.com/Arcanada-one/coworker/blob/main/docs/rtk-plugin.md

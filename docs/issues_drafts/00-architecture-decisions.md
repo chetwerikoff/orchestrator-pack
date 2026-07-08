@@ -631,20 +631,22 @@ Record Gate 0 + two-track table in [`docs/architecture.md`](../architecture.md#f
 
 ## S. Delegation policy fan-out (single source, thin pointers)
 
-Decision taken 2026-06-04: the Coworker CLI delegation policy (#148) lives only in
-`prompts/agent_rules.md`. Without fan-out, Codex, standalone Cursor CLI, and Claude Code
-(architect) never see rules that AO injects only via `agentRulesFile`.
+Decision taken 2026-06-04; amended 2026-07-08 (#678): Coworker CLI delegation policy (#148)
+lives in [`AGENTS.md`](../../AGENTS.md) — the single worker/agent rulebook for AO 0.10.2+
+(Cursor and Codex workers). The retired `agentRulesFile` → `prompts/agent_rules.md` injection
+leg is removed; workers receive policy via native `AGENTS.md` pickup in fresh worktrees.
 
 1. **Single canonical body.** Triggers, profiles, anti-delegation, reviewer carve-out, and
-   provider-input fence are authored and maintained only in `prompts/agent_rules.md` (#148).
-   No second authoritative copy in pointer surfaces.
+   provider-input fence are authored and maintained only in [`AGENTS.md`](../../AGENTS.md) (#148,
+   #678). No second authoritative copy in pointer surfaces.
 
 2. **One thin pointer per entrypoint** (names the canonical path; does not paste ≥10 consecutive
    policy lines):
-   - AO workers — `agentRulesFile` → `prompts/agent_rules.md` (injection, not a separate file).
-   - Codex — [`AGENTS.md`](../../AGENTS.md) coworker delegation section.
-   - Standalone Cursor CLI — always-applied [`.cursor/rules/`](../../.cursor/rules/) rule.
-   - Architect (Claude Code) — [`CLAUDE.md`](../../CLAUDE.md) coworker delegation section.
+   - AO workers (Cursor/Codex) — native [`AGENTS.md`](../../AGENTS.md) pickup (ungated coworker/RTK
+     core + self-gated worker lifecycle region).
+   - Standalone Cursor CLI — always-applied [`.cursor/rules/`](../../.cursor/rules/) for RCA and
+     draft-author pointers only (coworker/RTK `.mdc` retired #678).
+   - Architect (Claude Code) — [`CLAUDE.md`](../../CLAUDE.md) coworker delegation pointer.
 
 3. **Advisory enforcement of a mandatory obligation.** Amended 2026-06-04 (#148 rewrite): read
    delegation is a **mandatory floor** — when an ask trigger fires, the corpus is fence-clean, and the

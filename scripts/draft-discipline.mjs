@@ -352,12 +352,12 @@ export function checkRcaSpecDisciplineSurfaces(repoRoot, configPath) {
     }
   }
 
-  const agentRulesPath = path.join(repoRoot, 'prompts/agent_rules.md');
+  const agentRulesPath = path.join(repoRoot, 'AGENTS.md');
   let agentRules = '';
   try {
     agentRules = readFileSync(agentRulesPath, 'utf8');
   } catch {
-    errors.push('missing prompts/agent_rules.md for mirror check');
+    errors.push('missing AGENTS.md for mirror check');
   }
 
   if (agentRules && config.agentRulesMirrors) {
@@ -370,8 +370,8 @@ export function checkRcaSpecDisciplineSurfaces(repoRoot, configPath) {
         errors.push(`missing agent_rules mirror: ${mirror}`);
         continue;
       }
-      if (!content.includes('agent_rules.md') && !content.includes('RCA spec discipline')) {
-        errors.push(`mirror ${mirror} does not point at agent_rules.md or RCA spec discipline`);
+      if (!content.includes('AGENTS.md') && !content.includes('RCA spec discipline')) {
+        errors.push(`mirror ${mirror} does not point at AGENTS.md or RCA spec discipline`);
       }
     }
   }

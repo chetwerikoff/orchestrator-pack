@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Moved-content guard: deep-dive anchors must not remain in prompts/agent_rules.md (Issue #654).
+  Moved-content guard: deep-dive anchors must not remain in AGENTS.md (Issue #678).
 #>
 param(
     [string]$RepoRoot
@@ -11,32 +11,35 @@ param(
 $gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
 $RepoRoot = $gate.RepoRoot
 
-$agentRules = Join-Path $RepoRoot 'prompts/agent_rules.md'
+$agentsMd = Join-Path $RepoRoot 'AGENTS.md'
 $coworkerDoc = Join-Path $RepoRoot 'docs/coworker-delegation.md'
 $tieringDoc = Join-Path $RepoRoot 'docs/tiering.md'
+$scriptOwnedDoc = Join-Path $RepoRoot 'docs/script-owned-review-pipeline.md'
 
-foreach ($path in @($agentRules, $coworkerDoc, $tieringDoc)) {
+foreach ($path in @($agentsMd, $coworkerDoc, $tieringDoc, $scriptOwnedDoc)) {
     if (-not (Test-Path -LiteralPath $path)) {
         Write-Host "[FAIL] missing required file: $path"
         exit 1
     }
 }
 
-$rulesText = Get-Content -LiteralPath $agentRules -Raw
+$agentsText = Get-Content -LiteralPath $agentsMd -Raw
 $coworkerText = Get-Content -LiteralPath $coworkerDoc -Raw
 $tieringText = Get-Content -LiteralPath $tieringDoc -Raw
+$scriptOwnedText = Get-Content -LiteralPath $scriptOwnedDoc -Raw
 
-$forbiddenInRules = @(
+$forbiddenInAgents = @(
     '## Task complexity tier rubric',
     '## Per-tier draft-review flow',
     '**Worked example.**',
-    'git diff <base-ref>...HEAD > /tmp/review.diff'
+    'git diff <base-ref>...HEAD > /tmp/review.diff',
+    '## Script-owned review pipeline (documentation)'
 )
 
 $failures = [System.Collections.Generic.List[string]]::new()
-foreach ($pattern in $forbiddenInRules) {
-    if ($rulesText.Contains($pattern)) {
-        $failures.Add("prompts/agent_rules.md still contains moved deep-dive anchor: $pattern")
+foreach ($pattern in $forbiddenInAgents) {
+    if ($agentsText.Contains($pattern)) {
+        $failures.Add("AGENTS.md still contains moved deep-dive anchor: $pattern")
     }
 }
 
@@ -65,14 +68,16 @@ foreach ($pattern in $requiredInTiering) {
     }
 }
 
-$preambleMarkers = @(
-    'worker-LLM behavioral contract',
-    'New CI checks must NOT require mirror phrases'
+$requiredInScriptOwned = @(
+    '## Event-driven review trigger',
+    '## Orchestrator review-run coverage',
+    '## Head ready for review',
+    'event-driven review trigger'
 )
 
-foreach ($pattern in $preambleMarkers) {
-    if (-not $rulesText.Contains($pattern)) {
-        $failures.Add("prompts/agent_rules.md missing admission-policy marker: $pattern")
+foreach ($pattern in $requiredInScriptOwned) {
+    if (-not $scriptOwnedText.Contains($pattern)) {
+        $failures.Add("docs/script-owned-review-pipeline.md missing required content: $pattern")
     }
 }
 
@@ -83,18 +88,18 @@ $stableTitles = @(
 )
 
 foreach ($title in $stableTitles) {
-    if (-not $rulesText.Contains($title)) {
-        $failures.Add("prompts/agent_rules.md missing pointer-stable title: $title")
+    if (-not $agentsText.Contains($title)) {
+        $failures.Add("AGENTS.md missing pointer-stable title: $title")
     }
 }
 
 if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] agent-rules moved-content guard:'
+    Write-Host '[FAIL] AGENTS.md moved-content guard:'
     foreach ($item in $failures) {
         Write-Host " - $item"
     }
     exit 1
 }
 
-Write-Host '[PASS] agent-rules moved-content guard (split layout and preamble markers)'
+Write-Host '[PASS] AGENTS.md moved-content guard (split layout and stable titles)'
 exit 0

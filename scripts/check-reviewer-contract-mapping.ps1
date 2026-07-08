@@ -13,7 +13,7 @@ $failures = New-ReviewerPolicyCheckFailures
 $helperPs1 = Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ps1'
 
 $requiredPaths = @(
-    (Join-Path $Root 'prompts/agent_rules.md'),
+    (Join-Path $Root 'AGENTS.md'),
     (Join-Path $Root 'prompts/codex_review_prompt.md'),
     $helperPs1,
     (Join-Path $Root 'scripts/invoke-reviewer-contract-mapping.ts'),
@@ -23,7 +23,7 @@ Test-ReviewerPolicyRequiredFiles -Root $Root -RequiredPaths $requiredPaths -Fail
 
 if ($failures.Count -eq 0) {
     $prompts = Get-ReviewerPolicyPromptTexts -Root $Root
-    Test-ReviewerPolicyPromptPhrases -Label 'prompts/agent_rules.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
+    Test-ReviewerPolicyPromptPhrases -Label 'AGENTS.md' -Text $prompts.AgentRules -Failures $failures -RequiredPhrases @(
         'Contract-mapping pass (reviewers only)',
         'candidate evidence',
         'direct diff inspection',

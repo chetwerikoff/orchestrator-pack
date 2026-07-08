@@ -1,9 +1,6 @@
 {
   "version": 1,
-  "policyBearingCursorRules": [
-    ".cursor/rules/coworker-delegation.mdc",
-    ".cursor/rules/coworker-rtk-read-exploration.mdc"
-  ],
+  "policyBearingCursorRules": [],
   "stalePatterns": [
     "all source reads delegate",
     "every Cursor source read",

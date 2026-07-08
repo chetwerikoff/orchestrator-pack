@@ -4,7 +4,7 @@ Phase 1 enforcement for coworker read delegation: a **tolerant compliance signal
 work-unit completion. The audit **never blocks reads**; it surfaces missed bulk reads for
 review and emits metrics for a deferred Phase-2 hard-block decision.
 
-Canonical ask thresholds live in [`prompts/agent_rules.md`](../prompts/agent_rules.md).
+Canonical ask thresholds live in [`AGENTS.md`](../AGENTS.md).
 Implementation: [`docs/read-delegation-audit.mjs`](../docs/read-delegation-audit.mjs).
 Hook entry: [`scripts/invoke-read-delegation-audit-stop.ps1`](../scripts/invoke-read-delegation-audit-stop.ps1).
 
@@ -47,7 +47,7 @@ For installations that already point both Stop/stop hooks at `scripts/invoke-rea
 
 ### 1. Resync tracked policy copies
 
-After merge, resync machine-local mirrors of `prompts/agent_rules.md`:
+After merge, resync machine-local mirrors of `AGENTS.md`:
 
 - `~/agent-rules/coworker-policy.md`
 - generated `~/.codex/AGENTS.md`

@@ -80,7 +80,7 @@ Edit the `projects:` block for your repository: set `repo`, `path`, and
 `defaultBranch`. Keep:
 
 ```yaml
-agentRulesFile: prompts/agent_rules.md
+agentRulesFile: AGENTS.md
 ```
 
 Do not add unsupported YAML fields (for example a top-level `reviewer:` role).
