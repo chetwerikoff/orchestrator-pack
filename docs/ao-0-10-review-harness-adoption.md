@@ -101,34 +101,31 @@ pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
 
 Do **not** edit live `agent-orchestrator.yaml` from automation — harness adoption is operator-only.
 
-## 6. Unified harness path — structured [Pn] findings (Issue #658)
+## 6. Unified harness path — post-submit structured [Pn] enforcement (Issues #658/#683)
 
-After #658, the codex harness reviewer must run the pack JSONL bridge before
-`ao review submit`:
+After AO auto-submits a codex harness review, the pack validates the same
+`latestRun.body` snapshot already read by the #669 delivery poll loop. Valid
+content is mapper JSON with `[P0]`–`[P3]` finding titles or the #663 clean terminal
+verdict (`verdict: clean`, `findingCount: 0`, `findings: []`).
 
-```powershell
-pwsh -NoProfile -File scripts/harness-review-bridge.ps1 `
-  -RunId <review-run-id> `
-  -RepoRoot . `
-  -Base origin/main `
-  -TrustedBaseRoot <trusted-pack-root>
-```
-
-Smoke proof: trigger a harness review, then confirm `latestRun.body` (and worker
-auto-delivery) contains JSON with `[P0]`–`[P3]` titles — not prose `Finding:` /
-`BLOCKING:` headings.
+Smoke proof: trigger a harness review, then confirm `latestRun.body` contains
+structured JSON — not prose `Finding:` / `BLOCKING:` headings, empty content, or
+`LGTM`. Invalid complete/delivered content is rejected; delivered invalid content
+is superseded by the bounded re-trigger path, while running rows remain covered by
+the #624 stale-run path.
 
 ### Kill-switch (rollback)
 
-Set `PACK_HARNESS_BRIDGE_DISABLED=1` before the harness reviewer turn. The bridge
-aborts before mapper/submit (classified failure). Complete review manually:
+Set `PACK_HARNESS_PN_CONTENT_SHAPE_DISABLED=1` only as a fail-closed emergency
+switch. The post-submit gate escalates and does not accept prose. Complete review
+manually:
 
 ```powershell
 pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
 ```
 
 Then operator submits via the normal AO path. Do not rely on warn-only skip — the
-bridge must fail closed.
+content-shape gate must fail closed.
 
 ### Unset reviewers trap
 

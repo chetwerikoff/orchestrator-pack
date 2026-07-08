@@ -1,0 +1,23 @@
+name: harness-pn-live-smoke
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    name: Live harness [Pn] smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run live smoke (fail-closed without AO daemon)
+        shell: pwsh
+        run: ./scripts/check-harness-post-submit-pn-live-smoke.ps1

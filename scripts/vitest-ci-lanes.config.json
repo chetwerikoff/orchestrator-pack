@@ -56,6 +56,7 @@
     "scripts/draft-author-relocation-contract.test.ts": "light",
     "scripts/guard-direct-edit.test.ts": "light",
     "scripts/harness-review-bridge.test.ts": "light",
+    "scripts/harness-post-submit-pn-content-shape.test.ts": "light",
     "scripts/finding-ledger-guard.test.ts": "light",
     "scripts/external-output-shape-guard.test.ts": "light",
     "scripts/gh-inventory-static-guard.test.ts": "light",

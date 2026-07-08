@@ -24,6 +24,8 @@ param(
     [string]$FixtureSessionsPath = '',
     [string]$FixtureOpenPrsPath = '',
     [string]$DeliveryMessage = '',
+    [int]$HarnessPnRetriggerCount = 0,
+    [int]$HarnessPnMaxRetriggerCount = 3,
     [switch]$DryRun
 )
 
@@ -267,6 +269,33 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
     exit 0
 }
 
+function Invoke-HarnessPostSubmitPnReconcileFromGate {
+    param([string]$Reason)
+
+    $script = Join-Path $PSScriptRoot 'harness-post-submit-pn-reconcile.ps1'
+    $args = @(
+        '-NoProfile',
+        '-File', $script,
+        '-SessionId', $SessionId,
+        '-RunId', $RunId,
+        '-BatchId', $BatchId,
+        '-PrNumber', $PrNumber,
+        '-TargetSha', $TargetSha,
+        '-Verdict', $Verdict,
+        '-Reason', $Reason,
+        '-RetriggerCount', ($HarnessPnRetriggerCount + 1)
+    )
+    if ($DryRun) { $args += '-DryRun' }
+    Write-ScriptedReviewDeliveryGateLog "invalid harness content; invoking post-submit [Pn] reconcile reason=$Reason"
+    & pwsh @args
+    if ($LASTEXITCODE -ne 0) {
+        Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'harness_pn_retrigger_failed' -Detail "exit=$LASTEXITCODE reason=$Reason" | Out-Null
+        exit 2
+    }
+    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
+    exit 0
+}
+
 $messageText = if ($DeliveryMessage) { $DeliveryMessage.Trim() } else { [Console]::In.ReadToEnd() }
 if ($null -eq $messageText) { $messageText = '' }
 $messageText = $messageText.Trim()
@@ -298,6 +327,8 @@ if ($Verdict -eq 'approved') {
         startedAtMs          = $startedAtMs
         nowMs                = $nowMs
         initialObservedRunId = ''
+        retriggerCount       = $HarnessPnRetriggerCount
+        maxRetriggerCount    = $HarnessPnMaxRetriggerCount
         config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
@@ -317,6 +348,9 @@ if ($Verdict -eq 'approved') {
         }
         $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
         Exit-ScriptedReviewDeliveryGateAfterExplicitSend -SendResult $send
+    }
+    if ($action -eq 'reject_retrigger') {
+        Invoke-HarnessPostSubmitPnReconcileFromGate -Reason ([string]$terminal.reason)
     }
 
     Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'approved_unexpected_terminal' | Out-Null
@@ -355,6 +389,8 @@ while ($true) {
         startedAtMs         = $startedAtMs
         nowMs               = $nowMs
         initialObservedRunId = $initialObservedRunId
+        retriggerCount       = $HarnessPnRetriggerCount
+        maxRetriggerCount    = $HarnessPnMaxRetriggerCount
         config              = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
@@ -379,6 +415,9 @@ while ($true) {
         }
         $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
         Exit-ScriptedReviewDeliveryGateAfterExplicitSend -SendResult $send
+    }
+    if ($action -eq 'reject_retrigger') {
+        Invoke-HarnessPostSubmitPnReconcileFromGate -Reason ([string]$terminal.reason)
     }
 
     if (-not $step.shouldContinuePolling) {

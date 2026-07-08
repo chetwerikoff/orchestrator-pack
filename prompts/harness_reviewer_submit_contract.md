@@ -3,19 +3,22 @@
 This file supplements `prompts/codex_review_prompt.md` for AO 0.10 **codex harness**
 reviewer sessions. It does **not** replace the trusted-root prompt or mapper chain.
 
-## Before `ao review submit`
+## Submit body shape
 
-1. Resolve trusted pack root (`AO_TRUSTED_PACK_ROOT` or operator main worktree).
-2. Run `scripts/harness-review-bridge.ps1` from that root with `-RunId` and `-TrustedBaseRoot`.
-3. Confirm stdout JSON carries `[P0]`–`[P3]` on every finding title (scope findings may
-   also include `[scope-violation]` but still require the priority prefix) and
-   `severity: blocking|non-blocking` inside each finding body.
+Submit mapper JSON, not prose. Finding titles carry `[P0]`–`[P3]` (scope findings
+may also include `[scope-violation]` but still require the priority prefix), and
+each finding body carries `severity: blocking|non-blocking`.
+
+After AO auto-submits the harness review, the pack validates `latestRun.body` in
+the #669 delivery poll loop. Valid bodies are mapper findings JSON or the #663
+clean terminal verdict (`{"verdict":"clean","findingCount":0,"findings":[]}`).
+Empty bodies, `LGTM`, and prose `Finding:` / `BLOCKING:` bodies are rejected and
+bounded-retriggered; delivered invalid bodies are superseded instead of accepted.
 
 ## Operator fallback
 
-When the kill-switch is enabled (`PACK_HARNESS_BRIDGE_DISABLED=1`), stop and ask the
-operator to complete review via `scripts/invoke-pack-review.ps1` (manual path; frozen
-contract).
+When the kill-switch is enabled (`PACK_HARNESS_PN_CONTENT_SHAPE_DISABLED=1`), the
+post-submit gate escalates. It must not silently accept prose or empty content.
 
 ## Claude harness after supersede
 
