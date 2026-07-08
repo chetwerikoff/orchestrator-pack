@@ -63,6 +63,10 @@ if ($capMjs -notmatch 'cleanEntry\.targetSha === currentHeadSha') {
     Write-Host 'review-cycle-cap.mjs must only inherit clean_early_stop merge eligibility on the current head'
     exit 1
 }
+if ($capMjs -notmatch 'if \(!prState\.tierFrozen\)') {
+    Write-Host 'review-cycle-cap.mjs must freeze tier at review-cycle start before completed runs exist'
+    exit 1
+}
 
 $claimedRunPs = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1') -Raw
 if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {

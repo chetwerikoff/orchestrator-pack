@@ -131,6 +131,21 @@ describe('tier default T2 cap 4', () => {
     expect(resolved.cap).toBe(8);
   });
 
+  it('freezes tier at first automated review launch before any completed runs', () => {
+    const t2Body = '```complexity-tier\ntier: T2\n```';
+    const t3Body = '```complexity-tier\ntier: T3\n```';
+    const head = 'launch'.padEnd(40, 'l');
+    const launch = run(646, head, [], { issueBody: t2Body });
+    expect(launch.allowStart).toBe(true);
+    expect(launch.prState?.tierFrozen).toBe(true);
+    expect(launch.prState?.tier).toBe('T2');
+    expect(launch.prState?.cap).toBe(4);
+
+    const afterRelabel = run(646, head, [], { capState: launch.capState, issueBody: t3Body });
+    expect(afterRelabel.prState?.tier).toBe('T2');
+    expect(afterRelabel.prState?.cap).toBe(4);
+  });
+
   it('freezes tier at cycle open — relabel does not change active cap', () => {
     const t2Body = '```complexity-tier\ntier: T2\n```';
     const t3Body = '```complexity-tier\ntier: T3\n```';

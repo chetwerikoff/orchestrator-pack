@@ -365,7 +365,7 @@ export function normalizePrCapCycleState(raw, prNumber) {
   const state = raw?.[key] && typeof raw[key] === 'object' ? { ...raw[key] } : {};
   const hasOpenCycle = Boolean(state.cycleOpenedAtUtc);
   const tierCap = resolveTierAndCap({
-    frozenTier: hasOpenCycle ? state.tier ?? null : null,
+    frozenTier: hasOpenCycle || state.tierFrozen ? state.tier ?? null : null,
     issueBody: null,
   });
   return {
@@ -437,21 +437,22 @@ export function syncReviewCycleCapState(input) {
   }
 
   if (!prState.cycleOpenedAtUtc) {
+    if (!prState.tierFrozen) {
+      const launchTierCap = resolveTierAndCap({
+        tier: input.tier,
+        issueBody: input.issueBody,
+      });
+      prState.tier = launchTierCap.tier;
+      prState.cap = launchTierCap.cap;
+      prState.tierFrozen = true;
+    }
     const probeBudget = deriveDistinctHeadBudget(input.reviewRuns ?? [], prNumber, currentHeadSha);
     const firstConsuming = probeBudget[0];
     if (firstConsuming) {
-      const tierCap = resolveTierAndCap({
-        tier: input.tier,
-        issueBody: input.issueBody,
-        frozenTier: prState.tierFrozen ? prState.tier : null,
-      });
-      prState.tier = tierCap.tier;
-      prState.cap = tierCap.cap;
       prState.cycleOpenedAtUtc =
         firstConsuming.completedAt != null
           ? new Date(Date.parse(String(firstConsuming.completedAt)) || nowMs).toISOString()
           : new Date(0).toISOString();
-      prState.tierFrozen = true;
     }
   }
 
