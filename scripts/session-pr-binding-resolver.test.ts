@@ -54,14 +54,27 @@ describe('session-pr-binding-resolver positive outcome', () => {
     expect(binding.prNumber).toBe(690);
     expect(binding.source).toBe('display_name');
 
-    const owner = resolveHeadOwningWorkerSessionId(
+    const owner = resolvePrOwningWorkerSessionBinding(
       [{ ...issueOnlyListRow, role: 'worker', status: 'working' }],
       690,
-      headSha,
       [openPr690],
-      { sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } } },
+      {
+        headSha,
+        sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } },
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      },
     );
-    expect(owner).toBe('orchestrator-pack-45');
+    expect(owner.sessionId).toBe('orchestrator-pack-45');
+    expect(
+      resolveHeadOwningWorkerSessionId(
+        [{ ...issueOnlyListRow, role: 'worker', status: 'working' }],
+        690,
+        headSha,
+        [openPr690],
+        { sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } } },
+      ),
+    ).toBeNull();
   });
 
   it('resolves owner via unique issue branch correlation when displayName is non-numeric', () => {
@@ -70,13 +83,18 @@ describe('session-pr-binding-resolver positive outcome', () => {
     expect(binding.source).toBe('issue_correlation');
     expect(binding.prNumber).toBe(690);
 
-    const owner = resolveHeadOwningWorkerSessionId(
+    const owner = resolvePrOwningWorkerSessionBinding(
       [session],
       690,
-      headSha,
       [openPr690],
+      {
+        headSha,
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      },
     );
-    expect(owner).toBe('orchestrator-pack-45');
+    expect(owner.sessionId).toBe('orchestrator-pack-45');
+    expect(resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690])).toBeNull();
   });
 });
 
@@ -157,6 +175,18 @@ describe('session-pr-binding-resolver scenario matrix', () => {
       openPr690,
       { number: 691, headRefOid: headSha, headRefName: 'issue-690-dup' },
     ]);
+    expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
+  });
+
+  it('scenario 3b: issue with many open PRs defers before headSha disambiguation', () => {
+    const binding = resolveSessionPrBinding(
+      issueOnlyListRow,
+      [
+        openPr690,
+        { number: 691, headRefOid: 'cccccccccccccccccccccccccccccccccccccccc', headRefName: 'issue-690-dup' },
+      ],
+      { headSha },
+    );
     expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
   });
 

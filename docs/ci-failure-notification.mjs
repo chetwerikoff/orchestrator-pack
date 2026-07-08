@@ -10,7 +10,8 @@ import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, rmSync, re
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
-import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs, getStoredReportHeadSha } from './review-trigger-reconcile.mjs';
+import { sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs, getStoredReportHeadSha } from './review-trigger-reconcile.mjs';
+import { resolvePrOwningWorkerSessionBinding } from './session-pr-binding-resolver.mjs';
 import { normalizeSha, toArray, getSessionIdentifier } from './review-reconcile-primitives.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 import {
@@ -292,7 +293,13 @@ export function resolveLivePrOwner({ workerState, episode }) {
   const validation = validateWorkerStateInput(workerState);
   if (!validation.ok) return { ok: false, ...validation };
   const ep = normalizeEpisodeKey(episode);
-  const ownerId = resolveHeadOwningWorkerSessionId(workerState.sessions, ep.prNumber, ep.headSha, workerState.openPrs);
+  const prBinding = resolvePrOwningWorkerSessionBinding(workerState.sessions, ep.prNumber, workerState.openPrs, {
+    headSha: ep.headSha,
+    requireLive: true,
+    isLive: isSessionAlive,
+    getSessionId: getSessionIdentifier,
+  });
+  const ownerId = prBinding.sessionId;
   if (!ownerId) {
     return { ok: true, ownerId: null, owner: null, live: false, reportState: null, targetGeneration: null };
   }
@@ -1156,7 +1163,13 @@ export function planCiFailureReactionRecords(input) {
       redFailingRuns,
     });
     const enrichedCiSource = { ...ciSource, aggregateRunId };
-    const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+    const prBinding = resolvePrOwningWorkerSessionBinding(sessions, prNumber, openPrs, {
+      headSha,
+      requireLive: true,
+      isLive: isSessionAlive,
+      getSessionId: getSessionIdentifier,
+    });
+    const targetId = prBinding.sessionId;
     if (!targetId) continue;
     const owner = findSessionByIdentifier(sessions, targetId);
     const activeTarget = {

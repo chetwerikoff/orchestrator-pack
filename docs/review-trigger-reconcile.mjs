@@ -571,17 +571,7 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
     return ownsHeadMatch;
   }
 
-  const prBinding = resolvePrOwningWorkerSessionBinding(sessions, prNumber, prList, {
-    headSha,
-    requireLive: true,
-    sessionDetailsById,
-    isLive: isLiveWorkerSession,
-    getSessionId: getSessionIdentifier,
-  });
-  if (prBinding.failClosed || !prBinding.sessionId) {
-    return null;
-  }
-  return prBinding.sessionId;
+  return null;
 }
 
 /**

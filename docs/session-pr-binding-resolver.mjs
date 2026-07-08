@@ -187,10 +187,8 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
     };
   }
 
-  const matches = listIssueCorrelatedOpenPrs(issueNumber, prList, session, {
-    headSha: options.headSha,
-  });
-  if (matches.length > 1) {
+  const issueScoped = listIssueCorrelatedOpenPrs(issueNumber, prList, session);
+  if (issueScoped.length > 1) {
     return {
       bound: false,
       prNumber: null,
@@ -199,6 +197,11 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
       deferReason: DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
     };
   }
+  const matches = options.headSha
+    ? listIssueCorrelatedOpenPrs(issueNumber, prList, session, {
+        headSha: options.headSha,
+      })
+    : issueScoped;
   if (matches.length === 1) {
     const prNumber = numberOrZero(matches[0]?.number);
     if (prNumber > 0) {
