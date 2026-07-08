@@ -97,6 +97,13 @@ export interface AoSession {
   role?: string;
   prNumber?: number | null;
   pr?: string | null;
+  issue?: string | number | null;
+  issueId?: string | number | null;
+  issueNumber?: number | null;
+  displayName?: string;
+  branch?: string;
+  headBranch?: string;
+  headRefName?: string;
   ownedHeadSha?: string;
   headRefOid?: string;
   status?: string;
