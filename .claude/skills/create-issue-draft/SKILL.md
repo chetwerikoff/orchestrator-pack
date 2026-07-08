@@ -331,7 +331,13 @@ not pasted into the draft body (same convention as #237) so the spec stays lean.
 
 ## Draft file structure (fixed order)
 
-Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the issue title.
+Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the **GitHub Issue title**
+and must carry the **recomputed tier** as a bracketed prefix: `[T1]`, `[T2]`, or
+`[T3]`, then a space, then the task name — e.g. `# [T3] Worker rules delivery
+restoration`. The prefix must match the `tier:` value in the `complexity-tier`
+fence. **Skip-line** inputs (`skip-line: true`) omit the tier prefix. Update the
+H1 whenever tier is raised on recompute (mid-flight or post-review drift) before
+sync.
 
 1. **Prerequisite** — issues that must merge first, **plus the already-merged
    issues this draft builds on or references** (from the prior-art reconnaissance
@@ -554,7 +560,8 @@ Runs **before** per-tier review stages and **before** sync. The gate **recompute
 tier from the Issue #574 rubric over the brief text; the architect brief tier is an
 **advisory prior only** — the gate may override upward, never downward (#574
 monotonic rule). Write the recomputed tier to the draft and synced issue body as a
-machine-readable fence.
+machine-readable fence, and set the draft H1 / GitHub Issue title to `[T<n>]
+<task name>` (see **Draft file structure** — skip-line inputs omit the prefix).
 
 ### `complexity-tier` fence (mandatory unless on #237 skip line)
 
@@ -603,9 +610,10 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
    through this gate. Explicit user invocation of an adversarial wrapper **floors
    effective tier at ≥ T2** and preserves the requested adversarial stage even when
    recompute yields T1.
-7. **Mid-flight upward recompute:** stop, raise fence, run skipped stages, resume.
-   Never sync below recomputed tier. If escalation happens after first sync, re-sync
-   the issue body with the raised fence before proceeding.
+7. **Mid-flight upward recompute:** stop, raise fence, **update the H1 tier prefix**
+   to match, run skipped stages, resume. Never sync below recomputed tier. If
+   escalation happens after first sync, re-sync the issue body **and title** with
+   the raised fence before proceeding.
 8. **Post-review drift recompute:** on **final draft text** (not the brief), recompute
    tier; upward drift escalates to the architect before publish (#188 drift hook).
 
@@ -746,7 +754,8 @@ After T3 architectural review converges:
 
 After review completes, recompute tier (Issue #189 / draft C). **Upward** drift —
 including scope growth from accepted findings — escalates to the architect before
-publish. Downward drift is impossible (#574 monotonic rule).
+publish; when tier rises, update the H1 / issue title prefix to match before sync.
+Downward drift is impossible (#574 monotonic rule).
 
 **Sync gate:** do not run `scripts/publish-issue-body-sync` create/edit until
 the tier-gate guard passes, T3 stage-completeness guard passes when tier is T3,
