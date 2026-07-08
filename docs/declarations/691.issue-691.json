@@ -1,0 +1,30 @@
+{
+  "issue_number": 691,
+  "iteration_id": "issue-691",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-08T12:05:00.000Z",
+  "baseline": {
+    "commit_sha": "c16ddc7228455bbc2e8e218c993c95f90e331fff",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c9787cad2f4081cf378e6119edd51aa4e6360f0cc4cfdfa2d993a0474f0853b7"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "docs/ci-pipeline-split.md",
+    "docs/declarations/691.issue-691.json",
+    "scripts/check-ci-pipeline-split.ps1",
+    "scripts/check-ci-pipeline-split.test.ts",
+    "scripts/enforce-vitest-runtime-budget.mjs",
+    "scripts/launch-argv-inventory.json",
+    "scripts/lib/vitest-json-report.mjs",
+    "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
+    "scripts/lib/vitest-runtime-history-merge.mjs",
+    "scripts/refresh-vitest-runtime-history.mjs",
+    "scripts/refresh-vitest-runtime-history.ps1",
+    "scripts/run-vitest-heavy-shard.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

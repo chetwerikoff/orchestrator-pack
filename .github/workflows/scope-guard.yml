@@ -143,6 +143,9 @@ jobs:
             package-lock.json
             trusted-scope-guard/package-lock.json
 
+      - name: Install npm dependencies (PR head)
+        run: npm ci --include=dev
+
       - name: Run scope guard
         shell: pwsh
         env:
