@@ -82,6 +82,7 @@
     "scripts/ao-events-fail-soft.test.ts": 90000,
     "scripts/audit-jsonl-retention.test.ts": 180000,
     "scripts/github-fleet-shared-read-model.test.ts": 180000,
-    "scripts/review-start-claim-run-binding.test.ts": 200000
+    "scripts/review-start-claim-run-binding.test.ts": 200000,
+    "scripts/review-start-preflight-shield.test.ts": 300000
   }
 }
