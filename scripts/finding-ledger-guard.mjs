@@ -113,6 +113,33 @@ function indexOfFirstReviewerFindingLine(text, fromIndex = 0) {
   return -1;
 }
 
+const INLINE_PROTECTED_FINDING_PATTERN =
+  /(?<!binding-)\btype:\s*(security|scope-violation)\b[^\n]{0,320}?(?<!binding-)\bid:\s*[A-Za-z0-9._-]+\b|(?<!binding-)\bid:\s*[A-Za-z0-9._-]+\b[^\n]{0,320}?(?<!binding-)\btype:\s*(security|scope-violation)\b/i;
+
+function indexOfInlineProtectedFinding(text, fromIndex = 0) {
+  const slice = text.slice(fromIndex);
+  const match = INLINE_PROTECTED_FINDING_PATTERN.exec(slice);
+  if (!match) {
+    return -1;
+  }
+  return fromIndex + match.index;
+}
+
+function indexOfFirstFindingSignal(text, fromIndex = 0) {
+  const headerIdx = indexOfFirstReviewerFindingLine(text, fromIndex);
+  const inlineIdx = indexOfInlineProtectedFinding(text, fromIndex);
+  if (headerIdx < 0 && inlineIdx < 0) {
+    return -1;
+  }
+  if (headerIdx < 0) {
+    return inlineIdx;
+  }
+  if (inlineIdx < 0) {
+    return headerIdx;
+  }
+  return Math.min(headerIdx, inlineIdx);
+}
+
 /** Scope parsing to reviewer findings — skip echoed rubric, draft body, and fenced blocks. */
 export function extractFindingsScanText(capture) {
   const withoutFences = stripMarkdownFencedCodeBlocks(capture);
@@ -135,7 +162,7 @@ export function extractFindingsScanText(capture) {
     }
   }
 
-  const findingStart = indexOfFirstReviewerFindingLine(withoutFences, scanFrom);
+  const findingStart = indexOfFirstFindingSignal(withoutFences, scanFrom);
   if (findingStart < 0) {
     return '';
   }

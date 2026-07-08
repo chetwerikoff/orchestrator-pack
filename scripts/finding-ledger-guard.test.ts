@@ -180,6 +180,13 @@ describe('finding-ledger guard scenario matrix (#679)', () => {
     expect(result.errors.join(' ')).toMatch(/sec-typed-only|security/);
   });
 
+  it('3d. still catches inline type:/id: security findings after echoed artifact', () => {
+    const { capture, ledger } = loadScenarioFixture('genuine-security-inline');
+    const result = checkFindingLedgerGuard(capture, ledger);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/sec-inline|security/);
+  });
+
   it('4. still catches a genuine reviewer type: scope-violation finding absent from the ledger', () => {
     const { capture, ledger } = loadScenarioFixture('genuine-scope-violation');
     const result = checkFindingLedgerGuard(capture, ledger);
