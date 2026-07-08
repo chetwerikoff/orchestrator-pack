@@ -14,6 +14,7 @@ import {
   startSupervisorBackground,
   supervisorScript,
   waitForMarkers,
+  waitForSupervisorHealthyStatus,
   type ManagedChildRole,
   type WakeMarker,
 } from './supervisor-recovery.test-helpers.js';
@@ -297,7 +298,7 @@ describe('orchestrator-wake-supervisor', () => {
     ]);
     await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
 
-    const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    const statusUp = await waitForSupervisorHealthyStatus(stateDir);
     expect(statusUp.status).toBe(0);
     expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   working');
