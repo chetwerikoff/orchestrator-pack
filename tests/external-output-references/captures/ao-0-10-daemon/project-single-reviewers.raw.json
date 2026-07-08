@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "project": {
+    "id": "orchestrator-pack",
+    "name": "orchestrator-pack",
+    "kind": "single_repo",
+    "path": "/home/che/projects/orchestrator-pack",
+    "repo": "https://chetwerikoff:gho_REDACTED@github.com/chetwerikoff/orchestrator-pack.git",
+    "defaultBranch": "main",
+    "config": {
+      "defaultBranch": "main",
+      "agentConfig": {
+        "permissions": "bypass-permissions"
+      },
+      "worker": {
+        "agent": "cursor",
+        "agentConfig": {}
+      },
+      "orchestrator": {
+        "agent": "cursor",
+        "agentConfig": {}
+      },
+      "reviewers": [
+        {
+          "harness": "codex"
+        }
+      ]
+    }
+  }
+}
