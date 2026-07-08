@@ -372,7 +372,25 @@ export function mergeConcurrentRefreshes(baseHistory, updates) {
         history.fileChangedAt[file] = normalized.fileChangedAt[file];
       }
     }
+
     const updateTs = Date.parse(normalized.dataChangedAt ?? '') || 0;
+    const weightChangedFiles = new Set(changedFiles);
+    for (const [file, provenance] of Object.entries(normalized.provenance ?? {})) {
+      if (provenance !== 'measured' || weightChangedFiles.has(file)) {
+        continue;
+      }
+      const historyFileTs = Date.parse(history.fileChangedAt?.[file] ?? '') || 0;
+      if (historyFileTs > updateTs) {
+        continue;
+      }
+      const proposedSamples = normalized.recentSamples?.[file];
+      if (!Array.isArray(proposedSamples) || proposedSamples.length === 0) {
+        continue;
+      }
+      history.provenance[file] = 'measured';
+      history.recentSamples[file] = [...proposedSamples];
+    }
+
     const historyTs = Date.parse(history.dataChangedAt ?? '') || 0;
     if (updateTs > historyTs) {
       history.dataChangedAt = normalized.dataChangedAt;

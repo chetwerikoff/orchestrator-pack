@@ -100,7 +100,6 @@ $proposedSnapshot = Join-Path ([System.IO.Path]::GetTempPath()) "vhr-proposed-$(
 $remoteSnapshot = Join-Path ([System.IO.Path]::GetTempPath()) "vhr-remote-$([guid]::NewGuid().ToString('n')).json"
 Copy-Item -LiteralPath $historyFile -Destination $proposedSnapshot -Force
 
-$committed = $false
 $maxAttempts = 3
 try {
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
@@ -108,6 +107,15 @@ try {
         if ($LASTEXITCODE -ne 0) {
             if ($attempt -eq $maxAttempts) {
                 Write-Host '[FAIL] runtime-history commit-back failed to fetch origin/main'
+                exit 1
+            }
+            continue
+        }
+
+        git -C $RepoRoot reset --hard origin/main
+        if ($LASTEXITCODE -ne 0) {
+            if ($attempt -eq $maxAttempts) {
+                Write-Host '[FAIL] runtime-history commit-back failed to reset to origin/main'
                 exit 1
             }
             continue
@@ -131,22 +139,11 @@ try {
             exit 0
         }
 
-        if (-not $committed) {
-            git -C $RepoRoot -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
-                commit -m "chore(ci): refresh vitest runtime-history from measured heavy-shard reports"
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host '[FAIL] runtime-history commit-back failed'
-                exit 1
-            }
-            $committed = $true
-        }
-        else {
-            git -C $RepoRoot -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
-                commit --amend --no-edit
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host '[FAIL] runtime-history commit-back amend failed'
-                exit 1
-            }
+        git -C $RepoRoot -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
+            commit -m "chore(ci): refresh vitest runtime-history from measured heavy-shard reports"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host '[FAIL] runtime-history commit-back failed'
+            exit 1
         }
 
         git -C $RepoRoot push origin HEAD:main

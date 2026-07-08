@@ -148,6 +148,30 @@ function runMeasuredSourceWithoutWeightChangeFixture() {
   assert(merged.history.provenance[file] === 'measured');
 }
 
+function runMetadataOnlyReconcileFixture() {
+  const base = seededHistory();
+  const file = 'scripts/check-ci-pipeline-split.test.ts';
+  const remote = normalizeHistory(base);
+
+  const proposed = normalizeHistory(base);
+  proposed.recentSamples[file] = [44000, 45000, 46000];
+  proposed.provenance[file] = 'measured';
+  proposed.source = MEASURED_SOURCE;
+  proposed.dataChangedAt = '2026-07-03T00:00:00.000Z';
+
+  const merged = reconcileProposedHistoryAgainstRemote(proposed, remote);
+  assert(
+    merged.provenance[file] === 'measured',
+    'metadata-only reconcile must preserve measured provenance',
+  );
+  assert(
+    Array.isArray(merged.recentSamples[file]) && merged.recentSamples[file].length === 3,
+    'metadata-only reconcile must preserve recentSamples',
+  );
+  assert(merged.files[file] === 45000, 'metadata-only reconcile must keep unchanged weight');
+  assert(merged.source === MEASURED_SOURCE, 'metadata-only reconcile must keep measured source');
+}
+
 function runStaleBaseReconcileFixture() {
   const base = seededHistory();
   const remote = normalizeHistory(base);
@@ -413,6 +437,7 @@ export function runRuntimeHistoryRefreshFixtures() {
   failures.length = 0;
   runMeasuredRefreshFixture();
   runMeasuredSourceWithoutWeightChangeFixture();
+  runMetadataOnlyReconcileFixture();
   runStaleBaseReconcileFixture();
   runSmoothingFixture();
   runCorruptInputFixtures();
