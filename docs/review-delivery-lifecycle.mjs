@@ -230,8 +230,16 @@ export function isVerdictSnapshotLost(entry) {
   if (!entry || typeof entry !== 'object') {
     return false;
   }
+  if (isLifecycleTerminal(entry)) {
+    return false;
+  }
   const state = String(entry.state ?? '').trim();
-  if (state !== LIFECYCLE_STARTED) {
+  const needsSnapshot =
+    state === LIFECYCLE_STARTED ||
+    state === LIFECYCLE_VERDICT_RECORDED ||
+    state === LIFECYCLE_DELIVERY_CLAIMED ||
+    state === LIFECYCLE_DELIVERY_ATTEMPTED;
+  if (!needsSnapshot) {
     return false;
   }
   return !String(entry.stdoutSnapshot ?? '').trim();

@@ -10,6 +10,7 @@ import {
   DEFAULT_TERMINAL_RETENTION_MS,
   evaluateDeterministicJournalAdmission,
   hashReviewFindings,
+  isVerdictSnapshotLost,
   normalizeLifecycleStore,
   readLifecycleStore,
   upsertLifecycleEntry,
@@ -69,6 +70,25 @@ describe('review delivery lifecycle helpers', () => {
     const result = canEvictLifecycleEntry({ entry, prActionable: false, nowMs: Date.now() });
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('non_actionable_pr');
+  });
+
+  it.each(['started', 'verdict_recorded', 'delivery_claimed', 'delivery_attempted'])(
+    'review delivery lifecycle snapshot loss: %s without stdoutSnapshot is lost',
+    (state) => {
+      expect(isVerdictSnapshotLost({ state, stdoutSnapshot: '' })).toBe(true);
+      expect(isVerdictSnapshotLost({ state, stdoutSnapshot: '   ' })).toBe(true);
+      expect(isVerdictSnapshotLost({ state, stdoutSnapshot: cleanStdout })).toBe(false);
+    },
+  );
+
+  it('review delivery lifecycle snapshot loss: terminal entries without snapshot are not lost', () => {
+    expect(
+      isVerdictSnapshotLost({
+        state: 'verdict_recorded',
+        terminalStatus: 'delivered',
+        stdoutSnapshot: '',
+      }),
+    ).toBe(false);
   });
 
   it('review delivery lifecycle compaction: evicts terminal entries past retention on store write', () => {
@@ -227,6 +247,33 @@ describe('review delivery lifecycle crash resume', () => {
     const result = JSON.parse(runPwsh(restartScript));
     expect(result.reason).toBe('verdict_snapshot_lost');
   });
+
+  it.each(['verdict_recorded', 'delivery_claimed', 'delivery_attempted'])(
+    'review delivery lifecycle crash resume: missing stdout in %s escalates verdict_snapshot_lost',
+    (state) => {
+      const storeDir = mkdtempSync(path.join(tmpdir(), `review-delivery-missing-snapshot-${state}-`));
+      tempDirs.push(storeDir);
+      const storePath = path.join(storeDir, 'lifecycle.json');
+      const key = deliveryKey([]);
+      let store = readLifecycleStore(storePath);
+      ({ store } = upsertLifecycleEntry(store, key, {
+        state,
+        prNumber,
+        headSha,
+        gateVerdict: 'approved',
+        findingsHash: hashReviewFindings([]),
+      }));
+      writeLifecycleStore(storePath, store);
+
+      const restartScript = [
+        `. ${psString(path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'))}`,
+        `$result = Resume-ScriptedReviewStdoutDeliveryFromLifecycle -DeliveryKey ${psString(key)} -LifecycleStorePath ${psString(storePath)} -RepoRoot ${psString(repoRoot)}`,
+        '$result | ConvertTo-Json -Compress',
+      ].join('\n');
+      const result = JSON.parse(runPwsh(restartScript));
+      expect(result.reason).toBe('verdict_snapshot_lost');
+    },
+  );
 
   it('review delivery lifecycle crash resume: C4b without resume hook delivery missing, with hook exactly one send', () => {
     const storeDir = mkdtempSync(path.join(tmpdir(), 'review-delivery-store-'));
