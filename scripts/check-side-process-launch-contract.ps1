@@ -45,6 +45,7 @@ if ($SelfTest) {
     $mismatchRegistry = Join-Path $fixtureRoot 'registry-mismatch.json'
     $mismatchScripts = $fixtureRoot
     $mandatoryMismatchRegistry = Join-Path $fixtureRoot 'registry-mandatory-params-mismatch.json'
+    $mandatoryShorthandMismatchRegistry = Join-Path $fixtureRoot 'registry-mandatory-shorthand-mismatch.json'
     $validatesetMismatchRegistry = Join-Path $fixtureRoot 'registry-validateset-mismatch.json'
 
     $mismatch = Invoke-LaunchContractGuard -GuardRegistryPath $mismatchRegistry -GuardScriptsRoot $mismatchScripts
@@ -70,6 +71,17 @@ if ($SelfTest) {
     if ($mandatoryMismatch.errors -notmatch 'mandatory parameter') {
         Write-Host '[FAIL] self-test: mandatory-params mismatch fixture must report unsatisfied mandatory params'
         Write-Host ($mandatoryMismatch.errors -join '; ')
+        exit 1
+    }
+
+    $mandatoryShorthandMismatch = Invoke-LaunchContractGuard -GuardRegistryPath $mandatoryShorthandMismatchRegistry -GuardScriptsRoot $mismatchScripts
+    if ($mandatoryShorthandMismatch.ok) {
+        Write-Host '[FAIL] self-test: mandatory shorthand fixture must fail launch-contract guard'
+        exit 1
+    }
+    if ($mandatoryShorthandMismatch.errors -notmatch 'mandatory parameter') {
+        Write-Host '[FAIL] self-test: mandatory shorthand fixture must report unsatisfied mandatory params'
+        Write-Host ($mandatoryShorthandMismatch.errors -join '; ')
         exit 1
     }
 

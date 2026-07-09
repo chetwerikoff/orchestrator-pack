@@ -249,7 +249,7 @@
     "scripts/review-wake-trigger.test.ts": "64176ba0f613b76c1a696b2f0820ae7736c6fb5fa614af61eb72b84dc63ea3c4",
     "scripts/seed-snapshot-failure-bounded-read-economy.test.ts": "ac138fc5a44777a298024c0c1abdb985918257e75cb06b19776af693511f073c",
     "scripts/session-runtime-liveness.test.ts": "6a25b956b35e6ed0dc1f1d4bceff3024c801f734b72032b64406b121f8112864",
-    "scripts/side-process-launch-contract.test.ts": "93dbc7778141455e3302709aa946a9f7cff1d151263df78ad3b304b74ddf5f39",
+    "scripts/side-process-launch-contract.test.ts": "84159dd1a61845370f2506eba0cbe945703a79e35acfbf1e08c71454f8427b91",
     "scripts/spawn-worktree-branch-operand-binding.test.ts": "7c5ebbd64855dd8bc9464a4a56796a52f6db60c2e9efd0dd297910d1071e5c87",
     "scripts/spawn-worktree-grant-finalization.test.ts": "2fd192bb6222340e5320c85b5cf6bbe5ba156195b0e0ae8b1f48b6323e01c714",
     "scripts/spawn-worktree-head-ref-oid-binding.test.ts": "9e99b367e2fc9111981238dec64b8c8dde8fd82308486dc8a39d802c512fac20",

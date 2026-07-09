@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "requiredChildIds": [
+    "mandatory-shorthand-mismatch"
+  ],
+  "children": [
+    {
+      "id": "mandatory-shorthand-mismatch",
+      "script": "mandatory-shorthand-mismatch.ps1",
+      "sideEffecting": false,
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 60,
+      "stallGraceMultiplier": 2
+    }
+  ]
+}

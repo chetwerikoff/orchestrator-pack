@@ -225,6 +225,19 @@ describe('mandatory-params satisfiability (#701)', { timeout: pwshTestTimeoutMs 
     expect(`${result.stdout}${result.stderr}`).toMatch(/not satisfiable from supervised launch shape/i);
   });
 
+  it('guard fails on mandatory shorthand [Parameter(Mandatory)] fixture', () => {
+    const result = runGuard([
+      '-RegistryPath',
+      join(fixtureRoot, 'registry-mandatory-shorthand-mismatch.json'),
+      '-ScriptsRoot',
+      fixtureRoot,
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/mandatory parameter 'SessionId'/i);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/mandatory parameter 'RunId'/i);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/not satisfiable from supervised launch shape/i);
+  });
+
   it('guard fails on ValidateSet mismatch fixture (cell 4)', () => {
     const result = runGuard([
       '-RegistryPath',

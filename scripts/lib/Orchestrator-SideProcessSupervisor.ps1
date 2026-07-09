@@ -970,7 +970,8 @@ function Get-OrchestratorSideProcessScriptParamDescriptors {
         $name = $match.Groups['name'].Value
         $defaultText = $match.Groups['default'].Value
         $hasDefault = [bool]($defaultText -and $defaultText.Trim())
-        $mandatory = ($attrs -match '(?i)Mandatory(\s*=\s*\$true|\s*\])') -and -not $hasDefault
+        # PowerShell accepts Mandatory shorthand: [Parameter(Mandatory)], [Parameter(Mandatory, ...)], and Mandatory = $true.
+        $mandatory = ($attrs -match '(?i)\bMandatory\b') -and -not ($attrs -match '(?i)Mandatory\s*=\s*\$false') -and -not $hasDefault
         $validateSet = @()
         if ($attrs -match 'ValidateSet\((?<vs>[^\)]+)\)') {
             $rawValues = $Matches['vs']
