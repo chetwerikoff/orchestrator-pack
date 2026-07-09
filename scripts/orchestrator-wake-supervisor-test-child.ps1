@@ -10,7 +10,7 @@ param(
     [string]$OrchestratorSessionId = '',
     [string]$ProjectId = '',
     [string]$MarkerDir = '',
-    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error', 'instant-exit', 'deterministic-defect')]
+    [ValidateSet('normal', 'hang', 'slow-side-effect', 'tick-error', 'instant-exit', 'deterministic-defect', 'prompt-block')]
     [string]$Mode = 'normal'
 )
 
@@ -69,6 +69,15 @@ $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerTemp -Encod
 Move-Item -LiteralPath $markerTemp -Destination $markerPath -Force
 
 if ($Mode -eq 'instant-exit') {
+    exit 1
+}
+
+if ($Mode -eq 'prompt-block') {
+    $delayMs = 6000
+    if ($env:AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS -and [int]::TryParse($env:AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS, [ref]$null)) {
+        $delayMs = [Math]::Max(1000, [int]$env:AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS)
+    }
+    Start-Sleep -Milliseconds $delayMs
     exit 1
 }
 

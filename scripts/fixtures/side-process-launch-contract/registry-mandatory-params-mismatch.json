@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "requiredChildIds": [
+    "gate-child-mismatch"
+  ],
+  "children": [
+    {
+      "id": "gate-child-mismatch",
+      "script": "gate-child-mismatch.ps1",
+      "sideEffecting": true,
+      "sideEffectLockFile": "gate-child-mismatch.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": true,
+      "cadenceSeconds": 300,
+      "stallGraceMultiplier": 4
+    }
+  ]
+}

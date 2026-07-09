@@ -318,13 +318,12 @@ describe('supervisor compatibility (AC#10)', () => {
     expect(text).toMatch(/\[string\]\$DeliveryMessage/);
   });
 
-  it('registers gate child in orchestrator-side-process-registry.json', () => {
+  it('does not register gate child as supervised polling registry entry (#701)', () => {
     const registry = JSON.parse(
       readFileSync(path.join(repoRoot, 'scripts/orchestrator-side-process-registry.json'), 'utf8'),
     );
     const child = registry.children.find((entry: { id: string }) => entry.id === 'scripted-review-confirmed-delivery-gate');
-    expect(child).toBeTruthy();
-    expect(child?.script).toBe('scripted-review-confirmed-delivery-gate.ps1');
+    expect(child).toBeUndefined();
     expect(registry.requiredChildIds).not.toContain('scripted-review-confirmed-delivery-gate');
   });
 

@@ -150,6 +150,34 @@ function Test-OrchestratorSideProcessProgressIdentityMatches {
     return $true
 }
 
+function Test-OrchestratorSideProcessProgressBelongsToChildGeneration {
+    param(
+        $Progress,
+        [int]$ChildPid = 0,
+        [long]$ChildStartedMs = 0
+    )
+
+    if (-not $Progress -or -not $Progress.lastProgressMs) {
+        return $false
+    }
+
+    if ($ChildPid -gt 0 -and -not (Test-OrchestratorSideProcessProgressIdentityMatches -Progress $Progress -ChildPid $ChildPid)) {
+        return $false
+    }
+
+    if ($ChildStartedMs -gt 0) {
+        $lastMs = 0
+        if (-not [long]::TryParse([string]$Progress.lastProgressMs, [ref]$lastMs)) {
+            return $false
+        }
+        if ($lastMs -lt $ChildStartedMs) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Test-OrchestratorSideProcessProgressShowsForwardWork {
     param(
         $Progress,

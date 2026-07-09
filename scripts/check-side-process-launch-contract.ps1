@@ -44,6 +44,9 @@ if ($SelfTest) {
     $fixtureRoot = Join-Path $Root 'scripts/fixtures/side-process-launch-contract'
     $mismatchRegistry = Join-Path $fixtureRoot 'registry-mismatch.json'
     $mismatchScripts = $fixtureRoot
+    $mandatoryMismatchRegistry = Join-Path $fixtureRoot 'registry-mandatory-params-mismatch.json'
+    $mandatoryShorthandMismatchRegistry = Join-Path $fixtureRoot 'registry-mandatory-shorthand-mismatch.json'
+    $validatesetMismatchRegistry = Join-Path $fixtureRoot 'registry-validateset-mismatch.json'
 
     $mismatch = Invoke-LaunchContractGuard -GuardRegistryPath $mismatchRegistry -GuardScriptsRoot $mismatchScripts
     if ($mismatch.ok) {
@@ -60,6 +63,39 @@ if ($SelfTest) {
         exit 1
     }
 
+    $mandatoryMismatch = Invoke-LaunchContractGuard -GuardRegistryPath $mandatoryMismatchRegistry -GuardScriptsRoot $mismatchScripts
+    if ($mandatoryMismatch.ok) {
+        Write-Host '[FAIL] self-test: mandatory-params mismatch fixture must fail launch-contract guard'
+        exit 1
+    }
+    if ($mandatoryMismatch.errors -notmatch 'mandatory parameter') {
+        Write-Host '[FAIL] self-test: mandatory-params mismatch fixture must report unsatisfied mandatory params'
+        Write-Host ($mandatoryMismatch.errors -join '; ')
+        exit 1
+    }
+
+    $mandatoryShorthandMismatch = Invoke-LaunchContractGuard -GuardRegistryPath $mandatoryShorthandMismatchRegistry -GuardScriptsRoot $mismatchScripts
+    if ($mandatoryShorthandMismatch.ok) {
+        Write-Host '[FAIL] self-test: mandatory shorthand fixture must fail launch-contract guard'
+        exit 1
+    }
+    if ($mandatoryShorthandMismatch.errors -notmatch 'mandatory parameter') {
+        Write-Host '[FAIL] self-test: mandatory shorthand fixture must report unsatisfied mandatory params'
+        Write-Host ($mandatoryShorthandMismatch.errors -join '; ')
+        exit 1
+    }
+
+    $validatesetMismatch = Invoke-LaunchContractGuard -GuardRegistryPath $validatesetMismatchRegistry -GuardScriptsRoot $mismatchScripts
+    if ($validatesetMismatch.ok) {
+        Write-Host '[FAIL] self-test: ValidateSet mismatch fixture must fail launch-contract guard'
+        exit 1
+    }
+    if ($validatesetMismatch.errors -notmatch 'ValidateSet') {
+        Write-Host '[FAIL] self-test: ValidateSet mismatch fixture must report ValidateSet violation'
+        Write-Host ($validatesetMismatch.errors -join '; ')
+        exit 1
+    }
+
     $aligned = Invoke-LaunchContractGuard -GuardRegistryPath $RegistryPath -GuardScriptsRoot $ScriptsRoot
     if (-not $aligned.ok) {
         Write-Host '[FAIL] self-test: aligned tree must pass launch-contract guard'
@@ -67,7 +103,7 @@ if ($SelfTest) {
         exit 1
     }
 
-    Write-Host '[PASS] side-process launch-contract guard self-test (Issue #659)'
+    Write-Host '[PASS] side-process launch-contract guard self-test (Issue #659, mandatory-params #701)'
     exit 0
 }
 
@@ -80,5 +116,5 @@ if (-not $result.ok) {
 
 $registry = Get-Content -LiteralPath $RegistryPath -Raw | ConvertFrom-Json
 $childCount = @($registry.children).Count
-Write-Host "[PASS] side-process launch-contract guard validated $childCount registry children (Issue #659)"
+Write-Host "[PASS] side-process launch-contract guard validated $childCount registry children (Issue #659, mandatory-params #701)"
 exit 0

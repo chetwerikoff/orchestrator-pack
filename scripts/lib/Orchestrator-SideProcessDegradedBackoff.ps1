@@ -294,6 +294,10 @@ function Update-OrchestratorWakeSupervisorChildStableWorkingRecovery {
         -or $fields.lastDegradedReason -or ($fields.repeatedReasonCount -gt 0)
 
     if (-not $hasDegradedState) {
+        $progress = Read-OrchestratorWakeSupervisorChildProgress -Paths $Paths -ChildId $ChildId
+        if (-not $progress -or -not $progress.lastProgressMs) {
+            return
+        }
         Reset-OrchestratorWakeSupervisorChildCrashRecoveryState -Paths $Paths -ChildId $ChildId
         if ($fields.stableWorkingPolls -gt 0) {
             Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{

@@ -416,3 +416,62 @@ Describe 'supervisor bounded recovery' {
         Test-OrchestratorSideProcessRecoveryShouldEscalate -PriorRecoveryAttempts 1 -MaxAttempts 1 | Should -Be $true
     }
 }
+
+Describe 'crash backoff stale progress (#701)' {
+    BeforeAll {
+        . (Join-Path $script:LibDir 'Orchestrator-SideProcessProgressEvidence.ps1')
+        . (Join-Path $script:LibDir 'Orchestrator-SideProcessCrashBackoff.ps1')
+        . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+    }
+
+    function script:New-TempCrashBackoffStateRoot {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("crash-backoff-test-" + [guid]::NewGuid().ToString())
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        return $dir
+    }
+
+    It 'rejects progress from a prior pid or start generation' {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $childStartedMs = $nowMs - 10000
+        $staleProgress = @{
+            childId        = 'listener'
+            pid            = 11111
+            lastProgressMs = ($childStartedMs - 60000)
+        }
+
+        Test-OrchestratorSideProcessProgressBelongsToChildGeneration -Progress $staleProgress `
+            -ChildPid 22222 -ChildStartedMs $childStartedMs | Should -Be $false
+        Test-OrchestratorSideProcessProgressBelongsToChildGeneration -Progress $staleProgress `
+            -ChildPid 11111 -ChildStartedMs $childStartedMs | Should -Be $false
+
+        $currentProgress = @{
+            childId        = 'listener'
+            pid            = 22222
+            lastProgressMs = ($childStartedMs + 1000)
+        }
+        Test-OrchestratorSideProcessProgressBelongsToChildGeneration -Progress $currentProgress `
+            -ChildPid 22222 -ChildStartedMs $childStartedMs | Should -Be $true
+    }
+
+    It 'classifies long-lived exit with stale on-disk progress as rapid for backoff' {
+        $stateRoot = New-TempCrashBackoffStateRoot
+        $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
+        New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
+        $childId = 'listener'
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $childStartedMs = $nowMs - 10000
+        $staleProgress = @{
+            childId        = $childId
+            pid            = 11111
+            lastProgressMs = ($childStartedMs - 60000)
+        }
+        $progressPath = Join-Path $paths.ProgressDir "$childId.progress.json"
+        $staleProgress | ConvertTo-Json -Compress | Set-Content -LiteralPath $progressPath -Encoding utf8 -NoNewline
+
+        $decision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId $childId `
+            -ChildStartedMs $childStartedMs -ChildPid 22222 -LogWriter { param([string]$Message) }
+
+        $decision.rapidExit | Should -Be $true
+        $decision.rapidExits | Should -Be 1
+    }
+}
