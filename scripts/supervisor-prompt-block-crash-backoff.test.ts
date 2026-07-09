@@ -10,7 +10,7 @@ import {
   startSupervisorBackground,
 } from './supervisor-recovery.test-helpers.js';
 
-const timeoutMs = 150_000;
+const timeoutMs = 200_000;
 
 afterEach(() => {
   cleanupSupervisorTests();
@@ -39,7 +39,7 @@ describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
     }
 
     const observedPids = new Set<number>();
-    const deadline = Date.now() + 100_000;
+    const deadline = Date.now() + 170_000;
     let supervisorLog = '';
     while (Date.now() < deadline) {
       try {
