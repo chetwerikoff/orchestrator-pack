@@ -381,9 +381,33 @@ function Acquire-OrchestratorWakeSupervisorStartLeaseHandoff {
         MainLock         = $main
         Epoch            = $Epoch
         Paths            = $Paths
+        ProjectId        = $ProjectId
     }
     $Script:OrchestratorWakeSupervisorPendingStartHandoff = $handoff
     return $handoff
+}
+
+
+function Invoke-OrchestratorWakeSupervisorStartLeaseHandoffRollback {
+    param(
+        [hashtable]$Handoff,
+        [int]$SpawnedPid = 0,
+        [string]$LogPath = ''
+    )
+    if (-not $Handoff) { return }
+    $paths = $Handoff.Paths
+    $projectId = if ($Handoff.ProjectId) { [string]$Handoff.ProjectId } else { '' }
+    $stateRoot = if ($paths.Root) { [string]$paths.Root } else { '' }
+    if ($SpawnedPid -gt 0 -and (Test-ProcessAlive -ProcessId $SpawnedPid)) {
+        if ($LogPath) {
+            Write-OrchestratorWakeSupervisorLog -Message "start lease handoff rollback: stopping spawned supervisor pid=$SpawnedPid" -LogPath $LogPath
+        }
+        Stop-OrchestratorWakeSupervisorChildren -Paths $paths -LogPath $LogPath -ProjectId $projectId -StateRoot $stateRoot
+        Stop-OrchestratorWakeSupervisorProcess -ProcessId $SpawnedPid -PidFile $paths.SupervisorPid `
+            -ManagedRole '' -LogPath $LogPath -ProjectId $projectId -StateRoot $stateRoot
+        Wait-OrchestratorWakeSupervisorProcessExit -ProcessId $SpawnedPid -TimeoutSeconds 5
+    }
+    Abort-OrchestratorWakeSupervisorStartLeaseHandoff -Handoff $Handoff
 }
 
 function Abort-OrchestratorWakeSupervisorStartLeaseHandoff {
@@ -422,7 +446,7 @@ function Complete-OrchestratorWakeSupervisorStartLeaseHandoff {
         if ($LogPath) {
             Write-OrchestratorWakeSupervisorLog -Message "start lease handoff failed: spawned pid=$SpawnedPid never became alive" -LogPath $LogPath
         }
-        Abort-OrchestratorWakeSupervisorStartLeaseHandoff -Handoff $Handoff
+        Invoke-OrchestratorWakeSupervisorStartLeaseHandoffRollback -Handoff $Handoff -SpawnedPid $SpawnedPid -LogPath $LogPath
         return $false
     }
 
@@ -453,7 +477,7 @@ function Complete-OrchestratorWakeSupervisorStartLeaseHandoff {
     if ($LogPath) {
         Write-OrchestratorWakeSupervisorLog -Message "start lease handoff timed out waiting for holderPid=$SpawnedPid" -LogPath $LogPath
     }
-    Abort-OrchestratorWakeSupervisorStartLeaseHandoff -Handoff $Handoff
+    Invoke-OrchestratorWakeSupervisorStartLeaseHandoffRollback -Handoff $Handoff -SpawnedPid $SpawnedPid -LogPath $LogPath
     return $false
 }
 

@@ -179,9 +179,19 @@ switch ($Action) {
                 $gate.handoff.MainLock = $null
             }
             Write-OrchestratorWakeSupervisorLog -Message 'supervisor foreground started' -LogPath $paths.SupervisorLog
-            Invoke-OrchestratorWakeSupervisorLoop -Paths $paths -ProjectId $project -PollSeconds $pollSec `
-                -SessionOverride $OrchestratorSessionId -FixturePath $FixturePath -AoCommand $AoCommand `
-                -TestMode:$TestMode -TestChildScript $TestChildScript -MaxLoopSeconds $MaxLoopSeconds
+            try {
+                Invoke-OrchestratorWakeSupervisorLoop -Paths $paths -ProjectId $project -PollSeconds $pollSec `
+                    -SessionOverride $OrchestratorSessionId -FixturePath $FixturePath -AoCommand $AoCommand `
+                    -TestMode:$TestMode -TestChildScript $TestChildScript -MaxLoopSeconds $MaxLoopSeconds
+            }
+            finally {
+                Write-OrchestratorWakeSupervisorLog -Message 'supervisor foreground ended; stopping managed children' -LogPath $paths.SupervisorLog
+                Stop-OrchestratorWakeSupervisorChildren -Paths $paths -LogPath $paths.SupervisorLog `
+                    -ProjectId $project -StateRoot $stateRoot
+                if (Test-Path -LiteralPath $paths.StateJson) {
+                    Remove-Item -LiteralPath $paths.StateJson -Force -ErrorAction SilentlyContinue
+                }
+            }
             exit 0
         }
 
