@@ -60,6 +60,22 @@ describe('worker-report-store-write', () => {
     });
     expect(parsed.sourceRecords[key].reportState).toBe('ready_for_review');
   });
+
+  it('Write-PackWorkerReportRecord uses locked read-modify-write without dropping prior records', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'wr-store-locked-'));
+    const storePath = path.join(dir, 'worker-report-store.json');
+    const lib = workerStoreLib.replace(/'/g, "''");
+    const escapedPath = storePath.replace(/'/g, "''");
+    runPwsh(`
+      . '${lib}'
+      $env:AO_WORKER_REPORT_STORE = '${escapedPath}'
+      Write-PackWorkerReportRecord -ReportState 'working' -SessionId 'opk-a' -RepoSlug 'org/a' -PrNumber 1 -HeadSha 'head1' -NowMs 1000 | Out-Null
+      Write-PackWorkerReportRecord -ReportState 'ready_for_review' -SessionId 'opk-b' -RepoSlug 'org/a' -PrNumber 2 -HeadSha 'head2' -NowMs 2000 | Out-Null
+    `);
+    const parsed = JSON.parse(readFileSync(storePath, 'utf8')) as WorkerReportStoreState & { generation?: number };
+    expect(Object.keys(parsed.sourceRecords ?? {})).toHaveLength(2);
+    expect(Number(parsed.generation ?? 0)).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('review-ready-report-state-seed-pack-source', () => {
@@ -87,6 +103,8 @@ describe('review-ready-report-state-seed-pack-source', () => {
     );
     const ready = findLatestAcceptedReadyForReviewAcrossSessions(sessions as never);
     expect(ready.report?.reportState).toBe('ready_for_review');
+    expect(seedRaw).toMatch(/Invoke-WorkerReportStoreEviction/);
+    expect(seedRaw).toMatch(/Build-WorkerReportStoreCurrentHeadByPr/);
   });
 });
 

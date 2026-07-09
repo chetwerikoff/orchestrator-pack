@@ -327,6 +327,22 @@ export function findPackWorkerAckReportAfterDelivery(session, run, sendObservedA
  * @param {number} input.nowMs
  * @param {number} [input.expectedGeneration]
  */
+export function upsertWorkerReportRecordInMemory({ store, record, callerSessionId, nowMs }) {
+  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record });
+  if (!trust.ok) {
+    return { ok: false, reason: trust.reason };
+  }
+  const normalized = createDefaultWorkerReportStore(store ?? {});
+  const result = upsertWorkerReportRecord(normalized, record, nowMs);
+  return {
+    ok: true,
+    store: normalized,
+    key: result.key,
+    record: result.record,
+    generation: normalized.generation,
+  };
+}
+
 export function writeWorkerReportRecordWithCas({
   storePath,
   record,
@@ -399,6 +415,15 @@ runStdinJsonCli('worker-report-store.mjs', {
       nonterminalMaxAgeMs: Number(payload.nonterminalMaxAgeMs ?? DEFAULT_NONTERMINAL_MAX_AGE_MS),
     });
     return { ...result, store };
+  },
+  upsertRecord: () => {
+    const payload = readStdinJson();
+    return upsertWorkerReportRecordInMemory({
+      store: createDefaultWorkerReportStore(payload.store ?? {}),
+      record: payload.record ?? {},
+      callerSessionId: String(payload.callerSessionId ?? ''),
+      nowMs: Number(payload.nowMs ?? Date.now()),
+    });
   },
   writeRecord: () => {
     const payload = readStdinJson();

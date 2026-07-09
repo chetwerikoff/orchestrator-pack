@@ -116,21 +116,65 @@ function Write-PackWorkerReportRecord {
         $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
-    return Invoke-WorkerReportStoreCli -Subcommand 'writeRecord' -Payload @{
-        storePath       = $path
-        callerSessionId = $SessionId
-        nowMs           = $NowMs
-        record          = @{
-            reportState   = $ReportState
-            accepted      = $Accepted
-            sessionId     = $SessionId
-            repoSlug      = $RepoSlug
-            prNumber      = $PrNumber
-            headSha       = $HeadSha
-            reportedAtMs  = $NowMs
-            lastObservedMs = $NowMs
+    $recordPayload = @{
+        reportState    = $ReportState
+        accepted       = $Accepted
+        sessionId      = $SessionId
+        repoSlug       = $RepoSlug
+        prNumber       = $PrNumber
+        headSha        = $HeadSha
+        reportedAtMs   = $NowMs
+        lastObservedMs = $NowMs
+    }
+    $writeResult = $null
+    $captured = @{}
+    Update-WorkerReportStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
+        param($current)
+        $applied = Invoke-WorkerReportStoreCli -Subcommand 'upsertRecord' -Payload @{
+            store           = $current
+            callerSessionId = $SessionId
+            nowMs           = $NowMs
+            record          = $recordPayload
+        }
+        if (-not $applied.ok) {
+            throw "worker-report-store upsert failed: $($applied.reason)"
+        }
+        $captured.result = $applied
+        return $applied.store
+    } | Out-Null
+    $writeResult = $captured.result
+    return @{
+        ok         = $true
+        key        = $writeResult.key
+        record     = $writeResult.record
+        generation = $writeResult.generation
+    }
+}
+
+function Build-WorkerReportStoreCurrentHeadByPr {
+    param(
+        [object[]]$OpenPrs = @(),
+        [string]$RepoSlug = '',
+        [string]$RepoRoot = ''
+    )
+
+    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+    $repoKey = [string]$slug
+    if ($repoKey) {
+        $repoKey = $repoKey.Trim().ToLowerInvariant()
+    }
+    $map = @{}
+    foreach ($pr in @($OpenPrs)) {
+        if ($null -eq $pr) { continue }
+        $num = [int]$pr.number
+        $head = [string]$pr.headRefOid
+        if ($num -le 0 -or [string]::IsNullOrWhiteSpace($head)) { continue }
+        $map[[string]$num] = $head
+        if ($repoKey) {
+            $map["$repoKey|$num"] = $head
         }
     }
+    return $map
 }
 
 function Resolve-WorkerReportStoreRepoSlug {
@@ -205,18 +249,32 @@ function Invoke-WorkerReportStoreEviction {
         $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
-    $store = Get-WorkerReportStoreState -Path $path
-    $payload = @{
-        store           = $store
-        openPrs         = @($OpenPrs)
-        currentHeadByPr = $CurrentHeadByPr
-        nowMs           = $NowMs
+    $evictSummary = @{}
+    $captured = @{}
+    Update-WorkerReportStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
+        param($current)
+        $payload = @{
+            store           = $current
+            openPrs         = @($OpenPrs)
+            currentHeadByPr = $CurrentHeadByPr
+            nowMs           = $NowMs
+        }
+        if ($MaxAgeMs -gt 0) { $payload.maxAgeMs = $MaxAgeMs }
+        if ($NonterminalMaxAgeMs -gt 0) { $payload.nonterminalMaxAgeMs = $NonterminalMaxAgeMs }
+        $result = Invoke-WorkerReportStoreCli -Subcommand 'evict' -Payload $payload
+        $captured.summary = @{
+            removed     = [int]$result.removed
+            recordCount = [int]$result.recordCount
+        }
+        return $result.store
+    } | Out-Null
+    if ($captured.summary) {
+        $evictSummary = $captured.summary
     }
-    if ($MaxAgeMs -gt 0) { $payload.maxAgeMs = $MaxAgeMs }
-    if ($NonterminalMaxAgeMs -gt 0) { $payload.nonterminalMaxAgeMs = $NonterminalMaxAgeMs }
-    $result = Invoke-WorkerReportStoreCli -Subcommand 'evict' -Payload $payload
-    Set-WorkerReportStoreState -Path $path -State $result.store
-    return $result
+    return @{
+        removed     = [int]$evictSummary.removed
+        recordCount = [int]$evictSummary.recordCount
+    }
 }
 
 function Get-PackWorkerReportDiscoveryCandidates {

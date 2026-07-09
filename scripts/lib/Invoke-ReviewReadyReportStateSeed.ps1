@@ -330,6 +330,14 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $watchEntriesForPlan[[string]$entry.Key] = $entry.Value
     }
 
+    $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $openPrs `
+        -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
+    $workerReportEviction = Invoke-WorkerReportStoreEviction -OpenPrs $openPrs `
+        -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs
+    if ($workerReportEviction.removed -gt 0 -and $LogWriter) {
+        & $LogWriter "worker-report-store: evicted $($workerReportEviction.removed) stale record(s)"
+    }
+
     & $emitProgress 'plan_seed'
     $plan = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'planTick' -Payload @{
         sessions               = $sessions
