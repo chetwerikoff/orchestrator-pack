@@ -586,7 +586,7 @@ runStdinJsonCli('worker-report-store.mjs', {
         reportState: String(payload.reportState ?? ''),
         sessionId: String(payload.sessionId ?? ''),
         prNumber: Number(payload.prNumber ?? 0),
-        headSha: "String(payload.headSha ?? '')",
+        headSha: String(payload.headSha ?? ''),
         deliveryRunId: String(payload.deliveryRunId ?? ''),
         reviewRuns: toArray(payload.reviewRuns),
       }),

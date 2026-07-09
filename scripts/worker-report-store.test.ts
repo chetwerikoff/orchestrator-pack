@@ -278,7 +278,33 @@ describe('delivery-confirm-pack-ack', () => {
     ).toBe('run-1');
   });
 
-  it('resolvePackWorkerReportDeliveryRunId ignores non-addressing states', () => {
+  it('resolveDeliveryRunId CLI forwards headSha to delivery-run resolution', () => {
+    const proc = spawnSync('node', [path.join(repoRoot, 'docs/worker-report-store.mjs'), 'resolveDeliveryRunId'], {
+      input: JSON.stringify({
+        reportState: 'addressing_reviews',
+        sessionId: 'opk-dc',
+        prNumber: 717,
+        headSha: 'abc717head',
+        reviewRuns: [
+          {
+            id: 'run-cli-head',
+            linkedSessionId: 'opk-dc',
+            prNumber: 717,
+            targetSha: 'abc717head',
+            status: 'changes_requested',
+            deliveredFindingCount: 1,
+          },
+        ],
+      }),
+      encoding: 'utf8',
+      cwd: repoRoot,
+    });
+    expect(proc.status).toBe(0);
+    const result = JSON.parse(proc.stdout.trim());
+    expect(result.deliveryRunId).toBe('run-cli-head');
+  });
+
+    it('resolvePackWorkerReportDeliveryRunId ignores non-addressing states', () => {
     expect(
       resolvePackWorkerReportDeliveryRunId({
         reportState: 'ready_for_review',
