@@ -32,13 +32,17 @@ const findingsStdout = JSON.stringify({
   findings: [{ id: 'F1', summary: 'test finding' }],
 });
 
-function deliveryKey(findings: unknown[]) {
-  return buildDeterministicDeliveryKey({
+function deliveryKey(findings: unknown[]): string {
+  const key = buildDeterministicDeliveryKey({
     prNumber,
     headSha,
     verdictSource: 'wrapper-stdout',
     findingsHash: hashReviewFindings(findings),
   });
+  if (!key) {
+    throw new Error('delivery key required for test fixture');
+  }
+  return key;
 }
 
 describe('review delivery lifecycle helpers', () => {
@@ -139,7 +143,7 @@ describe('review delivery lifecycle crash resume', () => {
     const storePath = path.join(storeDir, 'lifecycle.json');
     const key = deliveryKey([]);
     let store = readLifecycleStore(storePath);
-    ({ store } = upsertLifecycleEntry(store, key!, {
+    ({ store } = upsertLifecycleEntry(store, key, {
       state: 'verdict_recorded',
       prNumber,
       headSha,
@@ -153,7 +157,7 @@ describe('review delivery lifecycle crash resume', () => {
       `. ${psString(path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'))}`,
       `$sessions = @(@{ id = 'worker-718'; sessionId = 'worker-718'; name = 'worker-718'; role = 'worker'; status = 'working'; prNumber = ${prNumber}; branch = 'feat/issue-718' })`,
       `$openPrs = @(@{ number = ${prNumber}; headRefOid = ${psString(headSha)}; headRefName = 'feat/issue-718' })`,
-      `$result = Resume-ScriptedReviewStdoutDeliveryFromLifecycle -DeliveryKey ${psString(key!)} -LifecycleStorePath ${psString(storePath)} -RepoRoot ${psString(repoRoot)} -Sessions $sessions -OpenPrs $openPrs -DryRun`,
+      `$result = Resume-ScriptedReviewStdoutDeliveryFromLifecycle -DeliveryKey ${psString(key)} -LifecycleStorePath ${psString(storePath)} -RepoRoot ${psString(repoRoot)} -Sessions $sessions -OpenPrs $openPrs -DryRun`,
       '$result | ConvertTo-Json -Compress',
     ].join('\n');
     const resumed = JSON.parse(runPwsh(resumeScript));
@@ -217,8 +221,8 @@ describe('review delivery journal durable path', () => {
 describe('review delivery deterministic identity', () => {
   it('builds stable delivery id for same session and key', () => {
     const key = deliveryKey([{ id: 'x' }]);
-    const left = buildDeterministicDeliveryId('session-1', key!);
-    const right = buildDeterministicDeliveryId('session-1', key!);
+    const left = buildDeterministicDeliveryId('session-1', key);
+    const right = buildDeterministicDeliveryId('session-1', key);
     expect(left).toBe(right);
     expect(left).toContain('pack-send:det:');
   });

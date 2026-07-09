@@ -234,7 +234,7 @@
     "scripts/reverify-allowlist-config.test.ts": "c79432ef9c0fcc9ca44e42b1c1232db0f2fb055f473543e04c9dfa316086680c",
     "scripts/reverify-e2e-fixture-session.test.ts": "015b2ce76f595f38a61207684768848a2b124fc14c81d88fda5e81809d9e52e5",
     "scripts/review-cycle-cap.test.ts": "1e53d5f2e31da505de714a69ae50169fc8c1a8c3e1f7f8be2a5f69a2d5b73b29",
-    "scripts/review-delivery.test.ts": "314ba817cc07255e500f6373edd91cdbe2da6efb077055cd4a0c1cb870d59e8f",
+    "scripts/review-delivery.test.ts": "c9ed107d7642f1f598c49814e99412e60aff100d4683a184d5530297326c971f",
     "scripts/review-finding-delivery-submit.test.ts": "d2f8bd879c697b3e3c01679c6778db1ecc5af47122e9ffbde240298c01978e29",
     "scripts/review-handoff-wake-trigger.test.ts": "385fb758ace481f6acfe0ddff137641a23e6afdd671a40c738f245bf3f7f2f32",
     "scripts/review-head-ready.test.ts": "acbdd7b5b382c0ffd72adf1df59525b50b1e20429cadac2562641d7d71b1c777",
