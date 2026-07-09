@@ -26,5 +26,18 @@
     "vitest.config.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:a57722cb0f789aa06da39f03b09633527e5dce89763285d3f3113d28b7c9baf8",
+      "new_active_scope_hash": "sha256:a57722cb0f789aa06da39f03b09633527e5dce89763285d3f3113d28b7c9baf8",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "refresh baseline after main merge",
+      "actor": "orchestrator-pack-88",
+      "timestamp": "2026-07-09T12:16:52.703Z",
+      "applied": true
+    }
+  ]
 }
