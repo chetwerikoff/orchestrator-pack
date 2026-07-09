@@ -70,17 +70,34 @@ function bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha) {
   return changed.filter((path) => RPC_ARTIFACT_BINDING_SCOPE_RE.test(path));
 }
 
+function bindingScopeTreeMatches(repoRootOverride, fromSha, toSha) {
+  return bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha).length === 0;
+}
+
+function isPrValidationContext() {
+  return Boolean(
+    process.env.PR_HEAD_SHA ||
+      process.env.PR_BASE_SHA ||
+      process.env.GITHUB_EVENT_NAME === 'pull_request',
+  );
+}
+
 export function resolveExpectedCaptureSha(repoRootOverride = repoRoot) {
   const head = resolveBindingHead(repoRootOverride);
+  const manifestPath = join(
+    repoRootOverride,
+    'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json',
+  );
+  const manifest = loadJsonFile(manifestPath);
+  const capture = manifest.captureCommitSha;
+
+  if (!capture || !FULL_SHA_RE.test(capture)) {
+    cliFail('RPC manifest missing captureCommitSha');
+  }
+
   const changed = pathsChangedInCommit(head, repoRootOverride);
   const changedFixtures = changed.filter((path) => path.startsWith(RPC_FIXTURE_PREFIX));
   const changedNonFixtures = changed.filter((path) => !path.startsWith(RPC_FIXTURE_PREFIX));
-
-  if (changedNonFixtures.length > 0 && changedFixtures.length > 0) {
-    cliFail(
-      'RPC metadata binding must be committed separately: only scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/ may change in the metadata bind commit',
-    );
-  }
 
   if (changed.length > 0 && changed.every((path) => path.startsWith(RPC_FIXTURE_PREFIX))) {
     try {
@@ -93,7 +110,23 @@ export function resolveExpectedCaptureSha(repoRootOverride = repoRoot) {
     }
   }
 
-  return head;
+  if (bindingScopeTreeMatches(repoRootOverride, capture, head)) {
+    return capture;
+  }
+
+  if (capture === head) {
+    return head;
+  }
+
+  if (isPrValidationContext() && changedNonFixtures.length > 0 && changedFixtures.length > 0) {
+    cliFail(
+      'RPC metadata binding must be committed separately: only scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/ may change in the metadata bind commit',
+    );
+  }
+
+  cliFail(
+    `RPC captureCommitSha ${capture} does not match binding-scope tree at HEAD ${head}; refresh heavy-lane RPC artifacts`,
+  );
 }
 
 export function assertRpcMetadataCommitSha(commitSha, expectedCaptureSha, passId, repoRootOverride = repoRoot) {

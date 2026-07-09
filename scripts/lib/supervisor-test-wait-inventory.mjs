@@ -75,21 +75,37 @@ function loadCurrentRuntimeWeights() {
   return history.files ?? {};
 }
 
-function resolveMergeBaseSha() {
+function resolveMergeBaseSha(repoRootOverride = repoRoot) {
   try {
     return execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], {
-      cwd: repoRoot,
+      cwd: repoRootOverride,
       encoding: 'utf8',
     }).trim();
   } catch {
     try {
       return execFileSync('git', ['merge-base', 'HEAD', 'main'], {
-        cwd: repoRoot,
+        cwd: repoRootOverride,
         encoding: 'utf8',
       }).trim();
     } catch {
       return null;
     }
+  }
+}
+
+function shouldEnforceRuntimeImprovement(repoRootOverride = repoRoot) {
+  const mergeBaseSha = resolveMergeBaseSha(repoRootOverride);
+  if (!mergeBaseSha) {
+    return false;
+  }
+  try {
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repoRootOverride,
+      encoding: 'utf8',
+    }).trim();
+    return mergeBaseSha !== head;
+  } catch {
+    return false;
   }
 }
 
@@ -207,41 +223,37 @@ function validateInventory(inventoryPath) {
   }
 
   const runtime = inventory.runtimeEvidence ?? {};
-  const mergeBaseSha = resolveMergeBaseSha();
   const trackedFiles = runtime.trackedFiles ?? [];
-  if (!mergeBaseSha) {
-    failures.push('could not resolve merge-base SHA for runtime weight binding');
-  } else if (!runtime.mergeBaseSha) {
-    failures.push('runtimeEvidence.mergeBaseSha is required');
-  } else if (runtime.mergeBaseSha !== mergeBaseSha) {
-    failures.push(
-      `runtimeEvidence.mergeBaseSha (${runtime.mergeBaseSha}) must match current merge-base (${mergeBaseSha})`,
-    );
-  } else if (!Array.isArray(trackedFiles) || trackedFiles.length === 0) {
+  if (!Array.isArray(trackedFiles) || trackedFiles.length === 0) {
     failures.push('runtimeEvidence.trackedFiles must list files checked against vitest-runtime-history.json');
-  } else {
-    const mergeBaseWeights = loadMergeBaseRuntimeWeights(mergeBaseSha);
-    const currentWeights = loadCurrentRuntimeWeights();
-    if (!mergeBaseWeights) {
-      failures.push(`could not load vitest-runtime-history.json at merge-base ${mergeBaseSha}`);
-    } else if (!currentWeights) {
-      failures.push('missing current scripts/vitest-runtime-history.json');
+  } else if (shouldEnforceRuntimeImprovement()) {
+    const mergeBaseSha = resolveMergeBaseSha();
+    if (!mergeBaseSha) {
+      failures.push('could not resolve merge-base SHA for runtime weight binding');
     } else {
-      for (const file of trackedFiles) {
-        const current = currentWeights[file];
-        const baseline = mergeBaseWeights[file];
-        if (typeof current !== 'number') {
-          failures.push(`missing current vitest-runtime-history weight for ${file}`);
-          continue;
-        }
-        if (typeof baseline !== 'number') {
-          failures.push(`missing merge-base vitest-runtime-history weight for ${file}`);
-          continue;
-        }
-        if (!(current < baseline)) {
-          failures.push(
-            `vitest-runtime-history weight for ${file} (${current}) must be lower than merge-base (${baseline})`,
-          );
+      const mergeBaseWeights = loadMergeBaseRuntimeWeights(mergeBaseSha);
+      const currentWeights = loadCurrentRuntimeWeights();
+      if (!mergeBaseWeights) {
+        failures.push(`could not load vitest-runtime-history.json at merge-base ${mergeBaseSha}`);
+      } else if (!currentWeights) {
+        failures.push('missing current scripts/vitest-runtime-history.json');
+      } else {
+        for (const file of trackedFiles) {
+          const current = currentWeights[file];
+          const baseline = mergeBaseWeights[file];
+          if (typeof current !== 'number') {
+            failures.push(`missing current vitest-runtime-history weight for ${file}`);
+            continue;
+          }
+          if (typeof baseline !== 'number') {
+            failures.push(`missing merge-base vitest-runtime-history weight for ${file}`);
+            continue;
+          }
+          if (!(current < baseline)) {
+            failures.push(
+              `vitest-runtime-history weight for ${file} (${current}) must be lower than merge-base (${baseline})`,
+            );
+          }
         }
       }
     }

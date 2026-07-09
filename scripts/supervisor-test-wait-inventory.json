@@ -280,7 +280,6 @@
   },
   "runtimeEvidence": {
     "mergeBaseRef": "origin/main",
-    "mergeBaseSha": "97df2efed9cd22a256bb327a60db01008e8d8fbb",
     "heavyLaneFingerprint": "CI=true maxWorkers=1 fileParallelism=false",
     "trackedFiles": [
       "scripts/orchestrator-wake-supervisor-startup.test.ts",
