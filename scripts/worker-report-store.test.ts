@@ -672,4 +672,27 @@ describe('worker-report-store DROP proof helpers', () => {
     expect(out).toContain(head);
   });
 
+  it('pack-worker-report resolves repo slug before trusted binding without env repo vars', () => {
+    const raw = readFileSync(path.join(repoRoot, 'scripts/pack-worker-report.ps1'), 'utf8');
+    expect(raw).toMatch(/Resolve-WorkerReportStoreRepoSlug[\s\S]*Resolve-PackWorkerReportTrustedBinding/);
+    expect(raw).not.toMatch(/-not \$RepoSlug -or -not \$PrNumber/);
+  });
+
+  it('pack-worker-report dry-run derives repo slug from RepoRoot without GITHUB_REPOSITORY', () => {
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const out = runWorkerStorePwsh(`
+      $env:AO_SESSION_ID = 'opk-resolve-repo'
+      $env:AO_PR_NUMBER = '717'
+      Remove-Item Env:AO_REPO_SLUG -ErrorAction SilentlyContinue
+      Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue
+      Remove-Item Env:AO_HEAD_SHA -ErrorAction SilentlyContinue
+      Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
+      Set-Location '${repoRoot.replace(/'/g, "''")}'
+      & '${path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''")}' ready_for_review -RepoRoot '${repoRoot.replace(/'/g, "''")}' -DryRun
+    `).trim();
+    expect(out).toContain('ready_for_review');
+    expect(out).toContain('chetwerikoff/orchestrator-pack');
+    expect(out).toContain(head);
+  });
+
 });

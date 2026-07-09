@@ -52,7 +52,18 @@ if (-not $HeadSha) {
     }
 }
 
-if (-not $CallerSessionId -or -not $SessionId -or -not $RepoSlug -or -not $PrNumber -or -not $HeadSha) {
+if (-not $RepoRoot -or -not (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
+    $cwd = (Get-Location).Path
+    if (Test-Path -LiteralPath (Join-Path $cwd '.git') -PathType Container) {
+        $RepoRoot = $cwd
+    }
+    else {
+        $RepoRoot = $Root
+    }
+}
+$RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+
+if (-not $CallerSessionId -or -not $SessionId -or [string]::IsNullOrWhiteSpace($HeadSha)) {
     # Binding is the trust boundary. Do not invent a substitute report channel.
     exit 0
 }
@@ -72,6 +83,9 @@ $PrNumber = [int]$trustedBinding.prNumber
 $HeadSha = [string]$trustedBinding.headSha
 if (-not $RepoSlug) {
     $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug '' -RepoRoot $RepoRoot
+}
+if (-not $RepoSlug -or $PrNumber -le 0 -or [string]::IsNullOrWhiteSpace($HeadSha)) {
+    exit 0
 }
 if (($requestedPrNumber -gt 0 -and $requestedPrNumber -ne $PrNumber) `
         -or (-not [string]::IsNullOrWhiteSpace($requestedHeadSha) -and $requestedHeadSha -ne $HeadSha)) {
