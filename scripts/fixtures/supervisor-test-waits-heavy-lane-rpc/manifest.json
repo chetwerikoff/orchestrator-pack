@@ -5,17 +5,17 @@
   "passes": [
     {
       "id": "pass-001",
-      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.log",
+      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.vitest-output.txt",
       "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.meta.json"
     },
     {
       "id": "pass-002",
-      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.log",
+      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.vitest-output.txt",
       "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.meta.json"
     },
     {
       "id": "pass-003",
-      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.log",
+      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.vitest-output.txt",
       "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json"
     }
   ]

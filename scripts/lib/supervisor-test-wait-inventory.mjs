@@ -8,18 +8,15 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..', '..');
 
+import { cliFail, loadJsonFile } from './cli-guard-helpers.mjs';
+
 const BARE_SLEEP_RE = /new\s+Promise\s*\(\s*\(\s*resolve\s*\)\s*=>\s*setTimeout\s*\(/;
 const FIXED_WINDOW_RE = /fixedObservationWindow\s*\(/;
 const POSITIVE_HELPER_RE =
   /waitForCondition|waitForStdoutContains|waitForMarkerPidChange|waitForSupervisorLogMatchFromOffset|waitForSupervisorLogMatch|waitForMarker|waitForMarkers|waitForProcessesStopped|waitForSupervisorHealthyStatus|stopSupervisorChild/;
 
-function fail(message) {
-  console.error(`[FAIL] ${message}`);
-  process.exit(1);
-}
-
 function loadJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
+  return loadJsonFile(path);
 }
 
 function hashExpectLines(filePath) {
@@ -169,7 +166,7 @@ function validateInventory(inventoryPath) {
 function validateNegativeRegression(negativePath) {
   const { failures } = validateInventory(negativePath);
   if (failures.length === 0) {
-    fail('negative regression corpus must be rejected but passed validation');
+    cliFail('negative regression corpus must be rejected but passed validation');
   }
   console.log('[PASS] negative regression corpus rejected as expected');
 }
@@ -184,7 +181,7 @@ function main() {
 
   if (mode === 'negative-regression') {
     if (!existsSync(negativePath)) {
-      fail(`missing negative regression corpus: ${negativePath}`);
+      cliFail(`missing negative regression corpus: ${negativePath}`);
     }
     validateNegativeRegression(negativePath);
     return;

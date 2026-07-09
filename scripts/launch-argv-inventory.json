@@ -7157,10 +7157,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-201",
+      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-198",
       "caller": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 201
+        "line": 198
       },
       "callee": {
         "kind": "other-external",
@@ -7175,17 +7175,17 @@
       "hashPinnedSourceHash": "sha256:d0952c48d4dda2269dcb5b0cb9b9f5de438ecd9d944e013f3528f46228742976",
       "discoveryMatch": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 201,
+        "line": 198,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-21",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-13",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 21
+        "line": 13
       },
       "callee": {
         "kind": "other-external",
@@ -7200,7 +7200,7 @@
       "hashPinnedSourceHash": "sha256:3aa3b8679645fdcf951d8f5a06ece0236605576906e23a631420a87318c0200a",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 21,
+        "line": 13,
         "patternIds": [
           "execFileSync"
         ]
