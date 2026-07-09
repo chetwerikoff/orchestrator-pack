@@ -77,7 +77,7 @@
     "Do not author `/tmp/gh-rest-bin/gh`",
     "unset GH_WRAPPER_ACTIVE",
     "gh api graphql",
-    "Do **not** `ao report ready_for_review` while required CI is not green",
+    "Do **not** run `pack-worker-report --state ready_for_review` while required",
     "Worker self-drive is primary",
     "- Link every branch and PR to its source issue; PR bodies must include",
     "**Mandatory profiles.** Every `coworker ask` MUST pass `--profile code`. Every",
