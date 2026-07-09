@@ -42,12 +42,41 @@ function findBareSleeps(filePath) {
 
 function siteCoversBareSleep(site, bareHit, fileText) {
   if (site.file !== bareHit.file) return false;
-  if (site.anchor && fileText.includes(site.anchor)) {
-    const anchorIndex = fileText.indexOf(site.anchor);
-    const lineStart = fileText.slice(0, anchorIndex).split('\n').length;
-    return Math.abs(lineStart - bareHit.line) <= 12;
+  if (!site.anchor || !fileText.includes(site.anchor)) return false;
+  const anchorIndex = fileText.indexOf(site.anchor);
+  const anchorLine = fileText.slice(0, anchorIndex).split('\n').length;
+  return Math.abs(anchorLine - bareHit.line) <= 12;
+}
+
+function resolveMergeBaseSha() {
+  try {
+    return execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    try {
+      return execFileSync('git', ['merge-base', 'HEAD', 'main'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      }).trim();
+    } catch {
+      return null;
+    }
   }
-  return false;
+}
+
+function loadMergeBaseRuntimeWeights(mergeBaseSha) {
+  try {
+    const raw = execFileSync('git', ['show', `${mergeBaseSha}:scripts/vitest-runtime-history.json`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    const history = JSON.parse(raw);
+    return history.files ?? {};
+  } catch {
+    return null;
+  }
 }
 
 function validateInventory(inventoryPath) {
@@ -75,12 +104,7 @@ function validateInventory(inventoryPath) {
     if (bareHits.length === 0) continue;
     const fileText = readFileSync(join(repoRoot, file), 'utf8');
     for (const hit of bareHits) {
-      const covered = inventory.sites.some(
-        (site) =>
-          site.file === file &&
-          (site.classification === 'poll-interval' || site.anchor) &&
-          (site.anchor ? fileText.includes(site.anchor) : false),
-      );
+      const covered = inventory.sites.some((site) => siteCoversBareSleep(site, hit, fileText));
       if (!covered) {
         failures.push(`unclassified bare setTimeout at ${file}:${hit.line}`);
       }
@@ -137,14 +161,36 @@ function validateInventory(inventoryPath) {
   }
 
   const runtime = inventory.runtimeEvidence ?? {};
-  for (const [file, baseline] of Object.entries(runtime.mergeBaseP75WallMs ?? {})) {
-    const current = runtime.p75WallMs?.[file];
-    if (typeof current !== 'number') {
-      failures.push(`missing current p75WallMs for ${file}`);
-      continue;
-    }
-    if (!(current < baseline)) {
-      failures.push(`p75WallMs for ${file} (${current}) must be lower than merge-base (${baseline})`);
+  const mergeBaseSha = resolveMergeBaseSha();
+  if (!mergeBaseSha) {
+    failures.push('could not resolve merge-base SHA for p75WallMs binding');
+  } else if (!runtime.mergeBaseSha) {
+    failures.push('runtimeEvidence.mergeBaseSha is required');
+  } else if (runtime.mergeBaseSha !== mergeBaseSha) {
+    failures.push(
+      `runtimeEvidence.mergeBaseSha (${runtime.mergeBaseSha}) must match current merge-base (${mergeBaseSha})`,
+    );
+  } else {
+    const mergeBaseWeights = loadMergeBaseRuntimeWeights(mergeBaseSha);
+    if (!mergeBaseWeights) {
+      failures.push(`could not load vitest-runtime-history.json at merge-base ${mergeBaseSha}`);
+    } else {
+      for (const [file, current] of Object.entries(runtime.p75WallMs ?? {})) {
+        if (typeof current !== 'number') {
+          failures.push(`missing current p75WallMs for ${file}`);
+          continue;
+        }
+        const baseline = mergeBaseWeights[file];
+        if (typeof baseline !== 'number') {
+          failures.push(`missing merge-base vitest-runtime-history weight for ${file}`);
+          continue;
+        }
+        if (!(current < baseline)) {
+          failures.push(
+            `p75WallMs for ${file} (${current}) must be lower than merge-base vitest-runtime-history (${baseline})`,
+          );
+        }
+      }
     }
   }
 
@@ -192,21 +238,6 @@ function main() {
     console.error('[FAIL] supervisor test wait inventory:');
     for (const item of failures) console.error(` - ${item}`);
     process.exit(1);
-  }
-
-  try {
-    const mergeBase = execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    }).trim();
-    const inventory = loadJson(inventoryPath);
-    if (inventory.runtimeEvidence?.mergeBaseSha && inventory.runtimeEvidence.mergeBaseSha !== mergeBase) {
-      console.warn(
-        `[WARN] inventory mergeBaseSha (${inventory.runtimeEvidence.mergeBaseSha}) differs from current merge-base (${mergeBase}); refresh after rebase`,
-      );
-    }
-  } catch {
-    console.warn('[WARN] could not compare merge-base SHA');
   }
 
   console.log('[PASS] supervisor test wait inventory (classification, positive-poll, negative-preserved, assertion-strength, runtime p75)');

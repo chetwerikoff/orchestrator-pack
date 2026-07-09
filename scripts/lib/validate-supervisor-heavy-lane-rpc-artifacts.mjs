@@ -13,6 +13,44 @@ function currentHeadSha() {
   return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
 }
 
+const FULL_SHA_RE = /^[0-9a-f]{40}$/;
+const RPC_ARTIFACT_SCOPE_RE =
+  /^scripts\/(orchestrator-wake-supervisor|supervisor-fault-boundary|supervisor-recovery\.test-helpers)/;
+
+function supervisorPathsChangedSince(repoRootOverride, fromSha, toSha) {
+  const changed = execFileSync('git', ['diff', '--name-only', fromSha, toSha], {
+    cwd: repoRootOverride,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return changed.filter((path) => RPC_ARTIFACT_SCOPE_RE.test(path));
+}
+
+export function assertRpcMetadataCommitSha(commitSha, head, passId, repoRootOverride = repoRoot) {
+  if (!commitSha || commitSha.startsWith('@') || !FULL_SHA_RE.test(commitSha)) {
+    cliFail(`${passId}: metadata commitSha must be a full 40-char git commit SHA, got ${commitSha}`);
+  }
+  if (commitSha === head) {
+    return;
+  }
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', commitSha, head], {
+      cwd: repoRootOverride,
+      stdio: 'ignore',
+    });
+  } catch {
+    cliFail(`${passId}: metadata commitSha ${commitSha} is not an ancestor of HEAD ${head}`);
+  }
+  const stalePaths = supervisorPathsChangedSince(repoRootOverride, commitSha, head);
+  if (stalePaths.length > 0) {
+    cliFail(
+      `${passId}: RPC artifacts bound to ${commitSha} but supervisor/wake paths changed since capture (${stalePaths.join(', ')}); refresh heavy-lane RPC artifacts at HEAD`,
+    );
+  }
+}
+
 export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoRoot) {
   const manifestPath = join(
     repoRootOverride,
@@ -39,10 +77,7 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     if (!meta.commitSha) cliFail(`${pass.id}: metadata missing commitSha`);
     if (!meta.heavyLaneFingerprint) cliFail(`${pass.id}: metadata missing heavyLaneFingerprint`);
     if (!meta.runTimestampUtc) cliFail(`${pass.id}: metadata missing runTimestampUtc`);
-    const boundSha = meta.commitSha === '@HEAD' ? head : meta.commitSha;
-    if (boundSha !== head) {
-      cliFail(`${pass.id}: metadata commitSha ${meta.commitSha} does not match HEAD ${head}`);
-    }
+    assertRpcMetadataCommitSha(meta.commitSha, head, pass.id, repoRootOverride);
     if (meta.heavyLaneFingerprint !== manifest.heavyLaneFingerprint) {
       cliFail(`${pass.id}: heavyLaneFingerprint mismatch`);
     }
