@@ -5,7 +5,8 @@
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
   "heavyPerTestIsolate": [
-    "scripts/autonomous-orchestrator-boundary.test.ts"
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/review-start-preflight-shield.test.ts"
   ],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",

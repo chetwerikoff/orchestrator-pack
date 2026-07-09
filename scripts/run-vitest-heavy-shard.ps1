@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard.json"
 $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
+$FileRunPlanScript = Join-Path $Root 'scripts/resolve-vitest-heavy-file-run-plan.mjs'
 
 $env:CI = 'true'
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
@@ -41,55 +42,84 @@ try {
     $partialReports = [System.Collections.Generic.List[string]]::new()
     $failedExitCode = 0
     $maxFileAttempts = if ($env:CI -eq 'true') { 5 } else { 1 }
+    $partialReportSeq = 0
 
     try {
         foreach ($file in $shardPlan.files) {
-            $safeName = ($file -replace '[^\w.\-]+', '_')
-            $partialReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-$safeName.json"
-            $filePassed = $false
-
-            for ($attempt = 1; $attempt -le $maxFileAttempts; $attempt++) {
-                if (Test-Path -LiteralPath $partialReportPath) {
-                    Remove-Item -LiteralPath $partialReportPath -Force
+            $filePlanJson = & node $FileRunPlanScript $file 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host $filePlanJson
+                exit 1
+            }
+            $runPlan = $filePlanJson | ConvertFrom-Json
+            $pool = [string]$runPlan.pool
+            $invocations = @(
+                @{ label = $file; testPattern = $null }
+            )
+            if ($runPlan.mode -eq 'tests') {
+                $invocations = @()
+                foreach ($testTitle in @($runPlan.tests)) {
+                    $invocations += @{ label = "$file > $testTitle"; testPattern = [string]$testTitle }
                 }
+            }
 
-                # Run one heavy file per Vitest invocation so long shard suites do not
-                # starve vitest-worker onTaskUpdate RPC (#487/#556; shard 6 flake class).
-                # Pool comes from vitest.config.ts (forks, serial heavy lane) — do not
-                # override with --pool=threads; that pool class reintroduces RPC timeouts.
-                $output = & npm test -- $file --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
-                $text = ($output | Out-String)
-                Write-Host $text
+            foreach ($invocation in $invocations) {
+                $partialReportSeq++
+                $safeLabel = ($invocation.label -replace '[^\w.\-]+', '_')
+                $partialReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-$partialReportSeq-$safeLabel.json"
+                $invocationPassed = $false
 
-                if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
-                    if ($attempt -lt $maxFileAttempts) {
-                        Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard file $file (attempt $attempt/$maxFileAttempts); retrying..."
-                        Start-Sleep -Seconds 5
-                        continue
+                for ($attempt = 1; $attempt -le $maxFileAttempts; $attempt++) {
+                    if (Test-Path -LiteralPath $partialReportPath) {
+                        Remove-Item -LiteralPath $partialReportPath -Force
                     }
-                    Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard (file: $file)"
-                    exit 1
-                }
 
-                if ($LASTEXITCODE -ne 0) {
-                    $failedExitCode = $LASTEXITCODE
+                    $testArgs = @()
+                    if ($invocation.testPattern) {
+                        $testArgs += '-t'
+                        $testArgs += [string]$invocation.testPattern
+                    }
+                    $poolArgs = @()
+                    if ($pool -eq 'forks') {
+                        $poolArgs += "--pool=$pool"
+                    }
+
+                    # One invocation per heavy file or per isolated test so long suites do not
+                    # starve vitest-worker onTaskUpdate RPC (#487/#556/#648).
+                    $output = & npm test -- $file @poolArgs @testArgs --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
+                    $text = ($output | Out-String)
+                    Write-Host $text
+
+                    if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
+                        if ($attempt -lt $maxFileAttempts) {
+                            Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard invocation $($invocation.label) (attempt $attempt/$maxFileAttempts); retrying..."
+                            Start-Sleep -Seconds 5
+                            continue
+                        }
+                        Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard invocation $($invocation.label)"
+                        exit 1
+                    }
+
+                    if ($LASTEXITCODE -ne 0) {
+                        $failedExitCode = $LASTEXITCODE
+                        break
+                    }
+
+                    if (-not (Test-Path -LiteralPath $partialReportPath)) {
+                        Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard invocation $($invocation.label)"
+                        exit 1
+                    }
+
+                    $invocationPassed = $true
                     break
                 }
 
-                if (-not (Test-Path -LiteralPath $partialReportPath)) {
-                    Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
-                    exit 1
+                if (-not $invocationPassed) {
+                    continue
                 }
 
-                $filePassed = $true
-                break
+                $partialReports.Add($partialReportPath) | Out-Null
             }
-
-            if (-not $filePassed) {
-                continue
-            }
-
-            $partialReports.Add($partialReportPath) | Out-Null
         }
 
         if ($failedExitCode -ne 0) {
