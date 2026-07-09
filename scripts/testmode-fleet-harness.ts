@@ -19,6 +19,68 @@ export function isolatedLeaseRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'opk-testmode-lease-'));
 }
 
+export function getDefaultLeaseRoot(): string {
+  const fromEnv = process.env.OPK_TESTMODE_LEASE_ROOT?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  const home = process.env.HOME ?? os.homedir();
+  const stateBase = process.env.XDG_STATE_HOME?.trim()
+    || process.env.LOCALAPPDATA?.trim()
+    || path.join(home, '.local', 'state');
+  return path.join(stateBase, 'opk-testmode-fleet-leases');
+}
+
+export function getVitestLaneContextFileName(): string {
+  const shard = process.env.VITEST_HEAVY_SHARD?.trim();
+  if (shard) {
+    return `vitest-lane-context-shard-${shard}.json`;
+  }
+  if (process.env.VITEST_CI_LIGHT_LANE === '1') {
+    return 'vitest-lane-context-light.json';
+  }
+  return 'vitest-lane-context.json';
+}
+
+export function writeVitestLaneLeaseContext(lease: LaneLease): void {
+  const contextPath = path.join(lease.leaseRoot, getVitestLaneContextFileName());
+  fs.mkdirSync(lease.leaseRoot, { recursive: true });
+  fs.writeFileSync(
+    contextPath,
+    JSON.stringify({
+      leaseId: lease.leaseId,
+      leaseRoot: lease.leaseRoot,
+      laneId: lease.laneId,
+      runId: lease.runId,
+      ownerPid: lease.ownerPid,
+      ownerStartTime: lease.ownerStartTime,
+      vitestShard: process.env.VITEST_HEAVY_SHARD ?? '',
+      lightLane: process.env.VITEST_CI_LIGHT_LANE === '1',
+      writtenMs: Date.now(),
+    }),
+  );
+}
+
+export function writeVitestLaneLeaseContextFromEnv(): void {
+  const leaseId = process.env.AO_TESTMODE_FLEET_LANE_LEASE_ID?.trim();
+  const leaseRoot = process.env.OPK_TESTMODE_LEASE_ROOT?.trim();
+  if (!leaseId || !leaseRoot) {
+    return;
+  }
+  writeVitestLaneLeaseContext({
+    leaseId,
+    leaseRoot,
+    laneId: process.env.VITEST_HEAVY_SHARD
+      ? `heavy-shard-${process.env.VITEST_HEAVY_SHARD}`
+      : process.env.VITEST_CI_LIGHT_LANE === '1'
+        ? 'light-lane'
+        : 'default-lane',
+    runId: process.env.GITHUB_RUN_ID ? `gh-${process.env.GITHUB_RUN_ID}` : `local-${process.pid}`,
+    ownerPid: process.pid,
+    ownerStartTime: getProcessStartTimeIdentity(process.pid),
+  });
+}
+
 export function runReaperCli(
   action: string,
   args: Record<string, string | number> = {},
@@ -65,7 +127,7 @@ export function registerLaneLease(options: {
   ownerPid?: number;
   workspaceRoot?: string;
 } = {}): LaneLease {
-  const leaseRoot = options.leaseRoot ?? isolatedLeaseRoot();
+  const leaseRoot = options.leaseRoot ?? process.env.OPK_TESTMODE_LEASE_ROOT?.trim() ?? getDefaultLeaseRoot();
   const { stdout, status } = runReaperCli(
     'register-lane',
     {
@@ -82,7 +144,8 @@ export function registerLaneLease(options: {
   const parsed = JSON.parse(stdout) as LaneLease;
   process.env.OPK_TESTMODE_LEASE_ROOT = leaseRoot;
   process.env.AO_TESTMODE_FLEET_LANE_LEASE_ID = parsed.leaseId;
-  return parsed;
+  writeVitestLaneLeaseContext({ ...parsed, leaseRoot });
+  return { ...parsed, leaseRoot };
 }
 
 export function getProcessStartTimeIdentity(pid: number): string {

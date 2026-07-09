@@ -177,6 +177,9 @@ try {
     Write-Host "vitest-lane-timing lane=heavy shard=$Shard files=$($shardPlan.files.Count) weight_ms=$($shardPlan.totalRuntimeMs) elapsed_sec=$elapsed"
 
     $reaperScript = Join-Path $Root 'scripts/invoke-testmode-fleet-reaper.ps1'
+    . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
+    Import-TestModeVitestLaneLeaseContext -Shard ([string]$Shard) | Out-Null
+
     $observeJson = & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript observe 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FAIL] TestMode fleet hygiene: surviving this-run/shard-scoped pwsh detected before post-run cleanup"

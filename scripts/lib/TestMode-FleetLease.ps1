@@ -142,6 +142,91 @@ function Get-TestModeFleetLeaseRecordsFromIndex {
     return @($records)
 }
 
+
+function Get-TestModeFleetIndexedLeaseIds {
+    $indexPath = Get-TestModeFleetLeaseIndexPath
+    if (-not (Test-Path -LiteralPath $indexPath)) { return @() }
+    try { $index = Get-Content -LiteralPath $indexPath -Raw | ConvertFrom-Json } catch { return @() }
+    $ids = [System.Collections.Generic.List[string]]::new()
+    foreach ($leaseId in @($index.leaseIds)) {
+        if ($leaseId) { $ids.Add([string]$leaseId) | Out-Null }
+    }
+    return @($ids)
+}
+
+function Get-TestModeVitestLaneContextFileName {
+    param(
+        [string]$Shard = '',
+        [string]$LightLane = ''
+    )
+
+    if ($Shard) { return "vitest-lane-context-shard-$Shard.json" }
+    if ($LightLane -eq '1') { return 'vitest-lane-context-light.json' }
+    return 'vitest-lane-context.json'
+}
+
+function Get-TestModeVitestLaneContextPath {
+    param(
+        [string]$LeaseRoot = '',
+        [string]$Shard = '',
+        [string]$LightLane = ''
+    )
+
+    if (-not $LeaseRoot) { $LeaseRoot = Get-TestModeFleetLeaseRoot }
+    $name = Get-TestModeVitestLaneContextFileName -Shard $Shard -LightLane $LightLane
+    return Join-Path $LeaseRoot $name
+}
+
+function Read-TestModeVitestLaneLeaseContext {
+    param(
+        [string]$LeaseRoot = '',
+        [string]$Shard = ''
+    )
+
+    $roots = [System.Collections.Generic.List[string]]::new()
+    if ($LeaseRoot) { [void]$roots.Add($LeaseRoot) }
+    $defaultRoot = Get-TestModeFleetLeaseRoot
+    if ($defaultRoot -and -not $roots.Contains($defaultRoot)) { [void]$roots.Add($defaultRoot) }
+
+    $names = [System.Collections.Generic.List[string]]::new()
+    if ($Shard) { [void]$names.Add((Get-TestModeVitestLaneContextFileName -Shard $Shard)) }
+    if ($env:VITEST_CI_LIGHT_LANE -eq '1') { [void]$names.Add((Get-TestModeVitestLaneContextFileName -LightLane '1')) }
+    [void]$names.Add((Get-TestModeVitestLaneContextFileName))
+
+    foreach ($root in @($roots | Select-Object -Unique)) {
+        foreach ($name in @($names | Select-Object -Unique)) {
+            $path = Join-Path $root $name
+            if (-not (Test-Path -LiteralPath $path)) { continue }
+            try {
+                $ctx = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+                if ($ctx.leaseId) { return $ctx }
+            }
+            catch {
+                continue
+            }
+        }
+    }
+
+    return $null
+}
+
+function Import-TestModeVitestLaneLeaseContext {
+    param(
+        [string]$Shard = '',
+        [switch]$FailIfMissing
+    )
+
+    $ctx = Read-TestModeVitestLaneLeaseContext -Shard $Shard
+    if (-not $ctx) {
+        if ($FailIfMissing) { throw 'TestMode vitest lane lease context is missing' }
+        return $null
+    }
+
+    if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
+    if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+    return $ctx
+}
+
 function ConvertTo-TestModeFleetLeaseHashtable {
     param([object]$Record)
     $hash = @{}

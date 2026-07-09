@@ -136,12 +136,19 @@ function Resolve-TestModeFleetLeaseForStateRoot {
 function Get-TestModeFleetReaperCandidateProcesses {
     $candidates = [System.Collections.Generic.List[int]]::new()
     foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
+        $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+        if ($classification.kind -in @('testmode_supervisor', 'testmode_managed')) {
+            $candidates.Add($proc.Id) | Out-Null
+            continue
+        }
+
         if ($IsLinux) {
             $marker = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
             $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
-            if (-not $marker -and -not $state) { continue }
+            if ($marker -or $state) {
+                $candidates.Add($proc.Id) | Out-Null
+            }
         }
-        $candidates.Add($proc.Id) | Out-Null
     }
     return @($candidates)
 }
@@ -350,6 +357,14 @@ function Invoke-TestModeFleetReaper {
         foreach ($pid in @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots @($stateRoots | Select-Object -Unique))) {
             [void]$candidateSet.Add($pid)
         }
+        foreach ($leaseId in @(Get-TestModeFleetIndexedLeaseIds)) {
+            if (-not $leaseId) { continue }
+            $readable = Read-TestModeFleetLeaseRecord -LeaseId $leaseId
+            if (-not $readable) {
+                [void]$staleLeaseIds.Add($leaseId)
+            }
+        }
+
         if ($staleLeaseIds.Count -gt 0) {
             foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
                 $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id

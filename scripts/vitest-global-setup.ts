@@ -9,6 +9,7 @@ import {
   registerLaneLease,
   runReaperCli,
   touchLeaseHeartbeat,
+  writeVitestLaneLeaseContextFromEnv,
   repoRoot,
 } from './testmode-fleet-harness.js';
 
@@ -112,6 +113,7 @@ export default function setup() {
 export async function teardown() {
   stopLeaseHeartbeat();
   try {
+    writeVitestLaneLeaseContextFromEnv();
     runReaperCli('teardown');
   } finally {
     assertSharedDefaultUnmutated();

@@ -16,6 +16,7 @@ import {
 } from './supervisor-recovery.test-helpers.js';
 import {
   getProcessStartTimeIdentity,
+  getDefaultLeaseRoot,
   isolatedLeaseRoot,
   isAlive as harnessIsAlive,
   killProcess,
@@ -329,6 +330,30 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
     );
     expect(result.stdout.trim()).toBe('True');
   });
+
+  it('uses durable default lease root when leaseRoot omitted', () => {
+    expect(getDefaultLeaseRoot()).toContain('opk-testmode-fleet-leases');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'bootstrap reaps orphans linked to corrupt indexed lease records',
+    async () => {
+      const leaseRoot = isolatedLeaseRoot();
+      const stateDir = makeStateDir();
+      const leaseId = 'corrupt-bootstrap';
+      writeCorruptLeaseRecord(leaseRoot, leaseId);
+      fs.writeFileSync(path.join(stateDir, 'testmode-lane-lease.id'), leaseId);
+      const orphanPid = spawnOrphanTestModeChild(stateDir);
+      expect(harnessIsAlive(orphanPid)).toBe(true);
+
+      const recovery = registerLaneLease({ leaseRoot, laneId: 'recovery-corrupt' });
+      const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, recovery.leaseId));
+      expect(bootstrap.status).toBe(0);
+      await waitForProcessesStopped([orphanPid], 20_000);
+      expect(harnessIsAlive(orphanPid)).toBe(false);
+    },
+    90_000,
+  );
 });
 
 describe('Issue #710 teardown post-sweep (AC#3)', () => {
