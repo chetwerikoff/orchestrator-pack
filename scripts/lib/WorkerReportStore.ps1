@@ -243,6 +243,70 @@ function Resolve-PackWorkerReportTrustedBinding {
     }
 }
 
+
+
+function Resolve-PackWorkerReportDeliveryRunId {
+    param(
+        [string]$ReportState = '',
+        [string]$SessionId = '',
+        [int]$PrNumber = 0,
+        [string]$HeadSha = '',
+        [string]$DeliveryRunId = '',
+        [string]$ProjectId = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportState) -or $ReportState -ne 'addressing_reviews') {
+        return ''
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DeliveryRunId)) {
+        return [string]$DeliveryRunId
+    }
+    foreach ($envName in @('AO_DELIVERY_RUN_ID', 'AO_REVIEW_RUN_ID', 'AO_REVIEW_START_RUN_ID')) {
+        $fromEnv = [Environment]::GetEnvironmentVariable($envName)
+        if (-not [string]::IsNullOrWhiteSpace($fromEnv)) {
+            return [string]$fromEnv
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($SessionId) -or $PrNumber -le 0) {
+        return ''
+    }
+
+    $reviewRuns = @()
+    $aoCli = Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1'
+    if (Test-Path -LiteralPath $aoCli) {
+        . $aoCli
+        $project = $ProjectId
+        if ([string]::IsNullOrWhiteSpace($project)) {
+            if ($env:AO_PROJECT_ID) { $project = [string]$env:AO_PROJECT_ID }
+            else { $project = 'orchestrator-pack' }
+        }
+        try {
+            $reviewRuns = @(Get-AoReviewRuns -Project $project)
+        }
+        catch {
+            $reviewRuns = @()
+        }
+    }
+
+    $runPayload = @()
+    foreach ($run in $reviewRuns) {
+        if ($null -eq $run) { continue }
+        $runPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $run)
+    }
+    $resolved = Invoke-WorkerReportStoreCli -Subcommand 'resolveDeliveryRunId' -Payload @{
+        reportState   = [string]$ReportState
+        sessionId     = [string]$SessionId
+        prNumber      = [int]$PrNumber
+        headSha       = [string]$HeadSha
+        deliveryRunId = ''
+        reviewRuns    = $runPayload
+    }
+    if ($resolved -and $resolved.deliveryRunId) {
+        return [string]$resolved.deliveryRunId
+    }
+    return ''
+}
+
 function Write-PackWorkerReportRecord {
     param(
         [string]$ReportState,
@@ -255,7 +319,8 @@ function Write-PackWorkerReportRecord {
         [long]$NowMs = 0,
         [string]$CallerSessionId = '',
         [string]$RepoRoot = '',
-        [object]$TrustedBinding = $null
+        [object]$TrustedBinding = $null,
+        [string]$DeliveryRunId = ''
     )
 
     if (-not $NowMs) {
@@ -290,6 +355,8 @@ function Write-PackWorkerReportRecord {
         $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug '' -RepoRoot $RepoRoot
     }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
+    $resolvedDeliveryRunId = Resolve-PackWorkerReportDeliveryRunId -ReportState $ReportState `
+        -SessionId $SessionId -PrNumber $PrNumber -HeadSha $HeadSha -DeliveryRunId $DeliveryRunId
     $recordPayload = @{
         reportState    = $ReportState
         accepted       = $Accepted
@@ -299,6 +366,9 @@ function Write-PackWorkerReportRecord {
         headSha        = $HeadSha
         reportedAtMs   = $NowMs
         lastObservedMs = $NowMs
+    }
+    if ($resolvedDeliveryRunId) {
+        $recordPayload.deliveryRunId = $resolvedDeliveryRunId
     }
     $writeResult = $null
     $captured = @{}

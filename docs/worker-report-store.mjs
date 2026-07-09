@@ -11,6 +11,7 @@ import {
   resolveSessionPrBinding,
   sessionDetailFromSessionGetPayload,
 } from './session-pr-binding-resolver.mjs';
+import { isPendingWorkerDeliveryConfirmation } from './review-producer-contract.mjs';
 
 export const WORKER_REPORT_STORE_SCHEMA_VERSION = 2;
 export const PACK_WORKER_REPORT_STORE_SURFACE = 'pack-worker-report-store';
@@ -390,6 +391,60 @@ export function sessionHasPackWorkerReportReceiptSurface(session) {
  * @param {object} run
  * @param {number} sendObservedAtMs
  */
+
+/**
+ * @param {object} input
+ * @param {string} [input.reportState]
+ * @param {string} [input.sessionId]
+ * @param {number} [input.prNumber]
+ * @param {string} [input.headSha]
+ * @param {string} [input.deliveryRunId]
+ * @param {Array<Record<string, unknown>>} [input.reviewRuns]
+ */
+export function resolvePackWorkerReportDeliveryRunId({
+  reportState = '',
+  sessionId = '',
+  prNumber = 0,
+  headSha = '',
+  deliveryRunId = '',
+  reviewRuns = [],
+}) {
+  if (String(reportState ?? '').toLowerCase() !== 'addressing_reviews') {
+    return '';
+  }
+  const explicit = String(deliveryRunId ?? '').trim();
+  if (explicit) {
+    return explicit;
+  }
+  const session = String(sessionId ?? '').trim();
+  const pr = Number(prNumber ?? 0);
+  const head = normalizeSha(headSha);
+  if (!session || pr <= 0) {
+    return '';
+  }
+  for (const run of toArray(reviewRuns)) {
+    const linked = String(run?.linkedSessionId ?? '').trim();
+    if (linked !== session) {
+      continue;
+    }
+    if (Number(run?.prNumber ?? 0) !== pr) {
+      continue;
+    }
+    const targetHead = normalizeSha(run?.targetSha);
+    if (head && targetHead && targetHead !== head) {
+      continue;
+    }
+    if (!isPendingWorkerDeliveryConfirmation(run)) {
+      continue;
+    }
+    const runId = String(run?.id ?? run?.reviewerSessionId ?? '').trim();
+    if (runId) {
+      return runId;
+    }
+  }
+  return '';
+}
+
 export function findPackWorkerAckReportAfterDelivery(session, run, sendObservedAtMs) {
   if (!sessionHasPackWorkerReportReceiptSurface(session)) {
     return null;
@@ -523,6 +578,19 @@ runStdinJsonCli('worker-report-store.mjs', {
       repoSlug: String(payload.repoSlug ?? ''),
     });
     return { ...result, store };
+  },
+  resolveDeliveryRunId: () => {
+    const payload = readStdinJson();
+    return {
+      deliveryRunId: resolvePackWorkerReportDeliveryRunId({
+        reportState: String(payload.reportState ?? ''),
+        sessionId: String(payload.sessionId ?? ''),
+        prNumber: Number(payload.prNumber ?? 0),
+        headSha: "String(payload.headSha ?? '')",
+        deliveryRunId: String(payload.deliveryRunId ?? ''),
+        reviewRuns: toArray(payload.reviewRuns),
+      }),
+    };
   },
   resolveTrustedBinding: () => {
     const payload = readStdinJson();

@@ -48,6 +48,14 @@ export declare function validateWorkerReportTrustBoundary(input: {
   trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
 }): { ok: boolean; reason?: string };
 export declare function sessionHasPackWorkerReportReceiptSurface(session: Record<string, unknown>): boolean;
+export declare function resolvePackWorkerReportDeliveryRunId(input: {
+  reportState?: string;
+  sessionId?: string;
+  prNumber?: number;
+  headSha?: string;
+  deliveryRunId?: string;
+  reviewRuns?: Array<Record<string, unknown>>;
+}): string;
 export declare function findPackWorkerAckReportAfterDelivery(
   session: Record<string, unknown>,
   run: Record<string, unknown>,

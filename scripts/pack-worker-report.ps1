@@ -7,6 +7,7 @@ param(
     [string]$RepoSlug = '',
     [int]$PrNumber = 0,
     [string]$HeadSha = '',
+    [string]$DeliveryRunId = '',
     [switch]$DryRun
 )
 
@@ -87,23 +88,29 @@ if (-not $RepoSlug) {
 if (-not $RepoSlug -or $PrNumber -le 0 -or [string]::IsNullOrWhiteSpace($HeadSha)) {
     exit 0
 }
+$DeliveryRunId = Resolve-PackWorkerReportDeliveryRunId -ReportState $State -SessionId $SessionId `
+    -PrNumber $PrNumber -HeadSha $HeadSha -DeliveryRunId $DeliveryRunId
 if (($requestedPrNumber -gt 0 -and $requestedPrNumber -ne $PrNumber) `
         -or (-not [string]::IsNullOrWhiteSpace($requestedHeadSha) -and $requestedHeadSha -ne $HeadSha)) {
     exit 0
 }
 
 if ($DryRun) {
+    $record = @{
+        reportState = $State
+        accepted    = $true
+        sessionId   = $SessionId
+        repoSlug    = $RepoSlug
+        prNumber    = $PrNumber
+        headSha     = $HeadSha
+    }
+    if ($DeliveryRunId) {
+        $record.deliveryRunId = $DeliveryRunId
+    }
     [pscustomobject]@{
         ok     = $true
         dryRun = $true
-        record = @{
-            reportState = $State
-            accepted    = $true
-            sessionId   = $SessionId
-            repoSlug    = $RepoSlug
-            prNumber    = $PrNumber
-            headSha     = $HeadSha
-        }
+        record = $record
     } | ConvertTo-Json -Compress -Depth 10
     exit 0
 }
@@ -111,7 +118,7 @@ if ($DryRun) {
 try {
     $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
         -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId -RepoRoot $RepoRoot `
-        -TrustedBinding $trustedBinding
+        -TrustedBinding $trustedBinding -DeliveryRunId $DeliveryRunId
     $result | ConvertTo-Json -Compress -Depth 20
 }
 catch {

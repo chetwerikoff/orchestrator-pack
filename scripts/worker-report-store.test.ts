@@ -13,6 +13,7 @@ import {
   createDefaultWorkerReportStore,
   evictWorkerReportRecords,
   findPackWorkerAckReportAfterDelivery,
+  resolvePackWorkerReportDeliveryRunId,
   mergePackWorkerReportsIntoSessions,
   migrateLegacySeedStateToWorkerReportStore,
   seedShouldPromoteReadyForReview,
@@ -256,7 +257,56 @@ describe('delivery-confirm-pack-ack', () => {
     expect(findPackWorkerAckReportAfterDelivery(session, run, sendMs)).toBeNull();
   });
 
-  it('rejects addressing_reviews ack when deliveryRunId is missing for a run-bound delivery', () => {
+  it('resolvePackWorkerReportDeliveryRunId resolves pending delivery run for addressing_reviews', () => {
+    expect(
+      resolvePackWorkerReportDeliveryRunId({
+        reportState: 'addressing_reviews',
+        sessionId: 'opk-dc',
+        prNumber: 717,
+        headSha: 'abc',
+        reviewRuns: [
+          {
+            id: 'run-1',
+            linkedSessionId: 'opk-dc',
+            prNumber: 717,
+            targetSha: 'abc',
+            status: 'changes_requested',
+            deliveredFindingCount: 2,
+          },
+        ],
+      }),
+    ).toBe('run-1');
+  });
+
+  it('resolvePackWorkerReportDeliveryRunId ignores non-addressing states', () => {
+    expect(
+      resolvePackWorkerReportDeliveryRunId({
+        reportState: 'ready_for_review',
+        sessionId: 'opk-dc',
+        prNumber: 717,
+        headSha: 'abc',
+        deliveryRunId: 'run-1',
+        reviewRuns: [],
+      }),
+    ).toBe('');
+  });
+
+  it('pack-worker-report carries deliveryRunId for addressing_reviews from env', () => {
+    const out = runWorkerStorePwsh(`
+      $env:AO_SESSION_ID = 'opk-delivery-run'
+      $env:AO_PR_NUMBER = '717'
+      $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
+      $env:AO_DELIVERY_RUN_ID = 'run-env-717'
+      Remove-Item Env:AO_HEAD_SHA -ErrorAction SilentlyContinue
+      Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
+      Set-Location '/home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-90'
+      & '/home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-90/scripts/pack-worker-report.ps1' addressing_reviews -RepoRoot '/home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-90' -DryRun
+    `).trim();
+    expect(out).toContain('addressing_reviews');
+    expect(out).toContain('run-env-717');
+  });
+
+    it('rejects addressing_reviews ack when deliveryRunId is missing for a run-bound delivery', () => {
     const sendMs = Date.parse('2026-07-09T12:00:00.000Z');
     const session = {
       id: 'opk-dc',
