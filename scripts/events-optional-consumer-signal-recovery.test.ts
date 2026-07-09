@@ -171,7 +171,7 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
       enqueueTickId: 'tick-new',
       config,
     });
-    expect(plan.actions.some((action) => action.type === 'evaluate')).toBe(true);
+    expect((plan.actions ?? []).some((action) => action.type === 'evaluate')).toBe(true);
   });
 
   it('five consumers complete -Once -DryRun without throwing', { timeout: 120_000 }, () => {
