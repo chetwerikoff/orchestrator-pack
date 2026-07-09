@@ -1,12 +1,12 @@
 {
   "issue_number": 710,
-  "iteration_id": "orchestrator-pack-88-codex-fix",
+  "iteration_id": "orchestrator-pack-88-workspace-bootstrap",
   "iteration_id_source": "ao_session",
-  "supersedes": "orchestrator-pack-88-candidate",
-  "created_at": "2026-07-09T16:36:00.000Z",
+  "supersedes": "orchestrator-pack-88-multi-lease-observe",
+  "created_at": "2026-07-09T17:45:08.000Z",
   "baseline": {
-    "commit_sha": "ca5e609f6a5fc238034d213e55601d85b043101b",
-    "worktree_dirty": true,
+    "commit_sha": "d3814ebb3febd1f82d836c29dd2c4157ff1ab42f",
+    "worktree_dirty": false,
     "active_scope_hash": "sha256:3a1c60673d8af50481a7f66aefc0c9f1702c2c9b2bc4c15281ac56cfe9c5a256"
   },
   "declared_paths": [
@@ -35,9 +35,9 @@
         "added": [],
         "removed": []
       },
-      "reason": "CI test fixes + safe reaper classification",
+      "reason": "bootstrap fail-closed, defer heavy teardown, workspace-scoped lease root, no-progress default",
       "actor": "orchestrator-pack-88",
-      "timestamp": "2026-07-09T17:03:39.000Z",
+      "timestamp": "2026-07-09T17:45:08.000Z",
       "applied": true
     }
   ]
