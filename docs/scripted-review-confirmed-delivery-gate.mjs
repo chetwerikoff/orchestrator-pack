@@ -5,6 +5,11 @@
 import { readStdinJson, resolveBoundedInt, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
 import { isLiveWorkerSession, normalizeSha } from './review-reconcile-primitives.mjs';
 import { sessionOwnsRunHead } from './review-trigger-reconcile.mjs';
+import {
+  evaluateHarnessContentShapeStage,
+  mapContentShapeToGateTerminal,
+  shouldRunHarnessContentShapeStage,
+} from './harness-post-submit-pn-content-shape.mjs';
 
 export const DEFAULT_POLL_WINDOW_MS = 45 * 1000;
 export const DEFAULT_POLL_INTERVAL_MS = 2 * 1000;
@@ -15,6 +20,7 @@ export const ENV_POLL_INTERVAL_SECONDS = 'AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTER
 export const GATE_ACTION_SEND = 'send';
 export const GATE_ACTION_SUPPRESS = 'suppress';
 export const GATE_ACTION_ESCALATE = 'escalate';
+export const GATE_ACTION_REJECT_RETRIGGER = 'reject_retrigger';
 
 export const LIVENESS_LIVE_HEAD_OWNING = 'live_head_owning';
 export const LIVENESS_DRIFTED_HEAD = 'drifted_head';
@@ -247,7 +253,7 @@ export function evaluateGatePollStep(input) {
   const windowExpired = elapsedMs >= config.pollWindowMs;
   const normalizedVerdict = String(input.verdict ?? '').trim().toLowerCase();
 
-  if (normalizedVerdict === 'approved') {
+  if (normalizedVerdict === 'approved' && input.harnessContentShape !== true) {
     const liveness = classifyWorkerLiveness({
       session: input.session,
       openPrs: input.openPrs,
@@ -330,6 +336,60 @@ export function evaluateGatePollStep(input) {
     submittedBatchId: input.batchId,
     initialObservedRunId: input.initialObservedRunId,
   });
+  const harnessLatestRun = attribution.latestRun ?? findResult.entry?.latestRun;
+  const contentShapeEnabled = shouldRunHarnessContentShapeStage(input, { latestRun: harnessLatestRun });
+  let evaluatedContentShape = null;
+  if (contentShapeEnabled) {
+    const contentShape = evaluateHarnessContentShapeStage({
+      latestRun: attribution.latestRun,
+      attributionOk: attribution.ok,
+      attributionReason: attribution.reason,
+      retriggerCount: input.retriggerCount,
+      maxRetriggerCount: input.maxRetriggerCount,
+    });
+    const contentTerminal = mapContentShapeToGateTerminal(contentShape);
+    if (contentTerminal.action) {
+      return {
+        config,
+        elapsedMs,
+        windowExpired,
+        pollOutcome: {
+          outcome: contentTerminal.action === GATE_ACTION_REJECT_RETRIGGER ? POLL_NOT_DELIVERED : POLL_AMBIGUOUS,
+          reason: contentTerminal.reason,
+        },
+        liveness: classifyWorkerLiveness({
+          session: input.session,
+          openPrs: input.openPrs,
+          prNumber: input.prNumber,
+          targetSha: input.targetSha,
+        }),
+        terminal: contentTerminal,
+        contentShape,
+        shouldContinuePolling: false,
+        latestRunStatus: String(attribution.latestRun?.status ?? ''),
+      };
+    }
+    evaluatedContentShape = contentShape;
+    if (contentShape.action === 'wait_running') {
+      const liveness = classifyWorkerLiveness({
+        session: input.session,
+        openPrs: input.openPrs,
+        prNumber: input.prNumber,
+        targetSha: input.targetSha,
+      });
+      return {
+        config,
+        elapsedMs,
+        windowExpired,
+        pollOutcome: { outcome: POLL_NOT_DELIVERED, reason: contentShape.reason, status: contentShape.status },
+        liveness,
+        terminal: { action: null, reason: contentShape.reason },
+        contentShape,
+        shouldContinuePolling: !windowExpired && input.verdict === 'changes_requested',
+        latestRunStatus: String(attribution.latestRun?.status ?? ''),
+      };
+    }
+  }
   const pollOutcome = classifyPollDatum({
     latestRun: attribution.latestRun,
     attributionOk: attribution.ok,
@@ -357,6 +417,7 @@ export function evaluateGatePollStep(input) {
     pollOutcome,
     liveness,
     terminal,
+    contentShape: evaluatedContentShape ?? (contentShapeEnabled ? { action: 'accept', reason: 'content_valid' } : { action: 'not_applicable', reason: 'non_harness_run' }),
     shouldContinuePolling,
     latestRunStatus: String(attribution.latestRun?.status ?? ''),
   };

@@ -1,0 +1,6 @@
+{
+  "projectConfig": {
+    "reviewers": []
+  },
+  "expectedReason": "reviewers_harness_misconfig"
+}

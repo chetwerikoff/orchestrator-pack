@@ -628,6 +628,22 @@ else {
     Add-Failure 'Missing AO 0.10 harness review bridge check script (Issue #658)'
 }
 
+$harnessPostSubmitPnCheck = Join-Path $Root 'scripts/check-harness-post-submit-pn-content-shape.ps1'
+if (Test-Path -LiteralPath $harnessPostSubmitPnCheck -PathType Leaf) {
+    & $harnessPostSubmitPnCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-harness-post-submit-pn-content-shape.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-harness-post-submit-pn-content-shape.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Harness post-submit [Pn] content-shape checks failed (Issue #683)'
+    }
+}
+else {
+    Write-Check 'scripts/check-harness-post-submit-pn-content-shape.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing harness post-submit [Pn] content-shape check script (Issue #683)'
+}
+
 
 Write-Host ''
 Write-Host '== AO 0.10 review producer data contract (Issue #626) =='

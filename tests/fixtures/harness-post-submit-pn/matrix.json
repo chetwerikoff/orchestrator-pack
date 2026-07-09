@@ -1,0 +1,122 @@
+{
+  "cases": [
+    {
+      "name": "prose-complete-reject-retrigger",
+      "latestRun": {
+        "id": "run-prose-complete",
+        "harness": "codex",
+        "status": "complete",
+        "verdict": "changes_requested",
+        "body": "Finding: a prose finding\nBLOCKING: this is not mapper JSON"
+      },
+      "expectedAction": "reject_retrigger",
+      "expectedReason": "prose_submit_markers"
+    },
+    {
+      "name": "delivered-prose-supersede-converge",
+      "latestRun": {
+        "id": "run-delivered-prose",
+        "harness": "codex",
+        "status": "delivered",
+        "verdict": "changes_requested",
+        "body": "Changes requested.\n\nInline finding:\n\n- scripts/x.ps1:1: prose body"
+      },
+      "expectedAction": "reject_retrigger",
+      "expectedNeedsSupersede": true
+    },
+    {
+      "name": "mapper-accept",
+      "latestRun": {
+        "id": "run-mapper",
+        "harness": "codex",
+        "status": "complete",
+        "verdict": "changes_requested",
+        "body": "{\"verdict\":\"findings\",\"findingCount\":1,\"findings\":[{\"title\":\"[P1] Guard missing\",\"body\":\"severity: blocking\\nDetails.\"}]}"
+      },
+      "expectedAction": "accept"
+    },
+    {
+      "name": "clean-accept",
+      "latestRun": {
+        "id": "run-clean",
+        "harness": "codex",
+        "status": "complete",
+        "verdict": "approved",
+        "body": "{\"verdict\":\"clean\",\"findingCount\":0,\"findings\":[]}"
+      },
+      "expectedAction": "accept"
+    },
+    {
+      "name": "empty-lgtm-reject",
+      "latestRun": {
+        "id": "run-lgtm",
+        "harness": "codex",
+        "status": "complete",
+        "verdict": "approved",
+        "body": "LGTM"
+      },
+      "expectedAction": "reject_retrigger",
+      "expectedReason": "empty_or_lgtm_non_clean"
+    },
+    {
+      "name": "failed-never-accept",
+      "latestRun": {
+        "id": "run-failed",
+        "harness": "codex",
+        "status": "failed",
+        "verdict": "approved",
+        "body": "{\"verdict\":\"clean\",\"findingCount\":0,\"findings\":[]}"
+      },
+      "expectedAction": "route_failed"
+    },
+    {
+      "name": "running-wait-624",
+      "latestRun": {
+        "id": "run-running",
+        "harness": "codex",
+        "status": "running",
+        "verdict": "",
+        "body": ""
+      },
+      "expectedAction": "wait_running"
+    },
+    {
+      "name": "contradictory-fail-closed",
+      "latestRun": {
+        "id": "run-contradictory",
+        "harness": "codex",
+        "status": "complete",
+        "verdict": "approved",
+        "body": "{\"verdict\":\"findings\",\"findingCount\":1,\"findings\":[{\"title\":\"[P0] Data loss\",\"body\":\"severity: blocking\\nDetails.\"}]}"
+      },
+      "expectedAction": "escalate",
+      "expectedReason": "approved_run_with_findings_payload"
+    },
+    {
+      "name": "ambiguous-escalate",
+      "latestRun": {
+        "id": "run-ambiguous",
+        "harness": "codex",
+        "status": "mystery",
+        "verdict": "changes_requested",
+        "body": "{\"verdict\":\"findings\",\"findingCount\":1,\"findings\":[{\"title\":\"[P2] Ambiguous\",\"body\":\"severity: non-blocking\\nDetails.\"}]}"
+      },
+      "expectedAction": "escalate",
+      "expectedReason": "unreadable_terminal_status"
+    },
+    {
+      "name": "bound-exhaustion-escalate",
+      "latestRun": {
+        "id": "run-bound",
+        "harness": "codex",
+        "status": "complete",
+        "verdict": "changes_requested",
+        "body": "Finding: still prose"
+      },
+      "retriggerCount": 3,
+      "maxRetriggerCount": 3,
+      "expectedAction": "escalate",
+      "expectedReason": "retrigger_bound_exhausted"
+    }
+  ]
+}

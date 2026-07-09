@@ -72,6 +72,7 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
   const lightMaxWorkers = Number(raw.lightMaxWorkers);
   const heavyShardCount = Number(raw.heavyShardCount);
   const heavyDefaultRuntimeMs = Number(raw.heavyDefaultRuntimeMs);
+  const heavyForkPoolMinRuntimeMs = Number(raw.heavyForkPoolMinRuntimeMs ?? heavyDefaultRuntimeMs);
   if (!Number.isFinite(lightMaxWorkers) || lightMaxWorkers < 1 || lightMaxWorkers > 4) {
     throw new Error('vitest-ci-lanes.config.json lightMaxWorkers must be 1..4');
   }
@@ -81,11 +82,19 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
   if (!Number.isFinite(heavyDefaultRuntimeMs) || heavyDefaultRuntimeMs <= 0) {
     throw new Error('vitest-ci-lanes.config.json heavyDefaultRuntimeMs must be positive');
   }
+  if (!Number.isFinite(heavyForkPoolMinRuntimeMs) || heavyForkPoolMinRuntimeMs <= 0) {
+    throw new Error('vitest-ci-lanes.config.json heavyForkPoolMinRuntimeMs must be positive');
+  }
   const classification = raw.classification ?? {};
+  const heavyPerTestIsolate = Array.isArray(raw.heavyPerTestIsolate)
+    ? raw.heavyPerTestIsolate.map((entry) => String(entry).replace(/\\/g, '/'))
+    : [];
   return {
     lightMaxWorkers,
     heavyShardCount,
     heavyDefaultRuntimeMs,
+    heavyForkPoolMinRuntimeMs,
+    heavyPerTestIsolate,
     classification,
   };
 }
@@ -143,6 +152,59 @@ export function resolveHeavyRuntimeMs(file, runtimeHistory, defaultRuntimeMs) {
     return Number(value);
   }
   return defaultRuntimeMs;
+}
+
+/**
+ * Long subprocess suites may exceed Vitest birpc's 60s onTaskUpdate ceiling per test.
+ * forks keeps the parent responsive; threads is cheaper for shorter files.
+ */
+export function resolveHeavyFilePool(file, runtimeHistory, defaultRuntimeMs, forkPoolMinRuntimeMs) {
+  const historyValue = runtimeHistory[file];
+  const forkThreshold = Number(forkPoolMinRuntimeMs ?? defaultRuntimeMs);
+  if (Number.isFinite(Number(historyValue)) && Number(historyValue) >= forkThreshold) {
+    return 'forks';
+  }
+  return 'threads';
+}
+
+/**
+ * @param {string} filePath absolute or repo-relative test file path
+ */
+export function enumerateVitestFileTestTitles(filePath) {
+  const text = readFileSync(filePath, 'utf8');
+  const titles = [];
+  const pattern = /\bit(?:\.(?:only|skip|todo|fails))?\(\s*(['"`])([\s\S]*?)\1/g;
+  for (const match of text.matchAll(pattern)) {
+    const title = match[2].replace(/\s+/g, ' ').trim();
+    if (title) {
+      titles.push(title);
+    }
+  }
+  return titles;
+}
+
+/**
+ * @param {string} file repo-relative vitest file
+ * @param {ReturnType<typeof loadLanesConfig>} config
+ * @param {Record<string, number>} runtimeHistory
+ * @param {string} repoRoot
+ */
+export function resolveHeavyFileRunPlan(file, config, runtimeHistory, repoRoot) {
+  const pool = resolveHeavyFilePool(
+    file,
+    runtimeHistory,
+    config.heavyDefaultRuntimeMs,
+    config.heavyForkPoolMinRuntimeMs,
+  );
+  if (config.heavyPerTestIsolate.includes(file)) {
+    const absolute = join(resolveRepoRoot(repoRoot), file);
+    return {
+      mode: 'tests',
+      pool,
+      tests: enumerateVitestFileTestTitles(absolute),
+    };
+  }
+  return { mode: 'file', pool };
 }
 
 /**

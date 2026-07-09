@@ -1,0 +1,46 @@
+{
+  "issue_number": 683,
+  "iteration_id": "orchestrator-pack-45",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-08T11:45:00.000Z",
+  "baseline": {
+    "commit_sha": "5e2bfcb875d01430e7c4400c475284f67034ad95",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:pending-worker-declare"
+  },
+  "declared_paths": [
+    ".github/workflows/harness-pn-live-smoke.yml",
+    ".github/workflows/scope-guard.yml",
+    "docs/ao-0-10-review-harness-adoption.md",
+    "docs/declarations/683.orchestrator-pack-45.json",
+    "docs/harness-post-submit-pn-content-shape.d.mts",
+    "docs/harness-post-submit-pn-content-shape.d.ts",
+    "docs/harness-post-submit-pn-content-shape.mjs",
+    "docs/scripted-review-confirmed-delivery-gate.d.mts",
+    "docs/scripted-review-confirmed-delivery-gate.mjs",
+    "scripts/check-harness-post-submit-pn-content-shape.ps1",
+    "scripts/check-harness-post-submit-pn-live-smoke.ps1",
+    "scripts/check-harness-review-bridge.ps1",
+    "scripts/harness-post-submit-pn-content-shape.test.ts",
+    "scripts/harness-post-submit-pn-reconcile.ps1",
+    "scripts/launch-argv-inventory.json",
+    "scripts/lib/Resolve-ScriptedReviewInitialObservedRunId.ps1",
+    "scripts/scripted-review-confirmed-delivery-gate.ps1",
+    "scripts/verify.ps1",
+    "scripts/vitest-ci-lanes.config.json",
+    "tests/fixtures/harness-post-submit-pn/clean-body.json",
+    "tests/fixtures/harness-post-submit-pn/mapper-golden-body.json",
+    "tests/fixtures/harness-post-submit-pn/matrix.json",
+    "tests/fixtures/harness-post-submit-pn/pretrigger-reviewers-unset-boundary.json"
+  ],
+  "declared_globs": [
+    "scripts/**",
+    "plugins/ao-codex-pr-reviewer/**",
+    "tests/**",
+    "tests/external-output-references/**",
+    "docs/**",
+    ".github/workflows/**"
+  ],
+  "amendments": []
+}

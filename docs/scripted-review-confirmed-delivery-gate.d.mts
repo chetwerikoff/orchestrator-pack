@@ -9,6 +9,7 @@ export declare const ENV_POLL_INTERVAL_SECONDS: string;
 export declare const GATE_ACTION_SEND: 'send';
 export declare const GATE_ACTION_SUPPRESS: 'suppress';
 export declare const GATE_ACTION_ESCALATE: 'escalate';
+export declare const GATE_ACTION_REJECT_RETRIGGER: 'reject_retrigger';
 
 export declare const LIVENESS_LIVE_HEAD_OWNING: 'live_head_owning';
 export declare const LIVENESS_DRIFTED_HEAD: 'drifted_head';
@@ -75,6 +76,7 @@ export interface GatePollStepResult {
   pollOutcome: PollOutcome;
   liveness: LivenessClassification;
   terminal: TerminalAction;
+  contentShape?: Record<string, unknown> | null;
   shouldContinuePolling: boolean;
   latestRunStatus?: string;
 }

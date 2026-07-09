@@ -8,7 +8,7 @@
     "plugins/ao-scope-guard/tests/integration.test.ts": 45000,
     "plugins/ao-task-declaration/tests/declare.test.ts": 45000,
     "plugins/ao-token-chain-ledger/tests/integration.test.ts": 45000,
-    "scripts/autonomous-orchestrator-boundary.test.ts": 60000,
+    "scripts/autonomous-orchestrator-boundary.test.ts": 180000,
     "scripts/autonomous-orchestrator-interposer.test.ts": 45000,
     "scripts/autonomous-review-worktree-e2e-smoke.test.ts": 45000,
     "scripts/autonomous-spawn-budget.test.ts": 45000,

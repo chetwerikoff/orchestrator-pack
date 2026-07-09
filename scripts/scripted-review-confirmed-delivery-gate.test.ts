@@ -156,7 +156,7 @@ describe('gate decision matrix (AC#9)', () => {
     expect(terminal.action).toBe('send');
   });
 
-  it('approved poll-step skips review lookup (empty reviews)', () => {
+  it('approved poll-step skips review lookup only when content-shape is disarmed', () => {
     const step = evaluateGatePollStep({
       verdict: 'approved',
       reviews: [],
@@ -178,6 +178,16 @@ describe('gate decision matrix (AC#9)', () => {
     expect(step.pollOutcome.reason).toBe('approved_skip_poll');
   });
 
+  it('approved poll-step rejects harness prose when content-shape is armed', () => {
+    const scenario = loadScenario('approved-live-send.json');
+    const step = evaluateGatePollStep({
+      ...scenario.input,
+      harnessContentShape: true,
+    });
+    expect(step.terminal.action).toBe('reject_retrigger');
+    expect(step.contentShape?.action).toBe('reject_retrigger');
+  });
+
   it('approved-dead escalates', () => {
     const scenario = loadScenario('approved-dead-escalate.json');
     const step = evaluateGatePollStep(scenario.input);
@@ -197,7 +207,7 @@ describe('gate decision matrix (AC#9)', () => {
     expect(step.terminal.action).toBe('escalate');
   });
 
-  it('approved-live fixture sends', () => {
+  it('approved-live fixture sends when content-shape is disarmed', () => {
     const scenario = loadScenario('approved-live-send.json');
     const step = evaluateGatePollStep(scenario.input);
     expect(step.terminal.action).toBe('send');
@@ -338,25 +348,36 @@ describe('post-submit seam wiring', () => {
     expect(text).toMatch(/scripted-review-confirmed-delivery-gate\.ps1/);
   });
 
-  it('approved ps1 path skips reviews fetch before poll loop', () => {
+  it('builds poll-step payloads in statement mode', () => {
+    const text = readFileSync(path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'), 'utf8');
+    expect(text).toMatch(/New-ScriptedReviewDeliveryGatePollStepPayload/);
+    expect(text).not.toMatch(/New-ScriptedReviewDeliveryGatePollStepBase \+ @\{/);
+  });
+
+  it('approved ps1 path polls daemon reviews before send when content-shape is armed', () => {
     const text = readFileSync(
       path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'),
       'utf8',
     );
     const approvedBlock = text.match(/if \(\$Verdict -eq 'approved'\)[\s\S]*?while \(\$true\)/);
     expect(approvedBlock).toBeTruthy();
-    expect(approvedBlock![0]).not.toMatch(/Get-ScriptedReviewDeliveryGateReviewsPayload/);
-    expect(approvedBlock![0]).toMatch(/skip daemon reviews poll/);
+    expect(approvedBlock![0]).toMatch(/Get-ScriptedReviewDeliveryGateReviewsPayload/);
+    expect(approvedBlock![0]).toMatch(/poll daemon reviews for harness content-shape/);
   });
 
   it('ps1 runs post-send composition after explicit send', () => {
-    const text = readFileSync(
+    const gate = readFileSync(
       path.join(repoRoot, 'scripts/scripted-review-confirmed-delivery-gate.ps1'),
       'utf8',
     );
-    expect(text).toMatch(/Complete-ScriptedReviewDeliveryGateAfterExplicitSend/);
-    expect(text).toMatch(/classify-post-send/);
-    expect(text).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
+    const explicit = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1'),
+      'utf8',
+    );
+    expect(gate).toMatch(/Complete-ScriptedReviewDeliveryGateAfterExplicitSend/);
+    expect(gate).toMatch(/Invoke-ScriptedReviewDeliveryExplicitSend/);
+    expect(explicit).toMatch(/classify-post-send/);
+    expect(gate).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
   });
 
   it('invoke-pack-review wires post-submit delivery after successful wrapper', () => {

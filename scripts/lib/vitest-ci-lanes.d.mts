@@ -6,8 +6,25 @@ export interface LanesConfig {
   lightMaxWorkers: number;
   heavyShardCount: number;
   heavyDefaultRuntimeMs: number;
+  heavyForkPoolMinRuntimeMs: number;
+  heavyPerTestIsolate: string[];
   classification: Record<string, string>;
 }
+
+export type HeavyFilePool = 'forks' | 'threads';
+
+export interface HeavyFileRunPlanFile {
+  mode: 'file';
+  pool: HeavyFilePool;
+}
+
+export interface HeavyFileRunPlanTests {
+  mode: 'tests';
+  pool: HeavyFilePool;
+  tests: string[];
+}
+
+export type HeavyFileRunPlan = HeavyFileRunPlanFile | HeavyFileRunPlanTests;
 
 export interface HeavyShardAssignment {
   shard: number;
@@ -53,6 +70,19 @@ export declare function resolveHeavyRuntimeMs(
   runtimeHistory: Record<string, number>,
   defaultRuntimeMs: number,
 ): number;
+export declare function resolveHeavyFilePool(
+  file: string,
+  runtimeHistory: Record<string, number>,
+  defaultRuntimeMs: number,
+  forkPoolMinRuntimeMs: number,
+): HeavyFilePool;
+export declare function enumerateVitestFileTestTitles(filePath: string): string[];
+export declare function resolveHeavyFileRunPlan(
+  file: string,
+  config: LanesConfig,
+  runtimeHistory: Record<string, number>,
+  repoRoot: string,
+): HeavyFileRunPlan;
 export declare function assignHeavyShards(
   heavyFiles: string[],
   runtimeHistory: Record<string, number>,

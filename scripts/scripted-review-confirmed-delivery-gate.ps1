@@ -24,6 +24,8 @@ param(
     [string]$FixtureSessionsPath = '',
     [string]$FixtureOpenPrsPath = '',
     [string]$DeliveryMessage = '',
+    [int]$HarnessPnRetriggerCount = 0,
+    [int]$HarnessPnMaxRetriggerCount = 3,
     [switch]$DryRun
 )
 
@@ -42,6 +44,9 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryEscalation.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
+. (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
+. (Join-Path $PSScriptRoot 'lib/Harness-PnRetriggerState.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1')
 
 $GateFilterCli = Join-Path $PackRoot 'docs/scripted-review-confirmed-delivery-gate.mjs'
 
@@ -58,6 +63,28 @@ function Invoke-ScriptedReviewDeliveryGateCli {
     )
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $GateFilterCli `
         -Subcommand $Subcommand -Payload $Payload -Label $Script:GateLogPrefix -JsonDepth 30
+}
+
+
+function New-ScriptedReviewDeliveryGatePollStepBase {
+    return @{
+        runId               = $RunId
+        batchId             = $BatchId
+        prNumber            = $PrNumber
+        targetSha           = $TargetSha
+        verdict             = $Verdict
+        harnessContentShape = $true
+        retriggerCount      = $HarnessPnRetriggerCount
+        maxRetriggerCount   = $HarnessPnMaxRetriggerCount
+    }
+}
+
+
+function New-ScriptedReviewDeliveryGatePollStepPayload {
+    param([Parameter(Mandatory = $true)][hashtable]$Extra)
+
+    $base = New-ScriptedReviewDeliveryGatePollStepBase
+    return $base + $Extra
 }
 
 function Get-ScriptedReviewDeliveryGateConfig {
@@ -135,70 +162,18 @@ function Invoke-ScriptedReviewDeliveryGateEscalation {
 function Invoke-ScriptedReviewDeliveryGateExplicitSend {
     param([string]$MessageText)
 
-    $session = $null
-    $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
-    $sessions = @(Get-ScriptedReviewDeliveryGateSessions)
-    $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
-        reviews   = @()
-        runId     = $RunId
-        batchId   = $BatchId
-        prNumber  = $PrNumber
-        targetSha = $TargetSha
-        verdict   = $Verdict
-        session   = $session
-        openPrs   = @($openPrs)
-        startedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        nowMs     = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    }
-    $liveness = $step.liveness
-    if ($liveness.liveness -ne 'live_head_owning') {
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$liveness.reason)
-    }
-
-    if ($DryRun) {
-        Write-ScriptedReviewDeliveryGateLog "dry-run would send explicit review findings to $SessionId (PR #$PrNumber run=$RunId)"
-        return @{ action = 'send'; sent = $false; reason = 'dry_run' }
-    }
-
-    $cycleKey = "run:$RunId"
-    $resolve = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
-        -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $openPrs
-    if (-not $resolve.ok) {
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$resolve.reason)
-    }
-    $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass 'review-findings' `
-        -WorkerTarget $resolve.workerTarget -SessionId $SessionId `
-        -Surface $Script:GateLogPrefix -ProjectId $ProjectId -Message $MessageText
-    if (-not $claim.acquired) {
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$claim.reason)
-    }
-
-    $hashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $MessageText }
-    $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash ([string]$hashResult.messageContentHash)
-    if (-not $hashPersist.ok) {
-        Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'message_hash_persist_failed' -Detail ([string]$hashPersist.reason)
-    }
-    $claimToken = New-WorkerNudgeClaimToken -ClaimResult $claim
-    $journaledScript = Join-Path $PSScriptRoot 'journaled-worker-send.ps1'
-    $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'scripted-review-delivery-side-effect.lock'
-    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'side_effect'
-    $sendExitCapture = @{ exitCode = 0 }
-    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
-        $MessageText | pwsh -NoProfile -File $journaledScript $SessionId `
-            -Source 'pack-send' -SourceKey "scripted-review:$RunId" `
-            -ClaimToken $claimToken -GatedNudge -NoWait
-        $sendExitCapture.exitCode = $LASTEXITCODE
-    }
-    $sendExitCode = [int]$sendExitCapture.exitCode
-    if (-not $fenced.ok -or $sendExitCode -ne 0) {
-        Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ exitCode = $sendExitCode } | Out-Null
-        return Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'explicit_send_failed' -Detail "exit=$sendExitCode"
-    }
-    Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
-    Write-ScriptedReviewDeliveryGateLog "explicit send ok PR #$PrNumber session=$SessionId run=$RunId"
-    return @{ action = 'send'; sent = $true; reason = 'explicit_send_dispatched'; dedupApplied = $true }
+    $pollStepBase = New-ScriptedReviewDeliveryGatePollStepBase
+    return Invoke-ScriptedReviewDeliveryExplicitSend `
+        -SessionId $SessionId -RunId $RunId -PrNumber $PrNumber -TargetSha $TargetSha `
+        -ProjectId $ProjectId -MessageText $MessageText -GateFilterCli $GateFilterCli `
+        -LogPrefix $Script:GateLogPrefix -ChildId $Script:GateLogPrefix `
+        -PollStepBase $pollStepBase `
+        -GetOpenPrs { Get-ScriptedReviewDeliveryGateOpenPrs } `
+        -GetSessions { Get-ScriptedReviewDeliveryGateSessions } `
+        -FindSession { param($sessions) Find-ScriptedReviewDeliveryGateSession -Sessions $sessions } `
+        -WriteLog { param($Message) Write-ScriptedReviewDeliveryGateLog $Message } `
+        -OnEscalation { param($Reason, $Detail) Invoke-ScriptedReviewDeliveryGateEscalation -Reason $Reason -Detail $Detail } `
+        -DryRun:$DryRun
 }
 
 function Complete-ScriptedReviewDeliveryGateAfterExplicitSend {
@@ -207,42 +182,14 @@ function Complete-ScriptedReviewDeliveryGateAfterExplicitSend {
         [bool]$DedupApplied = $false
     )
 
-    $classifyInput = @{
-        reviews       = @()
-        runId         = $RunId
-        batchId       = $BatchId
-        prNumber      = $PrNumber
-        targetSha     = $TargetSha
-        sendSucceeded = $SendSucceeded
-    }
-    if ($SendSucceeded -and $Verdict -eq 'changes_requested') {
-        try {
-            $reviewsPayload = Get-ScriptedReviewDeliveryGateReviewsPayload
-            $classifyInput.reviews = @($reviewsPayload.reviews)
-        }
-        catch {
-            Write-ScriptedReviewDeliveryGateLog "post-send reviews read failed: $($_.Exception.Message)"
-        }
-    }
-
-    $classified = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'classify-post-send' -Payload $classifyInput
-    $composition = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'post-send' -Payload @{
-        explicitSendOutcome         = [string]$classified.explicitSendOutcome
-        lateAutoDeliveryConfirmed   = [bool]$classified.lateAutoDeliveryConfirmed
-        dedupApplied                = $DedupApplied
-        dedupFailed                 = $false
-    }
-
-    $terminal = [string]$composition.terminal
-    if ($terminal -eq 'escalate') {
-        Invoke-ScriptedReviewDeliveryGateEscalation -Reason ([string]$composition.reason) | Out-Null
-        return @{ ok = $false }
-    }
-    if ($terminal -eq 'dedup_or_escalate') {
-        Write-ScriptedReviewDeliveryGateLog "post-send late auto-delivery race; dedup applied ($($composition.reason))"
-    }
-    Write-ScriptedReviewDeliveryGateLog "post-send complete: $terminal ($($composition.reason))"
-    return @{ ok = $true; terminal = $terminal }
+    return Complete-ScriptedReviewDeliveryExplicitSend `
+        -SessionId $SessionId -RunId $RunId -BatchId $BatchId -PrNumber $PrNumber `
+        -TargetSha $TargetSha -Verdict $Verdict -GateFilterCli $GateFilterCli `
+        -LogPrefix $Script:GateLogPrefix `
+        -GetReviewsPayload { Get-ScriptedReviewDeliveryGateReviewsPayload } `
+        -WriteLog { param($Message) Write-ScriptedReviewDeliveryGateLog $Message } `
+        -OnEscalation { param($Reason, $Detail) Invoke-ScriptedReviewDeliveryGateEscalation -Reason $Reason -Detail $Detail } `
+        -SendSucceeded $SendSucceeded -DedupApplied $DedupApplied
 }
 
 function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
@@ -256,6 +203,7 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
         exit 2
     }
     if (-not $sent) {
+        Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
         Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
         exit 0
     }
@@ -263,6 +211,42 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'side_effect'
     $postSend = Complete-ScriptedReviewDeliveryGateAfterExplicitSend -SendSucceeded $true -DedupApplied $dedupApplied
     if (-not $postSend.ok) { exit 2 }
+    Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
+    Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
+    exit 0
+}
+
+function Invoke-HarnessPostSubmitPnReconcileFromGate {
+    param([string]$Reason)
+
+    $script = Join-Path $PSScriptRoot 'harness-post-submit-pn-reconcile.ps1'
+    $args = @(
+        '-NoProfile',
+        '-File', $script,
+        '-SessionId', $SessionId,
+        '-RunId', $RunId,
+        '-BatchId', $BatchId,
+        '-PrNumber', $PrNumber,
+        '-TargetSha', $TargetSha,
+        '-Verdict', $Verdict,
+        '-Reason', $Reason,
+        '-ProjectId', $ProjectId,
+        '-RetriggerCount', $HarnessPnRetriggerCount
+    )
+    if ($RepoRoot) { $args += '-RepoRoot', $RepoRoot }
+    if ($PollWindowSeconds -gt 0) { $args += '-PollWindowSeconds', $PollWindowSeconds }
+    if ($PollIntervalSeconds -gt 0) { $args += '-PollIntervalSeconds', $PollIntervalSeconds }
+    if ($FixtureReviewsPath) { $args += '-FixtureReviewsPath', $FixtureReviewsPath }
+    if ($FixtureSessionsPath) { $args += '-FixtureSessionsPath', $FixtureSessionsPath }
+    if ($FixtureOpenPrsPath) { $args += '-FixtureOpenPrsPath', $FixtureOpenPrsPath }
+    if ($DryRun) { $args += '-DryRun' }
+    if ($messageText) { $args += '-DeliveryMessage', $messageText }
+    Write-ScriptedReviewDeliveryGateLog "invalid harness content; invoking post-submit [Pn] reconcile reason=$Reason"
+    & pwsh @args
+    if ($LASTEXITCODE -ne 0) {
+        Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'harness_pn_retrigger_failed' -Detail "exit=$LASTEXITCODE reason=$Reason" | Out-Null
+        exit 2
+    }
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
     exit 0
 }
@@ -270,6 +254,9 @@ function Exit-ScriptedReviewDeliveryGateAfterExplicitSend {
 $messageText = if ($DeliveryMessage) { $DeliveryMessage.Trim() } else { [Console]::In.ReadToEnd() }
 if ($null -eq $messageText) { $messageText = '' }
 $messageText = $messageText.Trim()
+
+$HarnessPnRetriggerCount = Resolve-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber `
+    -TargetSha $TargetSha -ExplicitCount $HarnessPnRetriggerCount
 
 $config = Get-ScriptedReviewDeliveryGateConfig
 $pollWindowMs = [int]$config.pollWindowMs
@@ -281,28 +268,29 @@ Write-ScriptedReviewDeliveryGateLog "starting session=$SessionId PR #$PrNumber r
 
 if ($Verdict -eq 'approved') {
     Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'poll'
-    Write-ScriptedReviewDeliveryGateLog 'approved verdict: skip daemon reviews poll'
+    $reviewsPayload = Get-ScriptedReviewDeliveryGateReviewsPayload
     $sessions = @(Get-ScriptedReviewDeliveryGateSessions)
     $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
     $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
-        reviews              = @()
-        runId                = $RunId
-        batchId              = $BatchId
-        prNumber             = $PrNumber
-        targetSha            = $TargetSha
-        verdict              = $Verdict
+    $initialObservedRunId = Resolve-ScriptedReviewInitialObservedRunId `
+        -CurrentInitialObservedRunId '' `
+        -Reviews @($reviewsPayload.reviews) `
+        -PrNumber $PrNumber
+    Write-ScriptedReviewDeliveryGateLog 'approved verdict: poll daemon reviews for harness content-shape'
+    $pollStepPayload = New-ScriptedReviewDeliveryGatePollStepPayload -Extra @{
+        reviews              = @($reviewsPayload.reviews)
         session              = $session
         openPrs              = @($openPrs)
         startedAtMs          = $startedAtMs
         nowMs                = $nowMs
-        initialObservedRunId = ''
+        initialObservedRunId = $initialObservedRunId
         config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
         }
     }
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload $pollStepPayload
 
     $terminal = $step.terminal
     $action = [string]$terminal.action
@@ -317,6 +305,9 @@ if ($Verdict -eq 'approved') {
         }
         $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
         Exit-ScriptedReviewDeliveryGateAfterExplicitSend -SendResult $send
+    }
+    if ($action -eq 'reject_retrigger') {
+        Invoke-HarnessPostSubmitPnReconcileFromGate -Reason ([string]$terminal.reason)
     }
 
     Invoke-ScriptedReviewDeliveryGateEscalation -Reason 'approved_unexpected_terminal' | Out-Null
@@ -331,40 +322,30 @@ while ($true) {
     $openPrs = @(Get-ScriptedReviewDeliveryGateOpenPrs)
     $session = Find-ScriptedReviewDeliveryGateSession -Sessions $sessions
 
-    if (-not $initialObservedRunId -and $reviewsPayload.reviews) {
-        foreach ($entry in @($reviewsPayload.reviews)) {
-            if ([int]$entry.prNumber -eq $PrNumber) {
-                $lr = $entry.latestRun
-                if ($lr -and [string]$lr.id) {
-                    $initialObservedRunId = [string]$lr.id
-                    break
-                }
-            }
-        }
-    }
+    $initialObservedRunId = Resolve-ScriptedReviewInitialObservedRunId `
+        -CurrentInitialObservedRunId $initialObservedRunId `
+        -Reviews @($reviewsPayload.reviews) `
+        -PrNumber $PrNumber
 
-    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload @{
-        reviews             = @($reviewsPayload.reviews)
-        runId               = $RunId
-        batchId             = $BatchId
-        prNumber            = $PrNumber
-        targetSha           = $TargetSha
-        verdict             = $Verdict
-        session             = $session
-        openPrs             = @($openPrs)
-        startedAtMs         = $startedAtMs
-        nowMs               = $nowMs
+    $pollStepPayload = New-ScriptedReviewDeliveryGatePollStepPayload -Extra @{
+        reviews              = @($reviewsPayload.reviews)
+        session              = $session
+        openPrs              = @($openPrs)
+        startedAtMs          = $startedAtMs
+        nowMs                = $nowMs
         initialObservedRunId = $initialObservedRunId
-        config              = @{
+        config               = @{
             pollWindowSeconds   = [Math]::Ceiling($pollWindowMs / 1000.0)
             pollIntervalSeconds = [Math]::Ceiling($pollIntervalMs / 1000.0)
         }
     }
+    $step = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'poll-step' -Payload $pollStepPayload
 
     $terminal = $step.terminal
     $action = [string]$terminal.action
     if ($action -eq 'suppress') {
         Write-ScriptedReviewDeliveryGateLog "suppress explicit send (daemon delivery confirmed) PR #$PrNumber run=$RunId"
+        Clear-HarnessPnRetriggerCount -SessionId $SessionId -PrNumber $PrNumber -TargetSha $TargetSha
         Write-OrchestratorSideProcessProgress -ChildId $Script:GateLogPrefix -Phase 'complete'
         exit 0
     }
@@ -379,6 +360,9 @@ while ($true) {
         }
         $send = Invoke-ScriptedReviewDeliveryGateExplicitSend -MessageText $messageText
         Exit-ScriptedReviewDeliveryGateAfterExplicitSend -SendResult $send
+    }
+    if ($action -eq 'reject_retrigger') {
+        Invoke-HarnessPostSubmitPnReconcileFromGate -Reason ([string]$terminal.reason)
     }
 
     if (-not $step.shouldContinuePolling) {
