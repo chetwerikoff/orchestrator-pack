@@ -280,14 +280,34 @@ function Invoke-WorkerReportStoreEviction {
 }
 
 function Get-PackWorkerReportDiscoveryCandidates {
-    param([string]$StorePath = '')
+    param(
+        [string]$StorePath = '',
+        [string]$RepoRoot = '',
+        [string]$RepoSlug = ''
+    )
 
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
     $store = Get-WorkerReportStoreState -Path $path
+    $repoKey = ''
+    if ($RepoSlug -or $RepoRoot) {
+        $repoKey = [string](Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot)
+        if ($repoKey) {
+            $repoKey = $repoKey.Trim().ToLowerInvariant()
+        }
+    }
     $records = @($store.sourceRecords.PSObject.Properties | ForEach-Object { $_.Value })
     $candidates = @()
     foreach ($record in $records) {
         if (-not $record) { continue }
+        if ($repoKey) {
+            $recordSlug = [string]$record.repoSlug
+            if ($recordSlug) {
+                $recordSlug = $recordSlug.Trim().ToLowerInvariant()
+            }
+            if ($recordSlug -and $recordSlug -ne $repoKey) {
+                continue
+            }
+        }
         $candidates += @{
             sessionId   = [string]$record.sessionId
             issueNumber = 0

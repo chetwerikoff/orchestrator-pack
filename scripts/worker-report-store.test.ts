@@ -346,6 +346,54 @@ describe('worker-report-store-cross-repo', () => {
   });
 });
 
+
+describe('worker-report-store-blocked-state', () => {
+  it('accepts blocked as a valid report state', () => {
+    const trust = validateWorkerReportTrustBoundary({
+      callerSessionId: 'opk-blocked',
+      record: {
+        reportState: 'blocked',
+        repoSlug: 'org/a',
+        sessionId: 'opk-blocked',
+        prNumber: 717,
+        headSha: 'abc717',
+      },
+    });
+    expect(trust.ok).toBe(true);
+  });
+});
+
+
+describe('worker-report-store-discovery-candidates', () => {
+  it('Get-PackWorkerReportDiscoveryCandidates filters by repo slug', () => {
+    const out = runPwsh(`
+      . 'scripts/lib/WorkerReportStore.ps1'
+      $storePath = Join-Path ([System.IO.Path]::GetTempPath()) ('wr-discovery-' + [guid]::NewGuid().ToString())
+      $dir = Split-Path -Parent $storePath
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+      $env:AO_WORKER_REPORT_STORE = $storePath
+      @'
+{
+  "schemaVersion": 2,
+  "generation": 1,
+  "lastUpdatedMs": 1,
+  "sourceRecords": {
+    "org/a|opk-a|1|h1": {"reportState":"working","accepted":true,"repoSlug":"org/a","sessionId":"opk-a","prNumber":1,"headSha":"h1"},
+    "org/b|opk-b|2|h2": {"reportState":"working","accepted":true,"repoSlug":"org/b","sessionId":"opk-b","prNumber":2,"headSha":"h2"}
+  }
+}
+'@ | Set-Content -LiteralPath $storePath -Encoding utf8
+      $rows = Get-PackWorkerReportDiscoveryCandidates -RepoSlug 'org/a'
+      $rows | ConvertTo-Json -Compress -Depth 5
+    `).trim();
+    const rows = JSON.parse(out) as Array<{ sessionId: string; prNumber: number }>;
+    const list = Array.isArray(rows) ? rows : [rows];
+    expect(list).toHaveLength(1);
+    expect(list[0]?.sessionId).toBe('opk-a');
+    expect(list[0]?.prNumber).toBe(1);
+  });
+});
+
 describe('worker-report-store DROP proof helpers', () => {
   it('Invoke-AoCliJson has no report-audit bind', () => {
     const raw = readFileSync(aoCliLib, 'utf8');

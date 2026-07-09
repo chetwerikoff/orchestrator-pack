@@ -20,6 +20,7 @@ export const WORKER_REPORT_STATES = Object.freeze([
   'fixing_ci',
   'addressing_reviews',
   'completed',
+  'blocked',
   'pr_created',
   'working',
   'started',

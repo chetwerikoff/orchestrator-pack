@@ -126,9 +126,12 @@ function Get-DeadWorkerWorktreeDiscoveryPorcelain {
 }
 
 function Get-DeadWorkerAuditDiscoveryCandidates {
-    param([string]$ProjectId)
+    param(
+        [string]$ProjectId,
+        [string]$RepoRoot = ''
+    )
 
-    return @(Get-PackWorkerReportDiscoveryCandidates)
+    return @(Get-PackWorkerReportDiscoveryCandidates -RepoRoot $RepoRoot)
 }
 
 function Get-DeadWorkerAbsentSessions {
@@ -142,7 +145,7 @@ function Get-DeadWorkerAbsentSessions {
     $result = Invoke-DeadWorkerPlannerCli -Subcommand 'discover-absent-sessions' -Payload @{
         sessions = @($Sessions)
         worktreePorcelain = (Get-DeadWorkerWorktreeDiscoveryPorcelain -RepoRoot $RepoRoot)
-        auditCandidates = @(Get-DeadWorkerAuditDiscoveryCandidates -ProjectId $ProjectId)
+        auditCandidates = @(Get-DeadWorkerAuditDiscoveryCandidates -ProjectId $ProjectId -RepoRoot $RepoRoot)
         openPrs = @($OpenPrs)
     }
     return @($result.absentSessions)
