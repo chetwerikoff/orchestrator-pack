@@ -141,12 +141,12 @@
     {
       "id": "startup-session-wait-log",
       "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
-      "anchor": "waitForCondition",
+      "anchor": "waitForStdoutContains",
       "classification": "positive-convertible",
-      "followingAssertion": "log contains waiting for orchestrator session",
-      "rationale": "Positive wait for supervisor log line instead of blind stdout sleep",
-      "generationBoundary": "supervisor.log length before spawn",
-      "raceFixture": "log"
+      "followingAssertion": "stdout contains waiting for orchestrator session",
+      "rationale": "Positive wait for operator-facing stdout instead of blind sleep",
+      "generationBoundary": "accumulated child stdout buffer",
+      "raceFixture": "stdout"
     },
     {
       "id": "startup-session-appear-marker-poll",
@@ -265,7 +265,7 @@
     }
   ],
   "assertionFingerprints": {
-    "scripts/orchestrator-wake-supervisor-startup.test.ts": "9c6ee9230ed5efb99d3ec27f45fbfaf50f3c1ecaf18b6e6d45ecf491f765b2c9",
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": "4e21da4a832e4a9a4ac130d7a272f34e81501f6f82177cdb30c36c8c7db5c7ea",
     "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "afabe7de4d15e92a0af34067db1102d57608f91d9dabf24c7f880c125ab55be3",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "0ff3a06c6abf8ac35a9f4f0d2a3db7dc13f3accafdbcd2dcb1871fb2373708d7",
     "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "31d76172aa340f4ea11276bb2d883c3ed073d8630ed30e261ee56744a4aaff8b",

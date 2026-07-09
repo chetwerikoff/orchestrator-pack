@@ -66,6 +66,15 @@ describe('supervisor test wait race/stale-state fixtures (Issue #693)', () => {
     expect(current.pid).not.toBe(priorPid);
   });
 
+  it('waitForCondition performs a final check at the timeout boundary', async () => {
+    const start = Date.now();
+    const readyAt = start + 480;
+    await waitForCondition(() => Date.now() >= readyAt, 500, 200, 'late-ready');
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(470);
+    expect(elapsed).toBeLessThan(650);
+  });
+
   it('stdout-generation-boundary ignores buffered prefix', async () => {
     let stdout = 'stale stdout prefix noise';
     const generationStart = stdout.length;

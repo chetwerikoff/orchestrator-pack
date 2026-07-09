@@ -373,6 +373,7 @@
     "docs/review-producer-contract.mjs": "973f012fdf3e03eb0b2d1e683f93450428022ef38d68a44879b990340529297d",
     "docs/worker-report-store.mjs": "b460e06d80d3849b41bd377a9b48ef51db8c08a912ad2ac77f4b76d6b4c9a7df",
     "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef"
+    "scripts/supervisor-test-wait-race.fixture.test.ts": "153d49a6279ede7c883fffc84f18ff9ada8313fa96769fc617a507540585a8f1"
   },
   "provenance": {},
   "dataChangedAt": "2026-07-10T03:00:00Z"

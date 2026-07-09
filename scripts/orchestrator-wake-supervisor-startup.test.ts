@@ -10,8 +10,7 @@ import {
   managedChildRoles,
   path,
   readMarker,
-  waitForCondition,
-  readSupervisorLog,
+  waitForStdoutContains,
   repoRoot,
   runSupervisor,
   spawn,
@@ -159,19 +158,8 @@ describe('orchestrator-wake-supervisor', () => {
       stdout += chunk.toString();
     });
 
-    const logGenerationStart = readSupervisorLog(stateDir).length;
-    await waitForCondition(
-      () =>
-        stdout.includes('waiting for orchestrator session') ||
-        /waiting for orchestrator session/.test(readSupervisorLog(stateDir).slice(logGenerationStart)),
-      1500,
-      undefined,
-      'orchestrator session wait log or stdout',
-    );
-    expect(
-      stdout.includes('waiting for orchestrator session') ||
-        /waiting for orchestrator session/.test(readSupervisorLog(stateDir).slice(logGenerationStart)),
-    ).toBe(true);
+    await waitForStdoutContains(() => stdout, 'waiting for orchestrator session', 1500);
+    expect(stdout).toContain('waiting for orchestrator session');
 
     fs.writeFileSync(
       dynamicFixture,

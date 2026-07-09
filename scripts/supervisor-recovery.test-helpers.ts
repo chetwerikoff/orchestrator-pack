@@ -33,7 +33,14 @@ export async function waitForCondition(
     if (await predicate()) {
       return;
     }
-    await sleepMs(intervalMs);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      break;
+    }
+    await sleepMs(Math.min(intervalMs, remaining));
+  }
+  if (await predicate()) {
+    return;
   }
   throw new Error(`timed out waiting for ${label}`);
 }
