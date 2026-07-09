@@ -262,7 +262,7 @@
     "scripts/supervisor-child-openprs-null.test.ts": "ec14aab275240cef3dc5eec87b3efbf27d289df228fa30505b271b5815342fbb",
     "scripts/terminal-flood-detect.test.ts": "41cb70f65e146857c9f43fe605ab54ab25d71acfb511fe239070bc7d81feeb96",
     "scripts/test-runtime-budget.test.ts": "31c80551506e013d72b2b633f0b47d83c8a44261409f7010c075ff764ccaef56",
-    "scripts/testmode-fleet-reaper.test.ts": "e893f4c9153fc68e434b1ee1ea4b369c57e09c385c878ac661fd4a9196388aac",
+    "scripts/testmode-fleet-reaper.test.ts": "4816e3edb45165b685e2dae78ab98ec27633b4fb6a484573b781d720538ed11b",
     "scripts/worker-iteration-cycle.test.ts": "41d3e6501354a1900402f3e608e1156bb9678e50dee1eaf5eaaeb348588e19cb",
     "scripts/worker-message-submit-reconcile.test.ts": "1de724d876c4acc4b065b27402d96161db7f8e91075feb09cd7b7873b034ee18",
     "scripts/worker-nudge-gate.test.ts": "7f77dce03edf9811acf0815e4b3d9bc27c48d309908480b1548f6f053c73353d",
