@@ -158,6 +158,50 @@ describe('handoff admission records lifecycle (#712)', () => {
   });
 
 
+
+  it('keeps admission identity stable without eventId across receipt jitter', () => {
+    const t0 = 1_700_000_000_000;
+    const first = seedHandoffAdmissionRecord({
+      existing: {},
+      admission: baseAdmission({
+        subject: {
+          eventId: '',
+          receivedAtMs: t0,
+        },
+        admittedHeadSha: 'handoff234',
+      }),
+      nowMs: t0,
+      openPrs: [{ number: 234, headRefOid: 'handoff234', repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+    }) as { seeded: boolean; records: Record<string, unknown> };
+    expect(first.seeded).toBe(true);
+    const key = Object.keys(first.records)[0]!;
+    const originalReceived = (first.records[key] as { receivedAtMs: number }).receivedAtMs;
+    const second = seedHandoffAdmissionRecord({
+      existing: first.records,
+      admission: baseAdmission({
+        subject: {
+          eventId: '',
+          receivedAtMs: t0 + 25,
+        },
+        admittedHeadSha: 'handoff234',
+      }),
+      nowMs: t0 + 25,
+      openPrs: [{ number: 234, headRefOid: 'handoff234', repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+    }) as { seeded: boolean; noop?: boolean; records: Record<string, unknown> };
+    expect(second).toMatchObject({ seeded: false, reason: 'already_acted_on', noop: true });
+    expect((second.records[key] as { receivedAtMs: number }).receivedAtMs).toBe(originalReceived);
+    expect(
+      deriveHandoffAdmissionId({
+        sessionId: 'opk-27',
+        prNumber: 234,
+        receivedAtMs: t0 + 99,
+        headSha: 'handoff234',
+      }),
+    ).toBe('opk-27|234|handoff234');
+  });
+
   it('tombstones superseded admission ids so delayed old-head POST cannot re-seed', () => {
     const t0 = 1_700_000_000_000;
     const oldHead = 'aaaa'.repeat(10);
@@ -376,19 +420,20 @@ describe('handoff admission records lifecycle (#712)', () => {
   it('continues replay in the same recovery pass after batch durable-trigger deletions', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'handoff-replay-cursor-'));
     const stateRoot = dir;
-    const listenerReadyMs = Date.now() - 2_000;
+    const replayBatchSize = 5;
+    const seedBaseMs = Date.now() - 1_000;
     let records: Record<string, unknown> = {};
     const openPrs: Array<{ number: number; headRefOid: string; repoSlug: string }> = [];
-    for (let i = 0; i < HANDOFF_REPLAY_BATCH_SIZE_MAX + 1; i += 1) {
+    for (let i = 0; i < replayBatchSize + 1; i += 1) {
       const headSha = `head${String(i).padStart(36, '0').slice(0, 40)}`;
       const prNumber = 700 + i;
-      const seeded = seedPair(headSha, prNumber, listenerReadyMs + i * 10, records);
+      const seeded = seedPair(headSha, prNumber, seedBaseMs + i * 10, records);
       records = seeded.records;
       openPrs.push({ number: prNumber, headRefOid: headSha, repoSlug: 'chetwerikoff/orchestrator-pack' });
     }
     writeFileSync(
       path.join(dir, 'review-handoff-wake-admission.json'),
-      JSON.stringify({ records, pendingRetries: {}, actedOn: {}, replayCursor: 0, lastUpdatedMs: listenerReadyMs }),
+      JSON.stringify({ records, pendingRetries: {}, actedOn: {}, replayCursor: 0, lastUpdatedMs: seedBaseMs }),
     );
     const lib = path.join(repoRoot, 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1');
     const openPrPs = openPrs
@@ -398,7 +443,8 @@ describe('handoff admission records lifecycle (#712)', () => {
       `. '${lib.replace(/'/g, "''")}'`,
       '$calls = 0',
       `$openPrs = @(${openPrPs})`,
-      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot.replace(/'/g, "''")}' -ListenerReadyMs ${listenerReadyMs} \``,
+      '$listenerReadyMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
+      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot.replace(/'/g, "''")}' -ListenerReadyMs $listenerReadyMs -ReplayBatchSize ${replayBatchSize} \``,
       '  -InvokeWakeFilter { param($BodyJson,$OpenPrs,$Failed) throw "filter should not run" } `',
       '  -ResolveOpenPrs { return $openPrs } `',
       '  -InvokeTrigger { $script:calls++; return @{ triggered = $true } } `',
@@ -409,7 +455,7 @@ describe('handoff admission records lifecycle (#712)', () => {
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || 'pwsh failed');
     }
-    expect(Number(result.stdout.trim())).toBe(HANDOFF_REPLAY_BATCH_SIZE_MAX + 1);
+    expect(Number(result.stdout.trim())).toBe(replayBatchSize + 1);
     const state = JSON.parse(readFileSync(path.join(dir, 'review-handoff-wake-admission.json'), 'utf8'));
     expect(Object.keys(state.records)).toHaveLength(0);
     expect(state.replayCursor).toBe(0);
@@ -648,6 +694,14 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(aged.evicted).toHaveLength(1);
   });
 
+
+  it('AC13: admission state writes are fenced against concurrent full-state rewrites', () => {
+    const src = readFileSync(path.join(repoRoot, 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1'), 'utf8');
+    expect(src).toContain('Get-ReviewHandoffWakeAdmissionLockPath');
+    expect(src).toContain('Invoke-ReviewHandoffWakeAdmissionStateLocked');
+    expect(src).toContain('Invoke-OrchestratorSideEffectFenced');
+  });
+
   it('derives stable admission ids from event id or receipt tuple', () => {
     expect(deriveHandoffAdmissionId({ eventId: 'evt-1' })).toBe('evt-1');
     expect(
@@ -657,6 +711,6 @@ describe('handoff admission records lifecycle (#712)', () => {
         receivedAtMs: 1,
         headSha: 'abc',
       }),
-    ).toContain('opk-27|234|');
+    ).toBe('opk-27|234|abc');
   });
 });

@@ -5,6 +5,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 
 $Script:ReviewHandoffWakeAdmissionCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-handoff-wake-admission.mjs'
 
@@ -51,6 +52,86 @@ function Set-ReviewHandoffWakeAdmissionState {
     $json = ($State | ConvertTo-Json -Depth 30 -Compress)
     Set-Content -LiteralPath $tmp -Value $json -Encoding UTF8
     Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+
+function Get-ReviewHandoffWakeAdmissionLockPath {
+    param([string]$StatePath)
+
+    $dir = Split-Path -Parent $StatePath
+    if (-not $dir) {
+        return Join-Path ([System.IO.Path]::GetTempPath()) 'review-handoff-wake-admission.lock'
+    }
+    return Join-Path $dir 'review-handoff-wake-admission.lock'
+}
+
+function Merge-ReviewHandoffWakeAdmissionWriteState {
+    param(
+        [hashtable]$Current,
+        [hashtable]$Update
+    )
+
+    $merged = @{
+        records        = $Current.records
+        pendingRetries = $Current.pendingRetries
+        actedOn        = $Current.actedOn
+        replayCursor   = $Current.replayCursor
+        lastUpdatedMs  = $Current.lastUpdatedMs
+    }
+    if ($null -ne $Update.records) { $merged.records = $Update.records }
+    if ($null -ne $Update.pendingRetries) { $merged.pendingRetries = $Update.pendingRetries }
+    if ($null -ne $Update.actedOn) { $merged.actedOn = $Update.actedOn }
+    if ($null -ne $Update.replayCursor) { $merged.replayCursor = [int]$Update.replayCursor }
+    if ($null -ne $Update.lastUpdatedMs) { $merged.lastUpdatedMs = $Update.lastUpdatedMs }
+    return $merged
+}
+
+function Invoke-ReviewHandoffWakeAdmissionStateLocked {
+    param(
+        [string]$Path,
+        [scriptblock]$Mutator,
+        [switch]$DryRun
+    )
+
+    if (-not $Path) {
+        return @{ ok = $false; reason = 'missing_path' }
+    }
+
+    $lockPath = Get-ReviewHandoffWakeAdmissionLockPath -StatePath $Path
+    $mutatorResult = $null
+    $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
+        purpose = 'review-handoff-wake-admission-state'
+    } -Action {
+        $current = Get-ReviewHandoffWakeAdmissionState -Path $Path
+        Assert-MechanicalJsonStateFencesTrusted -State $current -Context 'handoff admission state'
+        $next = & $Mutator $current
+        if ($null -eq $next) {
+            $script:mutatorResult = $current
+            return
+        }
+        if (-not $DryRun) {
+            Set-ReviewHandoffWakeAdmissionState -Path $Path -State $next
+        }
+        $script:mutatorResult = $next
+    }
+
+    if (-not $fenced.ok) {
+        return @{ ok = $false; reason = 'admission_state_busy' }
+    }
+    return @{ ok = $true; state = $script:mutatorResult }
+}
+
+function Update-ReviewHandoffWakeAdmissionStateLocked {
+    param(
+        [string]$Path,
+        [hashtable]$Update,
+        [switch]$DryRun
+    )
+
+    return Invoke-ReviewHandoffWakeAdmissionStateLocked -Path $Path -DryRun:$DryRun -Mutator {
+        param($current)
+        return (Merge-ReviewHandoffWakeAdmissionWriteState -Current $current -Update $Update)
+    }
 }
 
 function New-ReviewHandoffWakeFilterResultFromAdmissionRecord {
@@ -135,41 +216,46 @@ function Record-ReviewHandoffWakeAdmission {
     }
 
     $path = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
-    $state = Get-ReviewHandoffWakeAdmissionState -Path $path
-    $seed = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'seed' -Payload @{
-        existing             = $state.records
-        actedOn              = $state.actedOn
-        openPrs              = @($OpenPrs)
-        openPrIndexTrusted   = $OpenPrIndexTrusted
-        admission = @{
-            subject = @{
-                sessionId    = [string]$FilterResult.sessionId
-                projectId    = [string]$FilterResult.projectId
-                prNumber     = [int]$FilterResult.prNumber
-                prUrl        = [string]$FilterResult.prUrl
-                priority     = [string]$FilterResult.handoffAdmission.audit.priority
-                eventId      = if ($FilterResult.handoffAdmission.audit.eventId) { [string]$FilterResult.handoffAdmission.audit.eventId } else { '' }
-                receivedAtMs = if ($WakeReceivedMs -gt 0) { $WakeReceivedMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    $seedOutcome = $null
+    $lockResult = Invoke-ReviewHandoffWakeAdmissionStateLocked -Path $path -DryRun:$DryRun -Mutator {
+        param($state)
+        $seed = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'seed' -Payload @{
+            existing             = $state.records
+            actedOn              = $state.actedOn
+            openPrs              = @($OpenPrs)
+            openPrIndexTrusted   = $OpenPrIndexTrusted
+            admission = @{
+                subject = @{
+                    sessionId    = [string]$FilterResult.sessionId
+                    projectId    = [string]$FilterResult.projectId
+                    prNumber     = [int]$FilterResult.prNumber
+                    prUrl        = [string]$FilterResult.prUrl
+                    priority     = [string]$FilterResult.handoffAdmission.audit.priority
+                    eventId      = if ($FilterResult.handoffAdmission.audit.eventId) { [string]$FilterResult.handoffAdmission.audit.eventId } else { '' }
+                    receivedAtMs = if ($WakeReceivedMs -gt 0) { $WakeReceivedMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+                }
+                admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
+                admittedHeadSha = [string]$FilterResult.handoffAdmission.admittedHeadSha
+                outcome         = 'promoted'
             }
-            admittedBaseRef = [string]$FilterResult.handoffAdmission.admittedBaseRef
-            admittedHeadSha = [string]$FilterResult.handoffAdmission.admittedHeadSha
-            outcome         = 'promoted'
+            nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         }
-        nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $script:seedOutcome = $seed
+        if (-not $seed.seeded) {
+            return $null
+        }
+        return (Merge-ReviewHandoffWakeAdmissionWriteState -Current $state -Update @{
+            records       = $seed.records
+            lastUpdatedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        })
     }
 
+    if (-not $lockResult.ok) {
+        return @{ recorded = $false; reason = [string]$lockResult.reason }
+    }
+    $seed = $script:seedOutcome
     if (-not $seed.seeded) {
         return @{ recorded = $false; reason = [string]$seed.reason; noop = [bool]$seed.noop }
-    }
-
-    if (-not $DryRun) {
-        Set-ReviewHandoffWakeAdmissionState -Path $path -State @{
-            records        = $seed.records
-            pendingRetries = $state.pendingRetries
-            actedOn        = $state.actedOn
-            replayCursor   = $state.replayCursor
-            lastUpdatedMs  = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
     }
 
     return @{
@@ -196,26 +282,31 @@ function Record-ReviewHandoffWakePendingRetry {
     }
 
     $path = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
-    $state = Get-ReviewHandoffWakeAdmissionState -Path $path
-    $seed = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'seedPendingRetry' -Payload @{
-        existing        = $state.pendingRetries
-        bodyJson        = $BodyJson
-        lookupDimension = $LookupDimension
-        nowMs           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $seedOutcome = $null
+    $lockResult = Invoke-ReviewHandoffWakeAdmissionStateLocked -Path $path -DryRun:$DryRun -Mutator {
+        param($state)
+        $seed = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'seedPendingRetry' -Payload @{
+            existing        = $state.pendingRetries
+            bodyJson        = $BodyJson
+            lookupDimension = $LookupDimension
+            nowMs           = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        }
+        $script:seedOutcome = $seed
+        if (-not $seed.seeded) {
+            return $null
+        }
+        return (Merge-ReviewHandoffWakeAdmissionWriteState -Current $state -Update @{
+            pendingRetries = $seed.pendingRetries
+            lastUpdatedMs  = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        })
     }
 
+    if (-not $lockResult.ok) {
+        return @{ recorded = $false; reason = [string]$lockResult.reason }
+    }
+    $seed = $script:seedOutcome
     if (-not $seed.seeded) {
         return @{ recorded = $false; reason = [string]$seed.reason }
-    }
-
-    if (-not $DryRun) {
-        Set-ReviewHandoffWakeAdmissionState -Path $path -State @{
-            records        = $state.records
-            pendingRetries = $seed.pendingRetries
-            actedOn        = $state.actedOn
-            replayCursor   = $state.replayCursor
-            lastUpdatedMs  = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
     }
 
     return @{
@@ -238,24 +329,29 @@ function Clear-ReviewHandoffWakePendingRetry {
     }
 
     $path = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
-    $state = Get-ReviewHandoffWakeAdmissionState -Path $path
-    $cleared = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'clearPendingRetry' -Payload @{
-        existing = $state.pendingRetries
-        key      = $Key
+    $clearOutcome = $null
+    $lockResult = Invoke-ReviewHandoffWakeAdmissionStateLocked -Path $path -DryRun:$DryRun -Mutator {
+        param($state)
+        $cleared = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'clearPendingRetry' -Payload @{
+            existing = $state.pendingRetries
+            key      = $Key
+        }
+        $script:clearOutcome = $cleared
+        if (-not $cleared.cleared) {
+            return $null
+        }
+        return (Merge-ReviewHandoffWakeAdmissionWriteState -Current $state -Update @{
+            pendingRetries = $cleared.pendingRetries
+            lastUpdatedMs  = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        })
     }
 
+    if (-not $lockResult.ok) {
+        return @{ cleared = $false; reason = [string]$lockResult.reason }
+    }
+    $cleared = $script:clearOutcome
     if (-not $cleared.cleared) {
         return @{ cleared = $false; reason = [string]$cleared.reason }
-    }
-
-    if (-not $DryRun) {
-        Set-ReviewHandoffWakeAdmissionState -Path $path -State @{
-            records        = $state.records
-            pendingRetries = $cleared.pendingRetries
-            actedOn        = $state.actedOn
-            replayCursor   = $state.replayCursor
-            lastUpdatedMs  = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        }
     }
 
     return @{ cleared = $true; key = $Key; path = $path }
@@ -291,17 +387,21 @@ function Save-ReviewHandoffWakeAdmissionLifecycleState {
     param(
         [string]$Path,
         [hashtable]$State,
-        [switch]$DryRun
+        [switch]$DryRun,
+        [switch]$IncludePendingRetries
     )
 
-    if ($DryRun) { return }
-    Set-ReviewHandoffWakeAdmissionState -Path $Path -State @{
-        records        = $State.records
-        pendingRetries = $State.pendingRetries
-        actedOn        = $State.actedOn
-        replayCursor   = if ($null -ne $State.replayCursor) { [int]$State.replayCursor } else { 0 }
-        lastUpdatedMs  = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if ($DryRun) { return @{ ok = $true } }
+    $update = @{
+        records       = $State.records
+        actedOn       = $State.actedOn
+        replayCursor  = if ($null -ne $State.replayCursor) { [int]$State.replayCursor } else { 0 }
+        lastUpdatedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
+    if ($IncludePendingRetries -and $null -ne $State.pendingRetries) {
+        $update.pendingRetries = $State.pendingRetries
+    }
+    return (Update-ReviewHandoffWakeAdmissionStateLocked -Path $Path -Update $update)
 }
 
 function Get-ReviewHandoffWakeAdmissionReplay {
@@ -444,6 +544,7 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
         [scriptblock]$InvokeTrigger,
         [switch]$DryRun,
         [switch]$PendingRetriesOnly,
+        [int]$ReplayBatchSize = 0,
         [scriptblock]$LogWriter = { param([string]$Message) Write-Host $Message }
     )
 
@@ -475,14 +576,13 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                         nowMs    = $nowMs
                     }
                     if ($degraded.marked -and -not $DryRun) {
-                        Set-ReviewHandoffWakeAdmissionState -Path $statePath -State @{
-                            records        = $admissionState.records
+                        $write = Update-ReviewHandoffWakeAdmissionStateLocked -Path $statePath -Update @{
                             pendingRetries = $degraded.pendingRetries
-                            actedOn        = $admissionState.actedOn
-                            replayCursor   = $admissionState.replayCursor
                             lastUpdatedMs  = $nowMs
                         }
-                        $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
+                        if ($write.ok) {
+                            $admissionState = $write.state
+                        }
                     }
                 }
                 & $LogWriter "review-handoff-wake: pending retry key=$retryKey lookup degraded ($lookupDimension) reason=$($lookupGate.reason)"
@@ -510,8 +610,10 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
             }
             if ($attempt.recorded -and -not $DryRun) {
                 $admissionState.pendingRetries = $attempt.pendingRetries
-                Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState
-                $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
+                $write = Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -IncludePendingRetries
+                if ($write.ok) {
+                    $admissionState = $write.state
+                }
             }
             & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown lookupDimension=openPr attempt=$($attempt.record.lookupAttemptCount)"
             continue
@@ -533,7 +635,10 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                 if ($attempt.recorded -and -not $DryRun) {
                     $stateNow = Get-ReviewHandoffWakeAdmissionState -Path $statePath
                     $stateNow.pendingRetries = $attempt.pendingRetries
-                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $stateNow
+                    $write = Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $stateNow -IncludePendingRetries
+                    if ($write.ok) {
+                        $admissionState = $write.state
+                    }
                 }
                 & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown lookupDimension=$dim attempt=$($attempt.record.lookupAttemptCount)"
             }
@@ -597,7 +702,19 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
 
     $continueReplay = $true
     while ($continueReplay) {
-        $replay = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'replay' -Payload @{
+        $loopAdmissionState = $null
+        $loopRead = Invoke-ReviewHandoffWakeAdmissionStateLocked -Path $statePath -DryRun:$DryRun -Mutator {
+            param($current)
+            $script:loopAdmissionState = $current
+            return $null
+        }
+        if (-not $loopRead.ok) {
+            & $LogWriter "review-handoff-wake: admission store busy; deferring replay"
+            return
+        }
+        $admissionState = $script:loopAdmissionState
+
+        $replayPayload = @{
             records            = $admissionState.records
             actedOn            = $admissionState.actedOn
             replayCursor       = $admissionState.replayCursor
@@ -605,6 +722,8 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
             openPrIndexTrusted = $openPrIndexTrusted
             listenerReadyMs    = $ListenerReadyMs
         }
+        if ($ReplayBatchSize -gt 0) { $replayPayload.batchSize = $ReplayBatchSize }
+        $replay = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'replay' -Payload $replayPayload
 
         foreach ($evicted in @($replay.evicted)) {
             Write-ReviewHandoffRecordTransition -Transition 'evict' -Reason ([string]$evicted.reason) `
@@ -645,7 +764,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                         -Key ([string]$record.key) -AdmissionId ([string]$record.admissionId) `
                         -PrNumber ([int]$record.prNumber) -HeadSha ([string]$record.headSha) -LogWriter $LogWriter
                     $recordsDeletedInBatch++
-                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
                 continue
             }
@@ -663,7 +781,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                 }
                 if ($updated.updated) {
                     $admissionState.records = $updated.records
-                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
                 continue
             }
@@ -681,7 +798,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                 }
                 if ($updated.updated) {
                     $admissionState.records = $updated.records
-                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
                 $cleared = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'clearRecord' -Payload @{
                     existing = $admissionState.records
@@ -698,7 +814,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                         -Key ([string]$record.key) -AdmissionId ([string]$record.admissionId) `
                         -PrNumber ([int]$record.prNumber) -HeadSha ([string]$record.headSha) -LogWriter $LogWriter
                     $recordsDeletedInBatch++
-                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
                 $batchTriggered = $true
                 continue
@@ -715,7 +830,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                 }
                 if ($updated.updated) {
                     $admissionState.records = $updated.records
-                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
             }
         }
@@ -726,7 +840,7 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
         else {
             $admissionState.replayCursor = [int]$replay.replayCursor
         }
-        Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
+        $null = Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
 
         if (-not $replay.hasMore) {
             $continueReplay = $false

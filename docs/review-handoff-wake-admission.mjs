@@ -484,12 +484,11 @@ export function deriveHandoffAdmissionId(input) {
   }
   const sessionId = nonEmptyString(input.sessionId) ?? '';
   const prNumber = String(input.prNumber ?? '');
-  const receivedAtMs = String(input.receivedAtMs ?? '');
   const headSha = normalizeSha(String(input.headSha ?? ''));
-  if (!sessionId || !prNumber || !receivedAtMs || !headSha) {
+  if (!sessionId || !prNumber || !headSha) {
     return '';
   }
-  return [sessionId, prNumber, receivedAtMs, headSha].join('|');
+  return [sessionId, prNumber, headSha].join('|');
 }
 
 export function findOpenPrForHandoffRecord(record, openPrs) {
@@ -580,6 +579,7 @@ export function classifyHandoffRecordEviction(input) {
 
 export function pruneHandoffAdmissionRecords(input) {
   const records = isRecord(input.records) ? { ...input.records } : {};
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
   const actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
   const nowMs = Number(input.nowMs ?? Date.now());
   const openPrs = toArray(input.openPrs);
@@ -696,6 +696,7 @@ export function isHandoffAdmissionIdActedOn(input) {
   if (!admissionId) {
     return { actedOn: false, reason: 'missing_admission_id' };
   }
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
   const actedOn = isRecord(input.actedOn) ? input.actedOn : {};
   if (actedOn[admissionId]) {
     return { actedOn: true, reason: 'already_acted_on', entry: actedOn[admissionId] };
@@ -708,6 +709,7 @@ export function recordHandoffActedOnIdentity(input) {
   if (!admissionId) {
     return { recorded: false, reason: 'missing_admission_id', actedOn: isRecord(input.actedOn) ? input.actedOn : {} };
   }
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
   const actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
   const nowMs = Number(input.nowMs ?? Date.now());
   actedOn[admissionId] = {
@@ -810,16 +812,16 @@ export function seedHandoffAdmissionRecord(input) {
   if (!admissionId) {
     return { seeded: false, reason: 'missing_admission_id' };
   }
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
   const actedOn = isRecord(input.actedOn) ? input.actedOn : {};
   const acted = isHandoffAdmissionIdActedOn({ admissionId, actedOn });
   if (acted.actedOn) {
-    return { seeded: false, reason: 'already_acted_on', noop: true, admissionId };
+    return { seeded: false, reason: 'already_acted_on', noop: true, admissionId, records: existing };
   }
 
   const repoSlug = normalizeRepoSlugFromPrUrl(subject.prUrl);
   const subjectKey = handoffPrSubjectKey({ projectId: subject.projectId, repoSlug, prNumber });
   const nowMs = Number(input.nowMs ?? Date.now());
-  const existing = isRecord(input.existing) ? { ...input.existing } : {};
   const active = findActiveHandoffRecordForSubject(existing, subjectKey);
   if (active) {
     const activeHead = normalizeSha(String(active.headSha ?? ''));
@@ -845,7 +847,7 @@ export function seedHandoffAdmissionRecord(input) {
       }
     }
     if (nonEmptyString(active.admissionId) === admissionId) {
-      return { seeded: false, reason: 'already_acted_on', noop: true, admissionId };
+      return { seeded: false, reason: 'already_acted_on', noop: true, admissionId, records: existing };
     }
   }
 

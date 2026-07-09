@@ -5733,10 +5733,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-116",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-197",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 116
+        "line": 197
       },
       "callee": {
         "kind": "other-external",
@@ -5751,17 +5751,17 @@
       "hashPinnedSourceHash": "sha256:c0084b8aba189ac0f7a52db8a5dddae21d7e3c15747094236f38f3d7e3946f51",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 116,
+        "line": 197,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-286",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-382",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 286
+        "line": 382
       },
       "callee": {
         "kind": "other-external",
@@ -5776,17 +5776,17 @@
       "hashPinnedSourceHash": "sha256:d62ed0bfa007ef4bdec722263548d6948710c3a92f0eb73d62d5035f0e8a4830",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 286,
+        "line": 382,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-488",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-588",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 488
+        "line": 588
       },
       "callee": {
         "kind": "other-external",
@@ -5801,17 +5801,17 @@
       "hashPinnedSourceHash": "sha256:2d1b9b33df0979c48a09a6dcb6795743f8df51c4720357a72b304954ff51c7ba",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 488,
+        "line": 588,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-491",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-591",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 491
+        "line": 591
       },
       "callee": {
         "kind": "other-external",
@@ -5826,17 +5826,17 @@
       "hashPinnedSourceHash": "sha256:9f759cde27a76ec70a1f63ce5b38e5b7b9a2060abcac8625f28eea5fc8652d6a",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 491,
+        "line": 591,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-516",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-618",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 516
+        "line": 618
       },
       "callee": {
         "kind": "other-external",
@@ -5848,20 +5848,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:840630c072ee4d6e0560021c98e12206e920a4341fc3760534c1d387c0a5b6a2",
+      "hashPinnedSourceHash": "sha256:b432cd5f3ac2dd2e6e81fa1d7af121554a2eda69d4a57c7d66631e94828b03b1",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 516,
+        "line": 618,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-538",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-643",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 538
+        "line": 643
       },
       "callee": {
         "kind": "other-external",
@@ -5873,20 +5873,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:8e325cbae68dda39dac097fb7ab9bfd7a1503525d739cf1f61ee077130bc99f6",
+      "hashPinnedSourceHash": "sha256:0c757fa00f690692509c533f031a540e64e9bb211be09cdc0e6033ca45d4516a",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 538,
+        "line": 643,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-541",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-646",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 541
+        "line": 646
       },
       "callee": {
         "kind": "other-external",
@@ -5901,17 +5901,17 @@
       "hashPinnedSourceHash": "sha256:fd5363818d4f019eb22de916526283f9763a8e7066b52076899fac303819cc70",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 541,
+        "line": 646,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-544",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-649",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 544
+        "line": 649
       },
       "callee": {
         "kind": "other-external",
@@ -5926,17 +5926,17 @@
       "hashPinnedSourceHash": "sha256:6b440e3ea08615c133db1364e59f3a24ce771c18111c2cf310fd9886cab88cce",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 544,
+        "line": 649,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-553",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-658",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 553
+        "line": 658
       },
       "callee": {
         "kind": "other-external",
@@ -5951,17 +5951,17 @@
       "hashPinnedSourceHash": "sha256:09a6da823ae1dd4b4f62fde8caf542b7d69a0e2b909b95843012bcb3a09b804b",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 553,
+        "line": 658,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-562",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-667",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 562
+        "line": 667
       },
       "callee": {
         "kind": "other-external",
@@ -5976,17 +5976,17 @@
       "hashPinnedSourceHash": "sha256:01b666388b41d6584c5e5b061fc5db6bd9f9b6a129b6d113d1b3a039f9969c34",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 562,
+        "line": 667,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-567",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-672",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 567
+        "line": 672
       },
       "callee": {
         "kind": "other-external",
@@ -6001,17 +6001,17 @@
       "hashPinnedSourceHash": "sha256:62044a4f71202b039485bf6438cc3ef0df440ee0c4569d81e5b90bd9ac3bd866",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 567,
+        "line": 672,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-594",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-699",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 594
+        "line": 699
       },
       "callee": {
         "kind": "other-external",
@@ -6026,17 +6026,42 @@
       "hashPinnedSourceHash": "sha256:ff20fd52e37fcfb23332e119b98a5a036d08f66bba708fabb726f88a6ed3ce7d",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 594,
+        "line": 699,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-671",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-712",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 671
+        "line": 712
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:d99144de31bf3048e2afc4b03e3db26a3f17cf224b55a1cd4df6cdd196d811a2",
+      "discoveryMatch": {
+        "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
+        "line": 712,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-788",
+      "caller": {
+        "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
+        "line": 788
       },
       "callee": {
         "kind": "other-external",
@@ -6051,7 +6076,7 @@
       "hashPinnedSourceHash": "sha256:8cb166755f7339af136890064b9310574591ab005205d1f37299a8908873b97f",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 671,
+        "line": 788,
         "patternIds": [
           "ps-call-op"
         ]
