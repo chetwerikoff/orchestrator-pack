@@ -133,7 +133,7 @@ export function seedStaleLeaseRecord(leaseRoot: string, stateRoot: string): Lane
     progressUpdatedMs: 0,
     createdMs: 0,
     workspaceRoot: repoRoot,
-    stateRoots: [stateRoot],
+    stateRoots: [path.resolve(stateRoot)],
   };
   const leasesDir = path.join(leaseRoot, 'leases');
   fs.mkdirSync(leasesDir, { recursive: true });
