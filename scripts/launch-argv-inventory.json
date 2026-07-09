@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -5307,7 +5307,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-146",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 146
+        "line": 147
       },
       "callee": {
         "kind": "other-external",
@@ -5322,7 +5322,7 @@
       "hashPinnedSourceHash": "sha256:a0a2736bf271c2b7d35a0a19b6dd7dcc9b6d2a4b3d896fd4773c409513c7cfe2",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 146,
+        "line": 147,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5332,7 +5332,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-154",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 154
+        "line": 155
       },
       "callee": {
         "kind": "other-external",
@@ -5347,7 +5347,7 @@
       "hashPinnedSourceHash": "sha256:ebfe169f710dbcc1868aaf759f14ea6c5ee384358ab924b737394da2431c49d5",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 154,
+        "line": 155,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5357,7 +5357,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-185",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 192
+        "line": 194
       },
       "callee": {
         "kind": "other-external",
@@ -5372,7 +5372,7 @@
       "hashPinnedSourceHash": "sha256:1404679e594e7b1a07b34de257df742c37b7bce054448ef2db663635d549c641",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 192,
+        "line": 194,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5382,7 +5382,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-198",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 205
+        "line": 207
       },
       "callee": {
         "kind": "other-external",
@@ -5397,7 +5397,7 @@
       "hashPinnedSourceHash": "sha256:c8a7f28ee077fb7906d9e12f0118c99748e9af78a3a0e026cdf44d36198c54d0",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 205,
+        "line": 207,
         "patternIds": [
           "ps-call-op"
         ]

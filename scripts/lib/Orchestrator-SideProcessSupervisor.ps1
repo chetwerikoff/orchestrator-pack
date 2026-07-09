@@ -1840,7 +1840,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                             $childStartedMs = [long]([System.IO.File]::GetCreationTimeUtc($pidFile)).Subtract([datetime]'1970-01-01').TotalMilliseconds
                         }
                         $restartDecision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed `
-                            -Paths $Paths -ChildId $child.Id -ChildStartedMs $childStartedMs `
+                            -Paths $Paths -ChildId $child.Id -ChildStartedMs $childStartedMs -ChildPid $status.Pid `
                             -LogWriter {
                                 param([string]$Message)
                                 Write-OrchestratorWakeSupervisorLog -Message $Message -LogPath $Paths.SupervisorLog
