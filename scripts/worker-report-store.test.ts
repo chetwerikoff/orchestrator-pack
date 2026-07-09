@@ -196,7 +196,8 @@ describe('delivery-confirm-pack-ack', () => {
       store,
       'org/a',
     );
-    expect(session.reports?.[0]?.deliveryRunId).toBe('run-1');
+    const reports = (session as { reports?: Array<{ deliveryRunId?: string }> }).reports;
+    expect(reports?.[0]?.deliveryRunId).toBe('run-1');
   });
 
 });
