@@ -178,6 +178,7 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 25000,
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": 200000,
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": 90000,
+    "scripts/orchestrator-wake-supervisor.test.ts": 480000,
     "scripts/review-handoff-admission-records-lifecycle.test.ts": 60000
   },
   "contentSha": {
@@ -357,6 +358,7 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
+    "scripts/orchestrator-wake-supervisor.test.ts": "4647888bb8312778699d95f7db7f33cbbb11dd3b30aa7acbda1dafcb568cdece",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020"
   },
   "provenance": {}
