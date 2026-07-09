@@ -54,7 +54,20 @@ export function buildWorkerReportRecordKey(record) {
   const sessionId = String(record?.sessionId ?? '').trim();
   const prNumber = Number(record?.prNumber ?? 0);
   const headSha = normalizeSha(record?.headSha);
-  return `${repoSlug}|${sessionId}|${prNumber}|${headSha}`;
+  const base = `${repoSlug}|${sessionId}|${prNumber}|${headSha}`;
+  const state = String(record?.reportState ?? '').toLowerCase();
+  if (state === 'addressing_reviews') {
+    const runId = String(record?.deliveryRunId ?? '').trim();
+    if (runId) {
+      return `${base}|ack|${runId}`;
+    }
+    const reportedAtMs = Number(record?.reportedAtMs ?? record?.lastObservedMs ?? 0);
+    if (reportedAtMs > 0) {
+      return `${base}|ack|${reportedAtMs}`;
+    }
+    return `${base}|ack`;
+  }
+  return base;
 }
 
 /**

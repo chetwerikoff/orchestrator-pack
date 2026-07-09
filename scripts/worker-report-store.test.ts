@@ -15,6 +15,7 @@ import {
   findPackWorkerAckReportAfterDelivery,
   resolvePackWorkerReportDeliveryRunId,
   mergePackWorkerReportsIntoSessions,
+  upsertWorkerReportRecord,
   migrateLegacySeedStateToWorkerReportStore,
   seedShouldPromoteReadyForReview,
   resolveWorkerReportTrustedBinding,
@@ -39,6 +40,42 @@ function runWorkerStorePwsh(script: string, extraEnv: NodeJS.ProcessEnv = {}) {
     env: { ...process.env, ...extraEnv },
   });
 }
+
+describe('worker-report-store-ack-preservation', () => {
+  it('preserves addressing_reviews ack when later lifecycle state is written', () => {
+    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
+    const ackRecord = {
+      reportState: 'addressing_reviews',
+      accepted: true,
+      repoSlug: 'org/a',
+      sessionId: 'opk-a',
+      prNumber: 717,
+      headSha: 'abc',
+      deliveryRunId: 'run-1',
+      reportedAtMs: nowMs,
+    };
+    const lifecycleRecord = {
+      reportState: 'ready_for_review',
+      accepted: true,
+      repoSlug: 'org/a',
+      sessionId: 'opk-a',
+      prNumber: 717,
+      headSha: 'abc',
+      reportedAtMs: nowMs + 1000,
+    };
+    upsertWorkerReportRecord(store, ackRecord, nowMs);
+    upsertWorkerReportRecord(store, lifecycleRecord, nowMs + 1000);
+    const ackKey = buildWorkerReportRecordKey(ackRecord);
+    const lifecycleKey = buildWorkerReportRecordKey(lifecycleRecord);
+    expect(store.sourceRecords[ackKey]?.reportState).toBe('addressing_reviews');
+    expect(store.sourceRecords[lifecycleKey]?.reportState).toBe('ready_for_review');
+    const [merged] = mergePackWorkerReportsIntoSessions([{ id: 'opk-a', repoSlug: 'org/a' }], store, 'org/a');
+    const states = ((merged as { reports?: Array<{ reportState?: string }> }).reports ?? []).map((row) => row.reportState);
+    expect(states).toContain('addressing_reviews');
+    expect(states).toContain('ready_for_review');
+  });
+});
 
 describe('worker-report-store-write', () => {
   it('pack command writes ready_for_review into durable JSON store', () => {
@@ -729,6 +766,16 @@ describe('worker-report-store-blocked-state', () => {
   });
 });
 
+
+describe('worker-report-store-seed-dry-run', () => {
+  it('Invoke-ReviewReadyReportStateSeed skips worker-report eviction in dry-run and fixture ticks', () => {
+    const raw = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1'),
+      'utf8',
+    );
+    expect(raw).toMatch(/if \(-not \$DryRun -and -not \$FixturePayload\)[\s\S]*Invoke-WorkerReportStoreEviction/);
+  });
+});
 
 describe('worker-report-store-repo-slug', () => {
   it('Resolve-WorkerReportStoreRepoSlug prefers AO_REPO_SLUG over GITHUB_REPOSITORY', () => {

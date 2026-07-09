@@ -338,13 +338,15 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $evictionOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
         $evictionOpenListAuthoritative = $true
     }
-    $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $evictionOpenPrs `
-        -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
-    $workerReportEviction = Invoke-WorkerReportStoreEviction -OpenPrs $evictionOpenPrs `
-        -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs -OpenListAuthoritative:$evictionOpenListAuthoritative `
-        -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
-    if ($workerReportEviction.removed -gt 0 -and $LogWriter) {
-        & $LogWriter "worker-report-store: evicted $($workerReportEviction.removed) stale record(s)"
+    if (-not $DryRun -and -not $FixturePayload) {
+        $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $evictionOpenPrs `
+            -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
+        $workerReportEviction = Invoke-WorkerReportStoreEviction -OpenPrs $evictionOpenPrs `
+            -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs -OpenListAuthoritative:$evictionOpenListAuthoritative `
+            -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
+        if ($workerReportEviction.removed -gt 0 -and $LogWriter) {
+            & $LogWriter "worker-report-store: evicted $($workerReportEviction.removed) stale record(s)"
+        }
     }
     $sessions = @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot)
 
