@@ -160,11 +160,42 @@ export function readLifecycleStore(path) {
 }
 
 /**
+ * @param {Record<string, unknown>} store
+ * @param {{ nowMs?: number, retentionMs?: number }} [options]
+ */
+export function compactLifecycleStore(store, options = {}) {
+  const nowMs = Number(options.nowMs ?? Date.now());
+  const retentionMs = Number(options.retentionMs ?? DEFAULT_TERMINAL_RETENTION_MS);
+  const next = normalizeLifecycleStore(store);
+  /** @type {Record<string, Record<string, unknown>>} */
+  const kept = {};
+  let evicted = 0;
+  for (const [key, entry] of Object.entries(next.entries)) {
+    const record = entry && typeof entry === 'object' ? entry : {};
+    const prActionable = record.prActionable !== false;
+    const eviction = canEvictLifecycleEntry({ entry: record, nowMs, retentionMs, prActionable });
+    if (eviction.ok) {
+      evicted += 1;
+      continue;
+    }
+    kept[key] = record;
+  }
+  next.entries = kept;
+  return { store: next, evicted };
+}
+
+/**
  * @param {string} path
  * @param {Record<string, unknown>} store
+ * @param {{ nowMs?: number, retentionMs?: number }} [options]
  */
-export function writeLifecycleStore(path, store) {
-  const next = normalizeLifecycleStore(store);
+export function writeLifecycleStore(path, store, options = {}) {
+  const retentionMs = Number(options.retentionMs ?? resolveTerminalRetentionMs());
+  const compacted = compactLifecycleStore(store, {
+    nowMs: Number(options.nowMs ?? Date.now()),
+    retentionMs,
+  });
+  const next = compacted.store;
   next.lastUpdatedMs = Date.now();
   writeJsonAtomic(path, next);
   return next;
@@ -237,7 +268,9 @@ export function canEvictLifecycleEntry(input) {
  * @param {number} [nowMs]
  */
 export function upsertLifecycleEntry(store, deliveryKey, patch, nowMs = Date.now()) {
-  const next = normalizeLifecycleStore(store);
+  const retentionMs = resolveTerminalRetentionMs();
+  const compacted = compactLifecycleStore(store, { nowMs, retentionMs });
+  const next = compacted.store;
   const key = String(deliveryKey ?? '').trim();
   if (!key) {
     return { ok: false, reason: 'missing_delivery_key', store: next };

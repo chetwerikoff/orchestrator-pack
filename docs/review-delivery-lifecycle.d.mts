@@ -50,10 +50,16 @@ export declare function normalizeLifecycleStore(store: unknown): {
 
 export declare function readLifecycleStore(path: string): ReturnType<typeof normalizeLifecycleStore>;
 
+export declare function compactLifecycleStore(
+  store: ReturnType<typeof normalizeLifecycleStore>,
+  options?: { nowMs?: number; retentionMs?: number },
+): { store: ReturnType<typeof normalizeLifecycleStore>; evicted: number };
+
 export declare function writeLifecycleStore(
   path: string,
   store: ReturnType<typeof normalizeLifecycleStore>,
-): void;
+  options?: { nowMs?: number; retentionMs?: number },
+): ReturnType<typeof normalizeLifecycleStore>;
 
 export declare function isLifecycleTerminal(entry: Record<string, unknown> | null | undefined): boolean;
 

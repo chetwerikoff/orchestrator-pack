@@ -6,8 +6,11 @@ import {
   buildDeterministicDeliveryId,
   buildDeterministicDeliveryKey,
   canEvictLifecycleEntry,
+  compactLifecycleStore,
+  DEFAULT_TERMINAL_RETENTION_MS,
   evaluateDeterministicJournalAdmission,
   hashReviewFindings,
+  normalizeLifecycleStore,
   readLifecycleStore,
   upsertLifecycleEntry,
   writeLifecycleStore,
@@ -66,6 +69,23 @@ describe('review delivery lifecycle helpers', () => {
     const result = canEvictLifecycleEntry({ entry, prActionable: false, nowMs: Date.now() });
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('non_actionable_pr');
+  });
+
+  it('review delivery lifecycle compaction: evicts terminal entries past retention on store write', () => {
+    const oldMs = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    const store = normalizeLifecycleStore({
+      entries: {
+        old: { terminalStatus: 'delivered', terminalAtMs: oldMs, lastUpdatedMs: oldMs },
+        fresh: { terminalStatus: 'delivered', terminalAtMs: Date.now(), lastUpdatedMs: Date.now() },
+      },
+    });
+    const compacted = compactLifecycleStore(store, {
+      nowMs: Date.now(),
+      retentionMs: DEFAULT_TERMINAL_RETENTION_MS,
+    });
+    expect(compacted.evicted).toBe(1);
+    expect(compacted.store.entries.old).toBeUndefined();
+    expect(compacted.store.entries.fresh).toBeDefined();
   });
 
   it('review delivery deterministic journal dedup: terminal delivered duplicate is no-op', () => {
@@ -281,6 +301,8 @@ describe('review delivery journal register before send', () => {
       'utf8',
     );
     expect(text).toMatch(/Register-WorkerMessageDispatch/);
+    expect(text).toMatch(/-ClaimToken \$claimToken -GatedNudge/);
+    expect(text).toMatch(/Acquire-WorkerNudgeClaim/);
     expect(text).toMatch(/-DeterministicDeliveryKey \$DeliveryKey/);
     const sendBlock = text.slice(text.indexOf('function Invoke-ScriptedReviewStdoutDeliverySend'));
     const registerIndex = sendBlock.indexOf('Register-WorkerMessageDispatch');

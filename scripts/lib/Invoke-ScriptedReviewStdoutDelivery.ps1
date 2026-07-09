@@ -101,11 +101,15 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
         [Parameter(Mandatory = $true)][string]$TargetSha,
         [string]$ProjectId = 'orchestrator-pack',
         [string]$FindingsHash = '',
+        [string]$WorkerTarget = '',
+        [object[]]$OpenPrs = $null,
         [string]$LifecycleStorePath = '',
         [int]$MaxDispatchUnknownAttempts = 3,
         [switch]$DryRun
     )
 
+    . (Join-Path $PSScriptRoot 'Worker-NudgeClaim.ps1')
+    . (Join-Path $PSScriptRoot 'Worker-AutonomousNudgeGate.ps1')
     . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
     . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
     . (Join-Path $PSScriptRoot 'Record-WorkerMessageDispatch.ps1')
@@ -113,12 +117,45 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
     $journaledScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'journaled-worker-send.ps1'
     $journalPath = Get-WorkerMessageDispatchJournalPath
     $lockPath = Get-OrchestratorSideEffectLockPath -LockFileName 'scripted-review-stdout-delivery.lock'
+    $cycleKey = "stdout:$FindingsHash"
+    if (-not $WorkerTarget) {
+        $targetResolve = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $SessionId `
+            -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $OpenPrs
+        if (-not $targetResolve.ok) {
+            return @{ ok = $false; sent = $false; reason = [string]$targetResolve.reason; terminal = 'escalated' }
+        }
+        $WorkerTarget = [string]$targetResolve.workerTarget
+    }
 
     for ($attempt = 1; $attempt -le $MaxDispatchUnknownAttempts; $attempt++) {
         if ($DryRun) {
             Write-ScriptedReviewStdoutDeliveryLog "dry-run would send to $SessionId key=$DeliveryKey"
             return @{ ok = $true; sent = $false; reason = 'dry_run'; terminal = 'delivered' }
         }
+
+        $claim = Acquire-WorkerNudgeClaim -PrNumber $PrNumber -CycleKey $cycleKey -IntentClass 'review-findings' `
+            -WorkerTarget $WorkerTarget -SessionId $SessionId -Surface 'scripted-review-stdout-delivery' `
+            -ProjectId $ProjectId -Message $MessageText
+        if (-not $claim.acquired) {
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+                terminalStatus = 'escalated'
+                terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                escalateReason = "nudge_claim_failed:$($claim.reason)"
+            } -LifecycleStorePath $LifecycleStorePath
+            return @{ ok = $false; sent = $false; reason = 'nudge_claim_failed'; terminal = 'escalated' }
+        }
+        $hashResult = Invoke-WorkerNudgeFilterCli -Subcommand 'hashMessageContent' -Payload @{ message = $MessageText }
+        $hashPersist = Set-WorkerNudgeClaimMessageContentHash -ClaimResult $claim -MessageContentHash ([string]$hashResult.messageContentHash)
+        if (-not $hashPersist.ok) {
+            Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+                terminalStatus = 'escalated'
+                terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                escalateReason = 'message_hash_persist_failed'
+            } -LifecycleStorePath $LifecycleStorePath
+            return @{ ok = $false; sent = $false; reason = 'message_hash_persist_failed'; terminal = 'escalated' }
+        }
+        $claimToken = New-WorkerNudgeClaimToken -ClaimResult $claim
 
         Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
             state          = 'delivery_claimed'
@@ -142,6 +179,8 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             -DeterministicDeliveryKey $DeliveryKey `
             -FindingsHash $FindingsHash
         if (-not $register.recorded) {
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' `
+                -Extra @{ reason = 'journal_register_failed'; detail = [string]$register.reason } | Out-Null
             Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 terminalStatus = 'escalated'
                 terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -150,6 +189,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             return @{ ok = $false; sent = $false; reason = 'journal_register_failed'; terminal = 'escalated' }
         }
         if ($register.duplicateNoOp) {
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
             Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 state          = 'delivered'
                 terminalStatus = 'delivered'
@@ -163,7 +203,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             $MessageText | pwsh -NoProfile -File $journaledScript $SessionId `
                 -Source 'pack-send' -SourceKey $DeliveryKey `
                 -DeliveryId $DeliveryId -DeterministicDeliveryKey $DeliveryKey `
-                -FindingsHash $FindingsHash -NoWait
+                -FindingsHash $FindingsHash -ClaimToken $claimToken -GatedNudge -NoWait
             $sendExitCapture.exitCode = $LASTEXITCODE
         }
         $sendExitCode = [int]$sendExitCapture.exitCode
@@ -175,6 +215,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
         } -LifecycleStorePath $LifecycleStorePath
 
         if ($fenced.ok -and $sendExitCode -eq 0) {
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
             Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 state          = 'delivered'
                 terminalStatus = 'delivered'
@@ -183,6 +224,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             return @{ ok = $true; sent = $true; reason = 'explicit_send_dispatched'; terminal = 'delivered' }
         }
         if ($sendExitCode -ne 44) {
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ exitCode = $sendExitCode } | Out-Null
             Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 terminalStatus = 'escalated'
                 terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -190,6 +232,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             } -LifecycleStorePath $LifecycleStorePath
             return @{ ok = $false; sent = $false; reason = 'explicit_send_failed'; terminal = 'escalated'; exitCode = $sendExitCode }
         }
+        Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
         Write-ScriptedReviewStdoutDeliveryLog "dispatch_unknown attempt $attempt for key=$DeliveryKey"
     }
 
@@ -223,6 +266,7 @@ function Invoke-ScriptedReviewStdoutDelivery {
     . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewPostSubmitDelivery.ps1')
     . (Join-Path $PSScriptRoot 'Review-DeliveryLifecycle.ps1')
     . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewDeliveryEscalation.ps1')
+    . (Join-Path $PSScriptRoot 'Worker-NudgeClaim.ps1')
 
     $findings = @($ParsedStdout.findings)
     if (-not $findings -and $ParsedStdout.rawFindings) {
@@ -329,9 +373,21 @@ function Invoke-ScriptedReviewStdoutDelivery {
         return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$message.reason) -PrNumber $PrNumber -SessionId $sessionId
     }
 
+    $nudgeResolve = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $PrNumber -SessionId $sessionId `
+        -HeadSha $TargetSha -ProjectId $ProjectId -OpenPrs $sessionResolve.openPrs -Sessions $Sessions
+    if (-not $nudgeResolve.ok) {
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch @{
+            terminalStatus = 'escalated'
+            terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            escalateReason = [string]$nudgeResolve.reason
+        } -LifecycleStorePath $LifecycleStorePath
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$nudgeResolve.reason) -PrNumber $PrNumber -SessionId $sessionId
+    }
+
     $send = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId `
         -MessageText ([string]$message.message) -DeliveryKey $deliveryKey -DeliveryId $deliveryId `
         -PrNumber $PrNumber -TargetSha $TargetSha -ProjectId $ProjectId -FindingsHash $findingsHash `
+        -WorkerTarget ([string]$nudgeResolve.workerTarget) -OpenPrs $sessionResolve.openPrs `
         -LifecycleStorePath $LifecycleStorePath -DryRun:$DryRun
 
     if (-not $SkipTelemetry) {
