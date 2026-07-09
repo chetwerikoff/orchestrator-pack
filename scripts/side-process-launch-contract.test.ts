@@ -50,7 +50,7 @@ describe.sequential('side-process launch contract (#659)', { timeout: pwshTestTi
   it('guard passes on aligned fleet registry (AC#4)', () => {
     const result = runGuard();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toMatch(/validated 16 registry children/i);
+    expect(result.stdout).toMatch(/validated 15 registry children/i);
   });
 
   it('guard fails on mismatch fixture reproducing passProjectId-without-ProjectId (AC#3)', () => {
@@ -209,5 +209,39 @@ describe.sequential('side-process launch contract (#659)', { timeout: pwshTestTi
     expect(errText).not.toMatch(/parameter name 'ProjectId'/i);
     expect(mainText).toMatch(/tick complete redelivered=/i);
     expect(payload.attempts).toBeGreaterThan(attemptsBefore);
+  });
+});
+
+describe('mandatory-params satisfiability (#701)', { timeout: pwshTestTimeoutMs }, () => {
+  it('guard fails on gate-child mandatory-params mismatch fixture', () => {
+    const result = runGuard([
+      '-RegistryPath',
+      join(fixtureRoot, 'registry-mandatory-params-mismatch.json'),
+      '-ScriptsRoot',
+      fixtureRoot,
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/mandatory parameter 'SessionId'/i);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/not satisfiable from supervised launch shape/i);
+  });
+
+  it('guard fails on ValidateSet mismatch fixture (cell 4)', () => {
+    const result = runGuard([
+      '-RegistryPath',
+      join(fixtureRoot, 'registry-validateset-mismatch.json'),
+      '-ScriptsRoot',
+      fixtureRoot,
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/ValidateSet/i);
+  });
+
+  it('aligned fleet registry excludes per-review gate child', () => {
+    const registry = JSON.parse(
+      readFileSync(join(repoRoot, 'scripts/orchestrator-side-process-registry.json'), 'utf8'),
+    ) as { children: { id: string }[] };
+    expect(registry.children.some((child) => child.id === 'scripted-review-confirmed-delivery-gate')).toBe(
+      false,
+    );
   });
 });

@@ -6,7 +6,7 @@
       "id": "side-process-launch-contract",
       "script": "scripts/check-side-process-launch-contract.ps1",
       "ownerIssues": [659],
-      "description": "Registry child launch argv binds to script param blocks."
+      "description": "Registry child launch argv binds to script param blocks and mandatory params are satisfiable from supervised launch shape."
     },
     {
       "id": "ao-spawn-shape",

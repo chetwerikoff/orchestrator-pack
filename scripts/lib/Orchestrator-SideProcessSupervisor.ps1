@@ -942,7 +942,7 @@ function Expand-OrchestratorWakeSupervisorChildExtraArgs {
 }
 
 
-function Get-OrchestratorSideProcessScriptParamNames {
+function Get-OrchestratorSideProcessScriptParamBlock {
     param([string]$ScriptPath)
 
     if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
@@ -950,9 +950,68 @@ function Get-OrchestratorSideProcessScriptParamNames {
     }
     $text = Get-Content -LiteralPath $ScriptPath -Raw
     if ($text -notmatch '(?ms)\bparam\s*\(\s*(.*?)\)\s*\r?\n') {
+        return ''
+    }
+    return $Matches[1]
+}
+
+function Get-OrchestratorSideProcessScriptParamDescriptors {
+    param([string]$ScriptPath)
+
+    $block = Get-OrchestratorSideProcessScriptParamBlock -ScriptPath $ScriptPath
+    if (-not $block) {
         return @()
     }
-    $block = $Matches[1]
+
+    $descriptors = [System.Collections.Generic.List[object]]::new()
+    $pattern = '(?ms)(?<attrs>(?:\[[^\]]*\]\s*)+)\$(?<name>[A-Za-z_][\w-]*)\s*(?:=\s*(?<default>[^,\r\n\)]+))?'
+    foreach ($match in [regex]::Matches($block, $pattern)) {
+        $attrs = $match.Groups['attrs'].Value
+        $name = $match.Groups['name'].Value
+        $defaultText = $match.Groups['default'].Value
+        $hasDefault = [bool]($defaultText -and $defaultText.Trim())
+        $mandatory = ($attrs -match '(?i)Mandatory(\s*=\s*\$true|\s*\])') -and -not $hasDefault
+        $validateSet = @()
+        if ($attrs -match 'ValidateSet\((?<vs>[^\)]+)\)') {
+            $rawValues = $Matches['vs']
+            $validateSet = @($rawValues -split ',' | ForEach-Object {
+                $_.Trim().Trim("'").Trim('"')
+            } | Where-Object { $_ })
+        }
+        $descriptors.Add([pscustomobject]@{
+            Name        = $name
+            Mandatory   = $mandatory
+            HasDefault  = $hasDefault
+            ValidateSet = $validateSet
+        })
+    }
+    return @($descriptors)
+}
+
+function Get-OrchestratorSideProcessLaunchShapeProvidedValues {
+    param([string[]]$ExpandedExtraArgs = @())
+
+    $providedValues = @{}
+    for ($i = 0; $i -lt $ExpandedExtraArgs.Count; $i++) {
+        $token = [string]$ExpandedExtraArgs[$i]
+        if ($token -match '^-(?<name>[A-Za-z][\w-]*)$') {
+            $switchName = $Matches['name']
+            if ($i + 1 -lt $ExpandedExtraArgs.Count -and [string]$ExpandedExtraArgs[$i + 1] -notmatch '^-') {
+                $providedValues[$switchName] = [string]$ExpandedExtraArgs[$i + 1]
+                $i++
+            }
+        }
+    }
+    return $providedValues
+}
+
+function Get-OrchestratorSideProcessScriptParamNames {
+    param([string]$ScriptPath)
+
+    $block = Get-OrchestratorSideProcessScriptParamBlock -ScriptPath $ScriptPath
+    if (-not $block) {
+        return @()
+    }
     return @([regex]::Matches($block, '\[\w+(?:\([^)]*\))?\]\$(?<name>[A-Za-z_][\w-]*)') |
         ForEach-Object { $_.Groups['name'].Value })
 }
@@ -1065,6 +1124,30 @@ function Test-OrchestratorSideProcessLaunchContract {
         foreach ($switchName in $expectedSwitches) {
             if ($paramNames -notcontains $switchName) {
                 $errors.Add("$($entry.Id): supervisor launch switch '-$switchName' is not declared in $($child.script) param block")
+            }
+        }
+
+        $expandedExtra = Expand-OrchestratorWakeSupervisorChildExtraArgs -ExtraArgs $entry.ExtraArgs `
+            -Paths @{ Root = $ScriptsRoot }
+        $providedValues = Get-OrchestratorSideProcessLaunchShapeProvidedValues -ExpandedExtraArgs $expandedExtra
+        $launchSwitchSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($switchName in @($expectedSwitches)) {
+            [void]$launchSwitchSet.Add($switchName)
+        }
+
+        foreach ($descriptor in Get-OrchestratorSideProcessScriptParamDescriptors -ScriptPath $entry.ScriptPath) {
+            if (-not $descriptor.Mandatory) {
+                continue
+            }
+            if (-not $launchSwitchSet.Contains($descriptor.Name)) {
+                $errors.Add("$($entry.Id): mandatory parameter '$($descriptor.Name)' is not satisfiable from supervised launch shape")
+                continue
+            }
+            if ($descriptor.ValidateSet.Count -gt 0 -and $providedValues.ContainsKey($descriptor.Name)) {
+                $providedValue = $providedValues[$descriptor.Name]
+                if ($descriptor.ValidateSet -notcontains $providedValue) {
+                    $errors.Add("$($entry.Id): mandatory parameter '$($descriptor.Name)' ValidateSet does not allow supervised launch value '$providedValue'")
+                }
             }
         }
     }

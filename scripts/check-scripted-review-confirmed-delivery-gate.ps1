@@ -134,8 +134,8 @@ if ($postSubmitLibText -match "resolve-submit-visibility-config' -Payload @\{ en
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
 $gateChild = @($registry.children | Where-Object { $_.id -eq 'scripted-review-confirmed-delivery-gate' })
-if ($gateChild.Count -ne 1) {
-    Write-Host 'orchestrator-side-process-registry.json must register scripted-review-confirmed-delivery-gate child (AC#10)'
+if ($gateChild.Count -gt 0) {
+    Write-Host 'orchestrator-side-process-registry.json must not register scripted-review-confirmed-delivery-gate as supervised polling child (Issue #701)'
     exit 1
 }
 
@@ -151,5 +151,5 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] scripted review confirmed-delivery gate wiring (Issue #669, supervisor child AC#10)'
+Write-Host '[PASS] scripted review confirmed-delivery gate wiring (Issue #669, per-review supervisor child #701)'
 exit 0

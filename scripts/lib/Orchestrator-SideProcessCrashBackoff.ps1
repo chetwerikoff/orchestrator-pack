@@ -176,6 +176,13 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     }
     $rapidExit = Test-OrchestratorWakeSupervisorChildRapidExit `
         -ChildStartedMs $ChildStartedMs -NowMs $nowMs -RapidExitThresholdMs $rapidThresholdMs -ExitMs $exitMs
+    if (-not $rapidExit -and $Paths -and $ChildId) {
+        $progress = Read-OrchestratorWakeSupervisorChildProgress -Paths $Paths -ChildId $ChildId
+        $neverProgressed = (-not $progress) -or (-not $progress.lastProgressMs)
+        if ($neverProgressed) {
+            $rapidExit = $true
+        }
+    }
     $updatedCrash = Update-OrchestratorWakeSupervisorChildCrashBackoffState `
         -Recovery $crashFields -RapidExit $rapidExit -NowMs $nowMs
 

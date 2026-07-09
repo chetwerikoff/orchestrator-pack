@@ -5357,7 +5357,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-185",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 185
+        "line": 192
       },
       "callee": {
         "kind": "other-external",
@@ -5372,7 +5372,7 @@
       "hashPinnedSourceHash": "sha256:1404679e594e7b1a07b34de257df742c37b7bce054448ef2db663635d549c641",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 185,
+        "line": 192,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5382,7 +5382,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-198",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 198
+        "line": 205
       },
       "callee": {
         "kind": "other-external",
@@ -5397,7 +5397,7 @@
       "hashPinnedSourceHash": "sha256:c8a7f28ee077fb7906d9e12f0118c99748e9af78a3a0e026cdf44d36198c54d0",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 198,
+        "line": 205,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5599,7 +5599,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1135",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1135
+        "line": 1218
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5610,7 +5610,7 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1135,
+        "line": 1218,
         "patternIds": [
           "start-process"
         ]
@@ -5620,7 +5620,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1144",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1144
+        "line": 1227
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5631,7 +5631,7 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1144,
+        "line": 1227,
         "patternIds": [
           "start-process"
         ]
@@ -5641,7 +5641,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1952",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1952
+        "line": 2035
       },
       "callee": {
         "kind": "ao",
@@ -5652,7 +5652,7 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1952,
+        "line": 2035,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5662,7 +5662,7 @@
       "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1969",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1969
+        "line": 2052
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5673,7 +5673,7 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1969,
+        "line": 2052,
         "patternIds": [
           "start-process"
         ]
