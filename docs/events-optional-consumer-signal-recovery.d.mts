@@ -20,6 +20,10 @@ export declare function shouldSuppressNudgeForPendingJournal(
   transitionId: string,
   pendingJournal?: Record<string, { sessionId?: string; sentAtMs?: number; message?: string }>,
 ): boolean;
+export declare function shouldSuppressSubmitForPendingOutcome(
+  deliveryId: string,
+  pendingOutcomes?: Record<string, { claimKey?: string; submittedAtMs?: number; sessionId?: string }>,
+): boolean;
 export declare function reviewRunsLackAoWireDeliveredAt(
   reviewRuns: Array<Record<string, unknown>>,
 ): boolean;
