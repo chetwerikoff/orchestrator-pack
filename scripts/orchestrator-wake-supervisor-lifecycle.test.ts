@@ -1,7 +1,8 @@
+import { describe, expect, it } from 'vitest';
 import * as ows from './orchestrator-wake-supervisor.shared.js';
 
 describe('orchestrator-wake-supervisor lifecycle', () => {
-  ows.it(
+  it(
     'stops children when orchestrator session disappears at runtime',
     async () => {
     const stateDir = ows.makeStateDir();
@@ -21,14 +22,14 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       ows.fs.readFileSync(ows.path.join(ows.fixtureDir, 'status-no-orchestrator.json')),
     );
     await ows.waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 25_000);
-    ows.expect(ows.isAlive(listenerBefore.pid)).toBe(false);
-    ows.expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
+    expect(ows.isAlive(listenerBefore.pid)).toBe(false);
+    expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
     child.kill('SIGTERM');
     },
     ows.detachedSupervisorTimeoutMs,
   );
 
-  ows.it(
+  it(
     'reports status and stops both children cleanly',
     async () => {
     const stateDir = ows.makeStateDir();
@@ -39,25 +40,25 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     await ows.waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
 
     const statusUp = await ows.waitForSupervisorHealthyStatus(stateDir);
-    ows.expect(statusUp.status).toBe(0);
-    ows.expect(statusUp.stdout).toContain('supervisor: running');
-    ows.expect(statusUp.stdout).toContain('listener:   working');
-    ows.expect(statusUp.stdout).toContain('heartbeat:  working');
+    expect(statusUp.status).toBe(0);
+    expect(statusUp.stdout).toContain('supervisor: running');
+    expect(statusUp.stdout).toContain('listener:   working');
+    expect(statusUp.stdout).toContain('heartbeat:  working');
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-    ows.expect(stop.status).toBe(0);
+    expect(stop.status).toBe(0);
 
     const statusDown = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
-    ows.expect(statusDown.status).not.toBe(0);
-    ows.expect(statusDown.stdout).toContain('stopped');
+    expect(statusDown.status).not.toBe(0);
+    expect(statusDown.stdout).toContain('stopped');
     },
     ows.detachedSupervisorTimeoutMs,
   );
 
-  ows.it(
+  it(
     'stops supervisor before children so no orphan wake processes remain',
     async () => {
     const stateDir = ows.makeStateDir();
@@ -66,23 +67,23 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
 
     const listenerBefore = await ows.readMarker(stateDir, 'listener');
     const heartbeatBefore = await ows.readMarker(stateDir, 'heartbeat');
-    ows.expect(ows.isAlive(listenerBefore.pid)).toBe(true);
-    ows.expect(ows.isAlive(heartbeatBefore.pid)).toBe(true);
+    expect(ows.isAlive(listenerBefore.pid)).toBe(true);
+    expect(ows.isAlive(heartbeatBefore.pid)).toBe(true);
 
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-    ows.expect(stop.status).toBe(0);
+    expect(stop.status).toBe(0);
 
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    ows.expect(ows.isAlive(listenerBefore.pid)).toBe(false);
-    ows.expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
+    expect(ows.isAlive(listenerBefore.pid)).toBe(false);
+    expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
 
     const statusDown = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
-    ows.expect(statusDown.stdout).toContain('stopped');
+    expect(statusDown.stdout).toContain('stopped');
     },
     ows.detachedSupervisorTimeoutMs,
   );
 
-  ows.it('status exits non-zero when supervisor is stopped but children remain', async () => {
+  it('status exits non-zero when supervisor is stopped but children remain', async () => {
     const stateDir = ows.makeStateDir();
     const child = ows.startSupervisorBackground(stateDir, [
       '-OrchestratorSessionId',
@@ -104,15 +105,15 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
 
     if (ows.isAlive(listener.pid)) {
       const statusOrphan = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
-      ows.expect(statusOrphan.status).not.toBe(0);
-      ows.expect(statusOrphan.stdout).toContain('supervisor: stopped');
+      expect(statusOrphan.status).not.toBe(0);
+      expect(statusOrphan.stdout).toContain('supervisor: stopped');
       process.kill(listener.pid, 'SIGKILL');
     }
 
     ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   }, ows.detachedSupervisorTimeoutMs);
 
-  ows.it(
+  it(
     'captures per-child logs and survives launching shell exit when detached',
     async () => {
     const stateDir = ows.makeStateDir();
@@ -128,13 +129,13 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       '-PollSeconds',
       '1',
     ]);
-    ows.expect(start.status).toBe(0);
-    ows.expect(start.stdout).toContain('supervisor detached');
+    expect(start.status).toBe(0);
+    expect(start.stdout).toContain('supervisor detached');
 
     const supervisorPid = Number(
       ows.fs.readFileSync(ows.path.join(stateDir, 'supervisor.pid'), 'utf8').trim(),
     );
-    ows.expect(supervisorPid).toBeGreaterThan(0);
+    expect(supervisorPid).toBeGreaterThan(0);
 
     const childLogs = ows.managedChildRoles.map((role) => ows.path.join(stateDir, `${role}.log`));
     const deadline = Date.now() + 20_000;
@@ -145,21 +146,21 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
     for (const logPath of childLogs) {
-      ows.expect(ows.fs.existsSync(logPath)).toBe(true);
+      expect(ows.fs.existsSync(logPath)).toBe(true);
     }
 
     await new Promise((resolve) => setTimeout(resolve, 2500));
-    ows.expect(ows.isAlive(supervisorPid)).toBe(true);
+    expect(ows.isAlive(supervisorPid)).toBe(true);
 
     const statusMid = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
-    ows.expect(statusMid.status).toBe(0);
-    ows.expect(statusMid.stdout).toContain('supervisor: running');
-    ows.expect(statusMid.stdout).toMatch(/listener:.*working/);
+    expect(statusMid.status).toBe(0);
+    expect(statusMid.stdout).toContain('supervisor: running');
+    expect(statusMid.stdout).toMatch(/listener:.*working/);
 
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-    ows.expect(stop.status).toBe(0);
+    expect(stop.status).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 500));
-    ows.expect(ows.isAlive(supervisorPid)).toBe(false);
+    expect(ows.isAlive(supervisorPid)).toBe(false);
     },
     ows.detachedSupervisorTimeoutMs,
   );
@@ -184,18 +185,18 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
         '-PollSeconds',
         '1',
       ]);
-      ows.expect(start.status).toBe(0);
+      expect(start.status).toBe(0);
 
       const launcher = ows.path.join(stateDir, 'launch-supervisor.sh');
-      ows.expect(ows.fs.existsSync(launcher)).toBe(true);
+      expect(ows.fs.existsSync(launcher)).toBe(true);
       const script = ows.fs.readFileSync(launcher, 'utf8');
       const quotedProjectId = `'${projectId.replace(/'/g, "'\\''")}'`;
-      ows.expect(script).toContain(`'-ProjectId' ${quotedProjectId}`);
-      ows.expect(script).not.toMatch(/-ProjectId proj&/);
-      ows.expect(script).not.toMatch(/nohup pwsh -NoProfile /);
-      ows.expect(script).toContain('command -v setsid');
-      ows.expect(script).toMatch(/setsid nohup pwsh/);
-      ows.expect(script).toMatch(/POSIX::setsid/);
+      expect(script).toContain(`'-ProjectId' ${quotedProjectId}`);
+      expect(script).not.toMatch(/-ProjectId proj&/);
+      expect(script).not.toMatch(/nohup pwsh -NoProfile /);
+      expect(script).toContain('command -v setsid');
+      expect(script).toMatch(/setsid nohup pwsh/);
+      expect(script).toMatch(/POSIX::setsid/);
 
       const apostropheDir = ows.makeStateDir();
       const apostropheProject = "team's-pack";
@@ -213,18 +214,18 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
         '-PollSeconds',
         '1',
       ]);
-      ows.expect(startApostrophe.status).toBe(0);
+      expect(startApostrophe.status).toBe(0);
       const launcherApostrophe = ows.path.join(apostropheDir, 'launch-supervisor.sh');
       const apostropheScript = ows.fs.readFileSync(launcherApostrophe, 'utf8');
-      ows.expect(apostropheScript).toContain(`'-ProjectId' 'team'\\''s-pack'`);
-      ows.expect(apostropheScript).not.toContain("'\\\\''");
+      expect(apostropheScript).toContain(`'-ProjectId' 'team'\\''s-pack'`);
+      expect(apostropheScript).not.toContain("'\\\\''");
 
       ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
       ows.runSupervisor(['-Action', 'Stop', '-StateDir', apostropheDir]);
     },
   );
 
-  ows.it(
+  it(
     'throttles crash-loop restarts for a child that exits immediately',
     async () => {
     const stateDir = ows.makeStateDir();
@@ -269,9 +270,9 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     if (!supervisorLog && ows.fs.existsSync(logPath)) {
       supervisorLog = ows.fs.readFileSync(logPath, 'utf8');
     }
-    ows.expect(supervisorLog).toMatch(/crash backoff: listener/);
+    expect(supervisorLog).toMatch(/crash backoff: listener/);
     // Listener-only crash backoff; allow one extra PID when the registry grows.
-    ows.expect(observedPids.size).toBeLessThanOrEqual(5);
+    expect(observedPids.size).toBeLessThanOrEqual(5);
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1500));
     ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);

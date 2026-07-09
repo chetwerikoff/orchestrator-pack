@@ -1,7 +1,8 @@
+import { describe, expect, it } from 'vitest';
 import * as bdb from './supervisor-degraded-backoff.shared.js';
 
 describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
-  bdb.it('preserves degraded recovery state across a crash cycle', async () => {
+  it('preserves degraded recovery state across a crash cycle', async () => {
     const stateDir = bdb.makeStateDir();
     const child = bdb.startSupervisorBackground(
       stateDir,
@@ -47,8 +48,8 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    bdb.expect(killed).toBe(true);
-    bdb.expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
+    expect(killed).toBe(true);
+    expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
 
     const crashDeadline = Date.now() + 60_000;
     let crashObserved = false;
@@ -71,17 +72,17 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
-    bdb.expect(crashObserved).toBe(true);
+    expect(crashObserved).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     const afterCrash = bdb.readChildRecovery(stateDir, 'heartbeat');
-    bdb.expect(Number(afterCrash.degradedAttempts ?? 0)).toBeGreaterThanOrEqual(
+    expect(Number(afterCrash.degradedAttempts ?? 0)).toBeGreaterThanOrEqual(
       Number(beforeCrash.degradedAttempts ?? 0),
     );
-    bdb.expect(Number(afterCrash.deterministicReasonStreak ?? 0)).toBeGreaterThanOrEqual(
+    expect(Number(afterCrash.deterministicReasonStreak ?? 0)).toBeGreaterThanOrEqual(
       Number(beforeCrash.deterministicReasonStreak ?? 0),
     );
-    bdb.expect(String(afterCrash.failureClass ?? '')).toBe(String(beforeCrash.failureClass ?? ''));
+    expect(String(afterCrash.failureClass ?? '')).toBe(String(beforeCrash.failureClass ?? ''));
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
