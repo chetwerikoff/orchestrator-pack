@@ -57,6 +57,17 @@ describe('review delivery lifecycle helpers', () => {
     expect(result.reason).toBe('non_terminal_actionable_pr');
   });
 
+  it('review delivery lifecycle ttl safety: non-terminal entry evictable when PR is not actionable', () => {
+    const entry = {
+      terminalStatus: '',
+      state: 'verdict_recorded',
+      lastUpdatedMs: Date.now(),
+    };
+    const result = canEvictLifecycleEntry({ entry, prActionable: false, nowMs: Date.now() });
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('non_actionable_pr');
+  });
+
   it('review delivery deterministic journal dedup: terminal delivered duplicate is no-op', () => {
     const key = deliveryKey([]);
     const journal = {
@@ -169,6 +180,31 @@ describe('review delivery lifecycle crash resume', () => {
       '$result | ConvertTo-Json -Compress',
     ].join('\n');
     const result = JSON.parse(runPwsh(script));
+    expect(result.reason).toBe('verdict_snapshot_lost');
+  });
+
+  it('review delivery lifecycle crash resume: C4a detects started-only durable entry after restart', () => {
+    const storeDir = mkdtempSync(path.join(tmpdir(), 'review-delivery-started-only-'));
+    tempDirs.push(storeDir);
+    const storePath = path.join(storeDir, 'lifecycle.json');
+    const key = deliveryKey([]);
+    let store = readLifecycleStore(storePath);
+    ({ store } = upsertLifecycleEntry(store, key, {
+      state: 'started',
+      prNumber,
+      headSha,
+      findingsHash: hashReviewFindings([]),
+      verdictSource: 'wrapper-stdout',
+    }));
+    writeLifecycleStore(storePath, store);
+
+    const restartScript = [
+      `. ${psString(path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'))}`,
+      "$parsed = @{ ok = $true; gateVerdict = 'approved'; packVerdict = 'clean'; findings = @() }",
+      `$result = Resume-ScriptedReviewStdoutDeliveryFromLifecycle -DeliveryKey ${psString(key)} -LifecycleStorePath ${psString(storePath)} -RepoRoot ${psString(repoRoot)}`,
+      '$result | ConvertTo-Json -Compress',
+    ].join('\n');
+    const result = JSON.parse(runPwsh(restartScript));
     expect(result.reason).toBe('verdict_snapshot_lost');
   });
 

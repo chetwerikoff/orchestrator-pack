@@ -61,6 +61,10 @@ export declare function canResumeDeliveryFromLifecycle(
   entry: Record<string, unknown> | null | undefined,
 ): boolean;
 
+export declare function isVerdictSnapshotLost(
+  entry: Record<string, unknown> | null | undefined,
+): boolean;
+
 export declare function canEvictLifecycleEntry(input: {
   entry: Record<string, unknown>;
   prActionable?: boolean;

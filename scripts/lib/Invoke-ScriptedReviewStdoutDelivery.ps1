@@ -239,12 +239,40 @@ function Invoke-ScriptedReviewStdoutDelivery {
         findings = @($findings)
     }).findingsHash
 
-    if ($SimulateCrashBeforeVerdictPersist) {
+    $existing = if ($LifecycleStorePath) {
+        Get-ReviewDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Path $LifecycleStorePath
+    }
+    else {
+        Get-ReviewDeliveryLifecycleEntry -DeliveryKey $deliveryKey
+    }
+    $entry = $existing.entry
+    $snapshotLost = [bool](Invoke-ReviewDeliveryLifecycleCli -Subcommand 'verdict-snapshot-lost' -Payload @{
+        entry = $entry
+    }).lost
+    if ($snapshotLost) {
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch @{
+            terminalStatus = 'escalated'
+            terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            escalateReason = 'verdict_snapshot_lost'
+        } -LifecycleStorePath $LifecycleStorePath
         return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'verdict_snapshot_lost' -PrNumber $PrNumber `
             -Detail "deliveryKey=$deliveryKey"
     }
 
     if (-not $ResumeOnly) {
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch @{
+            state         = 'started'
+            prNumber      = $PrNumber
+            headSha       = $TargetSha
+            findingsHash  = $findingsHash
+            verdictSource = 'wrapper-stdout'
+        } -LifecycleStorePath $LifecycleStorePath
+
+        if ($SimulateCrashBeforeVerdictPersist) {
+            return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'verdict_snapshot_lost' -PrNumber $PrNumber `
+                -Detail "deliveryKey=$deliveryKey"
+        }
+
         $verdictPatch = @{
             state           = 'verdict_recorded'
             prNumber        = $PrNumber
@@ -352,6 +380,14 @@ function Resume-ScriptedReviewStdoutDeliveryFromLifecycle {
     }
     if ([string]$entry.terminalStatus -eq 'delivered') {
         return @{ ok = $true; skipped = $true; reason = 'already_delivered' }
+    }
+    $snapshotLost = [bool](Invoke-ReviewDeliveryLifecycleCli -Subcommand 'verdict-snapshot-lost' -Payload @{
+        entry = $entry
+    }).lost
+    if ($snapshotLost) {
+        . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewDeliveryEscalation.ps1')
+        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'verdict_snapshot_lost' `
+            -PrNumber ([int]$entry.prNumber) -Detail "deliveryKey=$DeliveryKey"
     }
     if ([string]$entry.state -ne 'verdict_recorded' -and [string]$entry.state -ne 'delivery_claimed' -and [string]$entry.state -ne 'delivery_attempted') {
         return @{ ok = $false; reason = 'not_resumable' }

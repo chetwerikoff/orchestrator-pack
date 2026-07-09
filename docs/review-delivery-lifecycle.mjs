@@ -193,6 +193,20 @@ export function canResumeDeliveryFromLifecycle(entry) {
 }
 
 /**
+ * @param {Record<string, unknown> | null | undefined} entry
+ */
+export function isVerdictSnapshotLost(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return false;
+  }
+  const state = String(entry.state ?? '').trim();
+  if (state !== LIFECYCLE_STARTED) {
+    return false;
+  }
+  return !String(entry.stdoutSnapshot ?? '').trim();
+}
+
+/**
  * @param {{ entry?: Record<string, unknown>, nowMs?: number, retentionMs?: number, prActionable?: boolean }} input
  */
 export function canEvictLifecycleEntry(input) {
@@ -201,16 +215,15 @@ export function canEvictLifecycleEntry(input) {
   const retentionMs = Number(input.retentionMs ?? DEFAULT_TERMINAL_RETENTION_MS);
   const prActionable = input.prActionable !== false;
 
+  if (!prActionable) {
+    return { ok: true, reason: 'non_actionable_pr' };
+  }
+
   if (!isLifecycleTerminal(entry)) {
-    if (prActionable) {
-      return { ok: false, reason: 'non_terminal_actionable_pr' };
-    }
+    return { ok: false, reason: 'non_terminal_actionable_pr' };
   }
 
   const terminalAt = Number(entry.terminalAtMs ?? entry.lastUpdatedMs ?? 0);
-  if (!isLifecycleTerminal(entry)) {
-    return { ok: false, reason: 'non_terminal' };
-  }
   if (nowMs - terminalAt < retentionMs) {
     return { ok: false, reason: 'retention_floor' };
   }
@@ -366,6 +379,10 @@ runStdinJsonCli('review-delivery-lifecycle.mjs', {
     return { entry: getLifecycleEntry(store, payload.deliveryKey) };
   },
   'can-evict': () => canEvictLifecycleEntry(readStdinJson()),
+  'verdict-snapshot-lost': () => {
+    const payload = readStdinJson();
+    return { lost: isVerdictSnapshotLost(payload.entry) };
+  },
   'can-resume': () => {
     const payload = readStdinJson();
     return { ok: canResumeDeliveryFromLifecycle(payload.entry) };
