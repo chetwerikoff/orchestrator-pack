@@ -36,6 +36,7 @@ $Script:DefaultIntervalSeconds = 30
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
@@ -288,7 +289,13 @@ function Write-SubmitReconcileLog {
     Write-Host "[$stamp] $($Script:ReconcileLogPrefix): $Message"
 }
 
-$Script:SubmitReconcileDefaultState = @{ deliveries = @{}; failedDeliveries = @{}; audit = @(); lastTickMs = $null }
+$Script:SubmitReconcileDefaultState = @{
+    deliveries       = @{}
+    failedDeliveries = @{}
+    audit            = @()
+    pendingOutcomes  = @{}
+    lastTickMs       = $null
+}
 
 function Get-SubmitReconcileState {
     param(
@@ -484,29 +491,24 @@ function Invoke-SubmitReconcileTick {
     )
 
     if ($Fixture) {
-        $fixture = Get-FixtureSubmitPayload -Path $Fixture
-        $sessions = @($fixture.sessions)
-        $aoEvents = @($fixture.aoEvents)
-        $reviewRuns = @($fixture.reviewRuns)
-        $dispatchJournal = @{}
-        if ($fixture.dispatchJournal) {
-            foreach ($prop in $fixture.dispatchJournal.PSObject.Properties) {
-                $dispatchJournal[$prop.Name] = $prop.Value
-            }
-        }
-        $tracking = if ($fixture.tracking) { $fixture.tracking } else { Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath }
-        $now = if ($fixture.nowMs) { [long]$fixture.nowMs } else { $NowMs }
-        $tickConfig = if ($fixture.config) { $fixture.config } else { @{} }
+        $fixturePayload = Get-FixtureSubmitPayload -Path $Fixture
+        $sessions = @($fixturePayload.sessions)
+        $aoEvents = @($fixturePayload.aoEvents)
+        $reviewRuns = @($fixturePayload.reviewRuns)
+        $dispatchJournal = Copy-MechanicalJsonMap -Map $fixturePayload.dispatchJournal
+        $tracking = if ($fixturePayload.tracking) { ConvertTo-MechanicalJsonStateHashtable -Value $fixturePayload.tracking } else { Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath }
+        $now = if ($fixturePayload.nowMs) { [long]$fixturePayload.nowMs } else { $NowMs }
+        $tickConfig = if ($fixturePayload.config) { $fixturePayload.config } else { @{} }
         $reactionMessages = @{}
-        if ($fixture.reactionMessages) {
-            foreach ($prop in $fixture.reactionMessages.PSObject.Properties) {
+        if ($fixturePayload.reactionMessages) {
+            foreach ($prop in $fixturePayload.reactionMessages.PSObject.Properties) {
                 $reactionMessages[$prop.Name] = [string]$prop.Value
             }
         }
-        $reactionConfigUnavailable = [bool]$fixture.reactionConfigUnavailable
-        if ($fixture.floodActiveSessions) {
+        $reactionConfigUnavailable = [bool]$fixturePayload.reactionConfigUnavailable
+        if ($fixturePayload.floodActiveSessions) {
             $floodActiveSessions = @{}
-            foreach ($prop in $fixture.floodActiveSessions.PSObject.Properties) {
+            foreach ($prop in $fixturePayload.floodActiveSessions.PSObject.Properties) {
                 $floodActiveSessions[$prop.Name] = [bool]$prop.Value
             }
         }
@@ -516,12 +518,27 @@ function Invoke-SubmitReconcileTick {
     }
     else {
         $sessions = Get-AoStatusSessionsWithReports
-        $aoEvents = Get-AoEventsSince -SinceMinutes 30
-        Write-AoEventsCorrelationDegraded -Surface 'worker-message-submit-reconcile' -LogPrefix $Script:ReconcileLogPrefix
+        $aoEvents = @()
+        Write-ReconcileSignalSource -Surface 'worker-message-submit-reconcile' -Source 'packDispatchJournal+reviewRuns' -LogPrefix $Script:ReconcileLogPrefix
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         $tracking = Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath
-        Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
+        try {
+            Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
+        }
+        catch {
+            if ($DryRunMode) {
+                Write-SubmitReconcileLog "dry-run degrade: $_"
+                return @{
+                    submitted = 0
+                    escalated = 0
+                    noop      = 0
+                    deferred  = 0
+                    tracking  = $tracking
+                }
+            }
+            throw
+        }
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
         $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else { Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot }
@@ -536,16 +553,13 @@ function Invoke-SubmitReconcileTick {
         else {
             $reactionConfigUnavailable = $true
         }
-        $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
+        $floodActiveSessions = @{}
     }
 
     if ($reactionConfigUnavailable) {
-        $reactionEvents = @($aoEvents | Where-Object {
-                $_.kind -eq 'reaction.action_succeeded' -and
-                $_.data -and $_.data.action -eq 'send-to-agent'
-            })
-        if ($reactionEvents.Count -gt 0) {
-            Write-SubmitReconcileLog "deferred: reason=reaction_config_unavailable reactionEventCount=$($reactionEvents.Count)"
+        $reactionJournalCount = @($dispatchJournal.Values | Where-Object { [string]$_.source -eq 'reaction' }).Count
+        if ($reactionJournalCount -gt 0) {
+            Write-SubmitReconcileLog "deferred: reason=reaction_config_unavailable reactionJournalCount=$reactionJournalCount"
             return @{
                 submitted = 0
                 escalated = 0
@@ -573,7 +587,18 @@ function Invoke-SubmitReconcileTick {
     $escalated = 0
     $noop = 0
     $submitOutcomes = @()
+    $savedPendingOutcomes = Copy-MechanicalJsonMap -Map $tracking.pendingOutcomes
     $tracking = $plan.tracking
+    if ($savedPendingOutcomes.Count -gt 0) {
+        $pendingOutcomes = Copy-MechanicalJsonMap -Map $tracking.pendingOutcomes
+        foreach ($deliveryId in @($savedPendingOutcomes.Keys)) {
+            if (-not $pendingOutcomes.ContainsKey($deliveryId)) {
+                $pendingOutcomes[$deliveryId] = $savedPendingOutcomes[$deliveryId]
+            }
+        }
+        $tracking = ConvertTo-MechanicalJsonStateHashtable -Value $tracking
+        $tracking['pendingOutcomes'] = $pendingOutcomes
+    }
 
     if ($plan.PSObject.Properties.Name -contains 'dispatchJournal' -and $null -ne $plan.dispatchJournal) {
         if (-not $DryRunMode -and -not $Fixture) {
@@ -603,6 +628,14 @@ function Invoke-SubmitReconcileTick {
     foreach ($action in @($plan.actions)) {
         switch ($action.type) {
             'submit' {
+                $pendingOutcomes = Copy-MechanicalJsonMap -Map $tracking.pendingOutcomes
+                if ($pendingOutcomes[[string]$action.deliveryId]) {
+                    Write-ReconcileJournalWriteDegraded -Surface 'worker-message-submit-reconcile' -Key ([string]$action.deliveryId) -LogPrefix $Script:ReconcileLogPrefix
+                    Write-SubmitReconcileLog "skip submit: outcome_journal_pending delivery=$($action.deliveryId)"
+                    $noop++
+                    continue
+                }
+
                 if (-not $DryRunMode -and -not $Fixture) {
                     Set-SubmitReconcileState -Path $StatePath -State $tracking
                 }

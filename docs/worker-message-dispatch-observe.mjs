@@ -28,6 +28,7 @@ import {
   REVIEW_ROUND_REPORT_STATES,
 } from './review-finding-delivery-confirm.mjs';
 import { isDeliveredChangesRequested } from './review-producer-contract.mjs';
+import { resolveDeliveredRunObservedAtMs } from './events-optional-consumer-signal-recovery.mjs';
 
 
 /** AO tmux paste path threshold (matches AO 0.9.2 sendMessage). */
@@ -109,7 +110,7 @@ export function buildDeliveryId(sessionId, deliveredAtMs, source, sourceKey = ''
  * @param {Record<string, unknown>} run
  */
 export function resolveReviewSendObservedAtMs(run) {
-  return parseIsoMs(run?.deliveredAt) ?? parseIsoMs(run?.updatedAt) ?? null;
+  return resolveDeliveredRunObservedAtMs(run, parseIsoMs);
 }
 
 /**
@@ -398,10 +399,9 @@ export function mergeDeliveryRecords(input) {
     const runAt = Number(row.deliveredAtMs ?? 0);
     return runAt > journalAt;
   });
-  const reactionObservation = extractReactionDeliveries(
-    toArray(aoEvents),
-    reactionMessages ?? {},
-  );
+  const reactionObservation = toArray(aoEvents).length > 0
+    ? extractReactionDeliveries(toArray(aoEvents), reactionMessages ?? {})
+    : { deliveries: [], audits: [] };
   const byId = new Map();
   for (const row of [
     ...journalDeliveries,

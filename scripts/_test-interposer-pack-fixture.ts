@@ -68,6 +68,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'autonomous-review-retry.mjs',
     'codex-reviewer-timeout-retry.mjs',
     'dead-worker-reconciler.mjs',
+    'events-optional-consumer-signal-recovery.mjs',
     'mechanical-reconcile-bounds.mjs',
     'orchestrator-claimed-review-run.mjs',
     'post-run-retry-ledger.mjs',

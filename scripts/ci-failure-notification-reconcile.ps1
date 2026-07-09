@@ -29,6 +29,7 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 . (Join-Path $PSScriptRoot 'lib/Ci-Failure-Notification-Common.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
@@ -40,14 +41,7 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 function Get-CiFailureReactionEvents {
-    $aoEvents = @(Get-AoEventsSince -SinceMinutes 120)
-    Write-AoEventsCorrelationDegraded -Surface 'ci-failure-notification-reconcile' -LogPrefix $Script:ReconcileLogPrefix
-    return @($aoEvents | Where-Object {
-            $type = [string]$_.type
-            if ($type -ne 'reaction.action_succeeded') { return $false }
-            $reactionKey = [string]($_.reactionKey ?? $_.reaction?.key ?? $_.metadata?.reactionKey ?? $_.details?.reactionKey ?? $_.data?.reactionKey ?? $_.data?.reaction?.key ?? '')
-            return $reactionKey -eq 'ci-failed'
-        })
+    return @()
 }
 
 function Get-CiFailureIntentTokens {
@@ -562,6 +556,8 @@ function Invoke-CiFailureNotificationTick {
         [string]$StoreDir,
         [string]$EnqueueTickId
     )
+
+    Write-ReconcileSignalSource -Surface 'ci-failure-notification-reconcile' -Source 'pendingEpisodeStore+liveSession' -LogPrefix $Script:ReconcileLogPrefix
 
     $repo = Get-RepoIdentity
     $openPrs = @($WorkerState.openPrs)

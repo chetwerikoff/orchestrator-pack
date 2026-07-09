@@ -227,6 +227,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'autonomous-gate-preflight.mjs',
   'codex-reviewer-timeout-retry.mjs',
   'dead-worker-reconciler.mjs',
+  'events-optional-consumer-signal-recovery.mjs',
   'review-finding-delivery-confirm.mjs',
   'review-head-ready.mjs',
   'review-ready-stuck-guard.mjs',

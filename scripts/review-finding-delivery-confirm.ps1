@@ -5,8 +5,10 @@
 
 .DESCRIPTION
   Low-frequency mechanical loop: observes run-level state from Get-AoReviewRuns fan-out
-  and worker reports from ao status --reports full. Confirms delivery only when the
-  linked worker reports addressing_reviews (or equivalent) after deliveredAt; on timeout
+  and AO 0.10.2 session rows from ao status --json (session.status for live owner checks).
+  Delivery is detected via session-reviews latestRun.status=="delivered" and pack send journal.
+  Worker-ack via addressing_reviews reportState is descoped on AO 0.10.2 (ao report removed);
+  legacy fixture/capture report rows still confirm when present. On timeout without ack,
   escalates (AO 0.10 auto-delivery — observe-only, no pack redelivery); draft submit is owned by worker-message-submit-reconcile.ps1
   (Issue #232). Never ao spawn,
   --claim-pr, ao session kill, or ao send.
@@ -38,6 +40,7 @@ $Script:DefaultConfirmationWindowMinutes = 5
 $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
@@ -301,6 +304,20 @@ function Invoke-PlannedReviewSend {
     return @{ sent = $false; reason = 'redelivery_removed' }
 }
 
+
+
+function Test-DeliveryReportReceiptSurfaceDescope {
+    param(
+        [object[]]$ReviewRuns,
+        [object[]]$Sessions
+    )
+
+    $result = Invoke-DeliveryFilterCli -Subcommand 'pendingReportReceiptDescope' -Payload @{
+        reviewRuns = @($ReviewRuns)
+        sessions   = @($Sessions)
+    }
+    return [bool]$result.descope
+}
 function Invoke-DeliveryTick {
     param(
         [string]$Project,
@@ -333,14 +350,17 @@ function Invoke-DeliveryTick {
     }
     else {
         $reviewRuns = Get-AoReviewRuns -Project $Project
-        $sessions = Get-AoStatusSessionsWithReports
+        $sessions = Get-AoStatusSessions -Project $Project
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Get-OpenPrList)
         $tracking = $TrackingState
         $now = $NowMs
         $tickConfig = $Config
-        $aoEvents = Get-AoEventsSince -SinceMinutes 30
-        Write-AoEventsCorrelationDegraded -Surface 'review-finding-delivery-confirm' -LogPrefix 'review-finding-delivery-confirm'
-        $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
+        $aoEvents = @()
+        Write-ReconcileSignalSource -Surface 'review-finding-delivery-confirm' -Source 'sessionReviewsDeliveredStatus+packJournal+sessionStatus' -LogPrefix 'review-finding-delivery-confirm'
+        if (Test-DeliveryReportReceiptSurfaceDescope -ReviewRuns $reviewRuns -Sessions $sessions) {
+            Write-ReconcileReportReceiptSurfaceRemoved -Surface 'review-finding-delivery-confirm' -LogPrefix 'review-finding-delivery-confirm'
+        }
+        $floodActiveSessions = @{}
     }
 
     $plan = Invoke-DeliveryFilterCli -Subcommand 'plan' -Payload @{
