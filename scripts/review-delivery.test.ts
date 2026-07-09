@@ -400,6 +400,26 @@ describe('review delivery verify guard wiring', () => {
   });
 });
 
+describe('review delivery side-effect fence contention', () => {
+  it('review delivery side-effect fence: busy lock retries instead of send_exit=0 escalation', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'),
+      'utf8',
+    );
+    const sendBlock = text.slice(
+      text.indexOf('function Invoke-ScriptedReviewStdoutDeliverySend'),
+      text.indexOf('function Invoke-ScriptedReviewStdoutDelivery {'),
+    );
+    expect(sendBlock).toMatch(/if \(\-not \$fenced\.ok\)/);
+    expect(sendBlock).toMatch(/side_effect_busy/);
+    expect(sendBlock).toMatch(/continue/);
+    const busyIndex = sendBlock.indexOf("side_effect_busy");
+    const exitEscalationIndex = sendBlock.indexOf('send_exit=$sendExitCode');
+    expect(busyIndex).toBeGreaterThan(-1);
+    expect(exitEscalationIndex).toBeGreaterThan(busyIndex);
+  });
+});
+
 describe('review delivery journal durable path', () => {
   it('review delivery journal durable path: default resolves under wake supervisor state root', () => {
     const script = `

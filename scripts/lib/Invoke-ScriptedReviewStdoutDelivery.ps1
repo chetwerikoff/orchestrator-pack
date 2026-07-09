@@ -206,6 +206,23 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
                 -FindingsHash $FindingsHash -ClaimToken $claimToken -GatedNudge -NoWait
             $sendExitCapture.exitCode = $LASTEXITCODE
         }
+
+        if (-not $fenced.ok) {
+            $fenceReason = [string]$fenced.reason
+            if ($fenceReason -eq 'side_effect_busy') {
+                Release-WorkerNudgeActiveClaim -ClaimResult $claim | Out-Null
+                Write-ScriptedReviewStdoutDeliveryLog "side_effect_busy attempt $attempt for key=$DeliveryKey"
+                continue
+            }
+            Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'FAILED_DEFINITIVE' -Extra @{ reason = $fenceReason } | Out-Null
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+                terminalStatus = 'escalated'
+                terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                escalateReason = "side_effect_fence:$fenceReason"
+            } -LifecycleStorePath $LifecycleStorePath
+            return @{ ok = $false; sent = $false; reason = $fenceReason; terminal = 'escalated' }
+        }
+
         $sendExitCode = [int]$sendExitCapture.exitCode
 
         Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
@@ -214,7 +231,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             sendAttempt      = $attempt
         } -LifecycleStorePath $LifecycleStorePath
 
-        if ($fenced.ok -and $sendExitCode -eq 0) {
+        if ($sendExitCode -eq 0) {
             Finalize-WorkerNudgeClaim -ClaimResult $claim -Outcome 'SENT' | Out-Null
             Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 state          = 'delivered'
