@@ -22,6 +22,28 @@ import {
   updateHandoffAdmissionRecordOutcome,
 } from '../docs/review-handoff-wake-admission.mjs';
 
+type HandoffRecordsMap = Record<string, Record<string, unknown>>;
+type PruneResult = {
+  records: HandoffRecordsMap;
+  actedOn: Record<string, Record<string, unknown>>;
+  evicted: Array<Record<string, unknown>>;
+};
+type ReplayResult = {
+  replay: Array<Record<string, unknown>>;
+  replayCursor: number;
+  hasMore: boolean;
+  records: HandoffRecordsMap;
+  actedOn: Record<string, Record<string, unknown>>;
+  evicted: Array<Record<string, unknown>>;
+  superseded: Array<Record<string, unknown>>;
+};
+type PrepareResult = {
+  records: HandoffRecordsMap;
+  actedOn: Record<string, Record<string, unknown>>;
+  evicted: Array<Record<string, unknown>>;
+  superseded: Array<Record<string, unknown>>;
+};
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const goldenFixture = JSON.parse(
   readFileSync(
@@ -86,7 +108,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       openPrs: [],
       openPrIndexTrusted: true,
       nowMs,
-    });
+    }) as PruneResult;
     expect(Object.keys(pruned.records)).toHaveLength(0);
     expect(pruned.evicted.length).toBeGreaterThanOrEqual(2);
 
@@ -97,7 +119,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       openPrs,
       openPrIndexTrusted: true,
       nowMs,
-    });
+    }) as PruneResult;
     expect(Object.keys(kept.records)).toHaveLength(1);
 
     const untrusted = pruneHandoffAdmissionRecords({
@@ -106,7 +128,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       openPrs: [],
       openPrIndexTrusted: false,
       nowMs,
-    });
+    }) as PruneResult;
     expect(Object.keys(untrusted.records)).toHaveLength(1);
   });
 
@@ -196,7 +218,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       })),
       openPrIndexTrusted: true,
       batchSize: HANDOFF_REPLAY_BATCH_SIZE_MAX,
-    }) as { replay: unknown[]; replayCursor: number; hasMore: boolean };
+    }) as ReplayResult;
     expect(first.replay.length).toBe(HANDOFF_REPLAY_BATCH_SIZE_MAX);
     expect(first.hasMore).toBe(true);
     expect(first.replayCursor).toBeGreaterThan(0);
@@ -282,7 +304,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       openPrs: [],
       openPrIndexTrusted: true,
       nowMs: t0 + 1_000,
-    });
+    }) as PrepareResult;
     expect(Object.keys(prepared.records)).toHaveLength(0);
 
     const oldHead = seedPair('aaaa'.repeat(10), 234, t0);
@@ -313,7 +335,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       openPrs: goldenFixture.openPrs,
       openPrIndexTrusted: true,
       nowMs: goldenFixture.nowMs,
-    }) as { records: Record<string, unknown>; evicted: unknown[]; superseded: unknown[] };
+    }) as PrepareResult;
     const remaining = Object.keys(prepared.records).length;
     expect(remaining).toBeLessThan(Object.keys(goldenFixture.records).length);
     expect(prepared.evicted.length + prepared.superseded.length).toBeGreaterThan(0);
@@ -324,7 +346,7 @@ describe('handoff admission records lifecycle (#712)', () => {
       openPrs: goldenFixture.openPrs,
       openPrIndexTrusted: true,
       nowMs: goldenFixture.nowMs + 60_000,
-    });
+    }) as PrepareResult;
     expect(Object.keys(secondPass.records).length).toBe(remaining);
   });
 
