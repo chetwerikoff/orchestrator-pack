@@ -174,6 +174,10 @@ switch ($Action) {
         }
 
         if ($Foreground) {
+            if ($gate.handoff -and $gate.handoff.MainLock) {
+                Release-OrchestratorWakeSupervisorHeldLock -Context $gate.handoff.MainLock
+                $gate.handoff.MainLock = $null
+            }
             Write-OrchestratorWakeSupervisorLog -Message 'supervisor foreground started' -LogPath $paths.SupervisorLog
             Invoke-OrchestratorWakeSupervisorLoop -Paths $paths -ProjectId $project -PollSeconds $pollSec `
                 -SessionOverride $OrchestratorSessionId -FixturePath $FixturePath -AoCommand $AoCommand `
@@ -211,6 +215,16 @@ switch ($Action) {
 
         $supervisorPid = Start-OrchestratorWakeSupervisorDaemon -LoopArguments $loopArgs `
             -WorkingDirectory $Script:OrchestratorWakeSupervisorPackRoot -LogPath $paths.SupervisorLog
+        if ($gate.handoff) {
+            $handoffOk = Complete-OrchestratorWakeSupervisorStartLeaseHandoff -Handoff $gate.handoff `
+                -SpawnedPid $supervisorPid -LogPath $paths.SupervisorLog
+            if (-not $handoffOk) {
+                $message = "start lease handoff failed for spawned supervisor pid=$supervisorPid"
+                Write-OrchestratorWakeSupervisorLog -Message $message -LogPath $paths.SupervisorLog
+                Write-Error $message
+                exit 2
+            }
+        }
         Write-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid -ProcessId $supervisorPid
         Start-Sleep -Seconds 1
         $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project

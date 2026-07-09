@@ -6,6 +6,7 @@
 #>
 
 $Script:OrchestratorWakeSupervisorLeaseContext = $null
+$Script:OrchestratorWakeSupervisorPendingStartHandoff = $null
 $Script:OrchestratorWakeSupervisorFlockNativeLoaded = $false
 
 function Initialize-OrchestratorWakeSupervisorFlockNative {
@@ -44,6 +45,12 @@ function Get-OrchestratorWakeSupervisorMaintenancePath {
     param([hashtable]$Paths)
     if ($Paths.MaintenanceEpoch) { return $Paths.MaintenanceEpoch }
     return Join-Path $Paths.Root 'maintenance.epoch'
+}
+
+function Get-OrchestratorWakeSupervisorStartReservationPath {
+    param([hashtable]$Paths)
+    if ($Paths.SupervisorStartLock) { return $Paths.SupervisorStartLock }
+    return Join-Path $Paths.Root 'supervisor.start.lock'
 }
 
 function Get-OrchestratorWakeSupervisorBootId {
@@ -126,29 +133,39 @@ function Read-OrchestratorWakeSupervisorLeaseDocument {
     if (-not (Test-Path -LiteralPath $LeasePath -PathType Leaf)) { return $null }
 
     $raw = ''
-    try {
-        $stream = [System.IO.File]::Open(
-            $LeasePath,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite
-        )
+    if ($IsLinux -or $IsMacOS) {
         try {
-            $reader = New-Object System.IO.StreamReader($stream)
-            $raw = $reader.ReadToEnd()
-            $reader.Dispose()
+            $raw = (& /bin/cat -- $LeasePath 2>$null | Out-String).Trim()
         }
-        finally {
-            $stream.Dispose()
+        catch {
+            $raw = ''
         }
     }
-    catch {
-        if ($IsLinux -or $IsMacOS) {
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        try {
+            $stream = [System.IO.File]::Open(
+                $LeasePath,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::ReadWrite
+            )
             try {
-                $raw = (& /bin/cat -- $LeasePath 2>$null | Out-String).Trim()
+                $reader = New-Object System.IO.StreamReader($stream)
+                $raw = $reader.ReadToEnd()
+                $reader.Dispose()
             }
-            catch {
-                $raw = ''
+            finally {
+                $stream.Dispose()
+            }
+        }
+        catch {
+            if (($IsLinux -or $IsMacOS) -and [string]::IsNullOrWhiteSpace($raw)) {
+                try {
+                    $raw = (& /bin/cat -- $LeasePath 2>$null | Out-String).Trim()
+                }
+                catch {
+                    $raw = ''
+                }
             }
         }
     }
@@ -174,6 +191,7 @@ function ConvertTo-OrchestratorWakeSupervisorLeaseHashtable {
         projectId         = if ($Document.projectId) { [string]$Document.projectId } else { '' }
         holderScriptPath  = if ($Document.holderScriptPath) { [string]$Document.holderScriptPath } else { '' }
         staleGraceStartMs = if ($Document.staleGraceStartMs) { [long]$Document.staleGraceStartMs } else { 0 }
+        startLauncherPid  = if ($Document.startLauncherPid) { [int]$Document.startLauncherPid } else { 0 }
     }
 }
 
@@ -226,7 +244,7 @@ function New-OrchestratorWakeSupervisorHeldLock {
             $leasePath,
             [System.IO.FileMode]::OpenOrCreate,
             [System.IO.FileAccess]::ReadWrite,
-            [System.IO.FileShare]::Read
+            [System.IO.FileShare]::ReadWrite
         )
     }
     catch {
@@ -263,6 +281,197 @@ function Release-OrchestratorWakeSupervisorHeldLock {
     }
     if ($Script:OrchestratorWakeSupervisorLeaseContext -eq $Context) {
         $Script:OrchestratorWakeSupervisorLeaseContext = $null
+    }
+}
+
+function New-OrchestratorWakeSupervisorHeldLockAtPath {
+    param(
+        [string]$LockPath,
+        [hashtable]$Paths,
+        [switch]$NonBlocking
+    )
+    if (-not (Test-OrchestratorWakeSupervisorLeasePlatformSupported)) {
+        return $null
+    }
+    Initialize-OrchestratorWakeSupervisorFlockNative
+    $dir = Split-Path -Parent $LockPath
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    try {
+        $stream = [System.IO.File]::Open(
+            $LockPath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::ReadWrite
+        )
+    }
+    catch {
+        return $null
+    }
+    $op = [OrchestratorWakeSupervisorFlockNative]::LOCK_EX
+    if ($NonBlocking) {
+        $op = $op -bor [OrchestratorWakeSupervisorFlockNative]::LOCK_NB
+    }
+    $result = Invoke-OrchestratorWakeSupervisorFlock -Stream $stream -Operation $op
+    if ($result -ne 0) {
+        $stream.Dispose()
+        return $null
+    }
+    return @{
+        Stream    = $stream
+        LeasePath = $LockPath
+        Paths     = $Paths
+    }
+}
+
+function Test-OrchestratorWakeSupervisorStartLeaseInProgress {
+    param(
+        [hashtable]$Paths,
+        [string]$LeasePath = ''
+    )
+    if (-not $LeasePath) {
+        $LeasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths
+    }
+    $startPath = Get-OrchestratorWakeSupervisorStartReservationPath -Paths $Paths
+    $startHeld = New-OrchestratorWakeSupervisorHeldLockAtPath -LockPath $startPath -Paths $Paths -NonBlocking
+    if ($startHeld) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $startHeld
+        return $false
+    }
+    return $true
+}
+
+function Acquire-OrchestratorWakeSupervisorStartLeaseHandoff {
+    param(
+        [hashtable]$Paths,
+        [string]$ProjectId,
+        [int]$Epoch,
+        [string]$LogPath = ''
+    )
+    $startRes = New-OrchestratorWakeSupervisorHeldLockAtPath `
+        -LockPath (Get-OrchestratorWakeSupervisorStartReservationPath -Paths $Paths) `
+        -Paths $Paths -NonBlocking
+    if (-not $startRes) { return $null }
+
+    $main = New-OrchestratorWakeSupervisorHeldLock -Paths $Paths -NonBlocking
+    if (-not $main) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $startRes
+        return $null
+    }
+
+    $nowMs = Get-OrchestratorWakeSupervisorNowMs
+    $pending = @{
+        epoch             = $Epoch
+        holderPid         = 0
+        holderStartTimeMs = 0
+        bootId            = ''
+        heartbeatMs       = $nowMs
+        projectId         = $ProjectId
+        holderScriptPath  = Get-OrchestratorWakeSupervisorScriptPath
+        staleGraceStartMs = 0
+        startLauncherPid  = $PID
+    }
+    Write-OrchestratorWakeSupervisorLeaseDocument -LockStream $main.Stream -Lease $pending -LeasePath $main.LeasePath
+    if ($LogPath) {
+        Write-OrchestratorWakeSupervisorLog -Message "start lease handoff reserved epoch=$Epoch launcherPid=$PID" -LogPath $LogPath
+    }
+    $handoff = @{
+        StartReservation = $startRes
+        MainLock         = $main
+        Epoch            = $Epoch
+        Paths            = $Paths
+    }
+    $Script:OrchestratorWakeSupervisorPendingStartHandoff = $handoff
+    return $handoff
+}
+
+function Abort-OrchestratorWakeSupervisorStartLeaseHandoff {
+    param([hashtable]$Handoff)
+    if (-not $Handoff) { return }
+    if ($Handoff.MainLock) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $Handoff.MainLock
+        $Handoff.MainLock = $null
+    }
+    if ($Handoff.StartReservation) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $Handoff.StartReservation
+        $Handoff.StartReservation = $null
+    }
+    if ($Script:OrchestratorWakeSupervisorPendingStartHandoff -eq $Handoff) {
+        $Script:OrchestratorWakeSupervisorPendingStartHandoff = $null
+    }
+}
+
+function Complete-OrchestratorWakeSupervisorStartLeaseHandoff {
+    param(
+        [hashtable]$Handoff,
+        [int]$SpawnedPid,
+        [string]$LogPath = '',
+        [int]$TimeoutSeconds = 30
+    )
+    if (-not $Handoff) { return $false }
+    $paths = $Handoff.Paths
+    $leasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $paths
+    $deadline = (Get-Date).AddSeconds([Math]::Max(5, $TimeoutSeconds))
+
+    while ((Get-Date) -lt $deadline) {
+        if (Test-ProcessAlive -ProcessId $SpawnedPid) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not (Test-ProcessAlive -ProcessId $SpawnedPid)) {
+        if ($LogPath) {
+            Write-OrchestratorWakeSupervisorLog -Message "start lease handoff failed: spawned pid=$SpawnedPid never became alive" -LogPath $LogPath
+        }
+        Abort-OrchestratorWakeSupervisorStartLeaseHandoff -Handoff $Handoff
+        return $false
+    }
+
+    if ($Handoff.MainLock) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $Handoff.MainLock
+        $Handoff.MainLock = $null
+    }
+
+    while ((Get-Date) -lt $deadline) {
+        $lease = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+            -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+        if ($lease -and [int]$lease.holderPid -eq $SpawnedPid -and (Test-ProcessAlive -ProcessId $SpawnedPid)) {
+            if ($Handoff.StartReservation) {
+                Release-OrchestratorWakeSupervisorHeldLock -Context $Handoff.StartReservation
+                $Handoff.StartReservation = $null
+            }
+            if ($LogPath) {
+                Write-OrchestratorWakeSupervisorLog -Message "start lease handoff complete holderPid=$SpawnedPid epoch=$($lease.epoch)" -LogPath $LogPath
+            }
+            if ($Script:OrchestratorWakeSupervisorPendingStartHandoff -eq $Handoff) {
+                $Script:OrchestratorWakeSupervisorPendingStartHandoff = $null
+            }
+            return $true
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    if ($LogPath) {
+        Write-OrchestratorWakeSupervisorLog -Message "start lease handoff timed out waiting for holderPid=$SpawnedPid" -LogPath $LogPath
+    }
+    Abort-OrchestratorWakeSupervisorStartLeaseHandoff -Handoff $Handoff
+    return $false
+}
+
+function Complete-OrchestratorWakeSupervisorStartLeaseHandoffAfterLoopAcquire {
+    param([string]$LogPath = '')
+    $handoff = $Script:OrchestratorWakeSupervisorPendingStartHandoff
+    if (-not $handoff) { return }
+    if ($handoff.StartReservation) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $handoff.StartReservation
+        $handoff.StartReservation = $null
+    }
+    if ($handoff.MainLock) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $handoff.MainLock
+        $handoff.MainLock = $null
+    }
+    $Script:OrchestratorWakeSupervisorPendingStartHandoff = $null
+    if ($LogPath) {
+        Write-OrchestratorWakeSupervisorLog -Message "start lease handoff complete in-loop holderPid=$PID" -LogPath $LogPath
     }
 }
 
@@ -506,7 +715,11 @@ function Initialize-OrchestratorWakeSupervisorLoopLease {
     $leasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths
     $existing = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
         -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
-    if ($existing) {
+    $pendingHandoff = $false
+    if ($existing -and [int]$existing.holderPid -eq 0 -and [int]$existing.startLauncherPid -gt 0) {
+        $pendingHandoff = $true
+    }
+    elseif ($existing) {
         $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $existing -LogPath $LogPath
         if ($stale -and $stale -ne 'stale-heartbeat-grace-pending') {
             $null = Invoke-OrchestratorWakeSupervisorStaleLiveReclaim -Paths $Paths -Lease $existing `
@@ -526,8 +739,13 @@ function Initialize-OrchestratorWakeSupervisorLoopLease {
         throw 'failed to acquire state-root supervisor lease (another holder owns flock)'
     }
 
-    $priorEpoch = if ($existing) { [int]$existing.epoch } else { 0 }
-    $epoch = [Math]::Max(1, $priorEpoch + 1)
+    if ($pendingHandoff) {
+        $epoch = [Math]::Max(1, [int]$existing.epoch)
+    }
+    else {
+        $priorEpoch = if ($existing) { [int]$existing.epoch } else { 0 }
+        $epoch = [Math]::Max(1, $priorEpoch + 1)
+    }
     $nowMs = Get-OrchestratorWakeSupervisorNowMs
     $lease = @{
         epoch             = $epoch
@@ -544,6 +762,9 @@ function Initialize-OrchestratorWakeSupervisorLoopLease {
     $held.Lease = $lease
     $Script:OrchestratorWakeSupervisorLeaseContext = $held
     Write-OrchestratorWakeSupervisorLog -Message "lease acquired epoch=$epoch holderPid=$PID" -LogPath $LogPath
+    if ($Script:OrchestratorWakeSupervisorPendingStartHandoff) {
+        Complete-OrchestratorWakeSupervisorStartLeaseHandoffAfterLoopAcquire -LogPath $LogPath
+    }
     return $held
 }
 
@@ -619,20 +840,31 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
     }
 
     $leasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths
-    $probe = New-OrchestratorWakeSupervisorHeldLock -Paths $Paths -NonBlocking
-    if ($probe) {
-        $existing = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
-            -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
-        $epoch = if ($existing) { [int]$existing.epoch + 1 } else { 1 }
-        Release-OrchestratorWakeSupervisorHeldLock -Context $probe
+    if (Test-OrchestratorWakeSupervisorStartLeaseInProgress -Paths $Paths -LeasePath $leasePath) {
         return @{
-            Outcome = 'spawn-allowed'
-            Epoch   = $epoch
+            Outcome  = 'start-in-progress'
+            ExitCode = 2
+            Message  = 'start blocked: another Start is reserving the state-root lease'
         }
     }
 
-    $lease = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+    $existing = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
         -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+    $epoch = if ($existing) { [int]$existing.epoch + 1 } else { 1 }
+    $handoff = Acquire-OrchestratorWakeSupervisorStartLeaseHandoff -Paths $Paths -ProjectId $ProjectId `
+        -Epoch $epoch -LogPath $LogPath
+    if ($handoff) {
+        return @{
+            Outcome  = 'spawn-allowed'
+            Epoch    = $epoch
+            Handoff  = $handoff
+        }
+    }
+
+    $lease = if ($existing) { $existing } else {
+        ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+            -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+    }
     if (-not $lease) {
         return @{
             Outcome  = 'lease-contended'
@@ -646,7 +878,21 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
         $fenced = Invoke-OrchestratorWakeSupervisorStaleLiveReclaim -Paths $Paths -Lease $lease `
             -StaleEvidence $stale -LogPath $LogPath
         if ($fenced) {
-            return @{ Outcome = 'spawn-allowed'; Epoch = [int]$lease.epoch + 1 }
+            $epoch = [int]$lease.epoch + 1
+            $handoff = Acquire-OrchestratorWakeSupervisorStartLeaseHandoff -Paths $Paths -ProjectId $ProjectId `
+                -Epoch $epoch -LogPath $LogPath
+            if ($handoff) {
+                return @{
+                    Outcome = 'spawn-allowed'
+                    Epoch   = $epoch
+                    Handoff = $handoff
+                }
+            }
+            return @{
+                Outcome  = 'start-in-progress'
+                ExitCode = 2
+                Message  = 'start blocked: could not reserve state-root lease after stale reclaim'
+            }
         }
         return @{
             Outcome  = 'reclaim-failed'
@@ -913,8 +1159,16 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseGate {
     switch ($outcome) {
         'spawn-allowed' {
             return @{
-                action = 'spawn'
-                epoch  = if ($null -ne $decision.Epoch) { [int]$decision.Epoch } else { 1 }
+                action  = 'spawn'
+                epoch   = if ($null -ne $decision.Epoch) { [int]$decision.Epoch } else { 1 }
+                handoff = $decision.Handoff
+            }
+        }
+        'start-in-progress' {
+            return @{
+                action   = 'fail'
+                exitCode = if ($decision.ExitCode) { [int]$decision.ExitCode } else { 2 }
+                message  = [string]$decision.Message
             }
         }
         'already-running-same-checkout' {
