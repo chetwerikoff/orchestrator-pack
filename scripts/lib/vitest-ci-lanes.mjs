@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
  * Vitest CI lane discovery, classification, and runtime-weighted heavy shard
- * assignment (Issue #556).
+ * assignment (Issue #556). Heavy shard count is derived from measured weight
+ * (Issue #695).
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildHeavyTopology, parseTopologyPolicy, validateTopologyPolicy } from './vitest-heavy-topology.mjs';
 
 const libDir = dirname(fileURLToPath(import.meta.url));
 export const defaultRepoRoot = join(libDir, '..', '..');
@@ -70,17 +72,18 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
   }
   const raw = JSON.parse(readFileSync(path, 'utf8'));
   const lightMaxWorkers = Number(raw.lightMaxWorkers);
-  const heavyShardCount = Number(raw.heavyShardCount);
   const heavyDefaultRuntimeMs = Number(raw.heavyDefaultRuntimeMs);
+  const topologyPolicy = parseTopologyPolicy(raw);
+  const policyErrors = validateTopologyPolicy(topologyPolicy);
   const heavyForkPoolMinRuntimeMs = Number(raw.heavyForkPoolMinRuntimeMs ?? heavyDefaultRuntimeMs);
   if (!Number.isFinite(lightMaxWorkers) || lightMaxWorkers < 1 || lightMaxWorkers > 4) {
     throw new Error('vitest-ci-lanes.config.json lightMaxWorkers must be 1..4');
   }
-  if (!Number.isFinite(heavyShardCount) || heavyShardCount < 1) {
-    throw new Error('vitest-ci-lanes.config.json heavyShardCount must be >= 1');
-  }
   if (!Number.isFinite(heavyDefaultRuntimeMs) || heavyDefaultRuntimeMs <= 0) {
     throw new Error('vitest-ci-lanes.config.json heavyDefaultRuntimeMs must be positive');
+  }
+  if (policyErrors.length > 0) {
+    throw new Error(policyErrors.join('; '));
   }
   if (!Number.isFinite(heavyForkPoolMinRuntimeMs) || heavyForkPoolMinRuntimeMs <= 0) {
     throw new Error('vitest-ci-lanes.config.json heavyForkPoolMinRuntimeMs must be positive');
@@ -91,8 +94,8 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
     : [];
   return {
     lightMaxWorkers,
-    heavyShardCount,
     heavyDefaultRuntimeMs,
+    heavyTopology: topologyPolicy,
     heavyForkPoolMinRuntimeMs,
     heavyPerTestIsolate,
     classification,
@@ -102,7 +105,9 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
 export function loadRuntimeHistory(repoRoot = defaultRepoRoot) {
   const path = runtimeHistoryPath(repoRoot);
   if (!existsSync(path)) {
-    throw new Error(`missing runtime history: ${relative(resolveRepoRoot(repoRoot), path)}`);
+    throw new Error(
+      'missing runtime history: scripts/vitest-runtime-history.json (post-#691 harvest artifact required; fail-closed)',
+    );
   }
   const raw = JSON.parse(readFileSync(path, 'utf8'));
   return raw.files ?? {};
@@ -153,6 +158,7 @@ export function resolveHeavyRuntimeMs(file, runtimeHistory, defaultRuntimeMs) {
   }
   return defaultRuntimeMs;
 }
+
 
 /**
  * Long subprocess suites may exceed Vitest birpc's 60s onTaskUpdate ceiling per test.
@@ -237,31 +243,34 @@ export function assignHeavyShards(heavyFiles, runtimeHistory, shardCount, defaul
   return shards;
 }
 
-export function buildLanePlan(repoRoot = defaultRepoRoot) {
-  const config = loadLanesConfig(repoRoot);
-  const runtimeHistory = loadRuntimeHistory(repoRoot);
-  const discovered = discoverVitestFiles(repoRoot);
-  const errors = validateClassification(discovered, config.classification);
-  if (errors.length > 0) {
-    return { ok: false, errors, discovered, config };
+export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
+  const topologyResult = buildHeavyTopology(repoRoot, options);
+  if (!topologyResult.ok) {
+    return {
+      ok: false,
+      errors: topologyResult.errors,
+      discovered: topologyResult.discovered ?? [],
+      config: topologyResult.lanesConfig,
+    };
   }
 
-  const { light, heavy } = partitionByLane(discovered, config.classification);
+  const { topology, discovered, light, heavy, runtimeHistory, lanesConfig } = topologyResult;
   const heavyShards = assignHeavyShards(
     heavy,
     runtimeHistory,
-    config.heavyShardCount,
-    config.heavyDefaultRuntimeMs,
+    topology.heavyShardCount,
+    lanesConfig.heavyDefaultRuntimeMs,
   );
 
   return {
     ok: true,
     discovered,
-    config,
+    config: lanesConfig,
     light,
     heavy,
     heavyShards,
     runtimeHistory,
+    topology,
   };
 }
 

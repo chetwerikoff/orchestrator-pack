@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -341,7 +342,7 @@ describe('review-start preflight transient shield (#584)', () => {
         $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'hang_then_ok'
         $env:AO_REVIEW_START_SCOPED_GH_STATE_FILE = ${psString(stateFile)}
         $env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA = ${psString(stableHead)}
-        $env:AO_REVIEW_START_PREFLIGHT_SHIELD_CAPTURE_TIMEOUT_MS = '500'
+        $env:AO_REVIEW_START_PREFLIGHT_SHIELD_CAPTURE_TIMEOUT_MS = '2000'
         $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '2'
         $env:AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS = '0'
         $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
@@ -393,7 +394,7 @@ describe('review-start preflight transient shield (#584)', () => {
     });
   });
 
-  describe('AC6 terminal guard', () => {
+  describe.sequential('AC6 terminal guard', () => {
     it.each([
       ['gh_auth_failed', 'gh_auth_failed'],
       ['policy_denied', 'policy_denied'],
@@ -448,9 +449,13 @@ describe('review-start preflight transient shield (#584)', () => {
     });
 
     it('returns gh_binary_missing for a missing scoped gh adoption command', () => {
-      const missingGh = path.join(tmpdir(), `missing-gh-${Date.now()}-${process.pid}.ps1`);
+      const missingGh = path.join(tmpdir(), `opk-missing-gh-${randomUUID()}.ps1`);
       const result = runScopedPreflight(
         `
+      $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
+      Remove-Item Env:AO_REVIEW_START_SCOPED_GH_SCENARIO -ErrorAction SilentlyContinue
+      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS = '1'
+      $env:AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS = '0'
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
       [pscustomobject]@{
         reason = [string]$lookup.transportFailure.reason
@@ -459,11 +464,6 @@ describe('review-start preflight transient shield (#584)', () => {
         transportFailure = [bool]$lookup.transportFailure
       } | ConvertTo-Json -Compress
     `,
-        {
-          AO_REVIEW_START_SCOPED_GH_COMMAND: missingGh,
-          AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS: '1',
-          AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS: '0',
-        },
       );
       expect(result.count).toBe(0);
       expect(result.reason).toBe('gh_binary_missing');
@@ -475,11 +475,13 @@ describe('review-start preflight transient shield (#584)', () => {
   describe('missing gh infra classification', () => {
     it('preserves infra_transport for gh_binary_missing recheck handling', () => {
       const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
-      const missingGh = path.join(tmpdir(), `missing-gh-recheck-${Date.now()}.ps1`);
+      const missingGh = path.join(tmpdir(), `opk-missing-gh-recheck-${randomUUID()}.ps1`);
       const result = JSON.parse(runPwsh(
         `
         . ${psString(shieldHelperPath)}
         . ${psString(claimHelperPath)}
+        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(missingGh)}
+        Remove-Item Env:AO_REVIEW_START_SCOPED_GH_SCENARIO -ErrorAction SilentlyContinue
         $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
         $denial = Get-ReviewStartSupervisedGhInfraTransportRecheckDenial -Snapshot @{
           transportFailure = $lookup.transportFailure
@@ -488,11 +490,10 @@ describe('review-start preflight transient shield (#584)', () => {
           reason = [string]$lookup.transportFailure.reason
           failureClass = [string]$lookup.transportFailure.failureClass
           transportFailure = [bool]$lookup.transportFailure
-          targetStateDenial = [bool]$lookup.targetStateDenial
           denial = ($null -ne $denial)
+          targetStateDenial = [bool]$lookup.targetStateDenial
         } | ConvertTo-Json -Compress
       `,
-        { AO_REVIEW_START_SCOPED_GH_COMMAND: missingGh },
       ));
       expect(result.reason).toBe('gh_binary_missing');
       expect(result.failureClass).toBe('infra_transport');

@@ -1,6 +1,6 @@
 {
   "vitestShardCount": 8,
-  "heavyShardCount": 7,
+  "fallbackHeavyShardCount": 7,
   "lightLaneJobName": "Vitest light lane",
   "heavyShardJobPrefix": "Vitest heavy shard",
   "aggregateJobName": "Run pack contract tests",

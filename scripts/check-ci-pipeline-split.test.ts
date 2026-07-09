@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -14,12 +22,25 @@ import {
   scanWorkerRpcSignatures,
   validateClassification,
 } from './lib/vitest-ci-lanes.mjs';
+import {
+  artifactRequiresFreshnessProvenance,
+  buildHeavyTopology,
+  clampHeavyShardCount,
+  deriveHeavyShardCountFromTotal,
+  formatOversizedGuardFailures,
+  loadRuntimeHistoryArtifact,
+  msToSeconds,
+  parseTopologyPolicy,
+  resolveGuardWeightSeconds,
+  validateTopologyPolicy,
+} from './lib/vitest-heavy-topology.mjs';
 
 const repoRoot = join(import.meta.dirname, '..');
 const aggregateScript = join(repoRoot, 'scripts/ci-test-aggregate.ps1');
 const configPath = join(repoRoot, 'scripts/ci-pipeline-split.config.json');
 const scopeGuardPath = join(repoRoot, '.github/workflows/scope-guard.yml');
 const lanesConfigPath = join(repoRoot, 'scripts/vitest-ci-lanes.config.json');
+const fixtureRoot = join(repoRoot, 'tests/fixtures/vitest-heavy-topology');
 
 function runAggregate(env: Record<string, string>) {
   const merged = { ...process.env, ...env };
@@ -43,6 +64,7 @@ describe('ci-test-aggregate fail-closed matrix (Issue #487/#556)', () => {
         TYPECHECK_RESULT: 'success',
         VITEST_LIGHT_RESULT: 'success',
         VITEST_HEAVY_RESULT: 'success',
+        VITEST_TOPOLOGY_PLAN_RESULT: 'success',
         PESTER_RESULT: 'success',
         GITHUB_SHA: 'deadbeef',
         GITHUB_RUN_ID: '42',
@@ -55,6 +77,8 @@ describe('ci-test-aggregate fail-closed matrix (Issue #487/#556)', () => {
     ['vitest light failure', { VITEST_LIGHT_RESULT: 'failure' }],
     ['vitest heavy cancelled', { VITEST_HEAVY_RESULT: 'cancelled' }],
     ['vitest light skipped', { VITEST_LIGHT_RESULT: 'skipped' }],
+    ['vitest topology plan failure', { VITEST_TOPOLOGY_PLAN_RESULT: 'failure' }],
+    ['vitest topology plan cancelled', { VITEST_TOPOLOGY_PLAN_RESULT: 'cancelled' }],
     ['missing head', { GITHUB_SHA: '' }],
     ['missing run', { GITHUB_RUN_ID: '' }],
   ] as const)('fails closed on %s', (_label, overrides) => {
@@ -71,30 +95,34 @@ describe('ci-test-aggregate fail-closed matrix (Issue #487/#556)', () => {
   });
 });
 
-describe('ci-pipeline-split config and workflow binding (#556 lanes)', () => {
-  it('config declares heavy shard count and stable aggregate name', () => {
+describe('ci-pipeline-split config and workflow binding (#556/#695 lanes)', () => {
+  it('config declares fallback heavy shard count and stable aggregate name', () => {
     const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
-      heavyShardCount: number;
+      fallbackHeavyShardCount: number;
       aggregateJobName: string;
       lightLaneJobName: string;
     };
-    expect(config.heavyShardCount).toBe(7);
+    expect(config.fallbackHeavyShardCount).toBe(7);
     expect(config.aggregateJobName).toBe('Run pack contract tests');
     expect(config.lightLaneJobName).toBe('Vitest light lane');
   });
 
-  it('scope-guard workflow exposes light/heavy lanes and aggregate job', () => {
+  it('scope-guard workflow exposes derived heavy topology plan job and dynamic matrix', () => {
     const yaml = readFileSync(scopeGuardPath, 'utf8');
+    expect(yaml).toMatch(/plan-vitest-ci-topology:/);
     expect(yaml).toMatch(/test-vitest-light:/);
     expect(yaml).toMatch(/test-vitest-heavy:/);
     expect(yaml).toMatch(/test-typecheck:/);
     expect(yaml).toMatch(/test-pester:/);
     expect(yaml).toMatch(/test-aggregate:/);
+    expect(yaml).toMatch(/emit-vitest-heavy-topology\.mjs/);
+    expect(yaml).toMatch(/fromJson\(needs\.plan-vitest-ci-topology\.outputs\.heavy_shard_matrix\)/);
     expect(yaml).toMatch(/run-vitest-light-lane\.ps1/);
     expect(yaml).toMatch(/run-vitest-heavy-shard\.ps1/);
     expect(yaml).toMatch(/ci-test-aggregate\.ps1/);
+    expect(yaml).toMatch(/VITEST_TOPOLOGY_PLAN_RESULT/);
     expect(yaml).toMatch(/name: Run pack contract tests/);
-    expect(yaml).toMatch(/shard: \[1, 2, 3, 4, 5, 6, 7\]/);
+    expect(yaml).not.toMatch(/shard: \[1, 2, 3, 4, 5, 6, 7\]/);
     expect(yaml).not.toMatch(/test-aggregate:[\s\S]*!cancelled\(\)/);
   });
 });
@@ -131,7 +159,8 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     const assigned = plan.heavyShards.flatMap((shard) => shard.files);
     expect(new Set(assigned).size).toBe(assigned.length);
     expect([...assigned].sort()).toEqual([...plan.heavy].sort());
-    expect(plan.heavyShards).toHaveLength(7);
+    expect(plan.heavyShards).toHaveLength(plan.topology.heavyShardCount);
+    expect(plan.topology.heavyShardMatrix).toHaveLength(plan.topology.heavyShardCount);
   });
 
   it('uses conservative fallback runtime for heavy files without history', () => {
@@ -171,7 +200,7 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
       throw new Error('expected per-test isolation plan');
     }
     expect(plan.pool).toBe('forks');
-    expect(plan.tests.length).toBeGreaterThan(0);
+    expect(plan.tests?.length ?? 0).toBeGreaterThan(0);
   });
 
   it('detects worker-RPC flake signatures in log text', () => {
@@ -217,5 +246,329 @@ describe('vitest runtime-history refresh workflow binding (#691)', () => {
     expect(yaml).toMatch(/include-hidden-files:\s*true/);
     expect(yaml).toMatch(/if-no-files-found:\s*error/);
     expect(yaml).toMatch(/refresh-vitest-runtime-history\.ps1/);
+  });
+});
+
+function makeTopologyFixtureRoot(runtimeHistoryFixture: string) {
+  const root = mkdtempSync(join(tmpdir(), 'opk-topology-'));
+  const scriptsDir = join(root, 'scripts');
+  const pluginsDir = join(root, 'plugins');
+  mkdirSync(scriptsDir, { recursive: true });
+  mkdirSync(pluginsDir, { recursive: true });
+  cpSync(join(fixtureRoot, 'scripts'), scriptsDir, { recursive: true });
+  cpSync(join(fixtureRoot, 'lanes-config.json'), join(scriptsDir, 'vitest-ci-lanes.config.json'));
+  cpSync(runtimeHistoryFixture, join(scriptsDir, 'vitest-runtime-history.json'));
+  return root;
+}
+
+describe('heavy topology weight-input fail-closed (#695)', () => {
+  it('derives shard count from moderate heavy-lane total weight (seconds)', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-moderate.json'));
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.fallbackClassification).toBe('derived');
+      expect(result.topology.heavyShardCount).toBe(2);
+      expect(result.topology.heavyShardMatrix).toEqual([1, 2]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('clamps cap-hit totals and marks under-provisioned without blocking', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-cap-hit.json'));
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.heavyShardCount).toBe(3);
+      expect(result.topology.underProvisioned).toBe(true);
+      expect(result.topology.rawDerivedCount).toBeGreaterThan(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('flags oversized discovered files and names split-or-speed-up action', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-oversized.json'));
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      const failures = formatOversizedGuardFailures(result);
+      expect(failures.some((line: string) => line.includes('scripts/sample-oversized.test.ts'))).toBe(true);
+      expect(failures.some((line: string) => line.includes('split the file or speed it up'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['empty', 'runtime-history-empty.json'],
+    ['degenerate', 'runtime-history-degenerate.json'],
+  ])('falls back to fixed count for present-but-unusable %s history', (_label, fixtureName) => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, fixtureName));
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.fallbackClassification).toBe('fixed-fallback');
+      expect(result.topology.heavyShardCount).toBe(3);
+      expect(formatOversizedGuardFailures(result).length).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when runtime-history artifact is absent (post-#691 loud error)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-topology-absent-'));
+    const scriptsDir = join(root, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(join(root, 'plugins'), { recursive: true });
+    cpSync(join(fixtureRoot, 'lanes-config.json'), join(scriptsDir, 'vitest-ci-lanes.config.json'));
+    cpSync(join(fixtureRoot, 'scripts'), scriptsDir, { recursive: true });
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.errors.join('\n')).toMatch(/missing|broken harvest/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects invalid topology policy before emission', () => {
+    const errors = validateTopologyPolicy({
+      targetShardSeconds: 0,
+      minShardCount: 0,
+      maxShardCount: 0,
+      fallbackHeavyShardCount: 0,
+    });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('normalizes runtime-history milliseconds to seconds for guard comparison', () => {
+    const artifact = {
+      files: { 'scripts/sample-heavy-a.test.ts': 90_000 },
+      provenance: { 'scripts/sample-heavy-a.test.ts': 'measured' },
+      source: 'ci-measured',
+    };
+    const policy = parseTopologyPolicy(JSON.parse(readFileSync(join(fixtureRoot, 'lanes-config.json'), 'utf8')));
+    const resolved = resolveGuardWeightSeconds('scripts/sample-heavy-a.test.ts', artifact, repoRoot);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      return;
+    }
+    expect(resolved.weightSeconds).toBe(msToSeconds(90_000));
+    expect(resolved.weightSeconds).toBeLessThan(policy.targetShardSeconds);
+  });
+
+  it('fails closed when a weighted file lacks freshness provenance (#695 review)', () => {
+    const artifact = {
+      source: 'ci-measured',
+      files: {
+        'scripts/sample-heavy-a.test.ts': 45_000,
+        'scripts/sample-heavy-b.test.ts': 60_000,
+      },
+      provenance: { 'scripts/sample-heavy-a.test.ts': 'measured' },
+    };
+    expect(artifactRequiresFreshnessProvenance(artifact)).toBe(true);
+    const resolved = resolveGuardWeightSeconds('scripts/sample-heavy-b.test.ts', artifact, repoRoot);
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) {
+      return;
+    }
+    expect(resolved.reason).toBe('missing-freshness-provenance');
+  });
+
+  it('flags missing freshness provenance and unknown weights for all discovered files under ci-measured history', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-missing-provenance.json'));
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      const failures = formatOversizedGuardFailures(result);
+      expect(failures.some((line: string) => line.includes('missing-freshness-provenance'))).toBe(true);
+      expect(failures.some((line: string) => line.includes('scripts/sample-light.test.ts'))).toBe(true);
+      expect(failures.some((line: string) => line.includes('scripts/sample-oversized.test.ts'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a changed ci-measured file lacks contentSha binding', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-missing-provenance.json'));
+    try {
+      const result = buildHeavyTopology(root, {
+        changedFiles: ['scripts/sample-heavy-a.test.ts'],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      const failures = formatOversizedGuardFailures(result);
+      expect(failures.some((line: string) => line.includes('stale-unassociated-weight'))).toBe(true);
+      expect(failures.some((line: string) => line.includes('scripts/sample-heavy-a.test.ts'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a changed file only has unassociated baseline-estimate weight (no contentSha)', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-baseline-estimates.json'));
+    try {
+      const result = buildHeavyTopology(root, {
+        changedFiles: ['scripts/sample-heavy-a.test.ts'],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      const failures = formatOversizedGuardFailures(result);
+      expect(failures.some((line: string) => line.includes('stale-unassociated-weight'))).toBe(true);
+      expect(failures.some((line: string) => line.includes('scripts/sample-heavy-a.test.ts'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts pre-topology measurement for changed baseline-estimate files without contentSha', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-baseline-estimates.json'));
+    try {
+      const result = buildHeavyTopology(root, {
+        changedFiles: ['scripts/sample-heavy-a.test.ts'],
+        preTopologyMeasurements: { 'scripts/sample-heavy-a.test.ts': 45 },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(formatOversizedGuardFailures(result)).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('flags unknown weights for unchanged discovered files when history omits them', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-missing-provenance.json'));
+    try {
+      const result = buildHeavyTopology(root, { changedFiles: [] });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      const failures = formatOversizedGuardFailures(result);
+      expect(failures.some((line: string) => line.includes('scripts/sample-light.test.ts'))).toBe(true);
+      expect(failures.some((line: string) => line.includes('missing-per-file-weight'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for changed files with stale contentSha provenance', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-stale-sha.json'));
+    try {
+      const result = buildHeavyTopology(root, {
+        changedFiles: ['scripts/sample-heavy-a.test.ts'],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      const failures = formatOversizedGuardFailures(result);
+      expect(failures.some((line: string) => line.includes('stale-content-sha'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts deterministic pre-topology same-run measurement for changed files', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-stale-sha.json'));
+    try {
+      const result = buildHeavyTopology(root, {
+        changedFiles: ['scripts/sample-heavy-a.test.ts'],
+        preTopologyMeasurements: { 'scripts/sample-heavy-a.test.ts': 45 },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(formatOversizedGuardFailures(result)).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses heavy-lane-only total for shard numerator while floor guard scans discovered files', () => {
+    const root = makeTopologyFixtureRoot(join(fixtureRoot, 'runtime-history-moderate.json'));
+    try {
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.heavy).toHaveLength(3);
+      expect(result.discovered).toHaveLength(4);
+      expect(result.topology.heavyLaneTotalWeightSeconds).toBeCloseTo((45_000 + 60_000 + 30_000) / 1000, 5);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('detects matrix/count drift via parity fields', () => {
+    const derived = deriveHeavyShardCountFromTotal(250, {
+      targetShardSeconds: 100,
+      minShardCount: 1,
+      maxShardCount: 3,
+      fallbackHeavyShardCount: 7,
+    });
+    expect(derived.heavyShardCount).toBe(3);
+    expect(derived.rawDerivedCount).toBe(3);
+  });
+
+  it('clamps fixed fallback shard count to maxShardCount', () => {
+    const policy = {
+      targetShardSeconds: 100,
+      minShardCount: 1,
+      maxShardCount: 3,
+      fallbackHeavyShardCount: 7,
+    };
+    expect(clampHeavyShardCount(policy.fallbackHeavyShardCount, policy)).toBe(3);
+  });
+
+  it('classifies corrupt runtime-history JSON as present-but-unusable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-topology-corrupt-'));
+    const scriptsDir = join(root, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(join(root, 'plugins'), { recursive: true });
+    cpSync(join(fixtureRoot, 'lanes-config.json'), join(scriptsDir, 'vitest-ci-lanes.config.json'));
+    cpSync(join(fixtureRoot, 'scripts'), scriptsDir, { recursive: true });
+    writeFileSync(join(scriptsDir, 'vitest-runtime-history.json'), '{not-json');
+    try {
+      const loaded = loadRuntimeHistoryArtifact(root);
+      expect(loaded.state).toBe('present_but_unusable');
+      const result = buildHeavyTopology(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.fallbackClassification).toBe('fixed-fallback');
+      expect(formatOversizedGuardFailures(result).length).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
