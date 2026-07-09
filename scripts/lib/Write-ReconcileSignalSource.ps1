@@ -18,6 +18,24 @@ function Write-ReconcileSignalSource {
     }
 }
 
+function Write-ReconcileReportReceiptSurfaceRemoved {
+    param(
+        [string]$Surface = '',
+        [string]$Followup = 'GitHub #611 (report-consumer migration on AO 0.10.2)',
+        [string]$LogPrefix = ''
+    )
+
+    $surfaceText = if ($Surface) { " surface=$Surface" } else { '' }
+    $followupText = if ($Followup) { " followup=$Followup" } else { '' }
+    $message = "report_receipt_surface_removed$surfaceText$followupText"
+    if ($LogPrefix) {
+        Write-Host "${LogPrefix}: $message"
+    }
+    else {
+        Write-Host $message
+    }
+}
+
 function Write-ReconcileJournalWriteDegraded {
     param(
         [string]$Surface = '',

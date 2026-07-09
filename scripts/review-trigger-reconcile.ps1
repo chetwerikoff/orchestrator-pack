@@ -306,7 +306,7 @@ function Get-ReconcileDeliveryPayload {
         }
     }
 
-    Write-ReconcileSignalSource -Surface 'review-trigger-reconcile' -Source 'openPrs+reviewRuns+reportState' -LogPrefix $Script:ReconcileLogPrefix
+    Write-ReconcileSignalSource -Surface 'review-trigger-reconcile' -Source 'openPrs+reviewRuns' -LogPrefix $Script:ReconcileLogPrefix
     return @{
         workerDeliveries            = @()
         aoEvents                    = @()

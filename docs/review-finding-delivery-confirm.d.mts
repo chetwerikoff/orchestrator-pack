@@ -114,6 +114,10 @@ export declare function isDeliveryConfirmed(
   tracking: DeliveryTrackingState,
   openPrs?: OpenPr[],
 ): boolean;
+export declare function pendingDeliveredRunsLackReportReceiptSurface(
+  reviewRuns: ReviewRun[],
+  sessions: AoSession[],
+): boolean;
 export declare function evaluateDeliveryTickInterval(input: {
   nowMs: number;
   lastTickMs?: number;

@@ -21,7 +21,10 @@ import {
 import {
   isPendingWorkerDeliveryConfirmation,
 } from './review-producer-contract.mjs';
-import { resolveDeliveredRunObservedAtMs } from './events-optional-consumer-signal-recovery.mjs';
+import {
+  resolveDeliveredRunObservedAtMs,
+  sessionHasLegacyReportReceiptSurface,
+} from './events-optional-consumer-signal-recovery.mjs';
 
 export { sessionOwnsRunHead };
 
@@ -110,6 +113,9 @@ export function getReportTimestampMs(report) {
 }
 
 /**
+ * Legacy report-full / fixture path only. AO 0.10.2 removed ao report and status --reports;
+ * live ticks descope worker-ack confirmation to escalation-only (see report_receipt_surface_removed).
+ *
  * @param {AoSession} session
  * @param {number} sendObservedAtMs
  */
@@ -253,7 +259,32 @@ export function isDeliveryConfirmed(
     return false;
   }
 
+  if (!sessionHasLegacyReportReceiptSurface(session)) {
+    return false;
+  }
+
   return Boolean(findReviewRoundReportAfterSend(session, sendObservedAtMs));
+}
+
+/**
+ * @param {ReviewRun[]} reviewRuns
+ * @param {AoSession[]} sessions
+ */
+export function pendingDeliveredRunsLackReportReceiptSurface(reviewRuns, sessions) {
+  const sessionList = toArray(sessions);
+  let hasPendingDelivered = false;
+  for (const run of toArray(reviewRuns)) {
+    if (!isPendingSentDeliveryRun(run)) {
+      continue;
+    }
+    hasPendingDelivered = true;
+    const linkedId = String(run?.linkedSessionId ?? '').trim();
+    const session = linkedId ? findSessionById(sessionList, linkedId) : null;
+    if (session && sessionHasLegacyReportReceiptSurface(session)) {
+      return false;
+    }
+  }
+  return hasPendingDelivered;
 }
 
 /**
@@ -517,5 +548,14 @@ runStdinJsonCli('review-finding-delivery-confirm.mjs', {
       lastTickMs: payload.lastTickMs,
       intervalMs: Number(payload.intervalMs) || DEFAULT_TICK_INTERVAL_MS,
     });
+  },
+  pendingReportReceiptDescope: () => {
+    const payload = readStdinJson();
+    return {
+      descope: pendingDeliveredRunsLackReportReceiptSurface(
+        payload.reviewRuns,
+        payload.sessions,
+      ),
+    };
   },
 });

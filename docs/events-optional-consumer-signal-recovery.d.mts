@@ -1,3 +1,5 @@
+export declare const REPORT_RECEIPT_SURFACE_FOLLOWUP: string;
+
 export declare const SIGNAL_SOURCES: Readonly<{
   reviewTrigger: string;
   deliveryConfirm: string;
@@ -6,8 +8,13 @@ export declare const SIGNAL_SOURCES: Readonly<{
   ciFailureNotification: string;
 }>;
 
+export declare const DEAD_AO_SIGNAL_SURFACES: Readonly<string[]>;
+
 export declare function formatSignalSourceLog(surface: string, source: string): string;
 export declare function formatJournalWriteDegradedLog(surface: string, key?: string): string;
+export declare function formatReportReceiptSurfaceRemovedLog(surface: string, followup?: string): string;
+export declare function assertLiveSignalSourceBinding(source: string): void;
+export declare function sessionHasLegacyReportReceiptSurface(session: Record<string, unknown>): boolean;
 export declare function isSessionReviewsDeliveredRun(run: Record<string, unknown>): boolean;
 export declare function resolveDeliveredRunObservedAtMs(
   run: Record<string, unknown>,

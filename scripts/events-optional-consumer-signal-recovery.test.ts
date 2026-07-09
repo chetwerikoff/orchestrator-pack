@@ -6,12 +6,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  assertLiveSignalSourceBinding,
+  DEAD_AO_SIGNAL_SURFACES,
   formatJournalWriteDegradedLog,
+  formatReportReceiptSurfaceRemovedLog,
   formatSignalSourceLog,
   hasReactionDispatchJournalEntries,
   isSessionReviewsDeliveredRun,
   resolveDeliveredRunObservedAtMs,
   reviewRunsLackAoWireDeliveredAt,
+  sessionHasLegacyReportReceiptSurface,
   shouldSuppressNudgeForPendingJournal,
   shouldSuppressSubmitForPendingOutcome,
   SIGNAL_SOURCES,
@@ -19,7 +23,10 @@ import {
 import { liveWorker, packGreenCiChecks } from './_test-worker-session-fixtures.js';
 import { mergeDeliveryRecords, resolveReviewSendObservedAtMs } from '../docs/worker-message-dispatch-observe.mjs';
 import { mergeWorkerDeliveriesFromPlanInput } from '../docs/review-head-ready.mjs';
-import { resolveSendObservedAtMs } from '../docs/review-finding-delivery-confirm.mjs';
+import {
+  pendingDeliveredRunsLackReportReceiptSurface,
+  resolveSendObservedAtMs,
+} from '../docs/review-finding-delivery-confirm.mjs';
 import { isDeliveredChangesRequested } from '../docs/review-producer-contract.mjs';
 import { planReconcileTick, recordPendingEpisode, resolveConfig } from '../docs/ci-failure-notification.mjs';
 
@@ -47,9 +54,62 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     }
   });
 
+  it('live signal-source bindings exclude dead AO 0.10.2 report surfaces', () => {
+    for (const source of Object.values(SIGNAL_SOURCES)) {
+      expect(() => assertLiveSignalSourceBinding(source)).not.toThrow();
+      for (const dead of DEAD_AO_SIGNAL_SURFACES) {
+        expect(String(source).toLowerCase()).not.toContain(dead);
+      }
+    }
+    expect(() => assertLiveSignalSourceBinding('openPrs+reviewRuns+reportState')).toThrow(
+      /dead AO 0.10.2 signal surface/,
+    );
+  });
+
+  it('AO 0.10.2 live delivery-confirm path uses ao status --json sessions, not report-full reader', () => {
+    const source = consumerSource('scripts/review-finding-delivery-confirm.ps1');
+    expect(source).toContain('Get-AoStatusSessions -Project $Project');
+    expect(source).not.toMatch(/\$sessions = Get-AoStatusSessionsWithReports/);
+    expect(source).toContain('Write-ReconcileReportReceiptSurfaceRemoved');
+  });
+
+  it('descopes worker-ack confirmation when legacy report receipt surface is absent', () => {
+    const nowMs = 1_717_502_000_000;
+    const reviewRuns = [
+      {
+        id: 'run-live',
+        prNumber: 120,
+        targetSha: 'cafe120',
+        status: 'changes_requested',
+        prReviewStatus: 'changes_requested',
+        deliveredFindingCount: 1,
+        linkedSessionId: 'opk-worker-ok',
+        latestRunStatus: 'delivered',
+        updatedAt: '2026-06-04T11:00:00Z',
+      },
+    ];
+    const sessions = [
+      {
+        sessionId: 'opk-worker-ok',
+        role: 'worker',
+        prNumber: 120,
+        status: 'working',
+        activity: { state: 'working', lastActivityAt: '2026-06-04T11:02:00Z' },
+      },
+    ];
+    expect(sessionHasLegacyReportReceiptSurface(sessions[0]!)).toBe(false);
+    expect(pendingDeliveredRunsLackReportReceiptSurface(reviewRuns, sessions)).toBe(true);
+    expect(
+      formatReportReceiptSurfaceRemovedLog('review-finding-delivery-confirm'),
+    ).toMatch(/report_receipt_surface_removed surface=review-finding-delivery-confirm followup=/);
+  });
+
   it('emits signal_source helper strings per consumer surface', () => {
     expect(formatSignalSourceLog('review-trigger-reconcile', SIGNAL_SOURCES.reviewTrigger)).toBe(
-      'signal_source surface=review-trigger-reconcile source=openPrs+reviewRuns+reportState',
+      'signal_source surface=review-trigger-reconcile source=openPrs+reviewRuns',
+    );
+    expect(formatSignalSourceLog('review-finding-delivery-confirm', SIGNAL_SOURCES.deliveryConfirm)).toContain(
+      'sessionReviewsDeliveredStatus+packJournal+sessionStatus',
     );
     expect(formatSignalSourceLog('ci-green-wake-reconcile', SIGNAL_SOURCES.ciGreenWake)).toContain(
       'openPrs+checks+ownerResolver',
