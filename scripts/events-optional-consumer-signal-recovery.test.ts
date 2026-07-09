@@ -223,9 +223,14 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
         '-FixturePath',
         join(repoRoot, fixture),
       ];
+      const ghToken = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
       const result = spawnSync('pwsh', args, {
         cwd: repoRoot,
         encoding: 'utf8',
+        env: {
+          ...process.env,
+          ...(ghToken ? { GH_TOKEN: ghToken } : {}),
+        },
       });
       expect(result.status, `${script} stderr: ${result.stderr}`).toBe(0);
       expect(formatSignalSourceLog(script.replace(/^scripts\//, '').replace(/\.ps1$/, ''), SIGNAL_SOURCES[surface])).toMatch(
