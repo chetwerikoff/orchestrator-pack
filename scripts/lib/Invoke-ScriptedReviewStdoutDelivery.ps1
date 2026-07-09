@@ -32,8 +32,8 @@ function Resolve-ScriptedReviewDeliveryWorkerSession {
         [string]$HeadSha,
         [string]$ProjectId = 'orchestrator-pack',
         [string]$RepoRoot = '',
-        [object[]]$Sessions = @(),
-        [object[]]$OpenPrs = @()
+        [object[]]$Sessions = $null,
+        [object[]]$OpenPrs = $null
     )
 
     . (Join-Path $PSScriptRoot 'Worker-NudgeClaim.ps1')
@@ -114,6 +114,34 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             claimAttempt   = $attempt
         } | Out-Null
 
+        $register = Register-WorkerMessageDispatch `
+            -SessionId $SessionId `
+            -Message $MessageText `
+            -Source 'pack-send' `
+            -SourceKey $DeliveryKey `
+            -JournalPath $journalPath `
+            -DispatchOutcome 'dispatch_in_flight' `
+            -HashIdentity `
+            -DeliveryId $DeliveryId `
+            -DeterministicDeliveryKey $DeliveryKey `
+            -FindingsHash $FindingsHash
+        if (-not $register.recorded) {
+            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+                terminalStatus = 'escalated'
+                terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                escalateReason = "journal_register_failed:$($register.reason)"
+            } | Out-Null
+            return @{ ok = $false; sent = $false; reason = 'journal_register_failed'; terminal = 'escalated' }
+        }
+        if ($register.duplicateNoOp) {
+            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+                state          = 'delivered'
+                terminalStatus = 'delivered'
+                terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            } | Out-Null
+            return @{ ok = $true; sent = $false; skipped = $true; reason = 'journal_duplicate_no_op'; terminal = 'delivered' }
+        }
+
         $sendExitCapture = @{ exitCode = 0 }
         $fenced = Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Action {
             $MessageText | pwsh -NoProfile -File $journaledScript $SessionId `
@@ -167,8 +195,8 @@ function Invoke-ScriptedReviewStdoutDelivery {
         [Parameter(Mandatory = $true)][string]$TargetSha,
         [string]$ProjectId = 'orchestrator-pack',
         [string]$LifecycleStorePath = '',
-        [object[]]$Sessions = @(),
-        [object[]]$OpenPrs = @(),
+        [object[]]$Sessions = $null,
+        [object[]]$OpenPrs = $null,
         [switch]$DryRun,
         [switch]$SkipTelemetry,
         [switch]$SimulateCrashBeforeVerdictPersist,
@@ -292,8 +320,8 @@ function Resume-ScriptedReviewStdoutDeliveryFromLifecycle {
         [string]$LifecycleStorePath = '',
         [string]$RepoRoot = '',
         [string]$ProjectId = 'orchestrator-pack',
-        [object[]]$Sessions = @(),
-        [object[]]$OpenPrs = @(),
+        [object[]]$Sessions = $null,
+        [object[]]$OpenPrs = $null,
         [switch]$DryRun
     )
 

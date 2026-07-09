@@ -203,6 +203,35 @@ describe('review delivery dispatch unknown', () => {
   });
 });
 
+describe('review delivery journal register before send', () => {
+  it('review delivery journal register before send: registers dispatch before journaled DeliveryId reuse', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'),
+      'utf8',
+    );
+    expect(text).toMatch(/Register-WorkerMessageDispatch/);
+    expect(text).toMatch(/-DeterministicDeliveryKey \$DeliveryKey/);
+    const sendBlock = text.slice(text.indexOf('function Invoke-ScriptedReviewStdoutDeliverySend'));
+    const registerIndex = sendBlock.indexOf('Register-WorkerMessageDispatch');
+    const invokeSendIndex = sendBlock.indexOf('pwsh -NoProfile -File $journaledScript');
+    expect(registerIndex).toBeGreaterThan(-1);
+    expect(invokeSendIndex).toBeGreaterThan(registerIndex);
+  });
+});
+
+describe('review delivery session resolver inputs', () => {
+  it('review delivery session resolver inputs: omitted Sessions/OpenPrs default to null for live fetch', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'),
+      'utf8',
+    );
+    expect(text).toMatch(/\[object\[\]\]\$Sessions = \$null/);
+    expect(text).toMatch(/\[object\[\]\]\$OpenPrs = \$null/);
+    expect(text).toMatch(/if \(\$null -eq \$OpenPrs\)/);
+    expect(text).toMatch(/if \(\$null -eq \$Sessions\)/);
+  });
+});
+
 describe('review delivery journal durable path', () => {
   it('review delivery journal durable path: default resolves under wake supervisor state root', () => {
     const script = `
