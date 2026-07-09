@@ -9,6 +9,7 @@ import {
   runStdinJsonCli,
   toArray,
 } from './review-mechanical-cli.mjs';
+import { parseWorktreeListPorcelain } from './worker-recovery.mjs';
 
 export const DEAD_WORKER_RECONCILER_VERSION = 'dead-worker-reconciler/v1';
 export const AUTONOMOUS_RESPAWN_POLICY_VERSION = 'autonomous-respawn-policy/v1';
@@ -155,6 +156,86 @@ function hasAssignedTask(session) {
   return getIssueNumber(session) > 0 || getPrNumber(session) > 0;
 }
 
+function normalizeSessionRowState(session) {
+  if (!session) return 'absent';
+  const status = normalizeLower(session.status ?? session.reportState ?? session.runtime);
+  if (status === 'absent') return 'absent';
+  if (session.isTerminated === true) return 'terminated';
+  const activityState = normalizeLower(session.activity?.state);
+  if (activityState === 'exited') return 'terminated';
+  if (['terminated', 'failed', 'completed', 'stopped', 'exited', 'dead'].includes(status)) return 'terminated';
+  return 'active';
+}
+
+function normalizeOsLiveness(value) {
+  const normalized = normalizeLower(value);
+  if (['pane-alive', 'pane-gone', 'unknown'].includes(normalized)) return normalized;
+  return 'unknown';
+}
+
+export function hasMatchingSanctionedKill(session, records = []) {
+  const sessionId = getSessionId(session);
+  if (!sessionId) return false;
+  const sessionIssue = getIssueNumber(session);
+  const sessionPr = getPrNumber(session);
+  return toArray(records).some((record) => {
+    if (normalizeString(record?.sessionId) !== sessionId) return false;
+    const recordIssue = numberOrZero(record?.issueNumber ?? record?.issue);
+    const recordPr = numberOrZero(record?.prNumber ?? record?.pr);
+    if (recordPr > 0) {
+      return sessionPr > 0 && sessionPr === recordPr;
+    }
+    if (recordIssue > 0) {
+      return sessionIssue > 0 && sessionIssue === recordIssue;
+    }
+    return sessionIssue <= 0 && sessionPr <= 0;
+  });
+}
+
+export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
+  const killSurface = livenessContext.sanctionedKillSurface ?? { healthy: true, records: [] };
+  if (killSurface.healthy === false) {
+    return {
+      verdict: 'audit_only',
+      reason: killSurface.reason || 'sanctioned_kill_record_unreadable',
+      escalate: true,
+      event: null,
+      matchedEvents: [],
+    };
+  }
+
+  const sessionId = getSessionId(session);
+  const sessionRowState = normalizeSessionRowState(session);
+  const osMap = livenessContext.osLiveness ?? {};
+  const osLiveness = normalizeOsLiveness(osMap[sessionId] ?? session?.osLiveness ?? livenessContext.defaultOsLiveness);
+  const sanctionedKillPresent = hasMatchingSanctionedKill(session, killSurface.records);
+  const evidence = {
+    sessionRowState,
+    osLiveness,
+    sanctionedKillPresent,
+  };
+
+  if (sanctionedKillPresent && sessionRowState === 'active' && osLiveness === 'pane-alive') {
+    return { verdict: 'live_or_unknown', reason: 'sanctioned_kill_present_but_worker_alive', event: null, matchedEvents: [], evidence };
+  }
+  if (sanctionedKillPresent) {
+    return { verdict: 'suppressed', reason: 'sanctioned_kill', event: null, matchedEvents: [], evidence };
+  }
+  if ((sessionRowState === 'terminated' || sessionRowState === 'absent') && osLiveness === 'pane-gone') {
+    return {
+      verdict: 'dead',
+      reason: 'session_row_and_os_liveness_dead',
+      event: { id: `liveness:${sessionId || 'absent'}`, type: 'liveness.probed_dead', timestampMs: 0 },
+      matchedEvents: [],
+      evidence,
+    };
+  }
+  if (sessionRowState === 'active' && osLiveness === 'pane-alive') {
+    return { verdict: 'live_or_unknown', reason: 'worker_alive', event: null, matchedEvents: [], evidence };
+  }
+  return { verdict: 'audit_only', reason: 'liveness_evidence_inconclusive', event: null, matchedEvents: [], evidence };
+}
+
 export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date.now(), options = {}) {
   const sessionId = getSessionId(session);
   const events = toArray(aoEvents);
@@ -253,6 +334,122 @@ export function issueLinkedWorkerBranches(issueNumber) {
     return [];
   }
   return [`feat/${issue}`, `feat/issue-${issue}`, `opk-${issue}`];
+}
+
+export function extractWorktreeSessionId(worktreePath) {
+  const normalized = normalizeString(worktreePath).replace(/\\/g, '/');
+  const match = normalized.match(/\/worktrees\/([^/]+)$/i);
+  return match ? normalizeString(match[1]) : '';
+}
+
+export function parseIssueNumberFromWorkerBranch(branch) {
+  const normalized = normalizeString(branch).replace(/^refs\/heads\//i, '');
+  if (!normalized) return 0;
+  const patterns = [
+    /^feat\/issue-(\d+)(?:-|$)/i,
+    /^feat\/(\d+)(?:-|$)/i,
+    /^opk-(\d+)$/i,
+    /^issue-(\d+)(?:-|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      const issue = numberOrZero(match[1]);
+      if (issue > 0) return issue;
+    }
+  }
+  return 0;
+}
+
+function isWorkerWorktreeSessionId(sessionId) {
+  const normalized = normalizeString(sessionId);
+  if (!normalized) return false;
+  return /^opk-/i.test(normalized) || /^orchestrator-pack-\d+$/i.test(normalized);
+}
+
+function normalizeWorkerBranchRef(branch) {
+  return normalizeString(branch).replace(/^refs\/heads\//i, '');
+}
+
+function resolveAbsentSessionBinding(session, openPrs = []) {
+  let issueNumber = getIssueNumber(session);
+  let prNumber = getPrNumber(session);
+  const branch = normalizeWorkerBranchRef(getBranch(session));
+  if (issueNumber <= 0 && branch) {
+    issueNumber = parseIssueNumberFromWorkerBranch(branch);
+  }
+  if (prNumber <= 0 && branch) {
+    for (const pr of toArray(openPrs)) {
+      const head = normalizeWorkerBranchRef(pr?.headRefName ?? pr?.head);
+      if (head && head === branch) {
+        prNumber = numberOrZero(pr?.number);
+        break;
+      }
+    }
+  }
+  return { issueNumber, prNumber };
+}
+
+export function discoverAbsentSessions(input = {}) {
+  const known = new Set();
+  for (const session of toArray(input.sessions)) {
+    const sessionId = getSessionId(session);
+    if (sessionId) known.add(sessionId);
+  }
+
+  const candidates = [];
+  const worktreeRecords = toArray(input.worktreeRecords);
+  if (input.worktreePorcelain) {
+    for (const record of parseWorktreeListPorcelain(input.worktreePorcelain)) {
+      worktreeRecords.push({
+        worktree: record.worktree,
+        branch: record.branch,
+        sessionId: extractWorktreeSessionId(record.worktree),
+      });
+    }
+  }
+  for (const record of worktreeRecords) {
+    const sessionId = normalizeString(record?.sessionId) || extractWorktreeSessionId(record?.worktree);
+    if (!sessionId) continue;
+    candidates.push({
+      sessionId,
+      worktree: normalizeString(record?.worktree),
+      branch: normalizeString(record?.branch),
+      issueNumber: numberOrZero(record?.issueNumber ?? record?.issue),
+      prNumber: numberOrZero(record?.prNumber ?? record?.pr),
+    });
+  }
+  for (const audit of toArray(input.auditCandidates)) {
+    const sessionId = getSessionId(audit);
+    if (!sessionId) continue;
+    candidates.push({
+      sessionId,
+      worktree: getWorktree(audit),
+      branch: getBranch(audit),
+      issueNumber: getIssueNumber(audit),
+      prNumber: getPrNumber(audit),
+    });
+  }
+
+  const absentSessions = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const sessionId = normalizeString(candidate.sessionId);
+    if (!sessionId || known.has(sessionId) || seen.has(sessionId)) continue;
+    if (!isWorkerWorktreeSessionId(sessionId)) continue;
+    const binding = resolveAbsentSessionBinding(candidate, input.openPrs);
+    if (binding.issueNumber <= 0 && binding.prNumber <= 0) continue;
+    seen.add(sessionId);
+    absentSessions.push({
+      sessionId,
+      issueNumber: binding.issueNumber,
+      prNumber: binding.prNumber,
+      branch: normalizeWorkerBranchRef(candidate.branch),
+      worktree: normalizeString(candidate.worktree),
+      status: 'absent',
+    });
+  }
+  return absentSessions;
 }
 
 export const AO_WORKER_ITERATION_BRANCH_PATTERN = /^opk-\d+$/i;
@@ -522,14 +719,16 @@ export function planDeadWorkerReconcile(input = {}) {
   let planningTracking = tracking;
   const actions = [];
   const gates = validateDeadWorkerGates(input);
-  const sessions = toArray(input.sessions);
+  const sessions = [...toArray(input.sessions), ...toArray(input.absentSessions).map((session) => ({ ...session, status: 'absent' }))];
 
   for (const session of sessions) {
     const sessionId = getSessionId(session);
     if (!sessionId || !hasAssignedTask(session)) {
       continue;
     }
-    const evidence = classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
+    const evidence = input.livenessContext
+      ? classifyWorkerLivenessEvidence(session, input.livenessContext)
+      : classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
     if (evidence.verdict === 'live_or_unknown') {
       continue;
     }
@@ -564,7 +763,13 @@ export function planDeadWorkerReconcile(input = {}) {
       continue;
     }
     if (evidence.verdict !== 'dead') {
-      actions.push({ ...base, type: 'audit_only', outcome: 'audit-only', reason: evidence.reason });
+      actions.push({
+        ...base,
+        type: 'audit_only',
+        outcome: 'audit-only',
+        reason: evidence.reason,
+        escalate: Boolean(evidence.escalate),
+      });
       continue;
     }
     if (!route.ok) {
@@ -825,5 +1030,13 @@ runStdinJsonCli('dead-worker-reconciler.mjs', {
     return resolveDeadWorkerBounds(payload.policy, payload.bounds ?? null);
   },
   'evaluate-adoption': () => evaluateDeadWorkerRuntimeAdoption(readStdinJson()),
+  'classify-liveness': () => {
+    const payload = readStdinJson();
+    return classifyWorkerLivenessEvidence(payload.session, payload.livenessContext);
+  },
   'parse-recovery-output': () => parseAndClassifyDeadWorkerRecoveryOutput(readStdinJson().output),
+  'discover-absent-sessions': () => {
+    const payload = readStdinJson();
+    return { absentSessions: discoverAbsentSessions(payload) };
+  },
 });

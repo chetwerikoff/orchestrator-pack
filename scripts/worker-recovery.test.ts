@@ -770,6 +770,17 @@ describe('invoke-worker-recovery entrypoint', () => {
     expect(entryText).toMatch(/ConvertTo-WorkerRecoverySessionSnapshot -AoRow \$aoRow/);
   });
 
+  it('invoke-worker-recovery records sanctioned kills on operator paths via record-sanctioned-worker-kill.ps1', () => {
+    const entryText = readFileSync(
+      path.join(repoRoot, 'scripts/invoke-worker-recovery.ps1'),
+      'utf8',
+    );
+    expect(entryText).toMatch(/record-sanctioned-worker-kill\.ps1/);
+    expect(entryText).toMatch(/\$Trigger -notin @\('operator_request', 'operator-recover'\)/);
+    expect(entryText).toMatch(/\$RecoveryResult\.cleanup -ne \$true/);
+    expect(entryText).toMatch(/Invoke-WorkerRecovery @recoveryParams[\s\S]*Invoke-RecordSanctionedWorkerKillIfNeeded/);
+  });
+
   it('invoke-worker-recovery forwards WorktreePresent only when caller bound the switch', () => {
     const entryText = readFileSync(
       path.join(repoRoot, 'scripts/invoke-worker-recovery.ps1'),

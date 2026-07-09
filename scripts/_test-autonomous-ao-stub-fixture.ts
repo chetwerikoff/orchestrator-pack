@@ -241,6 +241,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'terminal-flood-detect.mjs',
   'worker-iteration-cycle.mjs',
   'worker-message-dispatch-observe.mjs',
+  'worker-recovery.mjs',
 ] as const;
 
 function copyAoSpawnProbeStubPackDocs(packRoot: string) {

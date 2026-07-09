@@ -35,6 +35,31 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Worker-Recovery.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 
+function Invoke-RecordSanctionedWorkerKillIfNeeded {
+    param(
+        [string]$Trigger,
+        [string]$SessionId,
+        [int]$IssueNumber,
+        [int]$PrNumber,
+        [object]$RecoveryResult,
+        [switch]$DryRun
+    )
+
+    if ($DryRun -or -not $SessionId) { return }
+    if ($Trigger -notin @('operator_request', 'operator-recover')) { return }
+
+    $audit = $RecoveryResult.audit
+    if (-not $audit -or [string]$audit.claimOutcome -ne 'claim_acquired') { return }
+    if ($RecoveryResult.cleanup -ne $true) { return }
+
+    $recordScript = Join-Path $PSScriptRoot 'record-sanctioned-worker-kill.ps1'
+    & pwsh -NoProfile -File $recordScript -SessionId $SessionId -IssueNumber $IssueNumber -PrNumber $PrNumber -KillKind 'manual' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "record-sanctioned-worker-kill failed session=$SessionId exit=$LASTEXITCODE"
+    }
+}
+
+
 $session = $null
 if ($FixtureSessionJson) {
     $session = $FixtureSessionJson | ConvertFrom-Json -AsHashtable
@@ -66,6 +91,7 @@ if (-not $WorktreePath) {
     throw 'WorktreePath is required unless -Probe is set.'
 }
 
+
 $recoveryParams = @{
     Trigger      = $Trigger
     SessionId    = $SessionId
@@ -91,6 +117,9 @@ if ($PSBoundParameters.ContainsKey('WorktreePresent') -or $Probe) {
 else {
     $result = Invoke-WorkerRecovery @recoveryParams
 }
+
+Invoke-RecordSanctionedWorkerKillIfNeeded -Trigger $Trigger -SessionId $SessionId `
+    -IssueNumber $IssueNumber -PrNumber $PrNumber -RecoveryResult $result -DryRun:$DryRun
 
 if ($result.outcome -in @('skipped_ambiguous', 'skipped_live', 'spawn_denied', 'partial_failure', 'escalated')) {
     $sessionId = [string]$SessionId

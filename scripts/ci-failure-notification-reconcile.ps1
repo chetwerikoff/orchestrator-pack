@@ -28,6 +28,7 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 
 . (Join-Path $PSScriptRoot 'lib/Ci-Failure-Notification-Common.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
@@ -39,7 +40,9 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 
 function Get-CiFailureReactionEvents {
-    return @(Get-AoEventsSince -SinceMinutes 120 | Where-Object {
+    $aoEvents = @(Get-AoEventsSince -SinceMinutes 120)
+    Write-AoEventsCorrelationDegraded -Surface 'ci-failure-notification-reconcile' -LogPrefix $Script:ReconcileLogPrefix
+    return @($aoEvents | Where-Object {
             $type = [string]$_.type
             if ($type -ne 'reaction.action_succeeded') { return $false }
             $reactionKey = [string]($_.reactionKey ?? $_.reaction?.key ?? $_.metadata?.reactionKey ?? $_.details?.reactionKey ?? $_.data?.reactionKey ?? $_.data?.reaction?.key ?? '')

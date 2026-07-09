@@ -43,6 +43,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
@@ -299,9 +300,11 @@ function Get-ReconcileDeliveryPayload {
         }
     }
 
+    $aoEvents = @(Get-AoEventsSince -SinceMinutes 30)
+    Write-AoEventsCorrelationDegraded -Surface 'review-trigger-reconcile' -LogPrefix $Script:ReconcileLogPrefix
     return @{
         workerDeliveries            = @()
-        aoEvents                    = @(Get-AoEventsSince -SinceMinutes 30)
+        aoEvents                    = $aoEvents
         dispatchJournal             = Get-WorkerMessageDispatchJournal
         reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
         reactionMessages            = $reactionMessages

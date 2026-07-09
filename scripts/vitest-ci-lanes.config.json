@@ -4,8 +4,7 @@
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
   "heavyPerTestIsolate": [
-    "scripts/autonomous-orchestrator-boundary.test.ts",
-    "scripts/review-start-preflight-shield.test.ts"
+    "scripts/autonomous-orchestrator-boundary.test.ts"
   ],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
@@ -33,7 +32,9 @@
     "plugins/ao-token-chain-ledger/tests/session_cost.test.ts": "light",
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/_test-stub-pack-import-closure.test.ts": "light",
-    "scripts/audit-jsonl-retention.test.ts": "light",
+    "scripts/ao-events-correlation-degraded.test.ts": "light",
+    "scripts/ao-events-fail-soft.test.ts": "heavy",
+    "scripts/audit-jsonl-retention.test.ts": "heavy",
     "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",
     "scripts/ao-session-adapter.test.ts": "light",
     "scripts/ao-0-10-review-trigger.test.ts": "light",
@@ -79,6 +80,8 @@
     "scripts/orchestrator-claimed-review-run.test.ts": "heavy",
     "scripts/orchestrator-escalation.test.ts": "light",
     "scripts/escalation-state-test-isolation.test.ts": "light",
+    "scripts/event-consumer-rebind-scenario-matrix.test.ts": "light",
+    "scripts/sanctioned-worker-kill-record.test.ts": "light",
     "scripts/side-process-launch-contract.test.ts": "heavy",
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
@@ -119,7 +122,11 @@
     "scripts/review-start-claim.test.ts": "heavy",
     "scripts/review-start-envelope-external-io.test.ts": "heavy",
     "scripts/review-start-envelope-ledger.test.ts": "heavy",
-    "scripts/review-start-preflight-shield.test.ts": "heavy",
+    "scripts/review-start-preflight-shield-classifier.test.ts": "light",
+    "scripts/review-start-preflight-shield.integration.test.ts": "heavy",
+    "scripts/review-start-preflight-shield-terminal.test.ts": "heavy",
+    "scripts/review-start-preflight-shield-denial-audit.test.ts": "heavy",
+    "scripts/review-start-preflight-shield-matrix.test.ts": "heavy",
     "scripts/review-start-repeat-classifier.test.ts": "light",
     "scripts/review-start-scoped-gh-json-capture.test.ts": "heavy",
     "scripts/review-start-supervised-gh-pid.test.ts": "heavy",

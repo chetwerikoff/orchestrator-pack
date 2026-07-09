@@ -89,6 +89,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'terminal-flood-detect.mjs',
     'worker-iteration-cycle.mjs',
     'worker-message-dispatch-observe.mjs',
+    'worker-recovery.mjs',
     'autonomous-review-start-capabilities.json',
     'autonomous-shared-capabilities.json',
   ]) {
