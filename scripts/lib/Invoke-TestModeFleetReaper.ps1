@@ -111,6 +111,24 @@ function Get-TestModeFleetProcessClassification {
     }
 }
 
+
+function Get-TestModeFleetProcessClassificationSafe {
+    param([int]$ProcessId)
+
+    try {
+        return Get-TestModeFleetProcessClassification -ProcessId $ProcessId
+    }
+    catch {
+        return @{
+            kind      = 'unmarked'
+            stateRoot = ''
+            markerDir = ''
+            leaseId   = ''
+            readable  = $false
+        }
+    }
+}
+
 function Resolve-TestModeFleetLeaseForStateRoot {
     param(
         [string]$StateRoot,
@@ -136,7 +154,7 @@ function Resolve-TestModeFleetLeaseForStateRoot {
 function Get-TestModeFleetReaperCandidateProcesses {
     $candidates = [System.Collections.Generic.List[int]]::new()
     foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
-        $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+        $classification = Get-TestModeFleetProcessClassificationSafe -ProcessId $proc.Id
         if ($classification.kind -in @('testmode_supervisor', 'testmode_managed')) {
             $candidates.Add($proc.Id) | Out-Null
             continue
@@ -183,7 +201,7 @@ function Get-TestModeFleetReaperCandidatesForStateRoots {
 
     $candidates = [System.Collections.Generic.List[int]]::new()
     foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
-        $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+        $classification = Get-TestModeFleetProcessClassificationSafe -ProcessId $proc.Id
         if ($classification.stateRoot -and $targets.Contains($classification.stateRoot)) {
             $candidates.Add($proc.Id) | Out-Null
             continue
@@ -367,7 +385,7 @@ function Invoke-TestModeFleetReaper {
 
         if ($staleLeaseIds.Count -gt 0) {
             foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
-                $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+                $classification = Get-TestModeFleetProcessClassificationSafe -ProcessId $proc.Id
                 if ($classification.leaseId -and $staleLeaseIds.Contains([string]$classification.leaseId)) {
                     [void]$candidateSet.Add($proc.Id)
                 }
@@ -388,7 +406,7 @@ function Invoke-TestModeFleetReaper {
     foreach ($candidatePid in @($candidatePids)) {
         if ($candidatePid -eq $PID) { continue }
 
-        $classification = Get-TestModeFleetProcessClassification -ProcessId $candidatePid
+        $classification = Get-TestModeFleetProcessClassificationSafe -ProcessId $candidatePid
         if ($classification.kind -in @('live_fleet', 'unmarked')) {
             continue
         }

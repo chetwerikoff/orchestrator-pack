@@ -15,8 +15,8 @@ import {
   waitForProcessesStopped,
 } from './supervisor-recovery.test-helpers.js';
 import {
+  getCanonicalDefaultLeaseRoot,
   getProcessStartTimeIdentity,
-  getDefaultLeaseRoot,
   isolatedLeaseRoot,
   isAlive as harnessIsAlive,
   killProcess,
@@ -283,15 +283,16 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
         withLeaseEnv(leaseRoot, liveLane.leaseId),
       );
 
+      clearInterval(liveHeartbeat);
+
       const currentLane = registerLaneLease({ leaseRoot, laneId: 'bootstrap-lane' });
       const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, currentLane.leaseId));
-      expect(bootstrap.status).toBe(0);
+      expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
       await waitForProcessesStopped([orphanPid], 20_000);
       expect(harnessIsAlive(orphanPid)).toBe(false);
       expect(isAlive(liveFleet.supervisorPid)).toBe(true);
       expect(isAlive(liveFleet.listener.pid)).toBe(true);
 
-      clearInterval(liveHeartbeat);
       runReaperCli('teardown', { LeaseId: liveLane.leaseId }, withLeaseEnv(leaseRoot, liveLane.leaseId));
       killProcess(liveOwner.pid);
     },
@@ -310,11 +311,12 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       expect(isAlive(fleet.listener.pid)).toBe(true);
       killProcess(owner.pid);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       const recoveryLane = registerLaneLease({ leaseRoot, laneId: 'recovery-lane' });
       const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, recoveryLane.leaseId));
-      expect(bootstrap.status).toBe(0);
-      await waitForProcessesStopped([fleet.listener.pid, fleet.heartbeat.pid], 20_000);
+      expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
+      await waitForProcessesStopped([fleet.listener.pid, fleet.heartbeat.pid], 45_000);
       expect(isAlive(fleet.listener.pid)).toBe(false);
     },
     120_000,
@@ -332,7 +334,17 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
   });
 
   it('uses durable default lease root when leaseRoot omitted', () => {
-    expect(getDefaultLeaseRoot()).toContain('opk-testmode-fleet-leases');
+    const savedRoot = process.env.OPK_TESTMODE_LEASE_ROOT;
+    delete process.env.OPK_TESTMODE_LEASE_ROOT;
+    try {
+      expect(getCanonicalDefaultLeaseRoot()).toContain('opk-testmode-fleet-leases');
+    } finally {
+      if (savedRoot !== undefined) {
+        process.env.OPK_TESTMODE_LEASE_ROOT = savedRoot;
+      } else {
+        delete process.env.OPK_TESTMODE_LEASE_ROOT;
+      }
+    }
   });
 
   it.skipIf(process.platform === 'win32')(

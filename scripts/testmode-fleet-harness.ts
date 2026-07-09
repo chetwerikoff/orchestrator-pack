@@ -19,16 +19,20 @@ export function isolatedLeaseRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'opk-testmode-lease-'));
 }
 
-export function getDefaultLeaseRoot(): string {
-  const fromEnv = process.env.OPK_TESTMODE_LEASE_ROOT?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+export function getCanonicalDefaultLeaseRoot(): string {
   const home = process.env.HOME ?? os.homedir();
   const stateBase = process.env.XDG_STATE_HOME?.trim()
     || process.env.LOCALAPPDATA?.trim()
     || path.join(home, '.local', 'state');
   return path.join(stateBase, 'opk-testmode-fleet-leases');
+}
+
+export function getDefaultLeaseRoot(): string {
+  const fromEnv = process.env.OPK_TESTMODE_LEASE_ROOT?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  return getCanonicalDefaultLeaseRoot();
 }
 
 export function getVitestLaneContextFileName(): string {
@@ -85,7 +89,7 @@ export function runReaperCli(
   action: string,
   args: Record<string, string | number> = {},
   env: Record<string, string> = {},
-): { stdout: string; status: number | null } {
+): { stdout: string; stderr: string; status: number | null } {
   const argv = [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -117,7 +121,11 @@ export function runReaperCli(
     encoding: 'utf8',
     timeout: 120_000,
   });
-  return { stdout: (result.stdout ?? '').trim(), status: result.status };
+  return {
+    stdout: (result.stdout ?? '').trim(),
+    stderr: (result.stderr ?? '').trim(),
+    status: result.status,
+  };
 }
 
 export function registerLaneLease(options: {

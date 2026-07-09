@@ -77,9 +77,27 @@ switch ($Action) {
         if (-not $current -and $env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
             $current = $env:AO_TESTMODE_FLEET_LANE_LEASE_ID
         }
-        $stats = Invoke-TestModeFleetReaper -ScopeMode 'bootstrap' -CurrentLeaseId $current -AllowKill
-        $stats | ConvertTo-Json -Depth 6 -Compress
-        exit 0
+        try {
+            $stats = Invoke-TestModeFleetReaper -ScopeMode 'bootstrap' -CurrentLeaseId $current -AllowKill
+            try {
+                Write-Output ($stats | ConvertTo-Json -Depth 6 -Compress)
+            }
+            catch {
+                Write-Output (@{
+                    scope    = 'bootstrap'
+                    matched  = [int]$stats.matched
+                    skipped  = [int]$stats.skipped
+                    killed   = [int]$stats.killed
+                    failed   = [int]$stats.failed
+                    jsonError = $true
+                } | ConvertTo-Json -Compress)
+            }
+            exit 0
+        }
+        catch {
+            Write-Output (@{ scope = 'bootstrap'; error = $_.Exception.Message } | ConvertTo-Json -Compress)
+            exit 1
+        }
     }
 
     'teardown' {
