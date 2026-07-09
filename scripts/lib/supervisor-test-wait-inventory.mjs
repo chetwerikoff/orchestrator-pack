@@ -12,8 +12,34 @@ import { cliFail, loadJsonFile } from './cli-guard-helpers.mjs';
 
 const BARE_SLEEP_RE = /new\s+Promise\s*\(\s*\(\s*resolve\s*\)\s*=>\s*setTimeout\s*\(/;
 const FIXED_WINDOW_RE = /fixedObservationWindow\s*\(/;
-const POSITIVE_HELPER_RE =
-  /waitForCondition|waitForStdoutContains|waitForMarkerPidChange|waitForSupervisorLogMatchFromOffset|waitForSupervisorLogMatch|waitForMarker|waitForMarkers|waitForProcessesStopped|waitForSupervisorHealthyStatus|stopSupervisorChild/;
+const POLLER_ANCHOR_WINDOW_LINES = 12;
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function anchorLineNumber(fileText, anchor) {
+  if (!fileText.includes(anchor)) return null;
+  return fileText.slice(0, fileText.indexOf(anchor)).split('\n').length;
+}
+
+function siteCoversBareSleep(site, bareHit, fileText) {
+  if (site.file !== bareHit.file) return false;
+  if (!site.anchor || !fileText.includes(site.anchor)) return false;
+  const anchorLine = anchorLineNumber(fileText, site.anchor);
+  if (anchorLine === null) return false;
+  return Math.abs(anchorLine - bareHit.line) <= POLLER_ANCHOR_WINDOW_LINES;
+}
+
+function siteCoversApprovedPoller(site, fileText, approvedHelpers) {
+  const anchorLine = anchorLineNumber(fileText, site.anchor);
+  if (anchorLine === null) return false;
+  const lines = fileText.split('\n');
+  const start = Math.max(0, anchorLine - 1);
+  const end = Math.min(lines.length, anchorLine - 1 + POLLER_ANCHOR_WINDOW_LINES);
+  const windowText = lines.slice(start, end).join('\n');
+  return approvedHelpers.some((helper) => new RegExp(`\\b${escapeRegExp(helper)}\\b`).test(windowText));
+}
 
 function loadJson(path) {
   return loadJsonFile(path);
@@ -40,12 +66,13 @@ function findBareSleeps(filePath) {
   return hits;
 }
 
-function siteCoversBareSleep(site, bareHit, fileText) {
-  if (site.file !== bareHit.file) return false;
-  if (!site.anchor || !fileText.includes(site.anchor)) return false;
-  const anchorIndex = fileText.indexOf(site.anchor);
-  const anchorLine = fileText.slice(0, anchorIndex).split('\n').length;
-  return Math.abs(anchorLine - bareHit.line) <= 12;
+function loadCurrentRuntimeWeights() {
+  const historyPath = join(repoRoot, 'scripts/vitest-runtime-history.json');
+  if (!existsSync(historyPath)) {
+    return null;
+  }
+  const history = loadJson(historyPath);
+  return history.files ?? {};
 }
 
 function resolveMergeBaseSha() {
@@ -111,6 +138,11 @@ function validateInventory(inventoryPath) {
     }
   }
 
+  const approvedHelpers = inventory.approvedPositiveHelpers ?? [];
+  if (approvedHelpers.length === 0) {
+    failures.push('approvedPositiveHelpers is required');
+  }
+
   for (const site of inventory.sites) {
     const fileText = readFileSync(join(repoRoot, site.file), 'utf8');
     if (!fileText.includes(site.anchor)) {
@@ -129,9 +161,11 @@ function validateInventory(inventoryPath) {
     }
     if (
       (site.classification === 'positive-convertible' || site.classification === 'teardown-poll') &&
-      !POSITIVE_HELPER_RE.test(fileText)
+      !siteCoversApprovedPoller(site, fileText, approvedHelpers)
     ) {
-      failures.push(`${site.id}: converted site must use shared positive poller in ${site.file}`);
+      failures.push(
+        `${site.id}: converted site must use an approved positive poller at anchor in ${site.file}`,
+      );
     }
     if (
       (site.classification === 'positive-convertible' || site.classification === 'teardown-poll') &&
@@ -162,32 +196,39 @@ function validateInventory(inventoryPath) {
 
   const runtime = inventory.runtimeEvidence ?? {};
   const mergeBaseSha = resolveMergeBaseSha();
+  const trackedFiles = runtime.trackedFiles ?? [];
   if (!mergeBaseSha) {
-    failures.push('could not resolve merge-base SHA for p75WallMs binding');
+    failures.push('could not resolve merge-base SHA for runtime weight binding');
   } else if (!runtime.mergeBaseSha) {
     failures.push('runtimeEvidence.mergeBaseSha is required');
   } else if (runtime.mergeBaseSha !== mergeBaseSha) {
     failures.push(
       `runtimeEvidence.mergeBaseSha (${runtime.mergeBaseSha}) must match current merge-base (${mergeBaseSha})`,
     );
+  } else if (!Array.isArray(trackedFiles) || trackedFiles.length === 0) {
+    failures.push('runtimeEvidence.trackedFiles must list files checked against vitest-runtime-history.json');
   } else {
     const mergeBaseWeights = loadMergeBaseRuntimeWeights(mergeBaseSha);
+    const currentWeights = loadCurrentRuntimeWeights();
     if (!mergeBaseWeights) {
       failures.push(`could not load vitest-runtime-history.json at merge-base ${mergeBaseSha}`);
+    } else if (!currentWeights) {
+      failures.push('missing current scripts/vitest-runtime-history.json');
     } else {
-      for (const [file, current] of Object.entries(runtime.p75WallMs ?? {})) {
+      for (const file of trackedFiles) {
+        const current = currentWeights[file];
+        const baseline = mergeBaseWeights[file];
         if (typeof current !== 'number') {
-          failures.push(`missing current p75WallMs for ${file}`);
+          failures.push(`missing current vitest-runtime-history weight for ${file}`);
           continue;
         }
-        const baseline = mergeBaseWeights[file];
         if (typeof baseline !== 'number') {
           failures.push(`missing merge-base vitest-runtime-history weight for ${file}`);
           continue;
         }
         if (!(current < baseline)) {
           failures.push(
-            `p75WallMs for ${file} (${current}) must be lower than merge-base vitest-runtime-history (${baseline})`,
+            `vitest-runtime-history weight for ${file} (${current}) must be lower than merge-base (${baseline})`,
           );
         }
       }

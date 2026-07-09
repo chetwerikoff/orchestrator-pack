@@ -23,8 +23,7 @@
   "runtimeEvidence": {
     "mergeBaseRef": "origin/main",
     "mergeBaseSha": "0000000000000000000000000000000000000000",
-    "p75WallMs": {},
-    "mergeBaseP75WallMs": {}
+    "trackedFiles": []
   },
   "raceFixtures": {}
 }

@@ -277,18 +277,12 @@
     "mergeBaseRef": "origin/main",
     "mergeBaseSha": "97df2efed9cd22a256bb327a60db01008e8d8fbb",
     "heavyLaneFingerprint": "CI=true maxWorkers=1 fileParallelism=false",
-    "p75WallMs": {
-      "scripts/orchestrator-wake-supervisor-startup.test.ts": 165000,
-      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": 185000,
-      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 110000,
-      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": 85000
-    },
-    "mergeBaseP75WallMs": {
-      "scripts/orchestrator-wake-supervisor-startup.test.ts": 180000,
-      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": 200000,
-      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 120000,
-      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": 90000
-    }
+    "trackedFiles": [
+      "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
+    ]
   },
   "raceFixtures": {
     "log": "scripts/supervisor-test-wait-race.fixture.test.ts#log-generation-boundary",
