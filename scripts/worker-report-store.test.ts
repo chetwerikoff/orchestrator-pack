@@ -69,7 +69,9 @@ describe('worker-report-store-write', () => {
     runPwsh(`
       . '${lib}'
       $env:AO_WORKER_REPORT_STORE = '${escapedPath}'
+      $env:AO_SESSION_ID = 'opk-a'
       Write-PackWorkerReportRecord -ReportState 'working' -SessionId 'opk-a' -RepoSlug 'org/a' -PrNumber 1 -HeadSha 'head1' -NowMs 1000 | Out-Null
+      $env:AO_SESSION_ID = 'opk-b'
       Write-PackWorkerReportRecord -ReportState 'ready_for_review' -SessionId 'opk-b' -RepoSlug 'org/a' -PrNumber 2 -HeadSha 'head2' -NowMs 2000 | Out-Null
     `);
     const parsed = JSON.parse(readFileSync(storePath, 'utf8')) as WorkerReportStoreState & { generation?: number };
@@ -402,6 +404,30 @@ describe('worker-report-store-trust-boundary', () => {
     });
     expect(trust.ok).toBe(false);
   });
+  it('pack-worker-report rejects explicit SessionId spoof without matching caller env', () => {
+    const out = runPwsh(`
+      $env:AO_SESSION_ID = 'worker-a'
+      $env:AO_PR_NUMBER = '717'
+      $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
+      $env:AO_HEAD_SHA = 'abc717spoof'
+      & '${path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''")}' ready_for_review -SessionId 'worker-b' -RepoSlug 'chetwerikoff/orchestrator-pack' -PrNumber 717 -HeadSha 'abc717spoof' -DryRun; Write-Output "exit:$LASTEXITCODE"
+    `).trim();
+    expect(out).toContain('exit:0');
+    expect(out).not.toContain('ready_for_review');
+  });
+
+  it('Write-PackWorkerReportRecord rejects cross-session caller env', () => {
+    expect(() =>
+      runPwsh(`
+        . '${workerStoreLib.replace(/'/g, "''")}'
+        $storePath = Join-Path ([System.IO.Path]::GetTempPath()) ('wr-trust-' + [guid]::NewGuid().ToString())
+        $env:AO_WORKER_REPORT_STORE = $storePath
+        $env:AO_SESSION_ID = 'worker-a'
+        Write-PackWorkerReportRecord -ReportState 'ready_for_review' -SessionId 'worker-b' -RepoSlug 'org/a' -PrNumber 1 -HeadSha 'abc' -NowMs 1000 | Out-Null
+      `),
+    ).toThrow();
+  });
+
 });
 
 describe('worker-report-store-nonterminal-ttl', () => {
@@ -532,7 +558,7 @@ describe('worker-report-store DROP proof helpers', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          AO_SESSION_ID: '',
+          AO_SESSION_ID: 'opk-wrapper-717',
           AO_WORKER_SESSION_ID: '',
           AO_PR_NUMBER: '',
           GITHUB_REPOSITORY: '',

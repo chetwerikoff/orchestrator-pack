@@ -100,6 +100,17 @@ function Update-WorkerReportStoreStateLocked {
     }
 }
 
+
+function Resolve-PackWorkerReportCallerSessionId {
+    if ($env:AO_WORKER_SESSION_ID) {
+        return [string]$env:AO_WORKER_SESSION_ID
+    }
+    if ($env:AO_SESSION_ID) {
+        return [string]$env:AO_SESSION_ID
+    }
+    return ''
+}
+
 function Write-PackWorkerReportRecord {
     param(
         [string]$ReportState,
@@ -109,11 +120,19 @@ function Write-PackWorkerReportRecord {
         [string]$HeadSha,
         [bool]$Accepted = $true,
         [string]$StorePath = '',
-        [long]$NowMs = 0
+        [long]$NowMs = 0,
+        [string]$CallerSessionId = ''
     )
 
     if (-not $NowMs) {
         $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
+    $callerSessionId = $CallerSessionId
+    if ([string]::IsNullOrWhiteSpace($callerSessionId)) {
+        $callerSessionId = Resolve-PackWorkerReportCallerSessionId
+    }
+    if ([string]::IsNullOrWhiteSpace($callerSessionId)) {
+        throw 'worker-report-store upsert failed: trust_boundary_session_mismatch'
     }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
     $recordPayload = @{
@@ -132,7 +151,7 @@ function Write-PackWorkerReportRecord {
         param($current)
         $applied = Invoke-WorkerReportStoreCli -Subcommand 'upsertRecord' -Payload @{
             store           = $current
-            callerSessionId = $SessionId
+            callerSessionId = $callerSessionId
             nowMs           = $NowMs
             record          = $recordPayload
         }

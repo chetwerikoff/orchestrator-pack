@@ -19,6 +19,7 @@ if ([string]::IsNullOrWhiteSpace($State)) {
     exit 0
 }
 
+$CallerSessionId = Resolve-PackWorkerReportCallerSessionId
 if (-not $SessionId) {
     if ($env:AO_WORKER_SESSION_ID) { $SessionId = $env:AO_WORKER_SESSION_ID }
     elseif ($env:AO_SESSION_ID) { $SessionId = $env:AO_SESSION_ID }
@@ -51,8 +52,11 @@ if (-not $HeadSha) {
     }
 }
 
-if (-not $SessionId -or -not $RepoSlug -or -not $PrNumber -or -not $HeadSha) {
+if (-not $CallerSessionId -or -not $SessionId -or -not $RepoSlug -or -not $PrNumber -or -not $HeadSha) {
     # Binding is the trust boundary. Do not invent a substitute report channel.
+    exit 0
+}
+if ($CallerSessionId -ne $SessionId) {
     exit 0
 }
 
@@ -73,5 +77,5 @@ if ($DryRun) {
 }
 
 $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
-    -PrNumber $PrNumber -HeadSha $HeadSha
+    -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId
 $result | ConvertTo-Json -Compress -Depth 20
