@@ -182,6 +182,32 @@ function Resolve-FleetHygieneCanonicalSupervisorPid {
         }
     }
 
+    $candidates = @($resolution.CandidatePids | Sort-Object)
+    if ($candidates.Count -eq 0) {
+        $candidates = Find-FleetHygieneManagedSupervisorCandidates `
+            -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot
+    }
+    if ($candidates.Count -gt 0) {
+        $recordedPid = Read-OrchestratorWakeSupervisorPidFile -Path $Config.Paths.SupervisorPid
+        if ($recordedPid -gt 0 -and ($candidates -contains $recordedPid) `
+                -and (Test-FleetHygieneSupervisorIdentity -ProcessId $recordedPid `
+                    -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot)) {
+            return @{
+                Pid    = [int]$recordedPid
+                Source = 'pid-file-heuristic'
+            }
+        }
+        foreach ($candidatePid in $candidates) {
+            if (Test-FleetHygieneSupervisorIdentity -ProcessId $candidatePid `
+                    -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot) {
+                return @{
+                    Pid    = [int]$candidatePid
+                    Source = 'process-scan-heuristic'
+                }
+            }
+        }
+    }
+
     return @{
         Pid    = 0
         Source = 'none'
@@ -537,6 +563,27 @@ function Invoke-FleetHygieneAssertionH5 {
         -Reason "wake-supervisor Status exit $exitCode"
 }
 
+function Test-FleetHygieneH6RssEligibleProcess {
+    param(
+        [int]$ProcessId,
+        [hashtable]$Config
+    )
+
+    if (Test-FleetHygieneSupervisorIdentity -ProcessId $ProcessId `
+            -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot) {
+        return $true
+    }
+    if (Test-FleetHygieneProcessRoleTaggedForState -ProcessId $ProcessId -StateRoot $Config.StateRoot) {
+        return $true
+    }
+    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+        if (Test-FleetHygieneManagedChildForState -ProcessId $ProcessId -Role $child.Id -StateRoot $Config.StateRoot) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Invoke-FleetHygieneAssertionH6 {
     param([hashtable]$Config)
 
@@ -548,24 +595,23 @@ function Invoke-FleetHygieneAssertionH6 {
         $pwshIds.Count
     }
 
-    $supervisorRssKb = 0L
+    $roleTaggedRssKb = 0L
     foreach ($procId in $pwshIds) {
-        if (Test-FleetHygieneSupervisorIdentity -ProcessId $procId `
-                -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot) {
-            $supervisorRssKb += Get-FleetHygieneProcessRssKb -ProcessId $procId
+        if (Test-FleetHygieneH6RssEligibleProcess -ProcessId $procId -Config $Config) {
+            $roleTaggedRssKb += Get-FleetHygieneProcessRssKb -ProcessId $procId
         }
     }
 
     $pwshOver = $totalPwsh -gt $Config.MaxPwshCount
-    $rssOver = $supervisorRssKb -gt $Config.MaxSupervisorRssKb
+    $rssOver = $roleTaggedRssKb -gt $Config.MaxSupervisorRssKb
     if (-not $pwshOver -and -not $rssOver) {
         return New-FleetHygieneAssertionResult -Id 'H6' -Code 'H6_OK' -Pass $true `
-            -Reason "pwsh count=$totalPwsh supervisorRssKb=$supervisorRssKb within caps"
+            -Reason "pwsh count=$totalPwsh roleTaggedRssKb=$roleTaggedRssKb within caps"
     }
 
     $parts = @()
     if ($pwshOver) { $parts += "pwsh count $totalPwsh > $($Config.MaxPwshCount)" }
-    if ($rssOver) { $parts += "supervisor RSS ${supervisorRssKb}kB > $($Config.MaxSupervisorRssKb)kB" }
+    if ($rssOver) { $parts += "role-tagged RSS ${roleTaggedRssKb}kB > $($Config.MaxSupervisorRssKb)kB" }
     return New-FleetHygieneAssertionResult -Id 'H6' -Code 'H6_CEILING_BREACH' -Pass $false `
         -Reason ($parts -join '; ')
 }

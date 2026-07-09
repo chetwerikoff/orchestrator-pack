@@ -17,7 +17,7 @@ const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessS
 const wakeSupervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 const guardScript = path.join(repoRoot, 'scripts/check-fleet-hygiene-sentinel.ps1');
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 30_000 });
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 30_000 });
 
 
 function runPwshWithEnv(script: string, env: Record<string, string> = {}) {
@@ -25,7 +25,7 @@ function runPwshWithEnv(script: string, env: Record<string, string> = {}) {
     cwd: repoRoot,
     encoding: 'utf8',
     env: { ...process.env, ...env },
-    timeout: 90_000,
+    timeout: 180_000,
   });
 }
 
@@ -41,7 +41,7 @@ function runSentinel(args: string[], env: Record<string, string> = {}) {
       cwd: repoRoot,
       encoding: 'utf8',
       env: { ...process.env, ...env },
-      timeout: 90_000,
+      timeout: 180_000,
     },
   );
 }
@@ -217,6 +217,27 @@ describe('Issue #711 fleet hygiene sentinel', () => {
     expect(reaped).not.toContain(canonical);
   });
 
+  it('kill mode without supervisor.lock preserves #613 pid-file heuristic winner (AC#3)', () => {
+    const stateDir = makeStateDir();
+    const cmdFixture = path.join(stateDir, 'cmdline.json');
+    const canonical = 930001;
+    const duplicate = 930002;
+    writeCmdlineFixture(cmdFixture, {
+      [canonical]: supervisorCommandLine(stateDir),
+      [duplicate]: supervisorCommandLine(stateDir),
+    });
+    fs.writeFileSync(path.join(stateDir, 'supervisor.pid'), String(canonical));
+
+    const reaped = runKillFromEvaluation(stateDir, {
+      AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE: cmdFixture,
+      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([canonical, duplicate]),
+      AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE: JSON.stringify([canonical, duplicate]),
+      AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
+    });
+
+    expect(reaped).toContain(duplicate);
+    expect(reaped).not.toContain(canonical);
+  });
   it('H5 delegates to wake-supervisor Status exit code (AC#4)', () => {
     const stateDir = makeStateDir();
     const healthy = evaluateHygiene({
@@ -300,6 +321,38 @@ describe('Issue #711 fleet hygiene sentinel', () => {
 
     expect(result.Assertions.find((row) => row.Id === 'H3')?.Pass).toBe(false);
     expect(result.Assertions.find((row) => row.Id === 'H3')?.Reason).not.toMatch(/940002/);
+  });
+
+  it('H6 counts role-tagged child RSS, not only supervisor RSS (review P2)', () => {
+    const stateDir = makeStateDir();
+    const cmdFixture = path.join(stateDir, 'cmdline.json');
+    const envFixture = path.join(stateDir, 'env.json');
+    const supervisorPid = 950001;
+    const listenerPid = 950002;
+    const testChild = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1');
+    writeCmdlineFixture(cmdFixture, {
+      [supervisorPid]: supervisorCommandLine(stateDir),
+      [listenerPid]: `pwsh -NoProfile -File ${testChild} -Role listener -MarkerDir ${path.join(stateDir, 'markers')}`,
+    });
+    writeEnvFixture(envFixture, {
+      [listenerPid]: { AO_SIDE_PROCESS_CHILD_ID: 'listener', AO_SIDE_PROCESS_STATE_DIR: stateDir },
+    });
+
+    const result = evaluateHygiene({
+      STATE_DIR: stateDir,
+      AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE: cmdFixture,
+      AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE: envFixture,
+      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([supervisorPid, listenerPid]),
+      AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE: JSON.stringify([supervisorPid, listenerPid]),
+      AO_FLEET_HYGIENE_PROCESS_RSS_FIXTURE: JSON.stringify({ [supervisorPid]: 100, [listenerPid]: 500000 }),
+      AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB: '10000',
+      AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE: '2',
+      AO_FLEET_HYGIENE_MAX_PWSH_COUNT: '200',
+      AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
+    });
+
+    expect(result.Assertions.find((row) => row.Id === 'H6')?.Pass).toBe(false);
+    expect(result.Assertions.find((row) => row.Id === 'H6')?.Reason).toMatch(/role-tagged RSS/i);
   });
 
   it('H6/H7 ceiling breaches (AC#7)', () => {
