@@ -1,18 +1,19 @@
-import { supervisorTestTimeoutMs } from './supervisor-recovery.test-setup.js';
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  supervisorTestTimeoutMs,
   countLogMatches,
   isAlive,
   makeStateDir,
-  readChildRecovery,
-  readChildPid,
   readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,
   waitForSupervisorLogMatch,
-} from './supervisor-recovery.test-helpers.js';
+  stopSupervisorChild,
+  assertTerminalHeartbeatStopped,
+  readChildRecovery,
+} from './supervisor-fault-boundary.shared.js';
 
 describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => {
   it('escalates a deterministically-throwing child to terminal while supervisor and siblings survive', async () => {
@@ -49,15 +50,8 @@ describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => 
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
-    try {
-      const heartbeatPid = readChildPid(stateDir, 'heartbeat');
-      expect(isAlive(heartbeatPid)).toBe(false);
-    } catch {
-      // pid file removed after terminal stop is acceptable
-    }
+    await assertTerminalHeartbeatStopped(stateDir);
 
-    child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    await stopSupervisorChild(child, stateDir);
   }, supervisorTestTimeoutMs);
 });

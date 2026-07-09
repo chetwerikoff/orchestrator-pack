@@ -1,24 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  cleanupSupervisorTests,
+  degradedBackoffTimeoutMs,
   countLogMatches,
-  isAlive,
   makeStateDir,
-  readChildPid,
-  readChildRecovery,
-  readMarker,
   readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,
-  waitForSupervisorLogMatch,
-} from './supervisor-recovery.test-helpers.js';
-
-const timeoutMs = 120_000;
-
-afterEach(() => {
-  cleanupSupervisorTests();
-}, timeoutMs);
+} from './supervisor-degraded-backoff.shared.js';
 
 describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
   it('emits at most one degraded-path restart per configured backoff window under sustained degraded health', async () => {
@@ -52,5 +41,5 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  }, timeoutMs);
-
+  }, degradedBackoffTimeoutMs);
+});

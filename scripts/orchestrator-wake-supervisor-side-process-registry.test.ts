@@ -1,33 +1,19 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
 import {
-  cleanupSupervisorTests,
-  fixtureDir,
+  describe,
+  expect,
+  fs,
   isAlive,
+  issue205TimeoutMs,
+  it,
   makeStateDir,
   managedChildRoles,
+  path,
   readMarker,
   repoRoot,
   runSupervisor,
   startSupervisorBackground,
-  supervisorScript,
   waitForMarkers,
-  waitForSupervisorHealthyStatus,
-  waitForProcessesStopped,
-  type ManagedChildRole,
-  type WakeMarker,
-} from './supervisor-recovery.test-helpers.js';
-
-const aoStub = path.join(fixtureDir, 'ao-stub.sh');
-const supervisorHookTimeoutMs = 120_000;
-
-afterEach(() => {
-  cleanupSupervisorTests();
-}, supervisorHookTimeoutMs);
-
-const detachedSupervisorTimeoutMs = 60_000;
+} from './orchestrator-wake-supervisor.shared.js';
 
 describe('Issue #205 side-process registry', () => {
   const issue205TimeoutMs = 60_000;

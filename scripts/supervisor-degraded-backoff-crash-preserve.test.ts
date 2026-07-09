@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  cleanupSupervisorTests,
+  degradedBackoffTimeoutMs,
   countLogMatches,
   isAlive,
   makeStateDir,
@@ -12,13 +12,7 @@ import {
   startSupervisorBackground,
   waitForMarker,
   waitForSupervisorLogMatch,
-} from './supervisor-recovery.test-helpers.js';
-
-const timeoutMs = 120_000;
-
-afterEach(() => {
-  cleanupSupervisorTests();
-}, timeoutMs);
+} from './supervisor-degraded-backoff.shared.js';
 
 describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
   it('preserves degraded recovery state across a crash cycle', async () => {
@@ -106,5 +100,5 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  }, timeoutMs);
+  }, degradedBackoffTimeoutMs);
 });

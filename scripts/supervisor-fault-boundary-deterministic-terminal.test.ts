@@ -1,18 +1,15 @@
-import { supervisorTestTimeoutMs } from './supervisor-recovery.test-setup.js';
-import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  countLogMatches,
+  supervisorTestTimeoutMs,
   isAlive,
   makeStateDir,
-  readChildRecovery,
-  readChildPid,
-  readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
   waitForMarker,
   waitForSupervisorLogMatch,
-} from './supervisor-recovery.test-helpers.js';
+  stopSupervisorChild,
+  assertTerminalHeartbeatStopped,
+} from './supervisor-fault-boundary.shared.js';
 
 describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
   it('enters terminal degraded for deterministic defects while supervisor keeps running', async () => {
@@ -38,18 +35,9 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
-    const heartbeatRecovery = readChildRecovery(stateDir, 'heartbeat');
-    expect(heartbeatRecovery.terminal).toBe(true);
-    try {
-      const heartbeatPid = readChildPid(stateDir, 'heartbeat');
-      expect(isAlive(heartbeatPid)).toBe(false);
-    } catch {
-      // pid file removed after terminal stop is acceptable
-    }
+    await assertTerminalHeartbeatStopped(stateDir);
 
-    child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    await stopSupervisorChild(child, stateDir);
   }, supervisorTestTimeoutMs);
 
   it('enters terminal degraded from progress failureClass without test env override', async () => {
@@ -72,8 +60,6 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       25_000,
     );
 
-    child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    await stopSupervisorChild(child, stateDir);
   }, supervisorTestTimeoutMs);
 });
