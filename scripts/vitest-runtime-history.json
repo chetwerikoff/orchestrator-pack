@@ -331,7 +331,7 @@
     "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3",
     "scripts/ao-events-correlation-degraded.test.ts": "9784bd0577a34476c58f9f7d222e59baa260dbf02c7125cd14f5356372118c1b",
     "scripts/ao-events-fail-soft.test.ts": "490b3c293032ec32fc7998e4c48cdc5e0b140358454a403f4f28b4a3cde8fe71",
-    "scripts/events-optional-consumer-signal-recovery.test.ts": "35a0d920e5e180e9d9e4b29f6f5a9023c064580ad9ebf160738ef68d00b86fe0",
+    "scripts/events-optional-consumer-signal-recovery.test.ts": "43a4bc60ed72a0045b3329655e61269605fc068fe786efc0b2608e4134e7ca6d",
     "scripts/event-consumer-rebind-scenario-matrix.test.ts": "3f4c03a69ae86b06b2c9e21375692d0de8b49d3fdeb694ed561a3709e459e4d4",
     "scripts/review-start-preflight-shield-classifier.test.ts": "5a4c5e92a3c35d7559c68e77b96e0b4f5d773990567de782cff880b3197b173f",
     "scripts/review-start-preflight-shield-denial-audit.test.ts": "a3292fe17dc489933571009567287f9c83102dc46c10d1365376e9c188cd44ed",

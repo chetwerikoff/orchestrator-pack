@@ -66,6 +66,17 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     expect(reviewRunsLackAoWireDeliveredAt([run])).toBe(true);
   });
 
+  it('prefers deliveredAt over updatedAt when both are present on delivered runs', () => {
+    const run = {
+      latestRunStatus: 'delivered',
+      deliveredAt: '2026-07-08T10:00:00.000Z',
+      updatedAt: '2026-07-08T12:00:00.000Z',
+    };
+    expect(resolveDeliveredRunObservedAtMs(run)).toBe(Date.parse('2026-07-08T10:00:00.000Z'));
+    expect(resolveSendObservedAtMs(run, 0)).toBe(Date.parse('2026-07-08T10:00:00.000Z'));
+    expect(resolveReviewSendObservedAtMs(run)).toBe(Date.parse('2026-07-08T10:00:00.000Z'));
+  });
+
   it('mergeDeliveryRecords synthesizes from journal and review runs without ao events', () => {
     const journal = {
       'sess:1:pack-send:ci-green:690:abc': {

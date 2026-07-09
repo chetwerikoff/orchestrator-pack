@@ -48,6 +48,10 @@ export function isSessionReviewsDeliveredRun(run) {
  */
 export function resolveDeliveredRunObservedAtMs(run, parseIsoMs) {
   const parse = parseIsoMs ?? defaultParseIsoMs;
+  const deliveredAtMs = parse(run?.deliveredAt);
+  if (deliveredAtMs != null) {
+    return deliveredAtMs;
+  }
   if (isSessionReviewsDeliveredRun(run)) {
     return (
       parse(run?.updatedAt) ??
@@ -56,7 +60,7 @@ export function resolveDeliveredRunObservedAtMs(run, parseIsoMs) {
       null
     );
   }
-  return parse(run?.deliveredAt) ?? parse(run?.updatedAt) ?? null;
+  return parse(run?.updatedAt) ?? null;
 }
 
 /**
