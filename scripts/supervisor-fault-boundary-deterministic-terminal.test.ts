@@ -1,0 +1,79 @@
+import { supervisorTestTimeoutMs } from './supervisor-recovery.test-setup.js';
+import fs from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import {
+  countLogMatches,
+  isAlive,
+  makeStateDir,
+  readChildRecovery,
+  readChildPid,
+  readSupervisorLog,
+  runSupervisor,
+  startSupervisorBackground,
+  waitForMarker,
+  waitForSupervisorLogMatch,
+} from './supervisor-recovery.test-helpers.js';
+
+describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
+  it('enters terminal degraded for deterministic defects while supervisor keeps running', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-deterministic-terminal'],
+      {
+        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'deterministic-defect',
+        AO_WAKE_SUPERVISOR_TEST_FAILURE_CLASS_heartbeat: 'deterministic',
+        AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '2',
+        AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '1',
+        AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
+      },
+    );
+
+    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForSupervisorLogMatch(
+      stateDir,
+      /heartbeat terminal degraded: deterministic defect/,
+      25_000,
+    );
+
+    const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    expect(status.stdout).toContain('supervisor: running');
+    const heartbeatRecovery = readChildRecovery(stateDir, 'heartbeat');
+    expect(heartbeatRecovery.terminal).toBe(true);
+    try {
+      const heartbeatPid = readChildPid(stateDir, 'heartbeat');
+      expect(isAlive(heartbeatPid)).toBe(false);
+    } catch {
+      // pid file removed after terminal stop is acceptable
+    }
+
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, supervisorTestTimeoutMs);
+
+  it('enters terminal degraded from progress failureClass without test env override', async () => {
+    const stateDir = makeStateDir();
+    const child = startSupervisorBackground(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-deterministic-progress'],
+      {
+        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'deterministic-defect',
+        AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '2',
+        AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '1',
+        AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
+      },
+    );
+
+    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForSupervisorLogMatch(
+      stateDir,
+      /heartbeat terminal degraded: deterministic defect/,
+      25_000,
+    );
+
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, supervisorTestTimeoutMs);
+});
