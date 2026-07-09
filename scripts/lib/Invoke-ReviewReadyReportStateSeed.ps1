@@ -167,6 +167,9 @@ function New-ReviewReadyReportStateSeedGitHubSnapshot {
         @()
     }
 
+    & $refreshProgress 'eviction_open_prs'
+    $evictionOpenPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
+
     & $refreshProgress 'checks_start'
     $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $openPrs -MergeRequiredNames {
         param($payload)
@@ -179,6 +182,7 @@ function New-ReviewReadyReportStateSeedGitHubSnapshot {
         fetchedAtMs                   = $NowMs
         trackedPrNumbers              = @($TrackedPrNumbers)
         openPrs                       = @($openPrs)
+        evictionOpenPrs               = @($evictionOpenPrs)
         ciChecksByPr                  = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
@@ -335,8 +339,24 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $evictionOpenListAuthoritative = $false
     }
     else {
-        $evictionOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
-        $evictionOpenListAuthoritative = $true
+        if ($null -ne $githubSnapshot -and $null -ne $githubSnapshot.evictionOpenPrs) {
+            $evictionOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs $githubSnapshot.evictionOpenPrs
+            $evictionOpenListAuthoritative = $true
+        }
+        else {
+            try {
+                $evictionOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
+                $evictionOpenListAuthoritative = $true
+            }
+            catch {
+                Write-GhFleetCacheAuditLine -Event 'seed_eviction_open_pr_list_degraded' -Fields @{
+                    consumer = 'review-ready-report-state-seed-eviction'
+                    reason   = [string]$_.Exception.Message
+                }
+                $evictionOpenPrs = @($openPrs)
+                $evictionOpenListAuthoritative = $false
+            }
+        }
     }
     if (-not $DryRun -and -not $FixturePayload) {
         $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $evictionOpenPrs `

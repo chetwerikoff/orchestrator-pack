@@ -217,6 +217,8 @@ describe('review-ready-report-state-seed-pack-source', () => {
     expect(ready.report?.reportState).toBe('ready_for_review');
     expect(seedRaw).toMatch(/Invoke-WorkerReportStoreEviction/);
     expect(seedRaw).toMatch(/Invoke-GhOpenPrList.*review-ready-report-state-seed-eviction/s);
+    expect(seedRaw).toMatch(/githubSnapshot\.evictionOpenPrs/);
+    expect(seedRaw).toMatch(/seed_eviction_open_pr_list_degraded/);
     expect(seedRaw).toMatch(/Merge-AoSessionRowsWithWorkerReportStore -Sessions \$sessions -RepoSlug \$SupervisedRepoSlug -RepoRoot \$RepoRoot/);
 
     expect(seedRaw).toMatch(/Build-WorkerReportStoreCurrentHeadByPr/);
