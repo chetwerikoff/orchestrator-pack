@@ -18,5 +18,6 @@
       "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.vitest-output.txt",
       "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json"
     }
-  ]
+  ],
+  "captureCommitSha": "2ff9cf36bb7790cd01e591cc061d4a331989253f"
 }
