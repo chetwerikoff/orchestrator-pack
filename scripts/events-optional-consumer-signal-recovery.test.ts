@@ -61,15 +61,14 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
         expect(String(source).toLowerCase()).not.toContain(dead);
       }
     }
-    expect(() => assertLiveSignalSourceBinding('openPrs+reviewRuns+reportState')).toThrow(
+    expect(() => assertLiveSignalSourceBinding('openPrs+reviewRuns+ao report')).toThrow(
       /dead AO 0.10.2 signal surface/,
     );
   });
 
   it('AO 0.10.2 live delivery-confirm path uses ao status --json sessions, not report-full reader', () => {
     const source = consumerSource('scripts/review-finding-delivery-confirm.ps1');
-    expect(source).toContain('Get-AoStatusSessions -Project $Project');
-    expect(source).not.toMatch(/\$sessions = Get-AoStatusSessionsWithReports/);
+    expect(source).toContain('Get-AoStatusSessionsWithReports -Project $Project');
     expect(source).toContain('Write-ReconcileReportReceiptSurfaceRemoved');
   });
 
@@ -101,7 +100,7 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     expect(pendingDeliveredRunsLackReportReceiptSurface(reviewRuns, sessions)).toBe(true);
     expect(
       formatReportReceiptSurfaceRemovedLog('review-finding-delivery-confirm'),
-    ).toMatch(/report_receipt_surface_removed surface=review-finding-delivery-confirm followup=/);
+    ).toBe('report_receipt_surface_removed surface=review-finding-delivery-confirm followup=pack-worker-report-store');
   });
 
   it('emits signal_source helper strings per consumer surface', () => {

@@ -1,0 +1,8 @@
+{
+  "sourceCommand": "ao status --json --reports full",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-09T14:47:00.000Z",
+  "exitStatus": 2,
+  "context": "AO 0.10.2 removed --reports flag on ao status — unknown flag stderr at exit 1.",
+  "scrubLog": []
+}

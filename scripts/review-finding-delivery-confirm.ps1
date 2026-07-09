@@ -350,7 +350,7 @@ function Invoke-DeliveryTick {
     }
     else {
         $reviewRuns = Get-AoReviewRuns -Project $Project
-        $sessions = Get-AoStatusSessions -Project $Project
+        $sessions = @(Get-AoStatusSessionsWithReports -Project $Project)
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Get-OpenPrList)
         $tracking = $TrackingState
         $now = $NowMs

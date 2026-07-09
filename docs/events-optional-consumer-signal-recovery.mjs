@@ -5,7 +5,7 @@
 import { toArray } from './review-reconcile-primitives.mjs';
 
 /** Follow-up for worker-ack receipt on AO 0.10.2 (ao report / status --reports removed). */
-export const REPORT_RECEIPT_SURFACE_FOLLOWUP = 'GitHub #611 (report-consumer migration on AO 0.10.2)';
+export const REPORT_RECEIPT_SURFACE_FOLLOWUP = 'pack-worker-report-store';
 
 export const SIGNAL_SOURCES = Object.freeze({
   reviewTrigger: 'openPrs+reviewRuns',
@@ -20,7 +20,6 @@ export const DEAD_AO_SIGNAL_SURFACES = Object.freeze([
   'ao report',
   'ao status --reports',
   '/sessions/{id}/reports',
-  'reportState',
 ]);
 
 /**
@@ -71,13 +70,16 @@ export function assertLiveSignalSourceBinding(source) {
 }
 
 /**
- * Legacy report-full / fixture rows only — not a live AO 0.10.2 producer surface.
+ * Pack store rows are the live AO 0.10.2 worker-ack source; report-full fixtures remain test-only.
  *
  * @param {Record<string, unknown>} session
  */
 export function sessionHasLegacyReportReceiptSurface(session) {
   const kind = String(session?.reportSnapshotKind ?? '').toLowerCase();
-  if (kind === 'cli-report-full' || kind === 'audit-backed' || kind === 'fixture-session-reports') {
+  if (kind === 'pack-worker-report-store') {
+    return toArray(session?.reports).length > 0;
+  }
+  if (kind === 'fixture-report-full' || kind === 'fixture-session-reports') {
     return toArray(session?.reports).length > 0;
   }
   return toArray(session?.reports).some((report) => {

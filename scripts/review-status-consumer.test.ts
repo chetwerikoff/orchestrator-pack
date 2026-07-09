@@ -174,17 +174,29 @@ describe('review-status consumer readers (Issue #611)', () => {
     expect(decision.reason).not.toBe('head_ready_for_review');
   });
 
-  it('audit-backed fallback attaches reports from .agent-report-audit ndjson', () => {
-    const tempRoot = mkdtempSync(path.join(tmpdir(), 'ao-audit-611-'));
-    const auditDir = path.join(tempRoot, 'projects', 'orchestrator-pack', 'sessions', '.agent-report-audit');
-    mkdirSync(auditDir, { recursive: true });
-    const auditEntry = {
-      timestamp: '2026-07-05T14:17:58.000Z',
-      source: 'report',
-      reportState: 'ready_for_review',
-      accepted: true,
-    };
-    writeFileSync(path.join(auditDir, 'opk-audit-611.ndjson'), `${JSON.stringify(auditEntry)}\n`);
+  it('pack-store fallback attaches reports from worker-report-store JSON', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'ao-pack-store-717-'));
+    const stateDir = path.join(tempRoot, 'state');
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, 'worker-report-store.json'), JSON.stringify({
+      schemaVersion: 1,
+      generation: 1,
+      lastUpdatedMs: Date.parse('2026-07-05T14:17:58.000Z'),
+      records: {
+        'orchestrator-pack|opk-audit-611|611|abc611': {
+          reportState: 'ready_for_review',
+          accepted: true,
+          repoSlug: 'orchestrator-pack',
+          sessionId: 'opk-audit-611',
+          prNumber: 611,
+          headSha: 'abc611',
+          reportedAtMs: Date.parse('2026-07-05T14:17:58.000Z'),
+          reportedAt: '2026-07-05T14:17:58.000Z',
+          updatedAtMs: Date.parse('2026-07-05T14:17:58.000Z'),
+          updatedAt: '2026-07-05T14:17:58.000Z',
+        },
+      },
+    }));
 
     const workerPayload = {
       data: [
@@ -206,10 +218,9 @@ describe('review-status consumer readers (Issue #611)', () => {
 
     const out = runPwsh(
       [
-        "$env:AO_BASE_DIR = '" + tempRoot.replace(/'/g, "''") + "'",
-        '$Script:AoReportFullCliProbeState = $false',
+        "$env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = '" + stateDir.replace(/'/g, "''") + "'",
         ". '" + lib + "'",
-        "$rows = Get-AoStatusSessionsWithReports -Project 'orchestrator-pack' `",
+        "$rows = Get-AoStatusSessionsWithReports -Project 'orchestrator-pack' -RepoSlug 'orchestrator-pack' `",
         "  -WorkerListPayload (Get-Content '" + workerPath + "' -Raw | ConvertFrom-Json) `",
         "  -OrchestratorListPayload (Get-Content '" + orchPath + "' -Raw | ConvertFrom-Json)",
         '$rows | ConvertTo-Json -Compress -Depth 20',
@@ -221,8 +232,8 @@ describe('review-status consumer readers (Issue #611)', () => {
       reportSourcePath?: string;
     }>;
     const list = Array.isArray(rows) ? rows : [rows];
-    expect(list[0]?.reportSnapshotKind).toBe('audit-backed');
+    expect(list[0]?.reportSnapshotKind).toBe('pack-worker-report-store');
     expect(list[0]?.reports?.[0]?.reportState).toBe('ready_for_review');
-    expect(list[0]?.reportSourcePath).toMatch(/audit-backed/);
+    expect(list[0]?.reportSourcePath).toMatch(/pack-worker-report-store/);
   });
 });

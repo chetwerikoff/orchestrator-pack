@@ -29,8 +29,8 @@ AO 0.10 auto-delivers on submit. Report `addressing_reviews` when
 
 Pack scripts read session/report state via `Get-AoStatusSessionsWithReports` (and
 `Get-AoStatusSessionsWithReportsIncludingTerminated` where terminated rows matter)
-from `scripts/lib/Invoke-AoCliJson.ps1` — not ad-hoc `ao status --reports full`
-shelling. `report-full` availability is gated by `Test-AoReportFullCliAvailable`.
+from `scripts/lib/Invoke-AoCliJson.ps1`. Live worker report rows come from the pack-owned
+`pack-worker-report-store`; removed AO report receipt surfaces are not fallback readers.
 
 ## Report-state review-start seed
 

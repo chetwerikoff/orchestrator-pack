@@ -749,6 +749,29 @@ else {
 }
 
 
+
+Write-Host '== pack worker report contract (Issue #717) =='
+foreach ($check in @(
+        @{ path = 'scripts/check-agents-report-contract.ps1'; label = 'agents report contract' },
+        @{ path = 'scripts/check-no-report-audit-bind.ps1'; label = 'no report-audit bind' }
+    )) {
+    $full = Join-Path $Root $check.path
+    if (Test-Path -LiteralPath $full -PathType Leaf) {
+        & $full
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check $check.path 'FAIL' "exit=$LASTEXITCODE"
+            $script:VerifyFailed = $true
+        }
+        else {
+            Write-Check $check.path 'PASS' $check.label
+        }
+    }
+    else {
+        Write-Check $check.path 'FAIL' 'missing'
+        $script:VerifyFailed = $true
+    }
+}
+
 Write-Host '== review-cycle cap (Issue #646) =='
 $reviewCycleCapCheck = Join-Path $Root 'scripts/check-review-cycle-cap.ps1'
 if (Test-Path -LiteralPath $reviewCycleCapCheck -PathType Leaf) {
