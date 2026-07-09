@@ -177,7 +177,8 @@
     "scripts/supervisor-degraded-backoff-restart.test.ts": 27000,
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 25000,
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": 200000,
-    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": 90000
+    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": 90000,
+    "scripts/review-handoff-admission-records-lifecycle.test.ts": 60000
   },
   "contentSha": {
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "e558ad7b666fc824b203559ad47d7944d4cfe5f3ad145709b294fab895ac65e6",
@@ -232,7 +233,7 @@
     "scripts/reverify-e2e-fixture-session.test.ts": "015b2ce76f595f38a61207684768848a2b124fc14c81d88fda5e81809d9e52e5",
     "scripts/review-cycle-cap.test.ts": "1e53d5f2e31da505de714a69ae50169fc8c1a8c3e1f7f8be2a5f69a2d5b73b29",
     "scripts/review-finding-delivery-submit.test.ts": "d2f8bd879c697b3e3c01679c6778db1ecc5af47122e9ffbde240298c01978e29",
-    "scripts/review-handoff-wake-trigger.test.ts": "0c8ee9d1ba20e18188c155d5265b993e145546a040f62a916dac2422e2badab1",
+    "scripts/review-handoff-wake-trigger.test.ts": "385fb758ace481f6acfe0ddff137641a23e6afdd671a40c738f245bf3f7f2f32",
     "scripts/review-head-ready.test.ts": "acbdd7b5b382c0ffd72adf1df59525b50b1e20429cadac2562641d7d71b1c777",
     "scripts/review-orchestrator-loop.test.ts": "3f957b368952eaefd0c1655e68af5b62df7b760ff141ea4663b33254facead15",
     "scripts/review-pipeline-spawn-budget.test.ts": "03765cb48f7dc88650a38e3ef46c877ddb52c97fbefeb3602f0ff7a464e24317",
@@ -355,7 +356,8 @@
     "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
-    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588"
+    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
+    "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020"
   },
   "provenance": {}
 }
