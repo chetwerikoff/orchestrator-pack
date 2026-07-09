@@ -5607,132 +5607,6 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-908",
-      "caller": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 908
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 908,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-911",
-      "caller": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 911
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 911,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1219",
-      "caller": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1219
-      },
-      "callee": {
-        "kind": "pack-ps1",
-        "identity": "registry child scripts"
-      },
-      "calleeContractSourceClass": "pack-ps1-param-block",
-      "coverageKind": "validator-backed",
-      "validatorId": "side-process-launch-contract",
-      "discoveryMatch": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1219,
-        "patternIds": [
-          "start-process"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1228",
-      "caller": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1228
-      },
-      "callee": {
-        "kind": "pack-ps1",
-        "identity": "registry child scripts"
-      },
-      "calleeContractSourceClass": "pack-ps1-param-block",
-      "coverageKind": "validator-backed",
-      "validatorId": "side-process-launch-contract",
-      "discoveryMatch": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1228,
-        "patternIds": [
-          "start-process"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2036",
-      "caller": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2036
-      },
-      "callee": {
-        "kind": "ao",
-        "identity": "ao CLI session/status/send"
-      },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-dead-argv-bypass",
-      "discoveryMatch": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2036,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2053",
-      "caller": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2053
-      },
-      "callee": {
-        "kind": "pack-ps1",
-        "identity": "registry child scripts"
-      },
-      "calleeContractSourceClass": "pack-ps1-param-block",
-      "coverageKind": "validator-backed",
-      "validatorId": "side-process-launch-contract",
-      "discoveryMatch": {
-        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2053,
-        "patternIds": [
-          "start-process"
-        ]
-      }
-    },
-    {
       "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-295",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
@@ -11001,6 +10875,90 @@
         "line": 2061,
         "patternIds": [
           "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1165",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 1165
+      },
+      "callee": {
+        "kind": "pack-ps1",
+        "identity": "registry child scripts"
+      },
+      "calleeContractSourceClass": "pack-ps1-param-block",
+      "coverageKind": "validator-backed",
+      "validatorId": "side-process-launch-contract",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 1165,
+        "patternIds": [
+          "start-process"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1174",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 1174
+      },
+      "callee": {
+        "kind": "pack-ps1",
+        "identity": "registry child scripts"
+      },
+      "calleeContractSourceClass": "pack-ps1-param-block",
+      "coverageKind": "validator-backed",
+      "validatorId": "side-process-launch-contract",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 1174,
+        "patternIds": [
+          "start-process"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2128",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 2128
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 2128,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2145",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 2145
+      },
+      "callee": {
+        "kind": "pack-ps1",
+        "identity": "registry child scripts"
+      },
+      "calleeContractSourceClass": "pack-ps1-param-block",
+      "coverageKind": "validator-backed",
+      "validatorId": "side-process-launch-contract",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+        "line": 2145,
+        "patternIds": [
+          "start-process"
         ]
       }
     }
