@@ -10,6 +10,22 @@ function Write-ScriptedReviewStdoutDeliveryLog {
     }
 }
 
+function Set-ScriptedReviewStdoutDeliveryLifecycleEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$DeliveryKey,
+        [Parameter(Mandatory = $true)][hashtable]$Patch,
+        [string]$LifecycleStorePath = ''
+    )
+
+    . (Join-Path $PSScriptRoot 'Review-DeliveryLifecycle.ps1')
+    if ($LifecycleStorePath) {
+        Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch $Patch -Path $LifecycleStorePath | Out-Null
+    }
+    else {
+        Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch $Patch | Out-Null
+    }
+}
+
 function Invoke-ScriptedReviewDeliveryBestEffortTelemetry {
     param(
         [int]$PrNumber,
@@ -85,11 +101,11 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
         [Parameter(Mandatory = $true)][string]$TargetSha,
         [string]$ProjectId = 'orchestrator-pack',
         [string]$FindingsHash = '',
+        [string]$LifecycleStorePath = '',
         [int]$MaxDispatchUnknownAttempts = 3,
         [switch]$DryRun
     )
 
-    . (Join-Path $PSScriptRoot 'Review-DeliveryLifecycle.ps1')
     . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
     . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
     . (Join-Path $PSScriptRoot 'Record-WorkerMessageDispatch.ps1')
@@ -104,7 +120,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             return @{ ok = $true; sent = $false; reason = 'dry_run'; terminal = 'delivered' }
         }
 
-        Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
             state          = 'delivery_claimed'
             deliveryId     = $DeliveryId
             sessionId      = $SessionId
@@ -112,7 +128,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             headSha        = $TargetSha
             findingsHash   = $FindingsHash
             claimAttempt   = $attempt
-        } | Out-Null
+        } -LifecycleStorePath $LifecycleStorePath
 
         $register = Register-WorkerMessageDispatch `
             -SessionId $SessionId `
@@ -126,19 +142,19 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
             -DeterministicDeliveryKey $DeliveryKey `
             -FindingsHash $FindingsHash
         if (-not $register.recorded) {
-            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 terminalStatus = 'escalated'
                 terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 escalateReason = "journal_register_failed:$($register.reason)"
-            } | Out-Null
+            } -LifecycleStorePath $LifecycleStorePath
             return @{ ok = $false; sent = $false; reason = 'journal_register_failed'; terminal = 'escalated' }
         }
         if ($register.duplicateNoOp) {
-            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 state          = 'delivered'
                 terminalStatus = 'delivered'
                 terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            } | Out-Null
+            } -LifecycleStorePath $LifecycleStorePath
             return @{ ok = $true; sent = $false; skipped = $true; reason = 'journal_duplicate_no_op'; terminal = 'delivered' }
         }
 
@@ -152,36 +168,36 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
         }
         $sendExitCode = [int]$sendExitCapture.exitCode
 
-        Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
             state            = 'delivery_attempted'
             lastSendExitCode = $sendExitCode
             sendAttempt      = $attempt
-        } | Out-Null
+        } -LifecycleStorePath $LifecycleStorePath
 
         if ($fenced.ok -and $sendExitCode -eq 0) {
-            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 state          = 'delivered'
                 terminalStatus = 'delivered'
                 terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            } | Out-Null
+            } -LifecycleStorePath $LifecycleStorePath
             return @{ ok = $true; sent = $true; reason = 'explicit_send_dispatched'; terminal = 'delivered' }
         }
         if ($sendExitCode -ne 44) {
-            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+            Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
                 terminalStatus = 'escalated'
                 terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 escalateReason = "send_exit=$sendExitCode"
-            } | Out-Null
+            } -LifecycleStorePath $LifecycleStorePath
             return @{ ok = $false; sent = $false; reason = 'explicit_send_failed'; terminal = 'escalated'; exitCode = $sendExitCode }
         }
         Write-ScriptedReviewStdoutDeliveryLog "dispatch_unknown attempt $attempt for key=$DeliveryKey"
     }
 
-    Set-ReviewDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
+    Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $DeliveryKey -Patch @{
         terminalStatus = 'escalated'
         terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         escalateReason = 'dispatch_unknown_exhausted'
-    } | Out-Null
+    } -LifecycleStorePath $LifecycleStorePath
     return @{ ok = $false; sent = $false; reason = 'dispatch_unknown_exhausted'; terminal = 'escalated' }
 }
 
@@ -239,12 +255,7 @@ function Invoke-ScriptedReviewStdoutDelivery {
             stdoutSnapshot  = $WrapperStdout
             verdictSource   = 'wrapper-stdout'
         }
-        if ($LifecycleStorePath) {
-            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch $verdictPatch -Path $LifecycleStorePath | Out-Null
-        }
-        else {
-            Set-ReviewDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch $verdictPatch | Out-Null
-        }
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch $verdictPatch -LifecycleStorePath $LifecycleStorePath
     }
 
     if ($SimulateCrashAfterVerdictBeforeSend) {
@@ -265,11 +276,11 @@ function Invoke-ScriptedReviewStdoutDelivery {
     $sessionResolve = Resolve-ScriptedReviewDeliveryWorkerSession -PrNumber $PrNumber -HeadSha $TargetSha `
         -ProjectId $ProjectId -RepoRoot $RepoRoot -Sessions $Sessions -OpenPrs $OpenPrs
     if (-not $sessionResolve.ok) {
-        Set-ReviewDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch @{
+        Set-ScriptedReviewStdoutDeliveryLifecycleEntry -DeliveryKey $deliveryKey -Patch @{
             terminalStatus = 'escalated'
             terminalAtMs   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             escalateReason = [string]$sessionResolve.reason
-        } | Out-Null
+        } -LifecycleStorePath $LifecycleStorePath
         return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$sessionResolve.reason) -PrNumber $PrNumber
     }
 
@@ -292,7 +303,8 @@ function Invoke-ScriptedReviewStdoutDelivery {
 
     $send = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId `
         -MessageText ([string]$message.message) -DeliveryKey $deliveryKey -DeliveryId $deliveryId `
-        -PrNumber $PrNumber -TargetSha $TargetSha -ProjectId $ProjectId -FindingsHash $findingsHash -DryRun:$DryRun
+        -PrNumber $PrNumber -TargetSha $TargetSha -ProjectId $ProjectId -FindingsHash $findingsHash `
+        -LifecycleStorePath $LifecycleStorePath -DryRun:$DryRun
 
     if (-not $SkipTelemetry) {
         Invoke-ScriptedReviewDeliveryBestEffortTelemetry -PrNumber $PrNumber -ProjectId $ProjectId -RepoRoot $RepoRoot

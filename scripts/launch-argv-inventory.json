@@ -5227,10 +5227,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ScriptedReviewStdoutDelivery-ps1-147",
+      "rowId": "site-scripts-lib-Invoke-ScriptedReviewStdoutDelivery-ps1-163",
       "caller": {
         "file": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
-        "line": 147
+        "line": 163
       },
       "callee": {
         "kind": "other-external",
@@ -5245,7 +5245,7 @@
       "hashPinnedSourceHash": "sha256:30a0d33ccc9515b1748e8579734daa9e81ac6bbee12160a4b0b99e2531b34a6a",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
-        "line": 147,
+        "line": 163,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile"
@@ -9357,10 +9357,10 @@
       }
     },
     {
-      "rowId": "site-scripts-verify-ps1-837",
+      "rowId": "site-scripts-verify-ps1-840",
       "caller": {
         "file": "scripts/verify.ps1",
-        "line": 837
+        "line": 840
       },
       "callee": {
         "kind": "other-external",
@@ -9375,7 +9375,7 @@
       "hashPinnedSourceHash": "sha256:90cbc1a8853b63104d01cb757b49c83e553ac61b13feb15bc3255504cfba4988",
       "discoveryMatch": {
         "file": "scripts/verify.ps1",
-        "line": 837,
+        "line": 840,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile",

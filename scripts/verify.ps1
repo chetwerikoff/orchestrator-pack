@@ -831,7 +831,10 @@ if (Test-Path -LiteralPath $scriptedDeliveryGateCheck -PathType Leaf) {
 }
 else {
     Write-Check 'scripts/check-scripted-review-confirmed-delivery-gate.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'
+}
 
+Write-Host '== review delivery stdout-first guard (Issue #718) =='
 $reviewDeliveryStdoutCheck = Join-Path $Root 'scripts/check-review-delivery-no-visibility-poll.ps1'
 if (Test-Path -LiteralPath $reviewDeliveryStdoutCheck -PathType Leaf) {
     & pwsh -NoProfile -File $reviewDeliveryStdoutCheck
@@ -846,9 +849,6 @@ if (Test-Path -LiteralPath $reviewDeliveryStdoutCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing review delivery stdout-first guard (Issue #718)'
-}
-
-    Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'
 }
 
 Write-Host ''

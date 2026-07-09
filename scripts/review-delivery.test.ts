@@ -267,6 +267,34 @@ describe('review delivery session resolver inputs', () => {
   });
 });
 
+describe('review delivery custom lifecycle store path', () => {
+  it('review delivery custom lifecycle store: send propagates LifecycleStorePath to lifecycle updates', () => {
+    const text = readFileSync(
+      path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'),
+      'utf8',
+    );
+    expect(text).toMatch(/function Set-ScriptedReviewStdoutDeliveryLifecycleEntry/);
+    expect(text).toMatch(
+      /Invoke-ScriptedReviewStdoutDeliverySend[\s\S]*-LifecycleStorePath \$LifecycleStorePath/,
+    );
+    expect(text).toMatch(
+      /Set-ScriptedReviewStdoutDeliveryLifecycleEntry[\s\S]*-LifecycleStorePath \$LifecycleStorePath/,
+    );
+  });
+});
+
+describe('review delivery verify guard wiring', () => {
+  it('verify.ps1 runs stdout-first guard outside missing confirmed-delivery gate branch', () => {
+    const text = readFileSync(path.join(repoRoot, 'scripts/verify.ps1'), 'utf8');
+    const gateElse = text.indexOf("Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'");
+    const guardSection = text.indexOf("Write-Host '== review delivery stdout-first guard (Issue #718) =='");
+    const guardCheck = text.indexOf('scripts/check-review-delivery-no-visibility-poll.ps1');
+    expect(gateElse).toBeGreaterThan(-1);
+    expect(guardSection).toBeGreaterThan(gateElse);
+    expect(guardCheck).toBeGreaterThan(guardSection);
+  });
+});
+
 describe('review delivery journal durable path', () => {
   it('review delivery journal durable path: default resolves under wake supervisor state root', () => {
     const script = `
