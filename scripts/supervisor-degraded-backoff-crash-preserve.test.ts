@@ -1,23 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import {
-  degradedBackoffTimeoutMs,
-  countLogMatches,
-  isAlive,
-  makeStateDir,
-  readChildPid,
-  readChildRecovery,
-  readMarker,
-  readSupervisorLog,
-  runSupervisor,
-  startSupervisorBackground,
-  waitForMarker,
-  waitForSupervisorLogMatch,
-} from './supervisor-degraded-backoff.shared.js';
+import * as bdb from './supervisor-degraded-backoff.shared.js';
 
 describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
-  it('preserves degraded recovery state across a crash cycle', async () => {
-    const stateDir = makeStateDir();
-    const child = startSupervisorBackground(
+  bdb.it('preserves degraded recovery state across a crash cycle', async () => {
+    const stateDir = bdb.makeStateDir();
+    const child = bdb.startSupervisorBackground(
       stateDir,
       ['-OrchestratorSessionId', 'op-degraded-crash-preserve'],
       {
@@ -28,31 +14,31 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 30_000);
-    await waitForSupervisorLogMatch(stateDir, /degraded backoff: heartbeat/, 30_000);
+    await bdb.waitForMarker(stateDir, 'heartbeat', 30_000);
+    await bdb.waitForSupervisorLogMatch(stateDir, /degraded backoff: heartbeat/, 30_000);
 
     let beforeCrash: Record<string, unknown> = {};
     let killed = false;
     let killedPid = 0;
     const killDeadline = Date.now() + 45_000;
     while (Date.now() < killDeadline && !killed) {
-      const recovery = readChildRecovery(stateDir, 'heartbeat');
+      const recovery = bdb.readChildRecovery(stateDir, 'heartbeat');
       if (Number(recovery.degradedAttempts ?? 0) === 0) {
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }
       let heartbeatPid = 0;
       try {
-        heartbeatPid = readChildPid(stateDir, 'heartbeat');
+        heartbeatPid = bdb.readChildPid(stateDir, 'heartbeat');
       } catch {
         try {
-          const marker = await readMarker(stateDir, 'heartbeat', 500);
+          const marker = await bdb.readMarker(stateDir, 'heartbeat', 500);
           heartbeatPid = marker.pid;
         } catch {
           // pid file and marker may be absent briefly during degraded-path restart
         }
       }
-      if (heartbeatPid > 0 && isAlive(heartbeatPid)) {
+      if (heartbeatPid > 0 && bdb.isAlive(heartbeatPid)) {
         beforeCrash = { ...recovery };
         process.kill(heartbeatPid, 'SIGKILL');
         killedPid = heartbeatPid;
@@ -61,17 +47,17 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    expect(killed).toBe(true);
-    expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
+    bdb.expect(killed).toBe(true);
+    bdb.expect(Number(beforeCrash.degradedAttempts ?? 0)).toBeGreaterThan(0);
 
     const crashDeadline = Date.now() + 60_000;
     let crashObserved = false;
     while (Date.now() < crashDeadline) {
-      const recovery = readChildRecovery(stateDir, 'heartbeat');
-      const log = readSupervisorLog(stateDir);
+      const recovery = bdb.readChildRecovery(stateDir, 'heartbeat');
+      const log = bdb.readSupervisorLog(stateDir);
       let heartbeatPid = 0;
       try {
-        heartbeatPid = readChildPid(stateDir, 'heartbeat');
+        heartbeatPid = bdb.readChildPid(stateDir, 'heartbeat');
       } catch {
         // absent until supervisor restarts the child
       }
@@ -85,20 +71,20 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
       }
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
-    expect(crashObserved).toBe(true);
+    bdb.expect(crashObserved).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    const afterCrash = readChildRecovery(stateDir, 'heartbeat');
-    expect(Number(afterCrash.degradedAttempts ?? 0)).toBeGreaterThanOrEqual(
+    const afterCrash = bdb.readChildRecovery(stateDir, 'heartbeat');
+    bdb.expect(Number(afterCrash.degradedAttempts ?? 0)).toBeGreaterThanOrEqual(
       Number(beforeCrash.degradedAttempts ?? 0),
     );
-    expect(Number(afterCrash.deterministicReasonStreak ?? 0)).toBeGreaterThanOrEqual(
+    bdb.expect(Number(afterCrash.deterministicReasonStreak ?? 0)).toBeGreaterThanOrEqual(
       Number(beforeCrash.deterministicReasonStreak ?? 0),
     );
-    expect(String(afterCrash.failureClass ?? '')).toBe(String(beforeCrash.failureClass ?? ''));
+    bdb.expect(String(afterCrash.failureClass ?? '')).toBe(String(beforeCrash.failureClass ?? ''));
 
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-  }, degradedBackoffTimeoutMs);
+    bdb.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, bdb.degradedBackoffTimeoutMs);
 });

@@ -335,7 +335,21 @@
     "scripts/review-start-preflight-shield-matrix.test.ts": "a60bb92a4df356f9676e2aaa462bc55e57a53abf4b8b92dc8090c308a690c861",
     "scripts/review-start-preflight-shield-terminal.test.ts": "7a417adff877f29cf75ddda9283ee2d6bcfac4e3cd4116db001a22e517ba0c62",
     "scripts/review-start-preflight-shield.integration.test.ts": "69071a5f08ce5150f08659cc54ce2e19c300e6f46f5d8e9c1b1df5bb3b846788",
-    "scripts/sanctioned-worker-kill-record.test.ts": "43a5c8f9c2a5b678226429667d31dd7d6d0f5d887f990b5f95bde0809dba80ce"
+    "scripts/sanctioned-worker-kill-record.test.ts": "43a5c8f9c2a5b678226429667d31dd7d6d0f5d887f990b5f95bde0809dba80ce",
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": "f7e204ed9e119d30db37370bfb2e1258a9b5165d598c711a8427bbd9d3b24cb1",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "940995e2d2fc2e09ba811e6904d68febd1123c05a4a8cb28f96e9360bbae3d5c",
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "9b9a93bc7afaafa1929b10e30f98a1e5de6c718ee6bcde23f7a8431e995fb21b",
+    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "a5ff8894b11f4a2ad257d4b05c9434fe590284129ed77c5038293a5fb3d822f8",
+    "scripts/orchestrator-wake-listener-evaluate.test.ts": "7ba7dfe3554a6551a0e9f485f2afb8cf8bb1d711457190b0c77b952b077edcae",
+    "scripts/orchestrator-wake-listener-helpers.test.ts": "356d1ca269c22322bed45b4efd50c51d84021a655356c7faab5bd467671863cc",
+    "scripts/supervisor-fault-boundary-redirect-disposed.test.ts": "d2c5a7235d8a36f352f30d48d3f3c5131030067f1484911dd289abeb9d08698c",
+    "scripts/supervisor-fault-boundary-child-entry-null.test.ts": "dd03e11eec062754f4e05bd5a0bb83a6954c8d313763093e4147e0a4ba20b223",
+    "scripts/supervisor-fault-boundary-status-entry.test.ts": "e87cc93cba99e7f16308c916f2b469a1c1068a49c03402d13c2b51f6fcd49b19",
+    "scripts/supervisor-fault-boundary-recovery-stop.test.ts": "104f49ec0843d2b4fdc0800c96b4388d7d28c8b9d09076ba9b4128d518de28c4",
+    "scripts/supervisor-fault-boundary-escalate.test.ts": "407a7e71c97796d5ad1efe1fd607d066397fdde666be85c32aca194627203c39",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "39b9ceb7a40f3cef005cd0e70c569545fa3516fcea1811ba925b2f0f6219ac90",
+    "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
+    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "489ab93cc91638cd5c8c4834c6f415d23978ba3095f7cead5af02b9967817df5"
   },
   "provenance": {}
 }
