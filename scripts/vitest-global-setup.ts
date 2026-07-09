@@ -123,7 +123,18 @@ export async function teardown() {
     // Heavy shards defer destructive teardown to run-vitest-heavy-shard.ps1 observe/cleanup
     // so AC#6 can fail on survivors before they are reaped.
     if (!process.env.VITEST_HEAVY_SHARD?.trim()) {
-      runReaperCli('teardown');
+      const teardown = runReaperCli('teardown');
+      if (teardown.status !== 0) {
+        throw new Error(
+          `TestMode fleet teardown post-sweep failed: status=${teardown.status} ${teardown.stderr || teardown.stdout}`,
+        );
+      }
+      const observe = runReaperCli('observe');
+      if (observe.status !== 0) {
+        throw new Error(
+          `TestMode fleet teardown left survivors: status=${observe.status} ${observe.stderr || observe.stdout}`,
+        );
+      }
     }
   } finally {
     assertSharedDefaultUnmutated();

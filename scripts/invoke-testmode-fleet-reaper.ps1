@@ -106,7 +106,22 @@ switch ($Action) {
         }
         if (-not $LeaseId) { throw 'LeaseId required for teardown' }
         $stats = Invoke-TestModeFleetReaper -ScopeMode 'teardown' -CurrentLeaseId $LeaseId -AllowKill
-        $stats | ConvertTo-Json -Depth 6 -Compress
+        try {
+            Write-Output ($stats | ConvertTo-Json -Depth 6 -Compress)
+        }
+        catch {
+            Write-Output (@{
+                scope     = 'teardown'
+                matched   = [int]$stats.matched
+                skipped   = [int]$stats.skipped
+                killed    = [int]$stats.killed
+                failed    = [int]$stats.failed
+                jsonError = $true
+            } | ConvertTo-Json -Compress)
+        }
+        if ([int]$stats.failed -gt 0) {
+            exit 1
+        }
         exit 0
     }
 
