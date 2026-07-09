@@ -295,7 +295,7 @@
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "b2b4b29e8c5dcbdbf149353c6fceb5cd70306ebb079ed99537f7a31a747fad2f",
     "scripts/_test-stub-pack-import-closure.test.ts": "2b2fdba9bb36afa6dcea88e6db6cedfe60200bed9195a0e99cc6b86ddffd8b91",
     "scripts/ao-0-10-review-trigger.test.ts": "d1ad41a304e585b50b7c820bfc0c68280ca91a0a62f67708f96a37f5de4a65d1",
-    "scripts/ao-session-adapter.test.ts": "bdc88169d3d77dc0094ba12493cb62b91b0bc2a892244defbdcf4ccb5ac5acde",
+    "scripts/ao-session-adapter.test.ts": "252858edaa149564b76004c570807efcaebc87fbc4519b97fbcc7d1bda962165",
     "scripts/ao-spawn-shape.test.ts": "7c52e3ca5d94228c703203216800a41fe0db3f4593943d046acb835093626b6c",
     "scripts/audit-jsonl-retention.test.ts": "e1976dcdcf3e3c7b319cca87a00bd96e928935f9d3c619c8c692a85dd8572b2f",
     "scripts/contract-evidence.test.ts": "ef6bbaf8b923a6140a9dcedbcf98ce51639d64ffd3ce5bf132b156150f50a431",
