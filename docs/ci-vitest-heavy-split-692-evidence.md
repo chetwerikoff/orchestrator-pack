@@ -15,15 +15,17 @@ The sole pre-split-only title is the Vitest static name `keeps supervisor alive 
 
 ## Per-file runtime weights (documented estimates)
 
-Weights are conservative estimates / `heavyDefaultRuntimeMs` defaults until brief #1 harvest (#691). Not treated as measured CI proof.
+Weights below are conservative estimates / `heavyDefaultRuntimeMs` defaults unless noted as measured from CI run [28994188708](https://github.com/chetwerikoff/orchestrator-pack/actions/runs/28994188708).
 
 | Pre-split file | Est. ms | Post-split files | Est. ms each |
 |----------------|--------:|------------------|-------------:|
 | `orchestrator-wake-supervisor.test.ts` | 500000 | startup / lifecycle / side-process-registry / empty-pid | 180000 / 200000 / 120000 / 90000 |
-| `supervisor-degraded-backoff.test.ts` | 400000 | restart / crash-preserve | 120000 / 280000 |
+| `supervisor-degraded-backoff.test.ts` | 400000 | restart / crash-preserve | **27.0s** / **24.8s** measured (CI run 28994188708) |
 | `supervisor-fault-boundary.test.ts` | 200000 | 4 injection + escalate + deterministic-terminal | 50000–80000 |
 | `orchestrator-wake-listener.test.ts` | 120000 | evaluate / helpers | 60000 / 60000 |
 | `supervisor-auto-recovery.test.ts` | 120000 | (unchanged single file — one `it`, no seam) | 120000 |
+
+`supervisor-degraded-backoff-crash-preserve.test.ts` retains a single `it` (no further split seam without changing semantics). Its planner weight is **25s measured** from CI (Vitest reported 24.83s on shard 2/9), replacing the interim 280s estimate that incorrectly retained the pre-split mega-file floor.
 
 ## Measured heavy-shard assignment (representative PR CI runs)
 

@@ -173,8 +173,8 @@
     "scripts/supervisor-fault-boundary-recovery-stop.test.ts": 50000,
     "scripts/supervisor-fault-boundary-escalate.test.ts": 70000,
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": 80000,
-    "scripts/supervisor-degraded-backoff-restart.test.ts": 120000,
-    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 280000
+    "scripts/supervisor-degraded-backoff-restart.test.ts": 27000,
+    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 25000
   },
   "contentSha": {
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "e558ad7b666fc824b203559ad47d7944d4cfe5f3ad145709b294fab895ac65e6",
