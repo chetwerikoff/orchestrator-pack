@@ -1,20 +1,23 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import { evaluateOrchestratorTurnGate } from '../docs/orchestrator-claimed-review-run.mjs';
-import { functionBody, psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+// Terminal guard scenarios for review-start preflight shield (#584).
 import {
   claimHelperPath,
-  driftHeadB,
+  describe,
+  expect,
   fakeGhPath,
+  functionBody,
   ghPrChecksPath,
-  listShieldAuditRecords,
+  it,
+  path,
+  psString,
+  readFileSync,
+  repoRoot,
+  runPwsh,
   runScopedPreflight,
   shieldHelperPath,
   snapshotPath,
   stableHead,
-} from './_test-review-start-preflight-shield-fixture.js';
+  tmpdir,
+} from './_test-review-start-preflight-shield-heavy.shared.js';
 
 describe('review-start preflight transient shield (#584)', () => {
   describe('AC6 terminal guard', () => {

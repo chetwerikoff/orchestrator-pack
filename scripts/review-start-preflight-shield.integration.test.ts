@@ -1,20 +1,31 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import { evaluateOrchestratorTurnGate } from '../docs/orchestrator-claimed-review-run.mjs';
-import { functionBody, psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+// Integration coverage for review-start preflight shield (#584).
 import {
   claimHelperPath,
+  describe,
   driftHeadB,
+  evaluateOrchestratorTurnGate,
+  existsSync,
+  expect,
   fakeGhPath,
+  functionBody,
   ghPrChecksPath,
+  it,
   listShieldAuditRecords,
+  mkdtempSync,
+  path,
+  psString,
+  readFileSync,
+  repoRoot,
+  rmSync,
+  runPwsh,
   runScopedPreflight,
   shieldHelperPath,
   snapshotPath,
   stableHead,
-} from './_test-review-start-preflight-shield-fixture.js';
+  tmpdir,
+  vi,
+  writeFileSync,
+} from './_test-review-start-preflight-shield-heavy.shared.js';
 
 describe('review-start preflight transient shield (#584)', () => {
   describe('static wiring', () => {
