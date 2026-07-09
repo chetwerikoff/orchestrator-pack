@@ -233,7 +233,7 @@
     "scripts/reverify-e2e-fixture-session.test.ts": "015b2ce76f595f38a61207684768848a2b124fc14c81d88fda5e81809d9e52e5",
     "scripts/review-cycle-cap.test.ts": "1e53d5f2e31da505de714a69ae50169fc8c1a8c3e1f7f8be2a5f69a2d5b73b29",
     "scripts/review-finding-delivery-submit.test.ts": "d2f8bd879c697b3e3c01679c6778db1ecc5af47122e9ffbde240298c01978e29",
-    "scripts/review-handoff-wake-trigger.test.ts": "1059d633b97008c9d00efb54a2e38f4e70cb12b9d11380216559421315e56f1b",
+    "scripts/review-handoff-wake-trigger.test.ts": "385fb758ace481f6acfe0ddff137641a23e6afdd671a40c738f245bf3f7f2f32",
     "scripts/review-head-ready.test.ts": "acbdd7b5b382c0ffd72adf1df59525b50b1e20429cadac2562641d7d71b1c777",
     "scripts/review-orchestrator-loop.test.ts": "3f957b368952eaefd0c1655e68af5b62df7b760ff141ea4663b33254facead15",
     "scripts/review-pipeline-spawn-budget.test.ts": "03765cb48f7dc88650a38e3ef46c877ddb52c97fbefeb3602f0ff7a464e24317",
