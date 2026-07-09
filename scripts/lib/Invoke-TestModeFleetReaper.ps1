@@ -40,6 +40,9 @@ function Get-TestModeFleetProcessClassification {
     }
 
     $tokens = @(Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId)
+    if (-not $stateDir -and $tokens.Count -gt 0) {
+        $stateDir = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-StateDir'
+    }
     $joined = if ($tokens.Count -gt 0) { $tokens -join ' ' } else { '' }
     $isTestModeSupervisor = $false
     if ($tokens.Count -gt 0) {
@@ -75,7 +78,13 @@ function Get-TestModeFleetProcessClassification {
     }
 
     if (-not $markerDir -and -not $isTestModeSupervisor -and $normalizedState -and $normalizedState -ne $liveRoot) {
-        # child linked by state root only
+        return @{
+            kind        = 'live_fleet'
+            stateRoot   = $normalizedState
+            markerDir   = ''
+            leaseId     = ''
+            readable    = $true
+        }
     }
     elseif (-not $markerDir -and -not $isTestModeSupervisor) {
         return @{
@@ -167,6 +176,12 @@ function Get-TestModeFleetReaperCandidatesForStateRoots {
 
     $candidates = [System.Collections.Generic.List[int]]::new()
     foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
+        $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+        if ($classification.stateRoot -and $targets.Contains($classification.stateRoot)) {
+            $candidates.Add($proc.Id) | Out-Null
+            continue
+        }
+
         if ($IsLinux) {
             $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
             if (-not $state) { continue }
@@ -174,11 +189,6 @@ function Get-TestModeFleetReaperCandidatesForStateRoots {
             if ($targets.Contains($normalized)) {
                 $candidates.Add($proc.Id) | Out-Null
             }
-            continue
-        }
-        $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
-        if ($classification.stateRoot -and $targets.Contains($classification.stateRoot)) {
-            $candidates.Add($proc.Id) | Out-Null
         }
     }
     return @($candidates)
@@ -328,13 +338,27 @@ function Invoke-TestModeFleetReaper {
     $candidatePids = @()
     if ($ScopeMode -eq 'bootstrap') {
         $staleLeases = @(Get-TestModeFleetStaleLeaseRecords -LeaseRecords $leaseRecords -CurrentLeaseId $CurrentLeaseId)
+        $staleLeaseIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $stateRoots = [System.Collections.Generic.List[string]]::new()
         foreach ($lease in $staleLeases) {
+            if ($lease.leaseId) { [void]$staleLeaseIds.Add([string]$lease.leaseId) }
             foreach ($root in @($lease.stateRoots)) {
                 if ($root) { $stateRoots.Add([string]$root) | Out-Null }
             }
         }
-        $candidatePids = @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots @($stateRoots | Select-Object -Unique))
+        $candidateSet = [System.Collections.Generic.HashSet[int]]::new()
+        foreach ($pid in @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots @($stateRoots | Select-Object -Unique))) {
+            [void]$candidateSet.Add($pid)
+        }
+        if ($staleLeaseIds.Count -gt 0) {
+            foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
+                $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+                if ($classification.leaseId -and $staleLeaseIds.Contains([string]$classification.leaseId)) {
+                    [void]$candidateSet.Add($proc.Id)
+                }
+            }
+        }
+        $candidatePids = @($candidateSet)
     }
     elseif ($ScopeMode -in @('teardown', 'observe', 'cleanup') -and $CurrentLeaseId) {
         $candidatePids = @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots (Get-TestModeFleetLeaseScopedStateRoots -LeaseRecords $leaseRecords -LeaseId $CurrentLeaseId))

@@ -125,23 +125,60 @@ function spawnOrphanTestModeChild(stateDir: string): number {
   return child.pid ?? 0;
 }
 
+
+async function waitForLiveChildPids(
+  stateDir: string,
+  timeoutMs = 30_000,
+): Promise<{ listener: number; heartbeat: number }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const listenerPath = path.join(stateDir, 'listener.pid');
+    const heartbeatPath = path.join(stateDir, 'heartbeat.pid');
+    if (fs.existsSync(listenerPath) && fs.existsSync(heartbeatPath)) {
+      return {
+        listener: Number(fs.readFileSync(listenerPath, 'utf8').trim()),
+        heartbeat: Number(fs.readFileSync(heartbeatPath, 'utf8').trim()),
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('timed out waiting for live supervisor child pid files');
+}
+
 async function startLiveDetachedSupervisor(stateDir: string): Promise<number> {
   const fixturePath = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor/status-orchestrator-op-old.json');
-  const start = runSupervisor([
-    '-Action',
-    'Start',
-    '-SkipInitialWait',
-    '-FixturePath',
-    fixturePath,
-    '-OrchestratorSessionId',
-    'op-live-inert',
-    '-StateDir',
-    stateDir,
-    '-PollSeconds',
-    '1',
-  ]);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.AO_TESTMODE_FLEET_LANE_LEASE_ID;
+  delete env.OPK_TESTMODE_LEASE_ROOT;
+  const start = spawnSync(
+    'pwsh',
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1'),
+      '-Action',
+      'Start',
+      '-SkipInitialWait',
+      '-FixturePath',
+      fixturePath,
+      '-OrchestratorSessionId',
+      'op-live-inert',
+      '-StateDir',
+      stateDir,
+      '-PollSeconds',
+      '1',
+    ],
+    {
+      cwd: repoRoot,
+      env,
+      encoding: 'utf8',
+      timeout: 120_000,
+    },
+  );
   expect(start.status).toBe(0);
-  await waitForMarkers(stateDir, 30_000, ['listener', 'heartbeat']);
+  await waitForLiveChildPids(stateDir, 30_000);
   return Number(fs.readFileSync(path.join(stateDir, 'supervisor.pid'), 'utf8').trim());
 }
 
@@ -323,8 +360,9 @@ describe('Issue #710 live fleet inert (AC#4)', () => {
       const lane = registerLaneLease({ leaseRoot, laneId: 'live-negative' });
       const stateDir = makeStateDir();
       const supervisorPid = await startLiveDetachedSupervisor(stateDir);
-      const listener = await readMarker(stateDir, 'listener');
-      const heartbeat = await readMarker(stateDir, 'heartbeat');
+      const liveChildren = await waitForLiveChildPids(stateDir);
+      const listener = { pid: liveChildren.listener };
+      const heartbeat = { pid: liveChildren.heartbeat };
 
       const fixture = spawn('sleep', ['3600'], { stdio: 'ignore', detached: true });
       fixture.unref();
