@@ -338,6 +338,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
     delete process.env.OPK_TESTMODE_LEASE_ROOT;
     try {
       expect(getCanonicalDefaultLeaseRoot()).toContain('opk-testmode-fleet-leases');
+      expect(getCanonicalDefaultLeaseRoot()).toMatch(/[/\\]ws-[0-9a-f]{16}$/);
     } finally {
       if (savedRoot !== undefined) {
         process.env.OPK_TESTMODE_LEASE_ROOT = savedRoot;

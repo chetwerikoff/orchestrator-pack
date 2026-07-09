@@ -91,6 +91,7 @@ function stopLeaseHeartbeat(): void {
 export default function setup() {
   sharedDefaultSnapshot = snapshotSharedDefaultStore();
   applyOpkVitestHarnessEscalationEnv();
+  process.env.OPK_TESTMODE_FLEET_WORKSPACE_ROOT = repoRoot;
 
   const laneId = process.env.VITEST_HEAVY_SHARD
     ? `heavy-shard-${process.env.VITEST_HEAVY_SHARD}`
@@ -106,7 +107,12 @@ export default function setup() {
     workspaceRoot: repoRoot,
   });
 
-  runReaperCli('bootstrap');
+  const bootstrap = runReaperCli('bootstrap');
+  if (bootstrap.status !== 0) {
+    throw new Error(
+      `TestMode fleet bootstrap pre-sweep failed: status=${bootstrap.status} ${bootstrap.stderr || bootstrap.stdout}`,
+    );
+  }
   startLeaseHeartbeat();
 }
 
@@ -114,7 +120,11 @@ export async function teardown() {
   stopLeaseHeartbeat();
   try {
     writeVitestLaneLeaseContextFromEnv();
-    runReaperCli('teardown');
+    // Heavy shards defer destructive teardown to run-vitest-heavy-shard.ps1 observe/cleanup
+    // so AC#6 can fail on survivors before they are reaped.
+    if (!process.env.VITEST_HEAVY_SHARD?.trim()) {
+      runReaperCli('teardown');
+    }
   } finally {
     assertSharedDefaultUnmutated();
   }

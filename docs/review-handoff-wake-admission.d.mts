@@ -3,6 +3,7 @@ import type { OpenPr } from './review-trigger-reconcile.d.mts';
 export declare const HANDOFF_WAKE_KIND: 'ready_for_review';
 export declare const HANDOFF_RECEIPT_TO_RUN_MAX_MS: 30000;
 export declare const HANDOFF_LISTENER_RECOVERY_MAX_MS: 30000;
+export declare const HANDOFF_REPLAY_BATCH_SIZE_MAX: 10;
 export declare const HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL: 3;
 export declare const HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS: 10000;
 export type HandoffLookupDimension = 'openPr' | 'session' | 'supervisedRepo';
@@ -18,6 +19,10 @@ export interface HandoffWakeAudit {
   prNumber?: number;
   claimOutcome?: string;
   lookupDimension?: HandoffLookupDimension;
+  transition?: string;
+  key?: string;
+  admissionId?: string;
+  headSha?: string;
 }
 
 export declare function isReadyForReviewHandoffEnvelope(
@@ -64,6 +69,7 @@ export declare function evaluateHandoffIdentityAdmission(input: {
 };
 
 export declare function formatHandoffWakeAuditLine(audit: HandoffWakeAudit): string;
+export declare function formatHandoffRecordTransitionLine(audit: HandoffWakeAudit): string;
 
 export declare function evaluateHandoffPreClaimRecheck(input: {
   planned?: {
@@ -83,8 +89,27 @@ export declare function evaluateHandoffPreClaimRecheck(input: {
   audit?: HandoffWakeAudit;
 };
 
+export declare function handoffAdmissionKey(input: Record<string, unknown>): string;
+export declare function handoffPrSubjectKey(input: Record<string, unknown>): string;
+export declare function deriveHandoffAdmissionId(input: Record<string, unknown>): string;
+export declare function findOpenPrForHandoffRecord(
+  record: Record<string, unknown>,
+  openPrs?: OpenPr[],
+): OpenPr | undefined;
+export declare function isHandoffReceiptBoundTerminalForEviction(
+  record: Record<string, unknown>,
+  nowMs?: number,
+): boolean;
+export declare function isHandoffRecordAgedOut(record: Record<string, unknown>, nowMs?: number): boolean;
+export declare function classifyHandoffRecordEviction(input: Record<string, unknown>): Record<string, unknown>;
+export declare function pruneHandoffAdmissionRecords(input: Record<string, unknown>): Record<string, unknown>;
+export declare function supersedeHandoffAdmissionRecords(input: Record<string, unknown>): Record<string, unknown>;
+export declare function isHandoffAdmissionIdActedOn(input: Record<string, unknown>): Record<string, unknown>;
+export declare function recordHandoffActedOnIdentity(input: Record<string, unknown>): Record<string, unknown>;
+export declare function clearHandoffAdmissionRecord(input: Record<string, unknown>): Record<string, unknown>;
+export declare function updateHandoffAdmissionRecordOutcome(input: Record<string, unknown>): Record<string, unknown>;
+export declare function prepareHandoffAdmissionRecordsForReplay(input: Record<string, unknown>): Record<string, unknown>;
 export declare function seedHandoffAdmissionRecord(input: Record<string, unknown>): Record<string, unknown>;
-
 export declare function selectHandoffAdmissionReplay(input: Record<string, unknown>): Record<string, unknown>;
 
 export declare function evaluateHandoffReceiptToRunBound(
@@ -97,7 +122,6 @@ export declare function evaluateHandoffReceiptToRunBound(
   boundMs: number;
   reason?: string;
 };
-
 
 export declare function evaluatePendingAdmissionLookupRetry(input: {
   record?: Record<string, unknown>;
@@ -113,13 +137,10 @@ export declare function evaluatePendingAdmissionLookupRetry(input: {
 
 export declare function recordPendingAdmissionLookupAttempt(input: Record<string, unknown>): Record<string, unknown>;
 export declare function markPendingAdmissionLookupDegraded(input: Record<string, unknown>): Record<string, unknown>;
-
 export declare function seedPendingAdmissionRetry(input: Record<string, unknown>): Record<string, unknown>;
-
 export declare function selectPendingAdmissionRetries(input: Record<string, unknown>): {
   retries: Array<Record<string, unknown>>;
 };
-
 export declare function clearPendingAdmissionRetry(input: Record<string, unknown>): Record<string, unknown>;
 
 export declare function getHandoffAdmissionStatePath(stateRoot: string): string;
@@ -127,13 +148,21 @@ export declare function getHandoffAdmissionStatePath(stateRoot: string): string;
 export declare function loadHandoffAdmissionState(filePath: string): {
   records: Record<string, unknown>;
   pendingRetries: Record<string, unknown>;
+  actedOn: Record<string, unknown>;
+  replayCursor: number;
   lastUpdatedMs: number | null;
+  corrupt: boolean;
 };
 
 export declare function saveHandoffAdmissionState(
   filePath: string,
-  state: { records: Record<string, unknown>; lastUpdatedMs: number | null },
+  state: {
+    records: Record<string, unknown>;
+    pendingRetries?: Record<string, unknown>;
+    actedOn?: Record<string, unknown>;
+    replayCursor?: number;
+    lastUpdatedMs: number | null;
+  },
 ): void;
 
 export declare function isTerminalHandoffAdmissionRecord(record: Record<string, unknown> | null | undefined): boolean;
-export declare function handoffAdmissionKey(input: Record<string, unknown>): string;

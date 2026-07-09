@@ -359,7 +359,7 @@ function Invoke-TestModeFleetReaper {
         survivors       = @()
     }
 
-    $leaseRecords = @(Get-TestModeFleetLeaseRecordsFromIndex)
+    $leaseRecords = @(Get-TestModeFleetLeaseRecordsForWorkspace -LeaseRecords @(Get-TestModeFleetLeaseRecordsFromIndex))
     $candidatePids = @()
     if ($ScopeMode -eq 'bootstrap') {
         $staleLeases = @(Get-TestModeFleetStaleLeaseRecords -LeaseRecords $leaseRecords -CurrentLeaseId $CurrentLeaseId)

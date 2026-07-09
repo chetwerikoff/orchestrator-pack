@@ -51,6 +51,18 @@
       "actor": "orchestrator-pack-88",
       "timestamp": "2026-07-09T17:39:22.000Z",
       "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:3a1c60673d8af50481a7f66aefc0c9f1702c2c9b2bc4c15281ac56cfe9c5a256",
+      "new_active_scope_hash": "sha256:3a1c60673d8af50481a7f66aefc0c9f1702c2c9b2bc4c15281ac56cfe9c5a256",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "bootstrap fail-closed, defer heavy teardown, workspace-scoped lease root, no-progress default",
+      "actor": "orchestrator-pack-88",
+      "timestamp": "2026-07-09T17:45:08.000Z",
+      "applied": true
     }
   ]
 }

@@ -12,13 +12,38 @@ function Normalize-TestModeFleetPath {
     catch { return $PathValue.Trim() }
 }
 
+
+function Get-TestModeFleetDefaultWorkspaceRoot {
+    if ($env:OPK_TESTMODE_FLEET_WORKSPACE_ROOT) {
+        return (Normalize-TestModeFleetPath -PathValue $env:OPK_TESTMODE_FLEET_WORKSPACE_ROOT)
+    }
+    return (Normalize-TestModeFleetPath -PathValue (Resolve-Path (Join-Path $PSScriptRoot '../..')))
+}
+
+function Get-TestModeFleetWorkspaceScopeKey {
+    param([string]$WorkspaceRoot)
+    if (-not $WorkspaceRoot) { return '' }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($WorkspaceRoot)
+        $hash = $sha.ComputeHash($bytes)
+        return ([BitConverter]::ToString($hash) -replace '-', '').Substring(0, 16).ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
 function Get-TestModeFleetLeaseRoot {
     if ($env:OPK_TESTMODE_LEASE_ROOT) { return $env:OPK_TESTMODE_LEASE_ROOT.Trim() }
     $userHome = if ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
     $stateBase = if ($env:XDG_STATE_HOME) { $env:XDG_STATE_HOME }
     elseif ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
     else { Join-Path $userHome '.local' 'state' }
-    return Join-Path $stateBase 'opk-testmode-fleet-leases'
+    $base = Join-Path $stateBase 'opk-testmode-fleet-leases'
+    $scopeKey = Get-TestModeFleetWorkspaceScopeKey -WorkspaceRoot (Get-TestModeFleetDefaultWorkspaceRoot)
+    if ($scopeKey) { return Join-Path $base "ws-$scopeKey" }
+    return $base
 }
 
 function Get-TestModeFleetLeaseIndexPath { Join-Path (Get-TestModeFleetLeaseRoot) 'index.json' }
@@ -40,7 +65,7 @@ function Get-TestModeFleetLeaseHeartbeatGraceSeconds {
 function Get-TestModeFleetLeaseNoProgressSeconds {
     $parsed = 0
     if ($env:AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS -and [int]::TryParse($env:AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
-    return 60
+    return 150
 }
 
 function Get-ProcessStartTimeIdentity {
@@ -127,6 +152,29 @@ function Read-TestModeFleetLeaseRecord {
         if (-not $raw) { return $null }
         return $raw | ConvertFrom-Json
     } catch { return $null }
+}
+
+
+function Get-TestModeFleetLeaseRecordsForWorkspace {
+    param(
+        [object[]]$LeaseRecords,
+        [string]$WorkspaceRoot = ''
+    )
+
+    if (-not $WorkspaceRoot) {
+        $WorkspaceRoot = Get-TestModeFleetDefaultWorkspaceRoot
+    }
+    $normalized = Normalize-TestModeFleetPath -PathValue $WorkspaceRoot
+    if (-not $normalized) { return @($LeaseRecords) }
+
+    $scoped = [System.Collections.Generic.List[object]]::new()
+    foreach ($record in @($LeaseRecords)) {
+        $recordRoot = Normalize-TestModeFleetPath -PathValue ([string]$record.workspaceRoot)
+        if (-not $recordRoot -or $recordRoot -eq $normalized) {
+            $scoped.Add($record) | Out-Null
+        }
+    }
+    return @($scoped)
 }
 
 function Get-TestModeFleetLeaseRecordsFromIndex {

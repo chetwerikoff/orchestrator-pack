@@ -753,6 +753,7 @@ describe('handoff review trigger path', () => {
 
   it('AC13: durable admission record replays within recovery bound', () => {
     const listenerReadyMs = 1_700_000_010_000;
+    const nowMs = listenerReadyMs + 2_000;
     const seed = seedHandoffAdmissionRecord({
       existing: {},
       admission: {
@@ -762,18 +763,23 @@ describe('handoff review trigger path', () => {
           prUrl: 'https://github.com/chetwerikoff/orchestrator-pack/pull/234',
           sessionId: 'opk-27',
           priority: 'info',
-          receivedAtMs: listenerReadyMs - 5_000,
+          eventId: 'evt-ready-for-review-info',
+          receivedAtMs: nowMs - 2_000,
         },
         admittedHeadSha: 'handoff234',
         admittedBaseRef: 'main',
         outcome: 'promoted',
       },
-      nowMs: listenerReadyMs - 5_000,
+      nowMs: nowMs - 2_000,
+      openPrs: [{ number: 234, headRefOid: 'handoff234' }],
+      openPrIndexTrusted: true,
     });
     const replay = selectHandoffAdmissionReplay({
       records: seed.records,
       listenerReadyMs,
-      nowMs: listenerReadyMs + 2_000,
+      nowMs,
+      openPrs: [{ number: 234, headRefOid: 'handoff234' }],
+      openPrIndexTrusted: true,
     }) as { replay: Array<{ withinRecoveryBound?: boolean }> };
     expect(replay.replay).toHaveLength(1);
     expect(replay.replay[0]?.withinRecoveryBound).toBe(true);
@@ -782,12 +788,15 @@ describe('handoff review trigger path', () => {
       records: seed.records,
       listenerReadyMs,
       nowMs: listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS + 1_000,
+      openPrs: [{ number: 234, headRefOid: 'handoff234' }],
+      openPrIndexTrusted: true,
     }) as { replay: Array<{ withinRecoveryBound?: boolean }> };
-    expect(stale.replay[0]?.withinRecoveryBound).toBe(false);
+    expect(stale.replay).toHaveLength(0);
   });
 
-  it('AC13: listener readiness resets recovery window for retained admissions', () => {
+  it('AC13: replay preserves original receipt timestamp for retained admissions', () => {
     const listenerReadyMs = 1_700_000_100_000;
+    const originalReceipt = listenerReadyMs - 5_000;
     const seed = seedHandoffAdmissionRecord({
       existing: {},
       admission: {
@@ -797,21 +806,27 @@ describe('handoff review trigger path', () => {
           prUrl: 'https://github.com/chetwerikoff/orchestrator-pack/pull/234',
           sessionId: 'opk-27',
           priority: 'info',
-          receivedAtMs: listenerReadyMs - 120_000,
+          eventId: 'evt-ready-for-review-info',
+          receivedAtMs: originalReceipt,
         },
         admittedHeadSha: 'handoff234',
         admittedBaseRef: 'main',
         outcome: 'promoted',
       },
-      nowMs: listenerReadyMs - 120_000,
+      nowMs: originalReceipt,
+      openPrs: [{ number: 234, headRefOid: 'handoff234' }],
+      openPrIndexTrusted: true,
     });
     const replay = selectHandoffAdmissionReplay({
       records: seed.records,
       listenerReadyMs,
       nowMs: listenerReadyMs + 5_000,
-    }) as { replay: Array<{ withinRecoveryBound?: boolean; replayReceivedAtMs?: number }> };
+      openPrs: [{ number: 234, headRefOid: 'handoff234' }],
+      openPrIndexTrusted: true,
+    }) as { replay: Array<{ withinRecoveryBound?: boolean; originalReceivedAtMs?: number; replayReceivedAtMs?: number }> };
     expect(replay.replay[0]?.withinRecoveryBound).toBe(true);
-    expect(replay.replay[0]?.replayReceivedAtMs).toBe(listenerReadyMs);
+    expect(replay.replay[0]?.originalReceivedAtMs).toBe(originalReceipt);
+    expect(replay.replay[0]?.replayReceivedAtMs).toBeUndefined();
   });
 
   it('AC14: audit line is greppable for promoted + claim win outcomes', () => {
@@ -1440,6 +1455,108 @@ describe('handoff lookup degrade on admission failure (Issue #418)', () => {
     const second = runRecovery('after degrade');
     expect(second.status).toBe(0);
     expect(Number(second.stdout.trim())).toBe(0);
+  });
+
+  it('preserves actedOn tombstones and replayCursor on openPr lookup retry writes (#712)', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-lookup-lifecycle-'));
+    const bodyJson = readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8');
+    const t0 = 1_700_000_000_000;
+    const admissionId = 'admission-durable-trigger-712';
+    const actedOn = {
+      [admissionId]: {
+        admissionId,
+        reason: 'delete_on_durable_trigger',
+        recordedAtMs: t0,
+      },
+    };
+    const seed = seedPendingAdmissionRetry({ existing: {}, bodyJson, lookupDimension: 'openPr', nowMs: t0 });
+    const key = String(seed.key);
+    writeFileSync(
+      path.join(dir, 'review-handoff-wake-admission.json'),
+      JSON.stringify(
+        {
+          records: {},
+          pendingRetries: { [key]: seed.record },
+          actedOn,
+          replayCursor: 3,
+          lastUpdatedMs: t0,
+        },
+        null,
+        2,
+      ),
+    );
+    const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const stateRoot = dir.replace(/'/g, "''");
+    const script = [
+      `. '${lib.replace(/'/g, "''")}'`,
+      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot}' -ListenerReadyMs ${t0} -PendingRetriesOnly \``,
+      `  -InvokeWakeFilter { throw 'filter should not run' } \``,
+      '  -ResolveOpenPrs { throw "gh open pr lookup failed" } `',
+      "  -InvokeTrigger { throw 'trigger should not run' } `",
+      '  -LogWriter { param($Message) }',
+    ].join('\n');
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || 'pwsh failed');
+    }
+    const state = JSON.parse(readFileSync(path.join(dir, 'review-handoff-wake-admission.json'), 'utf8'));
+    expect(state.actedOn?.[admissionId]).toBeTruthy();
+    expect(state.replayCursor).toBe(3);
+    expect(Object.keys(state.pendingRetries ?? {}).length).toBe(1);
+  });
+
+  it('preserves actedOn tombstones and replayCursor on admission_lookup_unknown retry writes (#712)', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-admission-lookup-lifecycle-'));
+    const bodyJson = readFileSync(path.join(captureDir, 'ready_for_review.raw.json'), 'utf8');
+    const t0 = 1_700_000_000_000;
+    const admissionId = 'admission-lookup-unknown-712';
+    const actedOn = {
+      [admissionId]: {
+        admissionId,
+        reason: 'delete_on_durable_trigger',
+        recordedAtMs: t0,
+      },
+    };
+    const seed = seedPendingAdmissionRetry({ existing: {}, bodyJson, lookupDimension: 'session', nowMs: t0 });
+    const key = String(seed.key);
+    writeFileSync(
+      path.join(dir, 'review-handoff-wake-admission.json'),
+      JSON.stringify(
+        {
+          records: {},
+          pendingRetries: { [key]: seed.record },
+          actedOn,
+          replayCursor: 5,
+          lastUpdatedMs: t0,
+        },
+        null,
+        2,
+      ),
+    );
+    const lib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const stateRoot = dir.replace(/'/g, "''");
+    const script = [
+      `. '${lib.replace(/'/g, "''")}'`,
+      '$filter = @{',
+      '  ok = $false',
+      "  retryable = $true",
+      "  reason = 'admission_lookup_unknown'",
+      "  audit = @{ lookupDimension = 'session' }",
+      '}',
+      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot}' -ListenerReadyMs ${t0} -PendingRetriesOnly \``,
+      '  -InvokeWakeFilter { param($BodyJson,$OpenPrs,$Failed) return $filter } `',
+      '  -ResolveOpenPrs { return @() } `',
+      "  -InvokeTrigger { throw 'trigger should not run' } `",
+      '  -LogWriter { param($Message) }',
+    ].join('\n');
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || 'pwsh failed');
+    }
+    const state = JSON.parse(readFileSync(path.join(dir, 'review-handoff-wake-admission.json'), 'utf8'));
+    expect(state.actedOn?.[admissionId]).toBeTruthy();
+    expect(state.replayCursor).toBe(5);
+    expect(Object.keys(state.pendingRetries ?? {}).length).toBe(1);
   });
 
 

@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,12 +20,19 @@ export function isolatedLeaseRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'opk-testmode-lease-'));
 }
 
-export function getCanonicalDefaultLeaseRoot(): string {
+export function getWorkspaceLeaseScopeKey(workspaceRoot: string): string {
+  const normalized = path.resolve(workspaceRoot);
+  return createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 16);
+}
+
+export function getCanonicalDefaultLeaseRoot(workspaceRoot: string = repoRoot): string {
   const home = process.env.HOME ?? os.homedir();
   const stateBase = process.env.XDG_STATE_HOME?.trim()
     || process.env.LOCALAPPDATA?.trim()
     || path.join(home, '.local', 'state');
-  return path.join(stateBase, 'opk-testmode-fleet-leases');
+  const base = path.join(stateBase, 'opk-testmode-fleet-leases');
+  const scopeKey = getWorkspaceLeaseScopeKey(workspaceRoot);
+  return path.join(base, `ws-${scopeKey}`);
 }
 
 export function getDefaultLeaseRoot(): string {
@@ -32,7 +40,8 @@ export function getDefaultLeaseRoot(): string {
   if (fromEnv) {
     return fromEnv;
   }
-  return getCanonicalDefaultLeaseRoot();
+  const workspace = process.env.OPK_TESTMODE_FLEET_WORKSPACE_ROOT?.trim() || repoRoot;
+  return getCanonicalDefaultLeaseRoot(workspace);
 }
 
 export function getVitestLaneContextFileName(leaseId?: string): string {

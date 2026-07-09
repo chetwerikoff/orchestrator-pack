@@ -17,6 +17,7 @@ $FileRunPlanScript = Join-Path $Root 'scripts/resolve-vitest-heavy-file-run-plan
 
 $env:CI = 'true'
 $env:VITEST_HEAVY_SHARD = [string]$Shard
+$env:OPK_TESTMODE_FLEET_WORKSPACE_ROOT = $Root
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
 . (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
 Set-OpkVitestHarnessEnv | Out-Null
