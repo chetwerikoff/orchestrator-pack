@@ -1,0 +1,30 @@
+{
+  "issue": 693,
+  "note": "Intentionally misclassified negative regression corpus — must fail guard in isolation",
+  "inScopeFiles": [
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts"
+  ],
+  "approvedPositiveHelpers": [
+    "waitForMarkerPidChange",
+    "fixedObservationWindow"
+  ],
+  "sites": [
+    {
+      "id": "registry-slow-side-effect-window",
+      "file": "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "anchor": "fixedObservationWindow(6000)",
+      "classification": "positive-convertible",
+      "followingAssertion": "pid unchanged after slow side effect",
+      "rationale": "MISCLASSIFIED: quiescence window incorrectly tagged positive-convertible",
+      "generationBoundary": "pidAtWindowStart"
+    }
+  ],
+  "assertionFingerprints": {},
+  "runtimeEvidence": {
+    "mergeBaseRef": "origin/main",
+    "mergeBaseSha": "0000000000000000000000000000000000000000",
+    "p75WallMs": {},
+    "mergeBaseP75WallMs": {}
+  },
+  "raceFixtures": {}
+}

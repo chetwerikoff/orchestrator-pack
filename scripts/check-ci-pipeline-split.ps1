@@ -501,6 +501,16 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
     }
 }
 
+
+$rpcArtifactValidator = Join-Path $RepoRoot 'scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs'
+if (Test-Path -LiteralPath $rpcArtifactValidator) {
+    $rpcOutput = & node $rpcArtifactValidator 2>&1 | Out-String
+    if ($rpcOutput.Trim()) { Write-Host $rpcOutput.Trim() }
+    if ($LASTEXITCODE -ne 0) {
+        Add-Fail 'supervisor heavy-lane RPC repeat-run artifact validation failed (Issue #693)'
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Host '[FAIL] CI pipeline split guard:'
     foreach ($item in $failures) {

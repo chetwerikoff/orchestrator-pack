@@ -13,6 +13,7 @@ export {
   readSupervisorLog,
   runSupervisor,
   startSupervisorBackground,
+  stopSupervisorChild,
   waitForMarker,
   waitForSupervisorLogMatch,
 } from './supervisor-recovery.test-helpers.js';
@@ -55,15 +56,6 @@ export async function runFaultBoundaryInjectionCase(inject: string): Promise<voi
   expect(status.stdout).toContain('supervisor: running');
 
   await stopSupervisorChild(child, stateDir);
-}
-
-export async function stopSupervisorChild(
-  child: { kill: (signal: NodeJS.Signals) => void },
-  stateDir: string,
-): Promise<void> {
-  child.kill('SIGTERM');
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
 }
 
 export async function assertTerminalHeartbeatStopped(stateDir: string): Promise<void> {

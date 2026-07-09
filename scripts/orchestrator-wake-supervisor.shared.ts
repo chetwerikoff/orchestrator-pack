@@ -9,17 +9,25 @@ export { afterEach, describe, expect, it } from 'vitest';
 export {
   cleanupSupervisorTests,
   fixtureDir,
+  fixedObservationWindow,
   isAlive,
   makeStateDir,
   managedChildRoles,
   readMarker,
+  readSupervisorLog,
   repoRoot,
   runSupervisor,
+  sleepMs,
   startSupervisorBackground,
+  stopSupervisorChild,
   supervisorScript,
+  waitForCondition,
+  waitForMarkerPidChange,
   waitForMarkers,
-  waitForSupervisorHealthyStatus,
   waitForProcessesStopped,
+  waitForStdoutContains,
+  waitForSupervisorLogMatchFromOffset,
+  waitForSupervisorHealthyStatus,
   type ManagedChildRole,
   type WakeMarker,
 } from './supervisor-recovery.test-helpers.js';
@@ -32,12 +40,3 @@ export const issue205TimeoutMs = 60_000;
 afterEach(() => {
   cleanupSupervisorTests();
 }, supervisorHookTimeoutMs);
-
-export async function stopSupervisorChild(
-  child: { kill: (signal: NodeJS.Signals) => void },
-  stateDir: string,
-): Promise<void> {
-  child.kill('SIGTERM');
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-}
