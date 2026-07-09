@@ -291,6 +291,24 @@ Operator adoption after merge:
 Safe rollback: remove `scripts/gh` from PATH prepend order (real `/usr/bin/gh` wins) — behavior
 returns to native GraphQL-backed `gh`.
 
+## Fleet hygiene sentinel (Issue #711)
+
+Standing external sentinel + on-demand `-Action Hygiene` observe H1–H7 fleet shape
+and machine `pwsh` ceilings. **Not** a supervised registry child.
+
+Operator adoption after merge:
+
+1. Install schedule from `docs/examples/fleet-hygiene-sentinel.cron.example` or
+   `docs/examples/fleet-hygiene-sentinel.systemd.timer.example`.
+2. Run once: `pwsh -NoProfile -File scripts/orchestrator-fleet-hygiene-sentinel.ps1 -Action Hygiene`
+   and confirm exit **0** on a healthy fleet.
+3. Leave kill mode **disabled** unless explicitly remediating a storm:
+   `AO_FLEET_HYGIENE_KILL_ENABLE=1` (default off).
+4. Optional caps/alerts: `AO_FLEET_HYGIENE_MAX_PWSH_COUNT`,
+   `AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB`, `AO_FLEET_HYGIENE_ALERT_FILE`.
+
+Runbook: [`docs/fleet-hygiene-sentinel-runbook.md`](fleet-hygiene-sentinel-runbook.md).
+
 ## Wake supervisor ordinary Start detach (Issue #552)
 
 Ordinary `-Action Start` on Linux/macOS now launches the supervisor loop in a new
