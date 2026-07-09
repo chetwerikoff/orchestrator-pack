@@ -13,6 +13,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessDegradedBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
+. (Join-Path $PSScriptRoot 'TestMode-FleetLease.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
 $Script:OrchestratorSideProcessRegistryPath = Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts/orchestrator-side-process-registry.json'
@@ -1711,6 +1712,10 @@ function Invoke-OrchestratorWakeSupervisorLoop {
 
     Invoke-OrchestratorWakeSupervisorAdoptOrTerminate -Paths $Paths -LogPath $Paths.SupervisorLog -TestMode:$TestMode
 
+    if ($TestMode) {
+        Register-TestModeFleetSupervisorStart -StateRoot $Paths.Root
+    }
+
     $loopStart = Get-Date
     $phase = 'waiting'
     $currentSessionId = ''
@@ -1723,6 +1728,16 @@ function Invoke-OrchestratorWakeSupervisorLoop {
     $registry = Get-OrchestratorWakeSupervisorChildRegistry
 
     while ($true) {
+        if ($TestMode) {
+            $leaseTtl = Test-TestModeFleetSupervisorLeaseExpired -Paths $Paths
+            if ($leaseTtl.expired) {
+                Write-OrchestratorWakeSupervisorLog -Message "testmode lease TTL self-exit ($($leaseTtl.reason))" -LogPath $Paths.SupervisorLog
+                Set-OrchestratorWakeSupervisorStoppingFlag -Paths $Paths
+                Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog -StateRoot $Paths.Root
+                break
+            }
+        }
+
         if (Test-OrchestratorWakeSupervisorStopping -Paths $Paths) {
             Write-OrchestratorWakeSupervisorLog -Message 'stop requested; exiting supervisor loop' -LogPath $Paths.SupervisorLog
             break

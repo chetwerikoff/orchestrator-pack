@@ -1,9 +1,16 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import {
   applyOpkVitestHarnessEscalationEnv,
   sharedDefaultEscalationStatePath,
 } from './test-harness-escalation-env.js';
+import {
+  registerLaneLease,
+  runReaperCli,
+  touchLeaseHeartbeat,
+  repoRoot,
+} from './testmode-fleet-harness.js';
 
 type SharedDefaultSnapshot = {
   exists: boolean;
@@ -12,6 +19,7 @@ type SharedDefaultSnapshot = {
 };
 
 let sharedDefaultSnapshot: SharedDefaultSnapshot;
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
 function snapshotSharedDefaultStore(): SharedDefaultSnapshot {
   const storePath = sharedDefaultEscalationStatePath();
@@ -60,11 +68,52 @@ function assertSharedDefaultUnmutated(): void {
   }
 }
 
+function startLeaseHeartbeat(): void {
+  const intervalSeconds = Number(process.env.AO_TESTMODE_FLEET_HEARTBEAT_INTERVAL_SECONDS ?? '5');
+  const intervalMs = Math.max(1, intervalSeconds) * 1000;
+  touchLeaseHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    touchLeaseHeartbeat();
+  }, intervalMs);
+  if (typeof heartbeatTimer.unref === 'function') {
+    heartbeatTimer.unref();
+  }
+}
+
+function stopLeaseHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+}
+
 export default function setup() {
   sharedDefaultSnapshot = snapshotSharedDefaultStore();
   applyOpkVitestHarnessEscalationEnv();
+
+  const laneId = process.env.VITEST_HEAVY_SHARD
+    ? `heavy-shard-${process.env.VITEST_HEAVY_SHARD}`
+    : process.env.VITEST_CI_LIGHT_LANE === '1'
+      ? 'light-lane'
+      : 'default-lane';
+
+  registerLaneLease({
+    laneId,
+    runId: process.env.GITHUB_RUN_ID
+      ? `gh-${process.env.GITHUB_RUN_ID}`
+      : `local-${process.pid}-${Date.now()}`,
+    workspaceRoot: repoRoot,
+  });
+
+  runReaperCli('bootstrap');
+  startLeaseHeartbeat();
 }
 
 export async function teardown() {
-  assertSharedDefaultUnmutated();
+  stopLeaseHeartbeat();
+  try {
+    runReaperCli('teardown');
+  } finally {
+    assertSharedDefaultUnmutated();
+  }
 }

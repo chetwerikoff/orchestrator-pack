@@ -16,6 +16,7 @@ $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 $FileRunPlanScript = Join-Path $Root 'scripts/resolve-vitest-heavy-file-run-plan.mjs'
 
 $env:CI = 'true'
+$env:VITEST_HEAVY_SHARD = [string]$Shard
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
 . (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
 Set-OpkVitestHarnessEnv | Out-Null
@@ -174,6 +175,15 @@ try {
     $sw.Stop()
     $elapsed = [math]::Round($sw.Elapsed.TotalSeconds, 2)
     Write-Host "vitest-lane-timing lane=heavy shard=$Shard files=$($shardPlan.files.Count) weight_ms=$($shardPlan.totalRuntimeMs) elapsed_sec=$elapsed"
+
+    $reaperScript = Join-Path $Root 'scripts/invoke-testmode-fleet-reaper.ps1'
+    $observeJson = & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript observe 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[FAIL] TestMode fleet hygiene: surviving this-run/shard-scoped pwsh detected before post-run cleanup"
+        Write-Host $observeJson
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript cleanup 2>&1 | Write-Host
+        exit 2
+    }
 }
 finally {
     Pop-Location
