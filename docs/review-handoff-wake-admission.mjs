@@ -861,6 +861,16 @@ export function seedHandoffAdmissionRecord(input) {
       return { seeded: false, reason: 'already_acted_on', noop: true, admissionId, records: existing };
     }
   }
+  else if (input.openPrIndexTrusted === true) {
+    const open = findOpenPrForHandoffRecord(
+      { projectId: subject.projectId, repoSlug, prNumber },
+      toArray(input.openPrs),
+    );
+    const trustedCurrentHead = normalizeSha(String(open?.headRefOid ?? ''));
+    if (trustedCurrentHead && headSha !== trustedCurrentHead) {
+      return { seeded: false, reason: 'stale_head_regressed', noop: true, admissionId };
+    }
+  }
 
   const key = handoffAdmissionKey({
     projectId: subject.projectId,

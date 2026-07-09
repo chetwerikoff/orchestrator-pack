@@ -226,6 +226,40 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(Object.values(result.records)[0]).toMatchObject({ headSha: currentHead });
   });
 
+
+  it('rejects stale heads without an active row when trusted open-PR head advanced', () => {
+    const t0 = 1_700_000_000_000;
+    const oldHead = 'aaaa'.repeat(10);
+    const newHead = 'bbbb'.repeat(10);
+    const newSeed = seedPair(newHead, 234, t0);
+    const newKey = Object.keys(newSeed.records)[0]!;
+    const cleared = clearHandoffAdmissionRecord({
+      existing: newSeed.records,
+      actedOn: {},
+      key: newKey,
+      nowMs: t0 + 1_000,
+    }) as { records: Record<string, unknown>; actedOn: Record<string, unknown> };
+    expect(Object.keys(cleared.records)).toHaveLength(0);
+
+    const stale = seedHandoffAdmissionRecord({
+      existing: cleared.records,
+      actedOn: cleared.actedOn,
+      admission: baseAdmission({
+        subject: {
+          prNumber: 234,
+          receivedAtMs: t0 + 2_000,
+          eventId: 'evt-delayed-old-head-no-active',
+          sessionId: 'opk-stale',
+        },
+        admittedHeadSha: oldHead,
+      }),
+      nowMs: t0 + 2_000,
+      openPrs: [{ number: 234, headRefOid: newHead, repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+    });
+    expect(stale).toMatchObject({ seeded: false, reason: 'stale_head_regressed', noop: true });
+  });
+
   it('tombstones superseded admission ids so delayed old-head POST cannot re-seed', () => {
     const t0 = 1_700_000_000_000;
     const oldHead = 'aaaa'.repeat(10);
