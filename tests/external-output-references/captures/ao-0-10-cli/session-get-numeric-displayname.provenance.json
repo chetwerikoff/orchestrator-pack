@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao session get orchestrator-pack-45 --json -p orchestrator-pack",
+  "toolVersion": "ao 0.10.2",
+  "capturedAtUtc": "2026-07-08T12:00:00.000Z",
+  "context": "Issue #699 live probe: numeric PR displayName on single-session get after claim-pr; corroborated against open-PR index only when numeric.",
+  "scrubLog": ["Synthetic session id orchestrator-pack-45"]
+}

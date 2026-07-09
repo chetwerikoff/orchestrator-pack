@@ -16,6 +16,7 @@ import {
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import { evaluateCiFailureSuppressorDecision } from './ci-failure-notification.mjs';
 import { resolveHeadOwningWorkerSessionId, sessionMatchesPr } from './review-trigger-reconcile.mjs';
+import { resolvePrOwningWorkerSessionBinding } from './session-pr-binding-resolver.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 export { validateCapabilityInventory };
 
@@ -267,22 +268,27 @@ function deriveTargetGeneration(session) {
  * @param {string} headSha
  * @param {unknown[]} openPrs
  */
-function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPrs = []) {
+function resolvePrOwningWorkerSessionId(sessions, prNumber, headSha = '', openPrs = [], sessionDetailsById = {}) {
   if (headSha) {
     const owned = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
     if (owned) {
-      return owned;
+      return { sessionId: owned };
     }
   }
-  const matches = toArray(sessions).filter((session) => {
-    const role = String(session?.role ?? '').toLowerCase();
-    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber);
+  const prBinding = resolvePrOwningWorkerSessionBinding(sessions, prNumber, openPrs, {
+    headSha: headSha || undefined,
+    requireLive: true,
+    isLive: isSessionAlive,
+    getSessionId: getSessionIdentifier,
+    sessionDetailsById,
   });
-  if (matches.length === 0) {
-    return null;
+  if (prBinding.failClosed) {
+    return {
+      sessionId: null,
+      deferReason: prBinding.deferReason ?? prBinding.reason ?? 'ambiguous_pr_session_binding',
+    };
   }
-  matches.sort((a, b) => getSessionIdentifier(a).localeCompare(getSessionIdentifier(b)));
-  return getSessionIdentifier(matches[0]);
+  return { sessionId: prBinding.sessionId ?? null };
 }
 
 /**
@@ -405,16 +411,18 @@ export function resolvePrOwnerSessionForNudge(input) {
   const sessions = toArray(input.sessions);
   const openPrs = toArray(input.openPrs);
 
-  const ownerSessionId = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+  const sessionDetailsById = input.sessionDetailsById ?? input.workerState?.sessionDetailsById ?? {};
+  const ownership = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, openPrs, sessionDetailsById);
+  const ownerSessionId = ownership.sessionId;
   if (!ownerSessionId) {
-    return { ok: false, reason: 'pr_owner_unresolved' };
+    return { ok: false, reason: ownership.deferReason ?? 'pr_owner_unresolved' };
   }
   if (sessionId && headSha && ownerSessionId !== sessionId) {
     return { ok: false, reason: 'head_owner_mismatch' };
   }
   if (sessionId && !headSha) {
     const sessionOk = sessions.some(
-      (session) => getSessionIdentifier(session) === sessionId && sessionMatchesPr(session, prNumber),
+      (session) => getSessionIdentifier(session) === sessionId && sessionMatchesPr(session, prNumber, openPrs),
     );
     if (!sessionOk) {
       return { ok: false, reason: 'pr_session_mismatch' };
@@ -435,11 +443,16 @@ export function resolveWorkerTargetFromPrClaim(input) {
   }
   const claimRecord =
     prClaims.find((row) => Number(row?.prNumber) === prNumber) ?? input.claimRecord ?? null;
+  const sessionDetailsById = input.sessionDetailsById ?? input.workerState?.sessionDetailsById ?? {};
+  const ownership = resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, input.openPrs, sessionDetailsById);
   const ownerSessionId =
-    String(claimRecord?.ownerSessionId ?? '').trim() ||
-    resolvePrOwningWorkerSessionId(sessions, prNumber, headSha, input.openPrs);
+    String(claimRecord?.ownerSessionId ?? '').trim() || ownership.sessionId;
   if (!ownerSessionId) {
-    return { ok: false, reason: 'pr_owner_unresolved', verifiable: false };
+    return {
+      ok: false,
+      reason: ownership.deferReason ?? 'pr_owner_unresolved',
+      verifiable: false,
+    };
   }
   if (!claimRecord?.generation) {
     return { ok: false, reason: 'pr_claim_unresolved', verifiable: false };

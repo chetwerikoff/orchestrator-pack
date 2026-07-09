@@ -26,6 +26,14 @@
       "path": "captures/ao-0-10-cli/send-help.raw.txt",
       "contentHash": "sha256:615ccc8fa729d038d41e449b76927b01e145ccbb12c7a6cb022e78597130b59e"
     },
+    "ao-0-10-cli/session-get-numeric-displayname": {
+      "id": "ao-0-10-cli/session-get-numeric-displayname",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao session get orchestrator-pack-45 --json -p orchestrator-pack",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/session-get-numeric-displayname.raw.json",
+      "contentHash": "sha256:fa065d82f482319517a225faba9f968cef3faeda4e6dc62a85c47f56fc19a287"
+    },
     "ao-0-10-cli/session-get-worker": {
       "id": "ao-0-10-cli/session-get-worker",
       "producer": "ao-0-10-cli",
@@ -41,6 +49,14 @@
       "kind": "structured",
       "path": "captures/ao-0-10-cli/session-ls.raw.json",
       "contentHash": "sha256:7d72c7b6a70cabb92d34829ecf310da6f26a8004b4da719282ede49334615c8d"
+    },
+    "ao-0-10-cli/session-ls-issue-only-post-claim": {
+      "id": "ao-0-10-cli/session-ls-issue-only-post-claim",
+      "producer": "ao-0-10-cli",
+      "sourceCommand": "ao session ls --json -p orchestrator-pack",
+      "kind": "structured",
+      "path": "captures/ao-0-10-cli/session-ls-issue-only-post-claim.raw.json",
+      "contentHash": "sha256:9f2b7d02a08cd57cc5c0c281fb21826424faf8623eb9a194bded1392a262dfcb"
     },
     "ao-0-10-cli/session-ls-terminated": {
       "id": "ao-0-10-cli/session-ls-terminated",
