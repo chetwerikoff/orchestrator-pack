@@ -25,6 +25,7 @@ import {
   readChildRecovery,
   runSupervisor,
   startSupervisorBackground,
+  stopSupervisorChild,
   waitForMarker,
   waitForSupervisorLogMatch,
 } from './supervisor-recovery.test-helpers.js';
