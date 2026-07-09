@@ -1199,6 +1199,9 @@ export function selectHandoffAdmissionReplay(input) {
   const ordered = sortHandoffRecordsForReplay(records);
   const replay = [];
   let cursor = Math.max(0, replayCursor);
+  if (ordered.length > 0 && cursor > ordered.length) {
+    cursor = 0;
+  }
   let nextCursor = cursor;
 
   while (cursor < ordered.length && replay.length < batchSize) {

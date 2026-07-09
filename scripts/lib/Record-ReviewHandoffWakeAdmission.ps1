@@ -588,8 +588,10 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
     $openPrIndexTrusted = -not $openPrLookupFailed
 
     $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
-    if ($admissionState.corrupt) {
-        & $LogWriter 'review-handoff-wake: admission store corrupt; skipping replay'
+    if (-not (Test-MechanicalJsonStateFencesTrusted -State $admissionState)) {
+        $recoveryReason = Get-MechanicalJsonStateRecoveryReason -State $admissionState
+        if (-not $recoveryReason) { $recoveryReason = 'untrusted_recovery_state' }
+        & $LogWriter "review-handoff-wake: admission store corrupt; skipping replay (reason=$recoveryReason)"
         return
     }
 

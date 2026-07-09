@@ -272,6 +272,30 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(second.replay.length).toBeGreaterThan(0);
   });
 
+
+  it('clamps stale replay cursor after prune shrinks the prepared record list', () => {
+    const listenerReadyMs = 1_700_000_000_000;
+    const nowMs = listenerReadyMs + 1_000;
+    let records: Record<string, unknown> = {};
+    for (let i = 0; i < 5; i += 1) {
+      const seeded = seedPair(`head${String(i)}`, 700 + i, listenerReadyMs + i * 100, records);
+      records = seeded.records;
+    }
+    const replay = selectHandoffAdmissionReplay({
+      records,
+      actedOn: {},
+      replayCursor: 10,
+      listenerReadyMs,
+      nowMs,
+      openPrs: [
+        { number: 700, headRefOid: 'head0' },
+        { number: 701, headRefOid: 'head1' },
+      ],
+      openPrIndexTrusted: true,
+    }) as { replay: unknown[] };
+    expect(replay.replay.length).toBe(2);
+  });
+
   it('continues replay in the same recovery pass after batch durable-trigger deletions', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'handoff-replay-cursor-'));
     const stateRoot = dir;
@@ -401,6 +425,33 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(loaded.corrupt).toBe(true);
     expect(loaded.records).toEqual({});
     expect(loaded.actedOn).toEqual({});
+  });
+
+
+  it('AC12 pwsh: corrupt mechanical-json load fail-closes recovery and preserves recovery marker', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-corrupt-recovery-'));
+    const stateRoot = dir;
+    const statePath = path.join(dir, 'review-handoff-wake-admission.json');
+    writeFileSync(statePath, '{not-json');
+    const lib = path.join(repoRoot, 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const script = [
+      `. '${lib.replace(/'/g, "''")}'`,
+      '$calls = 0',
+      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot.replace(/'/g, "''")}' -ListenerReadyMs ${Date.now() - 2_000} \``,
+      '  -InvokeWakeFilter { throw "filter should not run" } `',
+      '  -ResolveOpenPrs { return @() } `',
+      '  -InvokeTrigger { $script:calls++; return @{ triggered = $true } } `',
+      '  -LogWriter { param($Message) }',
+      '$calls',
+    ].join('\n');
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(Number(result.stdout.trim())).toBe(0);
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      _recovery?: { fenceTrusted?: boolean; reason?: string };
+    };
+    expect(state._recovery?.fenceTrusted).toBe(false);
+    expect(state._recovery?.reason).toBe('unparseable_no_backup');
   });
 
   it('AC14/AC20: golden pre-fix store shrinks after one recovery prepare pass', () => {

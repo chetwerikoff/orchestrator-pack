@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -6008,10 +6008,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-592",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-594",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 592
+        "line": 594
       },
       "callee": {
         "kind": "other-external",
@@ -6023,20 +6023,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:f3a4e663a4908cc05db82f4e2bead7aad8eeef272c80695321703635b6e8548a",
+      "hashPinnedSourceHash": "sha256:ff20fd52e37fcfb23332e119b98a5a036d08f66bba708fabb726f88a6ed3ce7d",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 592,
+        "line": 594,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-669",
+      "rowId": "site-scripts-lib-Record-ReviewHandoffWakeAdmission-ps1-671",
       "caller": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 669
+        "line": 671
       },
       "callee": {
         "kind": "other-external",
@@ -6051,7 +6051,7 @@
       "hashPinnedSourceHash": "sha256:8cb166755f7339af136890064b9310574591ab005205d1f37299a8908873b97f",
       "discoveryMatch": {
         "file": "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1",
-        "line": 669,
+        "line": 671,
         "patternIds": [
           "ps-call-op"
         ]
