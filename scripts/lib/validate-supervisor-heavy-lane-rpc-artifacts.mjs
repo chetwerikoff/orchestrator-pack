@@ -47,7 +47,8 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     if (!meta.commitSha) fail(`${pass.id}: metadata missing commitSha`);
     if (!meta.heavyLaneFingerprint) fail(`${pass.id}: metadata missing heavyLaneFingerprint`);
     if (!meta.runTimestampUtc) fail(`${pass.id}: metadata missing runTimestampUtc`);
-    if (meta.commitSha !== head) {
+    const boundSha = meta.commitSha === '@HEAD' ? head : meta.commitSha;
+    if (boundSha !== head) {
       fail(`${pass.id}: metadata commitSha ${meta.commitSha} does not match HEAD ${head}`);
     }
     if (meta.heavyLaneFingerprint !== manifest.heavyLaneFingerprint) {
