@@ -40,7 +40,7 @@ if (mode === 'heavy') {
   }
   const heavyShard = plan.heavyShards.find((entry) => entry.shard === shard);
   if (!heavyShard) {
-    console.error(`heavy shard ${shard} not found (count=${plan.config.heavyShardCount})`);
+    console.error(`heavy shard ${shard} not found (count=${plan.topology.heavyShardCount})`);
     process.exit(1);
   }
   console.log(JSON.stringify(heavyShard));

@@ -368,10 +368,10 @@ function runProvenanceGateFixtures() {
   const commitSha = 'deadbeef';
   const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-prov`);
   mkdirSync(dir, { recursive: true });
-  const heavy = classifyHeavyFiles(defaultRepoRoot).heavy;
+  const { heavy, heavyShardCount } = classifyHeavyFiles(defaultRepoRoot);
 
   const partialAssignments = new Map();
-  for (let shard = 1; shard <= 6; shard += 1) {
+  for (let shard = 1; shard < heavyShardCount; shard += 1) {
     partialAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
   }
   const partial = refreshRuntimeHistory({
@@ -413,7 +413,7 @@ function runProvenanceGateFixtures() {
   assert(unknown.rejected, 'unclassified path must be rejected');
 
   const partialTimingAssignments = new Map();
-  for (let shard = 1; shard <= 7; shard += 1) {
+  for (let shard = 1; shard <= heavyShardCount; shard += 1) {
     partialTimingAssignments.set(shard, [{ file: heavy[shard - 1], durationMs: 12000 }]);
   }
   const uncoveredHeavy = 'scripts/orchestrator-wake-supervisor.test.ts';

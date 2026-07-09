@@ -1,0 +1,16 @@
+{
+  "issue": 691,
+  "source": "ci-measured",
+  "files": {
+    "scripts/sample-heavy-a.test.ts": 45000,
+    "scripts/sample-heavy-b.test.ts": 60000,
+    "scripts/sample-oversized.test.ts": 30000,
+    "scripts/sample-light.test.ts": 15000
+  },
+  "provenance": {
+    "scripts/sample-heavy-a.test.ts": "measured",
+    "scripts/sample-heavy-b.test.ts": "measured",
+    "scripts/sample-oversized.test.ts": "measured",
+    "scripts/sample-light.test.ts": "measured"
+  }
+}

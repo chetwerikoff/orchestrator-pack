@@ -16,7 +16,7 @@ import {
   historyBytes,
   writeHistoryIfChanged,
 } from './lib/vitest-runtime-history-merge.mjs';
-import { loadLanesConfig } from './lib/vitest-ci-lanes.mjs';
+import { buildHeavyTopology } from './lib/vitest-heavy-topology.mjs';
 
 function printUsage() {
   console.error(`Usage: node scripts/refresh-vitest-runtime-history.mjs \\
@@ -120,8 +120,15 @@ function main() {
 
   const historyPath =
     options.historyPath || join(options.repoRoot, 'scripts/vitest-runtime-history.json');
-  const config = loadLanesConfig(options.repoRoot);
-  const shardReports = loadShardReportsFromDir(options.reportsDir, config.heavyShardCount);
+  const topologyResult = buildHeavyTopology(options.repoRoot);
+  if (!topologyResult.ok) {
+    console.error(topologyResult.errors.join('; '));
+    process.exit(1);
+  }
+  const shardReports = loadShardReportsFromDir(
+    options.reportsDir,
+    topologyResult.topology.heavyShardCount,
+  );
   const baseHistory = options.baseHistoryFile
     ? loadHistoryFromFile(options.baseHistoryFile)
     : loadHistoryFromFile(historyPath);

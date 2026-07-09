@@ -19,9 +19,13 @@ classify-pr-changes (markdown-only skip)
 
 Lane topology is canonical in:
 
-- `scripts/ci-pipeline-split.config.json` — job names and heavy shard count (**7**)
-- `scripts/vitest-ci-lanes.config.json` — per-file **light** / **heavy** classification
-- `scripts/vitest-runtime-history.json` — per-file timing evidence for weighted shards
+- `scripts/ci-pipeline-split.config.json` — job names and **fallback** heavy shard count (**7**)
+- `scripts/vitest-ci-lanes.config.json` — per-file **light** / **heavy** classification and
+  **heavyTopology** budget (`targetShardSeconds`, min/max caps, fallback count)
+- `scripts/vitest-runtime-history.json` — per-file timing evidence (#691 harvest producer;
+  ms values normalized to **seconds** at derivation/guard read time)
+- `scripts/vitest-heavy-topology.plan.json` — CI-generated canonical topology artifact (derived
+  count, matrix payload, fallback classification) from `emit-vitest-heavy-topology.mjs`
 
 Issue #487 shipped a **4-way** Vitest matrix. Issue #536 doubled isolation to
 **8-way** round-robin as a reversible experiment. Issue #556 replaces round-robin
@@ -52,17 +56,57 @@ Every discovered Vitest file must be explicitly classified in
 **False-light classification is the dangerous failure** (can reintroduce
 `onTaskUpdate` flakes). When uncertain, classify **heavy**.
 
-## Runtime-weighted heavy shards
+## Runtime-weighted heavy shards (Issue #556 + #695)
 
-Heavy files are assigned to `heavyShardCount` shards using greedy LPT bin packing
-on `vitest-runtime-history.json` timings. Files without history use
-`heavyDefaultRuntimeMs` (**120s** conservative fallback).
+Heavy files are assigned to a **derived** `heavyShardCount` using greedy LPT bin packing
+on `vitest-runtime-history.json` timings (milliseconds in the artifact; **seconds** in
+policy math). Shard count is:
+
+```text
+clamp(ceil(heavyLaneTotalWeightSeconds / targetShardSeconds), minShardCount, maxShardCount)
+```
+
+`heavyLaneTotalWeightSeconds` sums resolved weights for files **classified heavy** only.
+The oversized-file floor guard evaluates **every discovered** Vitest file.
+
+Current budget (see `heavyTopology` in `scripts/vitest-ci-lanes.config.json`):
+
+| Policy input | Value |
+| --- | ---: |
+| `targetShardSeconds` | **900** (15 min per-shard budget) |
+| `minShardCount` | **1** |
+| `maxShardCount` | **14** |
+| `fallbackHeavyShardCount` | **7** |
+
+Files without per-file history use `heavyDefaultRuntimeMs` (**120s** conservative fallback)
+for **LPT assignment only**; the oversized guard fail-closes on PR-changed files with
+missing/stale weights unless deterministic pre-topology same-run measurement supplies a
+valid weight (see Issue #695).
+
+When the runtime-history artifact is **present-but-unusable** (empty, corrupt, degenerate),
+topology derivation falls back to `fallbackHeavyShardCount` and logs `fixed-fallback`.
+**Whole-artifact absence** post-#691 is a loud fail-closed error (broken harvest), not a
+fallback. Cap-hit clamping emits a non-blocking under-provisioned summary.
+
+The `plan-vitest-ci-topology` job emits the canonical topology artifact and exposes
+`heavy_shard_matrix` for the dynamic `test-vitest-heavy` matrix. `check-ci-pipeline-split.ps1`
+enforces matrix/count parity and the oversized-file merge guard on the PR-required path.
 
 Guards prove:
 
 - Lane union equals serial discovery (no missing/duplicate files)
 - Unknown files cannot enter accepted lanes
 - Heavy shard union equals the classified heavy set
+- Derived matrix count matches topology artifact parity
+- Any discovered file above `targetShardSeconds` (after ms→seconds normalization) fails merge
+  with split-or-speed-up guidance
+
+### Pre-#691 integration note
+
+Issue #695 consumes the #691 runtime-history schema (`files` ms map plus optional
+`provenance` / `contentSha` per entry). Until #691 merges and main accumulates measured
+weights, derivation runs on the committed `ci-baseline-estimates` seed; real-artifact
+integration completes after #691 lands.
 
 ## Light lane parallelism bound
 
@@ -83,6 +127,17 @@ Eight-way round-robin (#536) baseline is documented in
 under round-robin because assignment ignored runtime.
 
 ## Rollback
+
+### To fixed-count topology (pre-#695 emergency)
+
+1. Restore hand-listed `shard: [1..7]` (or prior fixed list) in `test-vitest-heavy`.
+2. Remove `plan-vitest-ci-topology` job and its `needs` edges.
+3. Restore fixed `heavyShardCount` in `scripts/vitest-ci-lanes.config.json` and drop derived
+   `heavyTopology` block (or ignore derivation by pinning count in workflow).
+4. Revert `scripts/lib/vitest-heavy-topology.mjs` consumption in lane plan/guard.
+
+Branch protection and the aggregate check name **Run pack contract tests** stay unchanged.
+Follow up to restore derived topology once weights are trustworthy.
 
 ### To #536 eight-way serial round-robin
 

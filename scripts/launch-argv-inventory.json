@@ -1740,10 +1740,10 @@
       }
     },
     {
-      "rowId": "site-scripts-check-ci-pipeline-split-ps1-338",
+      "rowId": "site-scripts-check-ci-pipeline-split-ps1-408",
       "caller": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 338
+        "line": 408
       },
       "callee": {
         "kind": "other-external",
@@ -1758,17 +1758,17 @@
       "hashPinnedSourceHash": "sha256:da42433612065311873d074435a5d60e804cace365cfb9148b640bb162ea55f0",
       "discoveryMatch": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 338,
+        "line": 408,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-check-ci-pipeline-split-ps1-350",
+      "rowId": "site-scripts-check-ci-pipeline-split-ps1-421",
       "caller": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 350
+        "line": 421
       },
       "callee": {
         "kind": "other-external",
@@ -1780,10 +1780,10 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:19077c6e3aa20872de063b94c18a5a8a4ade3ba89f09a17cb47629bc40f28708",
+      "hashPinnedSourceHash": "sha256:ef9412b4453a712fa01abd3e2635ade321409db5e9713ab14938f18156084e18",
       "discoveryMatch": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 350,
+        "line": 421,
         "patternIds": [
           "ps-call-op"
         ]

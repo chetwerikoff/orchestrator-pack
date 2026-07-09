@@ -1,0 +1,10 @@
+{
+  "issue": 556,
+  "source": "ci-baseline-estimates",
+  "files": {
+    "scripts/sample-heavy-a.test.ts": 45000,
+    "scripts/sample-heavy-b.test.ts": 60000,
+    "scripts/sample-oversized.test.ts": 30000,
+    "scripts/sample-light.test.ts": 15000
+  }
+}

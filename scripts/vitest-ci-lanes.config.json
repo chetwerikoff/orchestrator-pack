@@ -1,7 +1,6 @@
 {
   "issue": 556,
   "lightMaxWorkers": 2,
-  "heavyShardCount": 7,
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
   "heavyPerTestIsolate": [
@@ -62,7 +61,6 @@
     "scripts/draft-author-relocation-contract.test.ts": "light",
     "scripts/guard-direct-edit.test.ts": "light",
     "scripts/harness-review-bridge.test.ts": "light",
-    "scripts/harness-post-submit-pn-content-shape.test.ts": "light",
     "scripts/finding-ledger-guard.test.ts": "light",
     "scripts/external-output-shape-guard.test.ts": "light",
     "scripts/gh-inventory-static-guard.test.ts": "light",
@@ -170,6 +168,15 @@
     "scripts/ao-spawn-shape.test.ts": "light",
     "scripts/dead-worker-reconcile.test.ts": "heavy",
     "scripts/github-fleet-governor.test.ts": "heavy",
-    "scripts/launch-argv-inventory.test.ts": "light"
-  }
+    "scripts/launch-argv-inventory.test.ts": "light",
+    "scripts/harness-post-submit-pn-content-shape.test.ts": "light"
+  },
+  "heavyTopology": {
+    "targetShardSeconds": 900,
+    "minShardCount": 1,
+    "maxShardCount": 14,
+    "fallbackHeavyShardCount": 7
+  },
+  "heavyVitestPerFilePool": "threads",
+  "heavyVitestPoolByFile": {}
 }

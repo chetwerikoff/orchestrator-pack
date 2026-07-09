@@ -139,9 +139,7 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            trusted-scope-guard/package-lock.json
+          cache-dependency-path: trusted-scope-guard/package-lock.json
 
       - name: Run scope guard
         shell: pwsh
@@ -244,9 +242,61 @@ jobs:
         shell: pwsh
         run: ./scripts/run-vitest-light-lane.ps1
 
-  test-vitest-heavy:
-    name: Vitest heavy shard ${{ matrix.shard }}/7
+  plan-vitest-ci-topology:
+    name: Plan Vitest heavy topology
     needs: classify-pr-changes
+    if: |
+      always() &&
+      (needs.classify-pr-changes.result == 'skipped' ||
+       needs.classify-pr-changes.outputs.markdown_only != 'true')
+    runs-on: ubuntu-latest
+    outputs:
+      heavy_shard_count: ${{ steps.plan.outputs.heavy_shard_count }}
+      heavy_shard_matrix: ${{ steps.plan.outputs.heavy_shard_matrix }}
+      fallback_classification: ${{ steps.plan.outputs.fallback_classification }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Emit derived heavy topology
+        id: plan
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
+            mapfile -t changed < <(git diff --name-only "${PR_BASE_SHA}...${PR_HEAD_SHA}" -- '*.test.ts' || true)
+            if [ "${#changed[@]}" -gt 0 ]; then
+              export OPK_CHANGED_VITEST_FILES="$(printf '%s\n' "${changed[@]}")"
+            fi
+          fi
+          node scripts/emit-vitest-heavy-topology.mjs --gha-output
+
+      - name: Upload heavy topology artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-heavy-topology
+          path: scripts/vitest-heavy-topology.plan.json
+          if-no-files-found: error
+
+  test-vitest-heavy:
+    name: Vitest heavy shard ${{ matrix.shard }}/${{ needs.plan-vitest-ci-topology.outputs.heavy_shard_count }}
+    needs: [classify-pr-changes, plan-vitest-ci-topology]
     if: |
       always() &&
       (needs.classify-pr-changes.result == 'skipped' ||
@@ -255,7 +305,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: ${{ fromJson(needs.plan-vitest-ci-topology.outputs.heavy_shard_matrix) }}
     permissions:
       contents: read
     steps:
@@ -307,7 +357,7 @@ jobs:
 
   test-aggregate:
     name: Run pack contract tests
-    needs: [classify-pr-changes, test-typecheck, test-vitest-light, test-vitest-heavy, test-pester]
+    needs: [classify-pr-changes, plan-vitest-ci-topology, test-typecheck, test-vitest-light, test-vitest-heavy, test-pester]
     if: |
       always() &&
       (needs.classify-pr-changes.result == 'skipped' ||
@@ -325,6 +375,7 @@ jobs:
           TYPECHECK_RESULT: ${{ needs.test-typecheck.result }}
           VITEST_LIGHT_RESULT: ${{ needs.test-vitest-light.result }}
           VITEST_HEAVY_RESULT: ${{ needs.test-vitest-heavy.result }}
+          VITEST_TOPOLOGY_PLAN_RESULT: ${{ needs.plan-vitest-ci-topology.result }}
           PESTER_RESULT: ${{ needs.test-pester.result }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
