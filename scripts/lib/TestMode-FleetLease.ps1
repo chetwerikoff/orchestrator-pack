@@ -183,31 +183,92 @@ function Read-TestModeVitestLaneLeaseContext {
         [string]$Shard = ''
     )
 
+    $contexts = @(Get-TestModeVitestLaneLeaseContexts -Shard $Shard -LeaseRoot $LeaseRoot)
+    if ($contexts.Count -eq 0) { return $null }
+
+    $latest = $contexts[0]
+    foreach ($ctx in $contexts) {
+        $candidateMs = 0
+        $latestMs = 0
+        if ($ctx.PSObject.Properties.Name -contains 'writtenMs') {
+            [void][long]::TryParse([string]$ctx.writtenMs, [ref]$candidateMs)
+        }
+        if ($latest.PSObject.Properties.Name -contains 'writtenMs') {
+            [void][long]::TryParse([string]$latest.writtenMs, [ref]$latestMs)
+        }
+        if ($candidateMs -ge $latestMs) { $latest = $ctx }
+    }
+    return $latest
+}
+
+
+function Add-TestModeVitestLaneLeaseContextFromFile {
+    param(
+        [string]$Path,
+        [System.Collections.Generic.HashSet[string]]$SeenLeaseIds,
+        [System.Collections.Generic.List[object]]$Contexts
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    try {
+        $ctx = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $leaseId = [string]$ctx.leaseId
+        if (-not $leaseId) { return }
+        if ($SeenLeaseIds.Contains($leaseId)) { return }
+        [void]$SeenLeaseIds.Add($leaseId)
+        $Contexts.Add($ctx) | Out-Null
+    }
+    catch {
+        return
+    }
+}
+
+function Get-TestModeVitestLaneLeaseContexts {
+    param(
+        [string]$Shard = '',
+        [string]$LeaseRoot = ''
+    )
+
+    $contexts = [System.Collections.Generic.List[object]]::new()
+    $seenLeaseIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+
     $roots = [System.Collections.Generic.List[string]]::new()
     if ($LeaseRoot) { [void]$roots.Add($LeaseRoot) }
     $defaultRoot = Get-TestModeFleetLeaseRoot
     if ($defaultRoot -and -not $roots.Contains($defaultRoot)) { [void]$roots.Add($defaultRoot) }
 
-    $names = [System.Collections.Generic.List[string]]::new()
-    if ($Shard) { [void]$names.Add((Get-TestModeVitestLaneContextFileName -Shard $Shard)) }
-    if ($env:VITEST_CI_LIGHT_LANE -eq '1') { [void]$names.Add((Get-TestModeVitestLaneContextFileName -LightLane '1')) }
-    [void]$names.Add((Get-TestModeVitestLaneContextFileName))
-
     foreach ($root in @($roots | Select-Object -Unique)) {
-        foreach ($name in @($names | Select-Object -Unique)) {
-            $path = Join-Path $root $name
-            if (-not (Test-Path -LiteralPath $path)) { continue }
-            try {
-                $ctx = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-                if ($ctx.leaseId) { return $ctx }
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+
+        if ($Shard) {
+            $perLeasePattern = "vitest-lane-context-shard-$Shard-*.json"
+            foreach ($file in @(Get-ChildItem -LiteralPath $root -Filter $perLeasePattern -File -ErrorAction SilentlyContinue)) {
+                Add-TestModeVitestLaneLeaseContextFromFile -Path $file.FullName -SeenLeaseIds $seenLeaseIds -Contexts $contexts
             }
-            catch {
-                continue
+            Add-TestModeVitestLaneLeaseContextFromFile -Path (Join-Path $root (Get-TestModeVitestLaneContextFileName -Shard $Shard)) `
+                -SeenLeaseIds $seenLeaseIds -Contexts $contexts
+        }
+        elseif ($env:VITEST_CI_LIGHT_LANE -eq '1') {
+            foreach ($file in @(Get-ChildItem -LiteralPath $root -Filter 'vitest-lane-context-light-*.json' -File -ErrorAction SilentlyContinue)) {
+                Add-TestModeVitestLaneLeaseContextFromFile -Path $file.FullName -SeenLeaseIds $seenLeaseIds -Contexts $contexts
             }
+            Add-TestModeVitestLaneLeaseContextFromFile -Path (Join-Path $root (Get-TestModeVitestLaneContextFileName -LightLane '1')) `
+                -SeenLeaseIds $seenLeaseIds -Contexts $contexts
+        }
+        else {
+            foreach ($file in @(Get-ChildItem -LiteralPath $root -Filter 'vitest-lane-context-*.json' -File -ErrorAction SilentlyContinue)) {
+                $name = [string]$file.Name
+                if ($name -eq 'vitest-lane-context.json') { continue }
+                if ($name -like 'vitest-lane-context-shard-*') { continue }
+                if ($name -like 'vitest-lane-context-light*') { continue }
+                Add-TestModeVitestLaneLeaseContextFromFile -Path $file.FullName -SeenLeaseIds $seenLeaseIds -Contexts $contexts
+            }
+            Add-TestModeVitestLaneLeaseContextFromFile -Path (Join-Path $root (Get-TestModeVitestLaneContextFileName)) `
+                -SeenLeaseIds $seenLeaseIds -Contexts $contexts
         }
     }
 
-    return $null
+    return @($contexts)
 }
 
 function Import-TestModeVitestLaneLeaseContext {

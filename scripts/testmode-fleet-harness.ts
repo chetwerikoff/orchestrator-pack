@@ -35,19 +35,29 @@ export function getDefaultLeaseRoot(): string {
   return getCanonicalDefaultLeaseRoot();
 }
 
-export function getVitestLaneContextFileName(): string {
+export function getVitestLaneContextFileName(leaseId?: string): string {
   const shard = process.env.VITEST_HEAVY_SHARD?.trim();
+  const normalizedLeaseId = leaseId?.trim();
+  if (shard && normalizedLeaseId) {
+    return `vitest-lane-context-shard-${shard}-${normalizedLeaseId}.json`;
+  }
   if (shard) {
     return `vitest-lane-context-shard-${shard}.json`;
   }
   if (process.env.VITEST_CI_LIGHT_LANE === '1') {
+    if (normalizedLeaseId) {
+      return `vitest-lane-context-light-${normalizedLeaseId}.json`;
+    }
     return 'vitest-lane-context-light.json';
+  }
+  if (normalizedLeaseId) {
+    return `vitest-lane-context-${normalizedLeaseId}.json`;
   }
   return 'vitest-lane-context.json';
 }
 
 export function writeVitestLaneLeaseContext(lease: LaneLease): void {
-  const contextPath = path.join(lease.leaseRoot, getVitestLaneContextFileName());
+  const contextPath = path.join(lease.leaseRoot, getVitestLaneContextFileName(lease.leaseId));
   fs.mkdirSync(lease.leaseRoot, { recursive: true });
   fs.writeFileSync(
     contextPath,

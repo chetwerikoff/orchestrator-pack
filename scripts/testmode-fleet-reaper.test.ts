@@ -326,7 +326,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
     const leaseRoot = isolatedLeaseRoot();
     const leaseId = 'corrupt-lease';
     writeCorruptLeaseRecord(leaseRoot, leaseId);
-    const result = runPwsh(
+      const result = runPwsh(
       `. '${supervisorLib.replace(/'/g, "''")}'; . '${path.join(repoRoot, 'scripts/lib/Invoke-TestModeFleetReaper.ps1').replace(/'/g, "''")}'; $d = Test-TestModeFleetLeaseStale -Record $null -TreatCorruptAsStale; Write-Output $d.stale`,
       { OPK_TESTMODE_LEASE_ROOT: leaseRoot },
     );
@@ -451,6 +451,35 @@ describe('Issue #710 marker identification (AC#5)', () => {
     },
     120_000,
   );
+});
+
+
+describe('Issue #710 vitest lane context (AC#6 multi-invocation)', () => {
+  it('collects every heavy-shard lane lease context for post-run observe', () => {
+    const leaseRoot = isolatedLeaseRoot();
+    const savedShard = process.env.VITEST_HEAVY_SHARD;
+    process.env.VITEST_HEAVY_SHARD = '9';
+    try {
+      const laneA = registerLaneLease({ leaseRoot, laneId: 'heavy-shard-9', runId: 'invocation-a' });
+      const laneB = registerLaneLease({ leaseRoot, laneId: 'heavy-shard-9', runId: 'invocation-b' });
+      const result = runPwsh(
+      `. '${path.join(repoRoot, 'scripts/lib/TestMode-FleetLease.ps1').replace(/'/g, "''")}'; `
+      + `$ctx = @(Get-TestModeVitestLaneLeaseContexts -Shard '9' -LeaseRoot '${leaseRoot.replace(/'/g, "''")}'); `
+      + 'Write-Output (($ctx | ForEach-Object { $_.leaseId } | Sort-Object -Unique) -join ",")',
+      { OPK_TESTMODE_LEASE_ROOT: leaseRoot, VITEST_HEAVY_SHARD: '9' },
+    );
+      expect(result.status).toBe(0);
+      const leaseIds = result.stdout.trim().split(',').filter(Boolean).sort();
+      expect(leaseIds).toEqual([laneA.leaseId, laneB.leaseId].sort());
+    } finally {
+      if (savedShard === undefined) {
+        delete process.env.VITEST_HEAVY_SHARD;
+      } else {
+        process.env.VITEST_HEAVY_SHARD = savedShard;
+      }
+    }
+  });
+
 });
 
 describe('Issue #710 CI hygiene assertion (AC#6)', () => {

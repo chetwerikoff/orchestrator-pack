@@ -178,13 +178,36 @@ try {
 
     $reaperScript = Join-Path $Root 'scripts/invoke-testmode-fleet-reaper.ps1'
     . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
-    Import-TestModeVitestLaneLeaseContext -Shard ([string]$Shard) | Out-Null
+    $laneContexts = @(Get-TestModeVitestLaneLeaseContexts -Shard ([string]$Shard))
+    if ($laneContexts.Count -eq 0) {
+        Import-TestModeVitestLaneLeaseContext -Shard ([string]$Shard) | Out-Null
+        if ($env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $laneContexts = @([pscustomobject]@{
+                leaseId   = [string]$env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+                leaseRoot = [string]$env:OPK_TESTMODE_LEASE_ROOT
+            })
+        }
+    }
 
-    $observeJson = & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript observe 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FAIL] TestMode fleet hygiene: surviving this-run/shard-scoped pwsh detected before post-run cleanup"
-        Write-Host $observeJson
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript cleanup 2>&1 | Write-Host
+    $hygieneFailed = $false
+    foreach ($ctx in $laneContexts) {
+        if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
+        if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+
+        $observeJson = & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript observe 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $hygieneFailed = $true
+            Write-Host "[FAIL] TestMode fleet hygiene: surviving this-run/shard-scoped pwsh detected for lease $($ctx.leaseId)"
+            Write-Host $observeJson
+        }
+    }
+
+    if ($hygieneFailed) {
+        foreach ($ctx in $laneContexts) {
+            if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
+            if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+            & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript cleanup 2>&1 | Write-Host
+        }
         exit 2
     }
 }
