@@ -545,6 +545,7 @@ runStdinJsonCli('worker-report-store.mjs', {
       callerSessionId: String(payload.callerSessionId ?? ''),
       nowMs: Number(payload.nowMs ?? Date.now()),
       expectedGeneration: payload.expectedGeneration,
+      trustedBinding: payload.trustedBinding ?? null,
     });
   },
   seedShouldPromote: () => {

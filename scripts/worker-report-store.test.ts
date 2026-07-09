@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -64,6 +64,41 @@ describe('worker-report-store-write', () => {
       sessionId: 'opk-717',
       prNumber: 717,
       headSha: 'abc123',
+    });
+    expect(parsed.sourceRecords[key].reportState).toBe('ready_for_review');
+  });
+
+  it('writeRecord CLI forwards trustedBinding to CAS write path', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'wr-store-cli-write-'));
+    const storePath = path.join(dir, 'worker-report-store.json');
+    const payload = {
+      storePath,
+      callerSessionId: 'opk-cli-write',
+      nowMs: Date.parse('2026-07-09T12:00:00.000Z'),
+      trustedBinding: trustedReportBinding(717, 'abc717cli'),
+      record: {
+        reportState: 'ready_for_review',
+        accepted: true,
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        sessionId: 'opk-cli-write',
+        prNumber: 717,
+        headSha: 'abc717cli',
+      },
+    };
+    const proc = spawnSync('node', [path.join(repoRoot, 'docs/worker-report-store.mjs'), 'writeRecord'], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      cwd: repoRoot,
+    });
+    expect(proc.status).toBe(0);
+    const result = JSON.parse(proc.stdout.trim());
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(readFileSync(storePath, 'utf8'));
+    const key = buildWorkerReportRecordKey({
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      sessionId: 'opk-cli-write',
+      prNumber: 717,
+      headSha: 'abc717cli',
     });
     expect(parsed.sourceRecords[key].reportState).toBe('ready_for_review');
   });
