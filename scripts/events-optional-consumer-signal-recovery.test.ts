@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { planCiGreenWakeActions } from '../docs/ci-green-wake-reconcile.mjs';
+import { QUIESCENCE_DEBOUNCE_MS } from '../docs/worker-iteration-cycle.mjs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,8 +13,10 @@ import {
   resolveDeliveredRunObservedAtMs,
   reviewRunsLackAoWireDeliveredAt,
   shouldSuppressNudgeForPendingJournal,
+  shouldSuppressSubmitForPendingOutcome,
   SIGNAL_SOURCES,
 } from '../docs/events-optional-consumer-signal-recovery.mjs';
+import { liveWorker, packGreenCiChecks } from './_test-worker-session-fixtures.js';
 import { mergeDeliveryRecords, resolveReviewSendObservedAtMs } from '../docs/worker-message-dispatch-observe.mjs';
 import { mergeWorkerDeliveriesFromPlanInput } from '../docs/review-head-ready.mjs';
 import { resolveSendObservedAtMs } from '../docs/review-finding-delivery-confirm.mjs';
@@ -129,16 +133,165 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     );
   });
 
-  it('dedup matrix cell 3 records ci-green journal-write degradation as a non-refire signal', () => {
-    expect(formatJournalWriteDegradedLog('ci-green-wake-reconcile', 'ci-green:690:abc')).toBe(
-      'journal_write_degraded surface=ci-green-wake-reconcile key=ci-green:690:abc',
+  it('dedup matrix cell 3: ci-green next tick logs journal_write_degraded without re-nudge after post-send journal write failure', () => {
+    const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    if (pwshProbe.status !== 0) {
+      return;
+    }
+
+    const openPrs = [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }];
+    const sessions = [
+      liveWorker({
+        reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],
+      }),
+    ];
+    const settledAt = Date.parse('2026-06-01T00:00:00.000Z');
+    const nowMs = settledAt + QUIESCENCE_DEBOUNCE_MS + 1000;
+    const plan = planCiGreenWakeActions({
+      openPrs,
+      sessions,
+      ciChecksByPr: { 42: packGreenCiChecks },
+      tracking: {},
+      nowMs,
+      repoRoot,
+    });
+    const nudge = plan.actions.find((action) => action.type === 'nudge');
+    expect(nudge).toBeDefined();
+    const transitionId = String(nudge?.transitionId ?? '');
+    expect(shouldSuppressNudgeForPendingJournal(transitionId, { [transitionId]: { sessionId: 'op-worker' } })).toBe(
+      true,
     );
+
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'ci-green-journal-failure-'));
+    const fixturePath = join(fixtureDir, 'journal-write-failure-next-tick.json');
+    writeFileSync(
+      fixturePath,
+      JSON.stringify({
+        description: 'AC#7 cell 3: post-send journal write failed; next tick must not re-nudge',
+        nowMs,
+        openPrs,
+        sessions,
+        ciChecksByPr: { 42: packGreenCiChecks },
+        tracking: {
+          pendingJournal: {
+            [transitionId]: {
+              sessionId: 'op-worker',
+              sentAtMs: nowMs,
+              message: String(nudge?.message ?? 'Required CI is green for the current PR head.'),
+            },
+          },
+        },
+      }),
+    );
+
+    const result = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-File',
+        join(repoRoot, 'scripts/ci-green-wake-reconcile.ps1'),
+        '-Once',
+        '-DryRun',
+        '-FixturePath',
+        fixturePath,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status, output).toBe(0);
+    expect(output).toContain(formatJournalWriteDegradedLog('ci-green-wake-reconcile', transitionId));
+    expect(output).toContain('journal_pending');
+    expect(output).not.toContain('dry-run would send');
+    expect(output).not.toContain('nudging worker');
   });
 
-  it('dedup matrix cell 4 records worker-submit journal-write degradation as a non-refire signal', () => {
-    expect(formatJournalWriteDegradedLog('worker-message-submit-reconcile', 'delivery-1')).toBe(
-      'journal_write_degraded surface=worker-message-submit-reconcile key=delivery-1',
+  it('dedup matrix cell 4: worker-submit next tick logs journal_write_degraded without re-submit after post-send outcome write failure', () => {
+    const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    if (pwshProbe.status !== 0) {
+      return;
+    }
+
+    const deliveryId = 'opk-ml-232:1717600000000:ao-send:orch-1';
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'worker-submit-journal-failure-'));
+    const fixturePath = join(fixtureDir, 'journal-write-failure-next-tick.json');
+    writeFileSync(
+      fixturePath,
+      JSON.stringify({
+        description: 'AC#7 cell 4: post-submit outcome write failed; next tick must not re-submit',
+        nowMs: 1717600100000,
+        sessions: [
+          {
+            sessionId: 'opk-ml-232',
+            role: 'worker',
+            status: 'working',
+            runtime: 'alive',
+            activity: 'idle',
+            reports: [],
+          },
+        ],
+        dispatchJournal: {
+          [deliveryId]: {
+            deliveryId,
+            sessionId: 'opk-ml-232',
+            deliveredAtMs: 1717600000000,
+            source: 'ao-send',
+            sourceKey: 'orch-1',
+            deliveryPath: 'pending-draft',
+            messageShape: { charLength: 42, lineCount: 2 },
+          },
+        },
+        aoEvents: [],
+        reviewRuns: [],
+        tracking: {
+          deliveries: {},
+          audit: [],
+          pendingOutcomes: {
+            [deliveryId]: {
+              claimKey: `${deliveryId}:1`,
+              submittedAtMs: 1717600100000,
+              sessionId: 'opk-ml-232',
+            },
+          },
+        },
+      }),
     );
+    expect(shouldSuppressSubmitForPendingOutcome(deliveryId, { [deliveryId]: { sessionId: 'opk-ml-232' } })).toBe(true);
+
+    const stateDir = mkdtempSync(join(tmpdir(), 'worker-submit-state-'));
+    const statePath = join(stateDir, 'state.json');
+    const journalPath = join(stateDir, 'journal.json');
+    writeFileSync(statePath, JSON.stringify({ deliveries: {}, audit: [], pendingOutcomes: {} }));
+    writeFileSync(journalPath, '{}');
+
+    const result = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-File',
+        join(repoRoot, 'scripts/worker-message-submit-reconcile.ps1'),
+        '-Once',
+        '-DryRun',
+        '-FixturePath',
+        fixturePath,
+        '-StateFile',
+        statePath,
+        '-DispatchJournalPath',
+        journalPath,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status, output).toBe(0);
+    expect(output).toContain(formatJournalWriteDegradedLog('worker-message-submit-reconcile', deliveryId));
+    expect(output).toContain('outcome_journal_pending');
+    expect(output).not.toContain('submitted: delivery=');
+    expect(output).toContain('fixture tick complete (submitted=0');
   });
 
   it('dedup matrix cell 5 does not synthesize delivery without journal or review-run inputs', () => {

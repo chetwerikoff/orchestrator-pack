@@ -281,6 +281,9 @@ function Get-FixtureCiGreenWakePayload {
         requiredCheckLookupFailedByPr   = $fixture.requiredCheckLookupFailedByPr
         tracking                        = $fixture.tracking
     }
+    if ($fixture.nowMs) {
+        $payload.nowMs = [long]$fixture.nowMs
+    }
     if ($fixture.reviewRuns) {
         $payload.reviewRuns = @($fixture.reviewRuns)
     }
@@ -507,7 +510,12 @@ function Invoke-CiGreenWakeTick {
         lastTickMs     = $tracking.lastTickMs
     }
 
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if ($Fixture -and $payload.nowMs) {
+        $nowMs = [long]$payload.nowMs
+    }
+    else {
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
     $reviewRuns = @()
     $workerDeliveries = @()
     $aoEvents = @()

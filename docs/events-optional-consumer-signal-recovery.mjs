@@ -95,6 +95,14 @@ export function shouldSuppressNudgeForPendingJournal(transitionId, pendingJourna
 }
 
 /**
+ * @param {string} deliveryId
+ * @param {Record<string, { claimKey?: string, submittedAtMs?: number, sessionId?: string }>} pendingOutcomes
+ */
+export function shouldSuppressSubmitForPendingOutcome(deliveryId, pendingOutcomes = {}) {
+  return Boolean(pendingOutcomes?.[deliveryId]);
+}
+
+/**
  * @param {Array<Record<string, unknown>>} reviewRuns
  */
 export function reviewRunsLackAoWireDeliveredAt(reviewRuns) {
