@@ -505,11 +505,8 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                 nowMs           = $nowMs
             }
             if ($attempt.recorded -and -not $DryRun) {
-                Set-ReviewHandoffWakeAdmissionState -Path $statePath -State @{
-                    records        = $admissionState.records
-                    pendingRetries = $attempt.pendingRetries
-                    lastUpdatedMs  = $nowMs
-                }
+                $admissionState.pendingRetries = $attempt.pendingRetries
+                Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState
                 $admissionState = Get-ReviewHandoffWakeAdmissionState -Path $statePath
             }
             & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown lookupDimension=openPr attempt=$($attempt.record.lookupAttemptCount)"
@@ -530,13 +527,9 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                     nowMs           = $nowMs
                 }
                 if ($attempt.recorded -and -not $DryRun) {
-                    $statePath = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
                     $stateNow = Get-ReviewHandoffWakeAdmissionState -Path $statePath
-                    Set-ReviewHandoffWakeAdmissionState -Path $statePath -State @{
-                        records        = $stateNow.records
-                        pendingRetries = $attempt.pendingRetries
-                        lastUpdatedMs  = $nowMs
-                    }
+                    $stateNow.pendingRetries = $attempt.pendingRetries
+                    Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $stateNow
                 }
                 & $LogWriter "review-handoff-wake: pending retry key=$retryKey still admission_lookup_unknown lookupDimension=$dim attempt=$($attempt.record.lookupAttemptCount)"
             }
