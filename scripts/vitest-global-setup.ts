@@ -120,9 +120,15 @@ export async function teardown() {
   stopLeaseHeartbeat();
   try {
     writeVitestLaneLeaseContextFromEnv();
-    // Heavy shards defer destructive teardown to run-vitest-heavy-shard.ps1 observe/cleanup
-    // so AC#6 can fail on survivors before they are reaped.
-    if (!process.env.VITEST_HEAVY_SHARD?.trim()) {
+    if (process.env.VITEST_HEAVY_SHARD?.trim()) {
+      // Per-invocation observe before the next file bootstrap can mask survivors (AC#6).
+      const observe = runReaperCli('observe');
+      if (observe.status !== 0) {
+        throw new Error(
+          `TestMode fleet heavy invocation left survivors: status=${observe.status} ${observe.stderr || observe.stdout}`,
+        );
+      }
+    } else {
       const teardown = runReaperCli('teardown');
       if (teardown.status !== 0) {
         throw new Error(

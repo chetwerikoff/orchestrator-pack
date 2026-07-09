@@ -47,11 +47,10 @@ function Get-TestModeFleetProcessClassification {
     $isTestModeSupervisor = $false
     if ($tokens.Count -gt 0) {
         $identityStateRoot = if ($stateDir) { $stateDir } else { '' }
-        $isTestModeSupervisor = Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity -Tokens $tokens `
+        $hasSupervisorShape = Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity -Tokens $tokens `
             -ProjectId (Get-OrchestratorWakeSupervisorDefaultProjectId) -StateRoot $identityStateRoot
-        if (-not $isTestModeSupervisor) {
-            $isTestModeSupervisor = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-TestMode'
-        }
+        $hasTestModeSwitch = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-TestMode'
+        $isTestModeSupervisor = $hasSupervisorShape -and $hasTestModeSwitch
     }
 
     $normalizedState = if ($stateDir) { Normalize-OrchestratorWakeSupervisorPath -PathValue $stateDir } else { '' }
