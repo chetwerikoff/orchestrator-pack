@@ -33,6 +33,7 @@
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/_test-stub-pack-import-closure.test.ts": "light",
     "scripts/ao-events-correlation-degraded.test.ts": "light",
+    "scripts/events-optional-consumer-signal-recovery.test.ts": "light",
     "scripts/ao-events-fail-soft.test.ts": "heavy",
     "scripts/audit-jsonl-retention.test.ts": "heavy",
     "scripts/autonomous-orchestrator-boundary.test.ts": "heavy",

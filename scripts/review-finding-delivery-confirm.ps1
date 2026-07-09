@@ -38,6 +38,7 @@ $Script:DefaultConfirmationWindowMinutes = 5
 $Script:DefaultMaxRedeliveries = 2
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
@@ -338,9 +339,9 @@ function Invoke-DeliveryTick {
         $tracking = $TrackingState
         $now = $NowMs
         $tickConfig = $Config
-        $aoEvents = Get-AoEventsSince -SinceMinutes 30
-        Write-AoEventsCorrelationDegraded -Surface 'review-finding-delivery-confirm' -LogPrefix 'review-finding-delivery-confirm'
-        $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
+        $aoEvents = @()
+        Write-ReconcileSignalSource -Surface 'review-finding-delivery-confirm' -Source 'sessionReviewsDeliveredStatus+packJournal' -LogPrefix 'review-finding-delivery-confirm'
+        $floodActiveSessions = @{}
     }
 
     $plan = Invoke-DeliveryFilterCli -Subcommand 'plan' -Payload @{

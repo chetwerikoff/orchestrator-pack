@@ -36,6 +36,7 @@ $Script:DefaultIntervalSeconds = 30
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-FloodActiveSessionMap.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
@@ -516,12 +517,27 @@ function Invoke-SubmitReconcileTick {
     }
     else {
         $sessions = Get-AoStatusSessionsWithReports
-        $aoEvents = Get-AoEventsSince -SinceMinutes 30
-        Write-AoEventsCorrelationDegraded -Surface 'worker-message-submit-reconcile' -LogPrefix $Script:ReconcileLogPrefix
+        $aoEvents = @()
+        Write-ReconcileSignalSource -Surface 'worker-message-submit-reconcile' -Source 'packDispatchJournal+reviewRuns' -LogPrefix $Script:ReconcileLogPrefix
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $dispatchJournal = Get-WorkerMessageDispatchJournal -Path $JournalPath
         $tracking = Get-SubmitReconcileState -Path $StatePath -JournalPath $JournalPath
-        Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
+        try {
+            Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'side effects'
+        }
+        catch {
+            if ($DryRunMode) {
+                Write-SubmitReconcileLog "dry-run degrade: $_"
+                return @{
+                    submitted = 0
+                    escalated = 0
+                    noop      = 0
+                    deferred  = 0
+                    tracking  = $tracking
+                }
+            }
+            throw
+        }
         $now = $NowMs
         $tickConfig = Get-SubmitBusyDispatchConfig -MarkerPath $BusyDispatchSmokeMarkerPath
         $operatorYamlPath = if ($ConfigYaml) { $ConfigYaml } else { Resolve-OperatorOrchestratorYamlPath -PackRoot $PackRoot }
@@ -536,16 +552,13 @@ function Invoke-SubmitReconcileTick {
         else {
             $reactionConfigUnavailable = $true
         }
-        $floodActiveSessions = Get-FloodActiveSessionMap -Events $aoEvents -NowMs $now
+        $floodActiveSessions = @{}
     }
 
     if ($reactionConfigUnavailable) {
-        $reactionEvents = @($aoEvents | Where-Object {
-                $_.kind -eq 'reaction.action_succeeded' -and
-                $_.data -and $_.data.action -eq 'send-to-agent'
-            })
-        if ($reactionEvents.Count -gt 0) {
-            Write-SubmitReconcileLog "deferred: reason=reaction_config_unavailable reactionEventCount=$($reactionEvents.Count)"
+        $reactionJournalCount = @($dispatchJournal.Values | Where-Object { [string]$_.source -eq 'reaction' }).Count
+        if ($reactionJournalCount -gt 0) {
+            Write-SubmitReconcileLog "deferred: reason=reaction_config_unavailable reactionJournalCount=$reactionJournalCount"
             return @{
                 submitted = 0
                 escalated = 0

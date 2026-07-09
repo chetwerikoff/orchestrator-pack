@@ -44,6 +44,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
@@ -218,11 +219,16 @@ function Get-ReconcileReactionMessages {
 function Test-ReconcileReactionConfigDefer {
     param(
         [bool]$ReactionConfigUnavailable,
-        [array]$AoEvents
+        [array]$AoEvents,
+        [hashtable]$DispatchJournal = @{}
     )
 
     if (-not $ReactionConfigUnavailable) {
         return $false
+    }
+
+    if (Test-ReconcileReactionDispatchDefer -ReactionConfigUnavailable $ReactionConfigUnavailable -DispatchJournal $DispatchJournal) {
+        return $true
     }
 
     return @($AoEvents | Where-Object {
@@ -300,11 +306,10 @@ function Get-ReconcileDeliveryPayload {
         }
     }
 
-    $aoEvents = @(Get-AoEventsSince -SinceMinutes 30)
-    Write-AoEventsCorrelationDegraded -Surface 'review-trigger-reconcile' -LogPrefix $Script:ReconcileLogPrefix
+    Write-ReconcileSignalSource -Surface 'review-trigger-reconcile' -Source 'openPrs+reviewRuns+reportState' -LogPrefix $Script:ReconcileLogPrefix
     return @{
         workerDeliveries            = @()
-        aoEvents                    = $aoEvents
+        aoEvents                    = @()
         dispatchJournal             = Get-WorkerMessageDispatchJournal
         reviewRuns                  = @(Get-AoReviewRuns -Project $Project)
         reactionMessages            = $reactionMessages
@@ -429,7 +434,7 @@ function Test-PreRunHeadReadyRecheck {
         $fresh.repoRoot = $RepoRoot
     }
 
-    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$fresh.reactionConfigUnavailable) -AoEvents @($fresh.aoEvents)) {
+    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$fresh.reactionConfigUnavailable) -AoEvents @($fresh.aoEvents) -DispatchJournal $fresh.dispatchJournal) {
         return @{
             emitReviewRun = $false
             reason        = 'reaction_config_unavailable'
@@ -679,7 +684,7 @@ function Invoke-ReconcileTick {
         throw 'Could not resolve REVIEW_COMMAND from agent-orchestrator.yaml'
     }
 
-    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$payload.reactionConfigUnavailable) -AoEvents @($payload.aoEvents)) {
+    if (Test-ReconcileReactionConfigDefer -ReactionConfigUnavailable ([bool]$payload.reactionConfigUnavailable) -AoEvents @($payload.aoEvents) -DispatchJournal $payload.dispatchJournal) {
         $reactionEventCount = @($payload.aoEvents | Where-Object {
                 $_.kind -eq 'reaction.action_succeeded' -and
                 $_.data -and $_.data.action -eq 'send-to-agent'

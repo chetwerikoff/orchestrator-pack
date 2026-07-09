@@ -106,8 +106,9 @@ export function resolveNormalizedRowStatus(prReviewStatus, latestRunStatus) {
  * @param {string} prReviewStatus
  */
 export function deriveDeliveredFindingCount(latestRun, prReviewStatus) {
+  const latestStatus = String(latestRun?.status ?? '').toLowerCase();
   const deliveredAt = latestRun?.deliveredAt;
-  if (!deliveredAt) {
+  if (!deliveredAt && latestStatus !== 'delivered') {
     return 0;
   }
   const deliveredFindingCount = Number(latestRun?.deliveredFindingCount);
@@ -138,6 +139,10 @@ export function isDeliveredChangesRequested(run) {
   const status = normalizeLegacyReviewRunStatus(rawStatus);
   if (status !== 'changes_requested') {
     return false;
+  }
+  const latestRunStatus = String(run?.latestRunStatus ?? '').toLowerCase();
+  if (latestRunStatus === 'delivered') {
+    return true;
   }
   if (run?.deliveredAt) {
     return true;
@@ -215,7 +220,9 @@ export function mapEngineStateToBoardStatus({ prReviewStatus, latestRun, headSha
     return 'clean';
   }
   if (engineStatus === 'changes_requested') {
-    return latest?.deliveredAt ? 'triage' : 'waiting';
+    return latest?.deliveredAt || String(latest?.status ?? '').toLowerCase() === 'delivered'
+      ? 'triage'
+      : 'waiting';
   }
   return 'queued';
 }

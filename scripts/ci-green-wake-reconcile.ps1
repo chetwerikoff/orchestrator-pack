@@ -56,6 +56,7 @@ $Script:DefaultIntervalMinutes = 1
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Write-AoEventsCorrelationDegraded.ps1')
+. (Join-Path $PSScriptRoot 'lib/Write-ReconcileSignalSource.ps1')
 . (Join-Path $PSScriptRoot 'lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
@@ -222,11 +223,10 @@ function Get-CiGreenWakeDeliveryPayload {
         [string]$Project
     )
 
-    $aoEvents = @(Get-AoEventsSince -SinceMinutes 30)
-    Write-AoEventsCorrelationDegraded -Surface 'ci-green-wake-reconcile' -LogPrefix $Script:ReconcileLogPrefix
+    Write-ReconcileSignalSource -Surface 'ci-green-wake-reconcile' -Source 'openPrs+checks+ownerResolver' -LogPrefix $Script:ReconcileLogPrefix
     return @{
         workerDeliveries = @()
-        aoEvents           = $aoEvents
+        aoEvents           = @()
         dispatchJournal    = Get-WorkerMessageDispatchJournal
         reviewRuns         = @(Get-AoReviewRuns -Project $Project)
     }
@@ -583,6 +583,7 @@ function Invoke-CiGreenWakeTick {
         }
 
         if ($pendingJournal[[string]$action.transitionId]) {
+            Write-ReconcileJournalWriteDegraded -Surface 'ci-green-wake-reconcile' -Key ([string]$action.transitionId) -LogPrefix $Script:ReconcileLogPrefix
             Write-CiGreenWakeLog "skip PR #$($action.prNumber): journal_pending"
             continue
         }

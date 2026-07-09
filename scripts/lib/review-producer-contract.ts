@@ -117,9 +117,12 @@ function normalizeSha(value: unknown): string {
   return String(value ?? '').trim().toLowerCase();
 }
 
-function hasDeliveredAt(latestRun: ReviewRunState | null | undefined): boolean {
+function hasDeliveredStatus(latestRun: ReviewRunState | null | undefined): boolean {
   const deliveredAt = latestRun?.deliveredAt;
-  return deliveredAt != null && String(deliveredAt).trim() !== '';
+  return (
+    String(latestRun?.status ?? '').toLowerCase() === 'delivered' ||
+    (deliveredAt != null && String(deliveredAt).trim() !== '')
+  );
 }
 
 function headMovedVsRun(
@@ -155,7 +158,7 @@ export function mapEngineToBoardStatus(input: EngineBoardMappingInput): BoardSta
   }
 
   if (prReviewStatus === 'changes_requested') {
-    return hasDeliveredAt(latestRun) ? 'triage' : 'waiting';
+    return hasDeliveredStatus(latestRun) ? 'triage' : 'waiting';
   }
 
   if (prReviewStatus === 'needs_review' && !latestRun) {

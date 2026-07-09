@@ -21,6 +21,7 @@ import {
 import {
   isPendingWorkerDeliveryConfirmation,
 } from './review-producer-contract.mjs';
+import { resolveDeliveredRunObservedAtMs } from './events-optional-consumer-signal-recovery.mjs';
 
 export { sessionOwnsRunHead };
 
@@ -86,11 +87,7 @@ export function parseIsoMs(iso) {
  * @param {number} fallbackMs
  */
 export function resolveSendObservedAtMs(run, fallbackMs) {
-  return (
-    parseIsoMs(run?.deliveredAt) ??
-    parseIsoMs(run?.updatedAt) ??
-    fallbackMs
-  );
+  return resolveDeliveredRunObservedAtMs(run, parseIsoMs) ?? fallbackMs;
 }
 
 /**
