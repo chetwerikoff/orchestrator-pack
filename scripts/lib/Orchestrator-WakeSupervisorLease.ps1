@@ -53,6 +53,71 @@ function Get-OrchestratorWakeSupervisorStartReservationPath {
     return Join-Path $Paths.Root 'supervisor.start.lock'
 }
 
+function Get-OrchestratorWakeSupervisorStaleGraceSidecarPath {
+    param([hashtable]$Paths)
+    if ($Paths.StaleGraceSidecar) { return $Paths.StaleGraceSidecar }
+    return Join-Path $Paths.Root 'stale-heartbeat-grace.json'
+}
+
+function Read-OrchestratorWakeSupervisorStaleGraceSidecar {
+    param(
+        [hashtable]$Paths,
+        [hashtable]$Lease
+    )
+    if (-not $Lease) { return 0 }
+    $path = Get-OrchestratorWakeSupervisorStaleGraceSidecarPath -Paths $Paths
+    if (-not (Test-Path -LiteralPath $path)) { return 0 }
+    try {
+        $doc = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ([int]$doc.holderPid -ne [int]$Lease.holderPid) { return 0 }
+        if ([int]$doc.epoch -ne [int]$Lease.epoch) { return 0 }
+        return [long]$doc.staleGraceStartMs
+    }
+    catch {
+        return 0
+    }
+}
+
+function Write-OrchestratorWakeSupervisorStaleGraceSidecar {
+    param(
+        [hashtable]$Paths,
+        [hashtable]$Lease,
+        [long]$StaleGraceStartMs
+    )
+    if (-not $Lease) { return }
+    $path = Get-OrchestratorWakeSupervisorStaleGraceSidecarPath -Paths $Paths
+    $dir = Split-Path -Parent $path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $payload = @{
+        holderPid         = [int]$Lease.holderPid
+        epoch             = [int]$Lease.epoch
+        staleGraceStartMs = [long]$StaleGraceStartMs
+    } | ConvertTo-Json -Compress
+    $temp = "$path.$PID.tmp"
+    Set-Content -LiteralPath $temp -Value $payload -Encoding utf8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $path -Force
+}
+
+function Clear-OrchestratorWakeSupervisorStaleGraceSidecar {
+    param([hashtable]$Paths)
+    $path = Get-OrchestratorWakeSupervisorStaleGraceSidecarPath -Paths $Paths
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-OrchestratorWakeSupervisorEffectiveStaleGraceStartMs {
+    param(
+        [hashtable]$Paths,
+        [hashtable]$Lease
+    )
+    $fromLease = [long]$Lease.staleGraceStartMs
+    if ($fromLease -gt 0) { return $fromLease }
+    return Read-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths -Lease $Lease
+}
+
 function Get-OrchestratorWakeSupervisorBootId {
     if ($IsLinux -or $IsMacOS) {
         $bootPath = '/proc/sys/kernel/random/boot_id'
@@ -538,7 +603,8 @@ function Test-OrchestratorWakeSupervisorLeaseMutationAllowed {
 function Test-OrchestratorWakeSupervisorLeaseStaleEvidence {
     param(
         [hashtable]$Lease,
-        [string]$LogPath = ''
+        [string]$LogPath = '',
+        [hashtable]$Paths = $null
     )
     if (-not $Lease) { return 'missing-lease' }
     $holderPid = [int]$Lease.holderPid
@@ -561,6 +627,9 @@ function Test-OrchestratorWakeSupervisorLeaseStaleEvidence {
     if ($heartbeatMs -gt 0 -and ($nowMs - $heartbeatMs) -gt $ttl) {
         $graceMs = Get-OrchestratorWakeSupervisorLeaseStaleGraceMs
         $graceStart = [long]$Lease.staleGraceStartMs
+        if ($graceStart -le 0 -and $Paths) {
+            $graceStart = Get-OrchestratorWakeSupervisorEffectiveStaleGraceStartMs -Paths $Paths -Lease $Lease
+        }
         if ($graceStart -le 0) {
             return 'stale-heartbeat-grace-pending'
         }
@@ -642,12 +711,19 @@ function Update-OrchestratorWakeSupervisorLeaseStaleGraceMarker {
     )
     if ($StaleEvidence -ne 'stale-heartbeat-grace-pending') { return $Lease }
     $nowMs = Get-OrchestratorWakeSupervisorNowMs
-    if ([long]$Lease.staleGraceStartMs -le 0) {
+    $effective = Get-OrchestratorWakeSupervisorEffectiveStaleGraceStartMs -Paths $Paths -Lease $Lease
+    if ($effective -le 0) {
         $Lease.staleGraceStartMs = $nowMs
         if ($Script:OrchestratorWakeSupervisorLeaseContext) {
             Write-OrchestratorWakeSupervisorLeaseDocument -LockStream $Script:OrchestratorWakeSupervisorLeaseContext.Stream `
                 -Lease $Lease -LeasePath (Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths)
         }
+        else {
+            Write-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths -Lease $Lease -StaleGraceStartMs $nowMs
+        }
+    }
+    elseif ([long]$Lease.staleGraceStartMs -le 0) {
+        $Lease.staleGraceStartMs = $effective
     }
     return $Lease
 }
@@ -744,7 +820,7 @@ function Initialize-OrchestratorWakeSupervisorLoopLease {
         $pendingHandoff = $true
     }
     elseif ($existing) {
-        $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $existing -LogPath $LogPath
+        $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $existing -LogPath $LogPath -Paths $Paths
         if ($stale -and $stale -ne 'stale-heartbeat-grace-pending') {
             $null = Invoke-OrchestratorWakeSupervisorStaleLiveReclaim -Paths $Paths -Lease $existing `
                 -StaleEvidence $stale -LogPath $LogPath
@@ -782,6 +858,7 @@ function Initialize-OrchestratorWakeSupervisorLoopLease {
         staleGraceStartMs = 0
     }
     Write-OrchestratorWakeSupervisorLeaseDocument -LockStream $held.Stream -Lease $lease -LeasePath $leasePath
+    Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
     $held.Epoch = $epoch
     $held.Lease = $lease
     $Script:OrchestratorWakeSupervisorLeaseContext = $held
@@ -806,6 +883,7 @@ function Update-OrchestratorWakeSupervisorLeaseHeartbeat {
     $lease.heartbeatMs = $nowMs
     $lease.staleGraceStartMs = 0
     $lease.holderPid = $PID
+    Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
     Write-OrchestratorWakeSupervisorLeaseDocument -LockStream $Script:OrchestratorWakeSupervisorLeaseContext.Stream `
         -Lease $lease -LeasePath (Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths)
     $Script:OrchestratorWakeSupervisorLeaseContext.Lease = $lease
@@ -897,11 +975,16 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
         }
     }
 
-    $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $lease -LogPath $LogPath
+    $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $lease -LogPath $LogPath -Paths $Paths
+    if ($stale -eq 'stale-heartbeat-grace-pending') {
+        $lease = Update-OrchestratorWakeSupervisorLeaseStaleGraceMarker -Paths $Paths -Lease $lease -StaleEvidence $stale
+        $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $lease -LogPath $LogPath -Paths $Paths
+    }
     if ($stale -and $stale -ne 'stale-heartbeat-grace-pending') {
         $fenced = Invoke-OrchestratorWakeSupervisorStaleLiveReclaim -Paths $Paths -Lease $lease `
             -StaleEvidence $stale -LogPath $LogPath
         if ($fenced) {
+            Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
             $epoch = [int]$lease.epoch + 1
             $handoff = Acquire-OrchestratorWakeSupervisorStartLeaseHandoff -Paths $Paths -ProjectId $ProjectId `
                 -Epoch $epoch -LogPath $LogPath
@@ -1052,9 +1135,7 @@ function Invoke-OrchestratorWakeSupervisorForceStop {
         }
     }
 
-    if ($lockReleased -and ($audit.stillLive.Count -eq 0)) {
-        Remove-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
-    }
+    $forceStopSucceeded = ($audit.stillLive.Count -eq 0)
 
     Write-OrchestratorWakeSupervisorStructuredAudit -Kind 'force-stop' -LogPath $LogPath -Fields @{
         matchedSupervisorCount = $audit.matchedSupervisorCount
@@ -1068,18 +1149,25 @@ function Invoke-OrchestratorWakeSupervisorForceStop {
         legacyStillLive        = ($audit.legacyStillLive -join ',')
         stillLive              = ($audit.stillLive -join ',')
         lockReleased           = $lockReleased
+        forceStopSucceeded     = $forceStopSucceeded
         projectId              = $ProjectId
         stateRoot              = $Paths.Root
     }
 
-    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
-        $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
-        Remove-OrchestratorWakeSupervisorPidFile -Path $pidFile
+    if ($forceStopSucceeded) {
+        if ($lockReleased) {
+            Remove-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
+        }
+        foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+            $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
+            Remove-OrchestratorWakeSupervisorPidFile -Path $pidFile
+        }
+        if (Test-Path -LiteralPath $Paths.StateJson) {
+            Remove-Item -LiteralPath $Paths.StateJson -Force -ErrorAction SilentlyContinue
+        }
+        Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
+        Exit-OrchestratorWakeSupervisorStopMaintenanceEpoch -Paths $Paths
     }
-    if (Test-Path -LiteralPath $Paths.StateJson) {
-        Remove-Item -LiteralPath $Paths.StateJson -Force -ErrorAction SilentlyContinue
-    }
-    Exit-OrchestratorWakeSupervisorStopMaintenanceEpoch -Paths $Paths
     return $audit
 }
 
