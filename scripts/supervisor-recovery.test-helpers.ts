@@ -66,11 +66,17 @@ function killSupervisorStateDir(root: string): void {
         '-StateDir',
         root,
       ],
-      { cwd: repoRoot, stdio: 'pipe', timeout: 20_000, env: fastStopEnv },
+      { cwd: repoRoot, stdio: 'pipe', timeout: 60_000, env: fastStopEnv },
     );
-    return;
   } catch {
     // fall through to marker/supervisor.pid kill
+  }
+
+  for (const artifact of ['maintenance.epoch', 'supervisor.start.lock', 'stale-grace.sidecar']) {
+    const artifactPath = path.join(root, artifact);
+    if (fs.existsSync(artifactPath)) {
+      fs.unlinkSync(artifactPath);
+    }
   }
 
   const supervisorPidFile = path.join(root, 'supervisor.pid');

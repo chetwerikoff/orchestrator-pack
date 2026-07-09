@@ -2329,4 +2329,14 @@ Force Stop enters a maintenance epoch, terminates all role-tagged managed childr
 
 Pre-709 supervisors without `supervisor.lock` block new `Start` with a legacy-holder diagnostic until `Stop -Force` clears the fleet.
 
+### Stale-live heartbeat reclaim
 
+When a holder pid is alive but `heartbeatMs` in `supervisor.lock` is older than `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` (default derived from poll interval) for longer than `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS`, the next `Start` may reclaim after structured `wake-supervisor-audit kind=stale-live-reclaim` output. Ordinary reclaim does **not** kill immediately on first stale detection — grace avoids false steals after WSL2 suspend/pause.
+
+### Lease tuning env vars
+
+| Variable | Purpose |
+| --- | --- |
+| `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | Max age before heartbeat considered stale |
+| `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | Two-phase grace before stale-live reclaim |
+| `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | Delay between role restarts on session-id flap |

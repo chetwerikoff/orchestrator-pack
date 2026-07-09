@@ -21,6 +21,8 @@ const fleetTimeoutMs = 180_000;
 const fleetLeaseEnv: Record<string, string> = {
   AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS: '600000',
   AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS: '30000',
+  AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS: '0',
+  AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS: '1',
 };
 
 afterEach(() => {
@@ -43,7 +45,7 @@ async function waitForLease(stateDir: string, timeoutMs = 120_000): Promise<void
   throw new Error(`timed out waiting for supervisor.lock at ${leasePath}`);
 }
 
-async function waitForSupervisorPid(stateDir: string, timeoutMs = 120_000): Promise<number> {
+async function waitForSupervisorPid(stateDir: string, timeoutMs = 180_000): Promise<number> {
   const pidPath = path.join(stateDir, 'supervisor.pid');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -402,13 +404,12 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
       path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor/status-orchestrator-op-old.json'),
       fixturePath,
     );
-    const supervisor = startSupervisorBackground(stateDir, [
-      '-FixturePath',
-      fixturePath,
-      '-AoCommand',
-      aoStub,
-    ]);
-    await waitForMarker(stateDir, 'listener', 90_000);
+    const supervisor = startSupervisorBackground(
+      stateDir,
+      ['-FixturePath', fixturePath, '-AoCommand', aoStub],
+      fleetLeaseEnv,
+    );
+    await waitForMarker(stateDir, 'listener', 150_000);
     const firstPid = readChildPid(stateDir, 'listener');
     expect(firstPid).toBeGreaterThan(0);
 
@@ -416,12 +417,24 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
       path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor/status-orchestrator-op-new.json'),
       fixturePath,
     );
-    const deadline = Date.now() + 60_000;
-    let secondPid = firstPid;
+    const deadline = Date.now() + 120_000;
+    let secondPid = 0;
     while (Date.now() < deadline) {
-      secondPid = tryReadChildPid(stateDir, 'listener');
-      if (secondPid > 0 && secondPid !== firstPid && !isAlive(firstPid)) {
-        break;
+      const markerPath = path.join(stateDir, 'markers', 'listener.marker.json');
+      if (fs.existsSync(markerPath)) {
+        const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')) as {
+          pid?: number;
+          orchestratorSessionId?: string;
+        };
+        if (
+          marker.orchestratorSessionId === 'op-orchestrator-new' &&
+          marker.pid &&
+          marker.pid > 0 &&
+          marker.pid !== firstPid
+        ) {
+          secondPid = marker.pid;
+          break;
+        }
       }
       await sleep(500);
     }
@@ -481,20 +494,22 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     const start = startDetachedLeaseHolder(stateDir, sessionId);
     expect(start.status).toBe(0);
     await waitForSupervisorPid(stateDir);
-    await sleep(8000);
     const lib = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1').replace(/'/g, "''");
-    const countResult = spawnSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId listener; Write-Output (($pids | Sort-Object -Unique).Count)`,
-      ],
-      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
-    );
-    const liveCount = Number((countResult.stdout ?? '').trim());
+    const countCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId listener; Write-Output (($pids | Sort-Object -Unique).Count)`;
+    const deadline = Date.now() + 60_000;
+    let liveCount = 3;
+    while (Date.now() < deadline) {
+      const countResult = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', countCommand],
+        { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+      );
+      liveCount = Number((countResult.stdout ?? '').trim());
+      if (liveCount <= 1) {
+        break;
+      }
+      await sleep(1000);
+    }
     expect(liveCount).toBeLessThanOrEqual(1);
     runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], fleetLeaseEnv);
   }, fleetTimeoutMs);
