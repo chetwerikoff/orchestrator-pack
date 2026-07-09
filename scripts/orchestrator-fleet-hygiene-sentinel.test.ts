@@ -558,6 +558,23 @@ describe('Issue #711 fleet hygiene sentinel', () => {
   });
 
 
+
+  it('Get-FleetHygieneConfig honors AO_SIDE_PROCESS_STATE_DIR without -StateDir (review P2)', () => {
+    const stateDir = makeStateDir();
+    const script = `
+      . ${psString(hygieneLib)}
+      $config = Get-FleetHygieneConfig
+      @{ stateRoot = $config.StateRoot } | ConvertTo-Json -Compress
+    `;
+    const result = runPwshWithEnv(script, {
+      AO_SIDE_PROCESS_STATE_DIR: stateDir,
+      AO_WAKE_SUPERVISOR_STATE_DIR: path.join(os.tmpdir(), 'wrong-wake-supervisor-state'),
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const parsed = JSON.parse(result.stdout.trim()) as { stateRoot: string };
+    expect(path.resolve(parsed.stateRoot)).toBe(path.resolve(stateDir));
+  });
+
   it('H2 fails when a registry role has no managed process (review P2)', () => {
     const stateDir = makeStateDir();
     const cmdFixture = path.join(stateDir, 'cmdline.json');

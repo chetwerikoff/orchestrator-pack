@@ -47,6 +47,18 @@ function Get-FleetHygieneProcessEnvironmentValue {
     return Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name $Name
 }
 
+function Resolve-FleetHygieneStateRoot {
+    param([string]$CliOverride = '')
+
+    if ($CliOverride) {
+        return $CliOverride.Trim()
+    }
+    if ($env:AO_SIDE_PROCESS_STATE_DIR) {
+        return $env:AO_SIDE_PROCESS_STATE_DIR.Trim()
+    }
+    return Get-OrchestratorWakeSupervisorStateRoot
+}
+
 function Get-FleetHygieneConfig {
     param(
         [string]$ProjectId = '',
@@ -56,7 +68,7 @@ function Get-FleetHygieneConfig {
     )
 
     $project = if ($ProjectId) { $ProjectId } else { Get-OrchestratorWakeSupervisorDefaultProjectId }
-    $stateRoot = Get-OrchestratorWakeSupervisorStateRoot -CliOverride $StateDir
+    $stateRoot = Resolve-FleetHygieneStateRoot -CliOverride $StateDir
     $pack = if ($PackRoot) {
         Normalize-OrchestratorWakeSupervisorPath -PathValue $PackRoot
     }
