@@ -65,7 +65,7 @@ export declare function writeWorkerReportRecordWithCas(input: {
   record: Record<string, unknown>;
   callerSessionId: string;
   nowMs: number;
-  expectedGeneration?: number;
+  expectedGeneration: number;
   trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
 }): { ok: boolean; reason?: string; key?: string; record?: Record<string, unknown>; generation?: number };
 export declare function seedShouldPromoteReadyForReview(

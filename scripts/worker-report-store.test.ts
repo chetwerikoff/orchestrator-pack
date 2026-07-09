@@ -47,6 +47,7 @@ describe('worker-report-store-write', () => {
       storePath,
       callerSessionId: 'opk-717',
       nowMs: Date.parse('2026-07-09T12:00:00.000Z'),
+      expectedGeneration: 0,
       trustedBinding: trustedReportBinding(717, 'abc123'),
       record: {
         reportState: 'ready_for_review',
@@ -75,6 +76,7 @@ describe('worker-report-store-write', () => {
       storePath,
       callerSessionId: 'opk-cli-write',
       nowMs: Date.parse('2026-07-09T12:00:00.000Z'),
+      expectedGeneration: 0,
       trustedBinding: trustedReportBinding(717, 'abc717cli'),
       record: {
         reportState: 'ready_for_review',
@@ -101,6 +103,34 @@ describe('worker-report-store-write', () => {
       headSha: 'abc717cli',
     });
     expect(parsed.sourceRecords[key].reportState).toBe('ready_for_review');
+  });
+
+  it('writeRecord rejects missing expectedGeneration', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'wr-store-cli-cas-'));
+    const storePath = path.join(dir, 'worker-report-store.json');
+    const payload = {
+      storePath,
+      callerSessionId: 'opk-cli-cas',
+      nowMs: Date.parse('2026-07-09T12:00:00.000Z'),
+      trustedBinding: trustedReportBinding(717, 'abc717cas'),
+      record: {
+        reportState: 'ready_for_review',
+        accepted: true,
+        repoSlug: 'chetwerikoff/orchestrator-pack',
+        sessionId: 'opk-cli-cas',
+        prNumber: 717,
+        headSha: 'abc717cas',
+      },
+    };
+    const proc = spawnSync('node', [path.join(repoRoot, 'docs/worker-report-store.mjs'), 'writeRecord'], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      cwd: repoRoot,
+    });
+    expect(proc.status).toBe(0);
+    const result = JSON.parse(proc.stdout.trim());
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('missing_expected_generation');
   });
 
   it('Write-PackWorkerReportRecord uses locked read-modify-write without dropping prior records', () => {
@@ -174,6 +204,7 @@ describe('delivery-confirm-pack-ack', () => {
           reportState: 'addressing_reviews',
           reportedAt: '2026-07-09T12:10:00.000Z',
           headSha: 'abc',
+          deliveryRunId: 'run-1',
         },
       ],
     };
@@ -218,6 +249,23 @@ describe('delivery-confirm-pack-ack', () => {
           reportedAt: '2026-07-09T12:10:00.000Z',
           headSha: 'abc',
           deliveryRunId: 'run-old',
+        },
+      ],
+    };
+    const run = { id: 'run-new', targetSha: 'abc' };
+    expect(findPackWorkerAckReportAfterDelivery(session, run, sendMs)).toBeNull();
+  });
+
+  it('rejects addressing_reviews ack when deliveryRunId is missing for a run-bound delivery', () => {
+    const sendMs = Date.parse('2026-07-09T12:00:00.000Z');
+    const session = {
+      id: 'opk-dc',
+      reportSnapshotKind: PACK_WORKER_REPORT_STORE_SURFACE,
+      reports: [
+        {
+          reportState: 'addressing_reviews',
+          reportedAt: '2026-07-09T12:10:00.000Z',
+          headSha: 'abc',
         },
       ],
     };
@@ -431,6 +479,7 @@ describe('worker-report-store-concurrency', () => {
       storePath,
       callerSessionId: 'opk-a',
       nowMs: 1,
+      expectedGeneration: 0,
       trustedBinding: trustedReportBinding(1, 'h1'),
       record: {
         reportState: 'working',

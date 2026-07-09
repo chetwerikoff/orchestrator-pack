@@ -410,8 +410,11 @@ export function findPackWorkerAckReportAfterDelivery(session, run, sendObservedA
     if (ts <= sendObservedAtMs) {
       continue;
     }
-    if (runId && report?.deliveryRunId && String(report.deliveryRunId) !== runId) {
-      continue;
+    if (runId) {
+      const reportRunId = String(report?.deliveryRunId ?? '').trim();
+      if (!reportRunId || reportRunId !== runId) {
+        continue;
+      }
     }
     return report;
   }
@@ -454,8 +457,11 @@ export function writeWorkerReportRecordWithCas({
   if (!trust.ok) {
     return { ok: false, reason: trust.reason };
   }
+  if (expectedGeneration === undefined || expectedGeneration === null) {
+    return { ok: false, reason: 'missing_expected_generation' };
+  }
   const store = readWorkerReportStoreFile(storePath);
-  if (expectedGeneration !== undefined && Number(store.generation ?? 0) !== Number(expectedGeneration)) {
+  if (Number(store.generation ?? 0) !== Number(expectedGeneration)) {
     return { ok: false, reason: 'generation_mismatch', generation: store.generation };
   }
   const result = upsertWorkerReportRecord(store, record, nowMs);
