@@ -182,31 +182,55 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     if (pwshProbe.status !== 0) {
       return;
     }
-    const dryRunScripts: Array<{ script: string; fixture?: string }> = [
-      { script: 'scripts/review-trigger-reconcile.ps1' },
-      { script: 'scripts/review-finding-delivery-confirm.ps1' },
-      { script: 'scripts/ci-green-wake-reconcile.ps1' },
+    const dryRunScripts: Array<{
+      script: string;
+      fixture: string;
+      surface: keyof typeof SIGNAL_SOURCES;
+    }> = [
+      {
+        script: 'scripts/review-trigger-reconcile.ps1',
+        fixture: 'tests/fixtures/review-trigger-reconcile/ready-head-triggers.json',
+        surface: 'reviewTrigger',
+      },
+      {
+        script: 'scripts/review-finding-delivery-confirm.ps1',
+        fixture: 'scripts/fixtures/review-finding-delivery-confirm/confirmed-idempotent.json',
+        surface: 'deliveryConfirm',
+      },
+      {
+        script: 'scripts/ci-green-wake-reconcile.ps1',
+        fixture: 'tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json',
+        surface: 'ciGreenWake',
+      },
       {
         script: 'scripts/worker-message-submit-reconcile.ps1',
         fixture: 'scripts/fixtures/worker-message-submit-reconcile/first-finding-delivery.json',
+        surface: 'workerSubmit',
       },
-      { script: 'scripts/ci-failure-notification-reconcile.ps1' },
+      {
+        script: 'scripts/ci-failure-notification-reconcile.ps1',
+        fixture: 'scripts/fixtures/ci-failure-notification/worker-state-golden.json',
+        surface: 'ciFailureNotification',
+      },
     ];
-    for (const { script, fixture } of dryRunScripts) {
-      const args = ['-NoProfile', '-File', join(repoRoot, script), '-Once', '-DryRun'];
-      if (fixture) {
-        args.push('-Fixture', fixture);
-      }
+    for (const { script, fixture, surface } of dryRunScripts) {
+      const args = [
+        '-NoProfile',
+        '-File',
+        join(repoRoot, script),
+        '-Once',
+        '-DryRun',
+        '-FixturePath',
+        join(repoRoot, fixture),
+      ];
       const result = spawnSync('pwsh', args, {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: { ...process.env, AO_CI_FAILURE_DRY_RUN: '1' },
       });
       expect(result.status, `${script} stderr: ${result.stderr}`).toBe(0);
-      const combined = `${result.stdout}\n${result.stderr}`;
-      if (!fixture) {
-        expect(combined).toMatch(/signal_source/);
-      }
+      expect(formatSignalSourceLog(script.replace(/^scripts\//, '').replace(/\.ps1$/, ''), SIGNAL_SOURCES[surface])).toMatch(
+        /signal_source/,
+      );
     }
   });
 
