@@ -318,7 +318,7 @@
     "scripts/review-stuck-run-reaper.test.ts": "9279583494196a204a066133034f8506c18d5c752cf18c9adb271e4d54286006",
     "scripts/reviewer-contract-mapping.test.ts": "6fec728ec33cd3bceea5ef9a05e554cfd489b6218dd428e5e162dbcd36d52685",
     "scripts/reviewer-failure-evidence.test.ts": "e66865ba5238d54d5e3fb7ac5b569e296fe7e17455477e1a9752693016a66eec",
-    "scripts/scripted-review-confirmed-delivery-gate.test.ts": "a19208a5cdaecec0e8704aa52d69a98006715984abe63e4c527d404b2d225c20",
+    "scripts/scripted-review-confirmed-delivery-gate.test.ts": "ccb4351b1d8c5d030dde29bb2751554b49bc838a92994fd71086e15b90344b20",
     "scripts/session-pr-binding-resolver.test.ts": "b1f4e6404b8c6656c2fab6c80baac4a34d5b4a97d45790959690cecc4c8787ea",
     "scripts/stage-completeness-guard.test.ts": "41ca9a24cda6ce1515788fe2c8d7f4072d69baf3fa8e623ae932c0253748bdcb",
     "scripts/tier-gate-guard.test.ts": "a02e366eac5c1296fa700d8da2b0e16103b645e38be45654f6096d1a1ea5c8e1",
