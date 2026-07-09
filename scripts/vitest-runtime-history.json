@@ -174,7 +174,8 @@
     "scripts/supervisor-fault-boundary-escalate.test.ts": 70000,
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": 80000,
     "scripts/supervisor-degraded-backoff-restart.test.ts": 27000,
-    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 25000
+    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 25000,
+    "scripts/supervisor-prompt-block-crash-backoff.test.ts": 200000
   },
   "contentSha": {
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "e558ad7b666fc824b203559ad47d7944d4cfe5f3ad145709b294fab895ac65e6",
@@ -349,7 +350,8 @@
     "scripts/supervisor-fault-boundary-escalate.test.ts": "407a7e71c97796d5ad1efe1fd607d066397fdde666be85c32aca194627203c39",
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "39b9ceb7a40f3cef005cd0e70c569545fa3516fcea1811ba925b2f0f6219ac90",
     "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
-    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605"
+    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
+    "scripts/supervisor-prompt-block-crash-backoff.test.ts": "acbfffe3c7c9f794e1acdcd66ab230431ece19da25dc88a7cf701a0244a21b03"
   },
   "provenance": {}
 }
