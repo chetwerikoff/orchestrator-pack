@@ -130,7 +130,9 @@ switch ($Action) {
 
         if ($SupervisorLoop) {
 
-        Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+            if ($TestMode) {
+                Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+            }
             Write-OrchestratorWakeSupervisorLog -Message 'supervisor loop started' -LogPath $paths.SupervisorLog
             Invoke-OrchestratorWakeSupervisorLoop -Paths $paths -ProjectId $project -PollSeconds $pollSec `
                 -SessionOverride $OrchestratorSessionId -FixturePath $FixturePath -AoCommand $AoCommand `
@@ -155,7 +157,9 @@ switch ($Action) {
 
         if ($Foreground) {
 
-        Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+            if ($TestMode) {
+                Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+            }
             Write-OrchestratorWakeSupervisorPidFile -Path $paths.SupervisorPid -ProcessId $PID
             try {
                 Invoke-OrchestratorWakeSupervisorLoop -Paths $paths -ProjectId $project -PollSeconds $pollSec `
@@ -171,7 +175,9 @@ switch ($Action) {
 
         $selfScript = (Resolve-Path -LiteralPath $PSCommandPath).Path
 
-        Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+        if ($TestMode) {
+            Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+        }
         $loopArgs = @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $selfScript,
             '-Action', 'Start', '-SupervisorLoop',

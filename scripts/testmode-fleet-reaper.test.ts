@@ -107,6 +107,7 @@ function registerLeaseForOwner(
 
 function spawnOrphanTestModeChild(stateDir: string): number {
   const markerDir = path.join(stateDir, 'markers');
+  fs.mkdirSync(markerDir, { recursive: true });
   const child = spawn(
     'pwsh',
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', testChildScript, '-Role', 'listener'],

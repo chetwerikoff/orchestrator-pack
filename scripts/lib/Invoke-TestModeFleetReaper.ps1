@@ -137,6 +137,65 @@ function Get-TestModeFleetReaperCandidateProcesses {
     return @($candidates)
 }
 
+function Get-TestModeFleetStaleLeaseRecords {
+    param(
+        [object[]]$LeaseRecords,
+        [string]$CurrentLeaseId = ''
+    )
+
+    $stale = [System.Collections.Generic.List[object]]::new()
+    foreach ($record in @($LeaseRecords)) {
+        $decision = Test-TestModeFleetLeaseStale -Record $record -CurrentLeaseId $CurrentLeaseId -TreatCorruptAsStale
+        if ($decision.stale -and (-not $CurrentLeaseId -or [string]$record.leaseId -ne $CurrentLeaseId)) {
+            $stale.Add($record) | Out-Null
+        }
+    }
+    return @($stale)
+}
+
+function Get-TestModeFleetReaperCandidatesForStateRoots {
+    param([string[]]$StateRoots)
+
+    if (-not $StateRoots -or $StateRoots.Count -eq 0) { return @() }
+    $targets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($root in @($StateRoots)) {
+        if ($root) {
+            [void]$targets.Add((Normalize-OrchestratorWakeSupervisorPath -PathValue $root))
+        }
+    }
+    if ($targets.Count -eq 0) { return @() }
+
+    $candidates = [System.Collections.Generic.List[int]]::new()
+    foreach ($proc in @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)) {
+        if ($IsLinux) {
+            $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
+            if (-not $state) { continue }
+            $normalized = Normalize-OrchestratorWakeSupervisorPath -PathValue $state
+            if ($targets.Contains($normalized)) {
+                $candidates.Add($proc.Id) | Out-Null
+            }
+            continue
+        }
+        $classification = Get-TestModeFleetProcessClassification -ProcessId $proc.Id
+        if ($classification.stateRoot -and $targets.Contains($classification.stateRoot)) {
+            $candidates.Add($proc.Id) | Out-Null
+        }
+    }
+    return @($candidates)
+}
+
+function Get-TestModeFleetLeaseScopedStateRoots {
+    param(
+        [object[]]$LeaseRecords,
+        [string]$LeaseId
+    )
+
+    if (-not $LeaseId) { return @() }
+    $record = $LeaseRecords | Where-Object { [string]$_.leaseId -eq $LeaseId } | Select-Object -First 1
+    if (-not $record) { return @() }
+    return @($record.stateRoots | ForEach-Object { [string]$_ } | Where-Object { $_ })
+}
+
 function Test-TestModeFleetReaperTargetStale {
     param(
         [hashtable]$Classification,
@@ -266,7 +325,28 @@ function Invoke-TestModeFleetReaper {
     }
 
     $leaseRecords = @(Get-TestModeFleetLeaseRecordsFromIndex)
-    foreach ($candidatePid in @(Get-TestModeFleetReaperCandidateProcesses)) {
+    $candidatePids = @()
+    if ($ScopeMode -eq 'bootstrap') {
+        $staleLeases = @(Get-TestModeFleetStaleLeaseRecords -LeaseRecords $leaseRecords -CurrentLeaseId $CurrentLeaseId)
+        $stateRoots = [System.Collections.Generic.List[string]]::new()
+        foreach ($lease in $staleLeases) {
+            foreach ($root in @($lease.stateRoots)) {
+                if ($root) { $stateRoots.Add([string]$root) | Out-Null }
+            }
+        }
+        $candidatePids = @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots @($stateRoots | Select-Object -Unique))
+    }
+    elseif ($ScopeMode -in @('teardown', 'observe', 'cleanup') -and $CurrentLeaseId) {
+        $candidatePids = @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots (Get-TestModeFleetLeaseScopedStateRoots -LeaseRecords $leaseRecords -LeaseId $CurrentLeaseId))
+        if ($candidatePids.Count -eq 0) {
+            $candidatePids = @(Get-TestModeFleetReaperCandidateProcesses)
+        }
+    }
+    else {
+        $candidatePids = @(Get-TestModeFleetReaperCandidateProcesses)
+    }
+
+    foreach ($candidatePid in @($candidatePids)) {
         if ($candidatePid -eq $PID) { continue }
 
         $classification = Get-TestModeFleetProcessClassification -ProcessId $candidatePid
@@ -346,7 +426,7 @@ function Invoke-TestModeFleetReaper {
     $survivorCount = @($stats.survivors).Count
     [Console]::Error.WriteLine(('[testmode-reaper] scope={0} matched={1} skipped={2} killed={3} failed={4} survivors={5}' -f $ScopeMode, $stats.matched, $stats.skipped, $stats.killed, $stats.failed, $survivorCount))
     foreach ($entry in $stats.skipReasons.GetEnumerator() | Sort-Object Name) {
-        [Console]::Error.WriteLine("[testmode-reaper] skip {0}={1}" -f $entry.Key, $entry.Value)
+        [Console]::Error.WriteLine(('[testmode-reaper] skip {0}={1}' -f [string]$entry.Key, [string]$entry.Value))
     }
 
     return $stats
