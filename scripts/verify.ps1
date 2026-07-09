@@ -953,6 +953,22 @@ else {
 
 Write-Host ''
 Write-Host '== terminal mux flood detection (Issue #173) =='
+$fleetHygieneCheck = Join-Path $Root 'scripts/check-fleet-hygiene-sentinel.ps1'
+if (Test-Path -LiteralPath $fleetHygieneCheck) {
+    & pwsh -NoProfile -File $fleetHygieneCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-fleet-hygiene-sentinel.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-fleet-hygiene-sentinel.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'fleet hygiene sentinel static guard failed (Issue #711)'
+    }
+}
+else {
+    Write-Check 'scripts/check-fleet-hygiene-sentinel.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing fleet hygiene sentinel static guard (Issue #711)'
+}
+
 $terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'
 if (Test-Path -LiteralPath $terminalFloodCheck -PathType Leaf) {
     & $terminalFloodCheck

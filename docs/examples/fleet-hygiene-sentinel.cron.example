@@ -1,0 +1,6 @@
+# Example cron entry for fleet hygiene sentinel (Issue #711).
+# Adjust PACK_ROOT and STATE_DIR for the operator machine.
+
+# Every 5 minutes — alert-first (kill disabled)
+*/5 * * * * AO_SIDE_PROCESS_STATE_DIR=/path/to/ao-side-process-state PACK_ROOT=/path/to/orchestrator-pack \
+  pwsh -NoProfile -ExecutionPolicy Bypass -File /path/to/orchestrator-pack/scripts/orchestrator-fleet-hygiene-sentinel.ps1 -Action Sentinel >> /path/to/ao-side-process-state/fleet-hygiene-sentinel.cron.log 2>&1

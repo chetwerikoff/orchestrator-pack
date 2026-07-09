@@ -1,0 +1,28 @@
+# Example systemd timer for fleet hygiene sentinel (Issue #711).
+# Install as /etc/systemd/system/orchestrator-fleet-hygiene.{service,timer}
+
+[Unit]
+Description=Orchestrator pack fleet hygiene sentinel (alert-first)
+
+[Service]
+Type=oneshot
+Environment=AO_SIDE_PROCESS_STATE_DIR=/var/lib/ao-side-process-state
+WorkingDirectory=/opt/orchestrator-pack
+ExecStart=/usr/bin/pwsh -NoProfile -ExecutionPolicy Bypass -File /opt/orchestrator-pack/scripts/orchestrator-fleet-hygiene-sentinel.ps1 -Action Sentinel
+# Kill mode is OFF by default. To enable during remediation:
+# Environment=AO_FLEET_HYGIENE_KILL_ENABLE=1
+
+[Install]
+WantedBy=multi-user.target
+
+# --- orchestrator-fleet-hygiene.timer ---
+# [Unit]
+# Description=Run fleet hygiene sentinel every 5 minutes
+#
+# [Timer]
+# OnBootSec=2min
+# OnUnitActiveSec=5min
+# Unit=orchestrator-fleet-hygiene.service
+#
+# [Install]
+# WantedBy=timers.target
