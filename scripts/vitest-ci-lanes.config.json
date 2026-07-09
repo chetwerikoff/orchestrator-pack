@@ -102,6 +102,7 @@
     "scripts/review-finding-delivery-confirm.test.ts": "light",
     "scripts/review-finding-delivery-submit.test.ts": "heavy",
     "scripts/scripted-review-confirmed-delivery-gate.test.ts": "light",
+    "scripts/review-delivery.test.ts": "light",
     "scripts/review-handoff-wake-trigger.test.ts": "heavy",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "heavy",
     "scripts/review-head-ready.test.ts": "heavy",
@@ -193,8 +194,5 @@
     "fallbackHeavyShardCount": 7
   },
   "heavyVitestPerFilePool": "threads",
-  "heavyVitestPoolByFile": {},
-  "files": {
-    "scripts/review-delivery.test.ts": "light"
-  }
+  "heavyVitestPoolByFile": {}
 }
