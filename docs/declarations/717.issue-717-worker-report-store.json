@@ -10,7 +10,8 @@
     "active_scope_hash": "sha256:717-worker-report-store-scope-v1"
   },
   "declared_paths": [
-    "AGENTS.md"
+    "AGENTS.md",
+    "agent-orchestrator.yaml.example"
   ],
   "declared_globs": [
     "scripts/**",
