@@ -5279,6 +5279,59 @@
       }
     },
     {
+      "rowId": "site-scripts-lib-Orchestrator-FleetHygiene-ps1-528",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-FleetHygiene.ps1",
+        "line": 528
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:4375c51fa9b807ce4dd958238efee76d30ba1bf3e5e4c897cc13060b9c6fa82c",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-FleetHygiene.ps1",
+        "line": 528,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile",
+          "call-pwsh",
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-FleetHygiene-ps1-798",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-FleetHygiene.ps1",
+        "line": 798
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:d726f381b0bd8639bd9d74411f8dfbd132d1ebf21593287f574cc5b182320246",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-FleetHygiene.ps1",
+        "line": 798,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-lib-Orchestrator-SideEffectFence-ps1-220",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideEffectFence.ps1",
@@ -7066,6 +7119,31 @@
         "line": 283,
         "patternIds": [
           "pwsh-file"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-orchestrator-fleet-hygiene-sentinel-ps1-81",
+      "caller": {
+        "file": "scripts/orchestrator-fleet-hygiene-sentinel.ps1",
+        "line": 81
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:b8e48ef055a0374e1331ad0f667ef16e26cf199a7ada08c25274b1a766729a20",
+      "discoveryMatch": {
+        "file": "scripts/orchestrator-fleet-hygiene-sentinel.ps1",
+        "line": 81,
+        "patternIds": [
+          "ps-call-op"
         ]
       }
     },

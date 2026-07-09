@@ -471,67 +471,34 @@ function Invoke-FleetHygieneAssertionH3 {
         -Reason "unmanaged role-tagged pwsh: $($unmanaged -join ',')"
 }
 
-function Test-FleetHygieneSupervisorBoundToState {
+function Test-FleetHygieneSupervisorCommandLineForeignCheckout {
     param(
         [int]$ProcessId,
-        [string]$ProjectId,
-        [string]$StateRoot
+        [hashtable]$Config
     )
 
-    if ($ProcessId -le 0) { return $false }
-    $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
-    if (-not $tokens -or $tokens.Count -eq 0) { return $false }
+    $commandLine = Get-OrchestratorWakeSupervisorProcessCommandLine -ProcessId $ProcessId
+    if (-not $commandLine) { return $false }
+    if ($commandLine -notmatch 'orchestrator-wake-supervisor\.ps1') { return $false }
+    if ($commandLine -notmatch '-Action\s+Start') { return $false }
+    if ($commandLine -notmatch '-SupervisorLoop|-Foreground') { return $false }
 
+    $normalizedState = [regex]::Escape((Normalize-OrchestratorWakeSupervisorPath -PathValue $Config.StateRoot))
+    if ($commandLine -notmatch $normalizedState) { return $false }
+
+    $tokens = Split-ProcessCommandLineTokens -CommandLine $commandLine
     $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
     if (-not $scriptInCommand) { return $false }
-    if ($scriptInCommand -notlike '*orchestrator-wake-supervisor.ps1') { return $false }
-
-    $action = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-Action'
-    if ($action -ne 'Start') { return $false }
-
-    $hasSupervisorLoop = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-SupervisorLoop'
-    $hasForeground = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-Foreground'
-    if (-not $hasSupervisorLoop -and -not $hasForeground) { return $false }
-
-    $defaultProject = Get-OrchestratorWakeSupervisorDefaultProjectId
-    $commandProject = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-ProjectId'
-    if ($commandProject) {
-        if ($commandProject -ne $ProjectId) { return $false }
-    }
-    elseif ($ProjectId -ne $defaultProject) {
-        return $false
-    }
-
-    $normalizedExpectedState = Normalize-OrchestratorWakeSupervisorPath -PathValue $StateRoot
-    $commandStateDir = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-StateDir'
-    if ($commandStateDir) {
-        $normalizedCommandState = Normalize-OrchestratorWakeSupervisorPath -PathValue $commandStateDir
-        if ($normalizedCommandState -ne $normalizedExpectedState) { return $false }
-    }
-    else {
-        $defaultStateRoot = Normalize-OrchestratorWakeSupervisorPath -PathValue (Get-OrchestratorWakeSupervisorStateRoot)
-        if ($normalizedExpectedState -ne $defaultStateRoot) { return $false }
-    }
-
-    return $true
+    $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
+    return -not $normalizedScript.StartsWith($Config.PackRoot, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Invoke-FleetHygieneAssertionH4 {
     param([hashtable]$Config)
 
     $foreign = [System.Collections.Generic.List[int]]::new()
-    $candidates = @(
-        Get-FleetHygienePwshProcessIds | Where-Object {
-            Test-FleetHygieneSupervisorBoundToState -ProcessId $_ -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot
-        }
-    )
-
-    foreach ($procId in $candidates) {
-        $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $procId
-        $scriptPath = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
-        if (-not $scriptPath) { continue }
-        $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptPath
-        if (-not $normalizedScript.StartsWith($Config.PackRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    foreach ($procId in Get-FleetHygienePwshProcessIds) {
+        if (Test-FleetHygieneSupervisorCommandLineForeignCheckout -ProcessId $procId -Config $Config) {
             $foreign.Add($procId) | Out-Null
         }
     }
@@ -835,26 +802,16 @@ function Invoke-FleetHygieneProcessKill {
 function Find-FleetHygieneAdoptableProcesses {
     param([hashtable]$Paths)
 
-    $found = @{}
-    $needsScan = New-Object System.Collections.Generic.List[string]
-    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
-        $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
-        $recorded = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
-        if ($recorded -gt 0 -and (Test-FleetHygieneManagedProcess -ProcessId $recorded -Role $child.Id)) {
-            $found[$child.Id] = $recorded
-            continue
-        }
-        $needsScan.Add($child.Id) | Out-Null
-    }
-
-    if ($needsScan.Count -eq 0) {
+    $found = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths
+    if (-not $env:AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE -and -not $env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE) {
         return $found
     }
 
-    foreach ($childId in $needsScan) {
+    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+        if ($found.ContainsKey($child.Id)) { continue }
         foreach ($procId in Get-FleetHygienePwshProcessIds) {
-            if (Test-FleetHygieneManagedChildForState -ProcessId $procId -Role $childId -StateRoot $Paths.Root) {
-                $found[$childId] = $procId
+            if (Test-FleetHygieneManagedChildForState -ProcessId $procId -Role $child.Id -StateRoot $Paths.Root) {
+                $found[$child.Id] = $procId
                 break
             }
         }

@@ -88,6 +88,7 @@
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
     "scripts/orchestrator-wake-heartbeat.test.ts": "light",
     "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts": "heavy",
+    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts": "heavy",
     "scripts/pr-scope-check.test.ts": "heavy",
