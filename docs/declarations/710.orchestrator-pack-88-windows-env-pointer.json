@@ -26,7 +26,8 @@
     "scripts/launch-argv-inventory.json",
     "scripts/launch-argv-test-exclusions.manifest.json",
     "scripts/vitest-runtime-history.json",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "scripts/test-runtime-budget.config.json"
   ],
   "declared_globs": [],
   "amendments": [
@@ -40,6 +41,20 @@
       "reason": "fix Windows RTL_USER_PROCESS_PARAMETERS.Environment pointer read",
       "actor": "orchestrator-pack-88",
       "timestamp": "2026-07-09T21:00:00.000Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:48dc0f30a49fa335214b26b10b08278dba1aa1ce694239cf870d3306002795dd",
+      "new_active_scope_hash": "sha256:48dc0f30a49fa335214b26b10b08278dba1aa1ce694239cf870d3306002795dd",
+      "changed": {
+        "added": [
+          "scripts/test-runtime-budget.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "raise per-file Vitest budget for Issue #710 fleet reaper e2e flake on GHA",
+      "actor": "orchestrator-pack-88",
+      "timestamp": "2026-07-09T21:10:00.000Z",
       "applied": true
     }
   ]
