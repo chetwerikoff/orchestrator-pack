@@ -133,6 +133,29 @@ function Write-PackWorkerReportRecord {
     }
 }
 
+function Resolve-WorkerReportStoreRepoSlug {
+    param(
+        [string]$RepoSlug = '',
+        [string]$RepoRoot = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($RepoSlug)) {
+        return $RepoSlug
+    }
+    if ($env:GITHUB_REPOSITORY) {
+        return [string]$env:GITHUB_REPOSITORY
+    }
+    if ($env:AO_REPO_SLUG) {
+        return [string]$env:AO_REPO_SLUG
+    }
+
+    $root = $RepoRoot
+    if (-not $root) {
+        $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    }
+    return Resolve-GhFleetRepoSlug -RepoRoot $root
+}
+
 function Merge-AoSessionRowsWithWorkerReportStore {
     param(
         [object[]]$Sessions,
@@ -154,10 +177,11 @@ function Merge-AoSessionRowsWithPackWorkerReports {
     )
 
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
-    $slug = $RepoSlug
-    if (-not $slug -and $RepoRoot) {
-        $slug = Resolve-GhFleetRepoSlug -RepoRoot $RepoRoot
+    $root = $RepoRoot
+    if (-not $root) {
+        $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     }
+    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $root
     $store = Get-WorkerReportStoreState -Path $path
     $merged = Invoke-WorkerReportStoreCli -Subcommand 'mergeIntoSessions' -Payload @{
         sessions = @($Sessions)

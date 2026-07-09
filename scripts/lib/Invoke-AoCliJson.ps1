@@ -577,7 +577,8 @@ function Get-AoStatusSessionsWithReports {
     $sessions = @(Get-AoStatusSessions -Project $Project `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
             -AoCommand $AoCommand)
-    return @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $RepoSlug)
+    $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug
+    return @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $resolvedRepoSlug)
 }
 
 function Get-AoStatusSessionsWithReportsIncludingTerminated {
@@ -598,7 +599,8 @@ function Get-AoStatusSessionsWithReportsIncludingTerminated {
     $sessions = @(Get-AoStatusSessionsIncludingTerminated -Project $Project `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
             -AoCommand $AoCommand)
-    return @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $RepoSlug)
+    $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug
+    return @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $resolvedRepoSlug)
 }
 
 function Get-AoOrchestratorSessions {

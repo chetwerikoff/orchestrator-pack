@@ -318,4 +318,40 @@ describe('worker-report-store DROP proof helpers', () => {
     `).trim();
     expect(out).toContain('ready_for_review');
   });
+
+  it('pack-worker-report wrapper forwards explicit binding flags', () => {
+    const wrapper = path.join(repoRoot, 'scripts/pack-worker-report');
+    const out = execFileSync(
+      wrapper,
+      [
+        '--state',
+        'ready_for_review',
+        '-SessionId',
+        'opk-wrapper-717',
+        '-RepoSlug',
+        'chetwerikoff/orchestrator-pack',
+        '-PrNumber',
+        '717',
+        '-HeadSha',
+        'abc717wrapper',
+        '-DryRun',
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_SESSION_ID: '',
+          AO_WORKER_SESSION_ID: '',
+          AO_PR_NUMBER: '',
+          GITHUB_REPOSITORY: '',
+          AO_REPO_SLUG: '',
+          AO_HEAD_SHA: '',
+          GITHUB_SHA: '',
+        },
+      },
+    ).trim();
+    expect(out).toContain('ready_for_review');
+    expect(out).toContain('opk-wrapper-717');
+  });
 });

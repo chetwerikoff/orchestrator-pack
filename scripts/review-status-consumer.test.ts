@@ -236,4 +236,62 @@ describe('review-status consumer readers (Issue #611)', () => {
     expect(list[0]?.reports?.[0]?.reportState).toBe('ready_for_review');
     expect(list[0]?.reportSourcePath).toMatch(/pack-worker-report-store/);
   });
+
+  it('pack-store merge resolves repo slug when callers omit -RepoSlug', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'ao-pack-store-slug-717-'));
+    const stateDir = path.join(tempRoot, 'state');
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, 'worker-report-store.json'), JSON.stringify({
+      schemaVersion: 1,
+      generation: 1,
+      lastUpdatedMs: Date.parse('2026-07-05T14:17:58.000Z'),
+      records: {
+        'chetwerikoff/orchestrator-pack|opk-slug-717|717|abc717': {
+          reportState: 'ready_for_review',
+          accepted: true,
+          repoSlug: 'chetwerikoff/orchestrator-pack',
+          sessionId: 'opk-slug-717',
+          prNumber: 717,
+          headSha: 'abc717',
+          reportedAtMs: Date.parse('2026-07-05T14:17:58.000Z'),
+          reportedAt: '2026-07-05T14:17:58.000Z',
+          updatedAtMs: Date.parse('2026-07-05T14:17:58.000Z'),
+          updatedAt: '2026-07-05T14:17:58.000Z',
+        },
+      },
+    }));
+
+    const workerPayload = {
+      data: [
+        {
+          id: 'opk-slug-717',
+          name: 'opk-slug-717',
+          projectId: 'orchestrator-pack',
+          role: 'worker',
+          status: 'idle',
+          isTerminated: false,
+        },
+      ],
+    };
+    const workerPath = path.join(tempRoot, 'worker.json');
+    const orchPath = path.join(tempRoot, 'orch.json');
+    writeFileSync(workerPath, JSON.stringify(workerPayload));
+    writeFileSync(orchPath, JSON.stringify({ data: [] as unknown[] }));
+
+    const out = runPwsh(
+      [
+        "$env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = '" + stateDir.replace(/'/g, "''") + "'",
+        "Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue",
+        "Remove-Item Env:AO_REPO_SLUG -ErrorAction SilentlyContinue",
+        ". '" + lib + "'",
+        "$rows = Get-AoStatusSessionsWithReports -Project 'orchestrator-pack' `",
+        "  -WorkerListPayload (Get-Content '" + workerPath + "' -Raw | ConvertFrom-Json) `",
+        "  -OrchestratorListPayload (Get-Content '" + orchPath + "' -Raw | ConvertFrom-Json)",
+        '$rows | ConvertTo-Json -Compress -Depth 20',
+      ].join('\n'),
+    ).trim();
+    const rows = JSON.parse(out) as Array<{ reports?: Array<{ reportState: string }> }>;
+    const list = Array.isArray(rows) ? rows : [rows];
+    expect(list[0]?.reports?.[0]?.reportState).toBe('ready_for_review');
+  });
 });

@@ -3,15 +3,18 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 state=""
+forward=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --state) state="${2:-}"; shift 2 ;;
     --state=*) state="${1#--state=}"; shift ;;
-    -*) shift ;;
+    -*) forward+=("$1"); shift ;;
     *)
       if [[ -z "$state" ]]; then
         state="$1"
+      else
+        forward+=("$1")
       fi
       shift
       ;;
@@ -22,4 +25,4 @@ if [[ -z "$state" ]]; then
   exit 0
 fi
 
-exec pwsh -NoProfile -File "$root/scripts/pack-worker-report.ps1" "$state" "$@"
+exec pwsh -NoProfile -File "$root/scripts/pack-worker-report.ps1" -State "$state" "${forward[@]}"
