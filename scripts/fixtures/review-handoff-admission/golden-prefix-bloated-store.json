@@ -1,0 +1,102 @@
+{
+  "nowMs": 1781001600000,
+  "openPrs": [
+    { "number": 460, "headRefOid": "cccccccccccccccccccccccccccccccccccccccc", "repoSlug": "chetwerikoff/orchestrator-pack" },
+    { "number": 519, "headRefOid": "dddddddddddddddddddddddddddddddddddddddd", "repoSlug": "chetwerikoff/orchestrator-pack" },
+    { "number": 528, "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "repoSlug": "chetwerikoff/orchestrator-pack" }
+  ],
+  "actedOn": {},
+  "records": {
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|460|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|460|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admissionId": "evt-460-a",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 460,
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sessionId": "opk-460-a",
+      "receivedAtMs": 1780990000000,
+      "outcome": "claim_win",
+      "reason": "head_ready_for_review"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|460|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|460|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "admissionId": "evt-460-b",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 460,
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sessionId": "opk-460-b",
+      "receivedAtMs": 1780991000000,
+      "outcome": "promoted"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|460|cccccccccccccccccccccccccccccccccccccccc": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|460|cccccccccccccccccccccccccccccccccccccccc",
+      "admissionId": "evt-460-c",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 460,
+      "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+      "sessionId": "opk-460-c",
+      "receivedAtMs": 1780992000000,
+      "outcome": "promoted"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|519|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|519|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admissionId": "evt-519-a",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 519,
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sessionId": "opk-519-a",
+      "receivedAtMs": 1780980000000,
+      "outcome": "handoff_receipt_bound_exceeded",
+      "reason": "handoff_receipt_bound_exceeded"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|519|dddddddddddddddddddddddddddddddddddddddd": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|519|dddddddddddddddddddddddddddddddddddddddd",
+      "admissionId": "evt-519-b",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 519,
+      "headSha": "dddddddddddddddddddddddddddddddddddddddd",
+      "sessionId": "opk-519-b",
+      "receivedAtMs": 1780993000000,
+      "outcome": "promoted"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|463|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|463|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admissionId": "evt-463-a",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 463,
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sessionId": "opk-463-a",
+      "receivedAtMs": 1780500000000,
+      "outcome": "promoted"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|528|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|528|eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "admissionId": "evt-528-a",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 528,
+      "headSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "sessionId": "opk-528-a",
+      "receivedAtMs": 1780994000000,
+      "outcome": "promoted"
+    },
+    "orchestrator-pack|chetwerikoff/orchestrator-pack|528|ffffffffffffffffffffffffffffffffffffffff": {
+      "key": "orchestrator-pack|chetwerikoff/orchestrator-pack|528|ffffffffffffffffffffffffffffffffffffffff",
+      "admissionId": "evt-528-b",
+      "projectId": "orchestrator-pack",
+      "repoSlug": "chetwerikoff/orchestrator-pack",
+      "prNumber": 528,
+      "headSha": "ffffffffffffffffffffffffffffffffffffffff",
+      "sessionId": "opk-528-b",
+      "receivedAtMs": 1780995000000,
+      "outcome": "toctou_reject",
+      "reason": "pre_claim_toctou_pr_closed"
+    }
+  }
+}

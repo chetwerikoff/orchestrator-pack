@@ -18,6 +18,7 @@ export const REVIEW_PENDING_HANDOFF_SEMANTIC_TYPE = 'review.pending';
 export const REVIEW_PENDING_HANDOFF_EVENT_TYPE = 'review.pending';
 export const HANDOFF_RECEIPT_TO_RUN_MAX_MS = 30_000;
 export const HANDOFF_LISTENER_RECOVERY_MAX_MS = 30_000;
+export const HANDOFF_REPLAY_BATCH_SIZE_MAX = 10;
 export const HANDOFF_LOOKUP_RETRY_MAX_IDENTICAL = 3;
 export const HANDOFF_LOOKUP_RETRY_MIN_SPACING_MS = 10_000;
 
@@ -470,12 +471,309 @@ export function handoffAdmissionKey({ projectId, repoSlug, prNumber, headSha }) 
   return [projectId ?? '', repoSlug ?? '', String(prNumber ?? ''), normalizeSha(headSha)].join('|');
 }
 
-/**
- * @param {object} input
- * @param {Record<string, unknown>} [input.existing]
- * @param {object} input.admission
- * @param {number} [input.nowMs]
- */
+export function handoffPrSubjectKey({ projectId, repoSlug, prNumber }) {
+  const normalizedRepo = nonEmptyString(repoSlug)?.toLowerCase() ?? '';
+  const normalizedProject = nonEmptyString(projectId) ?? '';
+  return [normalizedProject, normalizedRepo, String(prNumber ?? '')].join('|');
+}
+
+export function deriveHandoffAdmissionId(input) {
+  const eventId = nonEmptyString(input.eventId);
+  if (eventId) {
+    return eventId;
+  }
+  const sessionId = nonEmptyString(input.sessionId) ?? '';
+  const prNumber = String(input.prNumber ?? '');
+  const receivedAtMs = String(input.receivedAtMs ?? '');
+  const headSha = normalizeSha(String(input.headSha ?? ''));
+  if (!sessionId || !prNumber || !receivedAtMs || !headSha) {
+    return '';
+  }
+  return [sessionId, prNumber, receivedAtMs, headSha].join('|');
+}
+
+export function findOpenPrForHandoffRecord(record, openPrs) {
+  const prNumber = Number(record?.prNumber);
+  if (!Number.isFinite(prNumber) || prNumber <= 0) {
+    return undefined;
+  }
+  const recordRepo = nonEmptyString(record?.repoSlug)?.toLowerCase();
+  return toArray(openPrs).find((pr) => {
+    if (Number(pr?.number) !== prNumber) {
+      return false;
+    }
+    if (!recordRepo) {
+      return true;
+    }
+    const prRepo = nonEmptyString(pr?.repoSlug)?.toLowerCase()
+      ?? normalizeRepoSlugFromPrUrl(nonEmptyString(pr?.url));
+    return !prRepo || prRepo === recordRepo;
+  });
+}
+
+export function isHandoffReceiptBoundTerminalForEviction(record, nowMs = Date.now()) {
+  if (!record || typeof record !== 'object') {
+    return false;
+  }
+  const reason = String(record.reason ?? record.deferReason ?? '').trim();
+  const outcome = String(record.outcome ?? '').trim().toLowerCase();
+  if (reason !== 'handoff_receipt_bound_exceeded' && outcome !== 'handoff_receipt_bound_exceeded') {
+    return false;
+  }
+  const receivedAtMs = Number(record.receivedAtMs);
+  if (!Number.isFinite(receivedAtMs)) {
+    return false;
+  }
+  return nowMs - receivedAtMs > HANDOFF_RECEIPT_TO_RUN_MAX_MS;
+}
+
+export function isHandoffRecordAgedOut(record, nowMs = Date.now()) {
+  const receivedAtMs = Number(record?.receivedAtMs);
+  if (!Number.isFinite(receivedAtMs)) {
+    return false;
+  }
+  return nowMs - receivedAtMs > HANDOFF_RECEIPT_TO_RUN_MAX_MS;
+}
+
+function reclassifyHandoffReceiptBoundTerminal(record, nowMs) {
+  const reason = String(record.reason ?? record.deferReason ?? '').trim();
+  const outcome = String(record.outcome ?? '').trim().toLowerCase();
+  if (reason !== 'handoff_receipt_bound_exceeded' && outcome !== 'handoff_receipt_bound_exceeded') {
+    return record;
+  }
+  if (isHandoffReceiptBoundTerminalForEviction(record, nowMs)) {
+    return { ...record, outcome: 'handoff_receipt_bound_exceeded', reason: 'handoff_receipt_bound_exceeded', terminal: true };
+  }
+  return { ...record, outcome: 'promoted', reason: '', terminal: false };
+}
+
+export function classifyHandoffRecordEviction(input) {
+  const record = isRecord(input.record) ? input.record : {};
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const openPrs = toArray(input.openPrs);
+  const openPrIndexTrusted = input.openPrIndexTrusted === true;
+  const reclassified = reclassifyHandoffReceiptBoundTerminal(record, nowMs);
+
+  if (isTerminalHandoffAdmissionRecord(reclassified)) {
+    return { evict: true, reason: 'terminal_outcome', record: reclassified };
+  }
+  if (isHandoffRecordAgedOut(reclassified, nowMs)) {
+    return {
+      evict: true,
+      reason: 'receipt_age_cap',
+      record: {
+        ...reclassified,
+        outcome: 'handoff_receipt_bound_exceeded',
+        reason: 'handoff_receipt_bound_exceeded',
+        terminal: true,
+      },
+    };
+  }
+  if (openPrIndexTrusted) {
+    const open = findOpenPrForHandoffRecord(reclassified, openPrs);
+    if (!open) {
+      return { evict: true, reason: 'closed_merged_absent_from_index', record: reclassified };
+    }
+  }
+  return { evict: false, reason: '', record: reclassified };
+}
+
+export function pruneHandoffAdmissionRecords(input) {
+  const records = isRecord(input.records) ? { ...input.records } : {};
+  const actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const openPrs = toArray(input.openPrs);
+  const openPrIndexTrusted = input.openPrIndexTrusted === true;
+  const evicted = [];
+
+  for (const [key, raw] of Object.entries(records)) {
+    if (!isRecord(raw)) {
+      delete records[key];
+      continue;
+    }
+    const decision = classifyHandoffRecordEviction({
+      record: raw,
+      nowMs,
+      openPrs,
+      openPrIndexTrusted,
+    });
+    if (decision.evict) {
+      evicted.push({
+        key,
+        admissionId: nonEmptyString(decision.record.admissionId),
+        prNumber: decision.record.prNumber,
+        headSha: decision.record.headSha,
+        reason: decision.reason,
+        record: decision.record,
+      });
+      delete records[key];
+      const admissionId = nonEmptyString(decision.record.admissionId);
+      if (admissionId) {
+        actedOn[admissionId] = {
+          admissionId,
+          outcome: String(decision.record.outcome ?? 'evicted'),
+          reason: decision.reason,
+          actedAtMs: nowMs,
+          prNumber: decision.record.prNumber,
+          headSha: decision.record.headSha,
+        };
+      }
+    }
+    else if (decision.record !== raw) {
+      records[key] = decision.record;
+    }
+  }
+
+  return { records, actedOn, evicted };
+}
+
+export function supersedeHandoffAdmissionRecords(input) {
+  const records = isRecord(input.records) ? { ...input.records } : {};
+  const openPrs = toArray(input.openPrs);
+  const openPrIndexTrusted = input.openPrIndexTrusted === true;
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const superseded = [];
+  const bySubject = new Map();
+
+  for (const [key, raw] of Object.entries(records)) {
+    if (!isRecord(raw)) continue;
+    const subjectKey = handoffPrSubjectKey(raw);
+    const list = bySubject.get(subjectKey) ?? [];
+    list.push({ key, record: raw });
+    bySubject.set(subjectKey, list);
+  }
+
+  for (const [, entries] of bySubject) {
+    if (entries.length <= 1) continue;
+    let winner = entries[0];
+    for (const entry of entries.slice(1)) {
+      const winnerReceived = Number(winner.record.receivedAtMs ?? 0);
+      const entryReceived = Number(entry.record.receivedAtMs ?? 0);
+      let pickEntry = entryReceived > winnerReceived;
+      if (openPrIndexTrusted && entryReceived === winnerReceived) {
+        const open = findOpenPrForHandoffRecord(entry.record, openPrs);
+        const openHead = normalizeSha(String(open?.headRefOid ?? ''));
+        if (openHead && openHead === normalizeSha(String(entry.record.headSha ?? ''))) {
+          pickEntry = true;
+        }
+      }
+      if (pickEntry) {
+        winner = entry;
+      }
+    }
+    for (const entry of entries) {
+      if (entry.key === winner.key) continue;
+      superseded.push({
+        key: entry.key,
+        admissionId: nonEmptyString(entry.record.admissionId),
+        prNumber: entry.record.prNumber,
+        headSha: entry.record.headSha,
+        reason: 'superseded_by_newer_head',
+        record: entry.record,
+      });
+      delete records[entry.key];
+    }
+  }
+
+  return { records, superseded, nowMs };
+}
+
+export function isHandoffAdmissionIdActedOn(input) {
+  const admissionId = nonEmptyString(input.admissionId);
+  if (!admissionId) {
+    return { actedOn: false, reason: 'missing_admission_id' };
+  }
+  const actedOn = isRecord(input.actedOn) ? input.actedOn : {};
+  if (actedOn[admissionId]) {
+    return { actedOn: true, reason: 'already_acted_on', entry: actedOn[admissionId] };
+  }
+  return { actedOn: false, reason: '' };
+}
+
+export function recordHandoffActedOnIdentity(input) {
+  const admissionId = nonEmptyString(input.admissionId);
+  if (!admissionId) {
+    return { recorded: false, reason: 'missing_admission_id', actedOn: isRecord(input.actedOn) ? input.actedOn : {} };
+  }
+  const actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
+  const nowMs = Number(input.nowMs ?? Date.now());
+  actedOn[admissionId] = {
+    admissionId,
+    outcome: nonEmptyString(input.outcome) ?? 'acted_on',
+    reason: nonEmptyString(input.reason) ?? '',
+    actedAtMs: nowMs,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+  };
+  return { recorded: true, admissionId, actedOn };
+}
+
+export function clearHandoffAdmissionRecord(input) {
+  const key = nonEmptyString(input.key);
+  const records = isRecord(input.existing) ? { ...input.existing } : {};
+  const prior = key ? records[key] : undefined;
+  if (!key || !isRecord(prior)) {
+    return { cleared: false, reason: 'missing_record', records, actedOn: isRecord(input.actedOn) ? input.actedOn : {} };
+  }
+  delete records[key];
+  const admissionId = nonEmptyString(prior.admissionId);
+  let actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
+  if (admissionId) {
+    const tombstone = recordHandoffActedOnIdentity({
+      actedOn,
+      admissionId,
+      outcome: nonEmptyString(input.outcome) ?? 'delete_on_durable_trigger',
+      reason: nonEmptyString(input.reason) ?? 'delete_on_durable_trigger',
+      nowMs: input.nowMs,
+      prNumber: prior.prNumber,
+      headSha: prior.headSha,
+    });
+    actedOn = tombstone.actedOn;
+  }
+  return { cleared: true, key, record: prior, records, actedOn };
+}
+
+export function updateHandoffAdmissionRecordOutcome(input) {
+  const key = nonEmptyString(input.key);
+  const records = isRecord(input.existing) ? { ...input.existing } : {};
+  const prior = key ? records[key] : undefined;
+  if (!key || !isRecord(prior)) {
+    return { updated: false, reason: 'missing_record', records };
+  }
+  const record = {
+    ...prior,
+    outcome: nonEmptyString(input.outcome) ?? prior.outcome,
+    reason: nonEmptyString(input.reason) ?? prior.reason,
+    updatedAtMs: Number(input.nowMs ?? Date.now()),
+    durableTriggerPersisted: input.durableTriggerPersisted === true ? true : prior.durableTriggerPersisted,
+  };
+  records[key] = record;
+  return { updated: true, key, record, records };
+}
+
+export function formatHandoffRecordTransitionLine(audit) {
+  const parts = [
+    `${HANDOFF_AUDIT_PREFIX}:`,
+    `transition=${String(audit?.transition ?? 'record')}`,
+    `reason=${String(audit?.reason ?? 'unspecified')}`,
+  ];
+  if (audit?.key) parts.push(`key=${audit.key}`);
+  if (audit?.admissionId) parts.push(`admissionId=${audit.admissionId}`);
+  if (audit?.prNumber != null) parts.push(`pr=#${audit.prNumber}`);
+  if (audit?.headSha) parts.push(`head=${audit.headSha}`);
+  return parts.join(' ');
+}
+
+function findActiveHandoffRecordForSubject(records, subjectKey) {
+  for (const record of Object.values(records)) {
+    if (!isRecord(record)) continue;
+    if (handoffPrSubjectKey(record) === subjectKey) {
+      return record;
+    }
+  }
+  return undefined;
+}
+
 export function seedHandoffAdmissionRecord(input) {
   const admission = input.admission ?? {};
   const subject = admission.subject ?? {};
@@ -488,36 +786,101 @@ export function seedHandoffAdmissionRecord(input) {
   if (!admittedBaseRef) {
     return { seeded: false, reason: 'missing_admitted_base_ref' };
   }
+  const receivedAtMs = Number(subject.receivedAtMs ?? input.nowMs ?? Date.now());
+  const admissionId = deriveHandoffAdmissionId({
+    eventId: subject.eventId ?? admission.eventId,
+    sessionId: subject.sessionId,
+    prNumber,
+    receivedAtMs,
+    headSha,
+  });
+  if (!admissionId) {
+    return { seeded: false, reason: 'missing_admission_id' };
+  }
+  const actedOn = isRecord(input.actedOn) ? input.actedOn : {};
+  const acted = isHandoffAdmissionIdActedOn({ admissionId, actedOn });
+  if (acted.actedOn) {
+    return { seeded: false, reason: 'already_acted_on', noop: true, admissionId };
+  }
+
   const repoSlug = normalizeRepoSlugFromPrUrl(subject.prUrl);
+  const subjectKey = handoffPrSubjectKey({ projectId: subject.projectId, repoSlug, prNumber });
+  const nowMs = Number(input.nowMs ?? Date.now());
+  const existing = isRecord(input.existing) ? { ...input.existing } : {};
+  const active = findActiveHandoffRecordForSubject(existing, subjectKey);
+  if (active) {
+    const activeHead = normalizeSha(String(active.headSha ?? ''));
+    const activeReceived = Number(active.receivedAtMs ?? 0);
+    if (activeHead && activeHead !== headSha) {
+      const openPrIndexTrusted = input.openPrIndexTrusted === true;
+      const open = openPrIndexTrusted
+        ? findOpenPrForHandoffRecord(active, toArray(input.openPrs))
+        : undefined;
+      const trustedCurrentHead = normalizeSha(String(open?.headRefOid ?? ''));
+      if (receivedAtMs < activeReceived || (trustedCurrentHead && trustedCurrentHead === activeHead && headSha !== activeHead)) {
+        return { seeded: false, reason: 'stale_head_regressed', noop: true, admissionId };
+      }
+    }
+    if (nonEmptyString(active.admissionId) === admissionId) {
+      return { seeded: false, reason: 'already_acted_on', noop: true, admissionId };
+    }
+  }
+
   const key = handoffAdmissionKey({
     projectId: subject.projectId,
     repoSlug,
     prNumber,
     headSha,
   });
-  const nowMs = Number(input.nowMs ?? Date.now());
-  const existing = isRecord(input.existing) ? input.existing : {};
   const prior = existing[key];
   const record = {
     key,
+    admissionId,
     projectId: subject.projectId,
     repoSlug,
     prNumber,
     headSha,
     sessionId: subject.sessionId,
-    admittedBaseRef: admittedBaseRef,
+    admittedBaseRef,
     priority: subject.priority,
-    receivedAtMs: subject.receivedAtMs ?? prior?.receivedAtMs ?? nowMs,
+    receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : (prior?.receivedAtMs ?? nowMs),
     updatedAtMs: nowMs,
     outcome: admission.outcome ?? 'promoted',
   };
+
+  for (const [existingKey, existingRecord] of Object.entries(existing)) {
+    if (!isRecord(existingRecord)) continue;
+    if (handoffPrSubjectKey(existingRecord) === subjectKey && existingKey !== key) {
+      delete existing[existingKey];
+    }
+  }
+  existing[key] = record;
+
   return {
     seeded: true,
     key,
+    admissionId,
     record,
-    records: { ...existing, [key]: record },
+    records: existing,
   };
 }
+
+export function prepareHandoffAdmissionRecordsForReplay(input) {
+  const pruned = pruneHandoffAdmissionRecords(input);
+  const superseded = supersedeHandoffAdmissionRecords({
+    records: pruned.records,
+    openPrs: input.openPrs,
+    openPrIndexTrusted: input.openPrIndexTrusted,
+    nowMs: input.nowMs,
+  });
+  return {
+    records: superseded.records,
+    actedOn: pruned.actedOn,
+    evicted: pruned.evicted,
+    superseded: superseded.superseded,
+  };
+}
+
 
 /**
  * @param {object} input
@@ -805,21 +1168,66 @@ export function clearPendingAdmissionRetry(input) {
   return { cleared: true, key, pendingRetries: existing };
 }
 
+function sortHandoffRecordsForReplay(records) {
+  return Object.values(records)
+    .filter((record) => isRecord(record))
+    .sort((a, b) => {
+      const aReceived = Number(a.receivedAtMs ?? 0);
+      const bReceived = Number(b.receivedAtMs ?? 0);
+      if (aReceived !== bReceived) return aReceived - bReceived;
+      return String(a.key ?? '').localeCompare(String(b.key ?? ''));
+    });
+}
+
 export function selectHandoffAdmissionReplay(input) {
-  const records = isRecord(input.records) ? input.records : {};
+  const prepared = prepareHandoffAdmissionRecordsForReplay(input);
+  const records = prepared.records;
   const listenerReadyMs = Number(input.listenerReadyMs ?? input.nowMs ?? Date.now());
   const nowMs = Number(input.nowMs ?? listenerReadyMs);
+  const replayCursor = Number(input.replayCursor ?? 0);
+  const batchSize = Number(input.batchSize ?? HANDOFF_REPLAY_BATCH_SIZE_MAX);
+  const ordered = sortHandoffRecordsForReplay(records);
   const replay = [];
-  for (const record of Object.values(records)) {
-    if (!isRecord(record)) continue;
+  let cursor = Math.max(0, replayCursor);
+  let nextCursor = cursor;
+
+  while (cursor < ordered.length && replay.length < batchSize) {
+    const record = ordered[cursor];
+    cursor += 1;
+    const withinRecoveryBound = nowMs - listenerReadyMs <= HANDOFF_LISTENER_RECOVERY_MAX_MS;
+    if (!withinRecoveryBound) {
+      nextCursor = cursor - 1;
+      break;
+    }
+    const receivedAtMs = Number(record.receivedAtMs ?? listenerReadyMs);
+    const receiptBound = evaluateHandoffReceiptToRunBound(receivedAtMs, nowMs);
+    if (!receiptBound.withinBound) {
+      continue;
+    }
     replay.push({
       ...record,
       replayEligible: true,
-      withinRecoveryBound: nowMs - listenerReadyMs <= HANDOFF_LISTENER_RECOVERY_MAX_MS,
-      replayReceivedAtMs: listenerReadyMs,
+      withinRecoveryBound,
+      originalReceivedAtMs: receivedAtMs,
     });
+    nextCursor = cursor;
   }
-  return { replay, listenerReadyMs, nowMs };
+
+  if (cursor >= ordered.length) {
+    nextCursor = 0;
+  }
+
+  return {
+    replay,
+    listenerReadyMs,
+    nowMs,
+    replayCursor: nextCursor,
+    records,
+    actedOn: prepared.actedOn,
+    evicted: prepared.evicted,
+    superseded: prepared.superseded,
+    hasMore: nextCursor !== 0 && replay.length > 0,
+  };
 }
 
 export function getHandoffAdmissionStatePath(stateRoot) {
@@ -829,19 +1237,22 @@ export function getHandoffAdmissionStatePath(stateRoot) {
 export function loadHandoffAdmissionState(filePath) {
   try {
     if (!fs.existsSync(filePath)) {
-      return { records: {}, pendingRetries: {}, lastUpdatedMs: null };
+      return { records: {}, pendingRetries: {}, actedOn: {}, replayCursor: 0, lastUpdatedMs: null, corrupt: false };
     }
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     if (!isRecord(parsed)) {
-      return { records: {}, pendingRetries: {}, lastUpdatedMs: null };
+      return { records: {}, pendingRetries: {}, actedOn: {}, replayCursor: 0, lastUpdatedMs: null, corrupt: true };
     }
     return {
       records: isRecord(parsed.records) ? parsed.records : {},
       pendingRetries: isRecord(parsed.pendingRetries) ? parsed.pendingRetries : {},
+      actedOn: isRecord(parsed.actedOn) ? parsed.actedOn : {},
+      replayCursor: typeof parsed.replayCursor === 'number' ? parsed.replayCursor : 0,
       lastUpdatedMs: typeof parsed.lastUpdatedMs === 'number' ? parsed.lastUpdatedMs : null,
+      corrupt: false,
     };
   } catch {
-    return { records: {}, pendingRetries: {}, lastUpdatedMs: null };
+    return { records: {}, pendingRetries: {}, actedOn: {}, replayCursor: 0, lastUpdatedMs: null, corrupt: true };
   }
 }
 
@@ -863,6 +1274,18 @@ runStdinJsonCli('review-handoff-wake-admission.mjs', {
   preClaim: () => evaluateHandoffPreClaimRecheck(readStdinJson()),
   seed: () => seedHandoffAdmissionRecord(readStdinJson()),
   replay: () => selectHandoffAdmissionReplay(readStdinJson()),
+  prepareReplay: () => prepareHandoffAdmissionRecordsForReplay(readStdinJson()),
+  prune: () => pruneHandoffAdmissionRecords(readStdinJson()),
+  supersede: () => supersedeHandoffAdmissionRecords(readStdinJson()),
+  clearRecord: () => clearHandoffAdmissionRecord(readStdinJson()),
+  updateRecordOutcome: () => updateHandoffAdmissionRecordOutcome(readStdinJson()),
+  actedOn: () => isHandoffAdmissionIdActedOn(readStdinJson()),
+  recordActedOn: () => recordHandoffActedOnIdentity(readStdinJson()),
+  formatTransition: () => {
+    const payload = readStdinJson();
+    const audit = isRecord(payload.audit) ? payload.audit : {};
+    return { transitionLine: formatHandoffRecordTransitionLine(audit) };
+  },
   seedPendingRetry: () => seedPendingAdmissionRetry(readStdinJson()),
   evaluatePendingLookupRetry: () => {
     const payload = readStdinJson();
