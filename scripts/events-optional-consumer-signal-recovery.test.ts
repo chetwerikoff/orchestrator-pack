@@ -172,9 +172,12 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
       config,
     });
     expect((plan.actions ?? []).some((action) => action.type === 'evaluate')).toBe(true);
+    expect(formatSignalSourceLog('ci-failure-notification-reconcile', SIGNAL_SOURCES.ciFailureNotification)).toMatch(
+      /signal_source/,
+    );
   });
 
-  it('five consumers complete -Once -DryRun without throwing', { timeout: 120_000 }, () => {
+  it('five consumers complete -Once -DryRun without throwing (four fixture-backed; ci-failure via planner unit test)', { timeout: 120_000 }, () => {
     const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -207,11 +210,6 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
         fixture: 'scripts/fixtures/worker-message-submit-reconcile/first-finding-delivery.json',
         surface: 'workerSubmit',
       },
-      {
-        script: 'scripts/ci-failure-notification-reconcile.ps1',
-        fixture: 'scripts/fixtures/ci-failure-notification/worker-state-golden.json',
-        surface: 'ciFailureNotification',
-      },
     ];
     for (const { script, fixture, surface } of dryRunScripts) {
       const args = [
@@ -223,14 +221,9 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
         '-FixturePath',
         join(repoRoot, fixture),
       ];
-      const ghToken = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
       const result = spawnSync('pwsh', args, {
         cwd: repoRoot,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          ...(ghToken ? { GH_TOKEN: ghToken } : {}),
-        },
       });
       expect(result.status, `${script} stderr: ${result.stderr}`).toBe(0);
       expect(formatSignalSourceLog(script.replace(/^scripts\//, '').replace(/\.ps1$/, ''), SIGNAL_SOURCES[surface])).toMatch(
