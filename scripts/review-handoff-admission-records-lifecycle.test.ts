@@ -340,7 +340,7 @@ describe('handoff admission records lifecycle (#712)', () => {
         headRefOid: `head${String(i).padStart(36, '0').slice(0, 40)}`,
       })),
       openPrIndexTrusted: true,
-      nowMsForCursor: (idx) => {
+      nowMsForCursor: (idx: number) => {
         if (idx === 2) {
           return listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS + 1_000;
         }
