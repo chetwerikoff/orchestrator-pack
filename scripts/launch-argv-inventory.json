@@ -2416,6 +2416,31 @@
       }
     },
     {
+      "rowId": "site-scripts-check-supervisor-test-wait-inventory-ps1-24",
+      "caller": {
+        "file": "scripts/check-supervisor-test-wait-inventory.ps1",
+        "line": 24
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:54f0a2e5db241fc329045ed77c7908048aaac804cf0481e3ff9700dd87b547e8",
+      "discoveryMatch": {
+        "file": "scripts/check-supervisor-test-wait-inventory.ps1",
+        "line": 24,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-check-tier-calibration-consistency-ps1-23",
       "caller": {
         "file": "scripts/check-tier-calibration-consistency.ps1",
@@ -7128,6 +7153,56 @@
         "line": 19,
         "patternIds": [
           "spawnSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-201",
+      "caller": {
+        "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
+        "line": 201
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:d0952c48d4dda2269dcb5b0cb9b9f5de438ecd9d944e013f3528f46228742976",
+      "discoveryMatch": {
+        "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
+        "line": 201,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-21",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 21
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:3aa3b8679645fdcf951d8f5a06ece0236605576906e23a631420a87318c0200a",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 21,
+        "patternIds": [
+          "execFileSync"
         ]
       }
     },
