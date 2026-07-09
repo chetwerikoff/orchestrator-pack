@@ -144,7 +144,7 @@ export function seedStaleLeaseRecord(leaseRoot: string, stateRoot: string): Lane
   const indexPath = path.join(leaseRoot, 'index.json');
   fs.writeFileSync(indexPath, JSON.stringify({ leaseIds: [record.leaseId] }));
   fs.writeFileSync(path.join(stateRoot, 'testmode-lane-lease.id'), record.leaseId);
-  return record as LaneLease;
+  return { ...record, leaseRoot };
 }
 
 export function countTestModeTaggedPwsh(markerDir?: string): number {
@@ -168,14 +168,7 @@ export function killProcess(pid: number, signal: NodeJS.Signals = 'SIGKILL'): vo
   }
 }
 
-export function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { isAlive } from './supervisor-recovery.test-helpers.js';
 
 export function runPwshFile(script: string, args: string[] = [], env: Record<string, string> = {}) {
   return spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], {

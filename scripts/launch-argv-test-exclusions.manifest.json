@@ -17,6 +17,7 @@
     "scripts/*-test-helpers.ts",
     "scripts/*-test-helpers.mjs",
     "scripts/supervisor-recovery.test-helpers.ts",
+    "scripts/testmode-fleet-harness.ts",
     "plugins/**/tests/**"
   ],
   "dedicatedTestHelperModules": [
@@ -28,6 +29,7 @@
     "scripts/_test-interposer-pack-fixture.ts",
     "scripts/_test-stub-pack-import-closure.ts",
     "scripts/_review-ready-seed-fixture-test-helpers.ts",
+    "scripts/testmode-fleet-harness.ts",
     "plugins/_shared/lib/git_fixture.ts"
   ]
 }
