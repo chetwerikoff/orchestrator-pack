@@ -629,6 +629,7 @@ export function pruneHandoffAdmissionRecords(input) {
 
 export function supersedeHandoffAdmissionRecords(input) {
   const records = isRecord(input.records) ? { ...input.records } : {};
+  let actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
   const openPrs = toArray(input.openPrs);
   const openPrIndexTrusted = input.openPrIndexTrusted === true;
   const nowMs = Number(input.nowMs ?? Date.now());
@@ -663,19 +664,31 @@ export function supersedeHandoffAdmissionRecords(input) {
     }
     for (const entry of entries) {
       if (entry.key === winner.key) continue;
+      const admissionId = nonEmptyString(entry.record.admissionId);
       superseded.push({
         key: entry.key,
-        admissionId: nonEmptyString(entry.record.admissionId),
+        admissionId,
         prNumber: entry.record.prNumber,
         headSha: entry.record.headSha,
         reason: 'superseded_by_newer_head',
         record: entry.record,
       });
+      if (admissionId) {
+        const tombstone = recordHandoffActedOnIdentity({
+          actedOn,
+          admissionId,
+          outcome: 'superseded',
+          reason: 'superseded_by_newer_head',
+          nowMs,
+          prNumber: entry.record.prNumber,
+        });
+        actedOn = tombstone.actedOn;
+      }
       delete records[entry.key];
     }
   }
 
-  return { records, superseded, nowMs };
+  return { records, superseded, actedOn, nowMs };
 }
 
 export function isHandoffAdmissionIdActedOn(input) {
@@ -879,13 +892,14 @@ export function prepareHandoffAdmissionRecordsForReplay(input) {
   const pruned = pruneHandoffAdmissionRecords(input);
   const superseded = supersedeHandoffAdmissionRecords({
     records: pruned.records,
+    actedOn: pruned.actedOn,
     openPrs: input.openPrs,
     openPrIndexTrusted: input.openPrIndexTrusted,
     nowMs: input.nowMs,
   });
   return {
     records: superseded.records,
-    actedOn: pruned.actedOn,
+    actedOn: superseded.actedOn,
     evicted: pruned.evicted,
     superseded: superseded.superseded,
   };
@@ -1193,7 +1207,6 @@ export function selectHandoffAdmissionReplay(input) {
   const prepared = prepareHandoffAdmissionRecordsForReplay(input);
   const records = prepared.records;
   const listenerReadyMs = Number(input.listenerReadyMs ?? input.nowMs ?? Date.now());
-  const nowMs = Number(input.nowMs ?? listenerReadyMs);
   const replayCursor = Number(input.replayCursor ?? 0);
   const batchSize = Number(input.batchSize ?? HANDOFF_REPLAY_BATCH_SIZE_MAX);
   const ordered = sortHandoffRecordsForReplay(records);
@@ -1203,17 +1216,31 @@ export function selectHandoffAdmissionReplay(input) {
     cursor = 0;
   }
   let nextCursor = cursor;
+  let lastRecordNowMs = Number(input.nowMs ?? listenerReadyMs);
+
+  const resolveRecordNowMs = (recordIndex) => {
+    if (typeof input.nowMsForCursor === 'function') {
+      return Number(input.nowMsForCursor(recordIndex));
+    }
+    if (input.nowMs != null) {
+      return Number(input.nowMs);
+    }
+    return Date.now();
+  };
 
   while (cursor < ordered.length && replay.length < batchSize) {
     const record = ordered[cursor];
+    const recordIndex = cursor;
     cursor += 1;
-    const withinRecoveryBound = nowMs - listenerReadyMs <= HANDOFF_LISTENER_RECOVERY_MAX_MS;
+    const recordNowMs = resolveRecordNowMs(recordIndex);
+    lastRecordNowMs = recordNowMs;
+    const withinRecoveryBound = recordNowMs - listenerReadyMs <= HANDOFF_LISTENER_RECOVERY_MAX_MS;
     if (!withinRecoveryBound) {
       nextCursor = cursor - 1;
       break;
     }
     const receivedAtMs = Number(record.receivedAtMs ?? listenerReadyMs);
-    const receiptBound = evaluateHandoffReceiptToRunBound(receivedAtMs, nowMs);
+    const receiptBound = evaluateHandoffReceiptToRunBound(receivedAtMs, recordNowMs);
     if (!receiptBound.withinBound) {
       continue;
     }
@@ -1233,7 +1260,7 @@ export function selectHandoffAdmissionReplay(input) {
   return {
     replay,
     listenerReadyMs,
-    nowMs,
+    nowMs: lastRecordNowMs,
     replayCursor: nextCursor,
     records,
     actedOn: prepared.actedOn,

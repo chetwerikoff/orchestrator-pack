@@ -357,7 +357,7 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
-    "scripts/review-handoff-admission-records-lifecycle.test.ts": "acd49068f250edbdc1c9532a48c1b8de67a0798bb7e9bd81676367eeb3ed1d53"
+    "scripts/review-handoff-admission-records-lifecycle.test.ts": "8f132586ccd1b4c35771562c15c7aa894c5cf9eef3fbbe559b071d2a40a15155"
   },
   "provenance": {}
 }

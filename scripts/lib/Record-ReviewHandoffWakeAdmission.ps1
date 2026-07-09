@@ -597,7 +597,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
 
     $continueReplay = $true
     while ($continueReplay) {
-        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $replay = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'replay' -Payload @{
             records            = $admissionState.records
             actedOn            = $admissionState.actedOn
@@ -605,7 +604,6 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
             openPrs            = @($openPrsForReplay)
             openPrIndexTrusted = $openPrIndexTrusted
             listenerReadyMs    = $ListenerReadyMs
-            nowMs              = $nowMs
         }
 
         foreach ($evicted in @($replay.evicted)) {
@@ -625,10 +623,12 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
         $batchTriggered = $false
         $recordsDeletedInBatch = 0
         foreach ($record in @($replay.replay)) {
-            if (-not $record.withinRecoveryBound) {
+            $recordNowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if ($recordNowMs - $ListenerReadyMs -gt 30000) {
                 $continueReplay = $false
                 break
             }
+            $nowMs = $recordNowMs
             if ($record.durableTriggerPersisted -eq $true) {
                 $cleared = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'clearRecord' -Payload @{
                     existing = $admissionState.records

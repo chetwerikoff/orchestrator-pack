@@ -157,6 +157,53 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(replay.replay).toHaveLength(0);
   });
 
+
+  it('tombstones superseded admission ids so delayed old-head POST cannot re-seed', () => {
+    const t0 = 1_700_000_000_000;
+    const oldHead = 'aaaa'.repeat(10);
+    const newHead = 'bbbb'.repeat(10);
+    const oldSeed = seedPair(oldHead, 234, t0);
+    const oldKey = Object.keys(oldSeed.records)[0]!;
+    const oldAdmissionId = (oldSeed.records[oldKey] as { admissionId: string }).admissionId;
+    const newSeed = seedPair(newHead, 234, t0 + 1_000, oldSeed.records);
+    const newKey = Object.keys(newSeed.records)[0]!;
+    const records = { ...newSeed.records, [oldKey]: oldSeed.records[oldKey] };
+    expect(Object.keys(records)).toHaveLength(2);
+
+    const superseded = supersedeHandoffAdmissionRecords({
+      records,
+      actedOn: {},
+      openPrs: [{ number: 234, headRefOid: newHead, repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+      nowMs: t0 + 2_000,
+    }) as { records: Record<string, unknown>; actedOn: Record<string, Record<string, unknown>> };
+    expect(Object.keys(superseded.records)).toHaveLength(1);
+    expect(superseded.actedOn[oldAdmissionId]).toMatchObject({ reason: 'superseded_by_newer_head' });
+
+    const cleared = clearHandoffAdmissionRecord({
+      existing: superseded.records,
+      actedOn: superseded.actedOn,
+      key: newKey,
+      nowMs: t0 + 3_000,
+    }) as { records: Record<string, unknown>; actedOn: Record<string, Record<string, unknown>> };
+    const dup = seedHandoffAdmissionRecord({
+      existing: cleared.records,
+      actedOn: cleared.actedOn,
+      admission: baseAdmission({
+        subject: {
+          prNumber: 234,
+          receivedAtMs: t0 + 4_000,
+          eventId: oldAdmissionId,
+        },
+        admittedHeadSha: oldHead,
+      }),
+      nowMs: t0 + 4_000,
+      openPrs: [{ number: 234, headRefOid: newHead, repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+    });
+    expect(dup).toMatchObject({ seeded: false, reason: 'already_acted_on', noop: true });
+  });
+
   it('AC3: newer head supersedes prior record for same PR', () => {
     const t0 = 1_700_000_000_000;
     const first = seedPair('aaaa'.repeat(10), 234, t0);
@@ -272,6 +319,36 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(second.replay.length).toBeGreaterThan(0);
   });
 
+
+
+  it('recomputes recovery bound per record while selecting replay batch', () => {
+    const listenerReadyMs = 1_700_000_000_000;
+    let records: Record<string, unknown> = {};
+    for (let i = 0; i < 3; i += 1) {
+      const headSha = `head${String(i).padStart(36, '0').slice(0, 40)}`;
+      const seeded = seedPair(headSha, 710 + i, listenerReadyMs + 100, records);
+      records = seeded.records;
+    }
+    const replay = selectHandoffAdmissionReplay({
+      records,
+      actedOn: {},
+      replayCursor: 0,
+      listenerReadyMs,
+      nowMs: listenerReadyMs + 1_000,
+      openPrs: [0, 1, 2].map((i) => ({
+        number: 710 + i,
+        headRefOid: `head${String(i).padStart(36, '0').slice(0, 40)}`,
+      })),
+      openPrIndexTrusted: true,
+      nowMsForCursor: (idx) => {
+        if (idx === 2) {
+          return listenerReadyMs + HANDOFF_LISTENER_RECOVERY_MAX_MS + 1_000;
+        }
+        return listenerReadyMs + 1_000;
+      },
+    }) as { replay: unknown[] };
+    expect(replay.replay).toHaveLength(2);
+  });
 
   it('clamps stale replay cursor after prune shrinks the prepared record list', () => {
     const listenerReadyMs = 1_700_000_000_000;
