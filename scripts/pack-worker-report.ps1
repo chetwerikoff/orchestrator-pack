@@ -34,10 +34,16 @@ if (-not $HeadSha) {
     if ($env:AO_HEAD_SHA) { $HeadSha = $env:AO_HEAD_SHA }
     elseif ($env:GITHUB_SHA) { $HeadSha = $env:GITHUB_SHA }
 }
-if (-not $HeadSha -and $RepoRoot -and (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
+if (-not $HeadSha) {
+    $headCwd = if ($RepoRoot -and (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
+        $RepoRoot
+    }
+    else {
+        (Get-Location).Path
+    }
     $previous = Get-Location
     try {
-        Set-Location $RepoRoot
+        Set-Location $headCwd
         $HeadSha = [string]((& git rev-parse HEAD 2>$null | Select-Object -First 1))
     }
     finally {

@@ -161,6 +161,44 @@ describe('delivery-confirm-pack-ack', () => {
       ),
     ).toBe(false);
   });
+  it('rejects addressing_reviews ack when deliveryRunId does not match the run', () => {
+    const sendMs = Date.parse('2026-07-09T12:00:00.000Z');
+    const session = {
+      id: 'opk-dc',
+      reportSnapshotKind: PACK_WORKER_REPORT_STORE_SURFACE,
+      reports: [
+        {
+          reportState: 'addressing_reviews',
+          reportedAt: '2026-07-09T12:10:00.000Z',
+          headSha: 'abc',
+          deliveryRunId: 'run-old',
+        },
+      ],
+    };
+    const run = { id: 'run-new', targetSha: 'abc' };
+    expect(findPackWorkerAckReportAfterDelivery(session, run, sendMs)).toBeNull();
+  });
+
+  it('mergePackWorkerReportsIntoSessions preserves deliveryRunId on projected rows', () => {
+    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    store.sourceRecords['org/a|opk-dc|717|abc'] = {
+      reportState: 'addressing_reviews',
+      accepted: true,
+      repoSlug: 'org/a',
+      sessionId: 'opk-dc',
+      prNumber: 717,
+      headSha: 'abc',
+      deliveryRunId: 'run-1',
+      reportedAtMs: Date.parse('2026-07-09T12:10:00.000Z'),
+    };
+    const [session] = mergePackWorkerReportsIntoSessions(
+      [{ id: 'opk-dc', repoSlug: 'org/a' }],
+      store,
+      'org/a',
+    );
+    expect(session.reports?.[0]?.deliveryRunId).toBe('run-1');
+  });
+
 });
 
 describe('events-optional-consumer-signal-recovery', () => {
@@ -506,4 +544,19 @@ describe('worker-report-store DROP proof helpers', () => {
     expect(out).toContain('ready_for_review');
     expect(out).toContain('opk-wrapper-717');
   });
+  it('pack-worker-report derives head SHA from cwd without -RepoRoot', () => {
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const out = runPwsh(`
+      $env:AO_SESSION_ID = 'opk-cwd-head'
+      $env:AO_PR_NUMBER = '717'
+      $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
+      Remove-Item Env:AO_HEAD_SHA -ErrorAction SilentlyContinue
+      Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
+      Set-Location '${repoRoot.replace(/'/g, "''")}'
+      & '${path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''")}' ready_for_review -DryRun
+    `).trim();
+    expect(out).toContain('ready_for_review');
+    expect(out).toContain(head);
+  });
+
 });

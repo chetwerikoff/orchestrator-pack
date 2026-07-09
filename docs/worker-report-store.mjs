@@ -171,6 +171,7 @@ export function workerReportRecordToSessionReportRow(record) {
     prNumber: Number(record?.prNumber ?? 0) || undefined,
     headSha: normalizeSha(record?.headSha) || undefined,
     repoSlug: String(record?.repoSlug ?? '').trim() || undefined,
+    deliveryRunId: record?.deliveryRunId ? String(record.deliveryRunId) : undefined,
     reportedAt: reportedAtMs > 0 ? new Date(reportedAtMs).toISOString() : undefined,
     timestamp: reportedAtMs > 0 ? new Date(reportedAtMs).toISOString() : undefined,
     source: PACK_WORKER_REPORT_STORE_SURFACE,
