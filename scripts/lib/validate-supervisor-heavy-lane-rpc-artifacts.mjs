@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanWorkerRpcSignatures } from './vitest-ci-lanes.mjs';
+import { scanWorkerRpcSignatures, resolveHeavyLaneFingerprint } from './vitest-ci-lanes.mjs';
 import { cliFail, loadJsonFile } from './cli-guard-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -161,6 +161,7 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
   const manifest = loadJsonFile(manifestPath);
   const head = resolveBindingHead(repoRootOverride);
   const expectedCaptureSha = resolveExpectedCaptureSha(repoRootOverride);
+  const expectedHeavyLaneFingerprint = resolveHeavyLaneFingerprint(repoRootOverride);
   const passes = manifest.passes ?? [];
   if (passes.length < (manifest.requiredConsecutivePasses ?? 3)) {
     cliFail(`RPC manifest requires >=${manifest.requiredConsecutivePasses ?? 3} passes, found ${passes.length}`);
@@ -170,6 +171,14 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     cliFail('RPC manifest missing captureCommitSha');
   }
   assertRpcMetadataCommitSha(manifest.captureCommitSha, expectedCaptureSha, 'manifest', repoRootOverride);
+  if (!manifest.heavyLaneFingerprint) {
+    cliFail('RPC manifest missing heavyLaneFingerprint');
+  }
+  if (manifest.heavyLaneFingerprint !== expectedHeavyLaneFingerprint) {
+    cliFail(
+      `manifest heavyLaneFingerprint (${manifest.heavyLaneFingerprint}) must match current heavy-lane config (${expectedHeavyLaneFingerprint})`,
+    );
+  }
 
   let lastTimestamp = 0;
   for (const pass of passes) {
@@ -186,8 +195,10 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     if (meta.commitSha !== manifest.captureCommitSha) {
       cliFail(`${pass.id}: metadata commitSha must match manifest captureCommitSha`);
     }
-    if (meta.heavyLaneFingerprint !== manifest.heavyLaneFingerprint) {
-      cliFail(`${pass.id}: heavyLaneFingerprint mismatch`);
+    if (meta.heavyLaneFingerprint !== expectedHeavyLaneFingerprint) {
+      cliFail(
+        `${pass.id}: heavyLaneFingerprint (${meta.heavyLaneFingerprint}) must match current heavy-lane config (${expectedHeavyLaneFingerprint})`,
+      );
     }
     const ts = Date.parse(meta.runTimestampUtc);
     if (Number.isNaN(ts)) cliFail(`${pass.id}: invalid runTimestampUtc`);

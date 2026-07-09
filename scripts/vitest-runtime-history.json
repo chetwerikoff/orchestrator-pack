@@ -364,7 +364,7 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
-    "scripts/check-supervisor-test-wait-inventory.test.ts": "ff9e7909adbf36f122163a555b034f492f0793a3c5cf347f23eb18040e3cdbe3",
+    "scripts/check-supervisor-test-wait-inventory.test.ts": "a498c661eab724aef88c8cb43cf273f5ddb61bded4dd20254eaa6d514b903ab3",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020",
     "scripts/supervisor-test-wait-race.fixture.test.ts": "df0bdeb7ab965247640ef023f3e678d34fbd18cbb43251777719683117bf8a94",
     "scripts/worker-report-store.test.ts": "7034e6e7fac55136e40a0afb0e0b277bd3a4f1b06c57664a808161d4011e5270",

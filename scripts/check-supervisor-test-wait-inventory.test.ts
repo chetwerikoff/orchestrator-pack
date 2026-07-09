@@ -7,6 +7,7 @@ import {
   assertRpcMetadataCommitSha,
   resolveExpectedCaptureSha,
 } from './lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs';
+import { resolveHeavyLaneFingerprint } from './lib/vitest-ci-lanes.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,6 +28,10 @@ describe('check-supervisor-test-wait-inventory guard (Issue #693)', () => {
       { cwd: repoRoot, encoding: 'utf8' },
     );
     expect(out).toContain('negative regression corpus rejected');
+  });
+
+  it('derives heavy-lane fingerprint from vitest.config.ts', () => {
+    expect(resolveHeavyLaneFingerprint(repoRoot)).toBe('CI=true maxWorkers=1 fileParallelism=false');
   });
 
   it('heavy-lane RPC artifact manifest is fail-closed clean', () => {

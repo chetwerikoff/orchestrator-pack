@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveHeavyLaneFingerprint } from './vitest-ci-lanes.mjs';
 import { cliFail, loadJsonFile } from './cli-guard-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -16,19 +17,19 @@ function currentHeadSha() {
 export function bindSupervisorHeavyLaneRpcMetadata(headSha = currentHeadSha(), repoRootOverride = repoRoot) {
   const manifestPath = join(repoRootOverride, 'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json');
   const manifest = loadJsonFile(manifestPath);
+  const heavyLaneFingerprint = resolveHeavyLaneFingerprint(repoRootOverride);
   manifest.captureCommitSha = headSha;
+  manifest.heavyLaneFingerprint = heavyLaneFingerprint;
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
   for (const pass of manifest.passes ?? []) {
     const metaPath = join(repoRootOverride, pass.metadataFile);
     const meta = loadJsonFile(metaPath);
     meta.commitSha = headSha;
-    if (!meta.heavyLaneFingerprint) {
-      meta.heavyLaneFingerprint = manifest.heavyLaneFingerprint;
-    }
+    meta.heavyLaneFingerprint = heavyLaneFingerprint;
     writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
   }
-  return { headSha, passCount: manifest.passes?.length ?? 0 };
+  return { headSha, passCount: manifest.passes?.length ?? 0, heavyLaneFingerprint };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

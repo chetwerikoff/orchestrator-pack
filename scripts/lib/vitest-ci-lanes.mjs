@@ -113,6 +113,31 @@ export function loadRuntimeHistory(repoRoot = defaultRepoRoot) {
   return raw.files ?? {};
 }
 
+export function resolveHeavyLaneFingerprint(repoRoot = defaultRepoRoot) {
+  const configPath = join(resolveRepoRoot(repoRoot), 'vitest.config.ts');
+  if (!existsSync(configPath)) {
+    throw new Error('missing vitest.config.ts for heavy-lane fingerprint derivation');
+  }
+  const text = readFileSync(configPath, 'utf8');
+  if (!/VITEST_CI_LIGHT_LANE/.test(text)) {
+    throw new Error('vitest.config.ts missing VITEST_CI_LIGHT_LANE gate for fingerprint derivation');
+  }
+  const matches = [
+    ...text.matchAll(/fileParallelism:\s*(true|false)\s*,\s*\n\s*maxWorkers:\s*([^,\n]+)/g),
+  ];
+  const heavy = matches.find((match) => match[1] === 'false');
+  if (!heavy) {
+    throw new Error('vitest.config.ts missing heavy-lane fileParallelism:false branch');
+  }
+  const maxWorkersRaw = heavy[2].trim();
+  if (!/^\d+$/.test(maxWorkersRaw)) {
+    throw new Error(
+      `vitest.config.ts heavy-lane maxWorkers must be a literal for fingerprinting, got ${maxWorkersRaw}`,
+    );
+  }
+  return `CI=true maxWorkers=${maxWorkersRaw} fileParallelism=false`;
+}
+
 export function validateClassification(discoveredFiles, classification) {
   const errors = [];
   const classified = new Set(Object.keys(classification));

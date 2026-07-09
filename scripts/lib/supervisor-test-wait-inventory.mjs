@@ -10,7 +10,8 @@ const repoRoot = join(__dirname, '..', '..');
 
 import { cliFail, loadJsonFile } from './cli-guard-helpers.mjs';
 
-const BARE_SLEEP_RE = /new\s+Promise\s*\(\s*\(\s*resolve\s*\)\s*=>\s*setTimeout\s*\(/;
+const BARE_SLEEP_RE =
+  /new\s+Promise\s*\(\s*(?:\((\w+)\)|(\w+))\s*=>\s*(?:\{[^}]{0,120}setTimeout|setTimeout)\s*\(\s*(?:\1|\2)\b/;
 const FIXED_WINDOW_RE = /fixedObservationWindow\s*\(/;
 const POLLER_ANCHOR_WINDOW_LINES = 12;
 
