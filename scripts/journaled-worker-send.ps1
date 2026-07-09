@@ -34,6 +34,8 @@ param(
     [switch]$GatedNudge,
     [switch]$NoWait,
     [string]$DeliveryId = '',
+    [string]$DeterministicDeliveryKey = '',
+    [string]$FindingsHash = '',
     [switch]$RegisterCapabilityOnly
 )
 
@@ -333,7 +335,10 @@ else {
         -ConfigPath $ConfigPath `
         -AoEpochHash $AoEpochHash `
         -ConfigPathHash $ConfigPathHash `
-        -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash
+        -AdoptionProbeRunIdHash $AdoptionProbeRunIdHash `
+        -DeliveryId $DeliveryId `
+        -DeterministicDeliveryKey $DeterministicDeliveryKey `
+        -FindingsHash $FindingsHash
 }
 
 if (-not $register.recorded) {

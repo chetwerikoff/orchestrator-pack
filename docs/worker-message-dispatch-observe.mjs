@@ -672,7 +672,11 @@ runStdinJsonCli('worker-message-dispatch-observe.mjs', {
     const payload = readStdinJson();
     return deriveMessageShape(payload.message, payload.senderSessionId);
   },
-  'journal-admit'() {
+  'deterministic-admit'() {
+    const payload = readStdinJson();
+    return evaluateDeterministicJournalAdmission(payload.journal ?? {}, payload.incoming ?? {});
+  },
+    'journal-admit'() {
     const payload = readStdinJson();
     return admitDispatchJournalRecord(
       payload.journal ?? {},

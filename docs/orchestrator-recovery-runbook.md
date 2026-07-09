@@ -692,6 +692,21 @@ is orphan), the process logs:
 Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
 runs and never contacts workers.
 
+
+## Stdout-first review delivery (Issue #718)
+
+Pack scripted review delivery no longer waits for the AO daemon to reflect submit in
+`GET /reviews`. **Authority:** reviewer wrapper terminal stdout JSON + dispatch journal +
+lifecycle store under the wake-supervisor state root (`review-delivery-lifecycle.json`,
+`worker-message-dispatch-journal.json`). Daemon dashboard supersede/delivered status may
+lag or be absent when corpus ingest fails — operator-accepted.
+
+`ao review submit`, `GET /reviews`, and `POST /reviews/trigger` are best-effort telemetry
+only (logged on failure; never gating delivery). Do not synthesize substitute worker
+notifications from daemon state when telemetry fails.
+
+Guard: `pwsh -NoProfile -File scripts/check-review-delivery-no-visibility-poll.ps1`
+
 ## Scripted review confirmed-delivery gate (Issue #669)
 
 After `ao review submit` in the pack scripted PR-review path, call:

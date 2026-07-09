@@ -27,3 +27,10 @@ Gate decision matrix (12 cells) and post-send composition fixtures (3 cells).
 | race_late_auto_delivery | dedup_or_escalate |
 
 Fixture ids under `scripts/fixtures/scripted-review-confirmed-delivery-gate/` mirror these cells.
+
+## Stdout-first delivery cells (Issue #718)
+
+| cell | authority | daemon corpus |
+| --- | --- | --- |
+| C1/C2 clean/findings | wrapper stdout | empty — still delivers once |
+| C12 visibility poll | retired | `submit_visibility_timeout` unreachable |

@@ -193,5 +193,8 @@
     "fallbackHeavyShardCount": 7
   },
   "heavyVitestPerFilePool": "threads",
-  "heavyVitestPoolByFile": {}
+  "heavyVitestPoolByFile": {},
+  "files": {
+    "scripts/review-delivery.test.ts": "light"
+  }
 }
