@@ -133,14 +133,6 @@ switch ($Action) {
             exit 2
         }
 
-        $registryErrors = @()
-        if (-not (Test-OrchestratorSideProcessRegistry -OutErrors ([ref]$registryErrors))) {
-            $message = "Supervisor registry validation failed: $($registryErrors -join '; ')"
-            Write-OrchestratorWakeSupervisorLog -Message $message -LogPath $paths.SupervisorLog
-            Write-Error $message
-            exit 2
-        }
-
         if (-not (Test-Path -LiteralPath $paths.ProgressDir)) {
             New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
         }
@@ -166,10 +158,19 @@ switch ($Action) {
             }
             if ($gate.message) {
                 Write-OrchestratorWakeSupervisorLog -Message ([string]$gate.message) -LogPath $paths.SupervisorLog
+                Write-Host ([string]$gate.message)
             }
             $report = Get-OrchestratorWakeSupervisorStatusReport -Paths $paths -ProjectId $project
             Write-OrchestratorWakeSupervisorStatusOutput -Report $report
             exit 0
+        }
+
+        $registryErrors = @()
+        if (-not (Test-OrchestratorSideProcessRegistry -OutErrors ([ref]$registryErrors))) {
+            $message = "Supervisor registry validation failed: $($registryErrors -join '; ')"
+            Write-OrchestratorWakeSupervisorLog -Message $message -LogPath $paths.SupervisorLog
+            Write-Error $message
+            exit 2
         }
 
         if ($Foreground) {

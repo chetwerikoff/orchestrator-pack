@@ -124,9 +124,37 @@ function Get-OrchestratorWakeSupervisorNowMs {
 function Read-OrchestratorWakeSupervisorLeaseDocument {
     param([string]$LeasePath)
     if (-not (Test-Path -LiteralPath $LeasePath -PathType Leaf)) { return $null }
+
+    $raw = ''
     try {
-        $raw = Get-Content -LiteralPath $LeasePath -Raw
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        $stream = [System.IO.File]::Open(
+            $LeasePath,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite
+        )
+        try {
+            $reader = New-Object System.IO.StreamReader($stream)
+            $raw = $reader.ReadToEnd()
+            $reader.Dispose()
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    catch {
+        if ($IsLinux -or $IsMacOS) {
+            try {
+                $raw = (& /bin/cat -- $LeasePath 2>$null | Out-String).Trim()
+            }
+            catch {
+                $raw = ''
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    try {
         return $raw | ConvertFrom-Json
     }
     catch {
@@ -193,12 +221,17 @@ function New-OrchestratorWakeSupervisorHeldLock {
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    $stream = [System.IO.File]::Open(
-        $leasePath,
-        [System.IO.FileMode]::OpenOrCreate,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::Read
-    )
+    try {
+        $stream = [System.IO.File]::Open(
+            $leasePath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::Read
+        )
+    }
+    catch {
+        return $null
+    }
     $op = [OrchestratorWakeSupervisorFlockNative]::LOCK_EX
     if ($NonBlocking) {
         $op = $op -bor [OrchestratorWakeSupervisorFlockNative]::LOCK_NB
@@ -237,12 +270,10 @@ function Test-OrchestratorWakeSupervisorHeldLockAlive {
     param($Context)
     if (-not $Context -or -not $Context.Stream) { return $false }
     try {
-        $probe = New-OrchestratorWakeSupervisorHeldLock -Paths $Context.Paths -NonBlocking
-        if ($probe) {
-            Release-OrchestratorWakeSupervisorHeldLock -Context $probe
-            return $false
-        }
-        return $true
+        Initialize-OrchestratorWakeSupervisorFlockNative
+        $op = [OrchestratorWakeSupervisorFlockNative]::LOCK_EX -bor [OrchestratorWakeSupervisorFlockNative]::LOCK_NB
+        $result = Invoke-OrchestratorWakeSupervisorFlock -Stream $Context.Stream -Operation $op
+        return ($result -eq 0)
     }
     catch {
         return $false
@@ -426,12 +457,29 @@ function Find-OrchestratorWakeSupervisorLegacyNoLockHolders {
         [string]$StateRoot,
         [hashtable]$Paths
     )
+    $candidates = @(
+        Find-OrchestratorWakeSupervisorManagedSupervisorCandidates -ProjectId $ProjectId -StateRoot $StateRoot |
+            Where-Object { $_ -ne $PID }
+    )
+    if ($candidates.Count -eq 0) { return @() }
+
     $leasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths
-    if (Test-Path -LiteralPath $leasePath) {
-        $doc = Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath
-        if ($doc -and $doc.holderPid) { return @() }
+    if (-not (Test-Path -LiteralPath $leasePath)) {
+        return $candidates
     }
-    return @(Find-OrchestratorWakeSupervisorManagedSupervisorCandidates -ProjectId $ProjectId -StateRoot $StateRoot)
+
+    $probe = New-OrchestratorWakeSupervisorHeldLock -Paths $Paths -NonBlocking
+    if (-not $probe) {
+        $lease = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+            -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+        if ($lease -and $lease.holderPid -gt 0) {
+            return @($candidates | Where-Object { $_ -ne [int]$lease.holderPid })
+        }
+        return @()
+    }
+
+    Release-OrchestratorWakeSupervisorHeldLock -Context $probe
+    return $candidates
 }
 
 function Initialize-OrchestratorWakeSupervisorLoopLease {
@@ -687,30 +735,29 @@ function Invoke-OrchestratorWakeSupervisorForceStop {
     $audit.matchedSupervisorCount = $supervisorCandidates.Count
     $audit.matchedSupervisorPids = $supervisorCandidates
 
-    foreach ($pid in $supervisorCandidates) {
-        Stop-OrchestratorWakeSupervisorProcess -ProcessId $pid -PidFile '' -ManagedRole 'supervisor' `
+    foreach ($candidatePid in $supervisorCandidates) {
+        Stop-OrchestratorWakeSupervisorProcess -ProcessId $candidatePid -PidFile '' -ManagedRole '' `
             -LogPath $LogPath -ProjectId $ProjectId -StateRoot $Paths.Root
-        $audit.killed += "supervisor:$pid"
+        $audit.killed += "supervisor:$candidatePid"
     }
 
     $registry = Get-OrchestratorWakeSupervisorChildRegistry
-    $processes = @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)
     foreach ($child in $registry) {
-        foreach ($proc in $processes) {
-            if (Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $proc.Id -Role $child.Id -StateRoot $Paths.Root) {
-                $audit.matchedChildCount++
-                $audit.matchedChildPids += $proc.Id
-                Stop-OrchestratorWakeSupervisorProcess -ProcessId $proc.Id -PidFile '' -ManagedRole $child.Id `
-                    -LogPath $LogPath -ProjectId $ProjectId -StateRoot $Paths.Root
-                $audit.killed += "$($child.Id):$($proc.Id)"
-            }
+        $childPids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $Paths `
+            -ProjectId $ProjectId -ChildId $child.Id
+        foreach ($childPid in $childPids) {
+            $audit.matchedChildCount++
+            $audit.matchedChildPids += $childPid
+            Stop-OrchestratorWakeSupervisorProcess -ProcessId $childPid -PidFile '' -ManagedRole '' `
+                -LogPath $LogPath -ProjectId $ProjectId -StateRoot $Paths.Root
+            $audit.killed += "$($child.Id):$childPid"
         }
     }
 
-    foreach ($pid in @($audit.matchedSupervisorPids + $audit.matchedChildPids | Sort-Object -Unique)) {
-        Wait-OrchestratorWakeSupervisorProcessExit -ProcessId $pid -TimeoutSeconds 5
-        if (Test-ProcessAlive -ProcessId $pid) {
-            $audit.stillLive += $pid
+    foreach ($candidatePid in @($audit.matchedSupervisorPids + $audit.matchedChildPids | Sort-Object -Unique)) {
+        Wait-OrchestratorWakeSupervisorProcessExit -ProcessId $candidatePid -TimeoutSeconds 5
+        if (Test-ProcessAlive -ProcessId $candidatePid) {
+            $audit.stillLive += $candidatePid
         }
     }
 
@@ -720,9 +767,9 @@ function Invoke-OrchestratorWakeSupervisorForceStop {
     }
 
     $allCandidates = @(Find-OrchestratorWakeSupervisorManagedSupervisorCandidates -ProjectId $ProjectId -StateRoot $Paths.Root)
-    foreach ($pid in $allCandidates) {
-        if (Test-ProcessAlive -ProcessId $pid) {
-            $audit.legacyStillLive += $pid
+    foreach ($candidatePid in $allCandidates) {
+        if (Test-ProcessAlive -ProcessId $candidatePid) {
+            $audit.legacyStillLive += $candidatePid
         }
     }
 
@@ -755,12 +802,151 @@ function Invoke-OrchestratorWakeSupervisorForceStop {
         stateRoot              = $Paths.Root
     }
 
-    Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $LogPath -ProjectId $ProjectId -StateRoot $Paths.Root
+    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+        $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
+        Remove-OrchestratorWakeSupervisorPidFile -Path $pidFile
+    }
     if (Test-Path -LiteralPath $Paths.StateJson) {
         Remove-Item -LiteralPath $Paths.StateJson -Force -ErrorAction SilentlyContinue
     }
     Exit-OrchestratorWakeSupervisorStopMaintenanceEpoch -Paths $Paths
     return $audit
+}
+
+
+function Get-OrchestratorWakeSupervisorLeaseEpoch {
+    param([hashtable]$Paths = $null)
+    if ($Script:OrchestratorWakeSupervisorLeaseContext -and $Script:OrchestratorWakeSupervisorLeaseContext.Epoch) {
+        return [int]$Script:OrchestratorWakeSupervisorLeaseContext.Epoch
+    }
+    if ($Paths) {
+        return Get-OrchestratorWakeSupervisorCurrentLeaseEpoch -Paths $Paths
+    }
+    return 0
+}
+
+function Test-OrchestratorWakeSupervisorLeaseEpochCurrent {
+    param([hashtable]$Paths = $null)
+    if (-not $Script:OrchestratorWakeSupervisorLeaseContext) { return $false }
+    if ($Paths) {
+        return Test-OrchestratorWakeSupervisorLeaseMutationAllowed -Paths $Paths
+    }
+    if (-not (Test-OrchestratorWakeSupervisorHeldLockAlive -Context $Script:OrchestratorWakeSupervisorLeaseContext)) {
+        return $false
+    }
+    return $true
+}
+
+function Assert-OrchestratorWakeSupervisorLeaseMutationAllowed {
+    param([hashtable]$Paths = $null)
+    if (-not (Test-OrchestratorWakeSupervisorLeaseEpochCurrent -Paths $Paths)) {
+        throw 'lease epoch stale; mutation refused'
+    }
+}
+
+function Read-OrchestratorWakeSupervisorLeaseRecord {
+    param([string]$LockPath)
+    $doc = Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $LockPath
+    if (-not $doc) { return $null }
+    return @{
+        pid   = [int]$doc.holderPid
+        epoch = [int]$doc.epoch
+    }
+}
+
+function Release-OrchestratorWakeSupervisorLease {
+    if ($Script:OrchestratorWakeSupervisorLeaseContext) {
+        Release-OrchestratorWakeSupervisorHeldLock -Context $Script:OrchestratorWakeSupervisorLeaseContext
+    }
+}
+
+function Invoke-OrchestratorWakeSupervisorLeaseHeartbeat {
+    param(
+        [hashtable]$Paths,
+        [int]$PollSeconds = 0,
+        [string]$LogPath = ''
+    )
+    if (-not $Paths) { return $false }
+    if (-not $LogPath) { $LogPath = $Paths.SupervisorLog }
+    return Update-OrchestratorWakeSupervisorLeaseHeartbeat -Paths $Paths -LogPath $LogPath
+}
+
+function Test-OrchestratorWakeSupervisorLeaseStillHeld {
+    param(
+        [hashtable]$Paths,
+        [int]$PollSeconds = 0,
+        [string]$LogPath = ''
+    )
+    if (-not $LogPath) { $LogPath = $Paths.SupervisorLog }
+    return Test-OrchestratorWakeSupervisorLoopLeaseHeld -Paths $Paths -LogPath $LogPath
+}
+
+function Enter-OrchestratorWakeSupervisorHeldLease {
+    param(
+        [hashtable]$Paths,
+        [string]$ProjectId,
+        [int]$PollSeconds = 0,
+        [string]$CheckoutScript = '',
+        [switch]$AllowReclaim
+    )
+    try {
+        $held = Initialize-OrchestratorWakeSupervisorLoopLease -Paths $Paths -ProjectId $ProjectId `
+            -LogPath $Paths.SupervisorLog
+        return @{ ok = $true; held = $held }
+    }
+    catch {
+        return @{ ok = $false; reason = [string]$_ }
+    }
+}
+
+function Resolve-OrchestratorWakeSupervisorStartLeaseGate {
+    param(
+        [hashtable]$Paths,
+        [string]$ProjectId,
+        [int]$PollSeconds = 0,
+        [string]$CheckoutScript = '',
+        [string]$LogPath = ''
+    )
+    if (-not $LogPath) { $LogPath = $Paths.SupervisorLog }
+    $decision = Resolve-OrchestratorWakeSupervisorStartLeaseDecision -Paths $Paths -ProjectId $ProjectId -LogPath $LogPath
+    $outcome = [string]$decision.Outcome
+    switch ($outcome) {
+        'spawn-allowed' {
+            return @{
+                action = 'spawn'
+                epoch  = if ($null -ne $decision.Epoch) { [int]$decision.Epoch } else { 1 }
+            }
+        }
+        'already-running-same-checkout' {
+            return @{
+                action    = 'already_running'
+                exitCode  = 0
+                holderPid = if ($decision.HolderPid) { [int]$decision.HolderPid } else { 0 }
+                message   = [string]$decision.Message
+            }
+        }
+        'foreign-holder' {
+            return @{
+                action   = 'fail'
+                exitCode = if ($decision.ExitCode) { [int]$decision.ExitCode } else { 3 }
+                message  = [string]$decision.Message
+            }
+        }
+        'lease-grace-pending' {
+            return @{
+                action   = 'fail'
+                exitCode = if ($decision.ExitCode) { [int]$decision.ExitCode } else { 2 }
+                message  = [string]$decision.Message
+            }
+        }
+        default {
+            return @{
+                action   = 'fail'
+                exitCode = if ($decision.ExitCode) { [int]$decision.ExitCode } else { 2 }
+                message  = [string]$decision.Message
+            }
+        }
+    }
 }
 
 function Test-OrchestratorWakeSupervisorSupervisorStateRootIdentity {

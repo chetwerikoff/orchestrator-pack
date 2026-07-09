@@ -62,6 +62,7 @@ function killSupervisorStateDir(root: string): void {
         supervisorScript,
         '-Action',
         'Stop',
+        '-Force',
         '-StateDir',
         root,
       ],

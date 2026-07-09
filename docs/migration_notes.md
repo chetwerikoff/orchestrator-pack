@@ -2292,3 +2292,41 @@ After merging on a host with a live wake supervisor:
 ## Session PR binding resolver (Issue #699)
 
 On AO 0.10.2, `ao session claim-pr <session> <pr>` may set numeric `displayName` on `ao session get` but does **not** populate `prNumber`/`pr` on `ao session ls` rows. Pack consumers resolve session↔PR ownership through `docs/session-pr-binding-resolver.mjs`; claim-pr remains optional AO-native CI hygiene only.
+
+## Wake-supervisor fleet cardinality lease (Issue #709)
+
+State-root singleton enforcement uses `<stateRoot>/supervisor.lock` (held `flock` on Linux/WSL2). One supervisor fleet per shared `AO_SIDE_PROCESS_STATE_DIR` / default wake state root.
+
+### Ordinary Stop blocked (ambiguous fleet)
+
+When two or more managed-supervisor candidates match the same project + state root, ordinary Stop fails closed:
+
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop -StateDir <stateRoot>
+```
+
+Expected diagnostic: `stop blocked: ambiguous managed supervisor candidates (...); use -Force or manual remediation`.
+
+### Force Stop (incident recovery)
+
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop -Force -StateDir <stateRoot>
+```
+
+Force Stop enters a maintenance epoch, terminates all role-tagged managed children and supervisor candidates for the project/state root, emits structured `wake-supervisor-audit kind=force-stop` output, and clears artifacts only after exit checks. Use when ordinary Stop is ambiguous or a wedged holder blocks recovery.
+
+### Post-force recovery verification
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status -StateDir <stateRoot>` — expect `supervisor: stopped` and no ambiguous candidate list.
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start -StateDir <stateRoot>` — expect detached start, `supervisor.lock` present, holder pid live.
+3. Re-check Status shows one running supervisor and healthy registry children.
+
+### Cross-checkout management
+
+`Status` / `Stop` / `Stop -Force` discover supervisors by **state root + project identity**, not checkout script path. A holder started from another worktree remains visible and stoppable from any checkout sharing the state root.
+
+### Legacy no-lock holders
+
+Pre-709 supervisors without `supervisor.lock` block new `Start` with a legacy-holder diagnostic until `Stop -Force` clears the fleet.
+
+
