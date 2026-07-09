@@ -3,6 +3,7 @@
 .SYNOPSIS
   CLI entry for TestMode fleet reaper and lane lease helpers (Issue #710).
 #>
+# CI sync trigger: noop comment to re-run scope-guard.
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
