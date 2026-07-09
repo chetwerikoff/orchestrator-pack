@@ -60,6 +60,24 @@ export declare function resolveHeavyRuntimeMs(
   runtimeHistory: Record<string, number>,
   defaultRuntimeMs: number,
 ): number;
+export declare function resolveHeavyFilePool(
+  file: string,
+  runtimeHistory: Record<string, number>,
+  defaultRuntimeMs: number,
+  forkPoolMinRuntimeMs: number,
+): 'forks' | 'threads';
+export declare function enumerateVitestFileTestTitles(filePath: string): string[];
+export interface HeavyFileRunPlan {
+  mode: 'file' | 'tests';
+  pool: 'forks' | 'threads';
+  tests?: string[];
+}
+export declare function resolveHeavyFileRunPlan(
+  file: string,
+  config: LanesConfig,
+  runtimeHistory: Record<string, number>,
+  repoRoot?: string,
+): HeavyFileRunPlan;
 export declare function assignHeavyShards(
   heavyFiles: string[],
   runtimeHistory: Record<string, number>,
