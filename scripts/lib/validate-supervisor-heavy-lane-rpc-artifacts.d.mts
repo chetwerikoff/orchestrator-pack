@@ -1,3 +1,5 @@
+export declare function resolvePrHeadSha(repoRootOverride?: string): string;
+
 export declare function resolveExpectedCaptureSha(repoRootOverride?: string): string;
 
 export declare function assertRpcMetadataCommitSha(

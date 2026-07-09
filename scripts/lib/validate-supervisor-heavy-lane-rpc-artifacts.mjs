@@ -14,15 +14,39 @@ const RPC_FIXTURE_PREFIX = 'scripts/fixtures/supervisor-test-waits-heavy-lane-rp
 const RPC_ARTIFACT_BINDING_SCOPE_RE =
   /^scripts\/(orchestrator-wake-supervisor|supervisor-fault-boundary|supervisor-recovery\.test-helpers|lib\/supervisor-test-wait-inventory|lib\/validate-supervisor-heavy-lane-rpc-artifacts|lib\/bind-supervisor-heavy-lane-rpc-metadata|lib\/vitest-ci-lanes|check-supervisor-test-wait-inventory|vitest-runtime-history\.json)/;
 
-function resolveBindingHead(repoRootOverride = repoRoot) {
-  const envHead = process.env.GITHUB_SHA ?? process.env.SUPERVISOR_RPC_BIND_HEAD;
-  if (envHead && FULL_SHA_RE.test(envHead)) {
-    return envHead;
+function resolvePrHeadSha(repoRootOverride = repoRoot) {
+  for (const candidate of [
+    process.env.SUPERVISOR_RPC_BIND_HEAD,
+    process.env.PR_HEAD_SHA,
+    process.env.AO_PR_HEAD_SHA,
+  ]) {
+    if (candidate && FULL_SHA_RE.test(candidate)) {
+      return candidate;
+    }
   }
+
+  // pull_request checkout is a merge commit; second parent is the PR head (not GITHUB_SHA).
+  try {
+    const secondParent = execFileSync('git', ['rev-parse', 'HEAD^2'], {
+      cwd: repoRootOverride,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (FULL_SHA_RE.test(secondParent)) {
+      return secondParent;
+    }
+  } catch {
+    // not a merge commit
+  }
+
   return execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: repoRootOverride,
     encoding: 'utf8',
   }).trim();
+}
+
+function resolveBindingHead(repoRootOverride = repoRoot) {
+  return resolvePrHeadSha(repoRootOverride);
 }
 
 function pathsChangedInCommit(commitSha, repoRootOverride) {

@@ -5,8 +5,17 @@
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts"
   ],
   "approvedPositiveHelpers": [
+    "waitForCondition",
+    "waitForStdoutContains",
     "waitForMarkerPidChange",
-    "fixedObservationWindow"
+    "waitForSupervisorLogMatch",
+    "waitForSupervisorLogMatchFromOffset",
+    "waitForMarker",
+    "waitForMarkers",
+    "waitForProcessesStopped",
+    "waitForSupervisorHealthyStatus",
+    "readMarker",
+    "stopSupervisorChild"
   ],
   "sites": [
     {
@@ -22,8 +31,19 @@
   "assertionFingerprints": {},
   "runtimeEvidence": {
     "mergeBaseRef": "origin/main",
-    "mergeBaseSha": "0000000000000000000000000000000000000000",
-    "trackedFiles": []
+    "mergeBaseSha": "97df2efed9cd22a256bb327a60db01008e8d8fbb",
+    "heavyLaneFingerprint": "CI=true maxWorkers=1 fileParallelism=false",
+    "trackedFiles": [
+      "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
+    ]
   },
-  "raceFixtures": {}
+  "raceFixtures": {
+    "log": "scripts/supervisor-test-wait-race.fixture.test.ts#log-generation-boundary",
+    "marker": "scripts/supervisor-test-wait-race.fixture.test.ts#marker-generation-boundary",
+    "stdout": "scripts/supervisor-test-wait-race.fixture.test.ts#stdout-generation-boundary",
+    "process-exit": "scripts/supervisor-test-wait-race.fixture.test.ts#process-exit-generation-boundary"
+  }
 }

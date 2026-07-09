@@ -117,7 +117,8 @@
       "classification": "teardown-poll",
       "followingAssertion": "Stop action after supervisor pid exits",
       "rationale": "Poll-for-exit before Stop instead of blind post-kill sleep",
-      "generationBoundary": "supervisor.pid read before SIGTERM"
+      "generationBoundary": "supervisor.pid read before SIGTERM",
+      "raceFixture": "process-exit"
     },
     {
       "id": "startup-restart-listener-poll",
@@ -172,7 +173,8 @@
       "classification": "teardown-poll",
       "followingAssertion": "Stop then status shows stopped",
       "rationale": "Poll supervisor exit after SIGTERM before Stop",
-      "generationBoundary": "supervisor.pid before child.kill"
+      "generationBoundary": "supervisor.pid before child.kill",
+      "raceFixture": "process-exit"
     },
     {
       "id": "lifecycle-stop-order-exit",
@@ -191,7 +193,8 @@
       "classification": "teardown-poll",
       "followingAssertion": "statusOrphan.status not 0 with supervisor stopped",
       "rationale": "Poll supervisor exit after background child SIGTERM",
-      "generationBoundary": "supervisorPid before child.kill"
+      "generationBoundary": "supervisorPid before child.kill",
+      "raceFixture": "process-exit"
     },
     {
       "id": "lifecycle-status-orphan-settle",
@@ -225,7 +228,8 @@
       "classification": "teardown-poll",
       "followingAssertion": "supervisor !isAlive after Stop",
       "rationale": "Poll supervisor exit after Stop action",
-      "generationBoundary": "supervisorPid before Stop"
+      "generationBoundary": "supervisorPid before Stop",
+      "raceFixture": "process-exit"
     },
     {
       "id": "lifecycle-crash-backoff-log-poll",
@@ -242,7 +246,8 @@
       "classification": "teardown-poll",
       "followingAssertion": "supervisor stopped after crash-backoff test",
       "rationale": "Shared teardown poller after crash-loop exercise",
-      "generationBoundary": "stateDir supervisor.pid before teardown"
+      "generationBoundary": "stateDir supervisor.pid before teardown",
+      "raceFixture": "process-exit"
     },
     {
       "id": "registry-stall-recovery-poll",

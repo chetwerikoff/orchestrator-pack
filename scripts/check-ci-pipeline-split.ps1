@@ -504,6 +504,12 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
 
 $rpcArtifactValidator = Join-Path $RepoRoot 'scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs'
 if (Test-Path -LiteralPath $rpcArtifactValidator) {
+    if (-not $env:PR_HEAD_SHA) {
+        $secondParent = git -C $RepoRoot rev-parse --verify HEAD^2 2>$null
+        if ($LASTEXITCODE -eq 0 -and $secondParent) {
+            $env:PR_HEAD_SHA = $secondParent
+        }
+    }
     $rpcOutput = & node $rpcArtifactValidator 2>&1 | Out-String
     if ($rpcOutput.Trim()) { Write-Host $rpcOutput.Trim() }
     if ($LASTEXITCODE -ne 0) {

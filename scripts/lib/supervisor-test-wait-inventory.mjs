@@ -106,6 +106,14 @@ function loadMergeBaseRuntimeWeights(mergeBaseSha) {
   }
 }
 
+function isMisclassifiedQuiescenceSite(site) {
+  return (
+    site.classification === 'positive-convertible' &&
+    typeof site.anchor === 'string' &&
+    site.anchor.includes('fixedObservationWindow')
+  );
+}
+
 function validateInventory(inventoryPath) {
   const inventory = loadJson(inventoryPath);
   const failures = [];
@@ -149,15 +157,12 @@ function validateInventory(inventoryPath) {
       failures.push(`inventory anchor missing in ${site.file}: ${site.anchor}`);
       continue;
     }
+    if (isMisclassifiedQuiescenceSite(site)) {
+      failures.push(`${site.id}: quiescence window cannot be classified positive-convertible`);
+      continue;
+    }
     if (site.classification === 'negative/quiescence-fixed' && !FIXED_WINDOW_RE.test(fileText)) {
       failures.push(`${site.id}: negative site must use fixedObservationWindow in ${site.file}`);
-    }
-    if (
-      site.classification === 'positive-convertible' &&
-      /fixedObservationWindow\s*\(\s*\d+/.test(fileText) &&
-      site.anchor.includes('fixedObservationWindow')
-    ) {
-      failures.push(`${site.id}: quiescence window cannot be classified positive-convertible`);
     }
     if (
       (site.classification === 'positive-convertible' || site.classification === 'teardown-poll') &&
@@ -172,6 +177,13 @@ function validateInventory(inventoryPath) {
       !site.generationBoundary
     ) {
       failures.push(`${site.id}: converted site missing generationBoundary`);
+    }
+    if (
+      (site.classification === 'positive-convertible' || site.classification === 'teardown-poll') &&
+      site.generationBoundary &&
+      !site.raceFixture
+    ) {
+      failures.push(`${site.id}: converted site missing raceFixture generation-boundary coverage`);
     }
     if (
       site.classification === 'negative/quiescence-fixed' &&
@@ -254,6 +266,14 @@ function validateNegativeRegression(negativePath) {
   const { failures } = validateInventory(negativePath);
   if (failures.length === 0) {
     cliFail('negative regression corpus must be rejected but passed validation');
+  }
+  const misclassificationFailures = failures.filter((item) =>
+    item.includes('quiescence window cannot be classified positive-convertible'),
+  );
+  if (misclassificationFailures.length !== 1) {
+    cliFail(
+      `negative regression corpus must fail only for misclassification; got ${failures.length} failure(s): ${failures.join('; ')}`,
+    );
   }
   console.log('[PASS] negative regression corpus rejected as expected');
 }
