@@ -29,6 +29,7 @@ import {
 } from './review-finding-delivery-confirm.mjs';
 import { isDeliveredChangesRequested } from './review-producer-contract.mjs';
 import { resolveDeliveredRunObservedAtMs } from './events-optional-consumer-signal-recovery.mjs';
+import { evaluateDeterministicJournalAdmission } from './review-delivery-lifecycle.mjs';
 
 
 /** AO tmux paste path threshold (matches AO 0.9.2 sendMessage). */
