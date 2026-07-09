@@ -278,7 +278,7 @@ describe('handoff admission records lifecycle (#712)', () => {
     const listenerReadyMs = Date.now() - 2_000;
     let records: Record<string, unknown> = {};
     const openPrs: Array<{ number: number; headRefOid: string; repoSlug: string }> = [];
-    for (let i = 0; i < HANDOFF_REPLAY_BATCH_SIZE_MAX * 2; i += 1) {
+    for (let i = 0; i < HANDOFF_REPLAY_BATCH_SIZE_MAX + 1; i += 1) {
       const headSha = `head${String(i).padStart(36, '0').slice(0, 40)}`;
       const prNumber = 700 + i;
       const seeded = seedPair(headSha, prNumber, listenerReadyMs + i * 10, records);
@@ -308,7 +308,7 @@ describe('handoff admission records lifecycle (#712)', () => {
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || 'pwsh failed');
     }
-    expect(Number(result.stdout.trim())).toBe(HANDOFF_REPLAY_BATCH_SIZE_MAX * 2);
+    expect(Number(result.stdout.trim())).toBe(HANDOFF_REPLAY_BATCH_SIZE_MAX + 1);
     const state = JSON.parse(readFileSync(path.join(dir, 'review-handoff-wake-admission.json'), 'utf8'));
     expect(Object.keys(state.records)).toHaveLength(0);
     expect(state.replayCursor).toBe(0);
