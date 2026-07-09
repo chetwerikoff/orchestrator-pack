@@ -1,0 +1,7 @@
+{
+  "sourceCommand": "ao session ls --json -p orchestrator-pack",
+  "toolVersion": "ao 0.10.2",
+  "capturedAtUtc": "2026-07-08T12:00:00.000Z",
+  "context": "Issue #699 live probe: issue-only session ls row after ao session claim-pr orchestrator-pack-45 690 — no prNumber/pr/displayName on list rows.",
+  "scrubLog": ["Synthetic session id orchestrator-pack-45"]
+}

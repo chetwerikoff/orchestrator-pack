@@ -68,12 +68,14 @@ function Get-CiFailurePreSendSnapshot {
 
     $resolvedOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     $sessions = @(Get-AoStatusSessions)
+    $sessionDetailsById = Build-AoSessionDetailsById -Sessions $sessions -Project $ProjectId
     $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
         @($resolvedOpenPrs | Where-Object { [int]$_.number -eq $PrNumber })
     )
     return @{
         openPrs                         = @($resolvedOpenPrs)
         sessions                        = @($sessions)
+        sessionDetailsById              = $sessionDetailsById
         ciChecksByPr                    = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr          = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
@@ -543,9 +545,11 @@ function Get-CiFailureWorkerStateSnapshot {
 
     $resolvedOpenPrs = if ($OpenPrs.Count -gt 0) { @($OpenPrs) } else { ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot) }
     $sessions = Get-AoStatusSessions
+    $sessionDetailsById = Build-AoSessionDetailsById -Sessions @($sessions) -Project $ProjectId
     return @{
-        sessions = @($sessions)
-        openPrs  = @($resolvedOpenPrs)
+        sessions             = @($sessions)
+        sessionDetailsById   = $sessionDetailsById
+        openPrs              = @($resolvedOpenPrs)
     }
 }
 

@@ -409,7 +409,7 @@ export function classifyReviewReadySnapshot({
     };
   }
 
-  if (!sessionMatchesPr(session, prNumber)) {
+  if (!sessionMatchesPr(session, prNumber, [openPr])) {
     reasons.push('session_not_linked_to_pr');
   }
 

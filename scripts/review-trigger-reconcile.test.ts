@@ -24,6 +24,7 @@ import {
   sessionMatchesIdentifier,
   planReconcileActions,
   resolveHeadOwningWorkerSessionId,
+  resolveReconcileEvaluationSession,
   resolveStrictHeadOwningWorkerSession,
   resolveWorkerSessionId,
   unwrapReconcilePlanResult,
@@ -233,6 +234,28 @@ function withExpiredNudgeCycle(fixture: FixturePayload): FixturePayload {
     },
   };
 }
+
+describe('resolveReconcileEvaluationSession displayName enrichment', () => {
+  it('resolves owner when session-get displayName binds PR', () => {
+    const headSha = 'cccccccccccccccccccccccccccccccccccccccc';
+    const sessionId = 'orchestrator-pack-45';
+    const openPrs = [{ number: 690, headRefOid: headSha, headRefName: 'issue-690-branch' }];
+    const sessions = [{
+      id: sessionId,
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      issueId: '690',
+      branch: 'unrelated-branch',
+    }];
+    const without = resolveReconcileEvaluationSession(sessions, 690, headSha, openPrs);
+    expect(without.sessionId).toBeNull();
+    const withDetail = resolveReconcileEvaluationSession(sessions, 690, headSha, openPrs, {
+      sessionDetailsById: { [sessionId]: { displayName: '690' } },
+    });
+    expect(withDetail.sessionId).toBe(sessionId);
+  });
+});
 
 describe('planReconcileActions', () => {
   it('persists ready_for_review debounce when reviewGate blocks on debounce pending', () => {

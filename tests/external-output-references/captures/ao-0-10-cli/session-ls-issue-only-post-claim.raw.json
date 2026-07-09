@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "id": "orchestrator-pack-45",
+      "projectId": "orchestrator-pack",
+      "role": "worker",
+      "status": "working",
+      "issueId": "690",
+      "harness": "cursor",
+      "isTerminated": false,
+      "lastActivityAt": "2026-07-08T12:00:00.000000000Z",
+      "createdAt": "2026-07-08T11:00:00.000000000Z",
+      "updatedAt": "2026-07-08T12:00:00.000000000Z"
+    }
+  ],
+  "meta": {
+    "hiddenTerminatedCount": 0
+  }
+}

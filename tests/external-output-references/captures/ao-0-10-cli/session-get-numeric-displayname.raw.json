@@ -1,0 +1,18 @@
+{
+  "session": {
+    "id": "orchestrator-pack-45",
+    "projectId": "orchestrator-pack",
+    "issueId": "690",
+    "kind": "worker",
+    "harness": "cursor",
+    "displayName": "690",
+    "activity": {
+      "state": "working",
+      "lastActivityAt": "2026-07-08T12:00:00.000000000Z"
+    },
+    "isTerminated": false,
+    "createdAt": "2026-07-08T11:00:00.000000000Z",
+    "updatedAt": "2026-07-08T12:00:00.000000000Z",
+    "status": "working"
+  }
+}

@@ -64,5 +64,28 @@ if ($reconcilePs1 -match "Join-Path \$PackRoot 'agent-orchestrator\.yaml\.exampl
     exit 1
 }
 
+if ($mjs -notmatch 'resolveReconcileEvaluationSession\([\s\S]{0,240}sessionDetailsById') {
+    Write-Host 'docs/review-trigger-reconcile.mjs must pass sessionDetailsById into resolveReconcileEvaluationSession'
+    exit 1
+}
+if ($reconcilePs1 -notlike '*sessionDetailsById*') {
+    Write-Host 'scripts/review-trigger-reconcile.ps1 must thread session-get displayName into reconcile snapshots'
+    exit 1
+}
+$reconcileDmts = Join-Path $Root 'docs/review-trigger-reconcile.d.mts'
+if (-not (Test-Path -LiteralPath $reconcileDmts -PathType Leaf)) {
+    Write-Host 'Missing docs/review-trigger-reconcile.d.mts'
+    exit 1
+}
+$dmts = Get-Content -LiteralPath $reconcileDmts -Raw
+if ($dmts -notmatch 'listWorkersForPr[\s\S]{0,240}sessionDetailsById') {
+    Write-Host 'docs/review-trigger-reconcile.d.mts must declare sessionDetailsById for listWorkersForPr'
+    exit 1
+}
+if ($dmts -notmatch 'PlanReconcileInput[\s\S]{0,240}sessionDetailsById') {
+    Write-Host 'docs/review-trigger-reconcile.d.mts must declare sessionDetailsById on PlanReconcileInput'
+    exit 1
+}
+
 Write-Host '[PASS] review-trigger reconciliation entrypoint and example wiring (Issue #163)'
 exit 0

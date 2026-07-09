@@ -45,6 +45,12 @@ import {
   CYCLE_SURFACE_READY_FOR_REVIEW,
 } from './worker-iteration-cycle.mjs';
 import { evaluateReviewCycleCapGate } from './review-cycle-cap.mjs';
+import {
+  isEnrichedPrBinding,
+  resolvePrOwningWorkerSessionBinding,
+  resolveSessionPrBinding,
+  sessionMatchesPrBound,
+} from './session-pr-binding-resolver.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string, findingCount?: number, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, body?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
@@ -187,15 +193,11 @@ export function findSessionById(sessions, sessionId) {
 /**
  * @param {AoSession} session
  * @param {number} prNumber
+ * @param {OpenPr[]} [openPrs]
+ * @param {{ headSha?: string, sessionDetail?: { displayName?: string } | null }} [options]
  */
-export function sessionMatchesPr(session, prNumber) {
-  if (Number(session?.prNumber) === prNumber) {
-    return true;
-  }
-  const prField = String(session?.pr ?? '');
-  return Boolean(
-    prField && (prField === String(prNumber) || prField === `#${prNumber}`),
-  );
+export function sessionMatchesPr(session, prNumber, openPrs = [], options = {}) {
+  return sessionMatchesPrBound(session, prNumber, openPrs, options);
 }
 
 /**
@@ -319,8 +321,13 @@ function sessionExplicitlyOwnsHead(session, headSha) {
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
-  if (!sessionMatchesPr(session, prNumber)) {
+export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = [], options = {}) {
+  const prList = toArray(openPrs);
+  const binding = resolveSessionPrBinding(session, prList, {
+    headSha,
+    sessionDetail: options.sessionDetail ?? null,
+  });
+  if (!binding.bound || Number(binding.prNumber) !== prNumber) {
     return false;
   }
 
@@ -329,7 +336,7 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
     return false;
   }
 
-  const pr = toArray(openPrs).find((row) => Number(row?.number) === prNumber);
+  const pr = prList.find((row) => Number(row?.number) === prNumber);
   const currentHead = normalizeSha(pr?.headRefOid);
   if (currentHead && currentHead !== target) {
     return false;
@@ -338,6 +345,17 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
   const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
   if (sessionHead) {
     return sessionHead === target;
+  }
+
+  if (isEnrichedPrBinding(binding)) {
+    if (
+      binding.source === 'display_name' &&
+      currentHead &&
+      currentHead === target
+    ) {
+      return true;
+    }
+    return false;
   }
 
   return Boolean(currentHead && currentHead === target);
@@ -349,10 +367,18 @@ export function sessionOwnsRunHead(session, prNumber, headSha, openPrs = []) {
  * @param {AoSession[]} sessions
  * @param {number} prNumber
  */
-export function listWorkersForPr(sessions, prNumber) {
+export function listWorkersForPr(sessions, prNumber, openPrs = [], options = {}) {
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   return toArray(sessions).filter((session) => {
     const role = String(session?.role ?? '').toLowerCase();
-    return (role === 'worker' || role === 'coding') && sessionMatchesPr(session, prNumber);
+    const sessionId = getSessionIdentifier(session);
+    return (
+      (role === 'worker' || role === 'coding') &&
+      sessionMatchesPr(session, prNumber, openPrs, {
+        headSha: options.headSha,
+        sessionDetail: sessionId ? sessionDetailsById[sessionId] ?? null : null,
+      })
+    );
   });
 }
 
@@ -365,9 +391,10 @@ export function listWorkersForPr(sessions, prNumber) {
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = []) {
+export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha, openPrs = [], options = {}) {
   const prList = toArray(openPrs);
-  const workers = listWorkersForPr(sessions, prNumber);
+  const sessionDetailsById = options.sessionDetailsById ?? {};
+  const workers = listWorkersForPr(sessions, prNumber, prList, { headSha, sessionDetailsById });
   const explicitOwners = workers.filter((session) =>
     sessionExplicitlyOwnsHead(session, headSha),
   );
@@ -402,7 +429,9 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
   const implicitOwners = workers.filter(
     (session) =>
       !sessionExplicitlyOwnsHead(session, headSha) &&
-      sessionOwnsRunHead(session, prNumber, headSha, prList),
+      sessionOwnsRunHead(session, prNumber, headSha, prList, {
+        sessionDetail: sessionDetailsById[getSessionIdentifier(session) ?? ''] ?? null,
+      }),
   );
   const liveImplicitOwners = implicitOwners.filter((session) =>
     isLiveWorkerSession(session),
@@ -449,14 +478,16 @@ export function resolveStrictHeadOwningWorkerSession(sessions, prNumber, headSha
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, openPrs = []) {
+export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, openPrs = [], options = {}) {
   const sessionList = toArray(sessions);
   const prList = toArray(openPrs);
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   const ownerResolution = resolveStrictHeadOwningWorkerSession(
     sessionList,
     prNumber,
     headSha,
     prList,
+    { sessionDetailsById },
   );
 
   if (ownerResolution.failClosed) {
@@ -475,12 +506,12 @@ export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, o
       session: findSessionById(sessionList, sessionId),
     };
   }
-
   const sessionId = resolveHeadOwningWorkerSessionId(
     sessionList,
     prNumber,
     headSha,
     prList,
+    { sessionDetailsById },
   );
   return {
     ownerResolution,
@@ -497,17 +528,22 @@ export function resolveReconcileEvaluationSession(sessions, prNumber, headSha, o
  * @param {string} headSha
  * @param {OpenPr[]} [openPrs]
  */
-export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = []) {
+export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs = [], options = {}) {
   const prList = toArray(openPrs);
   const target = normalizeSha(headSha);
   const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
   const reportBindingOptions = { headCommittedAtMs };
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   const workers = toArray(sessions).filter((session) => {
     const role = String(session?.role ?? '').toLowerCase();
+    const sessionId = getSessionIdentifier(session);
     return (
       (role === 'worker' || role === 'coding') &&
       isLiveWorkerSession(session) &&
-      sessionMatchesPr(session, prNumber)
+      sessionMatchesPr(session, prNumber, prList, {
+        headSha,
+        sessionDetail: sessionId ? sessionDetailsById[sessionId] ?? null : null,
+      })
     );
   });
 
@@ -540,9 +576,20 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
     return getSessionIdentifier(best);
   }
 
-  return resolveWorkerSessionId(sessions, prNumber, {
-    ownsHead: (session) => sessionOwnsRunHead(session, prNumber, headSha, prList),
+  const ownsHeadMatch = resolveWorkerSessionId(sessions, prNumber, {
+    openPrs: prList,
+    headSha,
+    sessionDetailsById,
+    ownsHead: (session) =>
+      sessionOwnsRunHead(session, prNumber, headSha, prList, {
+        sessionDetail: sessionDetailsById[getSessionIdentifier(session) ?? ''] ?? null,
+      }),
   });
+  if (ownsHeadMatch) {
+    return ownsHeadMatch;
+  }
+
+  return null;
 }
 
 /**
@@ -552,25 +599,37 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
  */
 export function resolveWorkerSessionId(sessions, prNumber, options = {}) {
   const ownsHead = options.ownsHead;
+  const openPrs = toArray(options.openPrs ?? []);
+  const headSha = options.headSha ?? '';
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   const workers = sessions.filter((s) => {
     const role = String(s?.role ?? '').toLowerCase();
     return (role === 'worker' || role === 'coding') && isLiveWorkerSession(s);
   });
 
+  /** @type {string[]} */
+  const matches = [];
   for (const session of workers) {
-    if (!sessionMatchesPr(session, prNumber)) {
+    const sessionId = getSessionIdentifier(session);
+    const matchOptions = {
+      headSha,
+      sessionDetail: sessionId ? sessionDetailsById[sessionId] ?? null : null,
+    };
+    if (!sessionMatchesPr(session, prNumber, openPrs, matchOptions)) {
       continue;
     }
     if (ownsHead && !ownsHead(session)) {
       continue;
     }
-    const identifier = getSessionIdentifier(session);
-    if (identifier) {
-      return identifier;
+    if (sessionId) {
+      matches.push(sessionId);
     }
   }
 
-  return null;
+  if (matches.length > 1) {
+    return null;
+  }
+  return matches[0] ?? null;
 }
 
 /**
@@ -700,6 +759,7 @@ export function planReconcileActions({
   openPrs,
   reviewRuns,
   sessions,
+  sessionDetailsById = {},
   ciChecksByPr,
   requiredCheckNamesByPr,
   requiredCheckLookupFailedByPr,
@@ -751,6 +811,7 @@ export function planReconcileActions({
       prNumber,
       headSha,
       prList,
+      { sessionDetailsById },
     );
     const ciChecks = getCiChecksForPr(ciChecksByPr, prNumber);
     const requiredCheckNames = getRequiredCheckNamesForPr(requiredCheckNamesByPr, prNumber);
