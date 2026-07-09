@@ -200,7 +200,7 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
       throw new Error('expected per-test isolation plan');
     }
     expect(plan.pool).toBe('forks');
-    expect(plan.tests.length).toBeGreaterThan(0);
+    expect(plan.tests?.length ?? 0).toBeGreaterThan(0);
   });
 
   it('detects worker-RPC flake signatures in log text', () => {
