@@ -17,6 +17,34 @@ const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessS
 const wakeSupervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 const guardScript = path.join(repoRoot, 'scripts/check-fleet-hygiene-sentinel.ps1');
 
+const registryRoles = JSON.parse(
+  fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-side-process-registry.json'), 'utf8'),
+).requiredChildIds as string[];
+const testChildScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1');
+
+function buildCleanRegistryFleetFixtures(stateDir: string, supervisorPid: number) {
+  const cmdMap: Record<number, string> = {
+    [supervisorPid]: supervisorCommandLine(stateDir),
+  };
+  const envMap: Record<number, Record<string, string>> = {};
+  const pids = [supervisorPid];
+  let nextPid = supervisorPid + 1;
+  for (const role of registryRoles) {
+    const pid = nextPid++;
+    pids.push(pid);
+    cmdMap[pid] =
+      `pwsh -NoProfile -File ${testChildScript} -Role ${role} -MarkerDir ${path.join(stateDir, 'markers')}`;
+    envMap[pid] = {
+      AO_SIDE_PROCESS_STATE_DIR: stateDir,
+      AO_SIDE_PROCESS_CHILD_ID: role,
+    };
+    fs.writeFileSync(path.join(stateDir, `${role}.pid`), String(pid));
+  }
+  fs.writeFileSync(path.join(stateDir, 'supervisor.pid'), String(supervisorPid));
+  return { cmdMap, envMap, pids };
+}
+
+
 vi.setConfig({ testTimeout: 420_000, hookTimeout: 30_000 });
 
 
@@ -424,15 +452,17 @@ describe('Issue #711 fleet hygiene sentinel', () => {
   it('on-demand Hygiene prints pass lines and exits 0 on clean fixture fleet (AC#9)', () => {
     const stateDir = makeStateDir();
     const cmdFixture = path.join(stateDir, 'cmdline.json');
+    const envFixture = path.join(stateDir, 'env.json');
     const supervisorPid = 960001;
-    writeCmdlineFixture(cmdFixture, {
-      [supervisorPid]: supervisorCommandLine(stateDir),
-    });
+    const fleet = buildCleanRegistryFleetFixtures(stateDir, supervisorPid);
+    writeCmdlineFixture(cmdFixture, fleet.cmdMap);
+    writeEnvFixture(envFixture, fleet.envMap);
 
     const result = runSentinel(['-Action', 'Hygiene', '-StateDir', stateDir], {
       AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE: cmdFixture,
-      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([supervisorPid]),
-      AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE: JSON.stringify([supervisorPid]),
+      AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE: envFixture,
+      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify(fleet.pids),
+      AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE: JSON.stringify(fleet.pids),
       AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -525,6 +555,38 @@ describe('Issue #711 fleet hygiene sentinel', () => {
     const raw = JSON.parse(fs.readFileSync(killLog, 'utf8')) as { kills?: number[] };
     expect(raw.kills ?? []).toContain(duplicate);
     expect(raw.kills ?? []).not.toContain(canonical);
+  });
+
+
+  it('H2 fails when a registry role has no managed process (review P2)', () => {
+    const stateDir = makeStateDir();
+    const cmdFixture = path.join(stateDir, 'cmdline.json');
+    const envFixture = path.join(stateDir, 'env.json');
+    const supervisorPid = 970001;
+    const listenerPid = 970002;
+    writeCmdlineFixture(cmdFixture, {
+      [supervisorPid]: supervisorCommandLine(stateDir),
+      [listenerPid]: `pwsh -NoProfile -File ${testChildScript} -Role listener -MarkerDir ${path.join(stateDir, 'markers')}`,
+    });
+    writeEnvFixture(envFixture, {
+      [listenerPid]: { AO_SIDE_PROCESS_STATE_DIR: stateDir, AO_SIDE_PROCESS_CHILD_ID: 'listener' },
+    });
+    fs.writeFileSync(path.join(stateDir, 'listener.pid'), String(listenerPid));
+
+    const result = evaluateHygiene({
+      STATE_DIR: stateDir,
+      AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE: cmdFixture,
+      AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE: envFixture,
+      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([supervisorPid, listenerPid]),
+      AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE: JSON.stringify([supervisorPid, listenerPid]),
+      AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
+    });
+
+    const h2 = result.Assertions.find((row) => row.Id === 'H2');
+    expect(h2?.Pass).toBe(false);
+    expect(h2?.Code).toBe('H2_MISSING_ROLE');
+    expect(h2?.Reason).toMatch(/missing roles:/i);
+    expect(h2?.Reason).not.toMatch(/listener/);
   });
 
   it('class matrix minimum cells (AC#11)', () => {

@@ -471,7 +471,7 @@ function Invoke-FleetHygieneAssertionH1 {
 function Invoke-FleetHygieneAssertionH2 {
     param([hashtable]$Config)
 
-    $adoptable = Find-FleetHygieneAdoptableProcesses -Paths $Config.Paths
+    $missing = [System.Collections.Generic.List[string]]::new()
     $failures = [System.Collections.Generic.List[string]]::new()
 
     foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
@@ -483,17 +483,29 @@ function Invoke-FleetHygieneAssertionH2 {
             }
         }
         $unique = @($matches | Sort-Object -Unique)
-        if ($unique.Count -gt 1) {
+        if ($unique.Count -eq 0) {
+            $missing.Add($child.Id) | Out-Null
+        }
+        elseif ($unique.Count -gt 1) {
             $failures.Add("$($child.Id): $($unique -join ',')") | Out-Null
         }
     }
 
-    if ($failures.Count -eq 0) {
+    if ($missing.Count -eq 0 -and $failures.Count -eq 0) {
         return New-FleetHygieneAssertionResult -Id 'H2' -Code 'H2_OK' -Pass $true `
             -Reason 'exactly one managed process per registry role'
     }
-    return New-FleetHygieneAssertionResult -Id 'H2' -Code 'H2_DUPLICATE_ROLE' -Pass $false `
-        -Reason ("duplicate role processes: {0}" -f ($failures -join '; '))
+
+    $parts = @()
+    if ($missing.Count -gt 0) {
+        $parts += "missing roles: $($missing -join ',')"
+    }
+    if ($failures.Count -gt 0) {
+        $parts += "duplicate role processes: $($failures -join '; ')"
+    }
+    $code = if ($missing.Count -gt 0) { 'H2_MISSING_ROLE' } else { 'H2_DUPLICATE_ROLE' }
+    return New-FleetHygieneAssertionResult -Id 'H2' -Code $code -Pass $false `
+        -Reason ($parts -join '; ')
 }
 
 function Invoke-FleetHygieneAssertionH3 {

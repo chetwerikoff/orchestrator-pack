@@ -961,10 +961,12 @@ if (Test-Path -LiteralPath $fleetHygieneCheck) {
     }
     else {
         Write-Check 'scripts/check-fleet-hygiene-sentinel.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'fleet hygiene sentinel static guard failed (Issue #711)'
     }
 }
 else {
     Write-Check 'scripts/check-fleet-hygiene-sentinel.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing fleet hygiene sentinel static guard (Issue #711)'
 }
 
 $terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'

@@ -355,7 +355,7 @@
     "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
-    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "5eae067212a43b190155af4b72f29adce2cf70db32b3bf6d6cfb75fedbf57d87"
+    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "e75d460d6ddbfe8a04dbca8b9e960705078047b73dd375e31ae3631b499a8b9d"
   },
   "provenance": {}
 }
