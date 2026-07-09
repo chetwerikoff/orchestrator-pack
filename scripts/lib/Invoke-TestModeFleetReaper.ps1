@@ -372,8 +372,8 @@ function Invoke-TestModeFleetReaper {
             }
         }
         $candidateSet = [System.Collections.Generic.HashSet[int]]::new()
-        foreach ($pid in @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots @($stateRoots | Select-Object -Unique))) {
-            [void]$candidateSet.Add($pid)
+        foreach ($stalePid in @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots @($stateRoots | Select-Object -Unique))) {
+            [void]$candidateSet.Add($stalePid)
         }
         foreach ($leaseId in @(Get-TestModeFleetIndexedLeaseIds)) {
             if (-not $leaseId) { continue }
