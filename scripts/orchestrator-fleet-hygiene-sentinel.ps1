@@ -31,7 +31,7 @@ $ErrorActionPreference = 'Stop'
 # Static guard: this script must never appear in the wake supervisor child registry.
 $Script:FleetHygieneSentinelEntryPoint = 'orchestrator-fleet-hygiene-sentinel.ps1'
 foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
-    if ($child.Script -eq $Script:FleetHygieneSentinelEntryPoint) {
+    if ($child.ScriptMarker -eq $Script:FleetHygieneSentinelEntryPoint) {
         Write-Error "fleet-hygiene sentinel must not be registered as a supervised child ($($child.Id))"
         exit 2
     }

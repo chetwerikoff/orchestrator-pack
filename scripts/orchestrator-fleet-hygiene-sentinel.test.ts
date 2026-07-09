@@ -171,6 +171,24 @@ function runKillFromEvaluation(
 }
 
 describe('Issue #711 fleet hygiene sentinel', () => {
+
+  it('runtime guard detects sentinel via registry ScriptMarker (review P3)', () => {
+    const sideProcessLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1');
+    const script = `
+      . ${psString(sideProcessLib)}
+      $entryPoint = 'orchestrator-fleet-hygiene-sentinel.ps1'
+      $registryChild = Get-OrchestratorWakeSupervisorChildRegistry | Select-Object -First 1
+      if (-not $registryChild.ScriptMarker) { throw 'registry entry missing ScriptMarker' }
+      $mock = [pscustomobject]@{ Id = 'fleet-hygiene'; ScriptMarker = $entryPoint }
+      if ($mock.ScriptMarker -ne $entryPoint) { throw 'ScriptMarker comparison failed' }
+      if ($mock.Script -eq $entryPoint) { throw 'legacy .Script property must not match' }
+      'ok'
+    `;
+    const result = runPwshWithEnv(script);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout.trim()).toBe('ok');
+  });
+
   it('static guard: sentinel absent from wake supervisor registry (AC#10)', () => {
     const result = spawnSync(
       'pwsh',
