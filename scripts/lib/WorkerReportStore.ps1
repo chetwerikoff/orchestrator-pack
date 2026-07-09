@@ -255,7 +255,7 @@ function Write-PackWorkerReportRecord {
         [long]$NowMs = 0,
         [string]$CallerSessionId = '',
         [string]$RepoRoot = '',
-        [hashtable]$TrustedBinding = $null
+        [object]$TrustedBinding = $null
     )
 
     if (-not $NowMs) {
@@ -275,6 +275,9 @@ function Write-PackWorkerReportRecord {
     if (-not $trustedBinding) {
         $trustedBinding = Resolve-PackWorkerReportTrustedBinding -SessionId $callerSessionId `
             -RepoRoot $RepoRoot -RepoSlug $RepoSlug -WorktreeHeadSha $HeadSha
+    }
+    if ($trustedBinding -is [pscustomobject]) {
+        $trustedBinding = ConvertTo-MechanicalJsonStateHashtable -Value $trustedBinding
     }
     if (-not $trustedBinding -or -not $trustedBinding.ok) {
         $reason = if ($trustedBinding.reason) { [string]$trustedBinding.reason } else { 'trust_boundary_binding_unresolved' }
