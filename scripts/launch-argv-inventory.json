@@ -10879,10 +10879,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-866",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-867",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 866
+        "line": 867
       },
       "callee": {
         "kind": "ao",
@@ -10893,17 +10893,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 866,
+        "line": 867,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-869",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-870",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 869
+        "line": 870
       },
       "callee": {
         "kind": "ao",
@@ -10914,17 +10914,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 869,
+        "line": 870,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1177",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1178",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1177
+        "line": 1178
       },
       "callee": {
         "kind": "pack-ps1",
@@ -10935,17 +10935,17 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1177,
+        "line": 1178,
         "patternIds": [
           "start-process"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1186",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1187",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1186
+        "line": 1187
       },
       "callee": {
         "kind": "pack-ps1",
@@ -10956,17 +10956,17 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1186,
+        "line": 1187,
         "patternIds": [
           "start-process"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2170",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2174",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2170
+        "line": 2174
       },
       "callee": {
         "kind": "ao",
@@ -10977,17 +10977,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2170,
+        "line": 2174,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2187",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2191",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2187
+        "line": 2191
       },
       "callee": {
         "kind": "pack-ps1",
@@ -10998,9 +10998,30 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2187,
+        "line": 2191,
         "patternIds": [
           "start-process"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-WakeSupervisorLease-ps1-692",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-WakeSupervisorLease.ps1",
+        "line": 692
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-WakeSupervisorLease.ps1",
+        "line": 692,
+        "patternIds": [
+          "ps-call-op"
         ]
       }
     }

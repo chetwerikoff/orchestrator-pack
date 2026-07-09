@@ -687,6 +687,14 @@ function Invoke-OrchestratorWakeSupervisorStaleLiveReclaim {
     if ($holderPid -gt 0 -and (Test-ProcessAlive -ProcessId $holderPid)) {
         Stop-OrchestratorWakeSupervisorProcess -ProcessId $holderPid -ManagedRole 'supervisor' `
             -LogPath $LogPath -ProjectId $Lease.projectId -StateRoot $Paths.Root
+        if (Test-ProcessAlive -ProcessId $holderPid) {
+            if ($IsLinux -or $IsMacOS) {
+                & kill -9 $holderPid 2>$null
+            }
+            else {
+                Stop-Process -Id $holderPid -Force -ErrorAction SilentlyContinue
+            }
+        }
         Wait-OrchestratorWakeSupervisorProcessExit -ProcessId $holderPid -TimeoutSeconds 5
     }
     $deadline = (Get-Date).AddSeconds(5)

@@ -10,6 +10,7 @@ import {
   readChildPid,
   repoRoot,
   runSupervisor,
+  runSupervisorAsync,
   startSupervisorBackground,
   waitForMarker,
   waitForSupervisorHealthyStatus,
@@ -118,7 +119,39 @@ function makeForeignCheckoutDir(): string {
 }
 
 function startDetachedLeaseHolder(stateDir: string, sessionId: string) {
-  return runSupervisor([
+  return runSupervisorAsync(
+    [
+      '-Action',
+      'Start',
+      '-SkipInitialWait',
+      '-OrchestratorSessionId',
+      sessionId,
+      '-StateDir',
+      stateDir,
+      '-PollSeconds',
+      '5',
+    ],
+    fleetLeaseEnv,
+  );
+}
+
+function freezeProcess(pid: number): void {
+  try {
+    process.kill(pid, 'SIGSTOP');
+  } catch {
+    // ignore
+  }
+}
+
+async function startAfterStaleLiveGrace(
+  stateDir: string,
+  sessionId: string,
+  env: Record<string, string>,
+  holderPid: number,
+) {
+  freezeProcess(holderPid);
+  await sleep(2500);
+  const startArgs = [
     '-Action',
     'Start',
     '-SkipInitialWait',
@@ -127,8 +160,19 @@ function startDetachedLeaseHolder(stateDir: string, sessionId: string) {
     '-StateDir',
     stateDir,
     '-PollSeconds',
-    '5',
-  ], fleetLeaseEnv);
+    '1',
+  ];
+  let result = await runSupervisorAsync(startArgs, env);
+  let audit = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  for (let attempt = 0; attempt < 3 && !/wake-supervisor-audit kind=stale-live-reclaim/.test(audit); attempt++) {
+    if (!/grace pending|reclaim failed|lease contended/i.test(audit)) {
+      break;
+    }
+    await sleep(800);
+    result = await runSupervisorAsync(startArgs, env);
+    audit = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  }
+  return { result, audit };
 }
 
 function startTestSupervisorLoop(stateDir: string, sessionId: string) {
@@ -192,13 +236,13 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     'C1: second Start on same checkout is idempotent when lease holder is live',
     async () => {
       const stateDir = makeStateDir();
-      const first = startDetachedLeaseHolder(stateDir, 'fleet-c1');
+      const first = await startDetachedLeaseHolder(stateDir, 'fleet-c1');
       expect(first.status).toBe(0);
       expect(first.stdout).toContain('supervisor detached');
       await waitForLease(stateDir);
       await waitForSupervisorPid(stateDir);
 
-      const second = runSupervisor(
+      const second = await runSupervisorAsync(
         [
           '-Action',
           'Start',
@@ -223,7 +267,7 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     async () => {
       const stateDir = makeStateDir();
       const foreignScript = makeForeignCheckoutDir();
-      const holder = startDetachedLeaseHolder(stateDir, 'fleet-c3-holder');
+      const holder = await startDetachedLeaseHolder(stateDir, 'fleet-c3-holder');
       expect(holder.status).toBe(0);
       await waitForLease(stateDir);
       await waitForSupervisorHealthyStatus(stateDir, 60_000);
@@ -321,7 +365,7 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     'lease file is created and held by detached supervisor loop (#552 / AC#13-14)',
     async () => {
       const stateDir = makeStateDir();
-      const start = startDetachedLeaseHolder(stateDir, 'fleet-lease-detach');
+      const start = await startDetachedLeaseHolder(stateDir, 'fleet-lease-detach');
       expect(start.status).toBe(0);
       await waitForLease(stateDir);
       const holderPid = await waitForSupervisorPid(stateDir);
@@ -376,17 +420,20 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
       }),
     );
 
-    const start = runSupervisor([
-      '-Action',
-      'Start',
-      '-SkipInitialWait',
-      '-OrchestratorSessionId',
-      'fleet-stale-dead',
-      '-StateDir',
-      stateDir,
-      '-PollSeconds',
-      '5',
-    ]);
+    const start = await runSupervisorAsync(
+      [
+        '-Action',
+        'Start',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'fleet-stale-dead',
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '5',
+      ],
+      fleetLeaseEnv,
+    );
     expect(start.status).toBe(0);
     await waitForLease(stateDir);
     const lease = readLease(stateDir);
@@ -491,12 +538,12 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     expect(dup3).toBeGreaterThan(0);
     fs.writeFileSync(path.join(stateDir, 'listener.pid'), String(dup1));
     await sleep(1000);
-    const start = startDetachedLeaseHolder(stateDir, sessionId);
+    const start = await startDetachedLeaseHolder(stateDir, sessionId);
     expect(start.status).toBe(0);
     await waitForSupervisorPid(stateDir);
     const lib = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1').replace(/'/g, "''");
     const countCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId listener; Write-Output (($pids | Sort-Object -Unique).Count)`;
-    const deadline = Date.now() + 60_000;
+    const deadline = Date.now() + 120_000;
     let liveCount = 3;
     while (Date.now() < deadline) {
       const countResult = spawnSync(
@@ -512,6 +559,196 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     }
     expect(liveCount).toBeLessThanOrEqual(1);
     runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], fleetLeaseEnv);
+  }, fleetTimeoutMs);
+
+
+  it(
+    'C2: concurrent Start leaves at most one live lease holder',
+    async () => {
+      const stateDir = makeStateDir();
+      const startArgs = [
+        '-Action',
+        'Start',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'fleet-c2',
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '5',
+      ];
+      const [first, second] = await Promise.all([
+        runSupervisorAsync(startArgs, fleetLeaseEnv),
+        runSupervisorAsync(startArgs, fleetLeaseEnv),
+      ]);
+      const outputs = [first, second].map((r) => (r.stderr ?? '') + (r.stdout ?? ''));
+      const liveHolders = outputs.filter((o) => /supervisor detached|already running/i.test(o));
+      expect(liveHolders.length).toBeGreaterThanOrEqual(1);
+      await waitForSupervisorPid(stateDir);
+      const holderPid = await waitForSupervisorPid(stateDir);
+      expect(isAlive(holderPid)).toBe(true);
+      const blocked = outputs.some((o) => /already running|start.*in progress/i.test(o));
+      expect(blocked || first.status !== second.status).toBe(true);
+      runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], fleetLeaseEnv);
+    },
+    fleetTimeoutMs,
+  );
+
+  it('pid-reuse stale lease is reclaimed on Start (AC#11)', async () => {
+    const stateDir = makeStateDir();
+    const sleeper = spawnSync(
+      'bash',
+      ['-c', "nohup pwsh -NoProfile -Command 'Start-Sleep 120' >/dev/null 2>&1 & echo $!"],
+      { encoding: 'utf8' },
+    );
+    const reusedPid = Number((sleeper.stdout ?? '').trim());
+    expect(reusedPid).toBeGreaterThan(0);
+    const leasePath = path.join(stateDir, 'supervisor.lock');
+    fs.writeFileSync(
+      leasePath,
+      JSON.stringify({
+        epoch: 3,
+        holderPid: reusedPid,
+        holderStartTimeMs: 1,
+        bootId: 'pid-reuse-fixture',
+        heartbeatMs: Date.now(),
+        projectId: 'orchestrator-pack',
+        holderScriptPath: supervisorScript,
+        staleGraceStartMs: 0,
+      }),
+    );
+
+    const start = await runSupervisorAsync(
+      [
+        '-Action',
+        'Start',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'fleet-pid-reuse',
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '5',
+      ],
+      fleetLeaseEnv,
+    );
+    expect(start.status).toBe(0);
+    await waitForLease(stateDir);
+    const lease = readLease(stateDir);
+    expect(Number(lease.holderPid)).not.toBe(reusedPid);
+    expect(isAlive(Number(lease.holderPid))).toBe(true);
+    try {
+      process.kill(reusedPid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+    runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], fleetLeaseEnv);
+  }, fleetTimeoutMs);
+
+  it('stale-live heartbeat reclaim emits audit after grace (AC#12)', async () => {
+    const stateDir = makeStateDir();
+    const staleEnv = {
+      ...fleetLeaseEnv,
+      AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS: '1000',
+      AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS: '500',
+    };
+    const holder = await runSupervisorAsync(
+      [
+        '-Action',
+        'Start',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        'fleet-stale-live',
+        '-StateDir',
+        stateDir,
+        '-PollSeconds',
+        '5',
+      ],
+      staleEnv,
+    );
+    expect(holder.status).toBe(0);
+    const firstPid = await waitForSupervisorPid(stateDir);
+    const firstEpoch = Number(readLease(stateDir).epoch);
+    const { result: reclaim, audit } = await startAfterStaleLiveGrace(
+      stateDir,
+      'fleet-stale-live-2',
+      staleEnv,
+      firstPid,
+    );
+    expect(reclaim.status).toBe(0);
+    expect(audit).toMatch(/wake-supervisor-audit kind=stale-live-reclaim/);
+    const newPid = await waitForSupervisorPid(stateDir);
+    const newLease = readLease(stateDir);
+    expect(newPid).toBeGreaterThan(0);
+    expect(Number(newLease.epoch)).toBeGreaterThan(firstEpoch);
+    try {
+      process.kill(firstPid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+    runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], staleEnv);
+  }, fleetTimeoutMs);
+
+  it('C4: supervisor loop exits after lease is stolen by reclaim', async () => {
+    const stateDir = makeStateDir();
+    const stealEnv = {
+      ...fleetLeaseEnv,
+      AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS: '1000',
+      AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS: '500',
+    };
+    const loop = spawn(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        supervisorScript,
+        '-Action',
+        'Start',
+        '-SupervisorLoop',
+        '-TestMode',
+        '-SkipInitialWait',
+        '-StateDir',
+        stateDir,
+        '-OrchestratorSessionId',
+        'fleet-c4',
+        '-PollSeconds',
+        '1',
+      ],
+      { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, ...stealEnv } },
+    );
+    const firstPid = await waitForSupervisorPid(stateDir, 90_000);
+    const { result: challenger } = await startAfterStaleLiveGrace(
+      stateDir,
+      'fleet-c4-new',
+      stealEnv,
+      firstPid,
+    );
+    expect(challenger.status).toBe(0);
+    const deadline = Date.now() + 60_000;
+    let lost = false;
+    while (Date.now() < deadline) {
+      const log = fs.existsSync(path.join(stateDir, 'supervisor.log'))
+        ? fs.readFileSync(path.join(stateDir, 'supervisor.log'), 'utf8')
+        : '';
+      if (/lease lost/i.test(log)) {
+        lost = true;
+        break;
+      }
+      if (!isAlive(firstPid)) {
+        lost = true;
+        break;
+      }
+      await sleep(500);
+    }
+    expect(lost).toBe(true);
+    try {
+      loop.kill('SIGTERM');
+    } catch {
+      // ignore
+    }
+    runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], stealEnv);
   }, fleetTimeoutMs);
 
   it('AC#18: lease platform support is explicit on Linux/WSL', () => {

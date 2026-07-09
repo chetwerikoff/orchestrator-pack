@@ -2340,3 +2340,12 @@ When a holder pid is alive but `heartbeatMs` in `supervisor.lock` is older than 
 | `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | Max age before heartbeat considered stale |
 | `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | Two-phase grace before stale-live reclaim |
 | `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | Delay between role restarts on session-id flap |
+
+### Start blocked during Stop maintenance (AC#8a)
+
+While `Stop` or `Stop -Force` holds the maintenance epoch (`maintenance.epoch`), concurrent `Start` must not acquire the lease. Expect `start blocked: stop maintenance epoch active` on stdout/stderr until force-stop completes and artifacts are cleared.
+
+### Post-force ordinary Start
+
+After `Stop -Force`, verify with `Status` (stopped, no ambiguous candidates), then ordinary `Start` (detached supervisor + fresh `supervisor.lock`). Cross-checkout `Status`/`Stop` from another worktree sharing the same state root should see the same holder.
+

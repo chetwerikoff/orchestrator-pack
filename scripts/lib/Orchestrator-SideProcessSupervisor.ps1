@@ -298,6 +298,7 @@ function Write-OrchestratorWakeSupervisorLog {
     )
     $line = "[{0}] orchestrator-wake-supervisor {1}" -f (Get-Date).ToString('o'), $Message
     Write-Host $line
+    try { [Console]::Out.Flush() } catch { }
     if ($LogPath) {
         Add-Content -LiteralPath $LogPath -Value $line -Encoding utf8
     }
@@ -1851,6 +1852,9 @@ function Invoke-OrchestratorWakeSupervisorLoop {
 
         if (-not $resolved) {
             $sessionMissingPolls++
+            if ($phase -eq 'waiting') {
+                Write-OrchestratorWakeSupervisorLog -Message "waiting for orchestrator session (project=$ProjectId)..." -LogPath $Paths.SupervisorLog
+            }
             if ($phase -eq 'running' -and $sessionMissingPolls -ge $sessionGlitchPolls) {
                 Write-OrchestratorWakeSupervisorLog -Message 'orchestrator session disappeared; stopping children' -LogPath $Paths.SupervisorLog
                 Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog

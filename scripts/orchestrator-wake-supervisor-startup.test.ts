@@ -163,8 +163,17 @@ describe('orchestrator-wake-supervisor', () => {
       stdout += chunk.toString();
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    expect(stdout).toContain('waiting for orchestrator session');
+    const logPath = path.join(stateDir, 'supervisor.log');
+    const waitDeadline = Date.now() + 15_000;
+    while (Date.now() < waitDeadline) {
+      const logText = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : stdout;
+      if (/waiting for orchestrator session/i.test(logText)) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    const combined = stdout + (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '');
+    expect(combined).toMatch(/waiting for orchestrator session/i);
 
     fs.writeFileSync(
       dynamicFixture,
