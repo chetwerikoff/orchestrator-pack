@@ -7,12 +7,13 @@
   "baseline": {
     "commit_sha": "9b97af20a976731e9c613f29aca2f643e8191a05",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:870dc10d52133b85f8e7b29ba4f835e17ea361a6d15028d88b867e7a69c2653b"
+    "active_scope_hash": "sha256:869b296f207786fbd438afdc7b8482807556b9954570351e7d4614ec0e96d31a"
   },
   "declared_paths": [
     "docs/declarations/701.orchestrator-pack-74.json"
   ],
   "declared_globs": [
+    "docs/declarations/**",
     "scripts/**",
     "tests/**"
   ],
