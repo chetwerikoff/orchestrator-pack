@@ -715,6 +715,32 @@ namespace OrchestratorPack
             return ReadProcessMemory(hProcess, address, buffer, length, out read) && read == length;
         }
 
+        static bool TryReadEnvironmentBytes(IntPtr hProcess, IntPtr address, out byte[] buffer)
+        {
+            buffer = null;
+            const int maxLength = 65536;
+            var raw = new byte[maxLength];
+            int read;
+            if (!ReadProcessMemory(hProcess, address, raw, maxLength, out read) || read <= 0)
+            {
+                return false;
+            }
+
+            var end = read;
+            for (var index = 0; index + 1 < read; index += 2)
+            {
+                if (raw[index] == 0 && raw[index + 1] == 0)
+                {
+                    end = index + 2;
+                    break;
+                }
+            }
+
+            buffer = new byte[end];
+            Array.Copy(raw, buffer, end);
+            return true;
+        }
+
         public static string GetEnvironmentVariable(int processId, string name)
         {
             if (processId <= 0 || string.IsNullOrEmpty(name)) { return string.Empty; }
@@ -737,27 +763,14 @@ namespace OrchestratorPack
                     return string.Empty;
                 }
 
-                var unicodeStringAddress = IntPtr.Add(processParameters, IntPtr.Size == 8 ? 0x80 : 0x48);
-                var unicodeString = new byte[IntPtr.Size == 8 ? 16 : 8];
-                int unicodeRead;
-                if (!ReadProcessMemory(hProcess, unicodeStringAddress, unicodeString, unicodeString.Length, out unicodeRead) || unicodeRead != unicodeString.Length)
+                IntPtr environmentBuffer;
+                if (!TryReadPointer(hProcess, IntPtr.Add(processParameters, IntPtr.Size == 8 ? 0x80 : 0x48), out environmentBuffer))
                 {
                     return string.Empty;
                 }
 
-                var environmentLength = BitConverter.ToUInt16(unicodeString, 0);
-                IntPtr environmentBuffer;
-                if (IntPtr.Size == 8)
-                {
-                    environmentBuffer = new IntPtr(BitConverter.ToInt64(unicodeString, 8));
-                }
-                else
-                {
-                    environmentBuffer = new IntPtr(BitConverter.ToInt32(unicodeString, 4));
-                }
-
                 byte[] environmentBytes;
-                if (!TryReadBytes(hProcess, environmentBuffer, environmentLength, out environmentBytes))
+                if (!TryReadEnvironmentBytes(hProcess, environmentBuffer, out environmentBytes))
                 {
                     return string.Empty;
                 }
