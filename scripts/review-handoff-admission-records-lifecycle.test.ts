@@ -202,6 +202,30 @@ describe('handoff admission records lifecycle (#712)', () => {
     ).toBe('opk-27|234|handoff234');
   });
 
+
+  it('prefers trusted open-PR current head over stale rows with later receivedAtMs', () => {
+    const t0 = 1_700_000_000_000;
+    const currentHead = 'bbbb'.repeat(10);
+    const staleHead = 'aaaa'.repeat(10);
+    const currentSeed = seedPair(currentHead, 234, t0);
+    const currentKey = Object.keys(currentSeed.records)[0]!;
+    const staleSeed = seedPair(staleHead, 234, t0 + 5_000, {});
+    const staleKey = Object.keys(staleSeed.records)[0]!;
+    const records = {
+      [currentKey]: currentSeed.records[currentKey],
+      [staleKey]: staleSeed.records[staleKey],
+    };
+    const result = supersedeHandoffAdmissionRecords({
+      records,
+      actedOn: {},
+      openPrs: [{ number: 234, headRefOid: currentHead, repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+      nowMs: t0 + 6_000,
+    }) as { records: Record<string, unknown> };
+    expect(Object.keys(result.records)).toHaveLength(1);
+    expect(Object.values(result.records)[0]).toMatchObject({ headSha: currentHead });
+  });
+
   it('tombstones superseded admission ids so delayed old-head POST cannot re-seed', () => {
     const t0 = 1_700_000_000_000;
     const oldHead = 'aaaa'.repeat(10);
@@ -700,6 +724,8 @@ describe('handoff admission records lifecycle (#712)', () => {
     expect(src).toContain('Get-ReviewHandoffWakeAdmissionLockPath');
     expect(src).toContain('Invoke-ReviewHandoffWakeAdmissionStateLocked');
     expect(src).toContain('Invoke-OrchestratorSideEffectFenced');
+    expect(src).toContain('Merge-ReviewHandoffAdmissionRecordMaps');
+    expect(src).toContain('-Baseline $loopBaseline');
   });
 
   it('derives stable admission ids from event id or receipt tuple', () => {

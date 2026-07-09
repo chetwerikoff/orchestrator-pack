@@ -627,6 +627,17 @@ export function pruneHandoffAdmissionRecords(input) {
   return { records, actedOn, evicted };
 }
 
+
+function handoffRecordMatchesTrustedOpenHead(record, openPrs, openPrIndexTrusted) {
+  if (!openPrIndexTrusted) {
+    return false;
+  }
+  const open = findOpenPrForHandoffRecord(record, openPrs);
+  const openHead = normalizeSha(String(open?.headRefOid ?? ''));
+  const recordHead = normalizeSha(String(record?.headSha ?? ''));
+  return Boolean(openHead && openHead === recordHead);
+}
+
 export function supersedeHandoffAdmissionRecords(input) {
   const records = isRecord(input.records) ? { ...input.records } : {};
   let actedOn = isRecord(input.actedOn) ? { ...input.actedOn } : {};
@@ -650,13 +661,13 @@ export function supersedeHandoffAdmissionRecords(input) {
     for (const entry of entries.slice(1)) {
       const winnerReceived = Number(winner.record.receivedAtMs ?? 0);
       const entryReceived = Number(entry.record.receivedAtMs ?? 0);
-      let pickEntry = entryReceived > winnerReceived;
-      if (openPrIndexTrusted && entryReceived === winnerReceived) {
-        const open = findOpenPrForHandoffRecord(entry.record, openPrs);
-        const openHead = normalizeSha(String(open?.headRefOid ?? ''));
-        if (openHead && openHead === normalizeSha(String(entry.record.headSha ?? ''))) {
-          pickEntry = true;
-        }
+      const winnerMatchesOpen = handoffRecordMatchesTrustedOpenHead(winner.record, openPrs, openPrIndexTrusted);
+      const entryMatchesOpen = handoffRecordMatchesTrustedOpenHead(entry.record, openPrs, openPrIndexTrusted);
+      let pickEntry = false;
+      if (openPrIndexTrusted && entryMatchesOpen !== winnerMatchesOpen) {
+        pickEntry = entryMatchesOpen;
+      } else {
+        pickEntry = entryReceived > winnerReceived;
       }
       if (pickEntry) {
         winner = entry;
