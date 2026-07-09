@@ -330,10 +330,18 @@ function Invoke-ReviewReadyReportStateSeedTick {
         $watchEntriesForPlan[[string]$entry.Key] = $entry.Value
     }
 
-    $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $openPrs `
+    if ($FixturePayload) {
+        $evictionOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs $FixturePayload.openPrs
+        $evictionOpenListAuthoritative = $false
+    }
+    else {
+        $evictionOpenPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
+        $evictionOpenListAuthoritative = $true
+    }
+    $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $evictionOpenPrs `
         -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
-    $workerReportEviction = Invoke-WorkerReportStoreEviction -OpenPrs $openPrs `
-        -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs
+    $workerReportEviction = Invoke-WorkerReportStoreEviction -OpenPrs $evictionOpenPrs `
+        -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs -OpenListAuthoritative:$evictionOpenListAuthoritative
     if ($workerReportEviction.removed -gt 0 -and $LogWriter) {
         & $LogWriter "worker-report-store: evicted $($workerReportEviction.removed) stale record(s)"
     }

@@ -104,6 +104,7 @@ describe('review-ready-report-state-seed-pack-source', () => {
     const ready = findLatestAcceptedReadyForReviewAcrossSessions(sessions as never);
     expect(ready.report?.reportState).toBe('ready_for_review');
     expect(seedRaw).toMatch(/Invoke-WorkerReportStoreEviction/);
+    expect(seedRaw).toMatch(/Invoke-GhOpenPrList.*review-ready-report-state-seed-eviction/s);
     expect(seedRaw).toMatch(/Build-WorkerReportStoreCurrentHeadByPr/);
   });
 });
@@ -193,9 +194,33 @@ describe('worker-report-store-eviction', () => {
       nowMs,
       maxAgeMs: 1_000,
       nonterminalMaxAgeMs: 1_000,
+      openListAuthoritative: true,
     });
     expect(result.removed).toBeGreaterThan(0);
     expect(result.recordCount).toBeLessThan(20);
+  });
+
+  it('preserves records for open PRs missing from a session-scoped open list', () => {
+    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
+    store.sourceRecords['org/a|dead-worker|42|abc42'] = {
+      reportState: 'ready_for_review',
+      accepted: true,
+      repoSlug: 'org/a',
+      sessionId: 'dead-worker',
+      prNumber: 42,
+      headSha: 'abc42',
+      reportedAtMs: nowMs,
+      lastObservedMs: nowMs,
+    };
+    const result = evictWorkerReportRecords({
+      store,
+      openPrs: [{ number: 99, state: 'open', headRefOid: 'head99' }],
+      nowMs,
+      openListAuthoritative: false,
+    });
+    expect(result.removed).toBe(0);
+    expect(store.sourceRecords['org/a|dead-worker|42|abc42']).toBeTruthy();
   });
 });
 

@@ -209,6 +209,7 @@ export function mergePackWorkerReportsIntoSessions(sessions, store, repoSlug = '
  * @param {number} input.nowMs
  * @param {number} [input.maxAgeMs]
  * @param {number} [input.nonterminalMaxAgeMs]
+ * @param {boolean} [input.openListAuthoritative]
  */
 export function evictWorkerReportRecords({
   store,
@@ -217,6 +218,7 @@ export function evictWorkerReportRecords({
   nowMs,
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   nonterminalMaxAgeMs = DEFAULT_NONTERMINAL_MAX_AGE_MS,
+  openListAuthoritative = false,
 }) {
   const openByNumber = new Map();
   for (const pr of toArray(openPrs)) {
@@ -231,7 +233,10 @@ export function evictWorkerReportRecords({
     const currentHead = normalizeSha(currentHeadByPr[prKey] ?? currentHeadByPr[String(prNumber)]);
     const openPr = openByNumber.get(prNumber);
     const prState = String(openPr?.state ?? '').toLowerCase();
-    const terminal = !openPr || prState === 'closed' || prState === 'merged' || openPr?.merged === true || openPr?.closed === true;
+    const explicitlyTerminal = Boolean(openPr)
+      && (prState === 'closed' || prState === 'merged' || openPr?.merged === true || openPr?.closed === true);
+    const unlistedTerminal = openListAuthoritative && !openPr;
+    const terminal = explicitlyTerminal || unlistedTerminal;
     const superseded = currentHead && recordHead && currentHead !== recordHead;
     const lastObserved = Number(record?.lastObservedMs ?? record?.reportedAtMs ?? 0);
     const stale = lastObserved > 0 && nowMs - lastObserved > (terminal ? maxAgeMs : nonterminalMaxAgeMs);
@@ -413,6 +418,7 @@ runStdinJsonCli('worker-report-store.mjs', {
       nowMs: Number(payload.nowMs ?? Date.now()),
       maxAgeMs: Number(payload.maxAgeMs ?? DEFAULT_MAX_AGE_MS),
       nonterminalMaxAgeMs: Number(payload.nonterminalMaxAgeMs ?? DEFAULT_NONTERMINAL_MAX_AGE_MS),
+      openListAuthoritative: Boolean(payload.openListAuthoritative ?? false),
     });
     return { ...result, store };
   },

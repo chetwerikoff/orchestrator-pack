@@ -242,7 +242,8 @@ function Invoke-WorkerReportStoreEviction {
         [string]$StorePath = '',
         [long]$NowMs = 0,
         [long]$MaxAgeMs = 0,
-        [long]$NonterminalMaxAgeMs = 0
+        [long]$NonterminalMaxAgeMs = 0,
+        [switch]$OpenListAuthoritative
     )
 
     if (-not $NowMs) {
@@ -261,6 +262,7 @@ function Invoke-WorkerReportStoreEviction {
         }
         if ($MaxAgeMs -gt 0) { $payload.maxAgeMs = $MaxAgeMs }
         if ($NonterminalMaxAgeMs -gt 0) { $payload.nonterminalMaxAgeMs = $NonterminalMaxAgeMs }
+        if ($OpenListAuthoritative) { $payload.openListAuthoritative = $true }
         $result = Invoke-WorkerReportStoreCli -Subcommand 'evict' -Payload $payload
         $captured.summary = @{
             removed     = [int]$result.removed

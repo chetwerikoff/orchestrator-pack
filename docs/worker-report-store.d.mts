@@ -33,6 +33,7 @@ export declare function evictWorkerReportRecords(input: {
   nowMs: number;
   maxAgeMs?: number;
   nonterminalMaxAgeMs?: number;
+  openListAuthoritative?: boolean;
 }): { removed: number; recordCount: number; store: Record<string, unknown> };
 export declare function validateWorkerReportTrustBoundary(input: {
   callerSessionId: string;
