@@ -54,32 +54,19 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:d2dfc581c9dea6529bc3f4e6a03618d1832065e91f56c7b2f6f1dd9ad7bcfca9",
-      "new_active_scope_hash": "sha256:9951157a5458ec6f75df5062804aa55f7afd27bbcc5cda1d2d9e2940adc06d28",
-      "changed": {
-        "added": [
-          "scripts/review-start-claim.test.ts"
-        ],
-        "removed": []
-      },
-      "reason": "CI flake fix touches review-start-claim overlap test",
-      "actor": "orchestrator-pack-59",
-      "timestamp": "2026-07-08T22:25:27.204Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:9951157a5458ec6f75df5062804aa55f7afd27bbcc5cda1d2d9e2940adc06d28",
       "new_active_scope_hash": "sha256:9992619c90d4de22818d1acc2839175a610760ed8813dcc7635740c8969a3507",
       "changed": {
         "added": [
           "scripts/lib/vitest-runtime-history-merge.fixture.mjs",
           "scripts/lib/vitest-runtime-history-merge.mjs",
-          "scripts/refresh-vitest-runtime-history.mjs"
+          "scripts/refresh-vitest-runtime-history.mjs",
+          "scripts/review-start-claim.test.ts"
         ],
         "removed": []
       },
-      "reason": "Runtime-history refresh shard-count fix touches #691 merge producer paths",
+      "reason": "Scope amendments: review-start-claim CI flake fix + runtime-history refresh producer paths (#691/#695)",
       "actor": "orchestrator-pack-59",
-      "timestamp": "2026-07-08T23:42:00.000Z",
+      "timestamp": "2026-07-09T00:21:09.371Z",
       "applied": true
     }
   ]
