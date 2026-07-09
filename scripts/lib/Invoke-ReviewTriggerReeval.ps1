@@ -114,6 +114,7 @@ function Invoke-ReviewTriggerReevalPlannedRun {
                 openPrs                     = @($fresh.openPrs)
                 reviewRuns                  = @($fresh.reviewRuns)
                 sessions                    = @($fresh.sessions)
+                sessionDetailsById          = $fresh.sessionDetailsById
                 ciChecks                    = @($fresh.ciChecksByPr[$prKey])
                 requiredCheckNames          = @($fresh.requiredCheckNamesByPr[$prKey])
                 requiredCheckLookupFailed   = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]

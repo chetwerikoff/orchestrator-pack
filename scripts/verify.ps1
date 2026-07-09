@@ -437,6 +437,22 @@ else {
 
 Write-Host ''
 Write-Host '== review-trigger reconciliation (Issue #163) =='
+$sessionPrBindingCheck = Join-Path $Root 'scripts/check-session-pr-binding-sole-path.ps1'
+if (Test-Path -LiteralPath $sessionPrBindingCheck -PathType Leaf) {
+    & $sessionPrBindingCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-session-pr-binding-sole-path.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-session-pr-binding-sole-path.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Session PR binding sole-path contract failed (Issue #699)'
+    }
+}
+else {
+    Write-Check 'scripts/check-session-pr-binding-sole-path.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing session PR binding sole-path check (Issue #699)'
+}
+
 $reviewReconcileCheck = Join-Path $Root 'scripts/check-review-trigger-reconcile.ps1'
 if (Test-Path -LiteralPath $reviewReconcileCheck -PathType Leaf) {
     & $reviewReconcileCheck
@@ -732,6 +748,23 @@ if (Test-Path -LiteralPath $reviewCycleCapCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-review-cycle-cap.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing review-cycle cap check script (Issue #646)'
+}
+
+Write-Host '== merge triage gate (Issue #648) =='
+$mergeTriageCheck = Join-Path $Root 'scripts/check-merge-triage-gate.ps1'
+if (Test-Path -LiteralPath $mergeTriageCheck -PathType Leaf) {
+    & $mergeTriageCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-merge-triage-gate.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-merge-triage-gate.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'merge triage gate checks failed (Issue #648)'
+    }
+}
+else {
+    Write-Check 'scripts/check-merge-triage-gate.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing merge triage gate check script (Issue #648)'
 }
 
 $reviewTriggerReevalCheck = Join-Path $Root 'scripts/check-review-trigger-reeval.ps1'

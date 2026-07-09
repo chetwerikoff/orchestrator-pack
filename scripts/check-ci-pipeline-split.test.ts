@@ -174,6 +174,27 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     const hits = scanWorkerRpcSignatures('vitest-worker onTaskUpdate RPC timeout');
     expect(hits.length).toBeGreaterThan(0);
   });
+
+  it('treats clean vitest JSON reports as success despite shutdown RPC noise', () => {
+    const reportScript = join(repoRoot, 'scripts/lib/vitest-json-report.mjs');
+    const tempDir = mkdtempSync(join(tmpdir(), 'vitest-json-report-clean-'));
+    try {
+      const cleanPath = join(tempDir, 'clean.json');
+      const failedPath = join(tempDir, 'failed.json');
+      writeFileSync(cleanPath, `${JSON.stringify({ success: true, numFailedTests: 0 })}\n`);
+      writeFileSync(failedPath, `${JSON.stringify({ success: true, numFailedTests: 1 })}\n`);
+      const clean = execFileSync('node', [reportScript, 'is-clean', cleanPath], {
+        encoding: 'utf8',
+      }).trim();
+      const failed = execFileSync('node', [reportScript, 'is-clean', failedPath], {
+        encoding: 'utf8',
+      }).trim();
+      expect(clean).toBe('1');
+      expect(failed).toBe('0');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('vitest runtime-history refresh workflow binding (#691)', () => {

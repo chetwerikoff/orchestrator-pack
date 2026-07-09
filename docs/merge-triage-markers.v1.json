@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "block_markers": [
+    "parser error",
+    "ReferenceError",
+    "throws before",
+    "cannot start",
+    "not executable",
+    "every … classified malformed",
+    "CI will fail",
+    "verify.ps1 fails",
+    "recorded as successful",
+    "looks green",
+    "never receives",
+    "written to disk",
+    "passed to coworker/provider"
+  ],
+  "defer_markers": [
+    "if the process crashes between…",
+    "when the head moves between…",
+    "under concurrent…",
+    "if two live sessions…",
+    "TOCTOU",
+    "an attacker/autonomous turn can forge/spoof…",
+    "when bwrap/unshare is unavailable",
+    "on Windows/BSD…",
+    "[scope-violation]",
+    "declare the path",
+    "sync to issue #N"
+  ],
+  "conditional_qualifier_stems": [
+    "unless",
+    "if the",
+    "if ",
+    "when ",
+    "under concurrent",
+    "between",
+    "on Windows",
+    "on BSD"
+  ],
+  "unconditional_block_markers": [
+    "written to disk",
+    "passed to coworker/provider",
+    "recorded as successful",
+    "looks green"
+  ],
+  "denylist_path_markers": [
+    "vendor/**",
+    "packages/core/**",
+    ".ao/**",
+    "denylist breach",
+    "protected path"
+  ]
+}

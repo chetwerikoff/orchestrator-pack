@@ -292,7 +292,14 @@ export function resolveLivePrOwner({ workerState, episode }) {
   const validation = validateWorkerStateInput(workerState);
   if (!validation.ok) return { ok: false, ...validation };
   const ep = normalizeEpisodeKey(episode);
-  const ownerId = resolveHeadOwningWorkerSessionId(workerState.sessions, ep.prNumber, ep.headSha, workerState.openPrs);
+  const sessionDetailsById = workerState.sessionDetailsById ?? {};
+  const ownerId = resolveHeadOwningWorkerSessionId(
+    workerState.sessions,
+    ep.prNumber,
+    ep.headSha,
+    workerState.openPrs,
+    { sessionDetailsById },
+  );
   if (!ownerId) {
     return { ok: true, ownerId: null, owner: null, live: false, reportState: null, targetGeneration: null };
   }
@@ -1125,6 +1132,7 @@ export function planCiFailureReactionRecords(input) {
   const repo = String(input?.repo ?? '').trim();
   const openPrs = toArray(input?.openPrs);
   const sessions = toArray(input?.sessions);
+  const sessionDetailsById = input?.sessionDetailsById ?? {};
   const checksMap = normalizeCiChecksByPr(input?.ciChecksByPr);
   const requiredNamesMap = normalizeRequiredCheckNamesByPr(input?.requiredCheckNamesByPr);
   const lookupFailedMap = normalizeRequiredCheckLookupFailedByPr(input?.requiredCheckLookupFailedByPr);
@@ -1156,7 +1164,9 @@ export function planCiFailureReactionRecords(input) {
       redFailingRuns,
     });
     const enrichedCiSource = { ...ciSource, aggregateRunId };
-    const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs);
+    const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs, {
+      sessionDetailsById,
+    });
     if (!targetId) continue;
     const owner = findSessionByIdentifier(sessions, targetId);
     const activeTarget = {
@@ -1190,6 +1200,7 @@ export function preSendCiRedRecheck(episode, fresh) {
   const workerState = {
     sessions: toArray(fresh?.sessions),
     openPrs: toArray(fresh?.openPrs),
+    sessionDetailsById: fresh?.sessionDetailsById ?? {},
   };
   const ownerResolution = resolveLivePrOwner({ workerState, episode: ep });
   if (!ownerResolution.ok) {

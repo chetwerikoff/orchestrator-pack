@@ -373,6 +373,7 @@ function Get-PreRunRecheckSnapshot {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessionsWithReports
+        $sessionDetailsById = Build-AoSessionDetailsById -Sessions @($sessions) -Project $Project
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @(
             @($openPrs | Where-Object { [int]$_.number -eq $PrNumber })
         )
@@ -383,6 +384,7 @@ function Get-PreRunRecheckSnapshot {
         openPrs                         = @($openPrs)
         reviewRuns                      = @($reviewRuns)
         sessions                        = @($sessions)
+        sessionDetailsById              = $sessionDetailsById
         ciChecksByPr                    = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr          = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr   = $checksBundle.requiredCheckLookupFailedByPr
@@ -453,6 +455,7 @@ function Test-PreRunHeadReadyRecheck {
             openPrs                       = @($fresh.openPrs)
             reviewRuns                    = @($fresh.reviewRuns)
             sessions                      = @($fresh.sessions)
+            sessionDetailsById            = $fresh.sessionDetailsById
             ciChecks                      = @($fresh.ciChecksByPr[$prKey])
             requiredCheckNames            = @($fresh.requiredCheckNamesByPr[$prKey])
             requiredCheckLookupFailed     = [bool]$fresh.requiredCheckLookupFailedByPr[$prKey]
@@ -629,6 +632,7 @@ function Invoke-ReconcileTick {
             openPrs                       = @($payload.openPrs)
             reviewRuns                    = $payload.reviewRuns
             sessions                      = $payload.sessions
+            sessionDetailsById            = $payload.sessionDetailsById
             ciChecksByPr                  = $payload.ciChecksByPr
             requiredCheckNamesByPr        = $payload.requiredCheckNamesByPr
             requiredCheckLookupFailedByPr = $payload.requiredCheckLookupFailedByPr
@@ -649,12 +653,14 @@ function Invoke-ReconcileTick {
         $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
         $reviewRuns = Get-AoReviewRuns -Project $Project
         $sessions = Get-AoStatusSessionsWithReports
+        $sessionDetailsById = Build-AoSessionDetailsById -Sessions @($sessions) -Project $Project
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs @($openPrs)
         $deliveryPayload = Get-ReconcileDeliveryPayload -Project $Project -ConfigYaml $ConfigYaml
         $payload = @{
             openPrs                       = @($openPrs)
             reviewRuns                    = @($reviewRuns)
             sessions                      = @($sessions)
+            sessionDetailsById            = $sessionDetailsById
             ciChecksByPr                  = $checksBundle.ciChecksByPr
             requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
             requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr

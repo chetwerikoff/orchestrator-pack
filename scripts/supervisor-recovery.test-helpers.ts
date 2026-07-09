@@ -185,6 +185,22 @@ export function startSupervisorBackground(
   return child;
 }
 
+export async function waitForSupervisorHealthyStatus(
+  stateDir: string,
+  timeoutMs = 25_000,
+): Promise<{ stdout: string; stderr: string; status: number | null }> {
+  const deadline = Date.now() + timeoutMs;
+  let last = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+  while (Date.now() < deadline) {
+    if (last.status === 0) {
+      return last;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    last = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+  }
+  return last;
+}
+
 export async function waitForMarkers(
   stateDir: string,
   timeoutMs = 25_000,
@@ -253,6 +269,20 @@ export function isAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+export async function waitForProcessesStopped(
+  pids: number[],
+  timeoutMs = 25_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pids.every((pid) => !isAlive(pid))) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`timed out waiting for processes to stop: ${pids.join(', ')}`);
 }
 
 export function countLogMatches(log: string, pattern: RegExp): number {

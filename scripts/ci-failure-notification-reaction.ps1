@@ -38,12 +38,14 @@ function Invoke-CiFailureReactionRecordTick {
     $repo = Get-RepoIdentity
     $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
     $sessions = @(Get-AoStatusSessions)
+    $sessionDetailsById = Build-AoSessionDetailsById -Sessions $sessions -Project $ProjectId
     $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
     $plan = Invoke-CiFailureHelper -Mode 'reaction-record-plan' -Payload @{
         storeDir                      = $StoreDir
         repo                          = $repo
         openPrs                       = $openPrs
         sessions                      = $sessions
+        sessionDetailsById            = $sessionDetailsById
         ciChecksByPr                  = $checksBundle.ciChecksByPr
         requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr

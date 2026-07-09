@@ -439,47 +439,28 @@ Add-AuditJsonlLine -ActivePath $active -Line '${line}' -Policy $policy
     expect(new Set(records.map((record) => record.index)).size).toBe(8);
   });
 
-  it('matrix: lock contenders skip rotation and still append', async () => {
+  it('matrix: lock contenders skip rotation and still append', () => {
     const root = makeRoot('lock');
     const activePath = join(root, 'audit.jsonl');
     mkdirSync(root, { recursive: true });
-    const lockPath = `${activePath}.maintenance.lock`;
-    const holder = spawn('pwsh', [
-      '-NoProfile',
-      '-Command',
-      `. '${retentionLib}'; if (-not (Test-AuditJsonlMaintenanceLock -LockPath ${psQuote(lockPath)})) { exit 2 }; Start-Sleep -Seconds 6; Remove-AuditJsonlMaintenanceLock -LockPath ${psQuote(lockPath)}`,
-    ], { cwd: repoRoot, stdio: 'ignore' });
-    await sleep(500);
-    const policyScript = `@{
-  streamId = 'github-fleet-cache'
-  maxActiveBytes = 1
-  maxTotalBytes = 100000
-  maxAgeMs = 604800000
-}`;
-    const contenders = await Promise.all([0, 1].map((index) => {
-      const line = JSON.stringify({ event: 'lock', index });
-      return runPwshAsync(`
-. '${retentionLib}'
-$active = ${psQuote(activePath)}
-$policy = ${policyScript}
-if (-not (Test-Path -LiteralPath $active)) { Set-Content -LiteralPath $active -Value '{"event":"seed"}' -Encoding UTF8 }
-Add-AuditJsonlLine -ActivePath $active -Line '${line}' -Policy $policy
-`);
-    }));
-    await new Promise<void>((resolve, reject) => {
-      holder.on('close', (code) => {
-        if (code === 0 || code === 2) {
-          resolve();
-          return;
-        }
-        reject(new Error(`lock holder exited ${code}`));
-      });
-    });
-    for (const result of contenders) {
-      expect(result.status).toBe(0);
+    const lockPath = maintenanceLockPath(activePath);
+    expect(tryAcquireMaintenanceLock(lockPath)).toBe(true);
+    try {
+      const policy = {
+        ...resolveAuditJsonlPolicy('github-fleet-cache', {}),
+        maxActiveBytes: 1,
+        maxTotalBytes: 100_000,
+      };
+      appendFileSync(activePath, '{"event":"seed"}\n');
+      const maintenance = maybeMaintainAuditJsonl(activePath, policy);
+      expect(maintenance.lockContended).toBe(true);
+      appendAuditJsonlLine(activePath, JSON.stringify({ event: 'lock', index: 0 }), { policy });
+      appendAuditJsonlLine(activePath, JSON.stringify({ event: 'lock', index: 1 }), { policy });
+      const records = collectAllJsonlRecords(root, activePath);
+      expect(records.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      releaseMaintenanceLock(lockPath);
     }
-    const records = collectAllJsonlRecords(root, activePath);
-    expect(records.length).toBeGreaterThanOrEqual(2);
   });
 
   it('matrix: open writer rename race keeps complete records', () => {

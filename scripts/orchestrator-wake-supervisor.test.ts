@@ -14,6 +14,8 @@ import {
   startSupervisorBackground,
   supervisorScript,
   waitForMarkers,
+  waitForSupervisorHealthyStatus,
+  waitForProcessesStopped,
   type ManagedChildRole,
   type WakeMarker,
 } from './supervisor-recovery.test-helpers.js';
@@ -279,7 +281,7 @@ describe('orchestrator-wake-supervisor', () => {
       dynamicFixture,
       fs.readFileSync(path.join(fixtureDir, 'status-no-orchestrator.json')),
     );
-    await new Promise((resolve) => setTimeout(resolve, 8000));
+    await waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 25_000);
     expect(isAlive(listenerBefore.pid)).toBe(false);
     expect(isAlive(heartbeatBefore.pid)).toBe(false);
     child.kill('SIGTERM');
@@ -297,7 +299,7 @@ describe('orchestrator-wake-supervisor', () => {
     ]);
     await waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
 
-    const statusUp = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
+    const statusUp = await waitForSupervisorHealthyStatus(stateDir);
     expect(statusUp.status).toBe(0);
     expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   working');

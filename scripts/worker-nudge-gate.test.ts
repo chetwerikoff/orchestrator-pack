@@ -1271,6 +1271,31 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(result.reason).toBe('head_owner_mismatch');
   });
 
+  it('fails closed when multiple issue-only workers match the same PR without head owner', () => {
+    const headSha = 'd'.repeat(40);
+    const openPr690 = {
+      number: 690,
+      headRefOid: headSha,
+      headRefName: 'issue-690-session-pr-binding',
+    };
+    const issueOnlyRow = {
+      role: 'worker',
+      status: 'working',
+      issueId: '690',
+      runtime: 'alive',
+    };
+    const result = resolvePrOwnerSessionForNudge({
+      prNumber: 690,
+      sessions: [
+        { ...issueOnlyRow, name: 'opk-a', sessionId: 'opk-a' },
+        { ...issueOnlyRow, name: 'opk-b', sessionId: 'opk-b' },
+      ],
+      openPrs: [openPr690],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('ambiguous_pr_session_binding');
+  });
+
   it('matches PR ownership fallback only when session pr URL equals requested PR', () => {
     const script = `
       . ${psString(helperPath)}

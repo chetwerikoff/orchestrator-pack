@@ -2270,3 +2270,7 @@ After merging on a host with a live wake supervisor:
 3. Verify: `... -Action Status` reports the supervisor as running with a non-zero pid when the loop is alive, including when `supervisor.pid` was previously missing or stale.
 
 
+
+## Session PR binding resolver (Issue #699)
+
+On AO 0.10.2, `ao session claim-pr <session> <pr>` may set numeric `displayName` on `ao session get` but does **not** populate `prNumber`/`pr` on `ao session ls` rows. Pack consumers resolve session↔PR ownership through `docs/session-pr-binding-resolver.mjs`; claim-pr remains optional AO-native CI hygiene only.

@@ -36,6 +36,18 @@
       "command": "ao session get orchestrator-pack-7 --json -p orchestrator-pack",
       "raw": "session-get-worker.raw.json",
       "provenance": "session-get-worker.provenance.json"
+    },
+    {
+      "id": "session-ls-issue-only-post-claim",
+      "command": "ao session ls --json -p orchestrator-pack",
+      "raw": "session-ls-issue-only-post-claim.raw.json",
+      "provenance": "session-ls-issue-only-post-claim.provenance.json"
+    },
+    {
+      "id": "session-get-numeric-displayname",
+      "command": "ao session get orchestrator-pack-45 --json -p orchestrator-pack",
+      "raw": "session-get-numeric-displayname.raw.json",
+      "provenance": "session-get-numeric-displayname.provenance.json"
     }
   ]
 }

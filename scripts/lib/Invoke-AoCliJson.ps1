@@ -430,6 +430,68 @@ function Get-AoSessionGetJson {
     if ($Project) { $args += @('-p', $Project) }
     return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao session get' -AoCommand $AoCommand
 }
+function Get-AoSessionRowIdentifier {
+    param($Row)
+
+    if (-not $Row) { return '' }
+    foreach ($key in @('sessionId', 'id', 'name')) {
+        $value = [string]$Row.$key
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return $value.Trim()
+        }
+    }
+    return ''
+}
+
+function Test-AoSessionRowNeedsSessionGetDetail {
+    param($Row)
+
+    if (-not $Row) { return $false }
+    $prNumber = 0
+    if ($null -ne $Row.prNumber) {
+        [void][int]::TryParse([string]$Row.prNumber, [ref]$prNumber)
+    }
+    if ($prNumber -gt 0) { return $false }
+    $displayName = [string]$Row.displayName
+    if ($displayName -match '^\d+$') { return $false }
+    $role = [string]$Row.role
+    if ($role -and $role -notin @('worker', 'coding')) { return $false }
+    return -not [string]::IsNullOrWhiteSpace((Get-AoSessionRowIdentifier -Row $Row))
+}
+
+function Build-AoSessionDetailsById {
+    param(
+        [object[]]$Sessions,
+        [string]$Project = 'orchestrator-pack',
+        [string]$AoCommand = 'ao'
+    )
+
+    $details = @{}
+    foreach ($row in @($Sessions)) {
+        if (-not (Test-AoSessionRowNeedsSessionGetDetail -Row $row)) {
+            $sessionId = Get-AoSessionRowIdentifier -Row $row
+            $displayName = [string]$row.displayName
+            if ($sessionId -and $displayName) {
+                $details[$sessionId] = @{ displayName = $displayName }
+            }
+            continue
+        }
+        $sessionId = Get-AoSessionRowIdentifier -Row $row
+        if (-not $sessionId) { continue }
+        try {
+            $payload = Get-AoSessionGetJson -SessionId $sessionId -Project $Project -AoCommand $AoCommand
+            $displayName = [string]$payload.session.displayName
+            if ($displayName) {
+                $details[$sessionId] = @{ displayName = $displayName }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+    return $details
+}
+
 
 function Test-AoSessionRowProjectMatches {
     param(
