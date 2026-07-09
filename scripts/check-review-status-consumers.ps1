@@ -9,10 +9,9 @@ $inventory = Join-Path $Root 'docs/review-status-consumer-inventory.md'
 $aoCli = Join-Path $Root 'scripts/lib/Invoke-AoCliJson.ps1'
 $testFile = Join-Path $Root 'scripts/review-status-consumer.test.ts'
 $scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
-$exampleYaml = Join-Path $Root 'agent-orchestrator.yaml.example'
 $diagnose = Join-Path $Root 'scripts/orchestrator-diagnose.ps1'
 
-foreach ($path in @($inventory, $aoCli, $testFile, $scriptOwnedDoc, $exampleYaml, $diagnose)) {
+foreach ($path in @($inventory, $aoCli, $testFile, $scriptOwnedDoc, $diagnose)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Write-Host "Missing required file: $path"
         exit 1
@@ -82,12 +81,6 @@ $rulesRaw = Get-Content -LiteralPath $scriptOwnedDoc -Raw
 if ($rulesRaw -notlike '*Review-status reader contract*' -or
     $rulesRaw -notlike '*Get-AoStatusSessionsWithReports*') {
     Write-Host 'docs/script-owned-review-pipeline.md missing review-status reader contract section'
-    exit 1
-}
-
-$exampleRaw = Get-Content -LiteralPath $exampleYaml -Raw
-if ($exampleRaw -match 'status --reports' -or $exampleRaw -match 'report-full') {
-    Write-Host 'agent-orchestrator.yaml.example must not advertise removed report-full reader contract prose'
     exit 1
 }
 

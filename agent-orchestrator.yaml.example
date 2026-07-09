@@ -439,7 +439,7 @@ projects:
       periodic reconcile below and heartbeat — not a replacement. Safety: never ao spawn,
       --claim-pr, ao session kill, ao send, or merge from this path — only ao-review run.
 
-      REVIEW-STATUS READER (Issue #717): worker report state comes from the pack-owned worker report store (`pack-worker-report` → `Get-AoStatusSessionsWithReports` / `pack-worker-report-store` JSON), never plain `ao session ls` or empty `reports: []` without naming the store source.
+      REVIEW-STATUS READER (Issue #611): worker report state comes from report-full snapshots only — `$.data[]` session rows with `reports[*]` via `Get-AoStatusSessionsWithReports` / audit-backed `.agent-report-audit`, never plain `ao session ls` or empty `reports: []` without naming the non-report-full source.
 
       STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A
       low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
