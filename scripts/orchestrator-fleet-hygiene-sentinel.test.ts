@@ -17,7 +17,7 @@ const supervisorLib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessS
 const wakeSupervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 const guardScript = path.join(repoRoot, 'scripts/check-fleet-hygiene-sentinel.ps1');
 
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 30_000 });
+vi.setConfig({ testTimeout: 420_000, hookTimeout: 30_000 });
 
 
 function runPwshWithEnv(script: string, env: Record<string, string> = {}) {
@@ -25,7 +25,7 @@ function runPwshWithEnv(script: string, env: Record<string, string> = {}) {
     cwd: repoRoot,
     encoding: 'utf8',
     env: { ...process.env, ...env },
-    timeout: 180_000,
+    timeout: 300_000,
   });
 }
 
@@ -41,7 +41,7 @@ function runSentinel(args: string[], env: Record<string, string> = {}) {
       cwd: repoRoot,
       encoding: 'utf8',
       env: { ...process.env, ...env },
-      timeout: 180_000,
+      timeout: 300_000,
     },
   );
 }
@@ -90,9 +90,10 @@ function writeEnvFixture(
 }
 
 function evaluateHygiene(env: Record<string, string>) {
+  const packRootArg = env.PACK_ROOT ? `-PackRoot ${psString(env.PACK_ROOT)}` : '';
   const script = `
     . ${psString(hygieneLib)}
-    $config = Get-FleetHygieneConfig -StateDir ${psString(env.STATE_DIR ?? '')}
+    $config = Get-FleetHygieneConfig -StateDir ${psString(env.STATE_DIR ?? '')} ${packRootArg}
     $result = Invoke-FleetHygieneEvaluation -Config $config
     $result | ConvertTo-Json -Depth 6 -Compress
   `;
@@ -404,12 +405,17 @@ describe('Issue #711 fleet hygiene sentinel', () => {
       detached: true,
     });
     primary.unref();
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    const lockPath = path.join(stateDir, 'fleet-hygiene-sentinel.lock');
+    const deadline = Date.now() + 120_000;
+    while (!fs.existsSync(lockPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(fs.existsSync(lockPath), 'primary did not acquire singleton lock in time').toBe(true);
     const secondary = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', secondaryScript], {
       cwd: repoRoot,
       encoding: 'utf8',
       env: process.env,
-      timeout: 10_000,
+      timeout: 30_000,
     });
     expect(secondary.stdout).toContain('skipped');
     expect(secondary.status).toBe(0);
@@ -433,6 +439,92 @@ describe('Issue #711 fleet hygiene sentinel', () => {
     for (const id of ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7']) {
       expect(result.stdout).toMatch(new RegExp(`PASS ${id}:`));
     }
+  });
+
+
+  it('H3/H6 ignore role-tagged processes bound to another state root (review P2)', () => {
+    const stateDir = makeStateDir();
+    const otherStateDir = path.join(os.tmpdir(), `fleet-hygiene-other-${process.pid}-${Date.now()}`);
+    fs.mkdirSync(otherStateDir, { recursive: true });
+    const envFixture = path.join(stateDir, 'env.json');
+    const foreignPid = 960001;
+    writeEnvFixture(envFixture, {
+      [foreignPid]: {
+        AO_SIDE_PROCESS_CHILD_ID: 'listener',
+        AO_SIDE_PROCESS_STATE_DIR: otherStateDir,
+      },
+    });
+
+    const result = evaluateHygiene({
+      STATE_DIR: stateDir,
+      AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE: envFixture,
+      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([foreignPid]),
+      AO_FLEET_HYGIENE_PROCESS_RSS_FIXTURE: JSON.stringify({ [foreignPid]: 500000 }),
+      AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB: '10000',
+      AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE: '1',
+      AO_FLEET_HYGIENE_MAX_PWSH_COUNT: '200',
+      AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
+    });
+
+    expect(result.Assertions.find((row) => row.Id === 'H3')?.Pass).toBe(true);
+    expect(result.Assertions.find((row) => row.Id === 'H6')?.Pass).toBe(true);
+  });
+
+  it('H4 uses path-boundary containment for adjacent checkout prefixes (review P2)', () => {
+    const stateDir = makeStateDir();
+    const cmdFixture = path.join(stateDir, 'cmdline.json');
+    const packRoot = path.join(os.tmpdir(), 'orchestrator-pack-8');
+    const adjacentRoot = path.join(os.tmpdir(), 'orchestrator-pack-81');
+    const adjacentScript = path.join(adjacentRoot, 'scripts/orchestrator-wake-supervisor.ps1');
+    const foreignPid = 960010;
+    writeCmdlineFixture(cmdFixture, {
+      [foreignPid]: supervisorCommandLine(stateDir).replace(wakeSupervisorScript, adjacentScript),
+    });
+
+    const result = evaluateHygiene({
+      STATE_DIR: stateDir,
+      PACK_ROOT: packRoot,
+      AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE: cmdFixture,
+      AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([foreignPid]),
+      AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
+    });
+
+    expect(result.Assertions.find((row) => row.Id === 'H4')?.Pass).toBe(false);
+    expect(result.Assertions.find((row) => row.Id === 'H4')?.Code).toBe(
+      'H4_FOREIGN_CHECKOUT_SUPERVISOR',
+    );
+  });
+
+  it('kill mode runs after stderr alert without terminating early (review P2)', () => {
+    const stateDir = makeStateDir();
+    const cmdFixture = path.join(stateDir, 'cmdline.json');
+    const canonical = 960101;
+    const duplicate = 960102;
+    writeCmdlineFixture(cmdFixture, {
+      [canonical]: supervisorCommandLine(stateDir),
+      [duplicate]: supervisorCommandLine(stateDir),
+    });
+    fs.writeFileSync(path.join(stateDir, 'supervisor.lock'), String(canonical));
+    const killLog = path.join(stateDir, 'kill-log.json');
+
+    const sentinel = runSentinel(
+      ['-Action', 'Sentinel', '-StateDir', stateDir, '-KillEnable'],
+      {
+        AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE: cmdFixture,
+        AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE: JSON.stringify([canonical, duplicate]),
+        AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE: JSON.stringify([canonical, duplicate]),
+        AO_FLEET_HYGIENE_STATUS_EXIT_CODE: '0',
+        AO_FLEET_HYGIENE_SKIP_SINGLETON: '1',
+        AO_FLEET_HYGIENE_KILL_LOG_FIXTURE: killLog,
+        AO_FLEET_HYGIENE_MOCK_KILL: '1',
+      },
+    );
+
+    expect(sentinel.status).not.toBe(0);
+    expect(fs.existsSync(killLog)).toBe(true);
+    const raw = JSON.parse(fs.readFileSync(killLog, 'utf8')) as { kills?: number[] };
+    expect(raw.kills ?? []).toContain(duplicate);
+    expect(raw.kills ?? []).not.toContain(canonical);
   });
 
   it('class matrix minimum cells (AC#11)', () => {

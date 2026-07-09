@@ -364,20 +364,43 @@ function Get-FleetHygieneProcessRssKb {
     return 0
 }
 
+
+function Test-FleetHygieneNormalizedPathUnderRoot {
+    param(
+        [string]$PathValue,
+        [string]$RootValue
+    )
+
+    $normalizedPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $PathValue
+    $normalizedRoot = Normalize-OrchestratorWakeSupervisorPath -PathValue $RootValue
+    if (-not $normalizedRoot -or -not $normalizedPath) { return $false }
+    if ($normalizedPath.Equals($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+
+    $rootWithSep = if ($normalizedRoot.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $normalizedRoot
+    }
+    else {
+        $normalizedRoot + [System.IO.Path]::DirectorySeparatorChar
+    }
+    return $normalizedPath.StartsWith($rootWithSep, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Test-FleetHygieneProcessRoleTaggedForState {
     param(
         [int]$ProcessId,
         [string]$StateRoot
     )
 
-    $childId = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_CHILD_ID'
-    if ($childId) { return $true }
-
+    $normalizedExpected = Normalize-OrchestratorWakeSupervisorPath -PathValue $StateRoot
     $envState = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
     if ($envState) {
-        $normalizedExpected = Normalize-OrchestratorWakeSupervisorPath -PathValue $StateRoot
         return (Normalize-OrchestratorWakeSupervisorPath -PathValue $envState) -eq $normalizedExpected
     }
+
+    $childId = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_CHILD_ID'
+    if ($childId) { return $false }
 
     return $false
 }
@@ -401,7 +424,7 @@ function Test-FleetHygieneManagedChildForState {
 
     $markerDir = Get-FleetHygieneProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
     if ($markerDir) {
-        return (Normalize-OrchestratorWakeSupervisorPath -PathValue $markerDir).StartsWith($normalizedExpected)
+        return Test-FleetHygieneNormalizedPathUnderRoot -PathValue $markerDir -RootValue $normalizedExpected
     }
 
     return $false
@@ -516,7 +539,7 @@ function Test-FleetHygieneSupervisorCommandLineForeignCheckout {
     $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
     if (-not $scriptInCommand) { return $false }
     $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
-    return -not $normalizedScript.StartsWith($Config.PackRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    return -not (Test-FleetHygieneNormalizedPathUnderRoot -PathValue $normalizedScript -RootValue $Config.PackRoot)
 }
 
 function Invoke-FleetHygieneAssertionH4 {
@@ -724,7 +747,7 @@ function Write-FleetHygieneAlert {
         Add-Content -LiteralPath $Config.AlertDestination -Value $payload -Encoding utf8
     }
     else {
-        Write-Error $payload
+        [Console]::Error.WriteLine($payload)
     }
 }
 
