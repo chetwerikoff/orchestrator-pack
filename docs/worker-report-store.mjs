@@ -192,6 +192,13 @@ export function mergePackWorkerReportsIntoSessions(sessions, store, repoSlug = '
       .sort((a, b) => Number(b.reportedAtMs ?? 0) - Number(a.reportedAtMs ?? 0))
       .map((record) => workerReportRecordToSessionReportRow(record));
     if (records.length === 0) {
+      if (String(session?.reportSnapshotKind ?? '') === PACK_WORKER_REPORT_STORE_SURFACE) {
+        const next = { ...session };
+        delete next.reports;
+        delete next.reportSourcePath;
+        delete next.reportSnapshotKind;
+        return next;
+      }
       return session;
     }
     return {

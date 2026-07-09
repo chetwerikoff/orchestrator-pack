@@ -107,6 +107,8 @@ describe('review-ready-report-state-seed-pack-source', () => {
     expect(ready.report?.reportState).toBe('ready_for_review');
     expect(seedRaw).toMatch(/Invoke-WorkerReportStoreEviction/);
     expect(seedRaw).toMatch(/Invoke-GhOpenPrList.*review-ready-report-state-seed-eviction/s);
+    expect(seedRaw).toMatch(/Merge-AoSessionRowsWithWorkerReportStore -Sessions \$sessions -RepoSlug \$SupervisedRepoSlug -RepoRoot \$RepoRoot/);
+
     expect(seedRaw).toMatch(/Build-WorkerReportStoreCurrentHeadByPr/);
   });
 });
@@ -211,6 +213,28 @@ describe('events-optional-consumer-signal-recovery', () => {
     );
   });
 });
+
+
+  it('clears pack-store report overlay when store records were evicted', () => {
+    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const session = {
+      id: 'opk-stale',
+      repoSlug: 'org/a',
+      reportSnapshotKind: PACK_WORKER_REPORT_STORE_SURFACE,
+      reportSourcePath: 'pack-worker-report-store/org/a/opk-stale',
+      reports: [
+        {
+          reportState: 'ready_for_review',
+          accepted: true,
+          headSha: 'stalehead',
+          reportedAt: '2026-07-09T10:00:00.000Z',
+        },
+      ],
+    };
+    const [merged] = mergePackWorkerReportsIntoSessions([session], store, 'org/a');
+    expect(merged.reportSnapshotKind).toBeUndefined();
+    expect(merged.reports).toBeUndefined();
+  });
 
 describe('worker-report-store-eviction', () => {
   it('evicts terminal PR records and prevents unbounded growth', () => {
@@ -571,6 +595,12 @@ describe('worker-report-store DROP proof helpers', () => {
     expect(out).toContain('ready_for_review');
     expect(out).toContain('opk-wrapper-717');
   });
+
+  it('pack-worker-report skips silently when store write fails', () => {
+    const raw = readFileSync(path.join(repoRoot, 'scripts/pack-worker-report.ps1'), 'utf8');
+    expect(raw).toMatch(/try \{[\s\S]*Write-PackWorkerReportRecord[\s\S]*catch \{[\s\S]*exit 0/);
+  });
+
   it('pack-worker-report derives head SHA from cwd without -RepoRoot', () => {
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
     const out = runPwsh(`

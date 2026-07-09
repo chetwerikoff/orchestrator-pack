@@ -76,6 +76,11 @@ if ($DryRun) {
     exit 0
 }
 
-$result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
-    -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId
-$result | ConvertTo-Json -Compress -Depth 20
+try {
+    $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
+        -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId
+    $result | ConvertTo-Json -Compress -Depth 20
+}
+catch {
+    exit 0
+}

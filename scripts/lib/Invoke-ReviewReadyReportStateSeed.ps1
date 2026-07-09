@@ -346,6 +346,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
     if ($workerReportEviction.removed -gt 0 -and $LogWriter) {
         & $LogWriter "worker-report-store: evicted $($workerReportEviction.removed) stale record(s)"
     }
+    $sessions = @(Merge-AoSessionRowsWithWorkerReportStore -Sessions $sessions -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot)
 
     & $emitProgress 'plan_seed'
     $plan = Invoke-ReviewReadyReportStateSeedCli -Subcommand 'planTick' -Payload @{
