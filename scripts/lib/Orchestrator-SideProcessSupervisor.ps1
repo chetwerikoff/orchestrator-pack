@@ -583,31 +583,20 @@ function Test-OrchestratorWakeSupervisorSupervisorIdentity {
 }
 
 
-function Get-ProcessEnvironmentValue {
+function Get-ProcessEnvironmentValueFromBytes {
     param(
-        [int]$ProcessId,
+        [byte[]]$Raw,
         [string]$Name
     )
 
-    if ($ProcessId -le 0) { return '' }
-    if (-not $IsLinux) { return '' }
-
-    $environPath = "/proc/$ProcessId/environ"
-    if (-not (Test-Path -LiteralPath $environPath)) { return '' }
-
-    try {
-        $raw = [System.IO.File]::ReadAllBytes($environPath)
-    }
-    catch {
-        return ''
-    }
+    if (-not $Raw -or $Raw.Length -eq 0) { return '' }
 
     $prefix = [System.Text.Encoding]::UTF8.GetBytes("$Name=")
     $start = -1
-    for ($index = 0; $index -le ($raw.Length - $prefix.Length); $index++) {
+    for ($index = 0; $index -le ($Raw.Length - $prefix.Length); $index++) {
         $matched = $true
         for ($offset = 0; $offset -lt $prefix.Length; $offset++) {
-            if ($raw[$index + $offset] -ne $prefix[$offset]) {
+            if ($Raw[$index + $offset] -ne $prefix[$offset]) {
                 $matched = $false
                 break
             }
@@ -620,11 +609,222 @@ function Get-ProcessEnvironmentValue {
     if ($start -lt 0) { return '' }
 
     $valueBytes = New-Object System.Collections.Generic.List[byte]
-    for ($index = $start; $index -lt $raw.Length; $index++) {
-        if ($raw[$index] -eq 0) { break }
-        $valueBytes.Add($raw[$index]) | Out-Null
+    for ($index = $start; $index -lt $Raw.Length; $index++) {
+        if ($Raw[$index] -eq 0) { break }
+        $valueBytes.Add($Raw[$index]) | Out-Null
     }
     return [System.Text.Encoding]::UTF8.GetString($valueBytes.ToArray())
+}
+
+function Get-ProcessEnvironmentValueFromFixture {
+    param(
+        [int]$ProcessId,
+        [string]$Name
+    )
+
+    $fixturePath = $env:AO_PROCESS_ENV_FIXTURE
+    if (-not $fixturePath) { return $null }
+    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { return $null }
+
+    try {
+        $map = Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json
+        $pidKey = [string]$ProcessId
+        if ($map.PSObject.Properties.Name -contains $pidKey) {
+            $entry = $map.$pidKey
+            if ($entry.PSObject.Properties.Name -contains $Name) {
+                return [string]$entry.$Name
+            }
+        }
+    }
+    catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Initialize-ProcessEnvironmentReader {
+    if ($script:ProcessEnvironmentReaderInitialized) { return }
+    $script:ProcessEnvironmentReaderInitialized = $true
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        if (-not ('OrchestratorPack.ProcessEnvironmentReader' -as [type])) {
+            $typeDefinition = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace OrchestratorPack
+{
+    public static class ProcessEnvironmentReader
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        struct ProcessBasicInformation
+        {
+            public IntPtr Reserved1;
+            public IntPtr PebBaseAddress;
+            public IntPtr Reserved2_0;
+            public IntPtr Reserved2_1;
+            public IntPtr UniqueProcessId;
+            public IntPtr Reserved3;
+        }
+
+        const int ProcessBasicInformationClass = 0;
+        const uint ProcessQueryAccess = 0x0410;
+
+        [DllImport("ntdll.dll")]
+        static extern int NtQueryInformationProcess(
+            IntPtr processHandle,
+            int processInformationClass,
+            ref ProcessBasicInformation processInformation,
+            int processInformationLength,
+            out int returnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(
+            IntPtr hProcess,
+            IntPtr lpBaseAddress,
+            byte[] lpBuffer,
+            int dwSize,
+            out int lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hProcess);
+
+        static bool TryReadPointer(IntPtr hProcess, IntPtr address, out IntPtr value)
+        {
+            value = IntPtr.Zero;
+            var buffer = new byte[IntPtr.Size];
+            int read;
+            if (!ReadProcessMemory(hProcess, address, buffer, buffer.Length, out read) || read != buffer.Length)
+            {
+                return false;
+            }
+            value = IntPtr.Size == 8 ? new IntPtr(BitConverter.ToInt64(buffer, 0)) : new IntPtr(BitConverter.ToInt32(buffer, 0));
+            return value != IntPtr.Zero;
+        }
+
+        static bool TryReadBytes(IntPtr hProcess, IntPtr address, int length, out byte[] buffer)
+        {
+            buffer = null;
+            if (length <= 0) { return false; }
+            buffer = new byte[length];
+            int read;
+            return ReadProcessMemory(hProcess, address, buffer, length, out read) && read == length;
+        }
+
+        public static string GetEnvironmentVariable(int processId, string name)
+        {
+            if (processId <= 0 || string.IsNullOrEmpty(name)) { return string.Empty; }
+
+            var hProcess = OpenProcess(ProcessQueryAccess, false, processId);
+            if (hProcess == IntPtr.Zero) { return string.Empty; }
+
+            try
+            {
+                var pbi = new ProcessBasicInformation();
+                int returnLength;
+                if (NtQueryInformationProcess(hProcess, ProcessBasicInformationClass, ref pbi, Marshal.SizeOf(typeof(ProcessBasicInformation)), out returnLength) != 0)
+                {
+                    return string.Empty;
+                }
+
+                IntPtr processParameters;
+                if (!TryReadPointer(hProcess, IntPtr.Add(pbi.PebBaseAddress, IntPtr.Size == 8 ? 0x20 : 0x10), out processParameters))
+                {
+                    return string.Empty;
+                }
+
+                var unicodeStringAddress = IntPtr.Add(processParameters, IntPtr.Size == 8 ? 0x80 : 0x48);
+                var unicodeString = new byte[IntPtr.Size == 8 ? 16 : 8];
+                int unicodeRead;
+                if (!ReadProcessMemory(hProcess, unicodeStringAddress, unicodeString, unicodeString.Length, out unicodeRead) || unicodeRead != unicodeString.Length)
+                {
+                    return string.Empty;
+                }
+
+                var environmentLength = BitConverter.ToUInt16(unicodeString, 0);
+                IntPtr environmentBuffer;
+                if (IntPtr.Size == 8)
+                {
+                    environmentBuffer = new IntPtr(BitConverter.ToInt64(unicodeString, 8));
+                }
+                else
+                {
+                    environmentBuffer = new IntPtr(BitConverter.ToInt32(unicodeString, 4));
+                }
+
+                byte[] environmentBytes;
+                if (!TryReadBytes(hProcess, environmentBuffer, environmentLength, out environmentBytes))
+                {
+                    return string.Empty;
+                }
+
+                var environmentBlock = Encoding.Unicode.GetString(environmentBytes);
+                var prefix = name + "=";
+                foreach (var entry in environmentBlock.Split('\0'))
+                {
+                    if (entry.StartsWith(prefix, StringComparison.Ordinal))
+                    {
+                        return entry.Substring(prefix.Length);
+                    }
+                }
+            }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+
+            return string.Empty;
+        }
+    }
+}
+'@
+            Add-Type -TypeDefinition $typeDefinition -ErrorAction Stop
+        }
+    }
+}
+
+function Get-ProcessEnvironmentValue {
+    param(
+        [int]$ProcessId,
+        [string]$Name
+    )
+
+    if ($ProcessId -le 0) { return '' }
+
+    $fixtureValue = Get-ProcessEnvironmentValueFromFixture -ProcessId $ProcessId -Name $Name
+    if ($null -ne $fixtureValue) { return $fixtureValue }
+
+    if ($IsLinux) {
+        $environPath = "/proc/$ProcessId/environ"
+        if (-not (Test-Path -LiteralPath $environPath)) { return '' }
+
+        try {
+            $raw = [System.IO.File]::ReadAllBytes($environPath)
+        }
+        catch {
+            return ''
+        }
+
+        return Get-ProcessEnvironmentValueFromBytes -Raw $raw -Name $Name
+    }
+
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        try {
+            Initialize-ProcessEnvironmentReader
+            if ('OrchestratorPack.ProcessEnvironmentReader' -as [type]) {
+                return [OrchestratorPack.ProcessEnvironmentReader]::GetEnvironmentVariable($ProcessId, $Name)
+            }
+        }
+        catch {
+            return ''
+        }
+    }
+
+    return ''
 }
 
 function Test-OrchestratorWakeSupervisorManagedChildForState {

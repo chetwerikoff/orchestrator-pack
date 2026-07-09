@@ -436,6 +436,30 @@ describe('Issue #710 marker identification (AC#5)', () => {
     expect(result.stdout.trim()).toBe('testmode_supervisor');
   });
 
+  it('classifies env-only managed child using fixtures (AC#5 non-cmdline markers)', () => {
+    const stateDir = makeStateDir();
+    const markerDir = path.join(stateDir, 'markers');
+    const cmdlineFixturePath = path.join(stateDir, 'cmdline-fixture.json');
+    const envFixturePath = path.join(stateDir, 'env-fixture.json');
+    const childScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1');
+    fs.writeFileSync(cmdlineFixturePath, JSON.stringify({ '424243': `pwsh -File ${childScript}` }));
+    fs.writeFileSync(envFixturePath, JSON.stringify({
+      '424243': {
+        AO_SIDE_PROCESS_STATE_DIR: stateDir,
+        AO_WAKE_SUPERVISOR_TEST_MARKER_DIR: markerDir,
+      },
+    }));
+    const reaperLib = path.join(repoRoot, 'scripts/lib/Invoke-TestModeFleetReaper.ps1');
+    const result = runPwsh(
+      `$env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE='${cmdlineFixturePath.replace(/'/g, "''")}'; `
+      + `$env:AO_PROCESS_ENV_FIXTURE='${envFixturePath.replace(/'/g, "''")}'; `
+      + `. '${supervisorLib.replace(/'/g, "''")}'; `
+      + `. '${reaperLib.replace(/'/g, "''")}'; `
+      + '$c = Get-TestModeFleetProcessClassification -ProcessId 424243; Write-Output $c.kind',
+    );
+    expect(result.stdout.trim()).toBe('testmode_managed');
+  });
+
   it.skipIf(process.platform === 'win32')(
     'real spawned pwsh e2e matches TestMode marker and not live root',
     async () => {

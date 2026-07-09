@@ -17,12 +17,10 @@ function Test-TestModeFleetProcessIdentityReadable {
         return $true
     }
 
-    if ($IsLinux) {
-        $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
-        if ($stateDir) { return $true }
-        $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
-        if ($markerDir) { return $true }
-    }
+    $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
+    if ($stateDir) { return $true }
+    $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+    if ($markerDir) { return $true }
 
     return $false
 }
@@ -34,10 +32,8 @@ function Get-TestModeFleetProcessClassification {
     $stateDir = ''
     $markerDir = ''
 
-    if ($IsLinux) {
-        $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
-        $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
-    }
+    $stateDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_SIDE_PROCESS_STATE_DIR'
+    $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
 
     $tokens = @(Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId)
     if (-not $stateDir -and $tokens.Count -gt 0) {
@@ -159,12 +155,10 @@ function Get-TestModeFleetReaperCandidateProcesses {
             continue
         }
 
-        if ($IsLinux) {
-            $marker = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
-            $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
-            if ($marker -or $state) {
-                $candidates.Add($proc.Id) | Out-Null
-            }
+        $marker = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+        $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
+        if ($marker -or $state) {
+            $candidates.Add($proc.Id) | Out-Null
         }
     }
     return @($candidates)
@@ -206,13 +200,11 @@ function Get-TestModeFleetReaperCandidatesForStateRoots {
             continue
         }
 
-        if ($IsLinux) {
-            $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
-            if (-not $state) { continue }
-            $normalized = Normalize-OrchestratorWakeSupervisorPath -PathValue $state
-            if ($targets.Contains($normalized)) {
-                $candidates.Add($proc.Id) | Out-Null
-            }
+        $state = Get-ProcessEnvironmentValue -ProcessId $proc.Id -Name 'AO_SIDE_PROCESS_STATE_DIR'
+        if (-not $state) { continue }
+        $normalized = Normalize-OrchestratorWakeSupervisorPath -PathValue $state
+        if ($targets.Contains($normalized)) {
+            $candidates.Add($proc.Id) | Out-Null
         }
     }
     return @($candidates)
