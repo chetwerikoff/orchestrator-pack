@@ -7,6 +7,10 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import {
+  resolveSessionPrBinding,
+  sessionDetailFromSessionGetPayload,
+} from './session-pr-binding-resolver.mjs';
 
 export const WORKER_REPORT_STORE_SCHEMA_VERSION = 2;
 export const PACK_WORKER_REPORT_STORE_SURFACE = 'pack-worker-report-store';
@@ -285,7 +289,57 @@ export function evictWorkerReportRecords({
  * @param {string} input.callerSessionId
  * @param {Record<string, unknown>} input.record
  */
-export function validateWorkerReportTrustBoundary({ callerSessionId, record }) {
+/**
+ * @param {object} input
+ * @param {Record<string, unknown>} input.session
+ * @param {Array<Record<string, unknown>>} [input.openPrs]
+ * @param {string} [input.worktreeHeadSha]
+ * @param {Record<string, unknown> | null} [input.sessionGetPayload]
+ */
+export function resolveWorkerReportTrustedBinding({
+  session,
+  openPrs = [],
+  worktreeHeadSha = '',
+  sessionGetPayload = null,
+}) {
+  const headSha = normalizeSha(worktreeHeadSha);
+  if (!headSha) {
+    return { ok: false, reason: 'missing_worktree_head' };
+  }
+  const sessionDetail = sessionGetPayload
+    ? sessionDetailFromSessionGetPayload(sessionGetPayload)
+    : null;
+  const binding = resolveSessionPrBinding(session, toArray(openPrs), {
+    headSha,
+    sessionDetail,
+  });
+  if (!binding.bound || Number(binding.prNumber ?? 0) <= 0) {
+    return {
+      ok: false,
+      reason: binding.deferReason ?? 'trust_boundary_binding_unresolved',
+    };
+  }
+  const prNumber = Number(binding.prNumber);
+  const prRow = toArray(openPrs).find((pr) => Number(pr?.number ?? 0) === prNumber);
+  const openHead = normalizeSha(prRow?.headRefOid);
+  if (openHead && openHead !== headSha) {
+    return { ok: false, reason: 'trust_boundary_head_mismatch' };
+  }
+  return {
+    ok: true,
+    prNumber,
+    headSha,
+    bindingSource: binding.source,
+  };
+}
+
+/**
+ * @param {object} input
+ * @param {string} input.callerSessionId
+ * @param {Record<string, unknown>} input.record
+ * @param {{ ok?: boolean, prNumber?: number, headSha?: string, reason?: string } | null} [input.trustedBinding]
+ */
+export function validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding = null }) {
   const caller = String(callerSessionId ?? '').trim();
   const target = String(record?.sessionId ?? '').trim();
   if (!caller || !target || caller !== target) {
@@ -303,6 +357,18 @@ export function validateWorkerReportTrustBoundary({ callerSessionId, record }) {
   const state = String(record?.reportState ?? '').toLowerCase();
   if (!WORKER_REPORT_STATES.includes(state)) {
     return { ok: false, reason: 'invalid_report_state' };
+  }
+  if (!trustedBinding || trustedBinding.ok !== true) {
+    return {
+      ok: false,
+      reason: String(trustedBinding?.reason ?? 'trust_boundary_binding_unresolved'),
+    };
+  }
+  if (Number(record?.prNumber ?? 0) !== Number(trustedBinding.prNumber ?? 0)) {
+    return { ok: false, reason: 'trust_boundary_pr_mismatch' };
+  }
+  if (normalizeSha(record?.headSha) !== normalizeSha(trustedBinding.headSha)) {
+    return { ok: false, reason: 'trust_boundary_head_mismatch' };
   }
   return { ok: true };
 }
@@ -360,8 +426,8 @@ export function findPackWorkerAckReportAfterDelivery(session, run, sendObservedA
  * @param {number} input.nowMs
  * @param {number} [input.expectedGeneration]
  */
-export function upsertWorkerReportRecordInMemory({ store, record, callerSessionId, nowMs }) {
-  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record });
+export function upsertWorkerReportRecordInMemory({ store, record, callerSessionId, nowMs, trustedBinding = null }) {
+  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding });
   if (!trust.ok) {
     return { ok: false, reason: trust.reason };
   }
@@ -382,8 +448,9 @@ export function writeWorkerReportRecordWithCas({
   callerSessionId,
   nowMs,
   expectedGeneration,
+  trustedBinding = null,
 }) {
-  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record });
+  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding });
   if (!trust.ok) {
     return { ok: false, reason: trust.reason };
   }
@@ -451,6 +518,15 @@ runStdinJsonCli('worker-report-store.mjs', {
     });
     return { ...result, store };
   },
+  resolveTrustedBinding: () => {
+    const payload = readStdinJson();
+    return resolveWorkerReportTrustedBinding({
+      session: payload.session ?? {},
+      openPrs: toArray(payload.openPrs),
+      worktreeHeadSha: String(payload.worktreeHeadSha ?? ''),
+      sessionGetPayload: payload.sessionGetPayload ?? null,
+    });
+  },
   upsertRecord: () => {
     const payload = readStdinJson();
     return upsertWorkerReportRecordInMemory({
@@ -458,6 +534,7 @@ runStdinJsonCli('worker-report-store.mjs', {
       record: payload.record ?? {},
       callerSessionId: String(payload.callerSessionId ?? ''),
       nowMs: Number(payload.nowMs ?? Date.now()),
+      trustedBinding: payload.trustedBinding ?? null,
     });
   },
   writeRecord: () => {

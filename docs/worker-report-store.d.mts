@@ -36,9 +36,16 @@ export declare function evictWorkerReportRecords(input: {
   openListAuthoritative?: boolean;
   repoSlug?: string;
 }): { removed: number; recordCount: number; store: Record<string, unknown> };
+export declare function resolveWorkerReportTrustedBinding(input: {
+  session: Record<string, unknown>;
+  openPrs?: Array<Record<string, unknown>>;
+  worktreeHeadSha?: string;
+  sessionGetPayload?: Record<string, unknown> | null;
+}): { ok: boolean; reason?: string; prNumber?: number; headSha?: string; bindingSource?: string };
 export declare function validateWorkerReportTrustBoundary(input: {
   callerSessionId: string;
   record: Record<string, unknown>;
+  trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
 }): { ok: boolean; reason?: string };
 export declare function sessionHasPackWorkerReportReceiptSurface(session: Record<string, unknown>): boolean;
 export declare function findPackWorkerAckReportAfterDelivery(
@@ -51,6 +58,7 @@ export declare function upsertWorkerReportRecordInMemory(input: {
   record: Record<string, unknown>;
   callerSessionId: string;
   nowMs: number;
+  trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
 }): { ok: boolean; reason?: string; store?: Record<string, unknown>; key?: string; record?: Record<string, unknown>; generation?: number };
 export declare function writeWorkerReportRecordWithCas(input: {
   storePath: string;
@@ -58,6 +66,7 @@ export declare function writeWorkerReportRecordWithCas(input: {
   callerSessionId: string;
   nowMs: number;
   expectedGeneration?: number;
+  trustedBinding?: { ok?: boolean; prNumber?: number; headSha?: string; reason?: string } | null;
 }): { ok: boolean; reason?: string; key?: string; record?: Record<string, unknown>; generation?: number };
 export declare function seedShouldPromoteReadyForReview(
   store: Record<string, unknown>,

@@ -111,6 +111,138 @@ function Resolve-PackWorkerReportCallerSessionId {
     return ''
 }
 
+
+function Resolve-PackWorkerReportWorktreeHeadSha {
+    param(
+        [string]$RepoRoot = '',
+        [string]$HeadSha = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($HeadSha)) {
+        return [string]$HeadSha
+    }
+    if ($env:AO_HEAD_SHA) { return [string]$env:AO_HEAD_SHA }
+    if ($env:GITHUB_SHA) { return [string]$env:GITHUB_SHA }
+
+    $headCwd = if ($RepoRoot -and (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
+        $RepoRoot
+    }
+    else {
+        (Get-Location).Path
+    }
+    $previous = Get-Location
+    try {
+        Set-Location $headCwd
+        return [string]((& git rev-parse HEAD 2>$null | Select-Object -First 1))
+    }
+    finally {
+        Set-Location $previous
+    }
+}
+
+function Resolve-PackWorkerReportTrustedBinding {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SessionId,
+        [string]$RepoRoot = '',
+        [string]$RepoSlug = '',
+        [string]$WorktreeHeadSha = ''
+    )
+
+    $headSha = Resolve-PackWorkerReportWorktreeHeadSha -RepoRoot $RepoRoot -HeadSha $WorktreeHeadSha
+    $session = $null
+    $sessionGetPayload = $null
+    $openPrs = @()
+
+    $aoCli = Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1'
+    if (Test-Path -LiteralPath $aoCli) {
+        . $aoCli
+        try {
+            $sessions = @(Get-AoStatusSessionsIncludingTerminated)
+            foreach ($row in $sessions) {
+                $id = Get-AoSessionRowIdentifier -Row $row
+                if ($id -eq $SessionId) {
+                    $session = $row
+                    break
+                }
+            }
+            if ($session -and (Get-Command Test-AoSessionRowNeedsSessionGetDetail -ErrorAction SilentlyContinue)) {
+                if (Test-AoSessionRowNeedsSessionGetDetail -Row $session) {
+                    try {
+                        $sessionGetPayload = Get-AoSessionGetJson -SessionId $SessionId
+                    }
+                    catch {
+                        $sessionGetPayload = $null
+                    }
+                }
+            }
+        }
+        catch {
+            $session = $null
+        }
+    }
+
+    if (-not $session) {
+        $envPr = 0
+        if ($env:AO_PR_NUMBER) {
+            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$envPr)
+        }
+        if ($envPr -gt 0) {
+            $session = @{
+                id        = $SessionId
+                name      = $SessionId
+                sessionId = $SessionId
+                prNumber  = $envPr
+            }
+        }
+    }
+
+    if (-not $session) {
+        return @{ ok = $false; reason = 'trust_boundary_binding_unresolved' }
+    }
+
+    try {
+        $ghPrChecks = Join-Path $PSScriptRoot 'Gh-PrChecks.ps1'
+        if (Test-Path -LiteralPath $ghPrChecks) {
+            . $ghPrChecks
+        }
+        $openPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'pack-worker-report-trusted-binding')
+    }
+    catch {
+        $openPrs = @()
+    }
+
+    if ($openPrs.Count -eq 0 -and $headSha) {
+        $fallbackPr = 0
+        if ($null -ne $session.prNumber) {
+            [void][int]::TryParse([string]$session.prNumber, [ref]$fallbackPr)
+        }
+        if ($fallbackPr -le 0 -and $env:AO_PR_NUMBER) {
+            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$fallbackPr)
+        }
+        if ($fallbackPr -gt 0) {
+            $openPrs = @(@{ number = $fallbackPr; headRefOid = $headSha; state = 'open' })
+        }
+    }
+
+    $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $session
+    $sessionGetHashtable = $null
+    if ($sessionGetPayload) {
+        $sessionGetHashtable = ConvertTo-MechanicalJsonStateHashtable -Value $sessionGetPayload
+    }
+    $openPrPayload = @()
+    foreach ($pr in $openPrs) {
+        $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
+    }
+
+    return Invoke-WorkerReportStoreCli -Subcommand 'resolveTrustedBinding' -Payload @{
+        session           = $sessionPayload
+        openPrs           = $openPrPayload
+        worktreeHeadSha   = $headSha
+        sessionGetPayload = $sessionGetHashtable
+    }
+}
+
 function Write-PackWorkerReportRecord {
     param(
         [string]$ReportState,
@@ -121,7 +253,9 @@ function Write-PackWorkerReportRecord {
         [bool]$Accepted = $true,
         [string]$StorePath = '',
         [long]$NowMs = 0,
-        [string]$CallerSessionId = ''
+        [string]$CallerSessionId = '',
+        [string]$RepoRoot = '',
+        [hashtable]$TrustedBinding = $null
     )
 
     if (-not $NowMs) {
@@ -133,6 +267,24 @@ function Write-PackWorkerReportRecord {
     }
     if ([string]::IsNullOrWhiteSpace($callerSessionId)) {
         throw 'worker-report-store upsert failed: trust_boundary_session_mismatch'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SessionId) -and $SessionId -ne $callerSessionId) {
+        throw 'worker-report-store upsert failed: trust_boundary_session_mismatch'
+    }
+    $trustedBinding = $TrustedBinding
+    if (-not $trustedBinding) {
+        $trustedBinding = Resolve-PackWorkerReportTrustedBinding -SessionId $callerSessionId `
+            -RepoRoot $RepoRoot -RepoSlug $RepoSlug -WorktreeHeadSha $HeadSha
+    }
+    if (-not $trustedBinding -or -not $trustedBinding.ok) {
+        $reason = if ($trustedBinding.reason) { [string]$trustedBinding.reason } else { 'trust_boundary_binding_unresolved' }
+        throw "worker-report-store upsert failed: $reason"
+    }
+    $SessionId = [string]$callerSessionId
+    $PrNumber = [int]$trustedBinding.prNumber
+    $HeadSha = [string]$trustedBinding.headSha
+    if ([string]::IsNullOrWhiteSpace($RepoSlug)) {
+        $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug '' -RepoRoot $RepoRoot
     }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
     $recordPayload = @{
@@ -154,6 +306,7 @@ function Write-PackWorkerReportRecord {
             callerSessionId = $callerSessionId
             nowMs           = $NowMs
             record          = $recordPayload
+            trustedBinding  = $trustedBinding
         }
         if (-not $applied.ok) {
             throw "worker-report-store upsert failed: $($applied.reason)"

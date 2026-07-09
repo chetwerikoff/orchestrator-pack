@@ -60,6 +60,24 @@ if ($CallerSessionId -ne $SessionId) {
     exit 0
 }
 
+$requestedPrNumber = $PrNumber
+$requestedHeadSha = $HeadSha
+$trustedBinding = Resolve-PackWorkerReportTrustedBinding -SessionId $CallerSessionId `
+    -RepoRoot $RepoRoot -RepoSlug $RepoSlug -WorktreeHeadSha $HeadSha
+if (-not $trustedBinding -or -not $trustedBinding.ok) {
+    exit 0
+}
+$SessionId = [string]$CallerSessionId
+$PrNumber = [int]$trustedBinding.prNumber
+$HeadSha = [string]$trustedBinding.headSha
+if (-not $RepoSlug) {
+    $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug '' -RepoRoot $RepoRoot
+}
+if (($requestedPrNumber -gt 0 -and $requestedPrNumber -ne $PrNumber) `
+        -or (-not [string]::IsNullOrWhiteSpace($requestedHeadSha) -and $requestedHeadSha -ne $HeadSha)) {
+    exit 0
+}
+
 if ($DryRun) {
     [pscustomobject]@{
         ok     = $true
@@ -78,7 +96,8 @@ if ($DryRun) {
 
 try {
     $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
-        -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId
+        -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId -RepoRoot $RepoRoot `
+        -TrustedBinding $trustedBinding
     $result | ConvertTo-Json -Compress -Depth 20
 }
 catch {

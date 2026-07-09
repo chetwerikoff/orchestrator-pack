@@ -16,6 +16,7 @@ import {
   mergePackWorkerReportsIntoSessions,
   migrateLegacySeedStateToWorkerReportStore,
   seedShouldPromoteReadyForReview,
+  resolveWorkerReportTrustedBinding,
   validateWorkerReportTrustBoundary,
   writeWorkerReportRecordWithCas,
 } from '../docs/worker-report-store.mjs';
@@ -24,6 +25,10 @@ const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workerStoreLib = path.join(repoRoot, 'scripts/lib/WorkerReportStore.ps1');
 const aoCliLib = path.join(repoRoot, 'scripts/lib/Invoke-AoCliJson.ps1');
 const seedLib = path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1');
+
+function trustedReportBinding(prNumber: number, headSha: string) {
+  return { ok: true as const, prNumber, headSha };
+}
 
 function runPwsh(script: string) {
   return execFileSync('pwsh', ['-NoProfile', '-Command', script], {
@@ -41,6 +46,7 @@ describe('worker-report-store-write', () => {
       storePath,
       callerSessionId: 'opk-717',
       nowMs: Date.parse('2026-07-09T12:00:00.000Z'),
+      trustedBinding: trustedReportBinding(717, 'abc123'),
       record: {
         reportState: 'ready_for_review',
         accepted: true,
@@ -70,9 +76,9 @@ describe('worker-report-store-write', () => {
       . '${lib}'
       $env:AO_WORKER_REPORT_STORE = '${escapedPath}'
       $env:AO_SESSION_ID = 'opk-a'
-      Write-PackWorkerReportRecord -ReportState 'working' -SessionId 'opk-a' -RepoSlug 'org/a' -PrNumber 1 -HeadSha 'head1' -NowMs 1000 | Out-Null
+      Write-PackWorkerReportRecord -ReportState 'working' -SessionId 'opk-a' -RepoSlug 'org/a' -PrNumber 1 -HeadSha 'head1' -NowMs 1000 -TrustedBinding @{ ok = $true; prNumber = 1; headSha = 'head1' } | Out-Null
       $env:AO_SESSION_ID = 'opk-b'
-      Write-PackWorkerReportRecord -ReportState 'ready_for_review' -SessionId 'opk-b' -RepoSlug 'org/a' -PrNumber 2 -HeadSha 'head2' -NowMs 2000 | Out-Null
+      Write-PackWorkerReportRecord -ReportState 'ready_for_review' -SessionId 'opk-b' -RepoSlug 'org/a' -PrNumber 2 -HeadSha 'head2' -NowMs 2000 -TrustedBinding @{ ok = $true; prNumber = 2; headSha = 'head2' } | Out-Null
     `);
     const parsed = JSON.parse(readFileSync(storePath, 'utf8')) as WorkerReportStoreState & { generation?: number };
     expect(Object.keys(parsed.sourceRecords ?? {})).toHaveLength(2);
@@ -389,6 +395,7 @@ describe('worker-report-store-concurrency', () => {
       storePath,
       callerSessionId: 'opk-a',
       nowMs: 1,
+      trustedBinding: trustedReportBinding(1, 'h1'),
       record: {
         reportState: 'working',
         repoSlug: 'org/a',
@@ -402,6 +409,7 @@ describe('worker-report-store-concurrency', () => {
       callerSessionId: 'opk-a',
       nowMs: 2,
       expectedGeneration: 0,
+      trustedBinding: trustedReportBinding(1, 'h1'),
       record: {
         reportState: 'ready_for_review',
         repoSlug: 'org/a',
@@ -411,6 +419,20 @@ describe('worker-report-store-concurrency', () => {
       },
     });
     expect(stale.ok).toBe(false);
+  });
+});
+
+
+describe('worker-report-store-trusted-binding', () => {
+  it('resolveWorkerReportTrustedBinding accepts explicit session PR with matching worktree head', () => {
+    const resolved = resolveWorkerReportTrustedBinding({
+      session: { id: 'opk-717', prNumber: 717 },
+      openPrs: [{ number: 717, headRefOid: 'abc717', state: 'open' }],
+      worktreeHeadSha: 'abc717',
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.prNumber).toBe(717);
+    expect(resolved.headSha).toBe('abc717');
   });
 });
 
@@ -435,6 +457,38 @@ describe('worker-report-store-trust-boundary', () => {
       $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
       $env:AO_HEAD_SHA = 'abc717spoof'
       & '${path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''")}' ready_for_review -SessionId 'worker-b' -RepoSlug 'chetwerikoff/orchestrator-pack' -PrNumber 717 -HeadSha 'abc717spoof' -DryRun; Write-Output "exit:$LASTEXITCODE"
+    `).trim();
+    expect(out).toContain('exit:0');
+    expect(out).not.toContain('ready_for_review');
+  });
+
+
+  it('rejects foreign PR/head bindings when trusted binding does not match', () => {
+    const trust = validateWorkerReportTrustBoundary({
+      callerSessionId: 'worker-a',
+      trustedBinding: trustedReportBinding(717, 'abc717'),
+      record: {
+        reportState: 'ready_for_review',
+        repoSlug: 'org/a',
+        sessionId: 'worker-a',
+        prNumber: 999,
+        headSha: 'abc717',
+      },
+    });
+    expect(trust.ok).toBe(false);
+    expect(trust.reason).toBe('trust_boundary_pr_mismatch');
+  });
+
+  it('pack-worker-report rejects explicit foreign PrNumber binding', () => {
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const out = runPwsh(`
+      $env:AO_SESSION_ID = 'opk-pr-bind'
+      $env:AO_PR_NUMBER = '717'
+      $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
+      Remove-Item Env:AO_HEAD_SHA -ErrorAction SilentlyContinue
+      Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
+      Set-Location '${repoRoot.replace(/'/g, "''")}'
+      & '${path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''")}' ready_for_review -PrNumber 999 -HeadSha '${head.replace(/'/g, "''")}' -DryRun; Write-Output "exit:$LASTEXITCODE"
     `).trim();
     expect(out).toContain('exit:0');
     expect(out).not.toContain('ready_for_review');
@@ -501,6 +555,7 @@ describe('worker-report-store-blocked-state', () => {
   it('accepts blocked as a valid report state', () => {
     const trust = validateWorkerReportTrustBoundary({
       callerSessionId: 'opk-blocked',
+      trustedBinding: trustedReportBinding(717, 'abc717'),
       record: {
         reportState: 'blocked',
         repoSlug: 'org/a',
@@ -584,7 +639,7 @@ describe('worker-report-store DROP proof helpers', () => {
           ...process.env,
           AO_SESSION_ID: 'opk-wrapper-717',
           AO_WORKER_SESSION_ID: '',
-          AO_PR_NUMBER: '',
+          AO_PR_NUMBER: '717',
           GITHUB_REPOSITORY: '',
           AO_REPO_SLUG: '',
           AO_HEAD_SHA: '',
