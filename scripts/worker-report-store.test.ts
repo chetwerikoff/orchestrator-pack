@@ -30,11 +30,12 @@ function trustedReportBinding(prNumber: number, headSha: string) {
   return { ok: true as const, prNumber, headSha };
 }
 
-function runPwsh(script: string) {
+function runWorkerStorePwsh(script: string, extraEnv: NodeJS.ProcessEnv = {}) {
   return execFileSync('pwsh', ['-NoProfile', '-Command', script], {
     cwd: repoRoot,
     encoding: 'utf8',
-    env: { ...process.env },
+    maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, ...extraEnv },
   });
 }
 
@@ -72,7 +73,7 @@ describe('worker-report-store-write', () => {
     const storePath = path.join(dir, 'worker-report-store.json');
     const lib = workerStoreLib.replace(/'/g, "''");
     const escapedPath = storePath.replace(/'/g, "''");
-    runPwsh(`
+    runWorkerStorePwsh(`
       . '${lib}'
       $env:AO_WORKER_REPORT_STORE = '${escapedPath}'
       $env:AO_SESSION_ID = 'opk-a'
@@ -451,7 +452,7 @@ describe('worker-report-store-trust-boundary', () => {
     expect(trust.ok).toBe(false);
   });
   it('pack-worker-report rejects explicit SessionId spoof without matching caller env', () => {
-    const out = runPwsh(`
+    const out = runWorkerStorePwsh(`
       $env:AO_SESSION_ID = 'worker-a'
       $env:AO_PR_NUMBER = '717'
       $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
@@ -481,7 +482,7 @@ describe('worker-report-store-trust-boundary', () => {
 
   it('pack-worker-report rejects explicit foreign PrNumber binding', () => {
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const out = runPwsh(`
+    const out = runWorkerStorePwsh(`
       $env:AO_SESSION_ID = 'opk-pr-bind'
       $env:AO_PR_NUMBER = '717'
       $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
@@ -496,7 +497,7 @@ describe('worker-report-store-trust-boundary', () => {
 
   it('Write-PackWorkerReportRecord rejects cross-session caller env', () => {
     expect(() =>
-      runPwsh(`
+      runWorkerStorePwsh(`
         . '${workerStoreLib.replace(/'/g, "''")}'
         $storePath = Join-Path ([System.IO.Path]::GetTempPath()) ('wr-trust-' + [guid]::NewGuid().ToString())
         $env:AO_WORKER_REPORT_STORE = $storePath
@@ -571,7 +572,7 @@ describe('worker-report-store-blocked-state', () => {
 
 describe('worker-report-store-discovery-candidates', () => {
   it('Get-PackWorkerReportDiscoveryCandidates filters by repo slug', () => {
-    const out = runPwsh(`
+    const out = runWorkerStorePwsh(`
       . 'scripts/lib/WorkerReportStore.ps1'
       $storePath = Join-Path ([System.IO.Path]::GetTempPath()) ('wr-discovery-' + [guid]::NewGuid().ToString())
       $dir = Split-Path -Parent $storePath
@@ -606,7 +607,7 @@ describe('worker-report-store DROP proof helpers', () => {
   });
 
   it('pack-worker-report wrapper delegates to PowerShell command', () => {
-    const out = runPwsh(`
+    const out = runWorkerStorePwsh(`
       $env:AO_SESSION_ID = 'opk-cli'
       $env:AO_PR_NUMBER = '717'
       $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
@@ -658,7 +659,7 @@ describe('worker-report-store DROP proof helpers', () => {
 
   it('pack-worker-report derives head SHA from cwd without -RepoRoot', () => {
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const out = runPwsh(`
+    const out = runWorkerStorePwsh(`
       $env:AO_SESSION_ID = 'opk-cwd-head'
       $env:AO_PR_NUMBER = '717'
       $env:GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack'
