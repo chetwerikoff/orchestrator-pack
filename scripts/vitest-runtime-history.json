@@ -342,7 +342,7 @@
     "scripts/review-start-preflight-shield-terminal.test.ts": "7a417adff877f29cf75ddda9283ee2d6bcfac4e3cd4116db001a22e517ba0c62",
     "scripts/review-start-preflight-shield.integration.test.ts": "69071a5f08ce5150f08659cc54ce2e19c300e6f46f5d8e9c1b1df5bb3b846788",
     "scripts/sanctioned-worker-kill-record.test.ts": "43a5c8f9c2a5b678226429667d31dd7d6d0f5d887f990b5f95bde0809dba80ce",
-    "scripts/orchestrator-wake-supervisor-startup.test.ts": "f7e204ed9e119d30db37370bfb2e1258a9b5165d598c711a8427bbd9d3b24cb1",
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": "79aa511662357ddf1708ddf6ff8f5a9d53ca595ec67b273bf1968b0bc6f61070",
     "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "0a0cae8fe5bcef21e68762b15152e1ddc31ca8344ebad49eef5f56ede58a733b",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "9b9a93bc7afaafa1929b10e30f98a1e5de6c718ee6bcde23f7a8431e995fb21b",
     "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "a5ff8894b11f4a2ad257d4b05c9434fe590284129ed77c5038293a5fb3d822f8",
@@ -353,13 +353,16 @@
     "scripts/supervisor-fault-boundary-status-entry.test.ts": "e87cc93cba99e7f16308c916f2b469a1c1068a49c03402d13c2b51f6fcd49b19",
     "scripts/supervisor-fault-boundary-recovery-stop.test.ts": "104f49ec0843d2b4fdc0800c96b4388d7d28c8b9d09076ba9b4128d518de28c4",
     "scripts/supervisor-fault-boundary-escalate.test.ts": "407a7e71c97796d5ad1efe1fd607d066397fdde666be85c32aca194627203c39",
-    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "39b9ceb7a40f3cef005cd0e70c569545fa3516fcea1811ba925b2f0f6219ac90",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "53f443aac9afc760a53a68969ddc2c69094a9e7cae258c90f32d5defd2fe574b",
     "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
-    "scripts/orchestrator-wake-supervisor.test.ts": "4651d7818afef777d68642adb384e882e9f135ac2d960f95096bd78f20f2e4b8",
+    "scripts/orchestrator-wake-supervisor.test.ts": "4811f37dd29cd202a19ddaf029f7462ff2c9d7833d4ea6ac5293b120eea47381",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020"
   },
-  "provenance": {}
+  "provenance": {},
+  "runtimeMs": {
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": 300000
+  }
 }
