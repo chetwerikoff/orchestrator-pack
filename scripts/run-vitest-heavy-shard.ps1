@@ -13,22 +13,7 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard.json"
 $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
-$MergeScript = Join-Path $Root 'scripts/merge-vitest-json-reports.mjs'
-$RpcScanScript = Join-Path $Root 'scripts/lib/scan-vitest-worker-rpc.mjs'
-$LanesConfigPath = Join-Path $Root 'scripts/vitest-ci-lanes.config.json'
-$heavyVitestPoolByFile = @{}
-$heavyVitestPerFilePool = 'threads'
-if (Test-Path -LiteralPath $LanesConfigPath) {
-    $lanesConfig = Get-Content -LiteralPath $LanesConfigPath -Raw | ConvertFrom-Json
-    if ($lanesConfig.heavyVitestPerFilePool) {
-        $heavyVitestPerFilePool = [string]$lanesConfig.heavyVitestPerFilePool
-    }
-    if ($lanesConfig.heavyVitestPoolByFile) {
-        foreach ($property in $lanesConfig.heavyVitestPoolByFile.PSObject.Properties) {
-            $heavyVitestPoolByFile[$property.Name] = [string]$property.Value
-        }
-    }
-}
+$FileRunPlanScript = Join-Path $Root 'scripts/resolve-vitest-heavy-file-run-plan.mjs'
 
 $env:CI = 'true'
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
@@ -55,108 +40,119 @@ try {
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $partialReports = [System.Collections.Generic.List[string]]::new()
-    $ordinal = 0
-    $exitCode = 0
+    $failedExitCode = 0
     $maxFileAttempts = if ($env:CI -eq 'true') { 5 } else { 1 }
+    $partialReportSeq = 0
 
-    foreach ($file in $shardPlan.files) {
-        $ordinal += 1
-        $partialReport = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-part-$ordinal.json"
-        $filePassed = $false
-
-        for ($attempt = 1; $attempt -le $maxFileAttempts; $attempt++) {
-            if (Test-Path -LiteralPath $partialReport) {
-                Remove-Item -LiteralPath $partialReport -Force
+    try {
+        foreach ($file in $shardPlan.files) {
+            $filePlanJson = & node $FileRunPlanScript $file 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host $filePlanJson
+                exit 1
+            }
+            $runPlan = $filePlanJson | ConvertFrom-Json
+            $pool = [string]$runPlan.pool
+            $invocations = @(
+                @{ label = $file; testPattern = $null }
+            )
+            if ($runPlan.mode -eq 'tests') {
+                $invocations = @()
+                foreach ($testTitle in @($runPlan.tests)) {
+                    $invocations += @{ label = "$file > $testTitle"; testPattern = [string]$testTitle }
+                }
             }
 
-            # One Vitest process per file avoids long-lived worker onTaskUpdate RPC timeouts
-            # when many subprocess-heavy suites share a single runner invocation (#597/#695).
-            # Per-file runs default to threads (vitest.config heavy lane uses forks for legacy
-            # bundled invocations only). Per-file pool overrides live in vitest-ci-lanes.config.json.
-            $pool = $heavyVitestPerFilePool
-            if ($heavyVitestPoolByFile.ContainsKey($file)) {
-                $pool = $heavyVitestPoolByFile[$file]
-            }
-            $vitestArgs = @($file, "--pool=$pool")
-            $output = & npm test -- @vitestArgs --reporter=default --reporter=json --outputFile=$partialReport 2>&1
-            $text = ($output | Out-String)
-            Write-Host $text
+            foreach ($invocation in $invocations) {
+                $partialReportSeq++
+                $safeLabel = ($invocation.label -replace '[^\w.\-]+', '_')
+                $partialReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-$partialReportSeq-$safeLabel.json"
+                $invocationPassed = $false
 
-            if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
-                $cleanReport = & node (Join-Path $Root 'scripts/lib/vitest-json-report.mjs') is-clean $partialReport
-                if ($cleanReport -eq '1') {
-                    Write-Host "[WARN] Post-success vitest-worker onTaskUpdate shutdown flake suppressed for $file"
-                    if (-not (Test-Path -LiteralPath $partialReport)) {
-                        Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
+                for ($attempt = 1; $attempt -le $maxFileAttempts; $attempt++) {
+                    if (Test-Path -LiteralPath $partialReportPath) {
+                        Remove-Item -LiteralPath $partialReportPath -Force
+                    }
+
+                    $testArgs = @()
+                    if ($invocation.testPattern) {
+                        $testArgs += '-t'
+                        $testArgs += [string]$invocation.testPattern
+                    }
+                    $poolArgs = @()
+                    if ($pool -eq 'forks') {
+                        $poolArgs += "--pool=$pool"
+                    }
+
+                    # One invocation per heavy file or per isolated test so long suites do not
+                    # starve vitest-worker onTaskUpdate RPC (#487/#556/#648).
+                    $output = & npm test -- $file @poolArgs @testArgs --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
+                    $text = ($output | Out-String)
+                    Write-Host $text
+
+                    if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
+                        $cleanReport = & node (Join-Path $Root 'scripts/lib/vitest-json-report.mjs') is-clean $partialReportPath
+                        if ($cleanReport -eq '1') {
+                            Write-Host "[WARN] Post-success vitest-worker onTaskUpdate shutdown flake suppressed for $($invocation.label)"
+                            if (-not (Test-Path -LiteralPath $partialReportPath)) {
+                                Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard invocation $($invocation.label)"
+                                exit 1
+                            }
+                            $invocationPassed = $true
+                            break
+                        }
+                        if ($attempt -lt $maxFileAttempts) {
+                            Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard invocation $($invocation.label) (attempt $attempt/$maxFileAttempts); retrying..."
+                            Start-Sleep -Seconds 5
+                            continue
+                        }
+                        Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard invocation $($invocation.label)"
                         exit 1
                     }
-                    $filePassed = $true
+
+                    if ($LASTEXITCODE -ne 0) {
+                        $failedExitCode = $LASTEXITCODE
+                        break
+                    }
+
+                    if (-not (Test-Path -LiteralPath $partialReportPath)) {
+                        Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard invocation $($invocation.label)"
+                        exit 1
+                    }
+
+                    $invocationPassed = $true
                     break
                 }
-                if ($attempt -lt $maxFileAttempts) {
-                    Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard file $file (attempt $attempt/$maxFileAttempts); retrying..."
-                    Start-Sleep -Seconds 5
+
+                if (-not $invocationPassed) {
                     continue
                 }
-                Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard file $file"
-                exit 1
-            }
 
-            $rpcLog = Join-Path $Root ".vitest-heavy-shard-$Shard-rpc-scan-$ordinal.log"
-            try {
-                [System.IO.File]::WriteAllText($rpcLog, $text)
-                & node $RpcScanScript $rpcLog
-                if ($LASTEXITCODE -ne 0) {
-                    if ($attempt -lt $maxFileAttempts) {
-                        Write-Host "[WARN] Vitest worker RPC scan failed on heavy shard $Shard file $file (attempt $attempt/$maxFileAttempts); retrying..."
-                        Start-Sleep -Seconds 5
-                        continue
-                    }
-                    Write-Host "[FAIL] Vitest worker onTaskUpdate RPC timeout detected on heavy shard $Shard file $file"
-                    exit 1
-                }
+                $partialReports.Add($partialReportPath) | Out-Null
             }
-            finally {
-                if (Test-Path -LiteralPath $rpcLog) {
-                    Remove-Item -LiteralPath $rpcLog -Force
-                }
-            }
-
-            if ($LASTEXITCODE -ne 0) {
-                $exitCode = $LASTEXITCODE
-                break
-            }
-
-            if (-not (Test-Path -LiteralPath $partialReport)) {
-                Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard file $file"
-                exit 1
-            }
-
-            $filePassed = $true
-            break
         }
 
-        if (-not $filePassed) {
-            continue
+        if ($failedExitCode -ne 0) {
+            exit $failedExitCode
         }
 
-        $partialReports.Add($partialReport) | Out-Null
+        $mergeArgs = @(
+            (Join-Path $Root 'scripts/lib/vitest-json-report.mjs'),
+            'merge',
+            '--output',
+            $RuntimeReportPath
+        ) + $partialReports
+        & node @mergeArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Vitest heavy shard $Shard failed to merge per-file JSON reports"
+            exit 1
+        }
     }
-
-    if ($exitCode -ne 0) {
-        exit $exitCode
-    }
-
-    $mergeArgs = @($MergeScript, $RuntimeReportPath) + [string[]]$partialReports
-    & node @mergeArgs
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FAIL] Vitest JSON report merge failed on heavy shard $Shard"
-        exit 1
-    }
-
-    foreach ($partialReport in $partialReports) {
-        if (Test-Path -LiteralPath $partialReport) {
-            Remove-Item -LiteralPath $partialReport -Force
+    finally {
+        foreach ($partialReportPath in $partialReports) {
+            if (Test-Path -LiteralPath $partialReportPath) {
+                Remove-Item -LiteralPath $partialReportPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 

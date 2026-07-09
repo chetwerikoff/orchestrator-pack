@@ -39,4 +39,10 @@ if ($invokePack -match 'harness-review-bridge') {
     exit 1
 }
 
-Write-Host '[PASS] AO 0.10 harness review bridge + [Pn] contract (Issue #658)'
+$postSubmitCheck = Join-Path $Root 'scripts/check-harness-post-submit-pn-content-shape.ps1'
+if (-not (Test-Path -LiteralPath $postSubmitCheck -PathType Leaf)) {
+    Write-Host 'Issue #683 post-submit [Pn] content-shape check must exist'
+    exit 1
+}
+
+Write-Host '[PASS] AO 0.10 harness review bridge + post-submit [Pn] contract (Issues #658/#683)'

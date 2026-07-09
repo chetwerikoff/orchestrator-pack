@@ -1,0 +1,13 @@
+{
+  "verdict": "findings",
+  "findingCount": 1,
+  "findings": [
+    {
+      "severity": "warning",
+      "title": "[P3] Remove generated review artifact files",
+      "body": "type: quality\ncode: remove-generated-review-artifact-files\nseverity: non-blocking\npath: review-events.jsonl\nsummary: [P3] Remove generated review artifact files\nsource: codex-local",
+      "filePath": "review-events.jsonl",
+      "category": "quality"
+    }
+  ]
+}

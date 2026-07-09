@@ -10,6 +10,8 @@ export interface LanesConfig {
   lightMaxWorkers: number;
   heavyDefaultRuntimeMs: number;
   heavyTopology: HeavyTopologyPolicy;
+  heavyForkPoolMinRuntimeMs: number;
+  heavyPerTestIsolate: string[];
   classification: Record<string, string>;
 }
 

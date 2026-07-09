@@ -2,14 +2,11 @@
   "issue": 556,
   "lightMaxWorkers": 2,
   "heavyDefaultRuntimeMs": 120000,
-  "heavyTopology": {
-    "targetShardSeconds": 900,
-    "minShardCount": 1,
-    "maxShardCount": 14,
-    "fallbackHeavyShardCount": 7
-  },
-  "heavyVitestPerFilePool": "threads",
-  "heavyVitestPoolByFile": {},
+  "heavyForkPoolMinRuntimeMs": 120000,
+  "heavyPerTestIsolate": [
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/review-start-preflight-shield.test.ts"
+  ],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
     "plugins/_shared/tests/git_fixture.test.ts": "light",
@@ -164,6 +161,15 @@
     "scripts/ao-spawn-shape.test.ts": "light",
     "scripts/dead-worker-reconcile.test.ts": "heavy",
     "scripts/github-fleet-governor.test.ts": "heavy",
-    "scripts/launch-argv-inventory.test.ts": "light"
-  }
+    "scripts/launch-argv-inventory.test.ts": "light",
+    "scripts/harness-post-submit-pn-content-shape.test.ts": "light"
+  },
+  "heavyTopology": {
+    "targetShardSeconds": 900,
+    "minShardCount": 1,
+    "maxShardCount": 14,
+    "fallbackHeavyShardCount": 7
+  },
+  "heavyVitestPerFilePool": "threads",
+  "heavyVitestPoolByFile": {}
 }

@@ -1,0 +1,44 @@
+name: harness-pn-live-smoke
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Superseded pull-request runs cancel per PR number; push-to-main runs never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    name: Live harness [Pn] smoke
+    # Armed only when operator configures PACK_HARNESS_PN_SMOKE_SESSION (merge-blocking then).
+    if: ${{ vars.PACK_HARNESS_PN_SMOKE_SESSION != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install AO CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm config set prefix "$RUNNER_TEMP/npm-global"
+          npm install -g @aoagents/ao
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
+
+      - name: Run live smoke (fail-closed without AO daemon)
+        shell: pwsh
+        env:
+          PACK_HARNESS_PN_SMOKE_ENABLED: ${{ vars.PACK_HARNESS_PN_SMOKE_ENABLED }}
+          PACK_HARNESS_PN_SMOKE_SESSION: ${{ vars.PACK_HARNESS_PN_SMOKE_SESSION }}
+          PACK_HARNESS_PN_SMOKE_PROJECT: ${{ vars.PACK_HARNESS_PN_SMOKE_PROJECT }}
+          AO_DAEMON_BASE_URL: ${{ vars.PACK_HARNESS_PN_SMOKE_DAEMON_URL }}
+        run: ./scripts/check-harness-post-submit-pn-live-smoke.ps1

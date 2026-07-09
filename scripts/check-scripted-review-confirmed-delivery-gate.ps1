@@ -41,8 +41,14 @@ if ($ps1 -match '(?:Read-|Open-|sqlite3|SELECT\s+).{0,20}ao\.db') {
     Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must not read ao.db directly'
     exit 1
 }
-if ($ps1 -notmatch 'journaled-worker-send\.ps1') {
-    Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must use journaled-worker-send for explicit send'
+$explicitSendLibPath = Join-Path $Root 'scripts/lib/Invoke-ScriptedReviewDeliveryExplicitSend.ps1'
+if (-not (Test-Path -LiteralPath $explicitSendLibPath -PathType Leaf)) {
+    Write-Host "Missing required file: $explicitSendLibPath"
+    exit 1
+}
+$explicitSendLib = Get-Content -LiteralPath $explicitSendLibPath -Raw
+if ($ps1 -notmatch 'Invoke-ScriptedReviewDeliveryExplicitSend' -or $explicitSendLib -notmatch 'journaled-worker-send\.ps1') {
+    Write-Host 'confirmed-delivery gate must route explicit send through shared journaled-worker-send lib'
     exit 1
 }
 if ($ps1 -notmatch '\[string\]\$DeliveryMessage') {
@@ -51,6 +57,14 @@ if ($ps1 -notmatch '\[string\]\$DeliveryMessage') {
 }
 if ($ps1 -notmatch 'Write-OrchestratorSideProcessProgress') {
     Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must report supervised side-process progress'
+    exit 1
+}
+if ($ps1 -match 'New-ScriptedReviewDeliveryGatePollStepBase \+ @\{') {
+    Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must build poll-step payloads in statement mode'
+    exit 1
+}
+if ($ps1 -notmatch 'New-ScriptedReviewDeliveryGatePollStepPayload') {
+    Write-Host 'scripted-review-confirmed-delivery-gate.ps1 must merge poll-step fields via New-ScriptedReviewDeliveryGatePollStepPayload'
     exit 1
 }
 
