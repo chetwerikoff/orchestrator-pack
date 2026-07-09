@@ -243,13 +243,16 @@ function Invoke-WorkerReportStoreEviction {
         [long]$NowMs = 0,
         [long]$MaxAgeMs = 0,
         [long]$NonterminalMaxAgeMs = 0,
-        [switch]$OpenListAuthoritative
+        [switch]$OpenListAuthoritative,
+        [string]$RepoSlug = '',
+        [string]$RepoRoot = ''
     )
 
     if (-not $NowMs) {
         $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerReportStorePath }
+    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
     $evictSummary = @{}
     $captured = @{}
     Update-WorkerReportStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
@@ -263,6 +266,7 @@ function Invoke-WorkerReportStoreEviction {
         if ($MaxAgeMs -gt 0) { $payload.maxAgeMs = $MaxAgeMs }
         if ($NonterminalMaxAgeMs -gt 0) { $payload.nonterminalMaxAgeMs = $NonterminalMaxAgeMs }
         if ($OpenListAuthoritative) { $payload.openListAuthoritative = $true }
+        if ($slug) { $payload.repoSlug = [string]$slug }
         $result = Invoke-WorkerReportStoreCli -Subcommand 'evict' -Payload $payload
         $captured.summary = @{
             removed     = [int]$result.removed

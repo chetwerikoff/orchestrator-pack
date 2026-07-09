@@ -341,7 +341,8 @@ function Invoke-ReviewReadyReportStateSeedTick {
     $workerReportEvictionHeadByPr = Build-WorkerReportStoreCurrentHeadByPr -OpenPrs $evictionOpenPrs `
         -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
     $workerReportEviction = Invoke-WorkerReportStoreEviction -OpenPrs $evictionOpenPrs `
-        -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs -OpenListAuthoritative:$evictionOpenListAuthoritative
+        -CurrentHeadByPr $workerReportEvictionHeadByPr -NowMs $nowMs -OpenListAuthoritative:$evictionOpenListAuthoritative `
+        -RepoSlug $SupervisedRepoSlug -RepoRoot $RepoRoot
     if ($workerReportEviction.removed -gt 0 -and $LogWriter) {
         & $LogWriter "worker-report-store: evicted $($workerReportEviction.removed) stale record(s)"
     }

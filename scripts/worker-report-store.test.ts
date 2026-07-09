@@ -222,6 +222,67 @@ describe('worker-report-store-eviction', () => {
     expect(result.removed).toBe(0);
     expect(store.sourceRecords['org/a|dead-worker|42|abc42']).toBeTruthy();
   });
+  it('scopes authoritative eviction to the supervised repository', () => {
+    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
+    store.sourceRecords['org/a|a-worker|42|abc42'] = {
+      reportState: 'ready_for_review',
+      accepted: true,
+      repoSlug: 'org/a',
+      sessionId: 'a-worker',
+      prNumber: 42,
+      headSha: 'abc42',
+      reportedAtMs: nowMs,
+      lastObservedMs: nowMs,
+    };
+    store.sourceRecords['org/b|b-worker|42|def42'] = {
+      reportState: 'ready_for_review',
+      accepted: true,
+      repoSlug: 'org/b',
+      sessionId: 'b-worker',
+      prNumber: 42,
+      headSha: 'def42',
+      reportedAtMs: nowMs,
+      lastObservedMs: nowMs,
+    };
+    const result = evictWorkerReportRecords({
+      store,
+      openPrs: [{ number: 99, state: 'open', headRefOid: 'head99' }],
+      nowMs,
+      openListAuthoritative: true,
+      repoSlug: 'org/a',
+    });
+    expect(result.removed).toBe(1);
+    expect(store.sourceRecords['org/a|a-worker|42|abc42']).toBeUndefined();
+    expect(store.sourceRecords['org/b|b-worker|42|def42']).toBeTruthy();
+  });
+
+  it('does not treat another repo closed PR as terminal for scoped records', () => {
+    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
+    store.sourceRecords['org/b|b-worker|1|head1'] = {
+      reportState: 'working',
+      accepted: true,
+      repoSlug: 'org/b',
+      sessionId: 'b-worker',
+      prNumber: 1,
+      headSha: 'head1',
+      reportedAtMs: nowMs,
+      lastObservedMs: nowMs,
+    };
+    const result = evictWorkerReportRecords({
+      store,
+      openPrs: [{ number: 1, state: 'closed' }],
+      nowMs,
+      maxAgeMs: 86_400_000,
+      nonterminalMaxAgeMs: 86_400_000,
+      openListAuthoritative: true,
+      repoSlug: 'org/a',
+    });
+    expect(result.removed).toBe(0);
+    expect(store.sourceRecords['org/b|b-worker|1|head1']).toBeTruthy();
+  });
+
 });
 
 describe('worker-report-store-superseded-head', () => {

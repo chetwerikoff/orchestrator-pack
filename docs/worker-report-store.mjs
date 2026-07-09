@@ -211,6 +211,7 @@ export function mergePackWorkerReportsIntoSessions(sessions, store, repoSlug = '
  * @param {number} [input.maxAgeMs]
  * @param {number} [input.nonterminalMaxAgeMs]
  * @param {boolean} [input.openListAuthoritative]
+ * @param {string} [input.repoSlug]
  */
 export function evictWorkerReportRecords({
   store,
@@ -220,23 +221,41 @@ export function evictWorkerReportRecords({
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   nonterminalMaxAgeMs = DEFAULT_NONTERMINAL_MAX_AGE_MS,
   openListAuthoritative = false,
+  repoSlug = '',
 }) {
-  const openByNumber = new Map();
+  const scopeRepo = String(repoSlug ?? '').trim().toLowerCase();
+  const openByRepoPr = new Map();
   for (const pr of toArray(openPrs)) {
-    openByNumber.set(Number(pr?.number ?? 0), pr);
+    const prNumber = Number(pr?.number ?? 0);
+    if (prNumber <= 0) {
+      continue;
+    }
+    const prRepo = scopeRepo || String(pr?.repoSlug ?? pr?.repository ?? '').trim().toLowerCase();
+    if (prRepo) {
+      openByRepoPr.set(`${prRepo}|${prNumber}`, pr);
+    } else {
+      openByRepoPr.set(String(prNumber), pr);
+    }
   }
   let removed = 0;
   for (const [key, record] of Object.entries(store.sourceRecords ?? {})) {
     const prNumber = Number(record?.prNumber ?? 0);
-    const repoSlug = String(record?.repoSlug ?? '').trim().toLowerCase();
+    const recordRepo = String(record?.repoSlug ?? '').trim().toLowerCase();
     const recordHead = normalizeSha(record?.headSha);
-    const prKey = `${repoSlug}|${prNumber}`;
-    const currentHead = normalizeSha(currentHeadByPr[prKey] ?? currentHeadByPr[String(prNumber)]);
-    const openPr = openByNumber.get(prNumber);
+    const prKey = recordRepo ? `${recordRepo}|${prNumber}` : String(prNumber);
+    const inScope = !scopeRepo || !recordRepo || recordRepo === scopeRepo;
+    const openPr = inScope
+      ? (openByRepoPr.get(prKey) ?? (scopeRepo ? undefined : openByRepoPr.get(String(prNumber))))
+      : undefined;
+    const currentHead = inScope
+      ? normalizeSha(
+        currentHeadByPr[prKey] ?? (scopeRepo ? undefined : currentHeadByPr[String(prNumber)]),
+      )
+      : undefined;
     const prState = String(openPr?.state ?? '').toLowerCase();
     const explicitlyTerminal = Boolean(openPr)
       && (prState === 'closed' || prState === 'merged' || openPr?.merged === true || openPr?.closed === true);
-    const unlistedTerminal = openListAuthoritative && !openPr;
+    const unlistedTerminal = openListAuthoritative && inScope && !openPr;
     const terminal = explicitlyTerminal || unlistedTerminal;
     const superseded = currentHead && recordHead && currentHead !== recordHead;
     const lastObserved = Number(record?.lastObservedMs ?? record?.reportedAtMs ?? 0);
@@ -420,6 +439,7 @@ runStdinJsonCli('worker-report-store.mjs', {
       maxAgeMs: Number(payload.maxAgeMs ?? DEFAULT_MAX_AGE_MS),
       nonterminalMaxAgeMs: Number(payload.nonterminalMaxAgeMs ?? DEFAULT_NONTERMINAL_MAX_AGE_MS),
       openListAuthoritative: Boolean(payload.openListAuthoritative ?? false),
+      repoSlug: String(payload.repoSlug ?? ''),
     });
     return { ...result, store };
   },
