@@ -3,17 +3,14 @@
   "iteration_id": "orchestrator-pack-74",
   "iteration_id_source": "ao_session",
   "supersedes": null,
-  "created_at": "2026-07-09T04:10:00.000Z",
+  "created_at": "2026-07-09T04:30:00.000Z",
   "baseline": {
-    "commit_sha": "9b97af20a976731e9c613f29aca2f643e8191a05",
+    "commit_sha": "743613f8a2308e3ef14de588f8979cb6c9a624d0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:869b296f207786fbd438afdc7b8482807556b9954570351e7d4614ec0e96d31a"
+    "active_scope_hash": "sha256:ce41bc9eabf1833af7a5211ac1485979172fb5bc5976b23d11b10e73573607c9"
   },
-  "declared_paths": [
-    "docs/declarations/701.orchestrator-pack-74.json"
-  ],
+  "declared_paths": [],
   "declared_globs": [
-    "docs/declarations/**",
     "scripts/**",
     "tests/**"
   ],
