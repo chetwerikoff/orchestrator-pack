@@ -170,6 +170,39 @@ describe('handoff admission records lifecycle (#712)', () => {
     const stale = seedPair('aaaa'.repeat(10), 234, t0 - 5_000, second.records);
     expect(stale.seeded).toBe(false);
     expect(stale).toMatchObject({ reason: 'stale_head_regressed', noop: true });
+
+    const delayedOldHead = seedHandoffAdmissionRecord({
+      existing: second.records,
+      admission: baseAdmission({
+        subject: {
+          prNumber: 234,
+          receivedAtMs: t0 + 5_000,
+          eventId: 'evt-delayed-old-head',
+        },
+        admittedHeadSha: 'aaaa'.repeat(10),
+      }),
+      nowMs: t0 + 5_000,
+      openPrs: [{ number: 234, headRefOid: 'bbbb'.repeat(10), repoSlug: 'chetwerikoff/orchestrator-pack' }],
+      openPrIndexTrusted: true,
+    });
+    expect(delayedOldHead.seeded).toBe(false);
+    expect(delayedOldHead).toMatchObject({ reason: 'stale_head_regressed', noop: true });
+
+    const untrustedRegression = seedHandoffAdmissionRecord({
+      existing: second.records,
+      admission: baseAdmission({
+        subject: {
+          prNumber: 234,
+          receivedAtMs: t0 + 6_000,
+          eventId: 'evt-untrusted-head-change',
+        },
+        admittedHeadSha: 'cccc'.repeat(10),
+      }),
+      nowMs: t0 + 6_000,
+      openPrIndexTrusted: false,
+    });
+    expect(untrustedRegression.seeded).toBe(false);
+    expect(untrustedRegression).toMatchObject({ reason: 'stale_head_regressed', noop: true });
   });
 
   it('AC4/AC7: aged-out and receipt-bound replay uses original receivedAtMs', () => {
@@ -238,6 +271,48 @@ describe('handoff admission records lifecycle (#712)', () => {
     }) as { replay: unknown[] };
     expect(second.replay.length).toBeGreaterThan(0);
   });
+
+  it('continues replay in the same recovery pass after batch durable-trigger deletions', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'handoff-replay-cursor-'));
+    const stateRoot = dir;
+    const listenerReadyMs = Date.now() - 2_000;
+    let records: Record<string, unknown> = {};
+    const openPrs: Array<{ number: number; headRefOid: string; repoSlug: string }> = [];
+    for (let i = 0; i < HANDOFF_REPLAY_BATCH_SIZE_MAX * 2; i += 1) {
+      const headSha = `head${String(i).padStart(36, '0').slice(0, 40)}`;
+      const prNumber = 700 + i;
+      const seeded = seedPair(headSha, prNumber, listenerReadyMs + i * 10, records);
+      records = seeded.records;
+      openPrs.push({ number: prNumber, headRefOid: headSha, repoSlug: 'chetwerikoff/orchestrator-pack' });
+    }
+    writeFileSync(
+      path.join(dir, 'review-handoff-wake-admission.json'),
+      JSON.stringify({ records, pendingRetries: {}, actedOn: {}, replayCursor: 0, lastUpdatedMs: listenerReadyMs }),
+    );
+    const lib = path.join(repoRoot, 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1');
+    const openPrPs = openPrs
+      .map((p) => `@{ number = ${p.number}; headRefOid = '${p.headRefOid}'; baseRefName = 'main' }`)
+      .join(',');
+    const script = [
+      `. '${lib.replace(/'/g, "''")}'`,
+      '$calls = 0',
+      `$openPrs = @(${openPrPs})`,
+      `Invoke-ReviewHandoffWakeAdmissionRecovery -StateRoot '${stateRoot.replace(/'/g, "''")}' -ListenerReadyMs ${listenerReadyMs} \``,
+      '  -InvokeWakeFilter { param($BodyJson,$OpenPrs,$Failed) throw "filter should not run" } `',
+      '  -ResolveOpenPrs { return $openPrs } `',
+      '  -InvokeTrigger { $script:calls++; return @{ triggered = $true } } `',
+      '  -LogWriter { param($Message) }',
+      '$calls',
+    ].join('\n');
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || 'pwsh failed');
+    }
+    expect(Number(result.stdout.trim())).toBe(HANDOFF_REPLAY_BATCH_SIZE_MAX * 2);
+    const state = JSON.parse(readFileSync(path.join(dir, 'review-handoff-wake-admission.json'), 'utf8'));
+    expect(Object.keys(state.records)).toHaveLength(0);
+    expect(state.replayCursor).toBe(0);
+  }, 60_000);
 
   it('AC6: per-record recovery-bound blocks replay after window elapses', () => {
     const listenerReadyMs = 1_700_000_000_000;

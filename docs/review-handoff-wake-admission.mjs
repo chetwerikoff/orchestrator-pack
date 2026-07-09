@@ -812,12 +812,22 @@ export function seedHandoffAdmissionRecord(input) {
     const activeHead = normalizeSha(String(active.headSha ?? ''));
     const activeReceived = Number(active.receivedAtMs ?? 0);
     if (activeHead && activeHead !== headSha) {
+      if (receivedAtMs < activeReceived) {
+        return { seeded: false, reason: 'stale_head_regressed', noop: true, admissionId };
+      }
       const openPrIndexTrusted = input.openPrIndexTrusted === true;
-      const open = openPrIndexTrusted
-        ? findOpenPrForHandoffRecord(active, toArray(input.openPrs))
-        : undefined;
+      if (!openPrIndexTrusted) {
+        return { seeded: false, reason: 'stale_head_regressed', noop: true, admissionId };
+      }
+      const open = findOpenPrForHandoffRecord(
+        { projectId: subject.projectId, repoSlug, prNumber },
+        toArray(input.openPrs),
+      );
       const trustedCurrentHead = normalizeSha(String(open?.headRefOid ?? ''));
-      if (receivedAtMs < activeReceived || (trustedCurrentHead && trustedCurrentHead === activeHead && headSha !== activeHead)) {
+      if (trustedCurrentHead && headSha !== trustedCurrentHead) {
+        return { seeded: false, reason: 'stale_head_regressed', noop: true, admissionId };
+      }
+      if (trustedCurrentHead && trustedCurrentHead === activeHead && headSha !== activeHead) {
         return { seeded: false, reason: 'stale_head_regressed', noop: true, admissionId };
       }
     }

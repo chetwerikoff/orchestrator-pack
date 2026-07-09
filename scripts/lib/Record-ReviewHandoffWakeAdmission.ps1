@@ -122,6 +122,8 @@ function Record-ReviewHandoffWakeAdmission {
         [string]$StateRoot = '',
         [object]$FilterResult,
         [long]$WakeReceivedMs = 0,
+        [array]$OpenPrs = @(),
+        [bool]$OpenPrIndexTrusted = $false,
         [switch]$DryRun
     )
 
@@ -135,8 +137,10 @@ function Record-ReviewHandoffWakeAdmission {
     $path = Get-ReviewHandoffWakeAdmissionPath -StateRoot $StateRoot
     $state = Get-ReviewHandoffWakeAdmissionState -Path $path
     $seed = Invoke-ReviewHandoffWakeAdmissionCli -Subcommand 'seed' -Payload @{
-        existing  = $state.records
-        actedOn   = $state.actedOn
+        existing             = $state.records
+        actedOn              = $state.actedOn
+        openPrs              = @($OpenPrs)
+        openPrIndexTrusted   = $OpenPrIndexTrusted
         admission = @{
             subject = @{
                 sessionId    = [string]$FilterResult.sessionId
@@ -615,10 +619,9 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
 
         $admissionState.records = $replay.records
         $admissionState.actedOn = $replay.actedOn
-        $admissionState.replayCursor = [int]$replay.replayCursor
-        Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
 
         $batchTriggered = $false
+        $recordsDeletedInBatch = 0
         foreach ($record in @($replay.replay)) {
             if (-not $record.withinRecoveryBound) {
                 $continueReplay = $false
@@ -639,6 +642,7 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                     Write-ReviewHandoffRecordTransition -Transition 'delete' -Reason 'crash_after_durable_trigger' `
                         -Key ([string]$record.key) -AdmissionId ([string]$record.admissionId) `
                         -PrNumber ([int]$record.prNumber) -HeadSha ([string]$record.headSha) -LogWriter $LogWriter
+                    $recordsDeletedInBatch++
                     Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
                 continue
@@ -691,6 +695,7 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                     Write-ReviewHandoffRecordTransition -Transition 'delete' -Reason 'delete_on_durable_trigger' `
                         -Key ([string]$record.key) -AdmissionId ([string]$record.admissionId) `
                         -PrNumber ([int]$record.prNumber) -HeadSha ([string]$record.headSha) -LogWriter $LogWriter
+                    $recordsDeletedInBatch++
                     Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
                 }
                 $batchTriggered = $true
@@ -712,6 +717,14 @@ function Invoke-ReviewHandoffWakeAdmissionRecovery {
                 }
             }
         }
+
+        if ($batchTriggered -or $recordsDeletedInBatch -gt 0) {
+            $admissionState.replayCursor = 0
+        }
+        else {
+            $admissionState.replayCursor = [int]$replay.replayCursor
+        }
+        Save-ReviewHandoffWakeAdmissionLifecycleState -Path $statePath -State $admissionState -DryRun:$DryRun
 
         if (-not $replay.hasMore) {
             $continueReplay = $false

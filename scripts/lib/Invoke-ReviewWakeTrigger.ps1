@@ -257,7 +257,7 @@ function Invoke-ReviewWakeTriggerOnCompletionWake {
 
     if ($isHandoffWake -and $resolvedStateRoot) {
         $admissionRecord = Record-ReviewHandoffWakeAdmission -StateRoot $resolvedStateRoot -FilterResult $FilterResult `
-            -WakeReceivedMs $wakeReceivedMs -DryRun:$DryRun
+            -WakeReceivedMs $wakeReceivedMs -OpenPrs @($snapshot.openPrs) -OpenPrIndexTrusted:$true -DryRun:$DryRun
         if ($admissionRecord.recorded) {
             & $LogWriter "review-handoff-wake: admission recorded key=$($admissionRecord.key)"
         }
