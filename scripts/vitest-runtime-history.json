@@ -274,7 +274,7 @@
     "scripts/worker-recovery-branch-cleanup.test.ts": "73d634769af0891ac60195240124e0131f3b4243257da8a0d33de38d2599a6ce",
     "scripts/worker-recovery-spawn-argv.test.ts": "3d24bf3bf5b3f2f92a559de3ae2c791bc6a84db1403e7c27314a5b26f052021c",
     "scripts/worker-recovery.test.ts": "c5fcacb0a9a89f5dd9f4380048cadc0fa14e3f29b677dc9984f2cd7c052985ca",
-    "scripts/worker-report-store.test.ts": "b0e082b8a4ff457f67e82c8cd78223e509aac6aa88a59f599508a33f136e0ffe",
+    "scripts/worker-report-store.test.ts": "5a25c87d95e088fe9ddf545a87cee61ab120b79c924afa39868ac48bd16d6278",
     "plugins/_shared/tests/declaration_schema.test.ts": "e5fc7c206705715762b3cbdab6d9d7d8e0f87b4d2613d90742d72c7e28ab2f59",
     "plugins/_shared/tests/git_fixture.test.ts": "92e9c6c70eae0e369688cd3aee9857f27c745da06644fe4c33e1894a97168311",
     "plugins/_shared/tests/issue_parser.test.ts": "0ad2e2c07fe66fde8be5c21beeaff75ff12c7c801b4b9e9d933aeab8d7e07cd6",
@@ -365,7 +365,8 @@
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020"
     "docs/worker-report-store.mjs": "aeb0791e3db9cdaa056ecd88bf4fffb094bf11f3cbbd760b5a76988c64891cd7"
+    "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef"
   },
   "provenance": {},
-  "dataChangedAt": "2026-07-09T22:49:53Z"
+  "dataChangedAt": "2026-07-09T23:10:00Z"
 }

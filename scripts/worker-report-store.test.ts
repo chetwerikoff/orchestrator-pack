@@ -730,6 +730,18 @@ describe('worker-report-store-blocked-state', () => {
 });
 
 
+describe('worker-report-store-repo-slug', () => {
+  it('Resolve-WorkerReportStoreRepoSlug prefers AO_REPO_SLUG over GITHUB_REPOSITORY', () => {
+    const out = runWorkerStorePwsh(`
+      . '${workerStoreLib.replace(/'/g, "''")}'
+      $env:AO_REPO_SLUG = 'supervised/org'
+      $env:GITHUB_REPOSITORY = 'checkout/org'
+      Resolve-WorkerReportStoreRepoSlug
+    `).trim();
+    expect(out).toBe('supervised/org');
+  });
+});
+
 describe('worker-report-store-discovery-candidates', () => {
   it('Get-PackWorkerReportDiscoveryCandidates filters by repo slug', () => {
     const out = runWorkerStorePwsh(`

@@ -35,7 +35,7 @@ export declare function evictWorkerReportRecords(input: {
   nonterminalMaxAgeMs?: number;
   openListAuthoritative?: boolean;
   repoSlug?: string;
-}): { removed: number; recordCount: number; store: Record<string, unknown> };
+}): { removed: number; recordCount: number };
 export declare function resolveWorkerReportTrustedBinding(input: {
   session: Record<string, unknown>;
   openPrs?: Array<Record<string, unknown>>;

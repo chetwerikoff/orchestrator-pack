@@ -431,11 +431,11 @@ function Resolve-WorkerReportStoreRepoSlug {
     if (-not [string]::IsNullOrWhiteSpace($RepoSlug)) {
         return $RepoSlug
     }
-    if ($env:GITHUB_REPOSITORY) {
-        return [string]$env:GITHUB_REPOSITORY
-    }
     if ($env:AO_REPO_SLUG) {
         return [string]$env:AO_REPO_SLUG
+    }
+    if ($env:GITHUB_REPOSITORY) {
+        return [string]$env:GITHUB_REPOSITORY
     }
 
     $root = $RepoRoot
