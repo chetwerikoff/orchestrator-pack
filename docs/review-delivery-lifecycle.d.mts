@@ -19,6 +19,20 @@ export declare function buildDeterministicDeliveryKey(input: {
   findingsHash?: string;
 }): string | null;
 
+export declare function parseDeterministicDeliveryKey(
+  key: string,
+): {
+  prNumber: number;
+  headSha: string;
+  verdictSource: string;
+  findingsHash: string;
+} | null;
+
+export declare function findSameHeadJournalConflict(
+  journal: Record<string, unknown>,
+  incomingKey: string,
+): Record<string, unknown> | null;
+
 export declare function buildDeterministicDeliveryId(
   sessionId: string,
   deterministicKey: string,
@@ -82,7 +96,8 @@ export declare function evaluateDeterministicJournalAdmission(
   incoming: { deterministicKey?: string; findingsHash?: string },
 ): {
   ok: boolean;
-  action: 'admit' | 'no_op_terminal' | 'resume' | 'supersede' | 'escalate';
+  action: 'admit' | 'no_op_terminal' | 'resume' | 'supersede' | 'escalate' | 'escalate_supersede';
   deliveryId?: string;
+  priorDeliveryId?: string;
   reason?: string;
 };

@@ -90,6 +90,41 @@ describe('review delivery lifecycle helpers', () => {
     });
     expect(admission.action).toBe('resume');
   });
+
+  it('review delivery duplicate wrapper run different findings: escalates instead of second send', () => {
+    const priorFindings = [{ id: 'F1', summary: 'first finding' }];
+    const nextFindings = [{ id: 'F2', summary: 'changed finding' }];
+    const priorKey = buildDeterministicDeliveryKey({
+      prNumber,
+      headSha,
+      verdictSource: 'wrapper-stdout',
+      findingsHash: hashReviewFindings(priorFindings),
+    })!;
+    const nextKey = buildDeterministicDeliveryKey({
+      prNumber,
+      headSha,
+      verdictSource: 'wrapper-stdout',
+      findingsHash: hashReviewFindings(nextFindings),
+    })!;
+    expect(priorKey).not.toBe(nextKey);
+
+    const journal = {
+      prior: {
+        deliveryId: 'sess:pack-send:det:abc',
+        deterministicKey: priorKey,
+        dispatchOutcome: 'dispatched',
+        lifecycleTerminal: TERMINAL_DELIVERED,
+        findingsHash: hashReviewFindings(priorFindings),
+      },
+    };
+    const admission = evaluateDeterministicJournalAdmission(journal, {
+      deterministicKey: nextKey,
+      findingsHash: hashReviewFindings(nextFindings),
+    });
+    expect(admission.ok).toBe(false);
+    expect(admission.action).toBe('escalate_supersede');
+    expect(admission.reason).toBe('different_findings_same_head');
+  });
 });
 
 describe('review delivery stdout parsing', () => {

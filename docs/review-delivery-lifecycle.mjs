@@ -44,6 +44,63 @@ export function buildDeterministicDeliveryKey(input) {
 }
 
 /**
+ * @param {string} key
+ * @returns {{ prNumber: number, headSha: string, verdictSource: string, findingsHash: string } | null}
+ */
+export function parseDeterministicDeliveryKey(key) {
+  const text = String(key ?? '').trim();
+  const match = text.match(/^pr:(\d+):head:([^:]+):src:([^:]+):findings:([^:]+)$/);
+  if (!match) {
+    return null;
+  }
+  const prNumber = Number(match[1]);
+  if (!Number.isFinite(prNumber) || prNumber <= 0) {
+    return null;
+  }
+  const headSha = normalizeSha(match[2]);
+  const verdictSource = String(match[3] ?? '').trim();
+  const findingsHash = String(match[4] ?? '').trim().toLowerCase();
+  if (!headSha || !verdictSource || !findingsHash) {
+    return null;
+  }
+  return { prNumber, headSha, verdictSource, findingsHash };
+}
+
+/**
+ * @param {Record<string, unknown>} journal
+ * @param {string} incomingKey
+ */
+export function findSameHeadJournalConflict(journal, incomingKey) {
+  const incoming = parseDeterministicDeliveryKey(incomingKey);
+  if (!incoming) {
+    return null;
+  }
+  for (const record of Object.values(journal ?? {})) {
+    if (!record || typeof record !== 'object') {
+      continue;
+    }
+    const parsed = parseDeterministicDeliveryKey(String(record.deterministicKey ?? ''));
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.prNumber !== incoming.prNumber) {
+      continue;
+    }
+    if (parsed.headSha !== incoming.headSha) {
+      continue;
+    }
+    if (parsed.verdictSource !== incoming.verdictSource) {
+      continue;
+    }
+    if (parsed.findingsHash === incoming.findingsHash) {
+      continue;
+    }
+    return record;
+  }
+  return null;
+}
+
+/**
  * @param {string} sessionId
  * @param {string} deterministicKey
  */
@@ -238,6 +295,15 @@ export function evaluateDeterministicJournalAdmission(journal, incoming) {
   }
 
   if (!matched) {
+    const conflict = findSameHeadJournalConflict(journal, deterministicKey);
+    if (conflict) {
+      return {
+        ok: false,
+        action: 'escalate_supersede',
+        reason: 'different_findings_same_head',
+        priorDeliveryId: String(conflict.deliveryId ?? ''),
+      };
+    }
     return { ok: true, action: 'admit' };
   }
 
