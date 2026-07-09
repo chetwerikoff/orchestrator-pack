@@ -2,10 +2,6 @@
 
 GitHub Issue: #692
 
-Note: this draft may be authored with `GitHub Issue: TBD`, but it must be bound to a
-concrete GitHub Issue before implementation work begins (PR evidence should reference that
-Issue).
-
 ## Prerequisite
 
 - `docs/issues_drafts/155-ci-pipeline-split-parallel-test-stage.md` (GitHub #487, closed) —
