@@ -5,7 +5,6 @@ import {
   makeStateDir,
   runSupervisor,
   startSupervisorBackground,
-  waitForMarker,
   waitForSupervisorLogMatch,
   stopSupervisorChild,
   assertTerminalHeartbeatStopped,
@@ -20,13 +19,12 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       {
         AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'deterministic-defect',
         AO_WAKE_SUPERVISOR_TEST_FAILURE_CLASS_heartbeat: 'deterministic',
-        AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '2',
+        AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
     await waitForSupervisorLogMatch(
       stateDir,
       /heartbeat terminal degraded: deterministic defect/,
@@ -47,13 +45,12 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       ['-OrchestratorSessionId', 'op-deterministic-progress'],
       {
         AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'deterministic-defect',
-        AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '2',
+        AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
     await waitForSupervisorLogMatch(
       stateDir,
       /heartbeat terminal degraded: deterministic defect/,

@@ -26,6 +26,7 @@ export {
   waitForMarkers,
   waitForProcessesStopped,
   waitForStdoutContains,
+  waitForSupervisorLogMatch,
   waitForSupervisorLogMatchFromOffset,
   waitForSupervisorHealthyStatus,
   type ManagedChildRole,
