@@ -50,7 +50,8 @@ export function resolveWorkerStatusStorePath(env = process.env) {
 
 export function createDefaultWorkerStatusStore(raw = {}) {
   const incomingSchema = Number(raw.schemaVersion ?? 0);
-  const schemaRejected = incomingSchema > 0 && incomingSchema !== WORKER_STATUS_STORE_SCHEMA_VERSION;
+  const schemaRejected = Boolean(raw.schemaRejected)
+    || (incomingSchema > 0 && incomingSchema !== WORKER_STATUS_STORE_SCHEMA_VERSION);
   const records = schemaRejected
     ? {}
     : (raw.records && typeof raw.records === 'object'
