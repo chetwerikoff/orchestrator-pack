@@ -35,6 +35,28 @@ function New-WorkerStatusEmptyGithubSnapshot {
     }
 }
 
+function Get-WorkerStatusTrackedPrNumbers {
+    param([object[]]$Sessions = @())
+
+    $tracked = @()
+    foreach ($session in @($Sessions)) {
+        if ($null -ne $session.prNumber) {
+            $pr = 0
+            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
+                $tracked += $pr
+            }
+        }
+        foreach ($report in @($session.reports)) {
+            if ($null -eq $report) { continue }
+            $reportPr = 0
+            if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
+                $tracked += $reportPr
+            }
+        }
+    }
+    return @($tracked | Sort-Object -Unique)
+}
+
 function Get-WorkerStatusRecomputeGithubSnapshot {
     param(
         [string]$RepoRoot = '',
@@ -46,7 +68,7 @@ function Get-WorkerStatusRecomputeGithubSnapshot {
     $repoRoot = Resolve-PackGateRepoRoot -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
     $empty = New-WorkerStatusEmptyGithubSnapshot -RepoRoot $repoRoot
     try {
-        $tracked = @($Sessions | ForEach-Object { [int]$_.prNumber } | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+        $tracked = @(Get-WorkerStatusTrackedPrNumbers -Sessions $Sessions)
         $openPrs = if ($tracked.Count -gt 0) {
             @(Invoke-GhOpenPrListForNumbers -RepoRoot $repoRoot -PrNumbers $tracked -Consumer 'worker-status-recompute')
         }
@@ -87,8 +109,20 @@ function Resolve-WorkerStatusSessionGithubBlock {
     if (-not $Snapshot) {
         return $null
     }
-    if (-not $PrNumber -and $Session.prNumber) {
-        $PrNumber = [int]$Session.prNumber
+    if (-not $PrNumber) {
+        if ($null -ne $Session.prNumber) {
+            $PrNumber = [int]$Session.prNumber
+        }
+        else {
+            foreach ($report in @($Session.reports)) {
+                if ($null -eq $report) { continue }
+                $reportPr = 0
+                if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
+                    $PrNumber = $reportPr
+                    break
+                }
+            }
+        }
     }
     $openPr = $null
     if ($PrNumber -gt 0) {
@@ -152,9 +186,18 @@ function Get-WorkerStatusStoreState {
     if (-not (Test-Path -LiteralPath $storePath -PathType Leaf)) {
         return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload @{}
     }
-    $raw = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $payload = ConvertTo-MechanicalJsonStateHashtable -Value $raw
-    return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload $payload
+    try {
+        $rawText = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($rawText)) {
+            throw 'empty_worker_status_store'
+        }
+        $raw = $rawText | ConvertFrom-Json
+        $payload = ConvertTo-MechanicalJsonStateHashtable -Value $raw
+        return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload $payload
+    }
+    catch {
+        return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload @{ schemaRejected = $true }
+    }
 }
 
 function Set-WorkerStatusStoreState {
@@ -250,14 +293,30 @@ function Write-WorkerStatusRow {
     $report = $null
     $reports = @($payload.reports)
     if ($reports.Count -gt 0) {
-        $report = $reports[$reports.Count - 1]
+        $report = $reports[0]
     }
 
     $prNumber = 0
-    if ($session.prNumber) { $prNumber = [int]$session.prNumber }
+    if ($null -ne $session.prNumber) {
+        $prNumber = [int]$session.prNumber
+    }
+    elseif ($report -and $null -ne $report.prNumber) {
+        $prNumber = [int]$report.prNumber
+    }
+    else {
+        foreach ($candidate in $reports) {
+            if ($null -eq $candidate) { continue }
+            $candidatePr = 0
+            if ([int]::TryParse([string]$candidate.prNumber, [ref]$candidatePr) -and $candidatePr -gt 0) {
+                $prNumber = $candidatePr
+                break
+            }
+        }
+    }
     $headSha = ''
     if ($session.ownedHeadSha) { $headSha = [string]$session.ownedHeadSha }
     elseif ($session.headRefOid) { $headSha = [string]$session.headRefOid }
+    elseif ($report -and $report.headSha) { $headSha = [string]$report.headSha }
 
     $repoTickGen = 0
     if ($writerVector.repoTickGeneration) { $repoTickGen = [int]$writerVector.repoTickGeneration }

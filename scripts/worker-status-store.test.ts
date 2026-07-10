@@ -686,6 +686,27 @@ describe('worker-status store schema', () => {
   });
 });
 
+
+describe('worker-status PowerShell bridge', () => {
+  it('collects PR numbers from pack report bindings for GitHub snapshot', () => {
+    const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    expect(source).toContain('Get-WorkerStatusTrackedPrNumbers');
+    expect(source).toContain('$session.reports');
+  });
+
+  it('selects newest worker report for fusion', () => {
+    const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    expect(source).toContain('$reports[0]');
+    expect(source).not.toContain('$reports[$reports.Count - 1]');
+  });
+
+  it('fails closed on malformed worker-status store JSON', () => {
+    const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    expect(source).toContain('schemaRejected = $true');
+    expect(source).toContain('empty_worker_status_store');
+  });
+});
+
 describe('worker-status sibling readiness', () => {
   it('reports ready when docs sibling modules are present', () => {
     const result = testSiblingReadiness({});

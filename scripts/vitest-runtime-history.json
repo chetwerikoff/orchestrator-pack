@@ -371,7 +371,7 @@
     "scripts/worker-recovery-spawn-argv.test.ts": "3d24bf3bf5b3f2f92a559de3ae2c791bc6a84db1403e7c27314a5b26f052021c",
     "scripts/worker-recovery.test.ts": "c5fcacb0a9a89f5dd9f4380048cadc0fa14e3f29b677dc9984f2cd7c052985ca",
     "scripts/worker-report-store.test.ts": "7034e6e7fac55136e40a0afb0e0b277bd3a4f1b06c57664a808161d4011e5270",
-    "scripts/worker-status-store.test.ts": "63234b672fd2eb5b8e828513e113d234ed64603d81a4bb0b5146260fb1a6e032",
+    "scripts/worker-status-store.test.ts": "53b531657f8f977acc647d35e6d208088caa79583ad3ae4cbcb958b69cf2a28e",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "81c1aca86859b3f34986f27b7894a1eb67d704aaae1acd698e9ccd41dba91d64",
     "tests/agents-md-relocation.test.ts": "b87abdbf7f34383103b97c21cbc7fefa3ea51e27eae76165401ddcf57861d0b9",
     "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3",
