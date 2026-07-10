@@ -80,6 +80,8 @@ function Get-WorkerStatusDecisionSessionsCore {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
     }
 
+    $githubSnapshot = Get-WorkerStatusRecomputeGithubSnapshot -Project $Project -Sessions $sessions
+
     foreach ($session in $sessions) {
         $sessionId = [string]$(
             if ($session.id) { $session.id }
@@ -91,6 +93,7 @@ function Get-WorkerStatusDecisionSessionsCore {
             session                = $session
             reports                = @($session.reports)
             repoSlug               = $resolvedRepoSlug
+            githubSnapshot         = $githubSnapshot
             writerGenerationVector = @{
                 writerSessionId       = $sessionId
                 reportStoreGeneration = 0

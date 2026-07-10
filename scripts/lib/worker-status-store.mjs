@@ -233,11 +233,14 @@ export function fuseWorkerStatus(input = {}) {
     return { status: 'review_active', derivedStatus: 'review_active', winningSource: 'github', diagnostics, invalidatedReport: !reportValidation.valid };
   }
   const reportState = String(report?.reportState ?? report?.report_state ?? '').toLowerCase();
-  if (reportValidation.valid && reportState === 'ready_for_review') {
-    return { status: 'ready_for_review', derivedStatus: 'ready_for_review', winningSource: 'report_store', diagnostics, webhookAccelerated: Boolean(input.webhookHint) };
-  }
   const ci = deriveCiClass(input.ciChecks ?? gh.ciChecks, input.requiredCheckNames ?? gh.requiredCheckNames, Boolean(input.requiredCheckLookupFailed ?? gh.requiredCheckLookupFailed));
   diagnostics.push(...ci.diagnostics);
+  if (reportValidation.valid && reportState === 'ready_for_review') {
+    if (prOpen && ci.ciClass === 'failed') {
+      return { status: 'ci_failed', derivedStatus: 'ci_failed', winningSource: 'github_ci', requiredCheckSource: ci.requiredCheckSource, diagnostics };
+    }
+    return { status: 'ready_for_review', derivedStatus: 'ready_for_review', winningSource: 'report_store', diagnostics, webhookAccelerated: Boolean(input.webhookHint) };
+  }
   if (ci.ciClass === 'unknown' && ci.requiredCheckSource === 'lookup_failed') {
     return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: 'ci_lookup_failed', diagnostics };
   }

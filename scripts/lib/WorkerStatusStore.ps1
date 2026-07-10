@@ -9,6 +9,71 @@ $Script:PackWorkerStatusStoreSurface = 'pack-worker-status-store'
 $Script:WorkerStatusKillSwitchEnv = 'PACK_WORKER_STATUS_STORE_DISABLED'
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
+. (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
+. (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+
+function Get-WorkerStatusRecomputeGithubSnapshot {
+    param(
+        [string]$RepoRoot = '',
+        [string]$Project = 'orchestrator-pack',
+        [object[]]$Sessions = @()
+    )
+
+    $repoRoot = Resolve-PackGateRepoRoot -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
+    $tracked = @($Sessions | ForEach-Object { [int]$_.prNumber } | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+    $openPrs = if ($tracked.Count -gt 0) {
+        @(Invoke-GhOpenPrListForNumbers -RepoRoot $repoRoot -PrNumbers $tracked -Consumer 'worker-status-recompute')
+    }
+    else {
+        @()
+    }
+    $checksBundle = Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs $openPrs
+    $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $repoRoot)
+    return @{
+        openPrs                       = @($openPrs)
+        reviewRuns                    = @($reviewRuns)
+        ciChecksByPr                  = $checksBundle.ciChecksByPr
+        requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+        requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+        repoRoot                      = $repoRoot
+    }
+}
+
+function Resolve-WorkerStatusSessionGithubBlock {
+    param(
+        [object]$Session,
+        [hashtable]$Snapshot,
+        [int]$PrNumber = 0,
+        [string]$HeadSha = ''
+    )
+
+    if (-not $Snapshot) {
+        return $null
+    }
+    if (-not $PrNumber -and $Session.prNumber) {
+        $PrNumber = [int]$Session.prNumber
+    }
+    $openPr = $null
+    if ($PrNumber -gt 0) {
+        $openPr = $Snapshot.openPrs | Where-Object { [int]$_.number -eq $PrNumber } | Select-Object -First 1
+    }
+    $prOpen = ($null -ne $openPr)
+    $resolvedHead = $HeadSha
+    if ($openPr -and $openPr.headRefOid) {
+        $resolvedHead = [string]$openPr.headRefOid
+    }
+    $prKey = if ($PrNumber -gt 0) { [string]$PrNumber } else { '' }
+    return @{
+        prOpen                    = $prOpen
+        headSha                   = $resolvedHead
+        reviewRuns                = @($Snapshot.reviewRuns)
+        ciChecks                  = if ($prKey) { @($Snapshot.ciChecksByPr[$prKey]) } else { @() }
+        requiredCheckNames        = if ($prKey) { @($Snapshot.requiredCheckNamesByPr[$prKey]) } else { @() }
+        requiredCheckLookupFailed = if ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
+    }
+}
 
 function Get-WorkerStatusStorePath {
     if ($env:AO_WORKER_STATUS_STORE) {
@@ -169,17 +234,28 @@ function Write-WorkerStatusRow {
     if ($session.activity) { $sessionActivity = [string]$session.activity }
     elseif ($session.state) { $sessionActivity = [string]$session.state }
 
+    $githubSnapshot = $payload.githubSnapshot
+    $githubBlock = $payload.github
+    if (-not $githubBlock) {
+        $githubBlock = Resolve-WorkerStatusSessionGithubBlock -Session $session -Snapshot $githubSnapshot `
+            -PrNumber $prNumber -HeadSha $headSha
+    }
+    if (-not $githubBlock) {
+        $githubBlock = @{
+            prOpen                    = $false
+            headSha                   = $headSha
+            reviewRuns                = @()
+            ciChecks                  = @()
+            requiredCheckNames        = @()
+            requiredCheckLookupFailed = $false
+        }
+    }
+    $githubBlock['repoTickGeneration'] = $repoTickGen
+
     $recomputePayload = @{
         sessionId        = $sessionId
         binding          = @{ ok = $true; prNumber = $prNumber; headSha = $headSha }
-        github           = @{
-            prOpen             = $true
-            headSha            = $headSha
-            reviewRuns         = @()
-            ciChecks           = @()
-            requiredCheckNames = @()
-            repoTickGeneration = $repoTickGen
-        }
+        github           = $githubBlock
         report           = $report
         osLiveness       = 'pane-alive'
         sessionActivity  = $sessionActivity

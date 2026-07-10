@@ -94,6 +94,27 @@ describe('worker-status pr713 review-active', () => {
 });
 
 describe('worker-status fusion precedence', () => {
+  it('red required CI overrides valid ready_for_review report', () => {
+    const result = fuseWorkerStatus({
+      sessionId: 'opk-c2b',
+      binding: { ok: true, prNumber: 2, headSha: 'head2' },
+      github: {
+        prOpen: true,
+        headSha: 'head2',
+        reviewRuns: [],
+        ciChecks: [{ name: 'scope-guard', conclusion: 'failure', status: 'completed' }],
+        requiredCheckNames: ['scope-guard'],
+        repoTickGeneration: 1,
+      },
+      report: { reportState: 'ready_for_review', headSha: 'head2', prNumber: 2 },
+      osLiveness: 'pane-alive',
+      sourceGeneration: { repoTickGeneration: 1, reportStoreGeneration: 1, journalCursor: 0, bindingCacheGeneration: 1 },
+      nowMs: 1_700_000_000_000,
+    });
+    expect(result.derivedStatus).toBe('ci_failed');
+    expect(result.winningSource).toBe('github_ci');
+  });
+
   it('valid ready_for_review at current head wins (C2)', () => {
     const result = fuseWorkerStatus({
       sessionId: 'opk-c2',
