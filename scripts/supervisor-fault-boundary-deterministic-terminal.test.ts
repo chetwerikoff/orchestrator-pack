@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  supervisorTestTimeoutMs,
   isAlive,
   makeStateDir,
   runSupervisor,
@@ -38,7 +37,7 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
     await assertTerminalHeartbeatStopped(stateDir);
 
     await stopSupervisorChild(child, stateDir);
-  }, supervisorTestTimeoutMs);
+  }, 120_000);
 
   it('enters terminal degraded from progress failureClass without test env override', async () => {
     const stateDir = makeStateDir();
@@ -61,5 +60,5 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
     );
 
     await stopSupervisorChild(child, stateDir);
-  }, supervisorTestTimeoutMs);
+  }, 120_000);
 });

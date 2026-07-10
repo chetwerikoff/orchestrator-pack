@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  supervisorTestTimeoutMs,
   countLogMatches,
   isAlive,
   makeStateDir,
@@ -49,5 +48,5 @@ describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => 
     await assertTerminalHeartbeatStopped(stateDir);
 
     await stopSupervisorChild(child, stateDir);
-  }, supervisorTestTimeoutMs);
+  }, 120_000);
 });
