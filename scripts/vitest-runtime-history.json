@@ -257,7 +257,7 @@
     "scripts/gh-wrapper.test.ts": "83dff56e725e9843637e749e1d0b2eb0906d3c5182190661c6d52328103a95d4",
     "scripts/github-fleet-cache-bypass-guard.test.ts": "67f77c60e758b0dacaf962bf16841db62d2a9f4d6a1788ac6fdb992268618892",
     "scripts/github-fleet-cache-bypass.test.ts": "496f2a57129fb98d4398c1bfbadf8d35dc538b3f0652eaecab571b6f22636e09",
-    "scripts/github-fleet-cache-coalesce.test.ts": "138aa6a33f36c28b34bf5c4a5286a7ad42ef64e9323a90e05c98801cd9440c76",
+    "scripts/github-fleet-cache-coalesce.test.ts": "0b6464f6704530cab1a5f5d4926c18c06b2af6f853a152915f0ab9428b616b2f",
     "scripts/github-fleet-cache-memo.test.ts": "28d74e986fc9d6f8b40e4f8a7115f5a570eaa02e0c8734bd105f85281c1b8961",
     "scripts/github-fleet-cache-stale-snapshot.test.ts": "47983ae6fd66a1e40d824806c0f57cba00522b18f697afccdbebc501bb3da561",
     "scripts/github-fleet-governor.test.ts": "2aaf47dd5d0563fc8a687f2e2544df9d5edf0c54e779b287eb91d1a9a9b6c6d8",
