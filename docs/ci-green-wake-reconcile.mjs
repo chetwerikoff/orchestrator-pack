@@ -33,6 +33,8 @@ import {
   sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
+import { resolveBindingRepoSlug, resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
+export { resolvePrSessionBindingForConsumer };
 
 export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.mjs';
 export { classifyRequiredCiLevel } from './review-ready-stuck-guard.mjs';
@@ -296,6 +298,7 @@ export function planCiGreenWakeActions({
       prNumber,
       headSha,
       toArray(openPrs),
+      { repoSlug: resolveBindingRepoSlug({}, toArray(openPrs)) },
     );
     if (!sessionId) {
       actions.push({ type: 'skip', prNumber, headSha, reason: 'no_head_owning_worker_session' });

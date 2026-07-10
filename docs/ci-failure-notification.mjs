@@ -11,6 +11,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli, resolveBoundedInt, evaluateMechanicalTickInterval } from './review-mechanical-cli.mjs';
 import { resolveHeadOwningWorkerSessionId, sessionOwnsRunHead, sessionMatchesPr, resolveHeadCommittedAtMs, getStoredReportHeadSha } from './review-trigger-reconcile.mjs';
+import { resolveBindingRepoSlug, resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
+export { resolvePrSessionBindingForConsumer };
 import { normalizeSha, toArray, getSessionIdentifier } from './review-reconcile-primitives.mjs';
 import { isSessionAlive } from './worker-message-dispatch-observe.mjs';
 import {
@@ -298,7 +300,10 @@ export function resolveLivePrOwner({ workerState, episode }) {
     ep.prNumber,
     ep.headSha,
     workerState.openPrs,
-    { sessionDetailsById },
+    {
+      sessionDetailsById,
+      repoSlug: resolveBindingRepoSlug({ repoSlug: workerState.repo }, workerState.openPrs),
+    },
   );
   if (!ownerId) {
     return { ok: true, ownerId: null, owner: null, live: false, reportState: null, targetGeneration: null };
@@ -1166,6 +1171,7 @@ export function planCiFailureReactionRecords(input) {
     const enrichedCiSource = { ...ciSource, aggregateRunId };
     const targetId = resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, openPrs, {
       sessionDetailsById,
+      repoSlug: resolveBindingRepoSlug({ repoSlug: repo }, openPrs),
     });
     if (!targetId) continue;
     const owner = findSessionByIdentifier(sessions, targetId);

@@ -453,6 +453,22 @@ else {
     Add-Failure 'Missing session PR binding sole-path check (Issue #699)'
 }
 
+$prSessionBindingCacheCheck = Join-Path $Root 'scripts/check-pr-session-binding-cache-first.ps1'
+if (Test-Path -LiteralPath $prSessionBindingCacheCheck -PathType Leaf) {
+    & $prSessionBindingCacheCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-pr-session-binding-cache-first.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-pr-session-binding-cache-first.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'PR session binding cache-first contract failed (Issue #719)'
+    }
+}
+else {
+    Write-Check 'scripts/check-pr-session-binding-cache-first.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing PR session binding cache-first check (Issue #719)'
+}
+
 $reviewReconcileCheck = Join-Path $Root 'scripts/check-review-trigger-reconcile.ps1'
 if (Test-Path -LiteralPath $reviewReconcileCheck -PathType Leaf) {
     & $reviewReconcileCheck

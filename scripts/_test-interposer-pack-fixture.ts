@@ -83,6 +83,8 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'review-start-envelope-external-io.mjs',
     'review-start-preflight-shield.mjs',
     'review-trigger-reconcile.mjs',
+    'pr-session-binding-cache.mjs',
+    'json-state-file-lock.mjs',
     'session-pr-binding-resolver.mjs',
     'review-delivery-lifecycle.mjs',
     'reviewer-failure-evidence-markers.mjs',

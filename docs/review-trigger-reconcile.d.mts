@@ -321,7 +321,12 @@ export declare function resolveHeadOwningWorkerSessionId(
   prNumber: number,
   headSha: string,
   openPrs?: OpenPr[],
-  options?: { sessionDetailsById?: SessionDetailsById },
+  options?: {
+    sessionDetailsById?: SessionDetailsById;
+    repoSlug?: string;
+    cachePath?: string;
+    writeBackfill?: boolean;
+  },
 ): string | null;
 
 export declare function planReconcileActions(input: PlanReconcileInput): ReconcilePlanResult;

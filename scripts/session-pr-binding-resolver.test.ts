@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
   DEFER_AMBIGUOUS_PR_SESSION_BINDING,
@@ -35,6 +37,24 @@ const openPr690 = {
   headRefOid: headSha,
   headRefName: 'issue-690-session-pr-binding',
 };
+
+let isolatedBindingCachePath = '';
+
+beforeEach(() => {
+  isolatedBindingCachePath = path.join(
+    mkdtempSync(path.join(tmpdir(), 'session-pr-binding-cache-')),
+    'cache.json',
+  );
+  process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
+});
+
+function headOwnerOptions(extra: Record<string, unknown> = {}) {
+  return {
+    cachePath: isolatedBindingCachePath,
+    repoSlug: 'chetwerikoff/orchestrator-pack',
+    ...extra,
+  };
+}
 
 const issueOnlyListRow = {
   id: 'orchestrator-pack-45',
@@ -97,7 +117,7 @@ describe('session-pr-binding-resolver positive outcome', () => {
       },
     );
     expect(owner.sessionId).toBe('orchestrator-pack-45');
-    expect(resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690])).toBeNull();
+    expect(resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690], headOwnerOptions())).toBeNull();
   });
 });
 
@@ -191,7 +211,7 @@ describe('session-pr-binding-resolver explicit prNumber regression', () => {
       status: 'working',
     };
     expect(
-      resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690]),
+      resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690], headOwnerOptions()),
     ).toBe('opk-explicit');
     expect(sessionOwnsRunHead(session, 690, headSha, [openPr690])).toBe(true);
   });
@@ -241,7 +261,7 @@ describe('session-pr-binding-resolver scenario matrix', () => {
     const openPrs = [{ number: 1, headRefOid: currentHead, headRefName: 'issue-1' }];
 
     expect(
-      resolveHeadOwningWorkerSessionId([session], 1, staleHead, openPrs),
+      resolveHeadOwningWorkerSessionId([session], 1, staleHead, openPrs, headOwnerOptions()),
     ).toBeNull();
     expect(
       resolveWorkerSessionId([session], 1, {

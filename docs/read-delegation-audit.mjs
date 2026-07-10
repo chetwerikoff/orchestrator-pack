@@ -19,6 +19,10 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
+  acquireJsonStateFileLock,
+  releaseJsonStateFileLock,
+} from './json-state-file-lock.mjs';
+import {
   AUDIT_BLOCKING_STATUSES,
   classifyUnitReads,
   delegableReadsFromClassifications,
@@ -1609,19 +1613,7 @@ function acquireArtifactLock(artifactPath) {
  * @param {{ fd: number, lockPath: string } | undefined} lock
  */
 function releaseArtifactLock(lock) {
-  if (!lock) {
-    return;
-  }
-  try {
-    closeSync(lock.fd);
-  } catch {
-    // ignore
-  }
-  try {
-    unlinkSync(lock.lockPath);
-  } catch {
-    // ignore
-  }
+  releaseJsonStateFileLock(lock ?? null);
 }
 
 /**

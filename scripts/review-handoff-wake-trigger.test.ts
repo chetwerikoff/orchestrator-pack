@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  getIsolatedBindingCachePath,
+  seedPrSessionBindingCache,
+  useIsolatedPrSessionBindingCache,
+} from './_test-pr-session-binding-cache-fixture.js';
 import { evaluateWakePayload, probeReadyForReviewHandoffEnvelope } from '../docs/orchestrator-wake-filter.mjs';
 import {
   evaluateHandoffIdentityAdmission,
@@ -936,11 +941,14 @@ describe('handoff review trigger path', () => {
   });
 
 describe('wake trigger integration', () => {
+  useIsolatedPrSessionBindingCache();
   it('merge.ready completion wake does not emit handoff claim audit lines', () => {
     const fixture = JSON.parse(
       readFileSync(path.join(fixturesDir, '../review-wake-trigger/green-wake-triggers.json'), 'utf8'),
     );
     const wakeSha = String(fixture.openPrs?.[0]?.headRefOid ?? 'abc123');
+    seedPrSessionBindingCache('opk-11', 42, wakeSha);
+    const bindingCachePath = getIsolatedBindingCachePath();
     const triggerLib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Invoke-ReviewWakeTrigger.ps1');
     const claimLib = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib/Review-StartClaim.ps1');
     const dir = mkdtempSync(path.join(tmpdir(), 'handoff-claim-audit-'));
@@ -971,7 +979,11 @@ describe('wake trigger integration', () => {
       '}',
       "$logs -join '\n'",
     ].join('\n');
-    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], { encoding: 'utf8', cwd: path.dirname(fileURLToPath(import.meta.url)) });
+    const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
+      encoding: 'utf8',
+      cwd: path.dirname(fileURLToPath(import.meta.url)),
+      env: { ...process.env, AO_PR_SESSION_BINDING_CACHE: bindingCachePath },
+    });
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || 'pwsh failed');
     }

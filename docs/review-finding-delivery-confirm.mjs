@@ -19,6 +19,12 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 import {
+  resolveBindingRepoSlug,
+  resolvePrSessionBindingCachePath,
+  resolvePrSessionBindingForConsumer,
+} from './pr-session-binding-cache.mjs';
+export { resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
+import {
   isPendingWorkerDeliveryConfirmation,
 } from './review-producer-contract.mjs';
 import {
@@ -142,7 +148,7 @@ export function findReviewRoundReportAfterSend(session, sendObservedAtMs) {
  * @param {AoSession[]} sessions
  * @param {OpenPr[]} [openPrs]
  */
-export function isLinkedSessionLiveOwner(run, sessions, openPrs) {
+export function isLinkedSessionLiveOwner(run, sessions, openPrs, options = {}) {
   const linkedId = String(run?.linkedSessionId ?? '').trim();
   if (!linkedId) {
     return false;
@@ -161,7 +167,28 @@ export function isLinkedSessionLiveOwner(run, sessions, openPrs) {
     return false;
   }
 
-  return sessionOwnsRunHead(session, prNumber, String(run?.targetSha ?? ''), openPrs);
+  const headSha = String(run?.targetSha ?? '');
+  const repoSlug = resolveBindingRepoSlug(options, openPrs);
+  const cachePath = options.cachePath ?? resolvePrSessionBindingCachePath();
+  const resolution = resolvePrSessionBindingForConsumer({
+    cachePath,
+    repoSlug,
+    prNumber,
+    headSha,
+    sessions,
+    openPrs,
+    nowMs: options.nowMs ?? Date.now(),
+    writeBackfill: options.writeBackfill ?? true,
+    isLive: (candidate) => isLiveWorkerSession(candidate),
+  });
+  if (!resolution.sessionId || resolution.failClosed) {
+    return false;
+  }
+  if (resolution.sessionId !== linkedId) {
+    return false;
+  }
+
+  return sessionOwnsRunHead(session, prNumber, headSha, openPrs);
 }
 
 /**
