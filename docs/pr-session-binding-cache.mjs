@@ -2,11 +2,12 @@
  * Pack-side PR↔session binding cache with push-register (Issue #719).
  * Vitest: scripts/pr-session-binding-cache.test.ts
  */
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execSync, spawnSync } from 'node:child_process';
+import { withDedupStateFileLock } from './orchestrator-wake-filter.mjs';
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import {
   DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
@@ -258,77 +259,6 @@ export function readPrSessionBindingCacheFile(path) {
   return createDefaultPrSessionBindingCache(parsed);
 }
 
-const BINDING_CACHE_LOCK_WAIT_MS = 5_000;
-const BINDING_CACHE_LOCK_STALE_MS = 30_000;
-const BINDING_CACHE_CAS_MAX_ATTEMPTS = 8;
-
-function sleepMs(ms) {
-  if (ms <= 0) {
-    return;
-  }
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function prSessionBindingCacheLockPath(cachePath) {
-  return `${cachePath}.lock`;
-}
-
-/**
- * @param {string} cachePath
- * @param {{ maxWaitMs?: number, staleMs?: number }} [options]
- */
-function acquirePrSessionBindingCacheLock(cachePath, options = {}) {
-  const maxWaitMs = options.maxWaitMs ?? BINDING_CACHE_LOCK_WAIT_MS;
-  const staleMs = options.staleMs ?? BINDING_CACHE_LOCK_STALE_MS;
-  const lockPath = prSessionBindingCacheLockPath(cachePath);
-  mkdirSync(dirname(cachePath), { recursive: true });
-  const deadline = Date.now() + maxWaitMs;
-  while (Date.now() < deadline) {
-    try {
-      const fd = openSync(lockPath, 'wx');
-      try {
-        writeFileSync(fd, `${process.pid}\n`, 'utf8');
-      } catch (writeErr) {
-        closeSync(fd);
-        throw writeErr;
-      }
-      return { fd, lockPath };
-    } catch (err) {
-      const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
-      if (code !== 'EEXIST') {
-        throw err;
-      }
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
-          unlinkSync(lockPath);
-          continue;
-        }
-      } catch {
-        // lock removed by peer — retry
-      }
-      sleepMs(5);
-    }
-  }
-  return null;
-}
-
-/** @param {{ fd: number, lockPath: string } | null} lock */
-function releasePrSessionBindingCacheLock(lock) {
-  if (!lock) {
-    return;
-  }
-  try {
-    closeSync(lock.fd);
-  } catch {
-    // ignore
-  }
-  try {
-    unlinkSync(lock.lockPath);
-  } catch {
-    // ignore
-  }
-}
-
 function uniquePrSessionBindingCacheTempPath(cachePath) {
   return `${cachePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString('hex')}`;
 }
@@ -351,11 +281,7 @@ export function writePrSessionBindingCacheFile(path, store) {
  * @param {number} expectedGeneration
  */
 export function writePrSessionBindingCacheFileWithCas(path, store, expectedGeneration) {
-  const lock = acquirePrSessionBindingCacheLock(path);
-  if (!lock) {
-    return { ok: false, reason: 'binding_cache_lock_timeout' };
-  }
-  try {
+  const locked = withDedupStateFileLock(path, () => {
     const expected = asFiniteNumber(expectedGeneration);
     const liveGeneration = existsSync(path)
       ? asFiniteNumber(JSON.parse(readFileSync(path, 'utf8'))?.generation)
@@ -368,9 +294,11 @@ export function writePrSessionBindingCacheFileWithCas(path, store, expectedGener
     writeFileSync(tempPath, `${JSON.stringify(store)}\n`, 'utf8');
     renameSync(tempPath, path);
     return { ok: true, generation: asFiniteNumber(store.generation) };
-  } finally {
-    releasePrSessionBindingCacheLock(lock);
+  });
+  if (locked && typeof locked === 'object' && locked.ok === false && locked.reason === 'dedup_lock_timeout') {
+    return { ok: false, reason: 'binding_cache_lock_timeout' };
   }
+  return locked;
 }
 
 /**
