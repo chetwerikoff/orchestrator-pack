@@ -141,10 +141,14 @@ export function shouldRefuseMonotonicWrite(existingRow, writerGenerationVector) 
     if (Number(existing[key] ?? 0) > 0) hasExisting = true;
   }
   if (!hasExisting) return false;
+  let hasStrictlyOlder = false;
   for (const key of keys) {
-    if (Number(writer[key] ?? 0) > Number(existing[key] ?? 0)) return false;
+    const existingValue = Number(existing[key] ?? 0);
+    const writerValue = Number(writer[key] ?? 0);
+    if (writerValue > existingValue) return false;
+    if (existingValue > 0 && writerValue < existingValue) hasStrictlyOlder = true;
   }
-  return true;
+  return hasStrictlyOlder;
 }
 
 export function shouldReloadMixedGeneration(existingRow, writerGenerationVector) {
@@ -373,11 +377,7 @@ export function recomputeWorkerStatusRow(input = {}) {
     : writerVector;
   const fusion = fuseWorkerStatus({ ...input, existingRow: existing, nowMs });
   if (existing && !reloadedMixedGeneration && shouldRefuseMonotonicWrite(existing, writerVector)) {
-    const existingStatus = String(existing.derivedStatus ?? existing.status ?? '');
-    const nextStatus = String(fusion.derivedStatus ?? fusion.status ?? '');
-    if (existingStatus === nextStatus) {
-      return { ok: false, reason: 'monotonic_refused', store };
-    }
+    return { ok: false, reason: 'monotonic_refused', store };
   }
   const freshnessMs = Number(input.freshnessMs ?? input.freshnessBoundMs ?? existing?.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS);
   const gh = input.github ?? {};

@@ -514,6 +514,52 @@ describe('worker-status monotonic generations', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('monotonic_refused');
   });
+
+  it('uniformly older generation is refused even when fused status changes (C12)', () => {
+    const writer = {
+      repoTickGeneration: 5,
+      reportStoreGeneration: 5,
+      journalCursor: 5,
+      bindingCacheGeneration: 5,
+    };
+    const result = recomputeWorkerStatusRow({
+      sessionId: 'opk-c12-status-change',
+      store: createDefaultWorkerStatusStore({
+        records: {
+          'opk-c12-status-change': {
+            sessionId: 'opk-c12-status-change',
+            derivedStatus: 'ci_failed',
+            status: 'ci_failed',
+            generationVector: {
+              repoTickGeneration: 10,
+              reportStoreGeneration: 10,
+              journalCursor: 10,
+              bindingCacheGeneration: 10,
+            },
+            lastUpdatedMs: 1000,
+          },
+        },
+      }),
+      binding: { ok: true, prNumber: 12, headSha: 'head12' },
+      github: {
+        prOpen: true,
+        headSha: 'head12',
+        reviewRuns: [],
+        repoTickGeneration: 5,
+        ciChecks: GREEN_MERGE_CONTRACT_CHECKS,
+      },
+      report: {
+        reportState: 'ready_for_review',
+        headSha: 'head12',
+        accepted: true,
+      },
+      sourceGeneration: writer,
+      nowMs: 2000,
+    }) as RecomputeWorkerStatusRowResult;
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('monotonic_refused');
+    expect(result.store?.records?.['opk-c12-status-change']?.derivedStatus).toBe('ci_failed');
+  });
 });
 
 describe('worker-status mixed generation vector', () => {
