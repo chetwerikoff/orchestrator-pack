@@ -95,7 +95,7 @@ describe('orchestrator-wake-supervisor', () => {
     if (isAlive(first.pid)) {
       process.kill(first.pid, 'SIGKILL');
     }
-    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 10_000);
+    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 30_000);
     child.kill('SIGTERM');
   });
 

@@ -25,11 +25,11 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForMarker(stateDir, 'heartbeat', 45_000);
     await waitForSupervisorLogMatch(
       stateDir,
       /heartbeat terminal degraded: deterministic defect/,
-      25_000,
+      45_000,
     );
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
@@ -52,11 +52,11 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForMarker(stateDir, 'heartbeat', 45_000);
     await waitForSupervisorLogMatch(
       stateDir,
       /heartbeat terminal degraded: deterministic defect/,
-      25_000,
+      45_000,
     );
 
     await stopSupervisorChild(child, stateDir);

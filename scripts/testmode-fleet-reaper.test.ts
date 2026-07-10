@@ -127,6 +127,18 @@ function spawnOrphanTestModeChild(stateDir: string): number {
 }
 
 
+async function waitForSupervisorPid(stateDir: string, timeoutMs = 30_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  const pidPath = path.join(stateDir, 'supervisor.pid');
+  while (Date.now() < deadline) {
+    if (fs.existsSync(pidPath)) {
+      return Number(fs.readFileSync(pidPath, 'utf8').trim());
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('timed out waiting for supervisor.pid');
+}
+
 async function waitForLiveChildPids(
   stateDir: string,
   timeoutMs = 30_000,
@@ -205,7 +217,7 @@ async function startDetachedTestModeFleet(stateDir: string, env: Record<string, 
     );
     expect(start.status).toBe(0);
     expect(start.stdout).toContain('supervisor detached');
-    const supervisorPid = Number(fs.readFileSync(path.join(stateDir, 'supervisor.pid'), 'utf8').trim());
+    const supervisorPid = await waitForSupervisorPid(stateDir, 30_000);
     await waitForMarkers(stateDir, 30_000, ['listener', 'heartbeat']);
     const listener = await readMarker(stateDir, 'listener');
     const heartbeatMarker = await readMarker(stateDir, 'heartbeat');
