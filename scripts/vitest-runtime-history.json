@@ -376,7 +376,7 @@
     "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3",
     "scripts/orchestrator-wake-supervisor.test.ts": "7242ebe0c142ff54ec904b0e7646af5a8f9a12be31ada0f6bf1a55945b60320a",
     "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": "da3de5eb04509c6b4cc45c4eeb042f23ca4bcbf127f896b46a5034c2dfca3760",
-    "scripts/pr-session-binding-cache.test.ts": "01e5af3484fe789c11fe6260b8a9a3a337f8e20213ea1d31dc9e6ceab3c07f25"
+    "scripts/pr-session-binding-cache.test.ts": "e43dafb2b5cc609fb82d7afc7b35ba4bfcbbec10a1cf2f5c88191c6348116fac"
   },
   "provenance": {},
   "dataChangedAt": "2026-07-10T03:00:00Z"
