@@ -295,6 +295,11 @@ describe('worker-status eviction', () => {
     });
     expect(fused.derivedStatus).toBe('dead');
   });
+
+  it('decision reader path invokes worker-status eviction (C10 wiring)', () => {
+    const source = readFileSync(join(import.meta.dirname, 'lib/Get-WorkerStatusDecisionSessions.ps1'), 'utf8');
+    expect(source).toContain('Invoke-WorkerStatusStoreEviction');
+  });
 });
 
 describe('worker-status pr-open idle', () => {
@@ -352,6 +357,61 @@ describe('stale status skip silent', () => {
     expect(result.winningSource).toBe('degraded');
   });
 
+  it('github unavailable fails closed before needs_input (C8)', () => {
+    const result = fuseWorkerStatus({
+      sessionId: 'opk-c8',
+      binding: { ok: true, prNumber: 8, headSha: 'head8' },
+      github: { unavailable: true },
+      osLiveness: 'pane-alive',
+      sessionActivity: 'waiting_input',
+      nowMs: 1_700_000_000_000,
+    });
+    expect(result.derivedStatus).toBe('unknown');
+    expect(result.degradedReason).toBe('github_unavailable');
+    expect(result.winningSource).toBe('degraded');
+  });
+
+
+  it('preserves missing-report anchor and degrades to unknown past freshness (C14)', () => {
+    const freshnessMs = 60_000;
+    const anchorMs = 1_700_000_000_000;
+    const nowMs = anchorMs + freshnessMs + 1;
+    const store = createDefaultWorkerStatusStore({
+      records: {
+        'opk-c14': {
+          sessionId: 'opk-c14',
+          derivedStatus: 'pr_open',
+          lastUpdatedMs: anchorMs,
+          missingReportObservedMs: anchorMs,
+          freshnessBoundMs: freshnessMs,
+          generationVector: { repoTickGeneration: 1, reportStoreGeneration: 0, journalCursor: 0, bindingCacheGeneration: 0 },
+          diagnostics: [],
+        },
+      },
+    });
+    const result = recomputeWorkerStatusRow({
+      sessionId: 'opk-c14',
+      store,
+      binding: { ok: true, prNumber: 14, headSha: 'head14' },
+      github: {
+        prOpen: true,
+        headSha: 'head14',
+        reviewRuns: [],
+        ciChecks: GREEN_MERGE_CONTRACT_CHECKS,
+        requiredCheckNames: [],
+        repoTickGeneration: 1,
+      },
+      osLiveness: 'pane-alive',
+      freshnessBoundMs: freshnessMs,
+      sourceGeneration: { repoTickGeneration: 1, reportStoreGeneration: 0, journalCursor: 0, bindingCacheGeneration: 0 },
+      nowMs,
+    }) as RecomputeWorkerStatusRowResult;
+    expect(result.ok).toBe(true);
+    expect(result.row?.derivedStatus).toBe('unknown');
+    expect(result.row?.degradedReason).toBe('missing_report_past_freshness_bound');
+    expect(result.row?.lastUpdatedMs).toBe(anchorMs);
+    expect(result.row?.missingReportObservedMs).toBe(anchorMs);
+  });
   it('merge marks stale rows unknown for consumers (C8)', () => {
     const store = createDefaultWorkerStatusStore({
       records: {

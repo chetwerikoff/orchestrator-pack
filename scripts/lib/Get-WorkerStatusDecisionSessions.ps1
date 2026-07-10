@@ -115,6 +115,13 @@ function Get-WorkerStatusDecisionSessionsCore {
         }
     }
 
+    try {
+        Invoke-WorkerStatusStoreEviction -Sessions $sessions | Out-Null
+    }
+    catch {
+        # eviction is best-effort; decision reads must still proceed
+    }
+
     return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
 }
 

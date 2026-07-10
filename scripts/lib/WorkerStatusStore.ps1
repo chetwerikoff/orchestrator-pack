@@ -100,13 +100,16 @@ function Resolve-WorkerStatusSessionGithubBlock {
         $resolvedHead = [string]$openPr.headRefOid
     }
     $prKey = if ($PrNumber -gt 0) { [string]$PrNumber } else { '' }
+    $snapshotDegraded = [bool]$Snapshot.degraded
     return @{
         prOpen                    = $prOpen
         headSha                   = $resolvedHead
         reviewRuns                = @($Snapshot.reviewRuns)
         ciChecks                  = if ($prKey) { @($Snapshot.ciChecksByPr[$prKey]) } else { @() }
         requiredCheckNames        = if ($prKey) { @($Snapshot.requiredCheckNamesByPr[$prKey]) } else { @() }
-        requiredCheckLookupFailed = if ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
+        requiredCheckLookupFailed = if ($snapshotDegraded) { $true } elseif ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
+        unavailable               = $snapshotDegraded
+        degraded                  = $snapshotDegraded
     }
 }
 

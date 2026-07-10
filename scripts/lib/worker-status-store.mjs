@@ -13,6 +13,7 @@ export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
 export const KILL_SWITCH_ENV = 'PACK_WORKER_STATUS_STORE_DISABLED';
 export const DEFAULT_FRESHNESS_MS = 15 * 60 * 1000;
+export const MISSING_REPORT_PAST_FRESHNESS_REASON = 'missing_report_past_freshness_bound';
 export const DEFAULT_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
 export const DERIVED_STATUSES = Object.freeze([
@@ -257,6 +258,10 @@ export function fuseWorkerStatus(input = {}) {
     const reason = String(binding.reason ?? 'binding_miss');
     return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: reason, diagnostics: [reason] };
   }
+  if (gh.unavailable === true || gh.degraded === true || input.githubUnavailable === true) {
+    const reason = 'github_unavailable';
+    return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: reason, diagnostics: [reason] };
+  }
   const reportState = String(report?.reportState ?? report?.report_state ?? '').toLowerCase();
   const ci = deriveCiClass(input.ciChecks ?? gh.ciChecks, input.requiredCheckNames ?? gh.requiredCheckNames, Boolean(input.requiredCheckLookupFailed ?? gh.requiredCheckLookupFailed));
   diagnostics.push(...ci.diagnostics);
@@ -290,6 +295,16 @@ export function fuseWorkerStatus(input = {}) {
   if (waitingInput) {
     return { status: 'needs_input', derivedStatus: 'needs_input', winningSource: 'os_liveness', diagnostics };
   }
+  if (prOpen && ci.ciClass === 'green' && reportValidation.reason === 'missing_report') {
+    const existing = input.existingRow ?? null;
+    const nowMs = Number(input.nowMs ?? Date.now());
+    const freshnessMs = Number(input.freshnessMs ?? input.freshnessBoundMs ?? existing?.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS);
+    const anchorMs = Number(existing?.missingReportObservedMs ?? existing?.lastUpdatedMs ?? 0);
+    if (anchorMs > 0 && nowMs - anchorMs > freshnessMs) {
+      const reason = MISSING_REPORT_PAST_FRESHNESS_REASON;
+      return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: reason, diagnostics: [reason] };
+    }
+  }
   if (prOpen) {
     return { status: 'pr_open', derivedStatus: 'pr_open', winningSource: 'github_pr', diagnostics, invalidatedReport: !reportValidation.valid && reportValidation.reason !== 'missing_report' };
   }
@@ -316,10 +331,31 @@ export function recomputeWorkerStatusRow(input = {}) {
   const effectiveVector = reloadedMixedGeneration
     ? mergeGenerationVectorMax(existing, writerVector)
     : writerVector;
+  const fusion = fuseWorkerStatus({ ...input, existingRow: existing, nowMs });
   if (existing && !reloadedMixedGeneration && shouldRefuseMonotonicWrite(existing, writerVector)) {
-    return { ok: false, reason: 'monotonic_refused', store };
+    const existingStatus = String(existing.derivedStatus ?? existing.status ?? '');
+    const nextStatus = String(fusion.derivedStatus ?? fusion.status ?? '');
+    if (existingStatus === nextStatus) {
+      return { ok: false, reason: 'monotonic_refused', store };
+    }
   }
-  const fusion = fuseWorkerStatus(input);
+  const freshnessMs = Number(input.freshnessMs ?? input.freshnessBoundMs ?? existing?.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS);
+  const gh = input.github ?? {};
+  const githubHead = normalizeSha(input.githubHead ?? input.headSha ?? gh.headSha ?? input.githubPr?.headRefOid ?? input.pr?.headRefOid);
+  const reportValidation = validateReportAgainstHead(input.report ?? latestReport(input), githubHead, input.journalFacts ?? {});
+  const ci = deriveCiClass(input.ciChecks ?? gh.ciChecks, input.requiredCheckNames ?? gh.requiredCheckNames, Boolean(input.requiredCheckLookupFailed ?? gh.requiredCheckLookupFailed));
+  const missingReportWatch = githubPrIsOpen(input)
+    && ci.ciClass === 'green'
+    && reportValidation.reason === 'missing_report'
+    && (fusion.derivedStatus ?? fusion.status) === 'pr_open';
+  const c14Degraded = fusion.degradedReason === MISSING_REPORT_PAST_FRESHNESS_REASON;
+  let missingReportObservedMs;
+  let lastUpdatedMs = input.webhookObservedAtMs ? Math.max(nowMs, Number(input.webhookObservedAtMs)) : nowMs;
+  if (missingReportWatch || c14Degraded) {
+    const anchorMs = Number(existing?.missingReportObservedMs ?? existing?.lastUpdatedMs ?? nowMs);
+    missingReportObservedMs = anchorMs;
+    lastUpdatedMs = anchorMs;
+  }
   const row = {
     schemaVersion: WORKER_STATUS_STORE_SCHEMA_VERSION,
     sessionId,
@@ -328,11 +364,12 @@ export function recomputeWorkerStatusRow(input = {}) {
     derivedStatus: fusion.derivedStatus ?? fusion.status,
     winningSource: fusion.winningSource,
     diagnostics: toArray(fusion.diagnostics).map(String),
-    degradedReason: fusion.status === 'unknown' ? String(toArray(fusion.diagnostics)[0] ?? 'unknown_status') : undefined,
+    degradedReason: fusion.degradedReason ?? (fusion.status === 'unknown' ? String(toArray(fusion.diagnostics)[0] ?? 'unknown_status') : undefined),
     requiredCheckSource: fusion.requiredCheckSource,
-    lastUpdatedMs: input.webhookObservedAtMs ? Math.max(nowMs, Number(input.webhookObservedAtMs)) : nowMs,
-    freshnessMs: Number(input.freshnessMs ?? input.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS),
-    freshnessBoundMs: Number(input.freshnessMs ?? input.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS),
+    lastUpdatedMs,
+    freshnessMs,
+    freshnessBoundMs: freshnessMs,
+    missingReportObservedMs,
     generationVector: effectiveVector,
     sourceGeneration: input.sourceGeneration ?? effectiveVector,
     reloadedMixedGeneration,

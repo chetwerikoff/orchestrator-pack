@@ -39,6 +39,7 @@ export interface WorkerStatusRow {
   lastUpdatedMs?: number;
   freshnessMs?: number;
   freshnessBoundMs?: number;
+  missingReportObservedMs?: number;
   generationVector?: WorkerStatusGenerationVector;
   sourceGeneration?: WorkerStatusGenerationVector;
 }
