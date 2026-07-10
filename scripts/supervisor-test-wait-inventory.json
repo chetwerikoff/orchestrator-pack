@@ -142,12 +142,12 @@
     {
       "id": "startup-session-wait-log",
       "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
-      "anchor": "waitForStdoutContains",
+      "anchor": "waitForSupervisorLogMatch",
       "classification": "positive-convertible",
-      "followingAssertion": "stdout contains waiting for orchestrator session",
-      "rationale": "Positive wait for operator-facing stdout instead of blind sleep",
-      "generationBoundary": "accumulated child stdout buffer",
-      "raceFixture": "stdout"
+      "followingAssertion": "supervisor log contains waiting for orchestrator session",
+      "rationale": "Positive wait for supervisor log line instead of blind sleep",
+      "generationBoundary": "supervisor log offset before session wait",
+      "raceFixture": "log"
     },
     {
       "id": "startup-session-appear-marker-poll",

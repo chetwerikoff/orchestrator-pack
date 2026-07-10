@@ -177,7 +177,16 @@ function Test-OrchestratorWakeSupervisorChildDegradedRestartAllowed {
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $fields = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $recovery
     $normalizedReason = if ($DegradedReason) { $DegradedReason } else { 'degraded' }
-    $resolvedFailureClass = if ($FailureClass) { $FailureClass } else { $fields.failureClass }
+    $progressFailureClass = Get-OrchestratorWakeSupervisorChildFailureClassFromProgress -Paths $Paths -ChildId $ChildId
+    $resolvedFailureClass = if ($FailureClass) {
+        $FailureClass
+    }
+    elseif ($progressFailureClass) {
+        $progressFailureClass
+    }
+    else {
+        $fields.failureClass
+    }
 
     if ($fields.degradedBackoffUntilMs -gt $nowMs) {
         $waitSeconds = [Math]::Ceiling(($fields.degradedBackoffUntilMs - $nowMs) / 1000.0)

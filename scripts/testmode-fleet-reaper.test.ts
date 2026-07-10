@@ -41,9 +41,9 @@ const spawnLeaseEnv = {
 };
 
 const ttlLeaseEnv = {
-  AO_TESTMODE_FLEET_LEASE_TTL_SECONDS: '90',
-  AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS: '4',
-  AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS: '8',
+  AO_TESTMODE_FLEET_LEASE_TTL_SECONDS: '75',
+  AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS: '3',
+  AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS: '5',
   AO_TESTMODE_FLEET_HEARTBEAT_INTERVAL_SECONDS: '1',
 };
 
@@ -74,7 +74,7 @@ function withLeaseEnv(leaseRoot: string, leaseId: string, extra: Record<string, 
 function startLeaseHeartbeat(leaseRoot: string, leaseId: string): ReturnType<typeof setInterval> {
   return setInterval(() => {
     runReaperCli('heartbeat', { LeaseId: leaseId }, { OPK_TESTMODE_LEASE_ROOT: leaseRoot });
-  }, 2000);
+  }, 1000);
 }
 
 function startRenewalOwner(): { child: ReturnType<typeof spawn>; pid: number; startTime: string } {
@@ -147,7 +147,10 @@ async function waitForLiveChildPids(
 
 async function startLiveDetachedSupervisor(stateDir: string): Promise<number> {
   const fixturePath = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor/status-orchestrator-op-old.json');
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
+  };
   delete env.AO_TESTMODE_FLEET_LANE_LEASE_ID;
   delete env.OPK_TESTMODE_LEASE_ROOT;
   const start = spawnSync(
@@ -307,10 +310,10 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       const stateDir = makeStateDir();
       const fleet = await startDetachedTestModeFleet(stateDir, withLeaseEnv(leaseRoot, lane.leaseId));
       killProcess(fleet.supervisorPid);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       expect(isAlive(fleet.listener.pid)).toBe(true);
       killProcess(owner.pid);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 250));
 
       const recoveryLane = registerLaneLease({ leaseRoot, laneId: 'recovery-lane' });
       const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, recoveryLane.leaseId));
