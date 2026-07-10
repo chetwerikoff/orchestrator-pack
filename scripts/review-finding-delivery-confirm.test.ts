@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createDefaultPrSessionBindingCache, writePrSessionBindingCacheFile } from '../docs/pr-session-binding-cache.mjs';
 import {
   DEFAULT_CONFIRMATION_WINDOW_MS,
   DEFAULT_MAX_REDELIVERIES,
@@ -22,6 +24,20 @@ import {
   sessionOwnsRunHead,
   type DeliveryConfirmAction,
 } from '../docs/review-finding-delivery-confirm.mjs';
+
+let isolatedBindingCachePath = '';
+
+beforeEach(() => {
+  isolatedBindingCachePath = path.join(
+    mkdtempSync(path.join(tmpdir(), 'delivery-confirm-binding-cache-')),
+    'cache.json',
+  );
+  process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
+  writePrSessionBindingCacheFile(
+    isolatedBindingCachePath,
+    createDefaultPrSessionBindingCache(),
+  );
+});
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -160,6 +176,42 @@ describe('delivery confirmation signal (AC1)', () => {
           a.type === 'escalate' && a.reason === 'orphan_or_dead_linked_session',
       ),
     ).toBe(true);
+  });
+
+
+  it('fails closed when cache has no binding and backfill cannot resolve session', () => {
+    const run = {
+      prNumber: 180,
+      targetSha: 'abc123',
+      linkedSessionId: 'opk-cache-miss',
+    };
+    const sessions = [
+      {
+        name: 'opk-cache-miss',
+        role: 'worker',
+        status: 'working',
+      },
+    ];
+    const openPrs = [{ number: 180, headRefOid: 'abc123' }];
+    expect(isLinkedSessionLiveOwner(run, sessions, openPrs, { writeBackfill: false })).toBe(false);
+  });
+
+  it('accepts linked session when cache backfill resolves binding', () => {
+    const run = {
+      prNumber: 166,
+      targetSha: 'abc123',
+      linkedSessionId: 'opk-8',
+    };
+    const sessions = [
+      {
+        name: 'opk-8',
+        role: 'worker',
+        prNumber: 166,
+        status: 'working',
+      },
+    ];
+    const openPrs = [{ number: 166, headRefOid: 'abc123' }];
+    expect(isLinkedSessionLiveOwner(run, sessions, openPrs)).toBe(true);
   });
 
   it('does not confirm when PR head advanced past run targetSha', () => {

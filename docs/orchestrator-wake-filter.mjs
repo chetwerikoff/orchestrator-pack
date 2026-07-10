@@ -6,6 +6,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  acquireJsonStateFileLock,
+  releaseJsonStateFileLock,
+  withJsonStateFileLock,
+} from './json-state-file-lock.mjs';
+import {
   evaluateHandoffIdentityAdmission,
   formatHandoffWakeAuditLine,
   isReadyForReviewHandoffEnvelope,
@@ -398,68 +403,20 @@ export function dedupLockPath(stateFilePath) {
   return `${stateFilePath}.lock`;
 }
 
-function sleepMs(ms) {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // short busy wait under lock contention (subprocess hold time is tiny)
-  }
-}
 
 /**
  * Exclusive lock for read-modify-write on the shared dedup JSON (listener + heartbeat).
  * @returns {{ fd: number, lockPath: string } | null}
  */
 export function acquireDedupStateLock(stateFilePath, options = {}) {
-  const maxWaitMs = options.maxWaitMs ?? DEDUP_LOCK_WAIT_MS;
-  const staleMs = options.staleMs ?? DEDUP_LOCK_STALE_MS;
-  const lockPath = dedupLockPath(stateFilePath);
-  fs.mkdirSync(path.dirname(stateFilePath), { recursive: true });
-  const deadline = Date.now() + maxWaitMs;
-
-  while (Date.now() < deadline) {
-    try {
-      const fd = fs.openSync(lockPath, 'wx');
-      try {
-        fs.writeFileSync(fd, `${process.pid}\n`, 'utf8');
-      } catch (writeErr) {
-        fs.closeSync(fd);
-        throw writeErr;
-      }
-      return { fd, lockPath };
-    } catch (err) {
-      const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
-      if (code !== 'EEXIST') {
-        throw err;
-      }
-      try {
-        const stat = fs.statSync(lockPath);
-        if (Date.now() - stat.mtimeMs > staleMs) {
-          fs.unlinkSync(lockPath);
-          continue;
-        }
-      } catch {
-        // lock removed by peer — retry
-      }
-      sleepMs(5);
-    }
-  }
-  return null;
+  return acquireJsonStateFileLock(stateFilePath, {
+    maxWaitMs: options.maxWaitMs ?? DEDUP_LOCK_WAIT_MS,
+    staleMs: options.staleMs ?? DEDUP_LOCK_STALE_MS,
+  });
 }
 
 export function releaseDedupStateLock(lock) {
-  if (!lock) {
-    return;
-  }
-  try {
-    fs.closeSync(lock.fd);
-  } catch {
-    // ignore
-  }
-  try {
-    fs.unlinkSync(lock.lockPath);
-  } catch {
-    // ignore
-  }
+  releaseJsonStateFileLock(lock);
 }
 
 /**

@@ -30,7 +30,7 @@
         "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
       },
       "codeHashes": {
-        "docs/read-delegation-audit.mjs": "74c9c9dc238d34ba075259451c47b9ffa4579592851bec62416fcbbba95d3e04",
+        "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
         "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
       }
     },
@@ -60,7 +60,7 @@
         "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
       },
       "codeHashes": {
-        "docs/read-delegation-audit.mjs": "74c9c9dc238d34ba075259451c47b9ffa4579592851bec62416fcbbba95d3e04",
+        "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
         "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
       }
     }

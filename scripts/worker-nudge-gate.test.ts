@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import {
+  seedPrSessionBindingCache,
+  useIsolatedPrSessionBindingCache,
+} from './_test-pr-session-binding-cache-fixture.js';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import { AO_SEND_0102_HELP } from './_ao-send-0102-test-fixture.js';
 import {
@@ -562,6 +566,8 @@ describe('worker nudge gate (#384)', () => {
 });
 
 describe('Worker-NudgeClaim single-flight contract', () => {
+  useIsolatedPrSessionBindingCache();
+
   it('never leaves two active claim records for one tuple under overlap', () => {
     const dir = tempClaimDir();
     try {
@@ -1229,12 +1235,13 @@ describe('Worker-NudgeClaim single-flight contract', () => {
 
   it('resolves head owner when multiple PR sessions exist', () => {
     const headSha = 'a'.repeat(40);
+    seedPrSessionBindingCache('opk-owner', 380, headSha);
     const result = resolvePrOwnerSessionForNudge({
       prNumber: 380,
       sessionId: 'opk-owner',
       headSha,
       sessions: [
-        { name: 'opk-stale', role: 'worker', prNumber: 380, runtime: 'alive' },
+        { name: 'opk-stale', role: 'worker', runtime: 'alive' },
         {
           name: 'opk-owner',
           role: 'worker',
@@ -1251,12 +1258,13 @@ describe('Worker-NudgeClaim single-flight contract', () => {
 
   it('rejects supplied session when it does not own head', () => {
     const headSha = 'b'.repeat(40);
+    seedPrSessionBindingCache('opk-owner', 380, headSha);
     const result = resolvePrOwnerSessionForNudge({
       prNumber: 380,
       sessionId: 'opk-stale',
       headSha,
       sessions: [
-        { name: 'opk-stale', role: 'worker', prNumber: 380, runtime: 'alive' },
+        { name: 'opk-stale', role: 'worker', runtime: 'alive' },
         {
           name: 'opk-owner',
           role: 'worker',
