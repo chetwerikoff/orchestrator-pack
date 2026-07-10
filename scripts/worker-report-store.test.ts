@@ -30,7 +30,7 @@ type WorkerReportStoreState = {
 };
 
 function defaultWorkerReportStore(): WorkerReportStoreState {
-  return defaultWorkerReportStore();
+  return createDefaultWorkerReportStore() as WorkerReportStoreState;
 }
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
