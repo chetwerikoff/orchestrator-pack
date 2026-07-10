@@ -229,6 +229,14 @@ function Install-CursorAgentTuiShim {
     }
 }
 
+
+function Test-CursorAgentTuiShimSelfHealEnabled {
+    if ($env:OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE -eq '1') {
+        return [pscustomobject]@{ Enabled = $false; Reason = 'OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1' }
+    }
+    return [pscustomobject]@{ Enabled = $true; Reason = 'self-heal enabled' }
+}
+
 function Invoke-CursorAgentTuiShimSelfHeal {
     param(
         [Parameter(Mandatory = $true)]
@@ -236,6 +244,16 @@ function Invoke-CursorAgentTuiShimSelfHeal {
         [string]$Source = 'manual',
         [switch]$Quiet
     )
+
+    $selfHealGate = Test-CursorAgentTuiShimSelfHealEnabled
+    if (-not $selfHealGate.Enabled) {
+        return [pscustomobject]@{
+            Healed   = $false
+            Alerted  = $false
+            Message  = "self-heal disabled: $($selfHealGate.Reason)"
+            Topology = (Get-CursorAgentTuiShimTopology)
+        }
+    }
 
     $topology = Get-CursorAgentTuiShimTopology
     if ($topology.Pass) {

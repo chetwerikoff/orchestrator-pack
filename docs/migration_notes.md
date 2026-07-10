@@ -324,11 +324,15 @@ Operator adoption after merge:
    `pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1`
 4. Optional alerts: set `AO_FLEET_HYGIENE_ALERT_FILE` (reuses fleet hygiene #711 sink).
 
-**Rollback** (restore stock cursor-agent only):
+**Rollback** (restore stock cursor-agent only; disable self-heal first):
 
 ```bash
+export OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1
 ln -sf "$(ls -d ~/.local/share/cursor-agent/versions/2026* | sort | tail -1)/cursor-agent" ~/.local/bin/cursor-agent
 ```
+
+Or stop `orchestrator-worktree-trust-watcher.ps1` before the `ln -sf` step. See
+[`docs/cursor-agent-tui-shim-runbook.md`](cursor-agent-tui-shim-runbook.md) §Rollback.
 
 Runbook: [`docs/cursor-agent-tui-shim-runbook.md`](cursor-agent-tui-shim-runbook.md).
 

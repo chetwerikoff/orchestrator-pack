@@ -215,6 +215,7 @@ describe('cursor-agent TUI shim (Issue #725)', () => {
     const notes = readFileSync(path.join(repoRoot, 'docs/migration_notes.md'), 'utf8');
     expect(notes).toMatch(/cursor-agent TUI shim/i);
     expect(notes).toMatch(/ln -sf/);
+    expect(notes).toMatch(/OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE/);
     expect(notes).not.toMatch(/~\/\.local\/bin\/agent.*shim/i);
   });
 
@@ -271,6 +272,25 @@ describe('cursor-agent TUI shim (Issue #725)', () => {
     expect(heal.Healed).toBe(true);
     expect(heal.Alerted).toBe(true);
     expect(topology(home).Pass).toBe(true);
+  });
+
+  it('rollback: self-heal disable env leaves stock symlink in place', () => {
+    const home = makeHome();
+    installFixture(home);
+    const realBinary = `${versionsDir(home)}/cursor-agent`;
+    const symlink = path.join(home, '.local/bin/cursor-agent');
+    rmSync(symlink);
+    symlinkSync(realBinary, symlink);
+    const result = runPwshCommand(
+      `. '${path.join(repoRoot, 'scripts/lib/Cursor-Agent-TuiShim.ps1').replace(/'/g, "''")}'; (Invoke-CursorAgentTuiShimSelfHeal -PackRoot '${repoRoot.replace(/'/g, "''")}' -Source test -Quiet | ConvertTo-Json -Compress)`,
+      home,
+      { OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE: '1' },
+    );
+    expect(result.status).toBe(0);
+    const heal = JSON.parse(result.stdout.trim()) as { Healed: boolean; Message: string };
+    expect(heal.Healed).toBe(false);
+    expect(heal.Message).toMatch(/self-heal disabled/);
+    expect(topology(home).ClobberShape).toBe('symlink-repoint');
   });
 
   it('matrix (b): regular-file clobber is replaced with shim symlink', () => {

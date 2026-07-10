@@ -53,13 +53,32 @@ pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1
 
 ## Rollback
 
-Restore stock cursor-agent (does **not** touch `agent`):
+Restore stock `cursor-agent` (does **not** touch `agent`). **Disable shim self-heal first**
+or the trust-watcher poll loop (~8s) will treat the stock symlink as drift and re-apply
+the pack shim.
+
+**Option A — keep trust-watcher running (workspace trust unchanged):**
 
 ```bash
+export OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1
 ln -sf "$(ls -d ~/.local/share/cursor-agent/versions/2026* | sort | tail -1)/cursor-agent" ~/.local/bin/cursor-agent
 ```
 
-Stop relying on pack interposition by keeping the stock symlink and not re-running install.
+Persist the disable flag in the shell profile or systemd/cron unit that launches
+`orchestrator-worktree-trust-watcher.ps1` until you intentionally re-enable pack
+interposition.
+
+**Option B — stop trust-watcher, then restore stock:**
+
+```bash
+pkill -f 'orchestrator-worktree-trust-watcher\.ps1' || true
+ln -sf "$(ls -d ~/.local/share/cursor-agent/versions/2026* | sort | tail -1)/cursor-agent" ~/.local/bin/cursor-agent
+```
+
+Do not re-run `install-cursor-agent-tui-shim.ps1` after rollback. Confirm with
+`pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1` (expect topological FAIL
+on the shim path when rolled back).
+
 See [`docs/migration_notes.md`](migration_notes.md) for operator adoption checklist.
 
 ## Translate branch contract
