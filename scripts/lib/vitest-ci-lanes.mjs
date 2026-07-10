@@ -192,6 +192,13 @@ export function partitionByLane(discoveredFiles, classification) {
 
 export function validateParkedWallclockE2e(classification, parkedWallclockE2e) {
   const errors = [];
+  const parkedFiles = new Set(parkedWallclockE2e?.files ?? []);
+  const classifiedParked = Object.entries(classification)
+    .filter(([, lane]) => lane === 'parked')
+    .map(([file]) => file);
+  if (parkedFiles.size === 0 && classifiedParked.length === 0) {
+    return errors;
+  }
   const trackingIssue = Number(parkedWallclockE2e?.trackingIssue);
   if (!Number.isFinite(trackingIssue) || trackingIssue !== 694) {
     errors.push('parkedWallclockE2e.trackingIssue must be 694');
