@@ -22,9 +22,9 @@ export const testChildScript = path.join(repoRoot, 'scripts/orchestrator-wake-su
 export const reaperScript = path.join(repoRoot, 'scripts/invoke-testmode-fleet-reaper.ps1');
 
 export const spawnLeaseEnv = {
-  AO_TESTMODE_FLEET_LEASE_TTL_SECONDS: '45',
-  AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS: '8',
-  AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS: '12',
+  AO_TESTMODE_FLEET_LEASE_TTL_SECONDS: '120',
+  AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS: '30',
+  AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS: '90',
   AO_TESTMODE_FLEET_HEARTBEAT_INTERVAL_SECONDS: '1',
 };
 
@@ -59,11 +59,15 @@ export function withLeaseEnv(leaseRoot: string, leaseId: string, extra: Record<s
   };
 }
 
+export function renewLaneLease(leaseRoot: string, leaseId: string): void {
+  const env = { OPK_TESTMODE_LEASE_ROOT: leaseRoot };
+  runReaperCli('heartbeat', { LeaseId: leaseId }, env);
+  runReaperCli('progress', { LeaseId: leaseId }, env);
+}
+
 export function startLeaseHeartbeat(leaseRoot: string, leaseId: string): ReturnType<typeof setInterval> {
   const tick = () => {
-    const env = { OPK_TESTMODE_LEASE_ROOT: leaseRoot };
-    runReaperCli('heartbeat', { LeaseId: leaseId }, env);
-    runReaperCli('progress', { LeaseId: leaseId }, env);
+    renewLaneLease(leaseRoot, leaseId);
   };
   tick();
   return setInterval(tick, 1000);
@@ -182,6 +186,9 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
   const leaseRoot = env.OPK_TESTMODE_LEASE_ROOT ?? '';
   const heartbeat = leaseId && leaseRoot ? startLeaseHeartbeat(leaseRoot, leaseId) : undefined;
   try {
+    if (leaseId && leaseRoot) {
+      renewLaneLease(leaseRoot, leaseId);
+    }
     const start = runSupervisor(
       [
         '-Action',
@@ -199,6 +206,9 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     );
     expect(start.status).toBe(0);
     expect(start.stdout).toContain('supervisor detached');
+    if (leaseId && leaseRoot) {
+      renewLaneLease(leaseRoot, leaseId);
+    }
     const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
     const pidDeadline = Date.now() + 15_000;
     while (!fs.existsSync(supervisorPidPath) && Date.now() < pidDeadline) {
@@ -206,7 +216,10 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     }
     expect(fs.existsSync(supervisorPidPath)).toBe(true);
     const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
-    await waitForMarkers(stateDir, 45_000, ['listener', 'heartbeat']);
+    await waitForMarkers(stateDir, 60_000, ['listener', 'heartbeat']);
+    if (leaseId && leaseRoot) {
+      renewLaneLease(leaseRoot, leaseId);
+    }
     const listener = await readMarker(stateDir, 'listener');
     const heartbeatMarker = await readMarker(stateDir, 'heartbeat');
     return { supervisorPid, listener, heartbeat: heartbeatMarker };

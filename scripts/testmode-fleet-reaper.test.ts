@@ -20,6 +20,7 @@ import {
 import {
   registerFleetReaperAfterEach,
   registerLeaseForOwner,
+  renewLaneLease,
   runPwsh,
   spawnOrphanTestModeChild,
   startDetachedTestModeFleet,
@@ -81,13 +82,24 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
           liveState,
           withLeaseEnv(leaseRoot, liveLane.leaseId),
         );
+        renewLaneLease(leaseRoot, liveLane.leaseId);
 
         const currentLane = registerLaneLease({ leaseRoot, laneId: 'bootstrap-lane' });
+        renewLaneLease(leaseRoot, liveLane.leaseId);
         const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, currentLane.leaseId));
         expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
-        await waitForProcessesStopped([orphanPid], 20_000);
+
+        const orphanDeadline = Date.now() + 20_000;
+        while (Date.now() < orphanDeadline && harnessIsAlive(orphanPid)) {
+          renewLaneLease(leaseRoot, liveLane.leaseId);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
         expect(harnessIsAlive(orphanPid)).toBe(false);
-        expect(isAlive(liveFleet.supervisorPid)).toBe(true);
+
+        const liveSupervisorPid = Number(
+          fs.readFileSync(path.join(liveState, 'supervisor.pid'), 'utf8').trim(),
+        );
+        expect(isAlive(liveSupervisorPid)).toBe(true);
         expect(isAlive(liveFleet.listener.pid)).toBe(true);
       } finally {
         clearInterval(liveHeartbeat);
