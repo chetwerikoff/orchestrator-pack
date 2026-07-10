@@ -146,7 +146,6 @@
     "scripts/worker-recovery-branch-cleanup.test.ts": 45000,
     "scripts/worker-recovery-spawn-argv.test.ts": 45000,
     "scripts/worker-recovery.test.ts": 180000,
-    "scripts/worker-report-store.test.ts": 45000,
     "scripts/worktree-gate-claim-completion-seam.test.ts": 45000,
     "tests/agents-md-relocation.test.ts": 45000,
     "tests/agents-md-size-budget.test.ts": 45000,
@@ -181,7 +180,8 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": 25000,
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": 200000,
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": 90000,
-    "scripts/review-handoff-admission-records-lifecycle.test.ts": 60000
+    "scripts/review-handoff-admission-records-lifecycle.test.ts": 60000,
+    "scripts/worker-report-store.test.ts": 45000
   },
   "contentSha": {
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "e558ad7b666fc824b203559ad47d7944d4cfe5f3ad145709b294fab895ac65e6",
@@ -274,7 +274,6 @@
     "scripts/worker-recovery-branch-cleanup.test.ts": "73d634769af0891ac60195240124e0131f3b4243257da8a0d33de38d2599a6ce",
     "scripts/worker-recovery-spawn-argv.test.ts": "3d24bf3bf5b3f2f92a559de3ae2c791bc6a84db1403e7c27314a5b26f052021c",
     "scripts/worker-recovery.test.ts": "c5fcacb0a9a89f5dd9f4380048cadc0fa14e3f29b677dc9984f2cd7c052985ca",
-    "scripts/worker-report-store.test.ts": "e2ddc4458f591bf7c195da035e3de974a784a28059a683de148695b2233fa1cb",
     "plugins/_shared/tests/declaration_schema.test.ts": "e5fc7c206705715762b3cbdab6d9d7d8e0f87b4d2613d90742d72c7e28ab2f59",
     "plugins/_shared/tests/git_fixture.test.ts": "92e9c6c70eae0e369688cd3aee9857f27c745da06644fe4c33e1894a97168311",
     "plugins/_shared/tests/issue_parser.test.ts": "0ad2e2c07fe66fde8be5c21beeaff75ff12c7c801b4b9e9d933aeab8d7e07cd6",
@@ -363,10 +362,14 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
-    "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020"
-    "docs/worker-report-store.mjs": "b460e06d80d3849b41bd377a9b48ef51db8c08a912ad2ac77f4b76d6b4c9a7df"
-    "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef"
+    "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020",
+    "scripts/worker-report-store.test.ts": "e2ddc4458f591bf7c195da035e3de974a784a28059a683de148695b2233fa1cb",
+    "docs/worker-report-store.mjs": "b460e06d80d3849b41bd377a9b48ef51db8c08a912ad2ac77f4b76d6b4c9a7df",
+    "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef",
+    "docs/events-optional-consumer-signal-recovery.mjs": "751f2115dfd8d9f43235540490e8d648a14e990756d7dd3e73baf79a0665e25c",
+    "docs/review-finding-delivery-confirm.mjs": "86821b3b78d458a0f7987a1b8959d35a38e01c082d72aa71976b05ad512b9276",
+    "docs/review-producer-contract.mjs": "973f012fdf3e03eb0b2d1e683f93450428022ef38d68a44879b990340529297d"
   },
   "provenance": {},
-  "dataChangedAt": "2026-07-09T23:10:00Z"
+  "dataChangedAt": "2026-07-10T01:52:00Z"
 }
