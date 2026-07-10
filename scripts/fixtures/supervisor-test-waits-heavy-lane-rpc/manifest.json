@@ -1,0 +1,23 @@
+{
+  "issue": 693,
+  "heavyLaneFingerprint": "CI=true maxWorkers=1 fileParallelism=false",
+  "requiredConsecutivePasses": 3,
+  "passes": [
+    {
+      "id": "pass-001",
+      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.vitest-output.txt",
+      "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.meta.json"
+    },
+    {
+      "id": "pass-002",
+      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.vitest-output.txt",
+      "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.meta.json"
+    },
+    {
+      "id": "pass-003",
+      "logFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.vitest-output.txt",
+      "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json"
+    }
+  ],
+  "captureCommitSha": "4f04e97b1339e5982f46d347ad659772a88f5e33"
+}

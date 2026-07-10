@@ -19,7 +19,12 @@ function Get-WorkerMessageDispatchJournalPath {
     if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
         return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
     }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-worker-message-dispatch-journal.json'
+    . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
+    $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
+    if (-not (Test-Path -LiteralPath $stateRoot)) {
+        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+    }
+    return Join-Path $stateRoot 'worker-message-dispatch-journal.json'
 }
 
 function Get-WorkerMessageDispatchJournalLockPath {
@@ -190,7 +195,10 @@ function Register-WorkerMessageDispatch {
         [string]$ConfigPath = '',
         [string]$AoEpochHash = '',
         [string]$ConfigPathHash = '',
-        [string]$AdoptionProbeRunIdHash = ''
+        [string]$AdoptionProbeRunIdHash = '',
+        [string]$DeliveryId = '',
+        [string]$DeterministicDeliveryKey = '',
+        [string]$FindingsHash = ''
     )
 
     $deliveredMs = if ($DeliveredAtMs -gt 0) { $DeliveredAtMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
@@ -205,8 +213,11 @@ function Register-WorkerMessageDispatch {
         [string]$shape.deliveryPath
     }
     $safeSourceKey = if ($HashIdentity) { ConvertTo-WorkerMessageSafeIdComponent -Value $SourceKey } else { $SourceKey }
-    $deliveryId = New-WorkerMessageDeliveryId -SessionId $SessionId -DeliveredAtMs $deliveredMs -Source $Source -SourceKey $safeSourceKey
-    if (-not $deliveryId) {
+    $resolvedDeliveryId = $DeliveryId.Trim()
+    if (-not $resolvedDeliveryId) {
+        $resolvedDeliveryId = New-WorkerMessageDeliveryId -SessionId $SessionId -DeliveredAtMs $deliveredMs -Source $Source -SourceKey $safeSourceKey
+    }
+    if (-not $resolvedDeliveryId) {
         return @{ recorded = $false; reason = 'invalid_delivery_id' }
     }
 
@@ -228,7 +239,7 @@ function Register-WorkerMessageDispatch {
                 return
             }
             $candidate = @{
-                deliveryId    = $deliveryId
+                deliveryId    = $resolvedDeliveryId
                 sessionId     = $SessionId
                 deliveredAtMs = $deliveredMs
                 source        = $Source
@@ -245,6 +256,34 @@ function Register-WorkerMessageDispatch {
                 aoEpochHash = $aoEpochHash
                 configPathHash = $configPathHash
                 adoptionProbeRunIdHash = $AdoptionProbeRunIdHash
+            }
+            if ($DeterministicDeliveryKey) {
+                $candidate.deterministicKey = $DeterministicDeliveryKey
+            }
+            if ($FindingsHash) {
+                $candidate.findingsHash = $FindingsHash
+            }
+            if ($DeterministicDeliveryKey) {
+                $dedup = Invoke-DispatchJournalCli -Subcommand 'deterministic-admit' -Payload @{
+                    journal  = $journal
+                    incoming = $candidate
+                }
+                if ($dedup.action -eq 'no_op_terminal') {
+                    $recordHolder.recorded = $true
+                    $recordHolder.deliveryId = [string]$dedup.deliveryId
+                    $recordHolder.duplicateNoOp = $true
+                    return
+                }
+                if ($dedup.action -eq 'resume') {
+                    $recordHolder.recorded = $true
+                    $recordHolder.deliveryId = [string]$dedup.deliveryId
+                    $recordHolder.resume = $true
+                    return
+                }
+                if (-not $dedup.ok) {
+                    $recordHolder.reason = [string]$dedup.reason
+                    return
+                }
             }
             $admitted = Invoke-DispatchJournalCli -Subcommand 'journal-admit' -Payload @{
                 journal = $journal
@@ -279,9 +318,11 @@ function Register-WorkerMessageDispatch {
 
     return @{
         recorded     = $true
-        deliveryId   = $deliveryId
+        deliveryId   = if ($recordHolder.deliveryId) { [string]$recordHolder.deliveryId } else { $resolvedDeliveryId }
         deliveryPath = $resolvedDeliveryPath
         dispatchOutcome = $DispatchOutcome
+        duplicateNoOp = [bool]$recordHolder.duplicateNoOp
+        resume       = [bool]$recordHolder.resume
     }
 }
 

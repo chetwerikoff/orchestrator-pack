@@ -95,12 +95,12 @@ if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -an
     Write-Host 'invoke-pack-review.ps1 must route through invoke-scripted-review-post-submit-delivery seam'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewDeliveryGateProcess') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must run delivery gate as a supervised child'
+if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewStdoutDelivery') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must route stdout-first delivery (Issue #718)'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'Start-OrchestratorWakeSupervisorChild') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must launch delivery gate via wake supervisor (AC#10)'
+if ($postSubmitLibText -match 'Wait-ScriptedReviewSubmittedRun|submit_visibility_timeout') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must not poll daemon submit visibility (Issue #718)'
     exit 1
 }
 if ($postSubmitLibText -match 'Get-PackReviewWrapperProcessStartInfo') {
@@ -123,12 +123,8 @@ if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalat
     Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate unattributed submit failures'
     exit 1
 }
-if ($postSubmitLibText -notmatch 'Get-ScriptedReviewSubmitVisibilityResolvedConfig') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must resolve submit visibility from AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS'
-    exit 1
-}
-if ($postSubmitLibText -match "resolve-submit-visibility-config' -Payload @\{ env = @\{\}") {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must not pass empty env to resolve-submit-visibility-config'
+if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalation') {
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate delivery failures'
     exit 1
 }
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'

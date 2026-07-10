@@ -1,0 +1,44 @@
+{
+  "issue_number": 710,
+  "iteration_id": "orchestrator-pack-88-reaper-fix",
+  "iteration_id_source": "ao_session",
+    "supersedes": "orchestrator-pack-88-topology",
+  "created_at": "2026-07-09T13:57:32.139Z",
+  "baseline": {
+    "commit_sha": "d99a4e015fa48140f46e19ac25c8c441bde5c42c",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:3a1c60673d8af50481a7f66aefc0c9f1702c2c9b2bc4c15281ac56cfe9c5a256"
+  },
+  "declared_paths": [
+    "scripts/invoke-testmode-fleet-reaper.ps1",
+    "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/TestMode-FleetLease.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/run-vitest-heavy-shard.ps1",
+    "scripts/testmode-fleet-harness.ts",
+    "scripts/testmode-fleet-reaper.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-testmode-fleet-progress.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/launch-argv-inventory.json",
+    "scripts/launch-argv-test-exclusions.manifest.json",
+    "scripts/vitest-runtime-history.json",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:3a1c60673d8af50481a7f66aefc0c9f1702c2c9b2bc4c15281ac56cfe9c5a256",
+      "new_active_scope_hash": "sha256:3a1c60673d8af50481a7f66aefc0c9f1702c2c9b2bc4c15281ac56cfe9c5a256",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "launch-argv inventory refresh after reaper scoping",
+      "actor": "orchestrator-pack-88",
+      "timestamp": "2026-07-09T14:11:31.283Z",
+      "applied": true
+    }
+  ]
+}

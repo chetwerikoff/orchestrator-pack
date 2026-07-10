@@ -1,0 +1,4 @@
+[vitest-lane-timing] heavy shard 4/9 elapsed=179.08s weight_ms=915000
+ Test Files  4 passed (4)
+      Tests  26 passed (26)
+[vitest-heavy] clean run — no worker RPC anomalies

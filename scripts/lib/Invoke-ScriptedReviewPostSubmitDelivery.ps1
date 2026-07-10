@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Wire confirmed-delivery gate into invoke-pack-review after ao review submit (Issue #669).
+  Wire stdout-first delivery into invoke-pack-review (Issues #669/#718).
 #>
 
 function Invoke-ScriptedReviewPostSubmitDeliveryCli {
@@ -57,180 +57,6 @@ function Invoke-ScriptedReviewPostSubmitDeliveryEscalation {
         -WriteLog { param($Message) [Console]::Error.WriteLine($Message) }
 }
 
-function Get-ScriptedReviewSubmitVisibilityResolvedConfig {
-    $payload = @{}
-    if ($env:AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS) {
-        $payload = @{
-            env = @{
-                AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS = [string]$env:AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS
-            }
-        }
-    }
-    return Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'resolve-submit-visibility-config' -Payload $payload
-}
-
-function Wait-ScriptedReviewSubmittedRun {
-    param(
-        [int]$PrNumber,
-        [string]$TargetSha,
-        [string]$ProjectId = 'orchestrator-pack',
-        [long]$SubmitObservedAfterMs = 0,
-        [hashtable]$VisibilityConfig = $null
-    )
-
-    . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
-    $config = if ($VisibilityConfig) { $VisibilityConfig } else {
-        Get-ScriptedReviewSubmitVisibilityResolvedConfig
-    }
-    $deadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + [int]$config.visibilityMs
-    $intervalMs = [Math]::Max(200, [int]$config.intervalMs)
-
-    while ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $deadline) {
-        $runs = @(Get-AoReviewRunsFromWorkerSessions -Project $ProjectId)
-        $found = Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'find-submitted-run' -Payload @{
-            reviewRuns            = @($runs)
-            prNumber              = $PrNumber
-            targetSha             = $TargetSha
-            submitObservedAfterMs = $SubmitObservedAfterMs
-        }
-        if ($found.ok) {
-            return $found
-        }
-        Start-Sleep -Milliseconds $intervalMs
-    }
-
-    return @{ ok = $false; reason = 'submit_visibility_timeout' }
-}
-
-function Write-ScriptedReviewDeliveryGateSupervisorLogsToStderr {
-    param([string[]]$LogPaths)
-
-    foreach ($logPath in @($LogPaths)) {
-        if (-not $logPath -or -not (Test-Path -LiteralPath $logPath -PathType Leaf)) { continue }
-        foreach ($line in (Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue)) {
-            $trimmed = [string]$line
-            if ($trimmed) {
-                [Console]::Error.WriteLine($trimmed)
-            }
-        }
-    }
-}
-
-function Get-ScriptedReviewDeliveryGateResolvedConfig {
-    $payload = @{ config = @{} }
-    if ($env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS) {
-        $payload.config.pollWindowSeconds = [int]$env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS
-    }
-    if ($env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS) {
-        $payload.config.pollIntervalSeconds = [int]$env:AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS
-    }
-    return Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'resolve-config' -Payload $payload
-}
-
-function Read-ScriptedReviewDeliveryGateSupervisorLogText {
-    param([string]$LogPath)
-
-    $parts = [System.Collections.Generic.List[string]]::new()
-    foreach ($path in @($LogPath, "${LogPath}.err")) {
-        if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        foreach ($line in (Get-Content -LiteralPath $path -ErrorAction SilentlyContinue)) {
-            $parts.Add([string]$line) | Out-Null
-        }
-    }
-    return ($parts -join "`n")
-}
-
-function Resolve-ScriptedReviewDeliveryGateChildExitCode {
-    param(
-        [int]$ChildPid,
-        [int]$WaitSeconds,
-        [string]$LogPath
-    )
-
-    $proc = $null
-    try {
-        $proc = [System.Diagnostics.Process]::GetProcessById($ChildPid)
-    }
-    catch {
-        $inferred = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'infer-supervisor-child-exit' -Payload @{
-            logText = (Read-ScriptedReviewDeliveryGateSupervisorLogText -LogPath $LogPath)
-        }
-        return [int]$inferred.exitCode
-    }
-
-    try {
-        if (-not $proc.WaitForExit($WaitSeconds * 1000)) {
-            try {
-                if (-not $proc.HasExited) {
-                    $proc.Kill()
-                }
-            }
-            catch { }
-            return 2
-        }
-        return [int]$proc.ExitCode
-    }
-    finally {
-        $proc.Dispose()
-    }
-}
-
-function Invoke-ScriptedReviewDeliveryGateProcess {
-    param(
-        [Parameter(Mandatory = $true)][hashtable]$GateParams,
-        [string]$MessageText = '',
-        [string]$ProjectId = 'orchestrator-pack'
-    )
-
-    $childId = 'scripted-review-confirmed-delivery-gate'
-    . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisor.ps1')
-    $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
-    if (-not (Test-Path -LiteralPath $stateRoot)) {
-        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
-    }
-    $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
-    $logPath = Get-OrchestratorWakeSupervisorChildLogPath -Paths $paths -ChildId $childId
-
-    $extraArgs = @(
-        '-SessionId', [string]$GateParams.SessionId,
-        '-RunId', [string]$GateParams.RunId,
-        '-PrNumber', [int]$GateParams.PrNumber,
-        '-TargetSha', [string]$GateParams.TargetSha,
-        '-Verdict', [string]$GateParams.Verdict,
-        '-RepoRoot', [string]$GateParams.RepoRoot
-    )
-    if ($GateParams.BatchId) {
-        $extraArgs += @('-BatchId', [string]$GateParams.BatchId)
-    }
-    if ($MessageText) {
-        $extraArgs += @('-DeliveryMessage', $MessageText)
-    }
-    if ($GateParams.DryRun) {
-        $extraArgs += '-DryRun'
-    }
-
-    $gateConfig = Get-ScriptedReviewDeliveryGateResolvedConfig
-    $parentWait = Invoke-ScriptedReviewDeliveryGateCli -Subcommand 'supervisor-parent-wait-ms' -Payload @{
-        config = @{
-            pollWindowSeconds   = [Math]::Ceiling([int]$gateConfig.pollWindowMs / 1000.0)
-            pollIntervalSeconds = [Math]::Ceiling([int]$gateConfig.pollIntervalMs / 1000.0)
-        }
-    }
-    $waitSeconds = [Math]::Ceiling([int]$parentWait.waitMs / 1000.0)
-
-    $childPid = Start-OrchestratorWakeSupervisorChild -ChildId $childId -OrchestratorSessionId '' `
-        -Paths $paths -ProjectId $ProjectId -ExtraChildArgs $extraArgs
-    if ($childPid -le 0) {
-        throw 'Failed to start scripted-review confirmed-delivery gate supervisor child'
-    }
-
-    $exitCode = Resolve-ScriptedReviewDeliveryGateChildExitCode -ChildPid $childPid `
-        -WaitSeconds $waitSeconds -LogPath $logPath
-
-    Write-ScriptedReviewDeliveryGateSupervisorLogsToStderr -LogPaths @($logPath, "${logPath}.err")
-    return [int]$exitCode
-}
-
 function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
     [CmdletBinding()]
     param(
@@ -268,51 +94,25 @@ function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
             -Detail "repoRoot=$RepoRoot"
     }
 
-    try {
-        $submitObservedAfterMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        $submitted = Wait-ScriptedReviewSubmittedRun -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId `
-            -SubmitObservedAfterMs $submitObservedAfterMs
-    }
-    catch {
-        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason 'review_runs_unavailable' -PrNumber $prNumber `
-            -Detail $_.Exception.Message
+    . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewStdoutDelivery.ps1')
+    $delivery = Invoke-ScriptedReviewStdoutDelivery -RepoRoot $RepoRoot -WrapperStdout $WrapperStdout `
+        -ParsedStdout $parsed -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId -DryRun:$DryRun
+
+    if ($delivery.escalated) {
+        return @{
+            ok        = $false
+            skipped   = $false
+            escalated = $true
+            reason    = [string]$delivery.reason
+        }
     }
 
-    if (-not $submitted.ok) {
-        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$submitted.reason) -PrNumber $prNumber `
-            -Detail "targetSha=$targetSha"
-    }
-
-    $message = Invoke-ScriptedReviewPostSubmitDeliveryCli -Subcommand 'build-delivery-message' -Payload @{
-        prNumber    = $prNumber
-        runId       = [string]$submitted.runId
-        gateVerdict = [string]$parsed.gateVerdict
-    }
-    if (-not $message.ok) {
-        return Invoke-ScriptedReviewPostSubmitDeliveryEscalation -Reason ([string]$message.reason) `
-            -RunId ([string]$submitted.runId) -SessionId ([string]$submitted.sessionId) -PrNumber $prNumber
-    }
-
-    $gateParams = @{
-        SessionId = [string]$submitted.sessionId
-        RunId     = [string]$submitted.runId
-        BatchId   = [string]$submitted.batchId
-        PrNumber  = $prNumber
-        TargetSha = $targetSha
-        Verdict   = [string]$parsed.gateVerdict
-        RepoRoot  = $RepoRoot
-        DryRun    = [bool]$DryRun
-    }
-
-    $gateExit = Invoke-ScriptedReviewDeliveryGateProcess -GateParams $gateParams `
-        -MessageText ([string]$message.message) -ProjectId $ProjectId
     return @{
-        ok        = ($gateExit -eq 0)
-        skipped   = $false
-        escalated = ($gateExit -ne 0)
-        gateExit  = $gateExit
-        runId     = [string]$submitted.runId
-        sessionId = [string]$submitted.sessionId
-        verdict   = [string]$parsed.gateVerdict
+        ok          = [bool]$delivery.ok
+        skipped     = [bool]$delivery.skipped
+        escalated   = $false
+        deliveryKey = [string]$delivery.deliveryKey
+        sessionId   = [string]$delivery.sessionId
+        verdict     = [string]$delivery.verdict
     }
 }

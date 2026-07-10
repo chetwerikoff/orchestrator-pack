@@ -40,6 +40,23 @@ export const IN_FLIGHT_PR_REVIEW_STATUSES = new Set(['needs_review', 'running'])
 
 export const IN_FLIGHT_LATEST_RUN_STATUSES = new Set(['queued', 'preparing', 'running']);
 
+export const REMOVED_REPORT_RECEIPT_SURFACES = [
+  'ao report',
+  'ao status --reports',
+  '.agent-report-audit',
+  '/sessions/{id}/reports',
+];
+
+export function assertNoRemovedReportReceiptSurface(value) {
+  const text = String(value ?? '').toLowerCase();
+  for (const surface of REMOVED_REPORT_RECEIPT_SURFACES) {
+    if (text.includes(surface.toLowerCase())) {
+      throw new Error(`removed report receipt surface: ${surface}`);
+    }
+  }
+  return true;
+}
+
 /**
  * @typedef {{
  *   id?: string,

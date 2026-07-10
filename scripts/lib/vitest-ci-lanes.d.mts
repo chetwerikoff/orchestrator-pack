@@ -47,6 +47,7 @@ export declare function runtimeHistoryPath(repoRoot?: string): string;
 export declare function discoverVitestFiles(repoRoot?: string): string[];
 export declare function loadLanesConfig(repoRoot?: string): LanesConfig;
 export declare function loadRuntimeHistory(repoRoot?: string): Record<string, number>;
+export declare function resolveHeavyLaneFingerprint(repoRoot?: string): string;
 export declare function validateClassification(
   discoveredFiles: string[],
   classification: Record<string, string>,

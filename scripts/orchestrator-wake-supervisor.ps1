@@ -138,6 +138,10 @@ switch ($Action) {
         }
 
         if ($SupervisorLoop) {
+
+            if ($TestMode) {
+                Register-TestModeFleetSupervisorStart -StateRoot $stateRoot
+            }
             Write-OrchestratorWakeSupervisorLog -Message 'supervisor loop started' -LogPath $paths.SupervisorLog
             Invoke-OrchestratorWakeSupervisorLoop -Paths $paths -ProjectId $project -PollSeconds $pollSec `
                 -SessionOverride $OrchestratorSessionId -FixturePath $FixturePath -AoCommand $AoCommand `

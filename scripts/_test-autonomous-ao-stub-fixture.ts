@@ -236,6 +236,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'review-cycle-cap.mjs',
   'review-trigger-reconcile.mjs',
   'session-pr-binding-resolver.mjs',
+    'review-delivery-lifecycle.mjs',
   'session-runtime-liveness.mjs',
   'spawn-worktree-git-ref.mjs',
   'spawn-worktree-grant.mjs',
@@ -243,6 +244,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'worker-iteration-cycle.mjs',
   'worker-message-dispatch-observe.mjs',
   'worker-recovery.mjs',
+  'worker-report-store.mjs',
 ] as const;
 
 function copyAoSpawnProbeStubPackDocs(packRoot: string) {

@@ -327,14 +327,14 @@ describe('supervisor compatibility (AC#10)', () => {
     expect(registry.requiredChildIds).not.toContain('scripted-review-confirmed-delivery-gate');
   });
 
-  it('post-submit lib launches gate via wake supervisor child', () => {
+  it('post-submit lib routes stdout-first without wake supervisor gate child', () => {
     const text = readFileSync(
       path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'),
       'utf8',
     );
-    expect(text).toMatch(/Start-OrchestratorWakeSupervisorChild/);
-    expect(text).toMatch(/scripted-review-confirmed-delivery-gate/);
-    expect(text).not.toMatch(/Get-PackReviewWrapperProcessStartInfo/);
+    expect(text).toMatch(/Invoke-ScriptedReviewStdoutDelivery/);
+    expect(text).not.toMatch(/Start-OrchestratorWakeSupervisorChild/);
+    expect(text).not.toMatch(/Wait-ScriptedReviewSubmittedRun/);
   });
 });
 
@@ -391,9 +391,9 @@ describe('post-submit seam wiring', () => {
       path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'),
       'utf8',
     );
-    expect(text).toMatch(/Wait-ScriptedReviewSubmittedRun/);
-    expect(text).toMatch(/Invoke-ScriptedReviewDeliveryGateProcess/);
-    expect(text).toMatch(/Start-OrchestratorWakeSupervisorChild/);
+    expect(text).toMatch(/Invoke-ScriptedReviewStdoutDelivery/);
+    expect(text).not.toMatch(/Wait-ScriptedReviewSubmittedRun/);
+    expect(text).not.toMatch(/Invoke-ScriptedReviewDeliveryGateProcess/);
     expect(text).toMatch(/Invoke-ScriptedReviewPostSubmitDeliveryEscalation/);
     expect(text).toMatch(/\[Console\]::Error\.WriteLine/);
     expect(text).not.toMatch(/Get-PackReviewWrapperProcessStartInfo/);

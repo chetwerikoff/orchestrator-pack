@@ -749,6 +749,29 @@ else {
 }
 
 
+
+Write-Host '== pack worker report contract (Issue #717) =='
+foreach ($check in @(
+        @{ path = 'scripts/check-agents-report-contract.ps1'; label = 'agents report contract' },
+        @{ path = 'scripts/check-no-report-audit-bind.ps1'; label = 'no report-audit bind' }
+    )) {
+    $full = Join-Path $Root $check.path
+    if (Test-Path -LiteralPath $full -PathType Leaf) {
+        & $full
+        if ($LASTEXITCODE -ne 0) {
+            Write-Check $check.path 'FAIL' "exit=$LASTEXITCODE"
+            $script:VerifyFailed = $true
+        }
+        else {
+            Write-Check $check.path 'PASS' $check.label
+        }
+    }
+    else {
+        Write-Check $check.path 'FAIL' 'missing'
+        $script:VerifyFailed = $true
+    }
+}
+
 Write-Host '== review-cycle cap (Issue #646) =='
 $reviewCycleCapCheck = Join-Path $Root 'scripts/check-review-cycle-cap.ps1'
 if (Test-Path -LiteralPath $reviewCycleCapCheck -PathType Leaf) {
@@ -832,6 +855,23 @@ if (Test-Path -LiteralPath $scriptedDeliveryGateCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-scripted-review-confirmed-delivery-gate.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'
+}
+
+Write-Host '== review delivery stdout-first guard (Issue #718) =='
+$reviewDeliveryStdoutCheck = Join-Path $Root 'scripts/check-review-delivery-no-visibility-poll.ps1'
+if (Test-Path -LiteralPath $reviewDeliveryStdoutCheck -PathType Leaf) {
+    & pwsh -NoProfile -File $reviewDeliveryStdoutCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review delivery stdout-first guard failed (Issue #718)'
+    }
+    else {
+        Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review delivery stdout-first guard (Issue #718)'
 }
 
 Write-Host ''

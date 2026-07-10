@@ -84,6 +84,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'review-start-preflight-shield.mjs',
     'review-trigger-reconcile.mjs',
     'session-pr-binding-resolver.mjs',
+    'review-delivery-lifecycle.mjs',
     'reviewer-failure-evidence-markers.mjs',
     'reviewer-failure-evidence.mjs',
     'session-runtime-liveness.mjs',
@@ -91,6 +92,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'worker-iteration-cycle.mjs',
     'worker-message-dispatch-observe.mjs',
     'worker-recovery.mjs',
+    'worker-report-store.mjs',
     'autonomous-review-start-capabilities.json',
     'autonomous-shared-capabilities.json',
   ]) {

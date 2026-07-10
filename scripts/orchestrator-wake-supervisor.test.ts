@@ -540,6 +540,8 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
           role,
           '-OrchestratorSessionId',
           sessionId,
+          '-ProjectId',
+          'orchestrator-pack',
           '-MarkerDir',
           markerDir,
         ],
@@ -551,6 +553,7 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
             ...fleetLeaseEnv,
             AO_WAKE_SUPERVISOR_TEST_MARKER_DIR: markerDir,
             AO_SIDE_PROCESS_STATE_DIR: stateDir,
+            AO_WAKE_LISTENER_PROJECT_ID: 'orchestrator-pack',
           },
         },
       );
@@ -785,6 +788,88 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
       // ignore
     }
     runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], stealEnv);
+  }, fleetTimeoutMs);
+
+  it('AC#6: force-stop child discovery filters by project on shared state root', async () => {
+    const stateDir = makeStateDir();
+    const markerRoot = path.join(stateDir, 'markers');
+    const packMarkerDir = path.join(markerRoot, 'pack');
+    const foreignMarkerDir = path.join(markerRoot, 'foreign');
+    fs.mkdirSync(packMarkerDir, { recursive: true });
+    fs.mkdirSync(foreignMarkerDir, { recursive: true });
+    const spawnTaggedChild = (projectId: string, markerDir: string): number => {
+      const child = spawn(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1'),
+          '-Role',
+          'listener',
+          '-OrchestratorSessionId',
+          'fleet-force-project',
+          '-ProjectId',
+          projectId,
+          '-MarkerDir',
+          markerDir,
+        ],
+        {
+          detached: true,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            AO_WAKE_SUPERVISOR_TEST_MARKER_DIR: markerDir,
+            AO_SIDE_PROCESS_STATE_DIR: stateDir,
+            AO_WAKE_LISTENER_PROJECT_ID: projectId,
+          },
+        },
+      );
+      child.unref();
+      return child.pid ?? 0;
+    };
+    const packPid = spawnTaggedChild('orchestrator-pack', packMarkerDir);
+    const foreignPid = spawnTaggedChild('other-ao-project', foreignMarkerDir);
+    expect(packPid).toBeGreaterThan(0);
+    expect(foreignPid).toBeGreaterThan(0);
+    await sleep(3000);
+    const lib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1').replace(/'/g, "''");
+    const stateEsc = stateDir.replace(/'/g, "''");
+    const identityCommand = (pid: number, projectId: string) =>
+      `. '${lib}'; Write-Output ([bool](Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId ${pid} -Role listener -ProjectId '${projectId}'))`;
+    const packIdentity = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', identityCommand(packPid, 'orchestrator-pack')],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    const foreignIdentity = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', identityCommand(foreignPid, 'orchestrator-pack')],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    expect((packIdentity.stdout ?? '').trim()).toBe('True');
+    expect((foreignIdentity.stdout ?? '').trim()).toBe('False');
+    const findCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId listener; Write-Output (($pids | Sort-Object -Unique) -join ',')`;
+    const findResult = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', findCommand],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    const matched = (findResult.stdout ?? '')
+      .trim()
+      .split(',')
+      .map((v) => Number(v))
+      .filter((v) => v > 0);
+    expect(matched).toContain(packPid);
+    expect(matched).not.toContain(foreignPid);
+    try {
+      process.kill(packPid, 'SIGKILL');
+      process.kill(foreignPid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+    runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], fleetLeaseEnv);
   }, fleetTimeoutMs);
 
   it('AC#8a: Start blocked while stop maintenance epoch is active', async () => {

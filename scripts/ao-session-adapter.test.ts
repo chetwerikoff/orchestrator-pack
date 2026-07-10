@@ -70,11 +70,11 @@ describe('Invoke-AoCliJson AO 0.10 session adapter (Issue #619)', () => {
     `)).toThrow(/missing non-empty id/);
   });
 
-  it('throws classified error for report-surface entry points', () => {
+  it('removed Get-AoStatusReportsJson is not bound (Issue #717)', () => {
     expect(() => runPwsh(`
       . '${lib}'
       Get-AoStatusReportsJson | Out-Null
-    `)).toThrow(/report-surface-unavailable/);
+    `)).toThrow(/not recognized|CommandNotFoundException/);
   });
 
   it('session-get capture forbids reports field', () => {

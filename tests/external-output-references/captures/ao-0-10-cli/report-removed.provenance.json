@@ -1,0 +1,8 @@
+{
+  "sourceCommand": "ao report ready_for_review",
+  "toolVersion": "ao dev (0.10.x)",
+  "capturedAt": "2026-07-09T14:47:00.000Z",
+  "exitStatus": 1,
+  "context": "AO 0.10.2 removed ao report subcommand — unknown command stderr at exit 1.",
+  "scrubLog": []
+}

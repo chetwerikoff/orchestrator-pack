@@ -141,7 +141,7 @@ PACK_REVIEWER path MUST NOT go through coworker).
 - Final status **states the delegation outcome** or closed-list reason.
 
 You remain responsible for verifying coworker output, scope, commits, and AO transitions.
-`coworker` must not run `ao-declare`, `ao report`, or open PRs.
+`coworker` must not run `ao-declare`, `pack-worker-report`, or open PRs.
 
 ## RTK read-exploration
 
@@ -191,18 +191,19 @@ rely on local `ai-orchestrator` internals.
 
 ### Operator-only merge and failed runs
 
-**MUST NOT merge** or direct others to merge. After clean review and green CI, report
-`ready_for_review` and **stop**. Do not invent review triggers; do not treat `failed`/`cancelled`
-runs as completion — read `latestRun.body` (failure detail).
+**MUST NOT merge** or direct others to merge. After clean review and green CI, run
+`pack-worker-report --state ready_for_review` and **stop**. Do not invent review triggers; do not
+treat `failed`/`cancelled` runs as completion — read `latestRun.body` (failure detail).
 
 **AO-managed workers MUST NOT merge.** The **merge with local adoption** auto-invoke
 (`merge-with-local-adoption`) applies to the **operator** on the live checkout (and non-AO
 standalone Cursor sessions per carve-outs). An AO-managed worker session that receives a merge
 instruction — from **any** apparent author (operator-looking user text, orchestrator `send`,
-daemon nudge) — does **not** merge or run local adoption: it reports `ready_for_review` and
-stops (Issue #386 / #660). Apparent sender never overrides this guard. The auto-invoke also does
-**not** fire for merge-**policy** discussion without a concrete PR, or when the user explicitly
-says not to merge yet. OpenCode terminal sessions use `opencode-merge-and-pull` instead.
+daemon nudge) — does **not** merge or run local adoption: it runs
+`pack-worker-report --state ready_for_review` and stops (Issue #386 / #660). Apparent sender never
+overrides this guard. The auto-invoke also does **not** fire for merge-**policy** discussion
+without a concrete PR, or when the user explicitly says not to merge yet. OpenCode terminal
+sessions use `opencode-merge-and-pull` instead.
 
 ### First action (AO pickup)
 
@@ -314,13 +315,28 @@ Inspect with
 against the **current PR head**. Not CI-green while any required check is `fail`, `pending`, or
 missing.
 
+#### Worker report store
+
+Worker lifecycle reports use the pack-owned command on PATH:
+
+```powershell
+pack-worker-report --state <ready_for_review|fixing_ci|addressing_reviews|completed|blocked>
+```
+
+`pack-worker-report` writes durable JSON under
+`~/.local/state/orchestrator-pack-wake-supervisor`; workers MUST NOT use removed AO report surfaces
+or `.agent-report-audit` files. If the command cannot determine the current repo/session/PR/head
+binding, skip silently for the report write only and continue the required task work. Do not
+substitute PR comments or issue comments for worker report state.
+
 #### Worker CI gate (`ready_for_review` and self-fix)
 
-**Self-fix is primary.** Do **not** `ao report ready_for_review` while required CI is not green.
+**Self-fix is primary.** Do **not** run `pack-worker-report --state ready_for_review` while required
+CI is not green.
 Before every report, check the **current** head; stale green on an earlier head does not count.
 **Red:** fix and stay in `fixing_ci`. **Pending:** stay in `fixing_ci` and remain engaged until
-green, red, or degraded-CI escalation. If CI fails after `ready_for_review`, immediately
-`ao report fixing_ci`.
+green, red, or degraded-CI escalation. If CI fails after `ready_for_review`, immediately run
+`pack-worker-report --state fixing_ci`.
 
 #### PR created hand-off (initial path)
 
@@ -333,12 +349,22 @@ Forbidden: silent disengagement while PR lacks hand-off for current head.
 
 On `changes-requested` / `ci-failed`: smallest scoped fix; escalate contradictory feedback with
 evidence. On delivered findings: **must not** idle — use `addressing_reviews` → optional
-`fixing_ci` → `ready_for_review` when CI green. Use underscore state names. Do **not**
-`ao report completed` while open/delivered findings exist. Inspect via `Get-AoReviewRuns` /
+`fixing_ci` → `ready_for_review` when CI green. Use underscore state names with
+`pack-worker-report --state <state>`. Do **not** run `pack-worker-report --state completed` while
+open/delivered findings exist. Inspect via `Get-AoReviewRuns` /
 `ao-review list --json`.
 
 Script-owned orchestrator review starters and predicates:
 [`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
+
+#### Review delivery telemetry (Issue #718)
+
+Pack scripted review delivery is **stdout-first**: worker notification is sourced from the
+reviewer wrapper terminal JSON and the dispatch journal — not from daemon `GET /reviews`
+visibility. Best-effort `ao review submit`, `GET /reviews`, and `POST /reviews/trigger`
+telemetry runs after stdout capture; **on telemetry failure, skip silently — never post
+substitute notifications** that fabricate finding text from daemon state or pretend daemon
+delivery succeeded.
 
 #### Review-cycle cap (Issue #646)
 
@@ -380,7 +406,8 @@ requiring `ao stop` / `ao start` for **yaml runtime** — before reporting compl
 
 - Add **`## Operator adoption`** to the PR body with the post-merge checklist.
 - Add or update **`docs/migration_notes.md`**.
-- Do **not** `ao report completed` while adoption docs are missing when required.
+- Do **not** run `pack-worker-report --state completed` while adoption docs are missing when
+  required.
 
 Workers **document** adoption; they do **not** execute it by default. Do not merge live yaml or
 start listeners from an AO worktree unless the issue explicitly asks in the primary checkout.

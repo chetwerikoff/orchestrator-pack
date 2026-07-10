@@ -45,8 +45,11 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     expect(statusUp.stdout).toContain('listener:   working');
     expect(statusUp.stdout).toContain('heartbeat:  working');
 
+    const supervisorPid = Number(
+      ows.fs.readFileSync(ows.path.join(stateDir, 'supervisor.pid'), 'utf8').trim(),
+    );
     child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await ows.waitForProcessesStopped([supervisorPid], 500);
 
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     expect(stop.status).toBe(0);
@@ -73,7 +76,7 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     expect(stop.status).toBe(0);
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await ows.waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 1500);
     expect(ows.isAlive(listenerBefore.pid)).toBe(false);
     expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
 
@@ -96,12 +99,12 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     );
     const listener = await ows.readMarker(stateDir, 'listener');
     child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await ows.waitForProcessesStopped([supervisorPid], 500);
 
     if (ows.isAlive(supervisorPid)) {
       process.kill(supervisorPid, 'SIGKILL');
     }
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await ows.sleepMs(300);
 
     if (ows.isAlive(listener.pid)) {
       const statusOrphan = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
@@ -143,14 +146,15 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       if (childLogs.every((logPath) => ows.fs.existsSync(logPath))) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await ows.sleepMs(300);
     }
     for (const logPath of childLogs) {
       expect(ows.fs.existsSync(logPath)).toBe(true);
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    expect(ows.isAlive(supervisorPid)).toBe(true);
+    const supervisorPidAtDetach = supervisorPid;
+    await ows.fixedObservationWindow(2500);
+    expect(ows.isAlive(supervisorPidAtDetach)).toBe(true);
 
     const statusMid = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusMid.status).toBe(0);
@@ -159,7 +163,7 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
 
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     expect(stop.status).toBe(0);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await ows.waitForProcessesStopped([supervisorPid], 500);
     expect(ows.isAlive(supervisorPid)).toBe(false);
     },
     ows.detachedSupervisorTimeoutMs,
@@ -264,7 +268,7 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
           break;
         }
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await ows.sleepMs(250);
     }
 
     if (!supervisorLog && ows.fs.existsSync(logPath)) {
@@ -273,9 +277,7 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     expect(supervisorLog).toMatch(/crash backoff: listener/);
     // Listener-only crash backoff; allow one extra PID when the registry grows.
     expect(observedPids.size).toBeLessThanOrEqual(5);
-    child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    await ows.stopSupervisorChild(child, stateDir, 1500);
     },
     45_000,
   );

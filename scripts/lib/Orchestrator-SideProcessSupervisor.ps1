@@ -14,6 +14,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessDegradedBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorLease.ps1')
+. (Join-Path $PSScriptRoot 'TestMode-FleetLease.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
 $Script:OrchestratorSideProcessRegistryPath = Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts/orchestrator-side-process-registry.json'
@@ -539,31 +540,20 @@ function Test-OrchestratorWakeSupervisorSupervisorIdentity {
 }
 
 
-function Get-ProcessEnvironmentValue {
+function Get-ProcessEnvironmentValueFromBytes {
     param(
-        [int]$ProcessId,
+        [byte[]]$Raw,
         [string]$Name
     )
 
-    if ($ProcessId -le 0) { return '' }
-    if (-not $IsLinux) { return '' }
-
-    $environPath = "/proc/$ProcessId/environ"
-    if (-not (Test-Path -LiteralPath $environPath)) { return '' }
-
-    try {
-        $raw = [System.IO.File]::ReadAllBytes($environPath)
-    }
-    catch {
-        return ''
-    }
+    if (-not $Raw -or $Raw.Length -eq 0) { return '' }
 
     $prefix = [System.Text.Encoding]::UTF8.GetBytes("$Name=")
     $start = -1
-    for ($index = 0; $index -le ($raw.Length - $prefix.Length); $index++) {
+    for ($index = 0; $index -le ($Raw.Length - $prefix.Length); $index++) {
         $matched = $true
         for ($offset = 0; $offset -lt $prefix.Length; $offset++) {
-            if ($raw[$index + $offset] -ne $prefix[$offset]) {
+            if ($Raw[$index + $offset] -ne $prefix[$offset]) {
                 $matched = $false
                 break
             }
@@ -576,11 +566,235 @@ function Get-ProcessEnvironmentValue {
     if ($start -lt 0) { return '' }
 
     $valueBytes = New-Object System.Collections.Generic.List[byte]
-    for ($index = $start; $index -lt $raw.Length; $index++) {
-        if ($raw[$index] -eq 0) { break }
-        $valueBytes.Add($raw[$index]) | Out-Null
+    for ($index = $start; $index -lt $Raw.Length; $index++) {
+        if ($Raw[$index] -eq 0) { break }
+        $valueBytes.Add($Raw[$index]) | Out-Null
     }
     return [System.Text.Encoding]::UTF8.GetString($valueBytes.ToArray())
+}
+
+function Get-ProcessEnvironmentValueFromFixture {
+    param(
+        [int]$ProcessId,
+        [string]$Name
+    )
+
+    $fixturePath = $env:AO_PROCESS_ENV_FIXTURE
+    if (-not $fixturePath) { return $null }
+    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { return $null }
+
+    try {
+        $map = Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json
+        $pidKey = [string]$ProcessId
+        if ($map.PSObject.Properties.Name -contains $pidKey) {
+            $entry = $map.$pidKey
+            if ($entry.PSObject.Properties.Name -contains $Name) {
+                return [string]$entry.$Name
+            }
+        }
+    }
+    catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Initialize-ProcessEnvironmentReader {
+    if ($script:ProcessEnvironmentReaderInitialized) { return }
+    $script:ProcessEnvironmentReaderInitialized = $true
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        if (-not ('OrchestratorPack.ProcessEnvironmentReader' -as [type])) {
+            $typeDefinition = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace OrchestratorPack
+{
+    public static class ProcessEnvironmentReader
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        struct ProcessBasicInformation
+        {
+            public IntPtr Reserved1;
+            public IntPtr PebBaseAddress;
+            public IntPtr Reserved2_0;
+            public IntPtr Reserved2_1;
+            public IntPtr UniqueProcessId;
+            public IntPtr Reserved3;
+        }
+
+        const int ProcessBasicInformationClass = 0;
+        const uint ProcessQueryAccess = 0x0410;
+
+        [DllImport("ntdll.dll")]
+        static extern int NtQueryInformationProcess(
+            IntPtr processHandle,
+            int processInformationClass,
+            ref ProcessBasicInformation processInformation,
+            int processInformationLength,
+            out int returnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(
+            IntPtr hProcess,
+            IntPtr lpBaseAddress,
+            byte[] lpBuffer,
+            int dwSize,
+            out int lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hProcess);
+
+        static bool TryReadPointer(IntPtr hProcess, IntPtr address, out IntPtr value)
+        {
+            value = IntPtr.Zero;
+            var buffer = new byte[IntPtr.Size];
+            int read;
+            if (!ReadProcessMemory(hProcess, address, buffer, buffer.Length, out read) || read != buffer.Length)
+            {
+                return false;
+            }
+            value = IntPtr.Size == 8 ? new IntPtr(BitConverter.ToInt64(buffer, 0)) : new IntPtr(BitConverter.ToInt32(buffer, 0));
+            return value != IntPtr.Zero;
+        }
+
+        static bool TryReadBytes(IntPtr hProcess, IntPtr address, int length, out byte[] buffer)
+        {
+            buffer = null;
+            if (length <= 0) { return false; }
+            buffer = new byte[length];
+            int read;
+            return ReadProcessMemory(hProcess, address, buffer, length, out read) && read == length;
+        }
+
+        static bool TryReadEnvironmentBytes(IntPtr hProcess, IntPtr address, out byte[] buffer)
+        {
+            buffer = null;
+            const int maxLength = 65536;
+            var raw = new byte[maxLength];
+            int read;
+            if (!ReadProcessMemory(hProcess, address, raw, maxLength, out read) || read <= 0)
+            {
+                return false;
+            }
+
+            var end = read;
+            for (var index = 0; index + 1 < read; index += 2)
+            {
+                if (raw[index] == 0 && raw[index + 1] == 0)
+                {
+                    end = index + 2;
+                    break;
+                }
+            }
+
+            buffer = new byte[end];
+            Array.Copy(raw, buffer, end);
+            return true;
+        }
+
+        public static string GetEnvironmentVariable(int processId, string name)
+        {
+            if (processId <= 0 || string.IsNullOrEmpty(name)) { return string.Empty; }
+
+            var hProcess = OpenProcess(ProcessQueryAccess, false, processId);
+            if (hProcess == IntPtr.Zero) { return string.Empty; }
+
+            try
+            {
+                var pbi = new ProcessBasicInformation();
+                int returnLength;
+                if (NtQueryInformationProcess(hProcess, ProcessBasicInformationClass, ref pbi, Marshal.SizeOf(typeof(ProcessBasicInformation)), out returnLength) != 0)
+                {
+                    return string.Empty;
+                }
+
+                IntPtr processParameters;
+                if (!TryReadPointer(hProcess, IntPtr.Add(pbi.PebBaseAddress, IntPtr.Size == 8 ? 0x20 : 0x10), out processParameters))
+                {
+                    return string.Empty;
+                }
+
+                IntPtr environmentBuffer;
+                if (!TryReadPointer(hProcess, IntPtr.Add(processParameters, IntPtr.Size == 8 ? 0x80 : 0x48), out environmentBuffer))
+                {
+                    return string.Empty;
+                }
+
+                byte[] environmentBytes;
+                if (!TryReadEnvironmentBytes(hProcess, environmentBuffer, out environmentBytes))
+                {
+                    return string.Empty;
+                }
+
+                var environmentBlock = Encoding.Unicode.GetString(environmentBytes);
+                var prefix = name + "=";
+                foreach (var entry in environmentBlock.Split('\0'))
+                {
+                    if (entry.StartsWith(prefix, StringComparison.Ordinal))
+                    {
+                        return entry.Substring(prefix.Length);
+                    }
+                }
+            }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+
+            return string.Empty;
+        }
+    }
+}
+'@
+            Add-Type -TypeDefinition $typeDefinition -ErrorAction Stop
+        }
+    }
+}
+
+function Get-ProcessEnvironmentValue {
+    param(
+        [int]$ProcessId,
+        [string]$Name
+    )
+
+    if ($ProcessId -le 0) { return '' }
+
+    $fixtureValue = Get-ProcessEnvironmentValueFromFixture -ProcessId $ProcessId -Name $Name
+    if ($null -ne $fixtureValue) { return $fixtureValue }
+
+    if ($IsLinux) {
+        $environPath = "/proc/$ProcessId/environ"
+        if (-not (Test-Path -LiteralPath $environPath)) { return '' }
+
+        try {
+            $raw = [System.IO.File]::ReadAllBytes($environPath)
+        }
+        catch {
+            return ''
+        }
+
+        return Get-ProcessEnvironmentValueFromBytes -Raw $raw -Name $Name
+    }
+
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        try {
+            Initialize-ProcessEnvironmentReader
+            if ('OrchestratorPack.ProcessEnvironmentReader' -as [type]) {
+                return [OrchestratorPack.ProcessEnvironmentReader]::GetEnvironmentVariable($ProcessId, $Name)
+            }
+        }
+        catch {
+            return ''
+        }
+    }
+
+    return ''
 }
 
 function Test-OrchestratorWakeSupervisorManagedChildForState {
@@ -607,6 +821,83 @@ function Test-OrchestratorWakeSupervisorManagedChildForState {
 
     return $false
 }
+
+function Test-OrchestratorWakeSupervisorManagedChildProjectIdentity {
+    param(
+        [int]$ProcessId,
+        [string]$Role,
+        [string]$ProjectId
+    )
+
+    if ($ProcessId -le 0) { return $false }
+    $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId $Role
+    if (-not $entry) { return $false }
+
+    $defaultProject = Get-OrchestratorWakeSupervisorDefaultProjectId
+    $expectedProject = if ($ProjectId) { $ProjectId } else { $defaultProject }
+
+    if ($Role -eq 'listener') {
+        $envProject = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_LISTENER_PROJECT_ID'
+        if ($envProject) {
+            return $envProject -eq $expectedProject
+        }
+    }
+
+    $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
+    if ($tokens -and $tokens.Count -gt 0) {
+        $commandProject = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-ProjectId'
+        if ($commandProject) {
+            return $commandProject -eq $expectedProject
+        }
+
+        $testChildPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $Script:OrchestratorSideProcessTestChildScript
+        $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
+        if ($scriptInCommand) {
+            $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
+            if ($normalizedScript -eq $testChildPath) {
+                $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+                if ($markerDir) {
+                    $markerPath = Join-Path $markerDir "$Role.marker.json"
+                    if (Test-Path -LiteralPath $markerPath) {
+                        try {
+                            $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+                            if ($marker.projectId) {
+                                return [string]$marker.projectId -eq $expectedProject
+                            }
+                        }
+                        catch {
+                            return $false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if ($entry.PassProjectId) {
+        return $false
+    }
+
+    return $expectedProject -eq $defaultProject
+}
+
+function Remove-OrchestratorWakeSupervisorSupervisorPidFileIfOwned {
+    param(
+        [hashtable]$Paths,
+        [int]$OwnerPid,
+        [string]$LogPath = ''
+    )
+
+    $recorded = Read-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
+    if ($recorded -le 0 -or $recorded -eq $OwnerPid) {
+        Remove-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
+        return
+    }
+    if ($LogPath) {
+        Write-OrchestratorWakeSupervisorLog -Message "skipping supervisor.pid cleanup; file pid=$recorded is not owner pid=$OwnerPid" -LogPath $LogPath
+    }
+}
+
 function Find-OrchestratorWakeSupervisorManagedSupervisorCandidates {
     param(
         [string]$ProjectId,
@@ -1519,7 +1810,8 @@ function Find-OrchestratorWakeSupervisorManagedChildCandidatesForState {
     foreach ($proc in $processes) {
         $procId = [int]$proc.Id
         if ($procId -le 0) { continue }
-        if (Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $procId -Role $ChildId -StateRoot $Paths.Root) {
+        if ((Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $procId -Role $ChildId -StateRoot $Paths.Root) -and `
+                (Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId $procId -Role $ChildId -ProjectId $ProjectId)) {
             $matches.Add($procId) | Out-Null
         }
     }
@@ -1819,6 +2111,10 @@ function Invoke-OrchestratorWakeSupervisorLoop {
         Write-OrchestratorWakeSupervisorLog -Message "adopt/reap skipped: $_" -LogPath $Paths.SupervisorLog
     }
 
+    if ($TestMode) {
+        Register-TestModeFleetSupervisorStart -StateRoot $Paths.Root
+    }
+
     $loopStart = Get-Date
     try {
     $phase = 'waiting'
@@ -1832,6 +2128,16 @@ function Invoke-OrchestratorWakeSupervisorLoop {
     $registry = Get-OrchestratorWakeSupervisorChildRegistry
 
     while ($true) {
+        if ($TestMode) {
+            $leaseTtl = Test-TestModeFleetSupervisorLeaseExpired -Paths $Paths
+            if ($leaseTtl.expired) {
+                Write-OrchestratorWakeSupervisorLog -Message "testmode lease TTL self-exit ($($leaseTtl.reason))" -LogPath $Paths.SupervisorLog
+                Set-OrchestratorWakeSupervisorStoppingFlag -Paths $Paths
+                Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog -StateRoot $Paths.Root
+                break
+            }
+        }
+
         if (-not (Test-OrchestratorWakeSupervisorLeaseStillHeld -Paths $Paths -PollSeconds $PollSeconds)) {
             Write-OrchestratorWakeSupervisorLog -Message 'lease lost; exiting supervisor loop' -LogPath $Paths.SupervisorLog
             break
@@ -2049,7 +2355,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
     }
     finally {
         Release-OrchestratorWakeSupervisorLease
-        Remove-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
+        Remove-OrchestratorWakeSupervisorSupervisorPidFileIfOwned -Paths $Paths -OwnerPid $PID -LogPath $Paths.SupervisorLog
     }
 }
 

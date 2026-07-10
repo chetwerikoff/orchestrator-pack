@@ -3,11 +3,15 @@ export declare function parsePackReviewTerminalStdout(stdout: unknown): {
   reason?: string;
   packVerdict?: 'clean' | 'findings';
   gateVerdict?: 'approved' | 'changes_requested';
+  findings?: unknown[];
+  findingCount?: number;
 };
 
 export declare function buildScriptedReviewDeliveryMessage(input: {
   prNumber?: number;
   runId?: string;
+  deliveryKey?: string;
+  headSha?: string;
   gateVerdict?: string;
 }): { ok: boolean; reason?: string; message?: string };
 
