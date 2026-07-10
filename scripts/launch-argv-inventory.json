@@ -1408,6 +1408,31 @@
       }
     },
     {
+      "rowId": "site-scripts-bind-supervisor-heavy-lane-rpc-metadata-ps1-31",
+      "caller": {
+        "file": "scripts/bind-supervisor-heavy-lane-rpc-metadata.ps1",
+        "line": 31
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:a9119c41ee39189abc757a9f36b225fe1f5e108b2328b76032c27ae0e6f4603c",
+      "discoveryMatch": {
+        "file": "scripts/bind-supervisor-heavy-lane-rpc-metadata.ps1",
+        "line": 31,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-bootstrap-ps1-22",
       "caller": {
         "file": "scripts/bootstrap.ps1",
@@ -6657,6 +6682,31 @@
       }
     },
     {
+      "rowId": "site-scripts-lib-bind-supervisor-heavy-lane-rpc-metadata-mjs-14",
+      "caller": {
+        "file": "scripts/lib/bind-supervisor-heavy-lane-rpc-metadata.mjs",
+        "line": 14
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:3aa3b8679645fdcf951d8f5a06ece0236605576906e23a631420a87318c0200a",
+      "discoveryMatch": {
+        "file": "scripts/lib/bind-supervisor-heavy-lane-rpc-metadata.mjs",
+        "line": 14,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-lib-gh-graphql-degraded-mjs-174",
       "caller": {
         "file": "scripts/lib/gh-graphql-degraded.mjs",
@@ -7157,10 +7207,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-53",
+      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-81",
       "caller": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 53
+        "line": 81
       },
       "callee": {
         "kind": "other-external",
@@ -7172,20 +7222,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:6c0e1698d26f0ba30eabeb127c3825dc84f4b3d8a1a3cd5a86a12eaa41298dbc",
+      "hashPinnedSourceHash": "sha256:5da587721664d0c9a53f4a883d49fc7c2818a8b3b49600431c727a17f8f97817",
       "discoveryMatch": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 53,
+        "line": 81,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-59",
+      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-87",
       "caller": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 59
+        "line": 87
       },
       "callee": {
         "kind": "other-external",
@@ -7197,20 +7247,45 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:9e9ab413edcb6bf1733a5ccd16f01826084e3596490055ee255c6a8b38900836",
+      "hashPinnedSourceHash": "sha256:9f58cf52dba58c138f48b7082e843c2b5214adb330c46009fad158f51e2f474b",
       "discoveryMatch": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 59,
+        "line": 87,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-71",
+      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-103",
       "caller": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 71
+        "line": 103
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:c1b4705fbf6cec082d61cf747c758f6fd984850d07eafff538278016103f2de4",
+      "discoveryMatch": {
+        "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
+        "line": 103,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-supervisor-test-wait-inventory-mjs-115",
+      "caller": {
+        "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
+        "line": 115
       },
       "callee": {
         "kind": "other-external",
@@ -7225,17 +7300,17 @@
       "hashPinnedSourceHash": "sha256:701580ce73ab10d8ce3cb48df12c4562fd549b869837797b4a4e188c8219edc7",
       "discoveryMatch": {
         "file": "scripts/lib/supervisor-test-wait-inventory.mjs",
-        "line": 71,
+        "line": 115,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-13",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-30",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 13
+        "line": 30
       },
       "callee": {
         "kind": "other-external",
@@ -7247,20 +7322,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:3aa3b8679645fdcf951d8f5a06ece0236605576906e23a631420a87318c0200a",
+      "hashPinnedSourceHash": "sha256:a3a84253a0546bdd768e726e172793998b3dce047f6fe91007a27a31547e3177",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 13,
+        "line": 30,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-21",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-41",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 21
+        "line": 41
       },
       "callee": {
         "kind": "other-external",
@@ -7272,20 +7347,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:37c21122acda10fac2b5e2ac1bc2dc82ffc82549b4fd71b4eb2c289eae7bbc40",
+      "hashPinnedSourceHash": "sha256:249cba9487890b12443becd13e084301f363eee45d665a206b9ca4aa57e1ca30",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 21,
+        "line": 41,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-39",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-55",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 39
+        "line": 55
       },
       "callee": {
         "kind": "other-external",
@@ -7297,10 +7372,85 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:a960f399f718480b60677a1f618fe04fe0272a8e6405e2a99e65582270e84786",
+      "hashPinnedSourceHash": "sha256:14dc7e08362fe8cc610b5547a62d896685324e2ffb13540335fc0badcfa5e9cf",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 39,
+        "line": 55,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-66",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 66
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:32758df664b54fc7fd1141dd7d128bc975f122d763e7d8ce514b140127fbe8cf",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 66,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-76",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 76
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:0b7770b7dc0d60bf1481d713198175793fbb18646cb19167b1c8ba7ac937b64c",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 76,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-117",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 117
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:ba83e83d8fbefe6cf5b4c2177161c28491c88dd553ecf74419b3737231329b45",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 117,
         "patternIds": [
           "execFileSync"
         ]

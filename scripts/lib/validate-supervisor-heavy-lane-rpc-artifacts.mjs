@@ -36,7 +36,20 @@ function resolvePrHeadSha(repoRootOverride = repoRoot) {
       return secondParent;
     }
   } catch {
-    // not a merge commit
+    // shallow merge checkout may not fetch HEAD^2; parse GitHub merge subject instead.
+    try {
+      const subject = execFileSync('git', ['log', '-1', '--pretty=%s', 'HEAD'], {
+        cwd: repoRootOverride,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      const match = subject.match(/^Merge ([0-9a-f]{40}) into [0-9a-f]{40}$/);
+      if (match && FULL_SHA_RE.test(match[1])) {
+        return match[1];
+      }
+    } catch {
+      // not a merge commit
+    }
   }
 
   return execFileSync('git', ['rev-parse', 'HEAD'], {
