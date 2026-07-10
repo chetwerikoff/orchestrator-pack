@@ -80,7 +80,13 @@ function Get-WorkerStatusDecisionSessionsCore {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
     }
 
-    $githubSnapshot = Get-WorkerStatusRecomputeGithubSnapshot -Project $Project -Sessions $sessions
+    $githubSnapshot = $null
+    try {
+        $githubSnapshot = Get-WorkerStatusRecomputeGithubSnapshot -Project $Project -Sessions $sessions
+    }
+    catch {
+        $githubSnapshot = New-WorkerStatusEmptyGithubSnapshot
+    }
 
     foreach ($session in $sessions) {
         $sessionId = [string]$(
@@ -89,19 +95,24 @@ function Get-WorkerStatusDecisionSessionsCore {
             else { $session.sessionId }
         )
         if (-not $sessionId) { continue }
-        Write-WorkerStatusRow -Input @{
-            session                = $session
-            reports                = @($session.reports)
-            repoSlug               = $resolvedRepoSlug
-            githubSnapshot         = $githubSnapshot
-            writerGenerationVector = @{
-                writerSessionId       = $sessionId
-                reportStoreGeneration = 0
-                repoTickGeneration    = $RepoTickGeneration
-                journalCursor         = 0
-                bindingCacheGeneration = 0
-            }
-        } | Out-Null
+        try {
+            Write-WorkerStatusRow -Input @{
+                session                = $session
+                reports                = @($session.reports)
+                repoSlug               = $resolvedRepoSlug
+                githubSnapshot         = $githubSnapshot
+                writerGenerationVector = @{
+                    writerSessionId        = $sessionId
+                    reportStoreGeneration  = 0
+                    repoTickGeneration     = $RepoTickGeneration
+                    journalCursor          = 0
+                    bindingCacheGeneration = 0
+                }
+            } | Out-Null
+        }
+        catch {
+            continue
+        }
     }
 
     return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)

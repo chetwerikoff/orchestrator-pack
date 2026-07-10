@@ -9,10 +9,31 @@ $Script:PackWorkerStatusStoreSurface = 'pack-worker-status-store'
 $Script:WorkerStatusKillSwitchEnv = 'PACK_WORKER_STATUS_STORE_DISABLED'
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
-. (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
-. (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
-. (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
-. (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+
+function Import-WorkerStatusGithubDependencies {
+    if ($script:WorkerStatusGithubDependenciesLoaded) {
+        return
+    }
+    . (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
+    . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
+    . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
+    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+    $script:WorkerStatusGithubDependenciesLoaded = $true
+}
+
+function New-WorkerStatusEmptyGithubSnapshot {
+    param([string]$RepoRoot = '')
+
+    return @{
+        openPrs                       = @()
+        reviewRuns                    = @()
+        ciChecksByPr                  = @{}
+        requiredCheckNamesByPr        = @{}
+        requiredCheckLookupFailedByPr = @{}
+        repoRoot                      = $RepoRoot
+        degraded                      = $true
+    }
+}
 
 function Get-WorkerStatusRecomputeGithubSnapshot {
     param(
@@ -21,23 +42,37 @@ function Get-WorkerStatusRecomputeGithubSnapshot {
         [object[]]$Sessions = @()
     )
 
+    Import-WorkerStatusGithubDependencies
     $repoRoot = Resolve-PackGateRepoRoot -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
-    $tracked = @($Sessions | ForEach-Object { [int]$_.prNumber } | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
-    $openPrs = if ($tracked.Count -gt 0) {
-        @(Invoke-GhOpenPrListForNumbers -RepoRoot $repoRoot -PrNumbers $tracked -Consumer 'worker-status-recompute')
+    $empty = New-WorkerStatusEmptyGithubSnapshot -RepoRoot $repoRoot
+    try {
+        $tracked = @($Sessions | ForEach-Object { [int]$_.prNumber } | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
+        $openPrs = if ($tracked.Count -gt 0) {
+            @(Invoke-GhOpenPrListForNumbers -RepoRoot $repoRoot -PrNumbers $tracked -Consumer 'worker-status-recompute')
+        }
+        else {
+            @()
+        }
+        $checksBundle = Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs $openPrs
+        $reviewRuns = @()
+        try {
+            $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $repoRoot)
+        }
+        catch {
+            $reviewRuns = @()
+        }
+        return @{
+            openPrs                       = @($openPrs)
+            reviewRuns                    = @($reviewRuns)
+            ciChecksByPr                  = $checksBundle.ciChecksByPr
+            requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+            repoRoot                      = $repoRoot
+            degraded                      = $false
+        }
     }
-    else {
-        @()
-    }
-    $checksBundle = Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs $openPrs
-    $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $repoRoot)
-    return @{
-        openPrs                       = @($openPrs)
-        reviewRuns                    = @($reviewRuns)
-        ciChecksByPr                  = $checksBundle.ciChecksByPr
-        requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
-        requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
-        repoRoot                      = $repoRoot
+    catch {
+        return $empty
     }
 }
 
