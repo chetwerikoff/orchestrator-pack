@@ -986,6 +986,22 @@ else {
     Add-Failure 'Missing fleet hygiene sentinel static guard (Issue #711)'
 }
 
+$cursorAgentTuiShimCheck = Join-Path $Root 'scripts/check-cursor-agent-tui-shim.ps1'
+if (Test-Path -LiteralPath $cursorAgentTuiShimCheck -PathType Leaf) {
+    & pwsh -NoProfile -File $cursorAgentTuiShimCheck
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-cursor-agent-tui-shim.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-cursor-agent-tui-shim.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'cursor-agent TUI shim fixture checks failed (Issue #725)'
+    }
+}
+else {
+    Write-Check 'scripts/check-cursor-agent-tui-shim.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing cursor-agent TUI shim check script (Issue #725)'
+}
+
 $terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'
 if (Test-Path -LiteralPath $terminalFloodCheck -PathType Leaf) {
     & $terminalFloodCheck

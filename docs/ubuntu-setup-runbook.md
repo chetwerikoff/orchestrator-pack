@@ -129,6 +129,10 @@ Install per vendor docs for Linux (versions change — verify with `command -v`)
 # Typical check after install:
 cursor-agent --version 2>/dev/null || agent --version
 
+# After orchestrator-pack merge for Issue #725 — pack TUI shim (optional but required for AO worker panes):
+# pwsh -NoProfile -File scripts/install-cursor-agent-tui-shim.ps1
+# pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1
+
 # OpenAI Codex CLI — follow current Codex install docs for Linux
 codex --version
 ```

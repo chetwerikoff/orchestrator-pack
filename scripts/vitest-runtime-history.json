@@ -137,6 +137,7 @@
     "scripts/testmode-fleet-reaper.test.ts": 240000,
     "scripts/tier-gate-guard.test.ts": 45000,
     "scripts/trust-ao-worktree.test.ts": 45000,
+    "scripts/cursor-agent-tui-shim.test.ts": 90000,
     "scripts/worker-iteration-cycle.test.ts": 45000,
     "scripts/worker-message-submit-reconcile.test.ts": 70000,
     "scripts/worker-nudge-gate.test.ts": 80000,
