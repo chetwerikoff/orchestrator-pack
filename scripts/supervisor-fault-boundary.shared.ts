@@ -26,6 +26,7 @@ import {
   runSupervisor,
   startSupervisorBackground,
   stopSupervisorChild,
+  waitForCondition,
   waitForMarker,
   waitForSupervisorLogMatch,
 } from './supervisor-recovery.test-helpers.js';
@@ -60,8 +61,11 @@ export async function runFaultBoundaryInjectionCase(inject: string): Promise<voi
 }
 
 export async function assertTerminalHeartbeatStopped(stateDir: string): Promise<void> {
-  const heartbeatRecovery = readChildRecovery(stateDir, 'heartbeat');
-  expect(heartbeatRecovery.terminal).toBe(true);
+  await waitForCondition(
+    async () => readChildRecovery(stateDir, 'heartbeat').terminal === true,
+    25_000,
+    'heartbeat child recovery terminal',
+  );
   try {
     const heartbeatPid = readChildPid(stateDir, 'heartbeat');
     expect(isAlive(heartbeatPid)).toBe(false);

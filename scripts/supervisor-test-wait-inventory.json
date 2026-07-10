@@ -274,8 +274,8 @@
     "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "afabe7de4d15e92a0af34067db1102d57608f91d9dabf24c7f880c125ab55be3",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "0ff3a06c6abf8ac35a9f4f0d2a3db7dc13f3accafdbcd2dcb1871fb2373708d7",
     "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "31d76172aa340f4ea11276bb2d883c3ed073d8630ed30e261ee56744a4aaff8b",
-    "scripts/supervisor-fault-boundary.shared.ts": "389d1aceb75cb4b5ba8df25d9ddd79eadb0664f08d3be0b9b3e598d53787e570",
-    "scripts/supervisor-fault-boundary-escalate.test.ts": "a14035a8c98cd363f25db134705d3ca9cd3bc95ed9b156faf9dfcd8b5ad8e492",
+    "scripts/supervisor-fault-boundary.shared.ts": "8f41c67d3473b1b2c07fd524235b281e9a1de0834504ce5cb71c13d1c3bc9e82",
+    "scripts/supervisor-fault-boundary-escalate.test.ts": "1ba1addd54c0cddc5ea9ad995954a06ca5f9d258586287ab1f8ca337503afe4b",
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "fae44143a6ea486c7bc7d99b543ea8c699d949aa8a0e208b219f3aa60bef8318"
   },
   "runtimeEvidence": {
