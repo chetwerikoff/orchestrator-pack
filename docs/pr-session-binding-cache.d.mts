@@ -56,6 +56,21 @@ export declare function createDefaultPrSessionBindingCache(
 
 export declare function readPrSessionBindingCacheFile(path: string): PrSessionBindingCacheStore;
 
+export declare function writePrSessionBindingCacheFileWithCas(
+  path: string,
+  store: PrSessionBindingCacheStore,
+  expectedGeneration: number,
+): { ok: boolean; reason?: string; generation?: number };
+
+export declare function updatePrSessionBindingCacheWithCas(
+  cachePath: string,
+  mutator: (
+    store: PrSessionBindingCacheStore,
+    nowMs: number,
+  ) => { ok: boolean; reason?: string; diagnostic?: string },
+  nowMs?: number,
+): { ok: boolean; reason?: string; diagnostic?: string; generation?: number };
+
 export declare function writePrSessionBindingCacheFile(
   path: string,
   store: PrSessionBindingCacheStore,

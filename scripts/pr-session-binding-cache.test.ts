@@ -20,7 +20,9 @@ import {
   resolvePrSessionBindingCachePath,
   resolvePrSessionBindingForConsumer,
   tryPushRegisterFromPrCreate,
+  updatePrSessionBindingCacheWithCas,
   writePrSessionBindingCacheFile,
+  writePrSessionBindingCacheFileWithCas,
 } from '../docs/pr-session-binding-cache.mjs';
 import { resolveHeadOwningWorkerSessionId } from '../docs/review-trigger-reconcile.mjs';
 
@@ -196,7 +198,7 @@ describe('pr-session-binding-cache push-register', () => {
     expect(lookupBindingByPr(readPrSessionBindingCacheFile(cachePath), repoSlug, 88)?.sessionId).toBe('opk-verified');
   });
 
-  it('push-register supersedes prior session binding without openPr evidence', () => {
+  it('push-register treats indeterminate same-session rebind as collision', () => {
     const cachePath = tempCachePath();
     const env = {
       AO_WORKER_SESSION_ID: 'opk-rebind',
@@ -216,10 +218,38 @@ describe('pr-session-binding-cache push-register', () => {
       env,
       sessions,
     });
-    expect(register.registered).toBe(true);
-    const updated = readPrSessionBindingCacheFile(cachePath);
-    expect(lookupBindingBySession(updated, repoSlug, 'opk-rebind')?.prNumber).toBe(12);
-    expect(lookupBindingByPr(updated, repoSlug, 11)).toBeNull();
+    expect(register.registered).toBe(false);
+    expect(register.reason).toBe('binding_collision');
+    expect(lookupBindingBySession(readPrSessionBindingCacheFile(cachePath), repoSlug, 'opk-rebind')?.prNumber).toBe(11);
+  });
+
+  it('push-register supersedes same-session rebind when prior PR is terminal in openPrs', () => {
+    const cachePath = tempCachePath();
+    const env = {
+      AO_WORKER_SESSION_ID: 'opk-rebind',
+      AO_REPO_SLUG: repoSlug,
+      AO_PROJECT_ID: 'orchestrator-pack',
+      AO_PR_SESSION_BINDING_CACHE: cachePath,
+    };
+    const sessions = [liveWorker('opk-rebind', 719)];
+    const store = seedStore({ sessionId: 'opk-rebind', prNumber: 11, headSha: 'old11' });
+    writePrSessionBindingCacheFile(cachePath, store);
+
+    const register = registerPrSessionBindingRecord(
+      store,
+      {
+        sessionId: 'opk-rebind',
+        prNumber: 12,
+        repoSlug,
+        headSha: 'new12',
+        source: BINDING_SOURCE_PUSH_REGISTER,
+        openPrs: [openPr(11, 'old11', 'MERGED'), openPr(12, 'new12')],
+      },
+      nowMs + 1000,
+    );
+    expect(register.ok).toBe(true);
+    writePrSessionBindingCacheFile(cachePath, store);
+    expect(lookupBindingBySession(store, repoSlug, 'opk-rebind')?.prNumber).toBe(12);
   });
 
   it('isolates corrupt cache IO from successful gh pr create registration path', () => {
@@ -251,6 +281,22 @@ describe('pr-session-binding-cache push-register', () => {
     expect(row?.sessionId).toBe('orchestrator-pack-7');
     expect(row?.role).toBe('worker');
     expect(row?.projectId).toBe('orchestrator-pack');
+  });
+
+
+  it('CAS rejects stale generation writes', () => {
+    const cachePath = tempCachePath();
+    const initial = seedStore({ sessionId: 'opk-a', prNumber: 30, headSha: 'h30' });
+    writePrSessionBindingCacheFile(cachePath, initial);
+    const observed = readPrSessionBindingCacheFile(cachePath);
+    const staleGeneration = observed.generation;
+    const concurrent = readPrSessionBindingCacheFile(cachePath);
+    concurrent.generation = staleGeneration + 1;
+    writePrSessionBindingCacheFile(cachePath, concurrent);
+    const staleWrite = writePrSessionBindingCacheFileWithCas(cachePath, observed, staleGeneration);
+    expect(staleWrite.ok).toBe(false);
+    expect(staleWrite.reason).toBe('generation_mismatch');
+    expect(readPrSessionBindingCacheFile(cachePath).generation).toBe(staleGeneration + 1);
   });
 
   it('parses PR number from gh pr create output', () => {

@@ -178,6 +178,42 @@ describe('delivery confirmation signal (AC1)', () => {
     ).toBe(true);
   });
 
+
+  it('fails closed when cache has no binding and backfill cannot resolve session', () => {
+    const run = {
+      prNumber: 180,
+      targetSha: 'abc123',
+      linkedSessionId: 'opk-cache-miss',
+    };
+    const sessions = [
+      {
+        name: 'opk-cache-miss',
+        role: 'worker',
+        status: 'working',
+      },
+    ];
+    const openPrs = [{ number: 180, headRefOid: 'abc123' }];
+    expect(isLinkedSessionLiveOwner(run, sessions, openPrs, { writeBackfill: false })).toBe(false);
+  });
+
+  it('accepts linked session when cache backfill resolves binding', () => {
+    const run = {
+      prNumber: 166,
+      targetSha: 'abc123',
+      linkedSessionId: 'opk-8',
+    };
+    const sessions = [
+      {
+        name: 'opk-8',
+        role: 'worker',
+        prNumber: 166,
+        status: 'working',
+      },
+    ];
+    const openPrs = [{ number: 166, headRefOid: 'abc123' }];
+    expect(isLinkedSessionLiveOwner(run, sessions, openPrs)).toBe(true);
+  });
+
   it('does not confirm when PR head advanced past run targetSha', () => {
     const run = {
       prNumber: 180,

@@ -269,6 +269,57 @@ export function writePrSessionBindingCacheFile(path, store) {
   renameSync(tempPath, path);
 }
 
+/**
+ * @param {string} path
+ * @param {Record<string, unknown>} store
+ * @param {number} expectedGeneration
+ */
+export function writePrSessionBindingCacheFileWithCas(path, store, expectedGeneration) {
+  const expected = asFiniteNumber(expectedGeneration);
+  if (!existsSync(path)) {
+    if (expected !== 0) {
+      return { ok: false, reason: 'generation_mismatch', generation: 0 };
+    }
+    writePrSessionBindingCacheFile(path, store);
+    return { ok: true, generation: asFiniteNumber(store.generation) };
+  }
+  const current = JSON.parse(readFileSync(path, 'utf8'));
+  const liveGeneration = asFiniteNumber(current?.generation);
+  if (liveGeneration !== expected) {
+    return { ok: false, reason: 'generation_mismatch', generation: liveGeneration };
+  }
+  writePrSessionBindingCacheFile(path, store);
+  return { ok: true, generation: asFiniteNumber(store.generation) };
+}
+
+const PUSH_REGISTER_CAS_MAX_ATTEMPTS = 8;
+
+/**
+ * @param {string} cachePath
+ * @param {(store: Record<string, unknown>, nowMs: number) => { ok: boolean, reason?: string, diagnostic?: string }} mutator
+ * @param {number} [nowMs]
+ */
+export function updatePrSessionBindingCacheWithCas(cachePath, mutator, nowMs = Date.now()) {
+  for (let attempt = 0; attempt < PUSH_REGISTER_CAS_MAX_ATTEMPTS; attempt += 1) {
+    const observed = readPrSessionBindingCacheFile(cachePath);
+    const expectedGeneration = asFiniteNumber(observed.generation);
+    const store = createDefaultPrSessionBindingCache(observed);
+    const mutation = mutator(store, nowMs);
+    if (!mutation.ok) {
+      return mutation;
+    }
+    const cas = writePrSessionBindingCacheFileWithCas(cachePath, store, expectedGeneration);
+    if (cas.ok) {
+      return { ok: true, reason: mutation.reason, generation: cas.generation };
+    }
+  }
+  return {
+    ok: false,
+    reason: 'push_register_cache_cas_exhausted',
+    diagnostic: 'generation_mismatch',
+  };
+}
+
 export function buildSessionBindingKey(repoSlug, sessionId) {
   return `${normalizeRepoSlug(repoSlug)}|session:${trimText(sessionId)}`;
 }
@@ -397,8 +448,14 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
     && trimText(existingSession.sessionId) === sessionId
     && asFiniteNumber(existingSession.prNumber) !== prNumber
   ) {
-    const oldPrStillLive = openPrs.length > 0
-      && bindingRecordIsLive(existingSession, openPrs, true, repoSlug);
+    if (openPrs.length === 0) {
+      return {
+        ok: false,
+        reason: COLLISION_REASON,
+        diagnostic: 'ambiguous_binding',
+      };
+    }
+    const oldPrStillLive = bindingRecordIsLive(existingSession, openPrs, true, repoSlug);
     if (oldPrStillLive) {
       return {
         ok: false,
@@ -776,28 +833,31 @@ export function tryPushRegisterFromPrCreate({
 
   try {
     const cachePath = resolvePrSessionBindingCachePath(env);
-    const store = readPrSessionBindingCacheFile(cachePath);
-    const register = registerPrSessionBindingRecord(
-      store,
-      {
-        sessionId: identity.sessionId,
-        prNumber,
-        repoSlug: identity.repoSlug,
-        issueNumber: identity.issueNumber,
-        headSha,
-        source: BINDING_SOURCE_PUSH_REGISTER,
-      },
-      Date.now(),
+    const nowMs = Date.now();
+    const cas = updatePrSessionBindingCacheWithCas(
+      cachePath,
+      (store, writeMs) => registerPrSessionBindingRecord(
+        store,
+        {
+          sessionId: identity.sessionId,
+          prNumber,
+          repoSlug: identity.repoSlug,
+          issueNumber: identity.issueNumber,
+          headSha,
+          source: BINDING_SOURCE_PUSH_REGISTER,
+        },
+        writeMs,
+      ),
+      nowMs,
     );
-    if (!register.ok) {
+    if (!cas.ok) {
       return {
         registered: false,
-        reason: register.reason ?? 'push_register_write_failed',
-        diagnostic: register.diagnostic ?? register.reason,
+        reason: cas.reason ?? 'push_register_write_failed',
+        diagnostic: cas.diagnostic ?? cas.reason,
       };
     }
-    writePrSessionBindingCacheFile(cachePath, store);
-    return { registered: true, reason: register.reason };
+    return { registered: true, reason: cas.reason };
   } catch (error) {
     const message = trimText(error?.message) || 'push_register_cache_io_failed';
     return {

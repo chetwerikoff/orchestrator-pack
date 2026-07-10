@@ -19,10 +19,9 @@ import {
   toArray,
 } from './review-trigger-reconcile.mjs';
 import {
-  lookupBindingByPr,
-  readPrSessionBindingCacheFile,
   resolveBindingRepoSlug,
   resolvePrSessionBindingCachePath,
+  resolvePrSessionBindingForConsumer,
 } from './pr-session-binding-cache.mjs';
 export { resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
 import {
@@ -171,12 +170,21 @@ export function isLinkedSessionLiveOwner(run, sessions, openPrs, options = {}) {
   const headSha = String(run?.targetSha ?? '');
   const repoSlug = resolveBindingRepoSlug(options, openPrs);
   const cachePath = options.cachePath ?? resolvePrSessionBindingCachePath();
-  const cached = lookupBindingByPr(
-    readPrSessionBindingCacheFile(cachePath),
+  const resolution = resolvePrSessionBindingForConsumer({
+    cachePath,
     repoSlug,
     prNumber,
-  );
-  if (cached?.sessionId && cached.sessionId !== linkedId) {
+    headSha,
+    sessions,
+    openPrs,
+    nowMs: options.nowMs ?? Date.now(),
+    writeBackfill: options.writeBackfill ?? true,
+    isLive: (candidate) => isLiveWorkerSession(candidate),
+  });
+  if (!resolution.sessionId || resolution.failClosed) {
+    return false;
+  }
+  if (resolution.sessionId !== linkedId) {
     return false;
   }
 
