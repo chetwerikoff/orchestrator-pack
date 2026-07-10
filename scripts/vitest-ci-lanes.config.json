@@ -176,6 +176,7 @@
     "scripts/terminal-flood-detect.test.ts": "heavy",
     "scripts/test-runtime-budget.test.ts": "heavy",
     "scripts/testmode-fleet-reaper.test.ts": "heavy",
+    "scripts/testmode-fleet-reaper-wallclock.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/trust-ao-worktree.test.ts": "light",
     "scripts/cursor-agent-tui-shim.test.ts": "light",
