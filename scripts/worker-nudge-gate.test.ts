@@ -1241,7 +1241,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       sessionId: 'opk-owner',
       headSha,
       sessions: [
-        { name: 'opk-stale', role: 'worker', prNumber: 380, runtime: 'alive' },
+        { name: 'opk-stale', role: 'worker', runtime: 'alive' },
         {
           name: 'opk-owner',
           role: 'worker',
@@ -1264,7 +1264,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       sessionId: 'opk-stale',
       headSha,
       sessions: [
-        { name: 'opk-stale', role: 'worker', prNumber: 380, runtime: 'alive' },
+        { name: 'opk-stale', role: 'worker', runtime: 'alive' },
         {
           name: 'opk-owner',
           role: 'worker',

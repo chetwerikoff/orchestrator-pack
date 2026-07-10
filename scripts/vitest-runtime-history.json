@@ -363,7 +363,7 @@
     "scripts/trust-ao-worktree.test.ts": "1de172838d6c7820a106ede736c65a64d6a7cded736a1327ebc98890ad5bcfb9",
     "scripts/worker-iteration-cycle.test.ts": "41d3e6501354a1900402f3e608e1156bb9678e50dee1eaf5eaaeb348588e19cb",
     "scripts/worker-message-submit-reconcile.test.ts": "1de724d876c4acc4b065b27402d96161db7f8e91075feb09cd7b7873b034ee18",
-    "scripts/worker-nudge-gate.test.ts": "4942acbe7c675f6048d0c3b2d7afea91cbe51206850cca42040535c618736a77",
+    "scripts/worker-nudge-gate.test.ts": "1c56e83f1bb3543132c9b627dc521993434f338b1f6526e6435d132f5441be09",
     "scripts/worker-nudge-issue-owner-bootstrap.test.ts": "09d45acbacfaf8dd577119443e705bfd5b8cbcf56be1ea126b027e0a5932828f",
     "scripts/worker-nudge-task-continuation-pr-facet.test.ts": "969346d2c0a4a3695b38b0bd96520693334dd8c11376ad923cdfa9f244e09b55",
     "scripts/worker-nudge-task-continuation-tuple.test.ts": "38fc19628b91f4f6ba9b32ffde84a4ce8d46b2ce508bf8300cf24c97ee791f0d",
