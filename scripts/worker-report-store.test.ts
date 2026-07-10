@@ -23,6 +23,16 @@ import {
   writeWorkerReportRecordWithCas,
 } from '../docs/worker-report-store.mjs';
 
+type WorkerReportStoreState = {
+  sourceRecords: Record<string, Record<string, unknown>>;
+  bindingByKey?: Record<string, unknown>;
+  seededKeys?: string[];
+};
+
+function defaultWorkerReportStore(): WorkerReportStoreState {
+  return defaultWorkerReportStore();
+}
+
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workerStoreLib = path.join(repoRoot, 'scripts/lib/WorkerReportStore.ps1');
 const aoCliLib = path.join(repoRoot, 'scripts/lib/Invoke-AoCliJson.ps1');
@@ -43,7 +53,7 @@ function runWorkerStorePwsh(script: string, extraEnv: NodeJS.ProcessEnv = {}) {
 
 describe('worker-report-store-ack-preservation', () => {
   it('preserves addressing_reviews ack when later lifecycle state is written', () => {
-    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const store = defaultWorkerReportStore();
     const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
     const ackRecord = {
       reportState: 'addressing_reviews',
@@ -198,7 +208,7 @@ describe('review-ready-report-state-seed-pack-source', () => {
     expect(aoCliRaw).not.toMatch(/Get-AoAgentReportAuditDir|Merge-AoSessionRowsWithReportAudit/);
     expect(aoCliRaw).toMatch(/Merge-AoSessionRowsWithWorkerReportStore/);
 
-    const store = createDefaultWorkerReportStore();
+    const store = defaultWorkerReportStore();
     store.sourceRecords['org/a|opk-seed|42|deadbeef'] = {
       reportState: 'ready_for_review',
       accepted: true,
@@ -391,7 +401,7 @@ describe('delivery-confirm-pack-ack', () => {
   });
 
   it('mergePackWorkerReportsIntoSessions preserves deliveryRunId on projected rows', () => {
-    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const store = defaultWorkerReportStore();
     store.sourceRecords['org/a|opk-dc|717|abc'] = {
       reportState: 'addressing_reviews',
       accepted: true,
@@ -423,7 +433,7 @@ describe('events-optional-consumer-signal-recovery', () => {
 
 
   it('clears pack-store report overlay when store records were evicted', () => {
-    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const store = defaultWorkerReportStore();
     const session = {
       id: 'opk-stale',
       repoSlug: 'org/a',
@@ -445,7 +455,7 @@ describe('events-optional-consumer-signal-recovery', () => {
 
 describe('worker-report-store-eviction', () => {
   it('evicts terminal PR records and prevents unbounded growth', () => {
-    const store = createDefaultWorkerReportStore();
+    const store = defaultWorkerReportStore();
     const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
     for (let i = 0; i < 20; i += 1) {
       store.sourceRecords[`org/a|s${i}|${100 + i}|head${i}`] = {
@@ -473,7 +483,7 @@ describe('worker-report-store-eviction', () => {
   });
 
   it('preserves records for open PRs missing from a session-scoped open list', () => {
-    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const store = defaultWorkerReportStore();
     const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
     store.sourceRecords['org/a|dead-worker|42|abc42'] = {
       reportState: 'ready_for_review',
@@ -495,7 +505,7 @@ describe('worker-report-store-eviction', () => {
     expect(store.sourceRecords['org/a|dead-worker|42|abc42']).toBeTruthy();
   });
   it('scopes authoritative eviction to the supervised repository', () => {
-    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const store = defaultWorkerReportStore();
     const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
     store.sourceRecords['org/a|a-worker|42|abc42'] = {
       reportState: 'ready_for_review',
@@ -530,7 +540,7 @@ describe('worker-report-store-eviction', () => {
   });
 
   it('does not treat another repo closed PR as terminal for scoped records', () => {
-    const store = createDefaultWorkerReportStore() as WorkerReportStoreState;
+    const store = defaultWorkerReportStore();
     const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
     store.sourceRecords['org/b|b-worker|1|head1'] = {
       reportState: 'working',
@@ -559,7 +569,7 @@ describe('worker-report-store-eviction', () => {
 
 describe('worker-report-store-superseded-head', () => {
   it('seed promotion rejects superseded head', () => {
-    const store = createDefaultWorkerReportStore();
+    const store = defaultWorkerReportStore();
     store.sourceRecords['org/a|opk|1|headA'] = {
       reportState: 'ready_for_review',
       accepted: true,
@@ -581,9 +591,9 @@ describe('worker-report-store-schema-migration', () => {
       deferredScanKeys: ['d1'],
       githubSnapshot: { openPrCount: 1 },
       lastUpdatedMs: 1,
-    });
-    expect(migrated.schemaVersion).toBe(2);
-    expect(migrated.bindingByKey['org/a|12']).toEqual({ prNumber: 12 });
+    }) as WorkerReportStoreState;
+    expect((migrated as { schemaVersion?: number }).schemaVersion).toBe(2);
+    expect(migrated.bindingByKey?.['org/a|12']).toEqual({ prNumber: 12 });
     expect(migrated.seededKeys).toEqual(['k1']);
   });
 });
@@ -712,7 +722,7 @@ describe('worker-report-store-trust-boundary', () => {
 
 describe('worker-report-store-nonterminal-ttl', () => {
   it('evicts stale open-PR records after maxAgeMs', () => {
-    const store = createDefaultWorkerReportStore();
+    const store = defaultWorkerReportStore();
     store.sourceRecords['org/a|opk|9|head9'] = {
       reportState: 'working',
       accepted: true,
@@ -734,7 +744,7 @@ describe('worker-report-store-nonterminal-ttl', () => {
 
 describe('worker-report-store-cross-repo', () => {
   it('repo A records do not attach to repo B sessions', () => {
-    const store = createDefaultWorkerReportStore();
+    const store = defaultWorkerReportStore();
     store.sourceRecords['org/a|opk|1|h1'] = {
       reportState: 'ready_for_review',
       accepted: true,
