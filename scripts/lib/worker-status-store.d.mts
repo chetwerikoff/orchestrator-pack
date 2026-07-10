@@ -45,6 +45,7 @@ export interface WorkerStatusRow {
 
 export interface WorkerStatusStore {
   schemaVersion: number;
+  schemaRejected?: boolean;
   lastUpdatedMs: number | null;
   generation: number;
   repoTickGeneration: number;

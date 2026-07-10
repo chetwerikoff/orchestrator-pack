@@ -49,11 +49,16 @@ export function resolveWorkerStatusStorePath(env = process.env) {
 }
 
 export function createDefaultWorkerStatusStore(raw = {}) {
-  const records = raw.records && typeof raw.records === 'object'
-    ? { ...raw.records }
-    : (raw.rows && typeof raw.rows === 'object' ? { ...raw.rows } : {});
+  const incomingSchema = Number(raw.schemaVersion ?? 0);
+  const schemaRejected = incomingSchema > 0 && incomingSchema !== WORKER_STATUS_STORE_SCHEMA_VERSION;
+  const records = schemaRejected
+    ? {}
+    : (raw.records && typeof raw.records === 'object'
+      ? { ...raw.records }
+      : (raw.rows && typeof raw.rows === 'object' ? { ...raw.rows } : {}));
   return {
     schemaVersion: WORKER_STATUS_STORE_SCHEMA_VERSION,
+    schemaRejected,
     lastUpdatedMs: Number(raw.lastUpdatedMs ?? 0) || null,
     generation: Number(raw.generation ?? 0) || 0,
     repoTickGeneration: Number(raw.repoTickGeneration ?? raw.generation ?? 0) || 0,
@@ -246,6 +251,11 @@ export function fuseWorkerStatus(input = {}) {
   if (reviewActive) {
     return { status: 'review_active', derivedStatus: 'review_active', winningSource: 'github', diagnostics, invalidatedReport: !reportValidation.valid };
   }
+  const binding = input.binding ?? {};
+  if (binding.ok === false) {
+    const reason = String(binding.reason ?? 'binding_miss');
+    return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: reason, diagnostics: [reason] };
+  }
   const reportState = String(report?.reportState ?? report?.report_state ?? '').toLowerCase();
   const ci = deriveCiClass(input.ciChecks ?? gh.ciChecks, input.requiredCheckNames ?? gh.requiredCheckNames, Boolean(input.requiredCheckLookupFailed ?? gh.requiredCheckLookupFailed));
   diagnostics.push(...ci.diagnostics);
@@ -256,6 +266,12 @@ export function fuseWorkerStatus(input = {}) {
     }
     if (ci.ciClass === 'failed') {
       return { status: 'ci_failed', derivedStatus: 'ci_failed', winningSource: 'github_ci', requiredCheckSource: ci.requiredCheckSource, diagnostics };
+    }
+    if (ci.ciClass === 'unknown' && ci.requiredCheckSource === 'lookup_failed') {
+      return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: 'ci_lookup_failed', diagnostics };
+    }
+    if (ci.ciClass !== 'green') {
+      return { status: 'pr_open', derivedStatus: 'pr_open', winningSource: 'github_pr', diagnostics, invalidatedReport: false };
     }
     return { status: 'ready_for_review', derivedStatus: 'ready_for_review', winningSource: 'report_store', diagnostics, webhookAccelerated: Boolean(input.webhookHint) };
   }
@@ -268,11 +284,6 @@ export function fuseWorkerStatus(input = {}) {
   const sessionStatus = String(session.status ?? input.osLiveness?.status ?? input.osLiveness ?? input.status ?? '').toLowerCase();
   if (TERMINAL_SESSION_RE.test(sessionStatus) || input.osLiveness?.dead === true || sessionStatus.includes('gone')) {
     return { status: 'dead', derivedStatus: 'dead', winningSource: 'os_liveness', diagnostics };
-  }
-  const binding = input.binding ?? {};
-  if (binding.ok === false) {
-    const reason = String(binding.reason ?? 'binding_miss');
-    return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: reason, diagnostics: [reason] };
   }
   const waitingInput = Boolean(input.osLiveness?.waitingInput) || WAITING_INPUT_RE.test(sessionStatus) || WAITING_INPUT_RE.test(String(input.sessionActivity ?? ''));
   if (waitingInput) {
@@ -356,6 +367,20 @@ export function evictWorkerStatusRecords(store, sessions = [], nowMs = Date.now(
 
 export function mergeWorkerStatusIntoSessions(sessions, store, nowMs = Date.now(), repoTickGeneration = 0) {
   const normalized = createDefaultWorkerStatusStore(store);
+  if (normalized.schemaRejected) {
+    return toArray(sessions).map((session) => ({
+      ...session,
+      status: 'unknown',
+      workerStatusSource: PACK_WORKER_STATUS_STORE_SURFACE,
+      workerStatus: 'unknown',
+      workerStatusDerived: 'unknown',
+      workerStatusWinningSource: 'degraded',
+      workerStatusDiagnostics: ['unsupported_schema_version'],
+      workerStatusStale: true,
+      workerStatusDegradedReason: 'unsupported_schema_version',
+      degradedReason: 'unsupported_schema_version',
+    }));
+  }
   return toArray(sessions).map((session) => {
     const id = sessionIdOf(session);
     const row = normalized.records[id];
@@ -405,6 +430,15 @@ export function testSiblingReadiness(env = process.env) {
 
 export function readWorkerStatusForDecision(sessionId, store, nowMs = Date.now()) {
   const normalized = createDefaultWorkerStatusStore(store);
+  if (normalized.schemaRejected) {
+    return {
+      status: 'unknown',
+      stale: true,
+      degradedReason: 'unsupported_schema_version',
+      winningSource: 'degraded',
+      diagnostics: ['unsupported_schema_version'],
+    };
+  }
   const row = normalized.records[String(sessionId ?? '').trim()];
   if (!row) {
     return { status: 'unknown', stale: true, degradedReason: 'missing_row', winningSource: 'missing', diagnostics: ['missing_row'] };

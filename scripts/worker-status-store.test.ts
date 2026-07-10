@@ -116,6 +116,27 @@ describe('worker-status fusion precedence', () => {
     expect(result.winningSource).toBe('github_ci');
   });
 
+  it('pending CI blocks valid ready_for_review report', () => {
+    const result = fuseWorkerStatus({
+      sessionId: 'opk-c2c',
+      binding: { ok: true, prNumber: 2, headSha: 'head2' },
+      github: {
+        prOpen: true,
+        headSha: 'head2',
+        reviewRuns: [],
+        ciChecks: [{ name: 'scope-guard', conclusion: '', status: 'in_progress' }],
+        requiredCheckNames: ['scope-guard'],
+        repoTickGeneration: 1,
+      },
+      report: { reportState: 'ready_for_review', headSha: 'head2', prNumber: 2 },
+      osLiveness: 'pane-alive',
+      sourceGeneration: { repoTickGeneration: 1, reportStoreGeneration: 1, journalCursor: 0, bindingCacheGeneration: 1 },
+      nowMs: 1_700_000_000_000,
+    });
+    expect(result.derivedStatus).toBe('pr_open');
+    expect(result.winningSource).toBe('github_pr');
+  });
+
   it('requires open PR before accepting ready_for_review report', () => {
     const result = fuseWorkerStatus({
       sessionId: 'opk-c2c',
@@ -308,6 +329,27 @@ describe('stale status skip silent', () => {
     });
     expect(result.derivedStatus).toBe('unknown');
     expect(result.degradedReason).toBe('binding_miss');
+  });
+
+  it('binding miss blocks valid ready_for_review report (C7b)', () => {
+    const result = fuseWorkerStatus({
+      sessionId: 'opk-c7b',
+      binding: { ok: false, reason: 'binding_miss' },
+      github: {
+        prOpen: true,
+        headSha: 'head7',
+        reviewRuns: [],
+        ciChecks: GREEN_MERGE_CONTRACT_CHECKS,
+        requiredCheckNames: [],
+        repoTickGeneration: 1,
+      },
+      report: { reportState: 'ready_for_review', headSha: 'head7', prNumber: 7 },
+      osLiveness: 'pane-alive',
+      nowMs: 1_700_000_000_000,
+    });
+    expect(result.derivedStatus).toBe('unknown');
+    expect(result.degradedReason).toBe('binding_miss');
+    expect(result.winningSource).toBe('degraded');
   });
 
   it('merge marks stale rows unknown for consumers (C8)', () => {
@@ -557,9 +599,24 @@ describe('worker-status producer-contract cutover guard', () => {
 });
 
 describe('worker-status store schema', () => {
-  it('migrates unknown schema to empty store fail-closed', () => {
-    const store = createDefaultWorkerStatusStore({ schemaVersion: 999 });
+  it('rejects unknown schema with empty records fail-closed', () => {
+    const store = createDefaultWorkerStatusStore({
+      schemaVersion: 999,
+      records: {
+        opk: { sessionId: 'opk', derivedStatus: 'ready_for_review', status: 'ready_for_review' },
+      },
+    });
     expect(store.schemaVersion).toBe(WORKER_STATUS_STORE_SCHEMA_VERSION);
+    expect(store.schemaRejected).toBe(true);
+    expect(Object.keys(store.records)).toHaveLength(0);
+    const merged = mergeWorkerStatusIntoSessions(
+      [{ sessionId: 'opk', status: 'idle', reports: [] }],
+      store,
+      Date.now(),
+      1,
+    );
+    expect(merged[0]?.status).toBe('unknown');
+    expect(merged[0]?.degradedReason).toBe('unsupported_schema_version');
   });
 
   it('readWorkerStatusForDecision returns unknown for missing row', () => {
