@@ -235,6 +235,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'review-orchestrator-loop.mjs',
   'review-cycle-cap.mjs',
   'review-trigger-reconcile.mjs',
+  'pr-session-binding-cache.mjs',
   'session-pr-binding-resolver.mjs',
     'review-delivery-lifecycle.mjs',
   'session-runtime-liveness.mjs',

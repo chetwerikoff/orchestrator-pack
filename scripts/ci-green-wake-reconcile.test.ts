@@ -4,6 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  seedPrSessionBindingCache,
+  useIsolatedPrSessionBindingCache,
+} from './_test-pr-session-binding-cache-fixture.js';
+import {
   DEFAULT_CI_GREEN_WAKE_INTERVAL_MS,
   buildTransitionId,
   classifyRequiredCiLevel,
@@ -128,6 +132,8 @@ describe('deriveGreenEpoch', () => {
 });
 
 describe('resolveHeadOwningWorkerSessionId', () => {
+  useIsolatedPrSessionBindingCache();
+
   it('skips stale live PR session and returns head owner', () => {
     const headSha = 'currenthead';
     const sessions: AoSession[] = [
@@ -149,6 +155,8 @@ describe('resolveHeadOwningWorkerSessionId', () => {
       },
     ];
 
+    seedPrSessionBindingCache('op-owner', 42, headSha);
+
     expect(
       resolveHeadOwningWorkerSessionId(sessions, 42, headSha, [
         { number: 42, headRefOid: headSha },
@@ -158,6 +166,8 @@ describe('resolveHeadOwningWorkerSessionId', () => {
 });
 
 describe('planCiGreenWakeActions', () => {
+  useIsolatedPrSessionBindingCache();
+
   it('(a) nudges pre-hand-off worker when required CI is green', () => {
     const session = liveWorker({
       reports: [
@@ -298,6 +308,7 @@ describe('planCiGreenWakeActions', () => {
 
   it('nudges when first live PR session is stale but a later session owns the head', () => {
     const headSha = 'currenthead';
+    seedPrSessionBindingCache('op-owner', 77, headSha);
     const result = plan({
       openPrs: [{ number: 77, headRefOid: headSha, headCommittedAt: '2026-06-01T00:00:00.000Z' }],
       sessions: [

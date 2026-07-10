@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  seedPrSessionBindingCache,
+  useIsolatedPrSessionBindingCache,
+} from './_test-pr-session-binding-cache-fixture.js';
+import {
   assertLiveSignalSourceBinding,
   DEAD_AO_SIGNAL_SURFACES,
   formatJournalWriteDegradedLog,
@@ -202,6 +206,7 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     }
 
     const openPrs = [{ number: 42, headRefOid: 'abc123', headCommittedAt: '2026-06-01T00:00:00.000Z' }];
+    seedPrSessionBindingCache('op-worker', 42, 'abc123');
     const sessions = [
       liveWorker({
         reports: [{ reportState: 'fixing_ci', reportedAt: '2026-06-01T00:00:00.000Z' }],

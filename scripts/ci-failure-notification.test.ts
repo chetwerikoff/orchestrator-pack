@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  seedPrSessionBindingCache,
+  useIsolatedPrSessionBindingCache,
+} from './_test-pr-session-binding-cache-fixture.js';
+import {
   appendAudit,
   assertTerminalAction,
   buildAdoptionArtifact,
@@ -199,6 +203,7 @@ describe('CI failure notification predicate (Issue #283 regressions)', () => {
 
 
   it('pre-send CI recheck rejects superseded notification target', () => {
+    seedPrSessionBindingCache('session-new', episode.prNumber, episode.headSha);
     const recheck = preSendCiRedRecheck(episode, {
       openPrs: [{ number: episode.prNumber, headRefOid: episode.headSha }],
       sessions: workerState({ targetId: 'session-new', targetGeneration: 'generation-new' }).sessions,
