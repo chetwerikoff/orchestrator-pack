@@ -105,13 +105,8 @@ function Get-WorkerStatusDecisionSessionsCore {
                 repoSlug               = $resolvedRepoSlug
                 githubSnapshot         = $githubSnapshot
                 osLiveness             = if ($osLivenessMap.ContainsKey($sessionId)) { $osLivenessMap[$sessionId] } else { $null }
-                writerGenerationVector = @{
-                    writerSessionId        = $sessionId
-                    reportStoreGeneration  = 0
-                    repoTickGeneration     = $RepoTickGeneration
-                    journalCursor          = 0
-                    bindingCacheGeneration = 0
-                }
+                writerGenerationVector = Get-WorkerStatusWriterGenerationVector -SessionId $sessionId `
+                        -RepoTickGeneration $RepoTickGeneration -GithubSnapshot $githubSnapshot
             } | Out-Null
         }
         catch {

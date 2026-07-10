@@ -316,6 +316,88 @@ function Test-WorkerStatusSiblingReadiness {
     return $result
 }
 
+function Get-WorkerStatusWriterGenerationVector {
+    param(
+        [string]$SessionId = '',
+        [long]$RepoTickGeneration = 0,
+        $GithubSnapshot = $null
+    )
+
+    if (-not (Get-Command Get-WorkerReportStoreState -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'WorkerReportStore.ps1')
+    }
+    if (-not (Get-Command Get-WorkerMessageDispatchJournal -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'Record-WorkerMessageDispatch.ps1')
+    }
+
+    $reportStoreGen = 0
+    try {
+        $reportStore = Get-WorkerReportStoreState
+        if ($null -ne $reportStore.generation) {
+            $reportStoreGen = [long]$reportStore.generation
+        }
+    }
+    catch {
+        $reportStoreGen = 0
+    }
+
+    $journalCursor = 0
+    try {
+        $journal = Get-WorkerMessageDispatchJournal
+        if ($journal) {
+            foreach ($prop in @($journal.Keys)) {
+                if ([string]$prop -match '^_') { continue }
+                $entry = $journal[$prop]
+                if ($null -eq $entry) { continue }
+                $delivered = 0
+                if ($entry -is [hashtable] -and $entry.ContainsKey('deliveredAtMs')) {
+                    $delivered = [long]$entry['deliveredAtMs']
+                }
+                elseif ($null -ne $entry.deliveredAtMs) {
+                    $delivered = [long]$entry.deliveredAtMs
+                }
+                if ($delivered -gt $journalCursor) {
+                    $journalCursor = $delivered
+                }
+            }
+        }
+    }
+    catch {
+        $journalCursor = 0
+    }
+
+    $bindingGen = 0
+    if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
+        foreach ($pr in @($GithubSnapshot.openPrs)) {
+            $headMs = 0
+            $committedAt = ''
+            if ($pr.headCommittedAt) { $committedAt = [string]$pr.headCommittedAt }
+            if ($committedAt) {
+                try {
+                    $headMs = [DateTimeOffset]::Parse($committedAt).ToUnixTimeMilliseconds()
+                }
+                catch {
+                    $headMs = 0
+                }
+            }
+            if ($headMs -gt $bindingGen) {
+                $bindingGen = $headMs
+            }
+        }
+        if ($bindingGen -le 0) {
+            $bindingGen = [long](@($GithubSnapshot.openPrs).Count)
+        }
+    }
+
+    return @{
+        writerSessionId        = $SessionId
+        repoTickGeneration     = $RepoTickGeneration
+        reportStoreGeneration  = $reportStoreGen
+        journalCursor          = $journalCursor
+        bindingCacheGeneration = $bindingGen
+    }
+}
+
 function Write-WorkerStatusRow {
     param(
         [hashtable]$Input,

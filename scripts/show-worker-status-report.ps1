@@ -24,9 +24,9 @@ foreach ($session in $sessions) {
         elseif ($session.name) { $session.name }
         else { $session.sessionId }
     )
-    $lastUpdatedMs = 0
+    $lastUpdatedMs = [long]0
     if ($session.workerStatusLastUpdatedMs) {
-        $lastUpdatedMs = [int]$session.workerStatusLastUpdatedMs
+        $lastUpdatedMs = [long]$session.workerStatusLastUpdatedMs
     }
     $ageMs = if ($lastUpdatedMs -gt 0) { $nowMs - $lastUpdatedMs } else { -1 }
     $rows += [pscustomobject]@{

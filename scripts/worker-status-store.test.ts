@@ -803,6 +803,16 @@ describe('worker-status PowerShell bridge', () => {
     expect(source).toContain('Test-WorkerStatusSessionsNeedPackBindingResolution');
     expect(source).toContain('Invoke-GhOpenPrList -RepoRoot');
   });
+
+  it('preserves live source generations for writer vector (P1)', () => {
+    const store = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    const reader = readFileSync(join(import.meta.dirname, 'lib/Get-WorkerStatusDecisionSessions.ps1'), 'utf8');
+    expect(store).toContain('function Get-WorkerStatusWriterGenerationVector');
+    expect(store).toContain('Get-WorkerReportStoreState');
+    expect(store).toContain('Get-WorkerMessageDispatchJournal');
+    expect(reader).toContain('Get-WorkerStatusWriterGenerationVector');
+    expect(reader).not.toMatch(/reportStoreGeneration\s*=\s*0/);
+  });
 });
 
 
@@ -821,6 +831,8 @@ describe('worker-status operator report', () => {
     const report = readFileSync(join(import.meta.dirname, 'show-worker-status-report.ps1'), 'utf8');
     expect(report).toContain('workerStatusLastUpdatedMs');
     expect(report).not.toContain('workerStatusFreshnessMs');
+    expect(report).toContain('[long]$session.workerStatusLastUpdatedMs');
+    expect(report).not.toContain('[int]$session.workerStatusLastUpdatedMs');
   });
 });
 
