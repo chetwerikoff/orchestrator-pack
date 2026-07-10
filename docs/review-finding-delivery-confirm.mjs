@@ -25,6 +25,10 @@ import {
   resolveDeliveredRunObservedAtMs,
   sessionHasLegacyReportReceiptSurface,
 } from './events-optional-consumer-signal-recovery.mjs';
+import {
+  findPackWorkerAckReportAfterDelivery,
+  PACK_WORKER_REPORT_STORE_SURFACE,
+} from './worker-report-store.mjs';
 
 export { sessionOwnsRunHead };
 
@@ -113,8 +117,8 @@ export function getReportTimestampMs(report) {
 }
 
 /**
- * Legacy report-full / fixture path only. AO 0.10.2 removed ao report and status --reports;
- * live ticks descope worker-ack confirmation to escalation-only (see report_receipt_surface_removed).
+ * Pack report-store / fixture path. AO 0.10.2 removed ao report and status --reports;
+ * live ticks confirm worker-ack only from pack-worker-report-store rows.
  *
  * @param {AoSession} session
  * @param {number} sendObservedAtMs
@@ -261,6 +265,10 @@ export function isDeliveryConfirmed(
 
   if (!sessionHasLegacyReportReceiptSurface(session)) {
     return false;
+  }
+
+  if (String(session?.reportSnapshotKind ?? '') === PACK_WORKER_REPORT_STORE_SURFACE) {
+    return Boolean(findPackWorkerAckReportAfterDelivery(session, run, sendObservedAtMs));
   }
 
   return Boolean(findReviewRoundReportAfterSend(session, sendObservedAtMs));

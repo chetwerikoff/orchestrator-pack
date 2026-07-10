@@ -10,13 +10,17 @@ import {
   managedChildRoles,
   path,
   readMarker,
+  waitForStdoutContains,
   repoRoot,
   runSupervisor,
   spawn,
   spawnSync,
   startSupervisorBackground,
   supervisorScript,
+  waitForMarkerPidChange,
   waitForMarkers,
+  fixedObservationWindow,
+  sleepMs,
   type WakeMarker,
 } from './orchestrator-wake-supervisor.shared.js';
 
@@ -91,17 +95,7 @@ describe('orchestrator-wake-supervisor', () => {
     if (isAlive(first.pid)) {
       process.kill(first.pid, 'SIGKILL');
     }
-    const deadline = Date.now() + 10_000;
-    let restarted = false;
-    while (Date.now() < deadline) {
-      const current = await readMarker(stateDir, 'listener');
-      if (current.pid !== first.pid && isAlive(current.pid)) {
-        restarted = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-    expect(restarted).toBe(true);
+    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 10_000);
     child.kill('SIGTERM');
   });
 
@@ -115,11 +109,12 @@ describe('orchestrator-wake-supervisor', () => {
 
     const listener = await readMarker(stateDir, 'listener');
     const heartbeat = await readMarker(stateDir, 'heartbeat');
+    const heartbeatPidAtKill = heartbeat.pid;
     if (isAlive(listener.pid)) {
       process.kill(listener.pid, 'SIGKILL');
     }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    expect(isAlive(heartbeat.pid)).toBe(true);
+    await fixedObservationWindow(2000);
+    expect(isAlive(heartbeatPidAtKill)).toBe(true);
     child.kill('SIGTERM');
   });
 
@@ -163,7 +158,7 @@ describe('orchestrator-wake-supervisor', () => {
       stdout += chunk.toString();
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await waitForStdoutContains(() => stdout, 'waiting for orchestrator session', 1500);
     expect(stdout).toContain('waiting for orchestrator session');
 
     fs.writeFileSync(
@@ -180,7 +175,7 @@ describe('orchestrator-wake-supervisor', () => {
       } catch {
         // not ready yet
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleepMs(300);
     }
 
     child.kill('SIGTERM');
@@ -246,7 +241,7 @@ describe('orchestrator-wake-supervisor', () => {
         sawNew = true;
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleepMs(500);
     }
     expect(sawNew).toBe(true);
     child.kill('SIGTERM');

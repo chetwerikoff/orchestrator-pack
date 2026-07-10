@@ -953,7 +953,7 @@ describe('wake trigger integration', () => {
       `$env:AO_REVIEW_CLAIM_DIR = '${dirEscaped}'`,
       '$logs = New-Object System.Collections.Generic.List[string]',
       `function Invoke-GhOpenPrList { param([string]$RepoRoot) @(@{ number = 42; headRefOid = '${wakeSha}'; baseRefName = 'main' }) }`,
-      "function Get-AoStatusSessions { @(@{ name = 'opk-11'; role = 'worker'; prNumber = 42; status = 'idle'; reports = @() }) }",
+      "function Get-AoStatusSessionsWithReports { @(@{ name = 'opk-11'; role = 'worker'; prNumber = 42; status = 'idle'; reports = @() }) }",
       'function Get-GhChecksBundleByPr {',
       '  param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)',
       "  @{ ciChecksByPr = @{ '42' = @() }; requiredCheckNamesByPr = @{ '42' = @() }; requiredCheckLookupFailedByPr = @{ '42' = $false } }",

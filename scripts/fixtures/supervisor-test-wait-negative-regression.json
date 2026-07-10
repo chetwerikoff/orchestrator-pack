@@ -1,0 +1,47 @@
+{
+  "issue": 693,
+  "note": "Intentionally misclassified negative regression corpus — must fail guard in isolation",
+  "inScopeFiles": [
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts"
+  ],
+  "approvedPositiveHelpers": [
+    "waitForCondition",
+    "waitForStdoutContains",
+    "waitForMarkerPidChange",
+    "waitForSupervisorLogMatch",
+    "waitForSupervisorLogMatchFromOffset",
+    "waitForMarker",
+    "waitForMarkers",
+    "waitForProcessesStopped",
+    "waitForSupervisorHealthyStatus",
+    "readMarker",
+    "stopSupervisorChild"
+  ],
+  "sites": [
+    {
+      "id": "registry-slow-side-effect-window",
+      "file": "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "anchor": "fixedObservationWindow(6000)",
+      "classification": "positive-convertible",
+      "followingAssertion": "pid unchanged after slow side effect",
+      "rationale": "MISCLASSIFIED: quiescence window incorrectly tagged positive-convertible",
+      "generationBoundary": "pidAtWindowStart"
+    }
+  ],
+  "assertionFingerprints": {},
+  "runtimeEvidence": {
+    "mergeBaseRef": "origin/main",
+    "trackedFiles": [
+      "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
+    ]
+  },
+  "raceFixtures": {
+    "log": "scripts/supervisor-test-wait-race.fixture.test.ts#log-generation-boundary",
+    "marker": "scripts/supervisor-test-wait-race.fixture.test.ts#marker-generation-boundary",
+    "stdout": "scripts/supervisor-test-wait-race.fixture.test.ts#stdout-generation-boundary",
+    "process-exit": "scripts/supervisor-test-wait-race.fixture.test.ts#process-exit-generation-boundary"
+  }
+}

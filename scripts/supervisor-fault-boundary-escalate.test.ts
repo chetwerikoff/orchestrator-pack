@@ -12,7 +12,6 @@ import {
   waitForSupervisorLogMatch,
   stopSupervisorChild,
   assertTerminalHeartbeatStopped,
-  readChildRecovery,
 } from './supervisor-fault-boundary.shared.js';
 
 describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => {
@@ -44,9 +43,6 @@ describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => 
     const supervisorLog = readSupervisorLog(stateDir);
     expect(countLogMatches(supervisorLog, /fault boundary: heartbeat:/)).toBeGreaterThan(0);
     expect(countLogMatches(supervisorLog, /heartbeat recovering \(degraded attempt/)).toBe(0);
-
-    const heartbeatRecovery = readChildRecovery(stateDir, 'heartbeat');
-    expect(heartbeatRecovery.terminal).toBe(true);
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');

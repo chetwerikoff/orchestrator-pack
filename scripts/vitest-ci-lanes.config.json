@@ -48,6 +48,7 @@
     "scripts/autonomous-spawn-worktree-gate.test.ts": "heavy",
     "scripts/autonomous-worker-nudge-boundary.test.ts": "heavy",
     "scripts/check-ci-pipeline-split.test.ts": "heavy",
+    "scripts/check-supervisor-test-wait-inventory.test.ts": "light",
     "scripts/ci-failure-fixing-stint-reconcile.test.ts": "heavy",
     "scripts/ci-failure-notification.test.ts": "heavy",
     "scripts/ci-failure-progress-freshness.test.ts": "heavy",
@@ -149,6 +150,7 @@
     "scripts/stage-completeness-guard.test.ts": "light",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/supervisor-auto-recovery.test.ts": "heavy",
+    "scripts/supervisor-test-wait-race.fixture.test.ts": "light",
     "scripts/supervisor-child-openprs-null.test.ts": "heavy",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "heavy",
     "scripts/terminal-flood-detect.test.ts": "heavy",
@@ -186,7 +188,8 @@
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "heavy",
     "scripts/supervisor-degraded-backoff-restart.test.ts": "heavy",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "heavy",
-    "scripts/testmode-fleet-reaper.test.ts": "heavy"
+    "scripts/testmode-fleet-reaper.test.ts": "heavy",
+    "scripts/worker-report-store.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

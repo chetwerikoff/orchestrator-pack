@@ -12,7 +12,9 @@ import {
   repoRoot,
   runSupervisor,
   startSupervisorBackground,
+  waitForMarkerPidChange,
   waitForMarkers,
+  fixedObservationWindow,
 } from './orchestrator-wake-supervisor.shared.js';
 
 describe('Issue #205 side-process registry', () => {
@@ -59,17 +61,7 @@ describe('Issue #205 side-process registry', () => {
 
     const first = await readMarker(stateDir, 'review-trigger-reconcile');
     const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
-    const deadline = Date.now() + 25_000;
-    let recovered = false;
-    while (Date.now() < deadline) {
-      const current = await readMarker(stateDir, 'review-trigger-reconcile');
-      if (current.pid !== first.pid && isAlive(current.pid)) {
-        recovered = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    expect(recovered).toBe(true);
+    await waitForMarkerPidChange(stateDir, 'review-trigger-reconcile', first.pid, 25_000);
     expect(isAlive(heartbeatBefore.pid)).toBe(true);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     },
@@ -99,9 +91,10 @@ describe('Issue #205 side-process registry', () => {
     await waitForMarkers(stateDir, 25_000, ['ci-green-wake-reconcile']);
 
     const first = await readMarker(stateDir, 'ci-green-wake-reconcile');
-    await new Promise((resolve) => setTimeout(resolve, 6000));
+    const pidAtWindowStart = first.pid;
+    await fixedObservationWindow(6000);
     const current = await readMarker(stateDir, 'ci-green-wake-reconcile');
-    expect(current.pid).toBe(first.pid);
+    expect(current.pid).toBe(pidAtWindowStart);
     expect(isAlive(current.pid)).toBe(true);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     },
