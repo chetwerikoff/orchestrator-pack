@@ -64,6 +64,7 @@ export async function assertTerminalHeartbeatStopped(stateDir: string): Promise<
   await waitForCondition(
     async () => readChildRecovery(stateDir, 'heartbeat').terminal === true,
     25_000,
+    undefined,
     'heartbeat child recovery terminal',
   );
   try {
