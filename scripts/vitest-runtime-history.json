@@ -247,7 +247,7 @@
     "scripts/draft-discipline.test.ts": "7901b3b0fa2fc65cb07769c8940d320636369cf35ca4221e746d220d84687190",
     "scripts/escalation-state-test-isolation.test.ts": "60da74f4752bfece6ebd8fa2ccb770e7f346e67bc1a73da70e0fe23db6e0fde5",
     "scripts/event-consumer-rebind-scenario-matrix.test.ts": "3f4c03a69ae86b06b2c9e21375692d0de8b49d3fdeb694ed561a3709e459e4d4",
-    "scripts/events-optional-consumer-signal-recovery.test.ts": "f3969cb8e4ef854ff5509887e3c7fd5bd31ea7306c8bf43c228526c05c1e1b33",
+    "scripts/events-optional-consumer-signal-recovery.test.ts": "a3729aee49b352c3b5d63f87d64f5c9a9fd2bce45317494d7af2be4e52d15104",
     "scripts/external-output-shape-guard.test.ts": "9e9134dc2cec761d268d1d51b288e6299ffc42b46597bae1804692a484357294",
     "scripts/finding-ledger-guard.test.ts": "5d53246a94fcac136644344bfee5de6bd01e96d6adf2458db0435050c3397697",
     "scripts/gh-inventory-static-guard.test.ts": "bd29163dd356a8d8668d0c773a989d801f02a5dcf43f3af5c6337b5e24467b14",
