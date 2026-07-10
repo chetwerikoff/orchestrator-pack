@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { normalizeSha, toArray } from '../../docs/review-reconcile-primitives.mjs';
 import { classifyRequiredCiLevel } from '../../docs/review-ready-stuck-guard.mjs';
 import { readStdinJson, runStdinJsonCli } from '../../docs/review-mechanical-cli.mjs';
+import { resolveSessionPrBinding } from '../../docs/session-pr-binding-resolver.mjs';
 
 export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
@@ -238,6 +239,45 @@ function latestReport(input = {}) {
       const bt = Date.parse(String(b?.reportedAt ?? b?.timestamp ?? '')) || Number(b?.reportedAtMs ?? b?.lastObservedMs ?? 0);
       return bt - at;
     })[0] ?? null;
+}
+
+
+export function resolveWorkerStatusSessionBinding(input = {}) {
+  const session = input.session ?? {};
+  const openPrs = toArray(input.openPrs ?? input.githubSnapshot?.openPrs);
+  const explicitPr = Number(input.prNumber ?? session.prNumber ?? 0);
+  const headHint = normalizeSha(input.headSha ?? input.githubHead ?? session.ownedHeadSha ?? session.headRefOid);
+  if (explicitPr > 0) {
+    const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === explicitPr);
+    return {
+      ok: true,
+      prNumber: explicitPr,
+      headSha: headHint || normalizeSha(prRow?.headRefOid),
+      bindingSource: 'explicit_pr',
+    };
+  }
+  const binding = resolveSessionPrBinding(session, openPrs, {
+    headSha: headHint || undefined,
+    sessionDetail: input.sessionDetail ?? null,
+  });
+  if (binding.bound && Number(binding.prNumber ?? 0) > 0) {
+    const prNumber = Number(binding.prNumber);
+    const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === prNumber);
+    return {
+      ok: true,
+      prNumber,
+      headSha: normalizeSha(prRow?.headRefOid) || headHint,
+      bindingSource: binding.source,
+      enriched: Boolean(binding.enriched),
+    };
+  }
+  return {
+    ok: false,
+    reason: String(binding.deferReason ?? 'binding_miss'),
+    prNumber: 0,
+    headSha: headHint,
+    bindingSource: binding.source ?? 'none',
+  };
 }
 
 export function fuseWorkerStatus(input = {}) {
@@ -558,6 +598,7 @@ runStdinJsonCli('scripts/lib/worker-status-store.mjs', {
     const payload = readStdinJson();
     return evaluateWorkerStatusKillSwitch(payload.env ?? process.env);
   },
+  resolveSessionBinding: () => resolveWorkerStatusSessionBinding(readStdinJson()),
   testSiblingReadiness: () => {
     const payload = readStdinJson();
     return testSiblingReadiness(payload.env ?? process.env);

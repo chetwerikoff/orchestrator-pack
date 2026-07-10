@@ -83,6 +83,18 @@ export declare function resolveWorkerStatusStorePath(env?: Record<string, unknow
 export declare function createDefaultWorkerStatusStore(raw?: Record<string, unknown>): WorkerStatusStore;
 export declare function readWorkerStatusStoreFile(path: string): WorkerStatusStore;
 export declare function writeWorkerStatusStoreFile(path: string, store: WorkerStatusStore | Record<string, unknown>): void;
+export interface WorkerStatusSessionBindingResult {
+  ok: boolean;
+  reason?: string;
+  prNumber?: number;
+  headSha?: string;
+  bindingSource?: string;
+  enriched?: boolean;
+}
+
+export declare function resolveWorkerStatusSessionBinding(
+  input: Record<string, unknown>,
+): WorkerStatusSessionBindingResult;
 export declare function fuseWorkerStatus(input: Record<string, unknown>): FuseWorkerStatusResult;
 export declare function validateReportAgainstHead(
   report: Record<string, unknown> | null | undefined,

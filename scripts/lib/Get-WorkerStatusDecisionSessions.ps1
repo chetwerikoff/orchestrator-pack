@@ -88,6 +88,9 @@ function Get-WorkerStatusDecisionSessionsCore {
         $githubSnapshot = New-WorkerStatusEmptyGithubSnapshot
     }
 
+    . (Join-Path $PSScriptRoot 'Get-WorkerOsLiveness.ps1')
+    $osLivenessMap = Get-WorkerOsLivenessMap -Sessions $sessions
+
     foreach ($session in $sessions) {
         $sessionId = [string]$(
             if ($session.id) { $session.id }
@@ -101,6 +104,7 @@ function Get-WorkerStatusDecisionSessionsCore {
                 reports                = @($session.reports)
                 repoSlug               = $resolvedRepoSlug
                 githubSnapshot         = $githubSnapshot
+                osLiveness             = if ($osLivenessMap.ContainsKey($sessionId)) { $osLivenessMap[$sessionId] } else { $null }
                 writerGenerationVector = @{
                     writerSessionId        = $sessionId
                     reportStoreGeneration  = 0

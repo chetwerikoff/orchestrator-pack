@@ -19,6 +19,7 @@ import {
   writeWorkerStatusStoreFile,
   evaluateWorkerStatusKillSwitch,
   WORKER_STATUS_STORE_SCHEMA_VERSION,
+  resolveWorkerStatusSessionBinding,
 } from './lib/worker-status-store.mjs';
 import type { RecomputeWorkerStatusRowResult } from './lib/worker-status-store.mjs';
 declare module '../docs/review-producer-contract.mjs' {
@@ -687,6 +688,45 @@ describe('worker-status store schema', () => {
 });
 
 
+
+describe('worker-status pack session binding', () => {
+  const openPr729 = {
+    number: 729,
+    headRefOid: 'head729abc',
+    headRefName: 'issue-720-worker-status-store',
+    state: 'open',
+  };
+  const issueOnlyRow = {
+    id: 'opk-720',
+    sessionId: 'opk-720',
+    name: 'opk-720',
+    role: 'worker',
+    issueId: '720',
+    status: 'working',
+  };
+
+  it('resolves issue-only worker rows through pack session binding (P1)', () => {
+    const binding = resolveWorkerStatusSessionBinding({
+      session: issueOnlyRow,
+      openPrs: [openPr729],
+      headSha: 'head729abc',
+    });
+    expect(binding.ok).toBe(true);
+    expect(binding.prNumber).toBe(729);
+    expect(binding.headSha).toBe('head729abc');
+    expect(binding.bindingSource).toBe('issue_correlation');
+  });
+
+  it('marks binding miss when pack resolver cannot attach a PR', () => {
+    const binding = resolveWorkerStatusSessionBinding({
+      session: issueOnlyRow,
+      openPrs: [],
+    });
+    expect(binding.ok).toBe(false);
+    expect(binding.reason).toBeTruthy();
+  });
+});
+
 describe('worker-status PowerShell bridge', () => {
   it('collects PR numbers from pack report bindings for GitHub snapshot', () => {
     const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
@@ -704,6 +744,18 @@ describe('worker-status PowerShell bridge', () => {
     const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
     expect(source).toContain('schemaRejected = $true');
     expect(source).toContain('empty_worker_status_store');
+  });
+
+  it('feeds real OS liveness into fusion (P2)', () => {
+    const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    expect(source).toContain('Get-WorkerOsLiveness');
+    expect(source).not.toMatch(/osLiveness\s*=\s*'pane-alive'/);
+  });
+
+  it('loads open PR inventory when pack binding resolution is required', () => {
+    const source = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    expect(source).toContain('Test-WorkerStatusSessionsNeedPackBindingResolution');
+    expect(source).toContain('Invoke-GhOpenPrList -RepoRoot');
   });
 });
 

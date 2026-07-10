@@ -9,6 +9,7 @@ $Script:PackWorkerStatusStoreSurface = 'pack-worker-status-store'
 $Script:WorkerStatusKillSwitchEnv = 'PACK_WORKER_STATUS_STORE_DISABLED'
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Get-WorkerOsLiveness.ps1')
 
 function Import-WorkerStatusGithubDependencies {
     if ($script:WorkerStatusGithubDependenciesLoaded) {
@@ -57,6 +58,64 @@ function Get-WorkerStatusTrackedPrNumbers {
     return @($tracked | Sort-Object -Unique)
 }
 
+
+function Test-WorkerStatusSessionsNeedPackBindingResolution {
+    param([object[]]$Sessions = @())
+
+    foreach ($session in @($Sessions)) {
+        if ($null -ne $session.prNumber) {
+            $pr = 0
+            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
+                continue
+            }
+        }
+        $hasReportPr = $false
+        foreach ($report in @($session.reports)) {
+            if ($null -eq $report) { continue }
+            $reportPr = 0
+            if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
+                $hasReportPr = $true
+                break
+            }
+        }
+        if ($hasReportPr) { continue }
+        if ($null -ne $session.issueId -or $null -ne $session.issueNumber) {
+            return $true
+        }
+        $displayName = [string]$session.displayName
+        if ($displayName -and $displayName -match '^\d+$') {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Resolve-WorkerStatusSessionBinding {
+    param(
+        [object]$Session,
+        [object]$GithubSnapshot,
+        [int]$PrNumber = 0,
+        [string]$HeadSha = ''
+    )
+
+    if ($PrNumber -gt 0) {
+        return @{ ok = $true; prNumber = $PrNumber; headSha = $HeadSha }
+    }
+    $openPrPayload = @()
+    if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
+        foreach ($pr in @($GithubSnapshot.openPrs)) {
+            $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
+        }
+    }
+    $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $Session
+    return Invoke-WorkerStatusStoreCli -Subcommand 'resolveSessionBinding' -Payload @{
+        session  = $sessionPayload
+        openPrs  = $openPrPayload
+        headSha  = $HeadSha
+        prNumber = $PrNumber
+    }
+}
+
 function Get-WorkerStatusRecomputeGithubSnapshot {
     param(
         [string]$RepoRoot = '',
@@ -69,7 +128,11 @@ function Get-WorkerStatusRecomputeGithubSnapshot {
     $empty = New-WorkerStatusEmptyGithubSnapshot -RepoRoot $repoRoot
     try {
         $tracked = @(Get-WorkerStatusTrackedPrNumbers -Sessions $Sessions)
-        $openPrs = if ($tracked.Count -gt 0) {
+        $needsPackBinding = Test-WorkerStatusSessionsNeedPackBindingResolution -Sessions $Sessions
+        $openPrs = if ($needsPackBinding) {
+            @(Invoke-GhOpenPrList -RepoRoot $repoRoot -Consumer 'worker-status-recompute')
+        }
+        elseif ($tracked.Count -gt 0) {
             @(Invoke-GhOpenPrListForNumbers -RepoRoot $repoRoot -PrNumbers $tracked -Consumer 'worker-status-recompute')
         }
         else {
@@ -332,6 +395,24 @@ function Write-WorkerStatusRow {
     elseif ($session.state) { $sessionActivity = [string]$session.state }
 
     $githubSnapshot = $payload.githubSnapshot
+
+    $binding = Resolve-WorkerStatusSessionBinding -Session $session -GithubSnapshot $githubSnapshot `
+        -PrNumber $prNumber -HeadSha $headSha
+    if ($binding.ok) {
+        $prNumber = [int]$binding.prNumber
+        if ($binding.headSha) { $headSha = [string]$binding.headSha }
+    }
+    else {
+        $bindingReason = 'binding_miss'
+        if ($binding.reason) { $bindingReason = [string]$binding.reason }
+        $binding = @{
+            ok       = $false
+            reason   = $bindingReason
+            prNumber = $prNumber
+            headSha  = $headSha
+        }
+    }
+
     $githubBlock = $payload.github
     if (-not $githubBlock) {
         $githubBlock = Resolve-WorkerStatusSessionGithubBlock -Session $session -Snapshot $githubSnapshot `
@@ -349,12 +430,17 @@ function Write-WorkerStatusRow {
     }
     $githubBlock['repoTickGeneration'] = $repoTickGen
 
+    $osLiveness = $payload.osLiveness
+    if (-not $osLiveness) {
+        $osLiveness = Get-WorkerOsLiveness -SessionId $sessionId
+    }
+
     $recomputePayload = @{
         sessionId        = $sessionId
-        binding          = @{ ok = $true; prNumber = $prNumber; headSha = $headSha }
+        binding          = $binding
         github           = $githubBlock
         report           = $report
-        osLiveness       = 'pane-alive'
+        osLiveness       = $osLiveness
         sessionActivity  = $sessionActivity
         sourceGeneration = @{
             repoTickGeneration     = $repoTickGen
