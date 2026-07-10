@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -5641,10 +5641,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-184",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-193",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 184
+        "line": 193
       },
       "callee": {
         "kind": "other-external",
@@ -5659,17 +5659,17 @@
       "hashPinnedSourceHash": "sha256:71e152e93759d1797e5b44c2a17bc9205794773f82a55bc8846d7472d6d936d5",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 184,
+        "line": 193,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-198",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-207",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 198
+        "line": 207
       },
       "callee": {
         "kind": "other-external",
@@ -5684,17 +5684,17 @@
       "hashPinnedSourceHash": "sha256:8666cbaf29faefd82a8e44fc3fa4fb6d930500dbd64cdd121d1ee9d114958945",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 198,
+        "line": 207,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-214",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-223",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 214
+        "line": 223
       },
       "callee": {
         "kind": "other-external",
@@ -5709,17 +5709,17 @@
       "hashPinnedSourceHash": "sha256:598b1f70c73850594b752cb1c8ffd81db0d23d7a7cc0a23b34382697198c6c95",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 214,
+        "line": 223,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-217",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-226",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 217
+        "line": 226
       },
       "callee": {
         "kind": "other-external",
@@ -5734,17 +5734,17 @@
       "hashPinnedSourceHash": "sha256:b58e402901c7cce73fc723366ac97de1e8482161a94426422f83806842f2127e",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 217,
+        "line": 226,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-266",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-275",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 266
+        "line": 275
       },
       "callee": {
         "kind": "other-external",
@@ -5759,7 +5759,7 @@
       "hashPinnedSourceHash": "sha256:9c319458342edafbc23f8abb7f7614746a8df4536b5732cec27a36a8631ee92c",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 266,
+        "line": 275,
         "patternIds": [
           "ps-call-op"
         ]
