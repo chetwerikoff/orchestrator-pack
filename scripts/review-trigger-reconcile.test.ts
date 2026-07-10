@@ -5,16 +5,17 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  getIsolatedBindingCachePath,
+  seedPrSessionBindingCache,
+  useIsolatedPrSessionBindingCache,
+} from './_test-pr-session-binding-cache-fixture.js';
+import {
   NOT_READY_COMPONENT_PRECEDENCE,
   choosePrimaryNotReadyComponent,
 } from '../docs/review-head-ready.mjs';
 import {
-  BINDING_SOURCE_PUSH_REGISTER,
-  createDefaultPrSessionBindingCache,
   readPrSessionBindingCacheFile,
-  registerPrSessionBindingRecord,
   resolvePrSessionBindingCachePath,
-  writePrSessionBindingCacheFile,
 } from '../docs/pr-session-binding-cache.mjs';
 import {
   DEFAULT_RECONCILE_INTERVAL_MS,
@@ -49,40 +50,11 @@ const greenChecks = [
   { name: 'Self-architect lint', state: 'SUCCESS' },
 ];
 
-let isolatedBindingCachePath = '';
-
-beforeEach(() => {
-  isolatedBindingCachePath = path.join(
-    mkdtempSync(path.join(tmpdir(), 'review-trigger-binding-cache-')),
-    'cache.json',
-  );
-  process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
-});
-
-function seedBindingCache(
-  sessionId: string,
-  prNumber: number,
-  headSha = '',
-  repoSlug = 'chetwerikoff/orchestrator-pack',
-) {
-  const store = createDefaultPrSessionBindingCache();
-  registerPrSessionBindingRecord(
-    store,
-    {
-      sessionId,
-      prNumber,
-      repoSlug,
-      headSha,
-      source: BINDING_SOURCE_PUSH_REGISTER,
-    },
-    Date.now(),
-  );
-  writePrSessionBindingCacheFile(isolatedBindingCachePath, store);
-}
+useIsolatedPrSessionBindingCache();
 
 function headOwnerOptions(extra: Record<string, unknown> = {}) {
   return {
-    cachePath: isolatedBindingCachePath,
+    cachePath: getIsolatedBindingCachePath(),
     repoSlug: 'chetwerikoff/orchestrator-pack',
     ...extra,
   };
@@ -708,7 +680,7 @@ describe('planReconcileActions', () => {
         headOwnerOptions(),
       );
       expect(ambiguousLegacyId).toBeNull();
-      seedBindingCache('opk-strict-owner', 92, 'newhead92abcd');
+      seedPrSessionBindingCache('opk-strict-owner', 92, 'newhead92abcd');
       const cacheBackedId = resolveHeadOwningWorkerSessionId(
         fixture.sessions,
         92,
@@ -747,7 +719,7 @@ describe('planReconcileActions', () => {
 
     it('AC10d: implicit owner ambiguity still honors ready_for_review report binding', () => {
       const fixture = loadFixture('implicit-ready-report-handoff.json');
-      seedBindingCache('op-ready', fixture.openPrs[0].number, fixture.openPrs[0].headRefOid);
+      seedPrSessionBindingCache('op-ready', fixture.openPrs[0].number, fixture.openPrs[0].headRefOid);
       const starts = startReviewActions(planReconcile(fixture));
       expect(starts).toHaveLength(1);
       expect(starts[0]?.sessionId).toBe('op-ready');
@@ -991,7 +963,7 @@ describe('resolveWorkerSessionId', () => {
 
   it('prefers head-owning worker over stale live worker on the same PR', () => {
     const headSha = 'currenthead57';
-    seedBindingCache('op-ready', 57, headSha);
+    seedPrSessionBindingCache('op-ready', 57, headSha);
     expect(
       resolveHeadOwningWorkerSessionId(
         [
@@ -1020,7 +992,7 @@ describe('resolveWorkerSessionId', () => {
 
   it('prefers worker with ready_for_review report when multiple live workers match PR', () => {
     const headSha = 'currenthead58';
-    seedBindingCache('op-ready', 58, headSha);
+    seedPrSessionBindingCache('op-ready', 58, headSha);
     const actions = planReconcile({
       openPrs: [{ number: 58, headRefOid: headSha, headCommittedAt: '2026-06-05T11:00:00.000Z' }],
       reviewRuns: [],

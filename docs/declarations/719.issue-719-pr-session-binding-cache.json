@@ -5,15 +5,14 @@
   "supersedes": null,
   "created_at": "2026-07-10T06:00:00.000Z",
   "baseline": {
-    "commit_sha": "e67bb593184710ce7165292eeb41c2ba5d168071",
+    "commit_sha": "090c51806dcee1b698f29887af6d12a5710a6d50",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:issue719prsessionbindingcache"
   },
   "declared_paths": [],
   "declared_globs": [
     "scripts/**",
-    "docs/**",
-    "tests/**"
+    "docs/**"
   ],
   "amendments": []
 }
