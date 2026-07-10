@@ -27,7 +27,7 @@
   ],
   "fallbackClassification": "derived",
   "targetShardSeconds": 900,
-  "heavyLaneTotalWeightSeconds": 8588,
+  "heavyLaneTotalWeightSeconds": 8618,
   "underProvisioned": false,
   "rawDerivedCount": 10,
   "weightInputReason": null,

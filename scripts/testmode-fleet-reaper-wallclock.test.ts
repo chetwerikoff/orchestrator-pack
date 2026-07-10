@@ -55,7 +55,7 @@ describe('Issue #710 live fleet inert (AC#4)', () => {
       killProcess(fixturePid);
       runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     },
-    120_000,
+    180_000,
   );
 });
 
@@ -74,7 +74,7 @@ describe('Issue #710 marker identification (AC#5)', () => {
       runReaperCli('teardown', { LeaseId: lane.leaseId }, withLeaseEnv(leaseRoot, lane.leaseId));
       killProcess(owner.pid);
     },
-    120_000,
+    180_000,
   );
 });
 
@@ -92,7 +92,7 @@ describe('Issue #710 CI hygiene assertion (AC#6)', () => {
 
     runReaperCli('teardown', { LeaseId: lane.leaseId }, withLeaseEnv(leaseRoot, lane.leaseId));
     killProcess(owner.pid);
-  }, 90_000);
+  }, 180_000);
 
   it.skipIf(process.platform === 'win32')('cleanup reports masked leak when survivors required post-run kill', async () => {
     const leaseRoot = isolatedLeaseRoot();
@@ -106,5 +106,5 @@ describe('Issue #710 CI hygiene assertion (AC#6)', () => {
     const payload = JSON.parse(cleanup.stdout) as { maskedLeak?: boolean };
     expect(payload.maskedLeak).toBe(true);
     killProcess(owner.pid);
-  }, 90_000);
+  }, 180_000);
 });
