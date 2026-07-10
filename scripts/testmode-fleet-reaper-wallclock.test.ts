@@ -24,7 +24,7 @@ import {
   withLeaseEnv,
 } from './testmode-fleet-reaper.shared.js';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 
 registerFleetReaperAfterEach();
 

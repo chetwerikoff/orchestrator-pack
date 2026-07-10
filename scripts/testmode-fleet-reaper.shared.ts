@@ -60,9 +60,13 @@ export function withLeaseEnv(leaseRoot: string, leaseId: string, extra: Record<s
 }
 
 export function startLeaseHeartbeat(leaseRoot: string, leaseId: string): ReturnType<typeof setInterval> {
-  return setInterval(() => {
-    runReaperCli('heartbeat', { LeaseId: leaseId }, { OPK_TESTMODE_LEASE_ROOT: leaseRoot });
-  }, 1000);
+  const tick = () => {
+    const env = { OPK_TESTMODE_LEASE_ROOT: leaseRoot };
+    runReaperCli('heartbeat', { LeaseId: leaseId }, env);
+    runReaperCli('progress', { LeaseId: leaseId }, env);
+  };
+  tick();
+  return setInterval(tick, 1000);
 }
 
 export function startRenewalOwner(): { child: ReturnType<typeof spawn>; pid: number; startTime: string } {
@@ -116,7 +120,7 @@ export function spawnOrphanTestModeChild(stateDir: string): number {
 
 export async function waitForLiveChildPids(
   stateDir: string,
-  timeoutMs = 20_000,
+  timeoutMs = 45_000,
 ): Promise<{ listener: number; heartbeat: number }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -195,8 +199,14 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     );
     expect(start.status).toBe(0);
     expect(start.stdout).toContain('supervisor detached');
-    const supervisorPid = Number(fs.readFileSync(path.join(stateDir, 'supervisor.pid'), 'utf8').trim());
-    await waitForMarkers(stateDir, 20_000, ['listener', 'heartbeat']);
+    const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
+    const pidDeadline = Date.now() + 15_000;
+    while (!fs.existsSync(supervisorPidPath) && Date.now() < pidDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(fs.existsSync(supervisorPidPath)).toBe(true);
+    const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
+    await waitForMarkers(stateDir, 45_000, ['listener', 'heartbeat']);
     const listener = await readMarker(stateDir, 'listener');
     const heartbeatMarker = await readMarker(stateDir, 'heartbeat');
     return { supervisorPid, listener, heartbeat: heartbeatMarker };

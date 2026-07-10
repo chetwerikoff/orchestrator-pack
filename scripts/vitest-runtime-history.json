@@ -357,7 +357,7 @@
     "scripts/terminal-flood-detect.test.ts": "41cb70f65e146857c9f43fe605ab54ab25d71acfb511fe239070bc7d81feeb96",
     "scripts/test-runtime-budget.test.ts": "e03e0075130a4476a8d3f23061ce4b33a2764b57d84fbab1423d7de9f3002222",
     "scripts/testmode-fleet-reaper.test.ts": "45c2445827b9c83ce51d5ddc23b174ec4b8f6de6ed042cfce7f53cd5328bdb73",
-    "scripts/testmode-fleet-reaper-wallclock.test.ts": "39ebe5b5069e5c294c5da66a868b44151872e3a18bbbcdcd3d8d2a659b565d8d",
+    "scripts/testmode-fleet-reaper-wallclock.test.ts": "ca6203c7f318fd94754fe88f862ccfda7b4cc96435374e614963d0acf6cb353d",
     "scripts/tier-gate-guard.test.ts": "a02e366eac5c1296fa700d8da2b0e16103b645e38be45654f6096d1a1ea5c8e1",
     "scripts/trust-ao-worktree.test.ts": "1de172838d6c7820a106ede736c65a64d6a7cded736a1327ebc98890ad5bcfb9",
     "scripts/worker-iteration-cycle.test.ts": "41d3e6501354a1900402f3e608e1156bb9678e50dee1eaf5eaaeb348588e19cb",
