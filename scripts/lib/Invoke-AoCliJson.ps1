@@ -10,6 +10,8 @@ $Script:AoEventsCliProbeState = $null
 $Script:AoEventsDegradedClassification = $null
 
 . (Join-Path $PSScriptRoot 'WorkerReportStore.ps1')
+. (Join-Path $PSScriptRoot 'WorkerStatusStore.ps1')
+. (Join-Path $PSScriptRoot 'Get-WorkerStatusDecisionSessions.ps1')
 
 function ConvertFrom-AoCliPrefixedOutput {
     param(

@@ -348,7 +348,7 @@ describe('review-start-envelope-ledger unit', () => {
     const seedPath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1');
     const src = readFileSync(seedPath, 'utf8');
     expect(src).toMatch(/Invoke-ReviewStartScopedGhPrView/);
-    expect(src).toMatch(/Get-AoStatusSessionsWithReportsIncludingTerminated/);
+    expect(src).toMatch(/Get-WorkerStatusDecisionSessionsIncludingTerminated/);
     expect(src).toMatch(/Invoke-ReviewStartSupervisedGh/);
     expect(src).not.toMatch(/Get-ClaimedReviewStartReevalFreshSnapshot/);
     expect(src).toMatch(/transportFailure\s*=\s*\$transport/);

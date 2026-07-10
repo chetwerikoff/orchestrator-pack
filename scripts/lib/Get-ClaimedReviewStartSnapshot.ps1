@@ -87,7 +87,7 @@ function Get-ClaimedReviewStartSnapshot {
         }
         Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot -Namespace $namespace
     )
-    $sessions = @(Get-AoStatusSessionsWithReports)
+    $sessions = @(Get-WorkerStatusDecisionSessions)
     $checksBundle = & $ResolveChecksBundle $openPrs $PrNumber $RepoRoot
     return @{
         openPrs                       = @($openPrs)

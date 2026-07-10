@@ -57,6 +57,22 @@ export function assertNoRemovedReportReceiptSurface(value) {
   return true;
 }
 
+/** Post-cutover daemon composite readers forbidden for status decisions (Issue #720). */
+export const REMOVED_DECISION_STATUS_SURFACES = [
+  'Get-AoStatusSessionsWithReports',
+  'Get-AoStatusSessionsWithReportsIncludingTerminated',
+];
+
+export function assertNoDaemonStatusDecisionRead(value) {
+  const text = String(value ?? '');
+  for (const surface of REMOVED_DECISION_STATUS_SURFACES) {
+    if (text.includes(surface)) {
+      throw new Error(`daemon status decision read forbidden: ${surface}`);
+    }
+  }
+  return true;
+}
+
 /**
  * @typedef {{
  *   id?: string,

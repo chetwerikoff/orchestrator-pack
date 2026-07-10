@@ -764,6 +764,22 @@ else {
     $script:VerifyFailed = $true
 }
 
+$workerStatusDecisionReadCheck = Join-Path $Root 'scripts/check-worker-status-decision-reads.ps1'
+if (Test-Path -LiteralPath $workerStatusDecisionReadCheck -PathType Leaf) {
+    & $workerStatusDecisionReadCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-worker-status-decision-reads.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        $script:VerifyFailed = $true
+    }
+    else {
+        Write-Check 'scripts/check-worker-status-decision-reads.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-worker-status-decision-reads.ps1' 'FAIL' 'missing'
+    $script:VerifyFailed = $true
+}
+
 
 
 Write-Host '== pack worker report contract (Issue #717) =='

@@ -21,6 +21,29 @@ $env:OPK_TESTMODE_FLEET_WORKSPACE_ROOT = $Root
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
 . (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
 Set-OpkVitestHarnessEnv | Out-Null
+. (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
+
+function Invoke-HeavyShardFleetCleanup {
+    param([int]$Shard)
+
+    $reaperScript = Join-Path $Root 'scripts/invoke-testmode-fleet-reaper.ps1'
+    $laneContexts = @(Get-TestModeVitestLaneLeaseContexts -Shard ([string]$Shard))
+    if ($laneContexts.Count -eq 0) {
+        Import-TestModeVitestLaneLeaseContext -Shard ([string]$Shard) | Out-Null
+        if ($env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $laneContexts = @([pscustomobject]@{
+                leaseId   = [string]$env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+                leaseRoot = [string]$env:OPK_TESTMODE_LEASE_ROOT
+            })
+        }
+    }
+
+    foreach ($ctx in $laneContexts) {
+        if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
+        if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript cleanup 2>&1 | Write-Host
+    }
+}
 
 Push-Location $Root
 try {
@@ -106,6 +129,7 @@ try {
                         }
                         if ($attempt -lt $maxFileAttempts) {
                             Write-Host "[WARN] Vitest worker RPC flake on heavy shard $Shard invocation $($invocation.label) (attempt $attempt/$maxFileAttempts); retrying..."
+                            Invoke-HeavyShardFleetCleanup -Shard $Shard
                             Start-Sleep -Seconds 5
                             continue
                         }
@@ -115,6 +139,12 @@ try {
 
                     if ($LASTEXITCODE -ne 0) {
                         $failedExitCode = $LASTEXITCODE
+                        if ($attempt -lt $maxFileAttempts) {
+                            Write-Host "[WARN] Vitest heavy shard $Shard invocation $($invocation.label) failed (attempt $attempt/$maxFileAttempts, exit=$failedExitCode); cleaning fleet and retrying..."
+                            Invoke-HeavyShardFleetCleanup -Shard $Shard
+                            Start-Sleep -Seconds 5
+                            continue
+                        }
                         break
                     }
 
@@ -128,6 +158,7 @@ try {
                 }
 
                 if (-not $invocationPassed) {
+                    Invoke-HeavyShardFleetCleanup -Shard $Shard
                     continue
                 }
 
@@ -183,7 +214,6 @@ try {
 
     $hygieneExitCode = 0
     $reaperScript = Join-Path $Root 'scripts/invoke-testmode-fleet-reaper.ps1'
-    . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
     $laneContexts = @(Get-TestModeVitestLaneLeaseContexts -Shard ([string]$Shard))
     if ($laneContexts.Count -eq 0) {
         Import-TestModeVitestLaneLeaseContext -Shard ([string]$Shard) | Out-Null

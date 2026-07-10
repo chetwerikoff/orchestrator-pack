@@ -94,7 +94,7 @@ function Get-ReviewTriggerReevalSnapshot {
     }
 
     $reviewRuns = Get-AoReviewRuns -Project $ProjectId
-    $sessions = Get-AoStatusSessionsWithReports
+    $sessions = Get-WorkerStatusDecisionSessions
     $checksBundle = Get-ReviewTriggerReevalChecksByPr -OpenPrs $resolvedOpenPrs
 
     return @{

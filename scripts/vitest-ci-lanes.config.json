@@ -192,6 +192,7 @@
     "scripts/worker-report-store.test.ts": "light",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",
+    "scripts/worker-status-store.test.ts": "light",
     "tests/agents-md-relocation.test.ts": "light",
     "tests/agents-md-size-budget.test.ts": "light"
   },

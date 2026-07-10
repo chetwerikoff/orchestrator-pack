@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
   createGithubFleetCacheHarness,
+  spawnPwsh,
   spawnPwshParallel,
   type FleetHarness,
 } from './github-fleet-cache-test-harness.js';
@@ -82,7 +83,7 @@ Write-Output 'done'
     expect(countAuditMatches(harness.auditFile, /\brepo view\b/)).toBe(0);
   });
 
-  it('propagates populate errors to waiters without silent per-child fallback', () => {
+  it('propagates populate errors to waiters without silent per-child fallback', async () => {
     harness = createGithubFleetCacheHarness();
     writeFileSync(
       join(harness.root, 'bin/gh'),
@@ -98,24 +99,16 @@ try {
   throw 'expected failure'
 }
 catch {
-  if ($_.Exception.Message -notmatch 'gh pr list failed') { throw }
+  if ($_.Exception.Message -notmatch 'gh pr list failed|snapshot_populate_failed') { throw }
   Write-Output 'failed-expected'
 }
 `;
-    const first = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', workerScript], {
-      cwd: repoRoot,
-      env: harness.env,
-      encoding: 'utf8',
-    });
-    expect(first.status).toBe(0);
+    const first = await spawnPwsh(workerScript, repoRoot, harness.env);
+    expect(first.status, `first stderr: ${first.stderr}\nstdout: ${first.stdout}`).toBe(0);
     expect(first.stdout).toContain('failed-expected');
 
-    const second = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', workerScript], {
-      cwd: repoRoot,
-      env: harness.env,
-      encoding: 'utf8',
-    });
-    expect(second.status).toBe(0);
+    const second = await spawnPwsh(workerScript, repoRoot, harness.env);
+    expect(second.status, `second stderr: ${second.stderr}\nstdout: ${second.stdout}`).toBe(0);
     expect(second.stdout).toContain('failed-expected');
     expect(countAuditMatches(harness.auditFile, /\bpr list\b/)).toBe(1);
   });

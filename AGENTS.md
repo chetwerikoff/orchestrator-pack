@@ -365,7 +365,7 @@ visibility. Best-effort `ao review submit`, `GET /reviews`, and `POST /reviews/t
 telemetry runs after stdout capture; **on telemetry failure, skip silently — never post
 substitute notifications** that fabricate finding text from daemon state or pretend daemon
 delivery succeeded.
-
+**Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
 #### Review-cycle cap (Issue #646)
 
 Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on

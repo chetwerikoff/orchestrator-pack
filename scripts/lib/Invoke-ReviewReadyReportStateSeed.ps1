@@ -298,7 +298,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
     }
     else {
         & $emitProgress 'load_status'
-        $sessions = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
+        $sessions = @(Get-WorkerStatusDecisionSessionsIncludingTerminated)
         $seedState = Get-ReviewReadyReportStateSeedState -Path $seedStatePath
         & $emitProgress 'load_review_runs'
         & $emitProgress 'refresh_github'
@@ -568,7 +568,7 @@ function Invoke-ReviewReadyReportStateSeedTick {
                 @{
                     openPrs                       = $scoped
                     reviewRuns                    = @(Get-AoReviewRuns -Project $ProjectId)
-                    sessions                      = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
+                    sessions                      = @(Get-WorkerStatusDecisionSessionsIncludingTerminated)
                     ciChecksByPr                  = $freshChecks.ciChecksByPr
                     requiredCheckNamesByPr        = $freshChecks.requiredCheckNamesByPr
                     requiredCheckLookupFailedByPr = $freshChecks.requiredCheckLookupFailedByPr

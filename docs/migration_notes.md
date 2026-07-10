@@ -2383,6 +2383,19 @@ While `Stop` or `Stop -Force` holds the maintenance epoch (`maintenance.epoch`),
 
 After `Stop -Force`, verify with `Status` (stopped, no ambiguous candidates), then ordinary `Start` (detached supervisor + fresh `supervisor.lock`). Cross-checkout `Status`/`Stop` from another worktree sharing the same state root should see the same holder.
 
+## Worker status store (Issue #720)
+
+Pack review/worker reconcilers now read derived worker status from `pack-worker-status-store`
+through `Get-WorkerStatusDecisionSessions*`. Operators can fail closed during rollout with:
+
+```bash
+export PACK_WORKER_STATUS_STORE_DISABLED=1
+```
+
+With the kill switch active, decision readers return `unknown` with a degraded reason instead of
+falling back to daemon composite report status. Worker-facing paths skip silently and avoid
+substitute notifications until the kill switch is removed and sibling store readiness is healthy.
+
 ## PR session binding cache (Issue #719)
 
 Pack consumers resolve PR↔session ownership from the durable binding cache before
