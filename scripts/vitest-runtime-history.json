@@ -358,7 +358,7 @@
     "scripts/supervisor-fault-boundary-child-entry-null.test.ts": "dd03e11eec062754f4e05bd5a0bb83a6954c8d313763093e4147e0a4ba20b223",
     "scripts/supervisor-fault-boundary-status-entry.test.ts": "e87cc93cba99e7f16308c916f2b469a1c1068a49c03402d13c2b51f6fcd49b19",
     "scripts/supervisor-fault-boundary-recovery-stop.test.ts": "104f49ec0843d2b4fdc0800c96b4388d7d28c8b9d09076ba9b4128d518de28c4",
-    "scripts/supervisor-fault-boundary-escalate.test.ts": "407a7e71c97796d5ad1efe1fd607d066397fdde666be85c32aca194627203c39",
+    "scripts/supervisor-fault-boundary-escalate.test.ts": "371a71d8216c114396e56b4dee3fdf5467c18ef592f39cb1ffacf6de459d18ee",
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "39b9ceb7a40f3cef005cd0e70c569545fa3516fcea1811ba925b2f0f6219ac90",
     "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
