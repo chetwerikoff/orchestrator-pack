@@ -104,7 +104,7 @@ function Test-WorkerStatusSiblingReadiness {
             ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
         }
     }
-    return [bool]$result.ready
+    return $result
 }
 
 function Write-WorkerStatusRow {

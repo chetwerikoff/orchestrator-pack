@@ -36,7 +36,7 @@ foreach ($session in $sessions) {
         degradedReason         = [string]$(if ($session.workerStatusDegradedReason) { $session.workerStatusDegradedReason } elseif ($session.degradedReason) { $session.degradedReason } else { '' })
         diagnostics            = @($session.workerStatusDiagnostics)
         killSwitchActive       = $killSwitch
-        siblingReadinessOk     = [bool]$readiness
+        siblingReadinessOk     = [bool]$readiness.ok
     }
 }
 
@@ -44,14 +44,14 @@ if ($Json) {
     $payload = @{
         generatedAtMs    = $nowMs
         killSwitchActive = $killSwitch
-        siblingReady     = [bool]$readiness
+        siblingReady     = [bool]$readiness.ok
         workers          = $rows
     }
     $payload | ConvertTo-Json -Depth 8
     exit 0
 }
 
-Write-Host "worker-status report (read-only) killSwitch=$killSwitch siblingReady=$readiness"
+Write-Host "worker-status report (read-only) killSwitch=$killSwitch siblingReady=$($readiness.ok)"
 foreach ($row in $rows) {
     Write-Host ("{0} status={1} decision={2} ageMs={3} source={4} stale={5} degraded={6}" -f `
             $row.sessionId, $row.derivedStatus, $row.decisionStatus, $row.freshnessAgeMs, `

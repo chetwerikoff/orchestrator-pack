@@ -52,7 +52,7 @@ function Get-WorkerStatusDecisionSessionsCore {
             return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
         }
         $readiness = Test-WorkerStatusSiblingReadiness
-        if (-not $readiness) {
+        if (-not $readiness.ok) {
             return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
         }
         return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions `
@@ -76,7 +76,7 @@ function Get-WorkerStatusDecisionSessionsCore {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
     }
     $readiness = Test-WorkerStatusSiblingReadiness
-    if (-not $readiness) {
+    if (-not $readiness.ok) {
         return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
     }
 

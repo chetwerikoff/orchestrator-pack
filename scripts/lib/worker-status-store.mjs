@@ -361,7 +361,7 @@ export function evaluateWorkerStatusKillSwitch(env = process.env) {
 }
 
 export function testSiblingReadiness(env = process.env) {
-  const base = dirname(new URL(import.meta.url).pathname);
+  const docsDir = join(dirname(new URL(import.meta.url).pathname), '..', '..', 'docs');
   const reportStorePath = env.AO_WORKER_REPORT_STORE
     ? String(env.AO_WORKER_REPORT_STORE)
     : (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
@@ -369,8 +369,8 @@ export function testSiblingReadiness(env = process.env) {
       : '');
   const workerReportStorePresent = reportStorePath
     ? existsSync(reportStorePath)
-    : existsSync(join(base, 'worker-report-store.mjs'));
-  const sessionPrBindingResolverPresent = existsSync(join(base, 'session-pr-binding-resolver.mjs'));
+    : existsSync(join(docsDir, 'worker-report-store.mjs'));
+  const sessionPrBindingResolverPresent = existsSync(join(docsDir, 'session-pr-binding-resolver.mjs'));
   return {
     ready: workerReportStorePresent && sessionPrBindingResolverPresent,
     ok: workerReportStorePresent && sessionPrBindingResolverPresent,

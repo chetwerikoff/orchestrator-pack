@@ -480,6 +480,14 @@ describe('worker-status store schema', () => {
 });
 
 describe('worker-status sibling readiness', () => {
+  it('reports ready when docs sibling modules are present', () => {
+    const result = testSiblingReadiness({});
+    expect(result.ok).toBe(true);
+    expect(result.ready).toBe(true);
+    expect(result.workerReportStorePresent).toBe(true);
+    expect(result.sessionPrBindingResolverPresent).toBe(true);
+  });
+
   it('fails closed when worker-report-store missing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'worker-status-sibling-'));
     try {
