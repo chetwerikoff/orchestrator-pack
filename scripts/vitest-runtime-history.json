@@ -237,7 +237,7 @@
     "scripts/review-cycle-cap.test.ts": "1e53d5f2e31da505de714a69ae50169fc8c1a8c3e1f7f8be2a5f69a2d5b73b29",
     "scripts/review-delivery.test.ts": "7113c9ed65f06d99664bbf293a6f7800ad1109cfa80cd8f77f1283eaa4ba0474",
     "scripts/review-finding-delivery-submit.test.ts": "d2f8bd879c697b3e3c01679c6778db1ecc5af47122e9ffbde240298c01978e29",
-    "scripts/review-handoff-wake-trigger.test.ts": "385fb758ace481f6acfe0ddff137641a23e6afdd671a40c738f245bf3f7f2f32",
+    "scripts/review-handoff-wake-trigger.test.ts": "d7080903fdd59eaf746ae24989ef1598506bedf536517442b44a496bf37571cf",
     "scripts/review-head-ready.test.ts": "acbdd7b5b382c0ffd72adf1df59525b50b1e20429cadac2562641d7d71b1c777",
     "scripts/review-orchestrator-loop.test.ts": "3f957b368952eaefd0c1655e68af5b62df7b760ff141ea4663b33254facead15",
     "scripts/review-pipeline-spawn-budget.test.ts": "03765cb48f7dc88650a38e3ef46c877ddb52c97fbefeb3602f0ff7a464e24317",
@@ -363,7 +363,7 @@
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020",
-    "scripts/worker-report-store.test.ts": "e2ddc4458f591bf7c195da035e3de974a784a28059a683de148695b2233fa1cb",
+    "scripts/worker-report-store.test.ts": "3dd3c222c979edab17f7a4fa24fa744e7e28b680bff50abc10121cf1dd12837f",
     "docs/worker-report-store.mjs": "b460e06d80d3849b41bd377a9b48ef51db8c08a912ad2ac77f4b76d6b4c9a7df",
     "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef",
     "docs/events-optional-consumer-signal-recovery.mjs": "751f2115dfd8d9f43235540490e8d648a14e990756d7dd3e73baf79a0665e25c",
@@ -371,5 +371,5 @@
     "docs/review-producer-contract.mjs": "973f012fdf3e03eb0b2d1e683f93450428022ef38d68a44879b990340529297d"
   },
   "provenance": {},
-  "dataChangedAt": "2026-07-10T01:52:00Z"
+  "dataChangedAt": "2026-07-10T02:08:00Z"
 }

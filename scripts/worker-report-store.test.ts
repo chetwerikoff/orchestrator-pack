@@ -357,6 +357,8 @@ describe('delivery-confirm-pack-ack', () => {
   });
 
   it('pack-worker-report carries deliveryRunId for addressing_reviews from env', () => {
+    const reportScript = path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''");
+    const repoEscaped = repoRoot.replace(/'/g, "''");
     const out = runWorkerStorePwsh(`
       $env:AO_SESSION_ID = 'opk-delivery-run'
       $env:AO_PR_NUMBER = '717'
@@ -364,8 +366,8 @@ describe('delivery-confirm-pack-ack', () => {
       $env:AO_DELIVERY_RUN_ID = 'run-env-717'
       Remove-Item Env:AO_HEAD_SHA -ErrorAction SilentlyContinue
       Remove-Item Env:GITHUB_SHA -ErrorAction SilentlyContinue
-      Set-Location '/home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-90'
-      & '/home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-90/scripts/pack-worker-report.ps1' addressing_reviews -RepoRoot '/home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-90' -DryRun
+      Set-Location '${repoEscaped}'
+      & '${reportScript}' addressing_reviews -RepoRoot '${repoEscaped}' -DryRun
     `).trim();
     expect(out).toContain('addressing_reviews');
     expect(out).toContain('run-env-717');
