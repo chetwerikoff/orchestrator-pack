@@ -19,6 +19,10 @@ import {
   isGovernorEnabled,
   resolveCallerLane,
 } from './gh-governor.mjs';
+import {
+  isGhPrCreateArgv,
+  tryPushRegisterFromPrCreate,
+} from '../../docs/pr-session-binding-cache.mjs';
 
 function formatStdout(result, parsed, route) {
   if (route?.id === 'pr-diff-name-only') {
@@ -87,22 +91,30 @@ function beginGovernorAdmission(argv, realGh) {
 
 const PASSTHROUGH_STDERR_CAPTURE_MAX = 64 * 1024;
 
-function runNativePassthrough(realGh, argv, captureStderrForGovernor) {
+function runNativePassthrough(realGh, argv, captureStderrForGovernor, captureStdoutForPushRegister = false) {
   const spawnOptions = {
     cwd: process.cwd(),
     env: { ...process.env, GH_WRAPPER_ACTIVE: '1' },
   };
-  if (!captureStderrForGovernor) {
+  if (!captureStderrForGovernor && !captureStdoutForPushRegister) {
     const result = spawnSync(realGh, argv, { ...spawnOptions, stdio: 'inherit' });
-    return Promise.resolve({ status: result.status ?? 1, stderr: '' });
+    return Promise.resolve({ status: result.status ?? 1, stderr: '', stdout: '' });
   }
 
   return new Promise((resolve) => {
     const stderrParts = [];
+    const stdoutParts = [];
     const child = spawn(realGh, argv, {
       ...spawnOptions,
-      stdio: ['inherit', 'inherit', 'pipe'],
+      stdio: ['inherit', captureStdoutForPushRegister ? 'pipe' : 'inherit', 'pipe'],
     });
+    if (captureStdoutForPushRegister && child.stdout) {
+      child.stdout.on('data', (chunk) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        process.stdout.write(buf);
+        stdoutParts.push(buf);
+      });
+    }
     child.stderr.on('data', (chunk) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       process.stderr.write(buf);
@@ -117,7 +129,10 @@ function runNativePassthrough(realGh, argv, captureStderrForGovernor) {
       const stderr = stderrParts.length > 0
         ? Buffer.concat(stderrParts).toString('utf8')
         : '';
-      resolve({ status, stderr });
+      const stdout = stdoutParts.length > 0
+        ? Buffer.concat(stdoutParts).toString('utf8')
+        : '';
+      resolve({ status, stderr, stdout });
     };
     child.on('close', (code) => finish(code ?? 1));
     child.on('error', () => finish(1));
@@ -149,14 +164,36 @@ async function passthrough(argv) {
   })) {
     return;
   }
-  const captureStderrForGovernor = isGovernorEnabled() && !admission.skipped;
-  const { status, stderr } = await runNativePassthrough(realGh, argv, captureStderrForGovernor);
+  const captureStdoutForPushRegister = isGhPrCreateArgv(argv);
+  const captureStderrForGovernor = (isGovernorEnabled() && !admission.skipped) || captureStdoutForPushRegister;
+  const { status, stderr, stdout } = await runNativePassthrough(
+    realGh,
+    argv,
+    captureStderrForGovernor,
+    captureStdoutForPushRegister,
+  );
   const rateLimit = consumeGhApiRateLimitHeaders();
   withGovernorRelease(admission, {
     exitCode: status,
     stderr,
     headers: rateLimit,
   });
+  if (captureStdoutForPushRegister) {
+    const pushRegister = tryPushRegisterFromPrCreate({
+      argv,
+      status,
+      stdout,
+      stderr,
+      env: process.env,
+      cwd: process.cwd(),
+    });
+    writeWrapperAudit('push-register', buildAuditFields(argv, {
+      kind: 'push-register',
+      registered: pushRegister.registered,
+      reason: pushRegister.reason,
+      diagnostic: pushRegister.diagnostic,
+    }));
+  }
   writeWrapperAudit('complete', buildAuditFields(argv, {
     kind: 'passthrough',
     route: 'passthrough',

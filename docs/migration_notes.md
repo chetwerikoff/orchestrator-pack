@@ -2383,3 +2383,17 @@ While `Stop` or `Stop -Force` holds the maintenance epoch (`maintenance.epoch`),
 
 After `Stop -Force`, verify with `Status` (stopped, no ambiguous candidates), then ordinary `Start` (detached supervisor + fresh `supervisor.lock`). Cross-checkout `Status`/`Stop` from another worktree sharing the same state root should see the same holder.
 
+## PR session binding cache (Issue #719)
+
+Pack consumers resolve PR↔session ownership from the durable binding cache before
+`docs/session-pr-binding-resolver.mjs` backfill. Worker PR create through the pack
+`gh` wrapper push-registers bindings at PR-create time.
+
+- **Env:** `AO_PR_SESSION_BINDING_CACHE` — optional override for cache JSON path.
+- **Default path:** `~/.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json`
+- **Fallback:** sibling of `AO_REPORT_STATE_SEED_STATE` when set.
+
+No operator restart required for the cache file itself; reconcile side processes pick up
+the module on next tick after deploy.
+
+

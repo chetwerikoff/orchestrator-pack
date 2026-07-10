@@ -51,6 +51,13 @@ import {
   resolveSessionPrBinding,
   sessionMatchesPrBound,
 } from './session-pr-binding-resolver.mjs';
+import {
+  lookupBindingByPr,
+  readPrSessionBindingCacheFile,
+  resolveBindingRepoSlug,
+  resolvePrSessionBindingCachePath,
+  resolvePrSessionBindingForConsumer,
+} from './pr-session-binding-cache.mjs';
 /** @typedef {{ number: number, headRefOid: string, headCommittedAt?: string | number, headCommitCommittedAt?: string | number, head_commit_committed_at?: string | number }} OpenPr */
 /** @typedef {{ id?: string, runId?: string, prNumber?: number, targetSha?: string, status?: string, prReviewStatus?: string, latestRunStatus?: string, findingCount?: number, openFindingCount?: number, deliveredFindingCount?: number, deliveredAt?: string | null, body?: string, retryEligible?: boolean, retryCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, ownedHeadSha?: string, headRefOid?: string, status?: string, reports?: Array<Record<string, unknown>> }} AoSession */
@@ -534,59 +541,49 @@ export function resolveHeadOwningWorkerSessionId(sessions, prNumber, headSha, op
   const headCommittedAtMs = resolveHeadCommittedAtMs(prList, prNumber);
   const reportBindingOptions = { headCommittedAtMs };
   const sessionDetailsById = options.sessionDetailsById ?? {};
-  const workers = toArray(sessions).filter((session) => {
-    const role = String(session?.role ?? '').toLowerCase();
-    const sessionId = getSessionIdentifier(session);
-    return (
-      (role === 'worker' || role === 'coding') &&
-      isLiveWorkerSession(session) &&
-      sessionMatchesPr(session, prNumber, prList, {
-        headSha,
-        sessionDetail: sessionId ? sessionDetailsById[sessionId] ?? null : null,
-      })
-    );
-  });
-
-  const headBound = workers.filter(
-    (session) =>
-      sessionExplicitlyOwnsHead(session, headSha) ||
-      sessionHasReportForHead(session, headSha, reportBindingOptions),
-  );
-
-  if (headBound.length === 1) {
-    return getSessionIdentifier(headBound[0]);
-  }
-
-  if (headBound.length > 1) {
-    let best = headBound[0];
-    let bestMs = -1;
-    for (const session of headBound) {
-      let latestMs = -1;
-      for (const report of toArray(session?.reports)) {
-        if (!reportCoversHead(report, target, reportBindingOptions)) {
-          continue;
-        }
-        latestMs = Math.max(latestMs, getReportTimestampMs(report));
-      }
-      if (latestMs > bestMs) {
-        bestMs = latestMs;
-        best = session;
-      }
-    }
-    return getSessionIdentifier(best);
-  }
-
-  const ownsHeadMatch = resolveWorkerSessionId(sessions, prNumber, {
-    openPrs: prList,
+  const repoSlug = resolveBindingRepoSlug(options, prList);
+  const cacheResolution = resolvePrSessionBindingForConsumer({
+    repoSlug,
+    prNumber,
     headSha,
+    sessions,
+    openPrs: prList,
     sessionDetailsById,
-    ownsHead: (session) =>
-      sessionOwnsRunHead(session, prNumber, headSha, prList, {
-        sessionDetail: sessionDetailsById[getSessionIdentifier(session) ?? ''] ?? null,
-      }),
+    cachePath: options.cachePath,
+    isLive: (session) => isLiveWorkerSession(session),
+    writeBackfill: options.writeBackfill !== false,
   });
-  if (ownsHeadMatch) {
-    return ownsHeadMatch;
+  if (cacheResolution.failClosed || !cacheResolution.sessionId) {
+    return null;
+  }
+
+  const session = findSessionById(sessions, cacheResolution.sessionId);
+  if (!session || !isLiveWorkerSession(session)) {
+    return null;
+  }
+
+  const cacheStore = readPrSessionBindingCacheFile(
+    options.cachePath ?? resolvePrSessionBindingCachePath(),
+  );
+  const cached = lookupBindingByPr(cacheStore, repoSlug, prNumber);
+  const cachedHead = normalizeSha(cached?.headSha);
+  const trustCachedHead = Boolean(
+    cached
+    && (cached.source === 'push_register' || cached.source === 'claim_pr')
+    && cachedHead
+    && target
+    && cachedHead === target,
+  );
+  if (
+    !target
+    || trustCachedHead
+    || sessionExplicitlyOwnsHead(session, headSha)
+    || sessionHasReportForHead(session, headSha, reportBindingOptions)
+    || sessionOwnsRunHead(session, prNumber, headSha, prList, {
+      sessionDetail: sessionDetailsById[cacheResolution.sessionId] ?? null,
+    })
+  ) {
+    return cacheResolution.sessionId;
   }
 
   return null;
