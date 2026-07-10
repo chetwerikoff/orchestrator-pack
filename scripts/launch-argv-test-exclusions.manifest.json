@@ -18,6 +18,7 @@
     "scripts/*-test-helpers.mjs",
     "scripts/supervisor-recovery.test-helpers.ts",
     "scripts/testmode-fleet-harness.ts",
+    "scripts/testmode-fleet-reaper.shared.ts",
     "plugins/**/tests/**"
   ],
   "dedicatedTestHelperModules": [
@@ -30,6 +31,7 @@
     "scripts/_test-stub-pack-import-closure.ts",
     "scripts/_review-ready-seed-fixture-test-helpers.ts",
     "scripts/testmode-fleet-harness.ts",
+    "scripts/testmode-fleet-reaper.shared.ts",
     "plugins/_shared/lib/git_fixture.ts"
   ]
 }
