@@ -168,7 +168,12 @@ function New-ReviewReadyReportStateSeedGitHubSnapshot {
     }
 
     & $refreshProgress 'eviction_open_prs'
-    $evictionOpenPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
+    $evictionOpenPrs = if (@($TrackedPrNumbers).Count -gt 0) {
+        @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'review-ready-report-state-seed-eviction')
+    }
+    else {
+        @()
+    }
 
     & $refreshProgress 'checks_start'
     $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs $openPrs -MergeRequiredNames {
