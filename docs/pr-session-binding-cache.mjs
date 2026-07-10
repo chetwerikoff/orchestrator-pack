@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import {
   DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
@@ -68,6 +68,94 @@ function parseIssueNumberFromEnv(env = process.env) {
     }
   }
   return 0;
+}
+
+
+function resolveProjectIdFromEnv(env = process.env, repoSlug = '') {
+  const explicit = trimText(env.AO_PROJECT_ID ?? env.AO_PROJECT);
+  if (explicit) {
+    return explicit;
+  }
+  const slug = trimText(repoSlug);
+  if (slug.includes('/')) {
+    return slug.split('/').pop() ?? '';
+  }
+  return slug;
+}
+
+/**
+ * @param {unknown} payload
+ */
+export function sessionRowFromAoSessionGetPayload(payload) {
+  const session = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
+  if (!session || typeof session !== 'object') {
+    return null;
+  }
+  const id = getSessionIdentifier(session);
+  if (!id) {
+    return null;
+  }
+  const kind = trimText(session.kind ?? session.role).toLowerCase();
+  const role = kind === 'worker' || kind === 'coding' ? 'worker' : kind;
+  return {
+    id,
+    sessionId: id,
+    role,
+    projectId: trimText(session.projectId),
+    issueNumber: asFiniteNumber(session.issueId ?? session.issueNumber),
+    issueId: session.issueId,
+    status: trimText(session.status ?? session.activity?.state),
+    displayName: trimText(session.displayName),
+    pr: session.pr,
+    isTerminated: Boolean(session.isTerminated),
+  };
+}
+
+/**
+ * @param {{ env?: NodeJS.ProcessEnv, cwd?: string, sessions?: Array<Record<string, unknown>> }} [options]
+ */
+export function loadPushRegisterVerifiedSessions(options = {}) {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  const provided = toArray(options.sessions);
+  if (provided.length > 0) {
+    return { ok: true, sessions: provided, source: 'provided' };
+  }
+
+  const sessionId = trimText(env.AO_WORKER_SESSION_ID ?? env.AO_SESSION_ID);
+  if (!sessionId) {
+    return { ok: false, reason: 'push_register_missing_session_identity', sessions: [] };
+  }
+
+  const repoSlug = resolveRepoSlugFromEnvOrCwd(env, cwd);
+  const projectId = resolveProjectIdFromEnv(env, repoSlug);
+  const args = ['session', 'get', sessionId, '--json'];
+  if (projectId) {
+    args.push('-p', projectId);
+  }
+  const aoCommand = trimText(env.AO_COMMAND) || 'ao';
+  const result = spawnSync(aoCommand, args, {
+    cwd,
+    env: { ...env },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  if (result.status !== 0 || !trimText(result.stdout)) {
+    return { ok: false, reason: 'push_register_session_verify_failed', sessions: [] };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    return { ok: false, reason: 'push_register_session_verify_failed', sessions: [] };
+  }
+
+  const row = sessionRowFromAoSessionGetPayload(payload);
+  if (!row || getSessionIdentifier(row) !== sessionId) {
+    return { ok: false, reason: 'push_register_session_verify_failed', sessions: [] };
+  }
+  return { ok: true, sessions: [row], source: 'ao_session_get' };
 }
 
 function resolveRepoSlugFromEnvOrCwd(env = process.env, cwd = process.cwd()) {
@@ -261,17 +349,27 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
   if (!repoSlug) {
     return { ok: false, reason: 'push_register_missing_repo_identity' };
   }
-  if (options.sessions) {
-    const session = findSessionById(options.sessions, sessionId);
-    if (!session) {
-      return { ok: false, reason: 'push_register_session_not_found' };
-    }
-    const role = trimText(session.role).toLowerCase();
-    if (role && role !== 'worker' && role !== 'coding') {
-      return { ok: false, reason: 'push_register_non_worker_role' };
-    }
+  const sessions = toArray(options.sessions);
+  if (sessions.length === 0) {
+    return { ok: false, reason: 'push_register_session_verification_required' };
   }
-  const issueNumber = parseIssueNumberFromEnv(env) || getSessionIssueNumber(findSessionById(options.sessions ?? [], sessionId));
+  const session = findSessionById(sessions, sessionId);
+  if (!session) {
+    return { ok: false, reason: 'push_register_session_not_found' };
+  }
+  const role = trimText(session.role ?? session.kind).toLowerCase();
+  if (role && role !== 'worker' && role !== 'coding') {
+    return { ok: false, reason: 'push_register_non_worker_role' };
+  }
+  if (session.isTerminated === true) {
+    return { ok: false, reason: 'push_register_session_terminated' };
+  }
+  const projectId = resolveProjectIdFromEnv(env, repoSlug);
+  const sessionProject = trimText(session.projectId);
+  if (projectId && sessionProject && projectId.toLowerCase() !== sessionProject.toLowerCase()) {
+    return { ok: false, reason: 'push_register_session_project_mismatch' };
+  }
+  const issueNumber = parseIssueNumberFromEnv(env) || getSessionIssueNumber(session);
   return { ok: true, sessionId, repoSlug, issueNumber: issueNumber > 0 ? issueNumber : undefined };
 }
 
@@ -288,9 +386,30 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
 
   const sessionKey = buildSessionBindingKey(repoSlug, sessionId);
   const prKey = buildPrBindingKey(repoSlug, prNumber);
-  const existingSession = store.records[sessionKey] ?? null;
+  let existingSession = store.records[sessionKey] ?? null;
   const existingPr = store.records[prKey] ?? null;
   const openPrs = toArray(record.openPrs);
+
+  if (
+    trimText(record.source) === BINDING_SOURCE_PUSH_REGISTER
+    && existingSession
+    && !existingSession.superseded
+    && trimText(existingSession.sessionId) === sessionId
+    && asFiniteNumber(existingSession.prNumber) !== prNumber
+  ) {
+    const oldPrStillLive = openPrs.length > 0
+      && bindingRecordIsLive(existingSession, openPrs, true, repoSlug);
+    if (oldPrStillLive) {
+      return {
+        ok: false,
+        reason: COLLISION_REASON,
+        diagnostic: 'ambiguous_binding',
+      };
+    }
+    markRecordSuperseded(store, sessionKey, nowMs);
+    markRecordSuperseded(store, buildPrBindingKey(repoSlug, existingSession.prNumber), nowMs);
+    existingSession = null;
+  }
 
   const samePair =
     existingSession
@@ -611,6 +730,7 @@ export function tryPushRegisterFromPrCreate({
   stderr,
   env = process.env,
   cwd = process.cwd(),
+  sessions,
 }) {
   if (!isGhPrCreateArgv(argv) || status !== 0) {
     return { registered: false, reason: 'not_applicable' };
@@ -621,7 +741,16 @@ export function tryPushRegisterFromPrCreate({
     return { registered: false, reason: 'push_register_pr_number_unparsed' };
   }
 
-  const identity = provePushRegisterWorkerIdentity(env, { cwd });
+  const verified = loadPushRegisterVerifiedSessions({ env, cwd, sessions });
+  if (!verified.ok) {
+    return {
+      registered: false,
+      reason: verified.reason ?? 'push_register_session_verify_failed',
+      diagnostic: verified.reason,
+    };
+  }
+
+  const identity = provePushRegisterWorkerIdentity(env, { cwd, sessions: verified.sessions });
   if (!identity.ok) {
     return {
       registered: false,
@@ -645,27 +774,36 @@ export function tryPushRegisterFromPrCreate({
     }
   }
 
-  const cachePath = resolvePrSessionBindingCachePath(env);
-  const store = readPrSessionBindingCacheFile(cachePath);
-  const register = registerPrSessionBindingRecord(
-    store,
-    {
-      sessionId: identity.sessionId,
-      prNumber,
-      repoSlug: identity.repoSlug,
-      issueNumber: identity.issueNumber,
-      headSha,
-      source: BINDING_SOURCE_PUSH_REGISTER,
-    },
-    Date.now(),
-  );
-  if (!register.ok) {
+  try {
+    const cachePath = resolvePrSessionBindingCachePath(env);
+    const store = readPrSessionBindingCacheFile(cachePath);
+    const register = registerPrSessionBindingRecord(
+      store,
+      {
+        sessionId: identity.sessionId,
+        prNumber,
+        repoSlug: identity.repoSlug,
+        issueNumber: identity.issueNumber,
+        headSha,
+        source: BINDING_SOURCE_PUSH_REGISTER,
+      },
+      Date.now(),
+    );
+    if (!register.ok) {
+      return {
+        registered: false,
+        reason: register.reason ?? 'push_register_write_failed',
+        diagnostic: register.diagnostic ?? register.reason,
+      };
+    }
+    writePrSessionBindingCacheFile(cachePath, store);
+    return { registered: true, reason: register.reason };
+  } catch (error) {
+    const message = trimText(error?.message) || 'push_register_cache_io_failed';
     return {
       registered: false,
-      reason: register.reason ?? 'push_register_write_failed',
-      diagnostic: register.diagnostic ?? register.reason,
+      reason: 'push_register_cache_io_failed',
+      diagnostic: message,
     };
   }
-  writePrSessionBindingCacheFile(cachePath, store);
-  return { registered: true, reason: register.reason };
 }

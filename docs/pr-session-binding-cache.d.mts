@@ -65,6 +65,21 @@ export declare function buildSessionBindingKey(repoSlug: string, sessionId: stri
 
 export declare function buildPrBindingKey(repoSlug: string, prNumber: number): string;
 
+export declare function sessionRowFromAoSessionGetPayload(
+  payload: unknown,
+): Record<string, unknown> | null;
+
+export declare function loadPushRegisterVerifiedSessions(options?: {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  sessions?: Array<Record<string, unknown>>;
+}): {
+  ok: boolean;
+  reason?: string;
+  sessions: Array<Record<string, unknown>>;
+  source?: string;
+};
+
 export declare function provePushRegisterWorkerIdentity(
   env?: NodeJS.ProcessEnv,
   options?: {
@@ -143,4 +158,5 @@ export declare function tryPushRegisterFromPrCreate(input: {
   stderr: string;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  sessions?: Array<Record<string, unknown>>;
 }): { registered: boolean; reason?: string; diagnostic?: string };

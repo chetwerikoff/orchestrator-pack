@@ -179,14 +179,23 @@ async function passthrough(argv) {
     headers: rateLimit,
   });
   if (captureStdoutForPushRegister) {
-    const pushRegister = tryPushRegisterFromPrCreate({
-      argv,
-      status,
-      stdout,
-      stderr,
-      env: process.env,
-      cwd: process.cwd(),
-    });
+    let pushRegister;
+    try {
+      pushRegister = tryPushRegisterFromPrCreate({
+        argv,
+        status,
+        stdout,
+        stderr,
+        env: process.env,
+        cwd: process.cwd(),
+      });
+    } catch (error) {
+      pushRegister = {
+        registered: false,
+        reason: 'push_register_unhandled_error',
+        diagnostic: String(error?.message ?? error),
+      };
+    }
     writeWrapperAudit('push-register', buildAuditFields(argv, {
       kind: 'push-register',
       registered: pushRegister.registered,
