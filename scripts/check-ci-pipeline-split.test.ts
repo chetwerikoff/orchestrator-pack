@@ -135,8 +135,8 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
       return;
     }
     expect(plan.discovered.length).toBeGreaterThan(0);
-    expect(plan.light.length + plan.heavy.length).toBe(plan.discovered.length);
-    const union = new Set([...plan.light, ...plan.heavy]);
+    expect(plan.light.length + plan.heavy.length + plan.parked.length).toBe(plan.discovered.length);
+    const union = new Set([...plan.light, ...plan.heavy, ...plan.parked]);
     expect(union.size).toBe(plan.discovered.length);
   });
 

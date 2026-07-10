@@ -92,6 +92,16 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
   const heavyPerTestIsolate = Array.isArray(raw.heavyPerTestIsolate)
     ? raw.heavyPerTestIsolate.map((entry) => String(entry).replace(/\\/g, '/'))
     : [];
+  const parkedWallclockE2e =
+    raw.parkedWallclockE2e && typeof raw.parkedWallclockE2e === 'object' && !Array.isArray(raw.parkedWallclockE2e)
+      ? {
+          trackingIssue: Number(raw.parkedWallclockE2e.trackingIssue),
+          trackingNote: String(raw.parkedWallclockE2e.trackingNote ?? ''),
+          files: Array.isArray(raw.parkedWallclockE2e.files)
+            ? raw.parkedWallclockE2e.files.map((entry) => String(entry).replace(/\\/g, '/'))
+            : [],
+        }
+      : { trackingIssue: 694, trackingNote: '', files: [] };
   return {
     lightMaxWorkers,
     heavyDefaultRuntimeMs,
@@ -99,6 +109,7 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
     heavyForkPoolMinRuntimeMs,
     heavyPerTestIsolate,
     classification,
+    parkedWallclockE2e,
   };
 }
 
@@ -148,7 +159,7 @@ export function validateClassification(discoveredFiles, classification) {
       errors.push(`classification-required: ${file} (new, renamed, or unclassified)`);
       continue;
     }
-    if (lane !== 'light' && lane !== 'heavy') {
+    if (lane !== 'light' && lane !== 'heavy' && lane !== 'parked') {
       errors.push(`invalid lane for ${file}: ${lane}`);
     }
   }
@@ -165,15 +176,48 @@ export function validateClassification(discoveredFiles, classification) {
 export function partitionByLane(discoveredFiles, classification) {
   const light = [];
   const heavy = [];
+  const parked = [];
   for (const file of discoveredFiles) {
     const lane = classification[file];
     if (lane === 'light') {
       light.push(file);
     } else if (lane === 'heavy') {
       heavy.push(file);
+    } else if (lane === 'parked') {
+      parked.push(file);
     }
   }
-  return { light, heavy };
+  return { light, heavy, parked };
+}
+
+export function validateParkedWallclockE2e(classification, parkedWallclockE2e) {
+  const errors = [];
+  const parkedFiles = new Set(parkedWallclockE2e?.files ?? []);
+  const classifiedParked = Object.entries(classification)
+    .filter(([, lane]) => lane === 'parked')
+    .map(([file]) => file);
+  if (parkedFiles.size === 0 && classifiedParked.length === 0) {
+    return errors;
+  }
+  const trackingIssue = Number(parkedWallclockE2e?.trackingIssue);
+  if (!Number.isFinite(trackingIssue) || trackingIssue !== 694) {
+    errors.push('parkedWallclockE2e.trackingIssue must be 694');
+  }
+  const trackingNote = String(parkedWallclockE2e?.trackingNote ?? '').trim();
+  if (!trackingNote.includes('239-ci-vitest-wallclock-e2e-separate-stage')) {
+    errors.push('parkedWallclockE2e.trackingNote must reference #694 wall-clock stage draft');
+  }
+  for (const file of parkedFiles) {
+    if (classification[file] !== 'parked') {
+      errors.push(`parkedWallclockE2e file must be classified parked: ${file}`);
+    }
+  }
+  for (const [file, lane] of Object.entries(classification)) {
+    if (lane === 'parked' && !parkedFiles.has(file)) {
+      errors.push(`classified parked file missing from parkedWallclockE2e.files: ${file}`);
+    }
+  }
+  return errors;
 }
 
 export function resolveHeavyRuntimeMs(file, runtimeHistory, defaultRuntimeMs) {
@@ -279,7 +323,7 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
     };
   }
 
-  const { topology, discovered, light, heavy, runtimeHistory, lanesConfig } = topologyResult;
+  const { topology, discovered, light, heavy, parked, runtimeHistory, lanesConfig } = topologyResult;
   const heavyShards = assignHeavyShards(
     heavy,
     runtimeHistory,
@@ -293,6 +337,7 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
     config: lanesConfig,
     light,
     heavy,
+    parked,
     heavyShards,
     runtimeHistory,
     topology,

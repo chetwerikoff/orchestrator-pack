@@ -1765,10 +1765,10 @@
       }
     },
     {
-      "rowId": "site-scripts-check-ci-pipeline-split-ps1-408",
+      "rowId": "site-scripts-check-ci-pipeline-split-ps1-414",
       "caller": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 408
+        "line": 414
       },
       "callee": {
         "kind": "other-external",
@@ -1783,17 +1783,17 @@
       "hashPinnedSourceHash": "sha256:da42433612065311873d074435a5d60e804cace365cfb9148b640bb162ea55f0",
       "discoveryMatch": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 408,
+        "line": 414,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-check-ci-pipeline-split-ps1-421",
+      "rowId": "site-scripts-check-ci-pipeline-split-ps1-427",
       "caller": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 421
+        "line": 427
       },
       "callee": {
         "kind": "other-external",
@@ -1808,7 +1808,7 @@
       "hashPinnedSourceHash": "sha256:ef9412b4453a712fa01abd3e2635ade321409db5e9713ab14938f18156084e18",
       "discoveryMatch": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 421,
+        "line": 427,
         "patternIds": [
           "ps-call-op"
         ]
@@ -5641,10 +5641,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-184",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-193",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 184
+        "line": 193
       },
       "callee": {
         "kind": "other-external",
@@ -5659,17 +5659,17 @@
       "hashPinnedSourceHash": "sha256:71e152e93759d1797e5b44c2a17bc9205794773f82a55bc8846d7472d6d936d5",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 184,
+        "line": 193,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-198",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-207",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 198
+        "line": 207
       },
       "callee": {
         "kind": "other-external",
@@ -5684,17 +5684,17 @@
       "hashPinnedSourceHash": "sha256:8666cbaf29faefd82a8e44fc3fa4fb6d930500dbd64cdd121d1ee9d114958945",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 198,
+        "line": 207,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-214",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-223",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 214
+        "line": 223
       },
       "callee": {
         "kind": "other-external",
@@ -5709,17 +5709,17 @@
       "hashPinnedSourceHash": "sha256:598b1f70c73850594b752cb1c8ffd81db0d23d7a7cc0a23b34382697198c6c95",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 214,
+        "line": 223,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-217",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-226",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 217
+        "line": 226
       },
       "callee": {
         "kind": "other-external",
@@ -5734,17 +5734,17 @@
       "hashPinnedSourceHash": "sha256:b58e402901c7cce73fc723366ac97de1e8482161a94426422f83806842f2127e",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 217,
+        "line": 226,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-266",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessDegradedBackoff-ps1-275",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 266
+        "line": 275
       },
       "callee": {
         "kind": "other-external",
@@ -5759,17 +5759,17 @@
       "hashPinnedSourceHash": "sha256:9c319458342edafbc23f8abb7f7614746a8df4536b5732cec27a36a8631ee92c",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
-        "line": 266,
+        "line": 275,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1122",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1159",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1122
+        "line": 1159
       },
       "callee": {
         "kind": "ao",
@@ -5780,17 +5780,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1122,
+        "line": 1159,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1125",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1162",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1125
+        "line": 1162
       },
       "callee": {
         "kind": "ao",
@@ -5801,17 +5801,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1125,
+        "line": 1162,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1433",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1470",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1433
+        "line": 1470
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5822,17 +5822,17 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1433,
+        "line": 1470,
         "patternIds": [
           "start-process"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1442",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1479",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1442
+        "line": 1479
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5843,17 +5843,17 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1442,
+        "line": 1479,
         "patternIds": [
           "start-process"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2264",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2491",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2264
+        "line": 2491
       },
       "callee": {
         "kind": "ao",
@@ -5864,17 +5864,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2264,
+        "line": 2491,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2281",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2508",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2281
+        "line": 2508
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5885,9 +5885,34 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2281,
+        "line": 2508,
         "patternIds": [
           "start-process"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-WakeSupervisorLease-ps1-698",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-WakeSupervisorLease.ps1",
+        "line": 716
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:8e45b3b16a15991290045d782991a4ab386949def56ad19f68d06f245c3c1fe8",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-WakeSupervisorLease.ps1",
+        "line": 716,
+        "patternIds": [
+          "ps-call-op"
         ]
       }
     },

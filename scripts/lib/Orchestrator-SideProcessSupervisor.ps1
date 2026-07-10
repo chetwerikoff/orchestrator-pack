@@ -13,6 +13,7 @@
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessDegradedBackoff.ps1')
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorLease.ps1')
 . (Join-Path $PSScriptRoot 'TestMode-FleetLease.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
@@ -236,9 +237,10 @@ function Get-OrchestratorWakeSupervisorPaths {
     param([string]$StateRoot)
 
     $paths = @{
-        Root          = $StateRoot
-        SupervisorPid = Join-Path $StateRoot 'supervisor.pid'
-        StateJson     = Join-Path $StateRoot 'state.json'
+        Root           = $StateRoot
+        SupervisorPid  = Join-Path $StateRoot 'supervisor.pid'
+        SupervisorLock = Join-Path $StateRoot 'supervisor.lock'
+        StateJson      = Join-Path $StateRoot 'state.json'
         SupervisorLog = Join-Path $StateRoot 'supervisor.log'
         ProgressDir   = Join-Path $StateRoot 'progress'
         StoppingFlag  = Join-Path $StateRoot 'stopping'
@@ -297,6 +299,7 @@ function Write-OrchestratorWakeSupervisorLog {
     )
     $line = "[{0}] orchestrator-wake-supervisor {1}" -f (Get-Date).ToString('o'), $Message
     Write-Host $line
+    try { [Console]::Out.Flush() } catch { }
     if ($LogPath) {
         Add-Content -LiteralPath $LogPath -Value $line -Encoding utf8
     }
@@ -522,48 +525,8 @@ function Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity {
         [string]$ProjectId,
         [string]$StateRoot
     )
-
-    if ((-not $Tokens -or $Tokens.Count -eq 0) -and $CommandLine) {
-        $Tokens = Split-ProcessCommandLineTokens -CommandLine $CommandLine
-    }
-    if (-not $Tokens -or $Tokens.Count -eq 0) { return $false }
-
-    $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
-    if (-not $scriptInCommand) { return $false }
-    $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
-    $normalizedExpected = Normalize-OrchestratorWakeSupervisorPath -PathValue (Get-OrchestratorWakeSupervisorScriptPath)
-    if ($normalizedScript -ne $normalizedExpected) { return $false }
-
-    $action = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-Action'
-    if ($action -ne 'Start') { return $false }
-
-    $hasSupervisorLoop = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-SupervisorLoop'
-    $hasForeground = Test-OrchestratorWakeSupervisorCommandLineHasSwitch -Tokens $tokens -SwitchName '-Foreground'
-    if (-not $hasSupervisorLoop -and -not $hasForeground) {
-        return $false
-    }
-
-    $defaultProject = Get-OrchestratorWakeSupervisorDefaultProjectId
-    $commandProject = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-ProjectId'
-    if ($commandProject) {
-        if ($commandProject -ne $ProjectId) { return $false }
-    }
-    elseif ($ProjectId -ne $defaultProject) {
-        return $false
-    }
-
-    $normalizedExpectedState = Normalize-OrchestratorWakeSupervisorPath -PathValue $StateRoot
-    $commandStateDir = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-StateDir'
-    if ($commandStateDir) {
-        $normalizedCommandState = Normalize-OrchestratorWakeSupervisorPath -PathValue $commandStateDir
-        if ($normalizedCommandState -ne $normalizedExpectedState) { return $false }
-    }
-    else {
-        $defaultStateRoot = Normalize-OrchestratorWakeSupervisorPath -PathValue (Get-OrchestratorWakeSupervisorStateRoot)
-        if ($normalizedExpectedState -ne $defaultStateRoot) { return $false }
-    }
-
-    return $true
+    return Test-OrchestratorWakeSupervisorSupervisorStateRootIdentity -CommandLine $CommandLine `
+        -Tokens $Tokens -ProjectId $ProjectId -StateRoot $StateRoot
 }
 
 function Test-OrchestratorWakeSupervisorSupervisorIdentity {
@@ -572,13 +535,7 @@ function Test-OrchestratorWakeSupervisorSupervisorIdentity {
         [string]$ProjectId,
         [string]$StateRoot
     )
-
-    if ($ProcessId -le 0) { return $false }
-    if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return $false }
-
-    $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
-    if (-not $tokens -or $tokens.Count -eq 0) { return $false }
-    return Test-OrchestratorWakeSupervisorSupervisorCommandLineIdentity -Tokens $tokens `
+    return Test-OrchestratorWakeSupervisorSupervisorStateRootProcessIdentity -ProcessId $ProcessId `
         -ProjectId $ProjectId -StateRoot $StateRoot
 }
 
@@ -864,6 +821,84 @@ function Test-OrchestratorWakeSupervisorManagedChildForState {
 
     return $false
 }
+
+function Test-OrchestratorWakeSupervisorManagedChildProjectIdentity {
+    param(
+        [int]$ProcessId,
+        [string]$Role,
+        [string]$ProjectId
+    )
+
+    if ($ProcessId -le 0) { return $false }
+    $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId $Role
+    if (-not $entry) { return $false }
+
+    $defaultProject = Get-OrchestratorWakeSupervisorDefaultProjectId
+    $expectedProject = if ($ProjectId) { $ProjectId } else { $defaultProject }
+
+    if ($Role -eq 'listener') {
+        $envProject = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_LISTENER_PROJECT_ID'
+        if ($envProject) {
+            return $envProject -eq $expectedProject
+        }
+    }
+
+    $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $ProcessId
+    if ($tokens -and $tokens.Count -gt 0) {
+        $commandProject = Get-OrchestratorWakeSupervisorCommandLineSwitchValue -Tokens $tokens -SwitchName '-ProjectId'
+        if ($commandProject) {
+            return $commandProject -eq $expectedProject
+        }
+
+        $testChildPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $Script:OrchestratorSideProcessTestChildScript
+        $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
+        if ($scriptInCommand) {
+            $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
+            if ($normalizedScript -eq $testChildPath) {
+                $markerDir = Get-ProcessEnvironmentValue -ProcessId $ProcessId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+                if ($markerDir) {
+                    $markerPath = Join-Path $markerDir "$Role.marker.json"
+                    if (Test-Path -LiteralPath $markerPath) {
+                        try {
+                            $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+                            if ($marker.projectId) {
+                                return [string]$marker.projectId -eq $expectedProject
+                            }
+                        }
+                        catch {
+                            return $false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if ($entry.PassProjectId) {
+        return $false
+    }
+
+    # Registry children without -ProjectId (e.g. heartbeat) are fleet-scoped by state root only.
+    return $true
+}
+
+function Remove-OrchestratorWakeSupervisorSupervisorPidFileIfOwned {
+    param(
+        [hashtable]$Paths,
+        [int]$OwnerPid,
+        [string]$LogPath = ''
+    )
+
+    $recorded = Read-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
+    if ($recorded -le 0 -or $recorded -eq $OwnerPid) {
+        Remove-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid
+        return
+    }
+    if ($LogPath) {
+        Write-OrchestratorWakeSupervisorLog -Message "skipping supervisor.pid cleanup; file pid=$recorded is not owner pid=$OwnerPid" -LogPath $LogPath
+    }
+}
+
 function Find-OrchestratorWakeSupervisorManagedSupervisorCandidates {
     param(
         [string]$ProjectId,
@@ -1114,6 +1149,8 @@ function Stop-OrchestratorWakeSupervisorProcess {
             return
         }
     }
+
+    if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return }
 
     try {
         $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
@@ -1460,6 +1497,7 @@ function Get-OrchestratorWakeSupervisorManagedChildCandidatePids {
     param(
         [hashtable]$Paths,
         [string]$ChildId,
+        [string]$ProjectId = '',
         [hashtable]$Adoptable = $null
     )
 
@@ -1470,7 +1508,7 @@ function Get-OrchestratorWakeSupervisorManagedChildCandidatePids {
         [void]$candidatePids.Add($recordedPid)
     }
 
-    $adoptableMap = if ($Adoptable) { $Adoptable } else { Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths }
+    $adoptableMap = if ($Adoptable) { $Adoptable } else { Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths -ProjectId $ProjectId }
     if ($adoptableMap.ContainsKey($ChildId)) {
         [void]$candidatePids.Add([int]$adoptableMap[$ChildId])
     }
@@ -1483,12 +1521,13 @@ function Stop-OrchestratorWakeSupervisorChildById {
         [hashtable]$Paths,
         [string]$ChildId,
         [string]$LogPath = '',
+        [string]$ProjectId = '',
         [hashtable]$Adoptable = $null
     )
 
     $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId $ChildId
     $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $ChildId
-    $candidatePids = Get-OrchestratorWakeSupervisorManagedChildCandidatePids -Paths $Paths -ChildId $ChildId -Adoptable $Adoptable
+    $candidatePids = Get-OrchestratorWakeSupervisorManagedChildCandidatePids -Paths $Paths -ChildId $ChildId -ProjectId $ProjectId -Adoptable $Adoptable
     $hasLiveChild = $false
     foreach ($candidatePid in $candidatePids) {
         if (Test-ProcessAlive -ProcessId $candidatePid) {
@@ -1526,9 +1565,9 @@ function Stop-OrchestratorWakeSupervisorChildren {
         @(Get-OrchestratorWakeSupervisorChildRegistry | ForEach-Object { $_.Id })
     }
 
-    $adoptable = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths
+    $adoptable = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths -ProjectId $ProjectId
     foreach ($childId in $targets) {
-        Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $childId -LogPath $LogPath -Adoptable $adoptable
+        Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $childId -LogPath $LogPath -ProjectId $ProjectId -Adoptable $adoptable
     }
 }
 function Get-OrchestratorWakeSupervisorChildRecoveryState {
@@ -1622,13 +1661,19 @@ function Get-OrchestratorWakeSupervisorChildStatusEntry {
     param(
         [hashtable]$Paths,
         [string]$ChildId,
-        [string]$SupervisorPhase = 'running'
+        [string]$SupervisorPhase = 'running',
+        [string]$ProjectId = ''
     )
 
     $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId $ChildId
     $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $ChildId
     $pidVal = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
-    $alive = Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $pidVal -Role $ChildId
+    $alive = $false
+    if ($pidVal -gt 0 -and (Test-ProcessAlive -ProcessId $pidVal)) {
+        $alive = (Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $pidVal -Role $ChildId `
+            -StateRoot $Paths.Root) -and `
+            (Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId $pidVal -Role $ChildId -ProjectId $ProjectId)
+    }
     $progress = Read-OrchestratorWakeSupervisorChildProgress -Paths $Paths -ChildId $ChildId
     $stallThreshold = if ($entry) {
         Get-OrchestratorWakeSupervisorChildStallThresholdMs -ChildEntry $entry
@@ -1669,13 +1714,14 @@ function Get-OrchestratorWakeSupervisorChildStatusEntry {
 function Get-OrchestratorWakeSupervisorChildStatus {
     param(
         $Paths,
-        [string]$SupervisorPhase = 'running'
+        [string]$SupervisorPhase = 'running',
+        [string]$ProjectId = ''
     )
 
     $entries = @()
     foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
         $entries += Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id `
-            -SupervisorPhase $SupervisorPhase
+            -SupervisorPhase $SupervisorPhase -ProjectId $ProjectId
     }
     return $entries
 }
@@ -1721,14 +1767,15 @@ function Read-OrchestratorWakeSupervisorChildProgress {
 function Test-OrchestratorWakeSupervisorChildStalled {
     param(
         [hashtable]$Paths,
-        $ChildEntry
+        $ChildEntry,
+        [string]$ProjectId = ''
     )
 
     if (-not $ChildEntry) {
         return $false
     }
 
-    $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $ChildEntry.Id
+    $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $ChildEntry.Id -ProjectId $ProjectId
     if (-not $status.Alive) {
         return $false
     }
@@ -1739,7 +1786,7 @@ function Test-OrchestratorWakeSupervisorChildStalled {
     $progress = Read-OrchestratorWakeSupervisorChildProgress -Paths $Paths -ChildId $ChildEntry.Id
     $nowMs = Get-OrchestratorSideProcessNowMs
     $threshold = Get-OrchestratorWakeSupervisorChildStallThresholdMs -ChildEntry $ChildEntry
-    $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $ChildEntry.Id
+    $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $ChildEntry.Id -ProjectId $ProjectId
     $childPid = [int]$status.Pid
 
     if (-not $progress -or -not $progress.lastProgressMs) {
@@ -1758,34 +1805,148 @@ function Test-OrchestratorWakeSupervisorChildStalled {
     return -not $freshness.Fresh
 }
 
-function Find-OrchestratorWakeSupervisorAdoptableProcesses {
-    param([hashtable]$Paths)
+function Find-OrchestratorWakeSupervisorManagedChildCandidatesForState {
+    param(
+        [hashtable]$Paths,
+        [string]$ProjectId,
+        [string]$ChildId
+    )
 
-    $found = @{}
-    $needsScan = New-Object System.Collections.Generic.List[string]
-    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
-        $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $child.Id
-        $recorded = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
-        if ($recorded -gt 0 -and (Test-OrchestratorWakeSupervisorDaemonRunning -ProcessId $recorded -Role $child.Id)) {
-            $found[$child.Id] = $recorded
-            continue
-        }
-        $needsScan.Add($child.Id) | Out-Null
-    }
-
-    if ($needsScan.Count -eq 0) {
-        return $found
-    }
-
+    $matches = [System.Collections.Generic.List[int]]::new()
     $processes = @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)
-    foreach ($childId in $needsScan) {
-        foreach ($proc in $processes) {
-            if (Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $proc.Id -Role $childId -StateRoot $Paths.Root) {
-                $found[$childId] = $proc.Id
-                break
+    foreach ($proc in $processes) {
+        $procId = [int]$proc.Id
+        if ($procId -le 0) { continue }
+        if ((Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $procId -Role $ChildId -StateRoot $Paths.Root) -and `
+                (Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId $procId -Role $ChildId -ProjectId $ProjectId)) {
+            $matches.Add($procId) | Out-Null
+        }
+    }
+    return @($matches | Sort-Object -Unique)
+}
+
+function Select-OrchestratorWakeSupervisorDuplicateSurvivor {
+    param(
+        [hashtable]$Paths,
+        [string]$ChildId,
+        [int[]]$CandidatePids,
+        [int]$LeaseEpoch = 0
+    )
+
+    if (-not $CandidatePids -or $CandidatePids.Count -eq 0) { return 0 }
+    if ($CandidatePids.Count -eq 1) { return [int]$CandidatePids[0] }
+
+    $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $ChildId
+    $recordedPid = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
+
+    $currentSession = ''
+    if (Test-Path -LiteralPath $Paths.StateJson) {
+        try {
+            $state = Get-Content -LiteralPath $Paths.StateJson -Raw | ConvertFrom-Json
+            $currentSession = [string]$state.orchestratorSessionId
+        }
+        catch {
+            $currentSession = ''
+        }
+    }
+
+    $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId $ChildId
+    $bestPid = 0
+    $bestScore = [int]::MinValue
+
+    foreach ($procId in @($CandidatePids)) {
+        if ($procId -le 0) { continue }
+        if (-not (Test-ProcessAlive -ProcessId $procId)) { continue }
+
+        $score = 0
+        $tokens = Get-OrchestratorWakeSupervisorProcessCommandLineTokens -ProcessId $procId
+        $registryMatch = $false
+        if ($entry -and $tokens) {
+            $scriptInCommand = Get-OrchestratorWakeSupervisorCommandLineScriptPath -Tokens $tokens
+            if ($scriptInCommand) {
+                $normalizedScript = Normalize-OrchestratorWakeSupervisorPath -PathValue $scriptInCommand
+                $registryPath = Normalize-OrchestratorWakeSupervisorPath -PathValue $entry.ScriptPath
+                $registryMatch = ($normalizedScript -eq $registryPath)
             }
         }
+        if ($registryMatch) { $score += 400 }
+
+        $markerSession = ''
+        $markersDir = Get-ProcessEnvironmentValue -ProcessId $procId -Name 'AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'
+        if ($markersDir) {
+            $markerPath = Join-Path $markersDir "$ChildId.marker.json"
+            if (Test-Path -LiteralPath $markerPath) {
+                try {
+                    $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+                    $markerSession = [string]$marker.orchestratorSessionId
+                }
+                catch {
+                    $markerSession = ''
+                }
+            }
+        }
+        if ($currentSession -and $markerSession -eq $currentSession) { $score += 300 }
+
+        if ($procId -eq $recordedPid) { $score += 100 }
+
+        $startMs = Get-OrchestratorWakeSupervisorProcessStartTimeMs -ProcessId $procId
+        if ($startMs -gt 0) {
+            $score += [int]($startMs / 1000000)
+        }
+
+        if ($score -gt $bestScore -or ($score -eq $bestScore -and $procId -gt $bestPid)) {
+            $bestScore = $score
+            $bestPid = $procId
+        }
     }
+
+    return $bestPid
+}
+
+function Find-OrchestratorWakeSupervisorAdoptableProcesses {
+    param(
+        [hashtable]$Paths,
+        [ref]$DuplicatePidsByRole,
+        [string]$ProjectId = ''
+    )
+
+    $found = @{}
+    $duplicates = @{}
+    $leaseEpoch = Get-OrchestratorWakeSupervisorLeaseEpoch -Paths $Paths
+    $processes = @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue)
+
+    foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
+        $childId = $child.Id
+        $matches = [System.Collections.Generic.List[int]]::new()
+        foreach ($proc in $processes) {
+            $procId = [int]$proc.Id
+            if ($procId -le 0) { continue }
+            if ((Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $procId -Role $childId -StateRoot $Paths.Root) -and `
+                    (Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId $procId -Role $childId -ProjectId $ProjectId)) {
+                $matches.Add($procId) | Out-Null
+            }
+        }
+        $matchArr = @($matches | Sort-Object -Unique)
+        if ($matchArr.Count -eq 0) {
+            $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $childId
+            $recorded = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
+            if ($recorded -gt 0 -and (Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $recorded `
+                    -Role $childId -StateRoot $Paths.Root) -and `
+                    (Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId $recorded -Role $childId -ProjectId $ProjectId)) {
+                $found[$childId] = $recorded
+            }
+            continue
+        }
+
+        $survivor = Select-OrchestratorWakeSupervisorDuplicateSurvivor -Paths $Paths -ChildId $childId `
+            -CandidatePids $matchArr -LeaseEpoch $leaseEpoch
+        if ($survivor -le 0) { continue }
+        $found[$childId] = $survivor
+        $dup = @($matchArr | Where-Object { $_ -ne $survivor })
+        if ($dup.Count -gt 0) { $duplicates[$childId] = $dup }
+    }
+
+    if ($DuplicatePidsByRole) { $DuplicatePidsByRole.Value = $duplicates }
     return $found
 }
 
@@ -1793,26 +1954,37 @@ function Invoke-OrchestratorWakeSupervisorAdoptOrTerminate {
     param(
         [hashtable]$Paths,
         [string]$LogPath = '',
-        [switch]$TestMode
+        [switch]$TestMode,
+        [string]$ProjectId = ''
     )
 
-    if ($TestMode) {
-        return
-    }
+    if ($TestMode) { return }
+    if (-not (Test-OrchestratorWakeSupervisorLeaseEpochCurrent -Paths $Paths)) { return }
 
-    $adoptable = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths
+    $duplicateMap = $null
+    $adoptable = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths -DuplicatePidsByRole ([ref]$duplicateMap) -ProjectId $ProjectId
     foreach ($pair in $adoptable.GetEnumerator()) {
         $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $pair.Key
         $existing = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
-        if ($existing -eq $pair.Value) {
-            continue
-        }
+        if ($existing -eq $pair.Value) { continue }
         if ($existing -gt 0 -and (Test-ProcessAlive -ProcessId $existing) -and $existing -ne $pair.Value) {
             Write-OrchestratorWakeSupervisorLog -Message "adoption: terminating duplicate $($pair.Key) pid=$existing" -LogPath $LogPath
-            Stop-OrchestratorWakeSupervisorProcess -ProcessId $existing -PidFile $pidFile -ManagedRole $pair.Key -LogPath $LogPath
+            Stop-OrchestratorWakeSupervisorProcess -ProcessId $existing -PidFile $pidFile -ManagedRole '' -LogPath $LogPath
         }
         Write-OrchestratorWakeSupervisorLog -Message "adoption: $($pair.Key) pid=$($pair.Value)" -LogPath $LogPath
+        Assert-OrchestratorWakeSupervisorLeaseMutationAllowed -Paths $Paths | Out-Null
         Write-OrchestratorWakeSupervisorPidFile -Path $pidFile -ProcessId $pair.Value
+    }
+
+    if ($duplicateMap) {
+        foreach ($pair in $duplicateMap.GetEnumerator()) {
+            $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $pair.Key
+            foreach ($dupPid in @($pair.Value)) {
+                if ($dupPid -le 0) { continue }
+                Write-OrchestratorWakeSupervisorLog -Message "adoption: terminating enumerate-all duplicate $($pair.Key) pid=$dupPid" -LogPath $LogPath
+                Stop-OrchestratorWakeSupervisorProcess -ProcessId $dupPid -PidFile $pidFile -ManagedRole '' -LogPath $LogPath
+            }
+        }
     }
 }
 
@@ -1829,7 +2001,7 @@ function Start-OrchestratorWakeSupervisorManagedSet {
     $started = @()
     $failures = @()
     foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
-        $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id
+        $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id -ProjectId $ProjectId
         if ($status.Alive) {
             Write-OrchestratorWakeSupervisorLog -Message "reusing adopted $($child.Id) pid=$($status.Pid)" -LogPath $LogPath
             continue
@@ -1868,11 +2040,22 @@ function Restart-OrchestratorWakeSupervisorChildStaggered {
     $staggerMs = Get-OrchestratorWakeSupervisorRestartStaggerMs
     $index = 0
     foreach ($childId in $ChildIds) {
+        $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $childId -ProjectId $ProjectId
+        if (-not $status.Alive) {
+            $pidFile = Get-OrchestratorWakeSupervisorChildPidPath -Paths $Paths -ChildId $childId
+            $recorded = Read-OrchestratorWakeSupervisorPidFile -Path $pidFile
+            if ($recorded -le 0 -or -not ((Test-OrchestratorWakeSupervisorManagedChildForState -ProcessId $recorded `
+                        -Role $childId -StateRoot $Paths.Root) -and `
+                        (Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId $recorded -Role $childId -ProjectId $ProjectId))) {
+                continue
+            }
+        }
+
         if ($index -gt 0 -and $staggerMs -gt 0) {
             $jitter = Get-Random -Minimum 0 -Maximum ([Math]::Max(1, [int]($staggerMs / 2)))
             Start-Sleep -Milliseconds ($staggerMs + $jitter)
         }
-        Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $childId -LogPath $LogPath
+        Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $childId -LogPath $LogPath -ProjectId $ProjectId
         Start-OrchestratorWakeSupervisorChild -ChildId $childId -OrchestratorSessionId $SessionId `
             -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
         $index++
@@ -1923,13 +2106,28 @@ function Invoke-OrchestratorWakeSupervisorLoop {
         New-Item -ItemType Directory -Path $Paths.ProgressDir -Force | Out-Null
     }
 
-    Invoke-OrchestratorWakeSupervisorAdoptOrTerminate -Paths $Paths -LogPath $Paths.SupervisorLog -TestMode:$TestMode
+    $checkoutScript = (Get-OrchestratorWakeSupervisorScriptPath)
+    $lease = Enter-OrchestratorWakeSupervisorHeldLease -Paths $Paths -ProjectId $ProjectId -PollSeconds $PollSeconds `
+        -CheckoutScript $checkoutScript -AllowReclaim
+    if (-not $lease.ok) {
+        $reason = [string]$lease.reason
+        Write-OrchestratorWakeSupervisorLog -Message "supervisor loop exiting: lease not acquired ($reason)" -LogPath $Paths.SupervisorLog
+        return
+    }
+    Write-OrchestratorWakeSupervisorPidFile -Path $Paths.SupervisorPid -ProcessId $PID
+    try {
+        Invoke-OrchestratorWakeSupervisorAdoptOrTerminate -Paths $Paths -LogPath $Paths.SupervisorLog -TestMode:$TestMode -ProjectId $ProjectId
+    }
+    catch {
+        Write-OrchestratorWakeSupervisorLog -Message "adopt/reap skipped: $_" -LogPath $Paths.SupervisorLog
+    }
 
     if ($TestMode) {
         Register-TestModeFleetSupervisorStart -StateRoot $Paths.Root
     }
 
     $loopStart = Get-Date
+    try {
     $phase = 'waiting'
     $currentSessionId = ''
     $currentSource = ''
@@ -1946,11 +2144,17 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             if ($leaseTtl.expired) {
                 Write-OrchestratorWakeSupervisorLog -Message "testmode lease TTL self-exit ($($leaseTtl.reason))" -LogPath $Paths.SupervisorLog
                 Set-OrchestratorWakeSupervisorStoppingFlag -Paths $Paths
-                Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog -StateRoot $Paths.Root
+                Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog -ProjectId $ProjectId -StateRoot $Paths.Root
                 break
             }
         }
 
+        if (-not (Test-OrchestratorWakeSupervisorLeaseStillHeld -Paths $Paths -PollSeconds $PollSeconds)) {
+            Write-OrchestratorWakeSupervisorLog -Message 'lease lost; exiting supervisor loop' -LogPath $Paths.SupervisorLog
+            break
+        }
+        $null = Invoke-OrchestratorWakeSupervisorLeaseHeartbeat -Paths $Paths -PollSeconds $PollSeconds `
+            -LogPath $Paths.SupervisorLog
         if (Test-OrchestratorWakeSupervisorStopping -Paths $Paths) {
             Write-OrchestratorWakeSupervisorLog -Message 'stop requested; exiting supervisor loop' -LogPath $Paths.SupervisorLog
             break
@@ -1965,9 +2169,12 @@ function Invoke-OrchestratorWakeSupervisorLoop {
 
         if (-not $resolved) {
             $sessionMissingPolls++
+            if ($phase -eq 'waiting') {
+                Write-OrchestratorWakeSupervisorLog -Message "waiting for orchestrator session (project=$ProjectId)..." -LogPath $Paths.SupervisorLog
+            }
             if ($phase -eq 'running' -and $sessionMissingPolls -ge $sessionGlitchPolls) {
                 Write-OrchestratorWakeSupervisorLog -Message 'orchestrator session disappeared; stopping children' -LogPath $Paths.SupervisorLog
-                Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog
+                Stop-OrchestratorWakeSupervisorChildren -Paths $Paths -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                 $phase = 'waiting'
                 $currentSessionId = ''
                 $pendingSessionId = ''
@@ -2024,6 +2231,12 @@ function Invoke-OrchestratorWakeSupervisorLoop {
             $childIds = @($registry | ForEach-Object { $_.Id })
             Restart-OrchestratorWakeSupervisorChildStaggered -Paths $Paths -SessionId $sessionId -ProjectId $ProjectId `
                 -ChildIds $childIds -TestMode:$TestMode -TestChildScript $TestChildScript -LogPath $Paths.SupervisorLog
+            try {
+                Invoke-OrchestratorWakeSupervisorAdoptOrTerminate -Paths $Paths -LogPath $Paths.SupervisorLog -TestMode:$TestMode -ProjectId $ProjectId
+            }
+            catch {
+                Write-OrchestratorWakeSupervisorLog -Message "adopt/reap skipped after session restart: $_" -LogPath $Paths.SupervisorLog
+            }
             Write-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson -State @{
                 phase                   = 'running'
                 orchestratorSessionId   = $sessionId
@@ -2039,6 +2252,15 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                 break
             }
 
+            if ($phase -eq 'running') {
+                try {
+                    Invoke-OrchestratorWakeSupervisorAdoptOrTerminate -Paths $Paths -LogPath $Paths.SupervisorLog -TestMode:$TestMode -ProjectId $ProjectId
+                }
+                catch {
+                    Write-OrchestratorWakeSupervisorLog -Message "adopt/reap skipped: $_" -LogPath $Paths.SupervisorLog
+                }
+            }
+
             foreach ($child in $registry) {
                 if (-not $child -or -not $child.Id) {
                     continue
@@ -2046,14 +2268,14 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                 try {
                     Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id
                     $status = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $Paths -ChildId $child.Id `
-                        -SupervisorPhase $phase
+                        -SupervisorPhase $phase -ProjectId $ProjectId
                     if ($status.Health -eq 'waiting') {
                         continue
                     }
 
                     if ($status.Health -eq 'working' -and $status.Alive) {
                         Update-OrchestratorWakeSupervisorChildStableWorkingRecovery -Paths $Paths -ChildId $child.Id
-                        if (-not (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child)) {
+                        if (-not (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child -ProjectId $ProjectId)) {
                             continue
                         }
                     }
@@ -2083,7 +2305,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     }
 
                     $needsRecovery = $status.Health -in @('degraded', 'stalled') -or
-                        (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child)
+                        (Test-OrchestratorWakeSupervisorChildStalled -Paths $Paths -ChildEntry $child -ProjectId $ProjectId)
                     if ($needsRecovery -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $Paths -ChildId $child.Id)) {
                         continue
                     }
@@ -2098,7 +2320,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     if ($recovery.terminal) {
                         if ($status.Alive) {
                             Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
-                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                         }
                         continue
                     }
@@ -2114,7 +2336,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                         $recoveryAfterDecision = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id
                         if ($recoveryAfterDecision.terminal -and $status.Alive) {
                             Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
-                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                         }
                         continue
                     }
@@ -2122,7 +2344,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     $attemptLabel = if ($degradedDecision.degradedAttempts) { $degradedDecision.degradedAttempts } else { 1 }
                     Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) recovering (degraded attempt $attemptLabel)" -LogPath $Paths.SupervisorLog
                     Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
-                    Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                    Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                     Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $currentSessionId `
                         -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
                 }
@@ -2140,6 +2362,11 @@ function Invoke-OrchestratorWakeSupervisorLoop {
         }
 
         Start-Sleep -Seconds $PollSeconds
+    }
+    }
+    finally {
+        Release-OrchestratorWakeSupervisorLease
+        Remove-OrchestratorWakeSupervisorSupervisorPidFileIfOwned -Paths $Paths -OwnerPid $PID -LogPath $Paths.SupervisorLog
     }
 }
 
@@ -2162,7 +2389,7 @@ function Get-OrchestratorWakeSupervisorStatusReport {
     $state = Read-OrchestratorWakeSupervisorState -StateJsonPath $Paths.StateJson
     $sessionId = if ($state) { [string]$state.orchestratorSessionId } else { '' }
     $supervisorPhase = if ($state -and $state.phase) { [string]$state.phase } else { 'running' }
-    $children = Get-OrchestratorWakeSupervisorChildStatus -Paths $Paths -SupervisorPhase $supervisorPhase
+    $children = Get-OrchestratorWakeSupervisorChildStatus -Paths $Paths -SupervisorPhase $supervisorPhase -ProjectId $ProjectId
 
     $report = @{
         ProjectId                 = $ProjectId

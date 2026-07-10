@@ -7,8 +7,34 @@ export const repoRoot = path.resolve(import.meta.dirname, '..');
 export const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 
-const supervisorHookTimeoutMs = 180_000;
+export const supervisorHookTimeoutMs = 180_000;
+export const supervisorAsyncTimeoutMs = 360_000;
+const supervisorSpawnMaxBufferBytes = 20 * 1024 * 1024;
 const tmpRoots: string[] = [];
+const frozenSupervisorPids: number[] = [];
+
+export function thawFrozenSupervisorPids(): void {
+  for (const pid of frozenSupervisorPids.splice(0)) {
+    try {
+      process.kill(pid, 'SIGCONT');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function freezeSupervisorPid(pid: number): void {
+  if (pid <= 0) {
+    return;
+  }
+  frozenSupervisorPids.push(pid);
+  try {
+    process.kill(pid, 'SIGSTOP');
+  } catch {
+    // ignore
+  }
+}
+
 
 /** Minimum poll cadence for supervisor/wake integration tests (Issue #693). */
 export const SUPERVISOR_TEST_POLL_INTERVAL_MS = 200;
@@ -128,13 +154,15 @@ export function makeStateDir(): string {
   return dir;
 }
 
+
+
 export function cleanupSupervisorTests(): void {
+  thawFrozenSupervisorPids();
   for (const root of tmpRoots.splice(0)) {
     killSupervisorStateDir(root);
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
-
 function killSupervisorStateDir(root: string): void {
   const fastStopEnv = { ...process.env, AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
   try {
@@ -148,14 +176,21 @@ function killSupervisorStateDir(root: string): void {
         supervisorScript,
         '-Action',
         'Stop',
+        '-Force',
         '-StateDir',
         root,
       ],
-      { cwd: repoRoot, stdio: 'pipe', timeout: 20_000, env: fastStopEnv },
+      { cwd: repoRoot, stdio: 'pipe', timeout: 60_000, env: fastStopEnv },
     );
-    return;
   } catch {
     // fall through to marker/supervisor.pid kill
+  }
+
+  for (const artifact of ['maintenance.epoch', 'supervisor.start.lock', 'stale-grace.sidecar']) {
+    const artifactPath = path.join(root, artifact);
+    if (fs.existsSync(artifactPath)) {
+      fs.unlinkSync(artifactPath);
+    }
   }
 
   const supervisorPidFile = path.join(root, 'supervisor.pid');
@@ -164,6 +199,21 @@ function killSupervisorStateDir(root: string): void {
     if (pid > 0) {
       try {
         execFileSync('kill', ['-9', String(pid)]);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const role of managedChildRoles) {
+    const childPidFile = path.join(root, `${role}.pid`);
+    if (!fs.existsSync(childPidFile)) {
+      continue;
+    }
+    const childPid = Number(fs.readFileSync(childPidFile, 'utf8').trim());
+    if (childPid > 0) {
+      try {
+        execFileSync('kill', ['-9', String(childPid)]);
       } catch {
         // ignore
       }
@@ -195,15 +245,30 @@ function killSupervisorStateDir(root: string): void {
   }
 }
 
-export function runSupervisor(
-  args: string[],
-  env: Record<string, string> = {},
-): { stdout: string; stderr: string; status: number | null } {
+function applySupervisorTestEnv(env: Record<string, string>): Record<string, string | undefined> {
   const savedEnv: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
     savedEnv[key] = process.env[key];
     process.env[key] = value;
   }
+  return savedEnv;
+}
+
+function restoreSupervisorTestEnv(savedEnv: Record<string, string | undefined>): void {
+  for (const [key, previous] of Object.entries(savedEnv)) {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
+export function runSupervisor(
+  args: string[],
+  env: Record<string, string> = {},
+): { stdout: string; stderr: string; status: number | null } {
+  const savedEnv = applySupervisorTestEnv(env);
   const result = spawnSync(
     'pwsh',
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
@@ -212,20 +277,55 @@ export function runSupervisor(
       env: process.env,
       encoding: 'utf8',
       timeout: supervisorHookTimeoutMs,
+      maxBuffer: supervisorSpawnMaxBufferBytes,
     },
   );
-  for (const [key, previous] of Object.entries(savedEnv)) {
-    if (previous === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = previous;
-    }
-  }
+  restoreSupervisorTestEnv(savedEnv);
   return {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
     status: result.status,
   };
+}
+
+export function runSupervisorAsync(
+  args: string[],
+  env: Record<string, string> = {},
+  timeoutMs = supervisorAsyncTimeoutMs,
+): Promise<{ stdout: string; stderr: string; status: number | null; signal: NodeJS.Signals | null }> {
+  const savedEnv = applySupervisorTestEnv(env);
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript, ...args],
+      {
+        cwd: repoRoot,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+    }, timeoutMs);
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      restoreSupervisorTestEnv(savedEnv);
+      reject(error);
+    });
+    child.on('close', (status, signal) => {
+      clearTimeout(timer);
+      restoreSupervisorTestEnv(savedEnv);
+      resolve({ stdout, stderr, status, signal });
+    });
+  });
 }
 
 export function startSupervisorBackground(

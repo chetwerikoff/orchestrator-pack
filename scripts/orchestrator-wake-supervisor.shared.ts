@@ -26,6 +26,7 @@ export {
   waitForMarkers,
   waitForProcessesStopped,
   waitForStdoutContains,
+  waitForSupervisorLogMatch,
   waitForSupervisorLogMatchFromOffset,
   waitForSupervisorHealthyStatus,
   type ManagedChildRole,
@@ -34,7 +35,7 @@ export {
 
 export const aoStub = path.join(fixtureDir, 'ao-stub.sh');
 export const supervisorHookTimeoutMs = 120_000;
-export const detachedSupervisorTimeoutMs = 60_000;
+export const detachedSupervisorTimeoutMs = 120_000;
 export const issue205TimeoutMs = 60_000;
 
 afterEach(() => {

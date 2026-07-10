@@ -2325,3 +2325,61 @@ After merging on a host with a live wake supervisor:
 ## Session PR binding resolver (Issue #699)
 
 On AO 0.10.2, `ao session claim-pr <session> <pr>` may set numeric `displayName` on `ao session get` but does **not** populate `prNumber`/`pr` on `ao session ls` rows. Pack consumers resolve session↔PR ownership through `docs/session-pr-binding-resolver.mjs`; claim-pr remains optional AO-native CI hygiene only.
+
+## Wake-supervisor fleet cardinality lease (Issue #709)
+
+State-root singleton enforcement uses `<stateRoot>/supervisor.lock` (held `flock` on Linux/WSL2). One supervisor fleet per shared `AO_SIDE_PROCESS_STATE_DIR` / default wake state root.
+
+### Ordinary Stop blocked (ambiguous fleet)
+
+When two or more managed-supervisor candidates match the same project + state root, ordinary Stop fails closed:
+
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop -StateDir <stateRoot>
+```
+
+Expected diagnostic: `stop blocked: ambiguous managed supervisor candidates (...); use -Force or manual remediation`.
+
+### Force Stop (incident recovery)
+
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop -Force -StateDir <stateRoot>
+```
+
+Force Stop enters a maintenance epoch, terminates all role-tagged managed children and supervisor candidates for the project/state root, emits structured `wake-supervisor-audit kind=force-stop` output, and clears artifacts only after exit checks. Use when ordinary Stop is ambiguous or a wedged holder blocks recovery.
+
+### Post-force recovery verification
+
+1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status -StateDir <stateRoot>` — expect `supervisor: stopped` and no ambiguous candidate list.
+2. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start -StateDir <stateRoot>` — expect detached start, `supervisor.lock` present, holder pid live.
+3. Re-check Status shows one running supervisor and healthy registry children.
+
+### Cross-checkout management
+
+`Status` / `Stop` / `Stop -Force` discover supervisors by **state root + project identity**, not checkout script path. A holder started from another worktree remains visible and stoppable from any checkout sharing the state root.
+
+### Legacy no-lock holders
+
+Pre-709 supervisors without `supervisor.lock` block new `Start` with a legacy-holder diagnostic until `Stop -Force` clears the fleet.
+
+### Stale-live heartbeat reclaim
+
+When a holder pid is alive but `heartbeatMs` in `supervisor.lock` is older than `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` (default derived from poll interval) for longer than `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS`, the next `Start` may reclaim after structured `wake-supervisor-audit kind=stale-live-reclaim` output. Ordinary reclaim does **not** kill immediately on first stale detection — grace avoids false steals after WSL2 suspend/pause.
+
+### Lease tuning env vars
+
+| Variable | Purpose |
+| --- | --- |
+| `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | Max age before heartbeat considered stale |
+| `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | Two-phase grace before stale-live reclaim |
+| `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | Delay between role restarts on session-id flap |
+| `AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | Seconds to wait for detached loop to assume `supervisor.lock` after `Start` |
+
+### Start blocked during Stop maintenance (AC#8a)
+
+While `Stop` or `Stop -Force` holds the maintenance epoch (`maintenance.epoch`), concurrent `Start` must not acquire the lease. Expect `start blocked: stop maintenance epoch active` on stdout/stderr until force-stop completes and artifacts are cleared.
+
+### Post-force ordinary Start
+
+After `Stop -Force`, verify with `Status` (stopped, no ambiguous candidates), then ordinary `Start` (detached supervisor + fresh `supervisor.lock`). Cross-checkout `Status`/`Stop` from another worktree sharing the same state root should see the same holder.
+

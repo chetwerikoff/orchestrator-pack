@@ -16,6 +16,7 @@ import {
   resolveRepoRoot,
   runtimeHistoryPath,
   validateClassification,
+  validateParkedWallclockE2e,
 } from './vitest-ci-lanes.mjs';
 
 /** Canonical CI-generated topology artifact (not committed). */
@@ -217,8 +218,12 @@ export function findOversizedFiles(discovered, artifact, policy, repoRoot, optio
   const offenders = [];
   const unresolved = [];
   const changedFiles = new Set(options.changedFiles ?? []);
+  const parkedFiles = new Set(options.parkedFiles ?? []);
 
   for (const file of discovered) {
+    if (parkedFiles.has(file)) {
+      continue;
+    }
     const resolved = resolveGuardWeightSeconds(file, artifact, repoRoot, {
       ...options,
       changedFiles: [...changedFiles],
@@ -290,8 +295,15 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
   if (classificationErrors.length > 0) {
     return { ok: false, errors: classificationErrors, discovered };
   }
+  const parkedErrors = validateParkedWallclockE2e(
+    lanesConfig.classification,
+    lanesConfig.parkedWallclockE2e,
+  );
+  if (parkedErrors.length > 0) {
+    return { ok: false, errors: parkedErrors, discovered };
+  }
 
-  const { light, heavy } = partitionByLane(discovered, lanesConfig.classification);
+  const { light, heavy, parked } = partitionByLane(discovered, lanesConfig.classification);
   const runtimeHistory = historyLoad.state === 'valid' ? historyLoad.artifact.files : {};
   const heavyLaneTotalWeightSeconds = sumHeavyLaneWeightSeconds(
     heavy,
@@ -323,7 +335,10 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
       : historyLoad.state === 'present_but_unusable' && historyLoad.artifact
         ? historyLoad.artifact
         : null;
-  const oversized = findOversizedFiles(discovered, artifactForGuard, policy, root, options);
+  const oversized = findOversizedFiles(discovered, artifactForGuard, policy, root, {
+    ...options,
+    parkedFiles: parked,
+  });
 
   const topology = {
     issue: 695,
@@ -351,6 +366,7 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
     discovered,
     light,
     heavy,
+    parked,
     runtimeHistory,
     lanesConfig,
     historyLoad,

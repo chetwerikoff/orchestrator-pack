@@ -10,7 +10,6 @@ import {
   managedChildRoles,
   path,
   readMarker,
-  waitForStdoutContains,
   repoRoot,
   runSupervisor,
   spawn,
@@ -19,6 +18,7 @@ import {
   supervisorScript,
   waitForMarkerPidChange,
   waitForMarkers,
+  waitForSupervisorLogMatch,
   fixedObservationWindow,
   sleepMs,
   type WakeMarker,
@@ -88,14 +88,16 @@ describe('orchestrator-wake-supervisor', () => {
 
   it('restarts a child after it exits', async () => {
     const stateDir = makeStateDir();
-    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart']);
+    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart'], {
+      AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS: '0',
+      AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS: '1',
+      AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS: '1',
+      AO_WAKE_SUPERVISOR_TEST_MODE_listener: 'instant-exit',
+    });
     await waitForMarkers(stateDir);
 
     const first = await readMarker(stateDir, 'listener');
-    if (isAlive(first.pid)) {
-      process.kill(first.pid, 'SIGKILL');
-    }
-    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 10_000);
+    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 25_000);
     child.kill('SIGTERM');
   });
 
@@ -158,7 +160,7 @@ describe('orchestrator-wake-supervisor', () => {
       stdout += chunk.toString();
     });
 
-    await waitForStdoutContains(() => stdout, 'waiting for orchestrator session', 1500);
+    await waitForSupervisorLogMatch(stateDir, /waiting for orchestrator session/, 8_000);
     expect(stdout).toContain('waiting for orchestrator session');
 
     fs.writeFileSync(

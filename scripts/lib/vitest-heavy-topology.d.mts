@@ -47,6 +47,7 @@ export interface HeavyTopologySuccess {
   discovered: string[];
   light: string[];
   heavy: string[];
+  parked: string[];
   runtimeHistory: Record<string, number>;
   lanesConfig: import('./vitest-ci-lanes.mjs').LanesConfig;
   historyLoad: { state: string; path?: string; reason?: string; artifact?: RuntimeHistoryArtifact | null };
@@ -76,14 +77,22 @@ export declare function resolveGuardWeightSeconds(
   file: string,
   artifact: RuntimeHistoryArtifact | null,
   repoRoot: string,
-  options?: { changedFiles?: string[]; preTopologyMeasurements?: Record<string, number> },
+  options?: {
+    changedFiles?: string[];
+    preTopologyMeasurements?: Record<string, number>;
+    parkedFiles?: string[];
+  },
 ): { ok: true; weightSeconds: number; source: string } | { ok: false; reason: string; file: string };
 export declare function findOversizedFiles(
   discovered: string[],
   artifact: RuntimeHistoryArtifact | null,
   policy: HeavyTopologyPolicy,
   repoRoot: string,
-  options?: { changedFiles?: string[]; preTopologyMeasurements?: Record<string, number> },
+  options?: {
+    changedFiles?: string[];
+    preTopologyMeasurements?: Record<string, number>;
+    parkedFiles?: string[];
+  },
 ): {
   offenders: Array<{ file: string; weightSeconds: number; targetShardSeconds: number }>;
   unresolved: Array<{ file: string; reason: string }>;
