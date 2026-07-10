@@ -594,7 +594,10 @@ describe('wall-clock e2e stage split (#694)', () => {
     } = await import('./lib/vitest-wallclock-e2e-split.mjs');
     const validation = validatePreMoveManifestAgainstBaseline(repoRoot);
     expect(validation.ok).toBe(true);
-    expect(validation.union?.length).toBeGreaterThan(0);
+    if (!validation.ok) {
+      throw new Error(validation.reason);
+    }
+    expect(validation.union.length).toBeGreaterThan(0);
     const manifest = loadSplitManifest(repoRoot);
     expect(validation.baselineSha).toBe(manifest.preMoveBaselineSha);
     const coverage = buildCoverageDeltaReport(repoRoot);
@@ -606,8 +609,7 @@ describe('wall-clock e2e stage split (#694)', () => {
     const original = readFileSync(preMovePath, 'utf8');
     const parsed = JSON.parse(original) as { baselineSha: string; prRequiredUnion: string[] };
     parsed.prRequiredUnion = parsed.prRequiredUnion.slice(1);
-    writeFileSync(preMovePath, `${JSON.stringify(parsed, null, 2)}
-`, 'utf8');
+    writeFileSync(preMovePath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
     try {
       const { buildCoverageDeltaReport } = await import('./lib/vitest-wallclock-e2e-split.mjs');
       const coverage = buildCoverageDeltaReport(repoRoot);
