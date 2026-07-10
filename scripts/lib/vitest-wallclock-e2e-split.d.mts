@@ -33,6 +33,7 @@ export interface ImmutableApprovalResult {
 export declare function loadSplitManifest(repoRoot?: string): SplitManifest;
 export declare function normalizeBaselineSha(sha: string | null | undefined): string | null;
 export declare function gitCommitExists(commitSha: string, repoRoot?: string): boolean;
+export declare function ensureGitCommitAvailable(commitSha: string, repoRoot?: string): boolean;
 export declare function derivePreMoveUnionAtBaseline(
   repoRoot?: string,
   baselineSha?: string,

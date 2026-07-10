@@ -55,13 +55,33 @@ export function gitCommitExists(commitSha, repoRoot = resolveRepoRoot()) {
   }
 }
 
+export function ensureGitCommitAvailable(commitSha, repoRoot = resolveRepoRoot()) {
+  if (gitCommitExists(commitSha, repoRoot)) {
+    return true;
+  }
+  const normalized = normalizeBaselineSha(commitSha);
+  if (!normalized) {
+    return false;
+  }
+  const root = resolveRepoRoot(repoRoot);
+  try {
+    execFileSync('git', ['fetch', '--depth', '1', 'origin', normalized], {
+      cwd: root,
+      stdio: 'pipe',
+    });
+  } catch {
+    return false;
+  }
+  return gitCommitExists(commitSha, root);
+}
+
 export function withDetachedGitWorktree(repoRoot, commitSha, callback) {
   const root = resolveRepoRoot(repoRoot);
   const normalized = normalizeBaselineSha(commitSha);
   if (!normalized) {
     throw new Error('invalid baseline commit sha');
   }
-  if (!gitCommitExists(normalized, root)) {
+  if (!ensureGitCommitAvailable(normalized, root)) {
     throw new Error(`baseline commit missing: ${normalized}`);
   }
   const tempBase = mkdtempSync(join(tmpdir(), 'opk-wallclock-baseline-'));
@@ -94,7 +114,7 @@ export function derivePreMoveUnionAtBaseline(repoRoot = resolveRepoRoot(), basel
   if (!sha) {
     return { ok: false, reason: 'pre-move-baseline-sha-invalid' };
   }
-  if (!gitCommitExists(sha, repoRoot)) {
+  if (!ensureGitCommitAvailable(sha, repoRoot)) {
     return { ok: false, reason: `pre-move-baseline-commit-unavailable:${sha}` };
   }
   try {

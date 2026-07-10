@@ -35,10 +35,35 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-vitest-wallclock-e2e-split-mjs-70",
+      "rowId": "site-scripts-lib-vitest-wallclock-e2e-split-mjs-68",
       "caller": {
         "file": "scripts/lib/vitest-wallclock-e2e-split.mjs",
-        "line": 70
+        "line": 68
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:e6266c88a27e29a9cbf0ce5d0588679c4af68fe21dac7c180a2cd443beb6408b",
+      "discoveryMatch": {
+        "file": "scripts/lib/vitest-wallclock-e2e-split.mjs",
+        "line": 68,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-vitest-wallclock-e2e-split-mjs-90",
+      "caller": {
+        "file": "scripts/lib/vitest-wallclock-e2e-split.mjs",
+        "line": 90
       },
       "callee": {
         "kind": "other-external",
@@ -53,17 +78,17 @@
       "hashPinnedSourceHash": "sha256:c3a46da993f64c863970c4fcb0ff1252c3ec027a82b6b8b808f8fb5160bce53f",
       "discoveryMatch": {
         "file": "scripts/lib/vitest-wallclock-e2e-split.mjs",
-        "line": 70,
+        "line": 90,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-vitest-wallclock-e2e-split-mjs-77",
+      "rowId": "site-scripts-lib-vitest-wallclock-e2e-split-mjs-97",
       "caller": {
         "file": "scripts/lib/vitest-wallclock-e2e-split.mjs",
-        "line": 77
+        "line": 97
       },
       "callee": {
         "kind": "other-external",
@@ -78,7 +103,7 @@
       "hashPinnedSourceHash": "sha256:aa76879b63a9074086c745663643dbf09738d5b689d152fcfd1ae8f5f533e023",
       "discoveryMatch": {
         "file": "scripts/lib/vitest-wallclock-e2e-split.mjs",
-        "line": 77,
+        "line": 97,
         "patternIds": [
           "execFileSync"
         ]
