@@ -12,6 +12,7 @@
     {
       "name": "op-earlier",
       "role": "worker",
+      "prNumber": 94,
       "status": "working",
       "reports": []
     },

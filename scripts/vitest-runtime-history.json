@@ -326,7 +326,7 @@
     "scripts/review-start-supervised-gh-pid.test.ts": "ece568f731961a31b1736c5f55847a5f34a20a56d7fc4597dd6a8e3b6e0efb60",
     "scripts/review-status-consumer.test.ts": "9ed3a4d089f262fdf85f023d77d6bea05e105a92f0678e43e849e46c1a682fb4",
     "scripts/review-stuck-run-reaper.test.ts": "9279583494196a204a066133034f8506c18d5c752cf18c9adb271e4d54286006",
-    "scripts/review-trigger-reconcile.test.ts": "49f2842c81a52a9f4fa71a60351d79732ca2ac64663915d54a9545208d987949",
+    "scripts/review-trigger-reconcile.test.ts": "73ce1add81f9db442a225810fc21064e6975b1b4de4c4042d9d416c2424042aa",
     "scripts/review-trigger-reeval.test.ts": "8b31ddf122c69bc3a0a8107ffd8d7eb334a1618d121b4a4316f2bbac6517f3eb",
     "scripts/review-wake-trigger.test.ts": "64176ba0f613b76c1a696b2f0820ae7736c6fb5fa614af61eb72b84dc63ea3c4",
     "scripts/reviewer-contract-mapping.test.ts": "6fec728ec33cd3bceea5ef9a05e554cfd489b6218dd428e5e162dbcd36d52685",

@@ -671,7 +671,15 @@ describe('planReconcileActions', () => {
     });
 
     it('AC10b: strict explicit owner wins over legacy report-history pick for quiescence', () => {
-      const fixture = withExpiredNudgeCycle(loadFixture('quiescent-strict-owner-over-legacy-report.json'));
+      const base = withExpiredNudgeCycle(loadFixture('quiescent-strict-owner-over-legacy-report.json'));
+      const fixture = {
+        ...base,
+        sessions: base.sessions.map((session) =>
+          session.name === 'opk-stale-report'
+            ? { ...session, status: 'terminated', prNumber: undefined }
+            : session,
+        ),
+      };
       const ambiguousLegacyId = resolveHeadOwningWorkerSessionId(
         fixture.sessions,
         92,
@@ -718,7 +726,13 @@ describe('planReconcileActions', () => {
     });
 
     it('AC10d: implicit owner ambiguity still honors ready_for_review report binding', () => {
-      const fixture = loadFixture('implicit-ready-report-handoff.json');
+      const base = loadFixture('implicit-ready-report-handoff.json');
+      const fixture = {
+        ...base,
+        sessions: base.sessions.map((session) =>
+          session.name === 'op-earlier' ? { ...session, prNumber: undefined } : session,
+        ),
+      };
       seedPrSessionBindingCache('op-ready', fixture.openPrs[0].number, fixture.openPrs[0].headRefOid);
       const starts = startReviewActions(planReconcile(fixture));
       expect(starts).toHaveLength(1);
