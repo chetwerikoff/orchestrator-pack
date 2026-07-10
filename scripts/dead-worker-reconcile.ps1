@@ -28,6 +28,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+. (Join-Path $PSScriptRoot 'lib/WorkerReportStore.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
@@ -125,39 +126,12 @@ function Get-DeadWorkerWorktreeDiscoveryPorcelain {
 }
 
 function Get-DeadWorkerAuditDiscoveryCandidates {
-    param([string]$ProjectId)
+    param(
+        [string]$ProjectId,
+        [string]$RepoRoot = ''
+    )
 
-    $auditDir = Get-AoAgentReportAuditDir -Project $ProjectId
-    if (-not (Test-Path -LiteralPath $auditDir -PathType Container)) {
-        return @()
-    }
-
-    $candidates = @()
-    foreach ($auditPath in @(Get-ChildItem -LiteralPath $auditDir -Filter '*.ndjson' -File -ErrorAction SilentlyContinue)) {
-        $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($auditPath.Name)
-        if (-not $sessionId) { continue }
-        $issueNumber = 0
-        $prNumber = 0
-        foreach ($line in @(Get-Content -LiteralPath $auditPath.FullName -Encoding UTF8 -ErrorAction SilentlyContinue)) {
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            try {
-                $entry = $line | ConvertFrom-Json
-            }
-            catch {
-                continue
-            }
-            if ($entry.issueId) { [void][int]::TryParse([string]$entry.issueId, [ref]$issueNumber) }
-            if ($entry.issueNumber) { [void][int]::TryParse([string]$entry.issueNumber, [ref]$issueNumber) }
-            if ($entry.prNumber) { [void][int]::TryParse([string]$entry.prNumber, [ref]$prNumber) }
-            if ($entry.pr) { [void][int]::TryParse([string]$entry.pr, [ref]$prNumber) }
-        }
-        $candidates += @{
-            sessionId = $sessionId
-            issueNumber = $issueNumber
-            prNumber = $prNumber
-        }
-    }
-    return @($candidates)
+    return @(Get-PackWorkerReportDiscoveryCandidates -RepoRoot $RepoRoot)
 }
 
 function Get-DeadWorkerAbsentSessions {
@@ -171,7 +145,7 @@ function Get-DeadWorkerAbsentSessions {
     $result = Invoke-DeadWorkerPlannerCli -Subcommand 'discover-absent-sessions' -Payload @{
         sessions = @($Sessions)
         worktreePorcelain = (Get-DeadWorkerWorktreeDiscoveryPorcelain -RepoRoot $RepoRoot)
-        auditCandidates = @(Get-DeadWorkerAuditDiscoveryCandidates -ProjectId $ProjectId)
+        auditCandidates = @(Get-DeadWorkerAuditDiscoveryCandidates -ProjectId $ProjectId -RepoRoot $RepoRoot)
         openPrs = @($OpenPrs)
     }
     return @($result.absentSessions)

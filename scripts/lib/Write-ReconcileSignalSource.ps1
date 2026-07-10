@@ -21,7 +21,7 @@ function Write-ReconcileSignalSource {
 function Write-ReconcileReportReceiptSurfaceRemoved {
     param(
         [string]$Surface = '',
-        [string]$Followup = 'GitHub #611 (report-consumer migration on AO 0.10.2)',
+        [string]$Followup = 'pack-worker-report-store',
         [string]$LogPrefix = ''
     )
 

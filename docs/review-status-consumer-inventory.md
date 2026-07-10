@@ -17,23 +17,23 @@ the live-only invariant when terminated sessions are excluded.
 | `scripts/lib/Autonomous-ClaimPrResumeGate.ps1` | report-full / plus-terminated | `Get-AoStatusSessionsWithReports*` via resume gate | Terminated-inclusive only when resume gate requests terminated scan |
 | `scripts/dead-worker-reconcile.ps1` | report-full-plus-terminated reader | `Get-AoStatusSessionsWithReportsIncludingTerminated` | Explicitly includes terminated rows for recovery classification |
 | `scripts/orchestrator-diagnose.ps1` | tracked diagnostic (fixed #611) | `Get-AoStatusSessionsWithReports`; prints `reportSourcePath` | Live-only diagnostic summary |
-| `scripts/lib/Invoke-AoCliJson.ps1` | shared reader implementation | `Get-AoStatusSessionsWithReports*`, `Invoke-AoCliJson` prefix-safe parse, audit-backed fallback | CLI `--reports full` when available; else `.agent-report-audit/<session>.ndjson` |
+| `scripts/lib/Invoke-AoCliJson.ps1` | shared reader implementation | `Get-AoStatusSessionsWithReports*`, `Invoke-AoCliJson` prefix-safe parse, pack worker report store merge | `pack-worker-report-store` JSON under wake-supervisor state dir |
 | `scripts/orchestrator-wake-listener.ps1` | not a worker-report consumer | webhook envelope only; no `ready_for_review` verdict from AO status | n/a |
 | `scripts/lib/Invoke-ReviewStuckRunReaper.ps1` | not a worker-report consumer | review run liveness only | n/a |
 | `scripts/lib/Worker-NudgeClaim.ps1` | not a worker-report consumer | session identity / nudge claims | n/a |
 | `scripts/lib/Worker-Recovery.ps1` | not a worker-report consumer | recovery spawn identity | n/a |
 | `scripts/ci-failure-notification-reconcile.ps1` | not a worker-report consumer | CI failure reaction routing | n/a |
 | `agent-orchestrator.yaml.example` orchestrator rules | ad-hoc prompt diagnostic (governed) | Must use `$.data[]` + report-full reader contract prose | n/a |
-| `AGENTS.md` review-status section | ad-hoc prompt diagnostic (governed) | Must use `Get-AoStatusSessionsWithReports` / explicit audit path | n/a |
+| `AGENTS.md` review-status section | ad-hoc prompt diagnostic (governed) | Must use `Get-AoStatusSessionsWithReports` / pack worker report store | n/a |
 
 ## Reader contract
 
 1. Never conclude `no_ready_for_review` from plain `ao status --json` or `ao session ls`
-   rows whose `reports` are empty when report-full or audit-backed state contains an
-   accepted current-head `ready_for_review`.
+   rows whose `reports` are empty when the pack worker report store or fixture
+   report-full payload contains an accepted current-head `ready_for_review`.
 2. Session list shape is `$.data[]` with optional `$.sessions[]` fallback — never
    `$.sessions` alone.
-3. Diagnostics that print a hand-off verdict must name `reportSourcePath` (CLI or
-   audit fixture).
+3. Diagnostics that print a hand-off verdict must name `reportSourcePath` (pack store or
+   fixture).
 4. Prefix-safe AO JSON parsing routes through `Invoke-AoCliJson` (or equivalent
    brace-index strip) for notifier/log prefixed CLI output.

@@ -92,6 +92,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'worker-iteration-cycle.mjs',
     'worker-message-dispatch-observe.mjs',
     'worker-recovery.mjs',
+    'worker-report-store.mjs',
     'autonomous-review-start-capabilities.json',
     'autonomous-shared-capabilities.json',
   ]) {
