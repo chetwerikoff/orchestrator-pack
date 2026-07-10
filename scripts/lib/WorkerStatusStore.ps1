@@ -330,7 +330,7 @@ function Get-WorkerStatusWriterGenerationVector {
         . (Join-Path $PSScriptRoot 'Record-WorkerMessageDispatch.ps1')
     }
 
-    $reportStoreGen = 0
+    $reportStoreGen = [long]0
     try {
         $reportStore = Get-WorkerReportStoreState
         if ($null -ne $reportStore.generation) {
@@ -338,10 +338,10 @@ function Get-WorkerStatusWriterGenerationVector {
         }
     }
     catch {
-        $reportStoreGen = 0
+        $reportStoreGen = [long]0
     }
 
-    $journalCursor = 0
+    $journalCursor = [long]0
     try {
         $journal = Get-WorkerMessageDispatchJournal
         if ($journal) {
@@ -349,7 +349,7 @@ function Get-WorkerStatusWriterGenerationVector {
                 if ([string]$prop -match '^_') { continue }
                 $entry = $journal[$prop]
                 if ($null -eq $entry) { continue }
-                $delivered = 0
+                $delivered = [long]0
                 if ($entry -is [hashtable] -and $entry.ContainsKey('deliveredAtMs')) {
                     $delivered = [long]$entry['deliveredAtMs']
                 }
@@ -363,13 +363,13 @@ function Get-WorkerStatusWriterGenerationVector {
         }
     }
     catch {
-        $journalCursor = 0
+        $journalCursor = [long]0
     }
 
-    $bindingGen = 0
+    $bindingGen = [long]0
     if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
         foreach ($pr in @($GithubSnapshot.openPrs)) {
-            $headMs = 0
+            $headMs = [long]0
             $committedAt = ''
             if ($pr.headCommittedAt) { $committedAt = [string]$pr.headCommittedAt }
             if ($committedAt) {
@@ -463,14 +463,14 @@ function Write-WorkerStatusRow {
     elseif ($session.headRefOid) { $headSha = [string]$session.headRefOid }
     elseif ($report -and $report.headSha) { $headSha = [string]$report.headSha }
 
-    $repoTickGen = 0
-    if ($writerVector.repoTickGeneration) { $repoTickGen = [int]$writerVector.repoTickGeneration }
-    $reportStoreGen = 0
-    if ($writerVector.reportStoreGeneration) { $reportStoreGen = [int]$writerVector.reportStoreGeneration }
-    $journalCursor = 0
-    if ($writerVector.journalCursor) { $journalCursor = [int]$writerVector.journalCursor }
-    $bindingGen = 0
-    if ($writerVector.bindingCacheGeneration) { $bindingGen = [int]$writerVector.bindingCacheGeneration }
+    $repoTickGen = [long]0
+    if ($writerVector.repoTickGeneration) { $repoTickGen = [long]$writerVector.repoTickGeneration }
+    $reportStoreGen = [long]0
+    if ($writerVector.reportStoreGeneration) { $reportStoreGen = [long]$writerVector.reportStoreGeneration }
+    $journalCursor = [long]0
+    if ($writerVector.journalCursor) { $journalCursor = [long]$writerVector.journalCursor }
+    $bindingGen = [long]0
+    if ($writerVector.bindingCacheGeneration) { $bindingGen = [long]$writerVector.bindingCacheGeneration }
 
     $sessionActivity = ''
     if ($session.activity) { $sessionActivity = [string]$session.activity }

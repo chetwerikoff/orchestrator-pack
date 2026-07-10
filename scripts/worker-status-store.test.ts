@@ -838,6 +838,15 @@ describe('worker-status PowerShell bridge', () => {
     expect(reader).toContain('Get-WorkerStatusWriterGenerationVector');
     expect(reader).not.toMatch(/reportStoreGeneration\s*=\s*0/);
   });
+
+  it('preserves millisecond generation counters as 64-bit in Write-WorkerStatusRow (P1)', () => {
+    const store = readFileSync(join(import.meta.dirname, 'lib/WorkerStatusStore.ps1'), 'utf8');
+    const writeBlock = store.split('function Write-WorkerStatusRow')[1].split('function Invoke-WorkerStatusStoreEviction')[0];
+    expect(writeBlock).toContain('[long]$writerVector.journalCursor');
+    expect(writeBlock).toContain('[long]$writerVector.bindingCacheGeneration');
+    expect(writeBlock).not.toMatch(/\[int\]\$writerVector\.journalCursor/);
+    expect(writeBlock).not.toMatch(/\[int\]\$writerVector\.bindingCacheGeneration/);
+  });
 });
 
 
