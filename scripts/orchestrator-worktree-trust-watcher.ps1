@@ -26,6 +26,10 @@ if (-not (Test-Path -LiteralPath $TrustScript -PathType Leaf)) {
     throw "Missing $TrustScript"
 }
 
+$PackRoot = Split-Path -Parent $PSScriptRoot
+$CursorAgentTuiShimModule = Join-Path $PSScriptRoot 'lib/Cursor-Agent-TuiShim.ps1'
+$CursorAgentTuiShimModuleLoaded = $false
+
 $userHome = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
 $stateBase = if (-not [string]::IsNullOrWhiteSpace($env:XDG_STATE_HOME)) {
     $env:XDG_STATE_HOME
@@ -54,6 +58,25 @@ function Write-WatcherLog {
     param([string]$Message)
     $ts = (Get-Date).ToString('o')
     Write-Host "[$ts] worktree-trust-watcher $Message"
+}
+
+function Invoke-CursorAgentTuiShimWatcherSelfHeal {
+    if (-not $CursorAgentTuiShimModuleLoaded) {
+        if (-not (Test-Path -LiteralPath $CursorAgentTuiShimModule -PathType Leaf)) {
+            return
+        }
+        . $CursorAgentTuiShimModule
+        $script:CursorAgentTuiShimModuleLoaded = $true
+    }
+    try {
+        $heal = Invoke-CursorAgentTuiShimSelfHeal -PackRoot $PackRoot -Source 'worktree-trust-watcher' -Quiet
+        if ($heal.Alerted) {
+            Write-WatcherLog "cursor-agent shim: $($heal.Message)"
+        }
+    }
+    catch {
+        Write-WatcherLog "cursor-agent shim self-heal error: $_"
+    }
 }
 
 function Register-TrustedPath {
@@ -94,5 +117,6 @@ while ($true) {
                 }
         }
     }
+    Invoke-CursorAgentTuiShimWatcherSelfHeal
     Start-Sleep -Seconds ([Math]::Max(3, $PollSeconds))
 }

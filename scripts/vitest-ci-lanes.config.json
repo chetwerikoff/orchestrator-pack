@@ -156,6 +156,7 @@
     "scripts/terminal-flood-detect.test.ts": "heavy",
     "scripts/test-runtime-budget.test.ts": "heavy",
     "scripts/trust-ao-worktree.test.ts": "light",
+    "scripts/cursor-agent-tui-shim.test.ts": "light",
     "tests/agents-md-size-budget.test.ts": "light",
     "tests/agents-md-relocation.test.ts": "light",
     "scripts/worker-iteration-cycle.test.ts": "heavy",

@@ -309,6 +309,39 @@ Operator adoption after merge:
 
 Runbook: [`docs/fleet-hygiene-sentinel-runbook.md`](fleet-hygiene-sentinel-runbook.md).
 
+## Cursor-agent TUI shim (Issue #725)
+
+Pack-owned argv interposition on `~/.local/bin/cursor-agent` for AO worker tmux panes.
+**Does not** shim `~/.local/bin/agent`.
+
+Operator adoption after merge:
+
+1. Install once on every AO Cursor host:
+   `pwsh -NoProfile -File scripts/install-cursor-agent-tui-shim.ps1`
+2. Keep `orchestrator-worktree-trust-watcher.ps1` running (drift self-heal piggybacks
+   on its poll loop — bounded latency ≈ poll interval, default ~8s).
+3. After `cursor-agent` self-update, confirm:
+   `pwsh -NoProfile -File scripts/verify-cursor-agent-tui-shim.ps1`
+4. Optional alerts: set `AO_FLEET_HYGIENE_ALERT_FILE` (reuses fleet hygiene #711 sink).
+
+**Rollback** (restore stock cursor-agent only; stop or restart trust-watcher with self-heal disabled):
+
+```bash
+pkill -f 'orchestrator-worktree-trust-watcher\.ps1' || true
+export OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1
+ln -sf "$(ls -d ~/.local/share/cursor-agent/versions/2026* | sort | tail -1)/cursor-agent" ~/.local/bin/cursor-agent
+```
+
+If you keep the trust-watcher running, **restart it** with
+`OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1` in that process environment before
+`ln -sf` — exporting the flag only in your current shell does not affect an
+already-running watcher, which will still re-apply the pack shim on the next poll.
+
+Or stop `orchestrator-worktree-trust-watcher.ps1` before the `ln -sf` step. See
+[`docs/cursor-agent-tui-shim-runbook.md`](cursor-agent-tui-shim-runbook.md) §Rollback.
+
+Runbook: [`docs/cursor-agent-tui-shim-runbook.md`](cursor-agent-tui-shim-runbook.md).
+
 ## Wake supervisor ordinary Start detach (Issue #552)
 
 Ordinary `-Action Start` on Linux/macOS now launches the supervisor loop in a new
