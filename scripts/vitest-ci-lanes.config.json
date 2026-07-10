@@ -183,7 +183,8 @@
     "scripts/supervisor-fault-boundary-escalate.test.ts": "heavy",
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "heavy",
     "scripts/supervisor-degraded-backoff-restart.test.ts": "heavy",
-    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "heavy"
+    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "heavy",
+    "scripts/testmode-fleet-reaper.test.ts": "heavy"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

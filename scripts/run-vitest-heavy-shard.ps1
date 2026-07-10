@@ -16,6 +16,8 @@ $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 $FileRunPlanScript = Join-Path $Root 'scripts/resolve-vitest-heavy-file-run-plan.mjs'
 
 $env:CI = 'true'
+$env:VITEST_HEAVY_SHARD = [string]$Shard
+$env:OPK_TESTMODE_FLEET_WORKSPACE_ROOT = $Root
 Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue
 . (Join-Path $PSScriptRoot 'lib/Set-OpkVitestHarnessEnv.ps1')
 Set-OpkVitestHarnessEnv | Out-Null
@@ -41,6 +43,7 @@ try {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $partialReports = [System.Collections.Generic.List[string]]::new()
     $failedExitCode = 0
+    $shardExitCode = 0
     $maxFileAttempts = if ($env:CI -eq 'true') { 5 } else { 1 }
     $partialReportSeq = 0
 
@@ -133,19 +136,41 @@ try {
         }
 
         if ($failedExitCode -ne 0) {
-            exit $failedExitCode
+            $shardExitCode = $failedExitCode
         }
+        else {
+            $mergeArgs = @(
+                (Join-Path $Root 'scripts/lib/vitest-json-report.mjs'),
+                'merge',
+                '--output',
+                $RuntimeReportPath
+            ) + $partialReports
+            & node @mergeArgs
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[FAIL] Vitest heavy shard $Shard failed to merge per-file JSON reports"
+                $shardExitCode = 1
+            }
+            else {
+                $metaPath = "$RuntimeReportPath.meta.json"
+                $meta = @{
+                    commitSha = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { '' }
+                    shard     = $Shard
+                    success   = $true
+                    runId     = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { '' }
+                }
+                $meta | ConvertTo-Json -Compress | Set-Content -LiteralPath $metaPath -Encoding utf8
 
-        $mergeArgs = @(
-            (Join-Path $Root 'scripts/lib/vitest-json-report.mjs'),
-            'merge',
-            '--output',
-            $RuntimeReportPath
-        ) + $partialReports
-        & node @mergeArgs
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "[FAIL] Vitest heavy shard $Shard failed to merge per-file JSON reports"
-            exit 1
+                & node (Join-Path $Root 'scripts/enforce-vitest-runtime-budget.mjs') $RuntimeReportPath
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "[FAIL] Vitest runtime budget exceeded on heavy shard $Shard"
+                    $shardExitCode = 1
+                }
+                else {
+                    $sw.Stop()
+                    $elapsed = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+                    Write-Host "vitest-lane-timing lane=heavy shard=$Shard files=$($shardPlan.files.Count) weight_ms=$($shardPlan.totalRuntimeMs) elapsed_sec=$elapsed"
+                }
+            }
         }
     }
     finally {
@@ -156,24 +181,48 @@ try {
         }
     }
 
-    $metaPath = "$RuntimeReportPath.meta.json"
-    $meta = @{
-        commitSha = if ($env:GITHUB_SHA) { $env:GITHUB_SHA } else { '' }
-        shard     = $Shard
-        success   = $true
-        runId     = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { '' }
+    $hygieneExitCode = 0
+    $reaperScript = Join-Path $Root 'scripts/invoke-testmode-fleet-reaper.ps1'
+    . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
+    $laneContexts = @(Get-TestModeVitestLaneLeaseContexts -Shard ([string]$Shard))
+    if ($laneContexts.Count -eq 0) {
+        Import-TestModeVitestLaneLeaseContext -Shard ([string]$Shard) | Out-Null
+        if ($env:AO_TESTMODE_FLEET_LANE_LEASE_ID) {
+            $laneContexts = @([pscustomobject]@{
+                leaseId   = [string]$env:AO_TESTMODE_FLEET_LANE_LEASE_ID
+                leaseRoot = [string]$env:OPK_TESTMODE_LEASE_ROOT
+            })
+        }
     }
-    $meta | ConvertTo-Json -Compress | Set-Content -LiteralPath $metaPath -Encoding utf8
 
-    & node (Join-Path $Root 'scripts/enforce-vitest-runtime-budget.mjs') $RuntimeReportPath
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FAIL] Vitest runtime budget exceeded on heavy shard $Shard"
-        exit 1
+    $hygieneFailed = $false
+    foreach ($ctx in $laneContexts) {
+        if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
+        if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+
+        $observeJson = & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript observe 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $hygieneFailed = $true
+            Write-Host "[FAIL] TestMode fleet hygiene: surviving this-run/shard-scoped pwsh detected for lease $($ctx.leaseId)"
+            Write-Host $observeJson
+        }
     }
 
-    $sw.Stop()
-    $elapsed = [math]::Round($sw.Elapsed.TotalSeconds, 2)
-    Write-Host "vitest-lane-timing lane=heavy shard=$Shard files=$($shardPlan.files.Count) weight_ms=$($shardPlan.totalRuntimeMs) elapsed_sec=$elapsed"
+    if ($hygieneFailed) {
+        foreach ($ctx in $laneContexts) {
+            if ($ctx.leaseRoot) { $env:OPK_TESTMODE_LEASE_ROOT = [string]$ctx.leaseRoot }
+            if ($ctx.leaseId) { $env:AO_TESTMODE_FLEET_LANE_LEASE_ID = [string]$ctx.leaseId }
+            & pwsh -NoProfile -ExecutionPolicy Bypass -File $reaperScript cleanup 2>&1 | Write-Host
+        }
+        $hygieneExitCode = 2
+    }
+
+    if ($hygieneExitCode -ne 0) {
+        exit $hygieneExitCode
+    }
+    if ($shardExitCode -ne 0) {
+        exit $shardExitCode
+    }
 }
 finally {
     Pop-Location

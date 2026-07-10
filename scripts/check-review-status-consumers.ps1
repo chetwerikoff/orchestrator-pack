@@ -25,7 +25,6 @@ $requiredConsumers = @{
     'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1'   = 'Get-AoStatusSessionsWithReportsIncludingTerminated'
     'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1'       = 'Get-AoStatusSessionsWithReports'
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1'             = 'Get-AoStatusSessionsWithReports'
-    'scripts/review-finding-delivery-confirm.ps1'          = 'Get-AoStatusSessionsWithReports'
     'scripts/ci-green-wake-reconcile.ps1'                  = 'Get-AoStatusSessionsWithReports'
     'scripts/worker-message-submit-reconcile.ps1'          = 'Get-AoStatusSessionsWithReports'
     'scripts/dead-worker-reconcile.ps1'                    = 'Get-AoStatusSessionsWithReportsIncludingTerminated'

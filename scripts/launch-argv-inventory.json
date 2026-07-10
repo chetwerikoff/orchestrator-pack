@@ -5227,6 +5227,56 @@
       }
     },
     {
+      "rowId": "site-scripts-lib-Invoke-TestModeFleetReaper-ps1-312",
+      "caller": {
+        "file": "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+        "line": 312
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:378c3cfbea052a786ceb897a2bb1d1a2598148b9a86ca234ca77c0c576dd939b",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+        "line": 312,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-TestModeFleetReaper-ps1-315",
+      "caller": {
+        "file": "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+        "line": 315
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:a862619e410a521cdddc5129768a5867ab4348ab276d26aa0f25efada14b3c55",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+        "line": 315,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
       "rowId": "site-scripts-lib-MechanicalReconcileNode-ps1-108",
       "caller": {
         "file": "scripts/lib/MechanicalReconcileNode.ps1",
@@ -5607,10 +5657,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-908",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1122",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 908
+        "line": 1122
       },
       "callee": {
         "kind": "ao",
@@ -5621,17 +5671,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 908,
+        "line": 1122,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-911",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1125",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 911
+        "line": 1125
       },
       "callee": {
         "kind": "ao",
@@ -5642,17 +5692,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 911,
+        "line": 1125,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1219",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1433",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1219
+        "line": 1433
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5663,17 +5713,17 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1219,
+        "line": 1433,
         "patternIds": [
           "start-process"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1228",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-1442",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1228
+        "line": 1442
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5684,17 +5734,17 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 1228,
+        "line": 1442,
         "patternIds": [
           "start-process"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2036",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2264",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2036
+        "line": 2264
       },
       "callee": {
         "kind": "ao",
@@ -5705,17 +5755,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2036,
+        "line": 2264,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2053",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2281",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2053
+        "line": 2281
       },
       "callee": {
         "kind": "pack-ps1",
@@ -5726,7 +5776,7 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2053,
+        "line": 2281,
         "patternIds": [
           "start-process"
         ]
@@ -8049,10 +8099,10 @@
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-145",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-148",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 145
+        "line": 148
       },
       "callee": {
         "kind": "other-external",
@@ -8064,20 +8114,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:1d18c359a9aa0c34807e9d95c8fc5b7b3159d19d77c975af4e3b8effb6d12c21",
+      "hashPinnedSourceHash": "sha256:3776d0265bba429d92b2b8eef35b201adfe671c2387a2975f800848b858f6051",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 145,
+        "line": 148,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-168",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-163",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 168
+        "line": 163
       },
       "callee": {
         "kind": "other-external",
@@ -8089,20 +8139,74 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:f311937ef036838ab07cf3c89aa006e11b019e58029f397e07fa545805a2abea",
+      "hashPinnedSourceHash": "sha256:4e6225cfee589d143ae6c49719ab14cf94062f4f4858e9ee558efdaf9d97d7f7",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 168,
+        "line": 163,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-light-lane-ps1-63",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-203",
+      "caller": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 203
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:3a9ef5387514c9c1f7e2c656241dd6afb73ba57af18a775016f28d1e1e2ad65c",
+      "discoveryMatch": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 203,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile",
+          "call-pwsh"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-215",
+      "caller": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 215
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:e3f5b0425a0e2e20e2ada41b16458b1eb80bc0f1927536062b4e30e4ca29942e",
+      "discoveryMatch": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 215,
+        "patternIds": [
+          "pwsh-file",
+          "pwsh-noprofile",
+          "call-pwsh"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-run-vitest-light-lane-ps1-64",
       "caller": {
         "file": "scripts/run-vitest-light-lane.ps1",
-        "line": 63
+        "line": 64
       },
       "callee": {
         "kind": "other-external",
@@ -8117,7 +8221,7 @@
       "hashPinnedSourceHash": "sha256:a5b863c09462dff207fae5fee469613d800c34ce242c6a0f62483347eeae4624",
       "discoveryMatch": {
         "file": "scripts/run-vitest-light-lane.ps1",
-        "line": 63,
+        "line": 64,
         "patternIds": [
           "ps-call-op"
         ]
