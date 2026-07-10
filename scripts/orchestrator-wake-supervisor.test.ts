@@ -863,6 +863,32 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
       .filter((v) => v > 0);
     expect(matched).toContain(packPid);
     expect(matched).not.toContain(foreignPid);
+
+    const adoptCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $map = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $paths -ProjectId orchestrator-pack; if ($map.ContainsKey('listener')) { Write-Output $map['listener'] } else { Write-Output '0' }`;
+    const adoptResult = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', adoptCommand],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    expect(Number((adoptResult.stdout ?? '').trim())).toBe(packPid);
+
+    const listenerPidPath = path.join(stateDir, 'listener.pid');
+    fs.writeFileSync(listenerPidPath, String(foreignPid));
+    const foreignStatusCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $s = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $paths -ChildId listener -ProjectId orchestrator-pack; Write-Output $s.Alive`;
+    const foreignStatus = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', foreignStatusCommand],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    expect((foreignStatus.stdout ?? '').trim()).toBe('False');
+    fs.writeFileSync(listenerPidPath, String(packPid));
+    const packStatus = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', foreignStatusCommand],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    expect((packStatus.stdout ?? '').trim()).toBe('True');
+
     try {
       process.kill(packPid, 'SIGKILL');
       process.kill(foreignPid, 'SIGKILL');

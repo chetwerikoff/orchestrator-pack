@@ -363,7 +363,7 @@
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "757575b1ab488c3eebb989708bb2a06b7fd4f0b0aaab1df2143a6da4f665b588",
-    "scripts/orchestrator-wake-supervisor.test.ts": "7bd4ea6ddbe7fe706dc46bfa72ea8e82bec67e82fec216c51580772d3fc88f14",
+    "scripts/orchestrator-wake-supervisor.test.ts": "03ac95c1bdb0e31d86251faafde1b54a68b501aa8bcf99cf9e445950e7fdb72f",
     "scripts/review-handoff-admission-records-lifecycle.test.ts": "b7ac4904f3acb4fc235c02da061120e9985122479e525d069ae0ea84585d2020",
     "scripts/supervisor-recovery.test-helpers.ts": "2b41fd579f9026c2ba0c4b2d23836ce4f034096127e67c4c330228a266c45e55",
     "scripts/review-delivery.test.ts": "7113c9ed65f06d99664bbf293a6f7800ad1109cfa80cd8f77f1283eaa4ba0474",
@@ -376,7 +376,7 @@
     "docs/review-producer-contract.mjs": "973f012fdf3e03eb0b2d1e683f93450428022ef38d68a44879b990340529297d",
     "docs/worker-report-store.mjs": "b460e06d80d3849b41bd377a9b48ef51db8c08a912ad2ac77f4b76d6b4c9a7df",
     "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef",
-    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1": "6a00413f1a92e6aac5a8414df92d043c93138b20e1ae10bf1c4e5a420079a75f",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1": "5b688d24d7e09ce0e3da866acad4ef19e571aa36c27e63bdcecf18746c91835b",
     "scripts/orchestrator-wake-supervisor.ps1": "3bd8f4852dcb1082f11163dd4dd27f723b3ea015408629e1f992b1f8fba19696"
   },
   "provenance": {},
@@ -384,5 +384,5 @@
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": 300000,
     "scripts/orchestrator-wake-supervisor.test.ts": 720000
   },
-  "dataChangedAt": "2026-07-10T05:42:14Z"
+  "dataChangedAt": "2026-07-10T06:23:31Z"
 }
