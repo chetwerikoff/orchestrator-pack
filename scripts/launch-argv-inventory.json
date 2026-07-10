@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "Pack-wide production caller→callee launch inventory (Issue #661).",
+  "description": "Pack-wide production caller\u2192callee launch inventory (Issue #661).",
   "absorbedCoverage": [
     {
       "validatorId": "ao-cli-argv-shape",
@@ -1765,10 +1765,10 @@
       }
     },
     {
-      "rowId": "site-scripts-check-ci-pipeline-split-ps1-408",
+      "rowId": "site-scripts-check-ci-pipeline-split-ps1-414",
       "caller": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 408
+        "line": 414
       },
       "callee": {
         "kind": "other-external",
@@ -1783,17 +1783,17 @@
       "hashPinnedSourceHash": "sha256:da42433612065311873d074435a5d60e804cace365cfb9148b640bb162ea55f0",
       "discoveryMatch": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 408,
+        "line": 414,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-check-ci-pipeline-split-ps1-421",
+      "rowId": "site-scripts-check-ci-pipeline-split-ps1-427",
       "caller": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 421
+        "line": 427
       },
       "callee": {
         "kind": "other-external",
@@ -1808,7 +1808,7 @@
       "hashPinnedSourceHash": "sha256:ef9412b4453a712fa01abd3e2635ade321409db5e9713ab14938f18156084e18",
       "discoveryMatch": {
         "file": "scripts/check-ci-pipeline-split.ps1",
-        "line": 421,
+        "line": 427,
         "patternIds": [
           "ps-call-op"
         ]

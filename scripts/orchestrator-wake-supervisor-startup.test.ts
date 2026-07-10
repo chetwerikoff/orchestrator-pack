@@ -88,7 +88,11 @@ describe('orchestrator-wake-supervisor', () => {
 
   it('restarts a child after it exits', async () => {
     const stateDir = makeStateDir();
-    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart']);
+    const child = startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-restart'], {
+      AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS: '0',
+      AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS: '1',
+      AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS: '1',
+    });
     await waitForMarkers(stateDir);
 
     const first = await readMarker(stateDir, 'listener');
