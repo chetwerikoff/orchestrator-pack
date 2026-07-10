@@ -496,9 +496,15 @@ function Complete-OrchestratorWakeSupervisorStartLeaseHandoff {
         [hashtable]$Handoff,
         [int]$SpawnedPid,
         [string]$LogPath = '',
-        [int]$TimeoutSeconds = 30
+        [int]$TimeoutSeconds = 0
     )
     if (-not $Handoff) { return $false }
+    if ($TimeoutSeconds -le 0) {
+        $TimeoutSeconds = 30
+        if ($env:AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC -and [int]::TryParse($env:AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC, [ref]$null)) {
+            $TimeoutSeconds = [Math]::Max(5, [int]$env:AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC)
+        }
+    }
     $paths = $Handoff.Paths
     $leasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $paths
     $deadline = (Get-Date).AddSeconds([Math]::Max(5, $TimeoutSeconds))
@@ -918,6 +924,66 @@ function Test-OrchestratorWakeSupervisorLoopLeaseHeld {
     return $true
 }
 
+
+function Resolve-OrchestratorWakeSupervisorLiveHolderStartOutcome {
+    param(
+        [hashtable]$Lease,
+        [string]$ProjectId,
+        [hashtable]$Paths = $null,
+        [string]$LogPath = ''
+    )
+    if (-not $Lease) { return $null }
+
+    $holderPid = [int]$Lease.holderPid
+    if ($holderPid -le 0) {
+        $launcherPid = if ($null -ne $Lease.startLauncherPid) { [int]$Lease.startLauncherPid } else { 0 }
+        if ($launcherPid -gt 0 -and (Test-ProcessAlive -ProcessId $launcherPid)) {
+            return @{
+                Outcome  = 'start-in-progress'
+                ExitCode = 2
+                Message  = 'start blocked: another Start is reserving the state-root lease'
+            }
+        }
+        return $null
+    }
+
+    $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $Lease -LogPath $LogPath -Paths $Paths
+    if ($stale) { return $null }
+    if (-not (Test-ProcessAlive -ProcessId $holderPid)) { return $null }
+
+    $localScript = Normalize-OrchestratorWakeSupervisorPath -PathValue (Get-OrchestratorWakeSupervisorScriptPath)
+    $holderScript = if ($Lease.holderScriptPath) {
+        Normalize-OrchestratorWakeSupervisorPath -PathValue $Lease.holderScriptPath
+    }
+    else { '' }
+
+    if ($holderScript -and $holderScript -eq $localScript) {
+        return @{
+            Outcome       = 'already-running-same-checkout'
+            ExitCode      = 0
+            Message       = "supervisor already running (pid=$holderPid)"
+            HolderPid     = $holderPid
+            HolderProject = $Lease.projectId
+        }
+    }
+
+    $crossProject = $Lease.projectId -and $Lease.projectId -ne $ProjectId
+    $msg = if ($crossProject) {
+        "cross-project start blocked: holder pid=$holderPid project=$($Lease.projectId) owns state-root lease; use Stop -Force on holder project or shared recovery"
+    }
+    else {
+        "cross-checkout start blocked: holder pid=$holderPid from foreign checkout owns state-root lease (script=$(Split-Path -Leaf $holderScript)); Status/Stop from this checkout can manage it"
+    }
+    return @{
+        Outcome       = 'foreign-holder'
+        ExitCode      = 3
+        Message       = $msg
+        HolderPid     = $holderPid
+        HolderProject = $Lease.projectId
+        HolderScript  = $holderScript
+    }
+}
+
 function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
     param(
         [hashtable]$Paths,
@@ -960,7 +1026,43 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
 
     $existing = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
         -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
-    $epoch = if ($existing) { [int]$existing.epoch + 1 } else { 1 }
+    $liveHolderOutcome = Resolve-OrchestratorWakeSupervisorLiveHolderStartOutcome -Lease $existing `
+        -ProjectId $ProjectId -Paths $Paths -LogPath $LogPath
+    if ($liveHolderOutcome) { return $liveHolderOutcome }
+
+    $nextEpochAfterReclaim = 0
+    if ($existing) {
+        $stalePreHandoff = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $existing -LogPath $LogPath -Paths $Paths
+        if ($stalePreHandoff -eq 'stale-heartbeat-grace-pending') {
+            $existing = Update-OrchestratorWakeSupervisorLeaseStaleGraceMarker -Paths $Paths -Lease $existing -StaleEvidence $stalePreHandoff
+            $stalePreHandoff = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $existing -LogPath $LogPath -Paths $Paths
+            if ($stalePreHandoff -eq 'stale-heartbeat-grace-pending') {
+                return @{
+                    Outcome  = 'lease-grace-pending'
+                    ExitCode = 2
+                    Message  = "lease heartbeat stale but grace pending for holder pid=$($existing.holderPid)"
+                }
+            }
+        }
+        if ($stalePreHandoff -and $stalePreHandoff -ne 'stale-heartbeat-grace-pending') {
+            $fencedPreHandoff = Invoke-OrchestratorWakeSupervisorStaleLiveReclaim -Paths $Paths -Lease $existing `
+                -StaleEvidence $stalePreHandoff -LogPath $LogPath
+            if (-not $fencedPreHandoff) {
+                return @{
+                    Outcome  = 'reclaim-failed'
+                    ExitCode = 2
+                    Message  = "stale lease reclaim failed for holder pid=$($existing.holderPid)"
+                }
+            }
+            $nextEpochAfterReclaim = [int]$existing.epoch + 1
+            Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
+            $existing = $null
+        }
+    }
+
+    $epoch = if ($nextEpochAfterReclaim -gt 0) { $nextEpochAfterReclaim }
+    elseif ($existing) { [int]$existing.epoch + 1 }
+    else { 1 }
     $handoff = Acquire-OrchestratorWakeSupervisorStartLeaseHandoff -Paths $Paths -ProjectId $ProjectId `
         -Epoch $epoch -LogPath $LogPath
     if ($handoff) {

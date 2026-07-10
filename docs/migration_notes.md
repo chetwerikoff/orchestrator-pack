@@ -2340,6 +2340,7 @@ When a holder pid is alive but `heartbeatMs` in `supervisor.lock` is older than 
 | `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | Max age before heartbeat considered stale |
 | `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | Two-phase grace before stale-live reclaim |
 | `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | Delay between role restarts on session-id flap |
+| `AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | Seconds to wait for detached loop to assume `supervisor.lock` after `Start` |
 
 ### Start blocked during Stop maintenance (AC#8a)
 

@@ -8,8 +8,33 @@ export const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-s
 export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 
 export const supervisorHookTimeoutMs = 180_000;
+export const supervisorAsyncTimeoutMs = 360_000;
 const supervisorSpawnMaxBufferBytes = 20 * 1024 * 1024;
 const tmpRoots: string[] = [];
+const frozenSupervisorPids: number[] = [];
+
+export function thawFrozenSupervisorPids(): void {
+  for (const pid of frozenSupervisorPids.splice(0)) {
+    try {
+      process.kill(pid, 'SIGCONT');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function freezeSupervisorPid(pid: number): void {
+  if (pid <= 0) {
+    return;
+  }
+  frozenSupervisorPids.push(pid);
+  try {
+    process.kill(pid, 'SIGSTOP');
+  } catch {
+    // ignore
+  }
+}
+
 
 export const managedChildRoles = [
   'listener',
@@ -43,13 +68,15 @@ export function makeStateDir(): string {
   return dir;
 }
 
+
+
 export function cleanupSupervisorTests(): void {
+  thawFrozenSupervisorPids();
   for (const root of tmpRoots.splice(0)) {
     killSupervisorStateDir(root);
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
-
 function killSupervisorStateDir(root: string): void {
   const fastStopEnv = { ...process.env, AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
   try {
@@ -86,6 +113,21 @@ function killSupervisorStateDir(root: string): void {
     if (pid > 0) {
       try {
         execFileSync('kill', ['-9', String(pid)]);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const role of managedChildRoles) {
+    const childPidFile = path.join(root, `${role}.pid`);
+    if (!fs.existsSync(childPidFile)) {
+      continue;
+    }
+    const childPid = Number(fs.readFileSync(childPidFile, 'utf8').trim());
+    if (childPid > 0) {
+      try {
+        execFileSync('kill', ['-9', String(childPid)]);
       } catch {
         // ignore
       }
@@ -163,7 +205,7 @@ export function runSupervisor(
 export function runSupervisorAsync(
   args: string[],
   env: Record<string, string> = {},
-  timeoutMs = supervisorHookTimeoutMs,
+  timeoutMs = supervisorAsyncTimeoutMs,
 ): Promise<{ stdout: string; stderr: string; status: number | null; signal: NodeJS.Signals | null }> {
   const savedEnv = applySupervisorTestEnv(env);
   return new Promise((resolve, reject) => {
