@@ -726,6 +726,31 @@ describe('worker-status store schema', () => {
     expect(merged[0]?.degradedReason).toBe('unsupported_schema_version');
   });
 
+  it('rejects records when schemaVersion is missing on disk (fail-closed)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'worker-status-schema-'));
+  try {
+      const storePath = join(dir, 'worker-status-store.json');
+      writeFileSync(storePath, JSON.stringify({
+        records: {
+          opk: { sessionId: 'opk', derivedStatus: 'ready_for_review', status: 'ready_for_review' },
+        },
+      }));
+      const store = readWorkerStatusStoreFile(storePath);
+      expect(store.schemaRejected).toBe(true);
+      expect(Object.keys(store.records)).toHaveLength(0);
+      const merged = mergeWorkerStatusIntoSessions(
+        [{ sessionId: 'opk', status: 'idle', reports: [] }],
+        store,
+        Date.now(),
+        1,
+      );
+      expect(merged[0]?.status).toBe('unknown');
+      expect(merged[0]?.degradedReason).toBe('unsupported_schema_version');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('readWorkerStatusForDecision returns unknown for missing row', () => {
     const decision = readWorkerStatusForDecision('missing', createDefaultWorkerStatusStore(), Date.now());
     expect(decision.status).toBe('unknown');

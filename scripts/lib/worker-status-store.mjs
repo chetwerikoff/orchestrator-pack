@@ -50,6 +50,13 @@ export function resolveWorkerStatusStorePath(env = process.env) {
   return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-status-store.json');
 }
 
+function workerStatusStoreHasRecords(raw = {}) {
+  const recordMap = raw.records && typeof raw.records === 'object'
+    ? raw.records
+    : (raw.rows && typeof raw.rows === 'object' ? raw.rows : null);
+  return Boolean(recordMap && Object.keys(recordMap).length > 0);
+}
+
 export function createDefaultWorkerStatusStore(raw = {}) {
   const incomingSchema = Number(raw.schemaVersion ?? 0);
   const schemaRejected = Boolean(raw.schemaRejected)
@@ -74,7 +81,20 @@ export function readWorkerStatusStoreFile(path) {
   if (!existsSync(path)) {
     return createDefaultWorkerStatusStore();
   }
-  return createDefaultWorkerStatusStore(JSON.parse(readFileSync(path, 'utf8')));
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  }
+  catch {
+    return createDefaultWorkerStatusStore({ schemaRejected: true });
+  }
+  if (!raw || typeof raw !== 'object') {
+    return createDefaultWorkerStatusStore({ schemaRejected: true });
+  }
+  if (!raw.schemaVersion && workerStatusStoreHasRecords(raw)) {
+    return createDefaultWorkerStatusStore({ ...raw, schemaRejected: true });
+  }
+  return createDefaultWorkerStatusStore(raw);
 }
 
 export function writeWorkerStatusStoreFile(path, store) {
