@@ -1,0 +1,2 @@
+[notifier] broken
+{not-json
