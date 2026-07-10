@@ -66,9 +66,9 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     );
   });
 
-  it('AO 0.10.2 live delivery-confirm path uses ao status --json sessions, not report-full reader', () => {
+  it('AO 0.10.2 live delivery-confirm path uses pack worker-status decision sessions, not report-full reader', () => {
     const source = consumerSource('scripts/review-finding-delivery-confirm.ps1');
-    expect(source).toContain('Get-AoStatusSessionsWithReports -Project $Project');
+    expect(source).toContain('Get-WorkerStatusDecisionSessions -Project $Project');
     expect(source).toContain('Write-ReconcileReportReceiptSurfaceRemoved');
   });
 

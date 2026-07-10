@@ -365,13 +365,7 @@ visibility. Best-effort `ao review submit`, `GET /reviews`, and `POST /reviews/t
 telemetry runs after stdout capture; **on telemetry failure, skip silently — never post
 substitute notifications** that fabricate finding text from daemon state or pretend daemon
 delivery succeeded.
-
-**Worker status decisions (Issue #720):** worker-facing reconcilers consume
-`Get-WorkerStatusDecisionSessions*` / `pack-worker-status-store`, not daemon composite report
-status. When the status store is disabled, stale, unknown, or sibling readiness is degraded, skip
-silently for worker-facing paths and do not send substitute notifications or infer readiness from
-daemon status.
-
+**Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
 #### Review-cycle cap (Issue #646)
 
 Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on
@@ -386,10 +380,6 @@ When `at_cap_open_findings` is latched, merge eligibility consults `docs/merge-t
 validated `merge_triage_cleared` with matching marker-list and open-finding snapshot hashes; BLOCK
 and pending architect/operator adjudication deny merge. This helper is read-only merge policy
 input, not a merge executor.
-
-#### Worker-status stale/unknown skip policy (Issue #720)
-
-When a fleet reconciler reads `unknown` or stale derived worker status from the pack worker-status store, it **must skip worker-facing reactions silently** — no `ao send`, spawn, or substitute orchestrator nudges based on guessed or daemon-backfilled status. Degraded reasons belong in the store projection and operator report (`scripts/show-worker-status-report.ps1`) only.
 
 #### Worker pre-flight (blocking)
 

@@ -245,7 +245,6 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'worker-message-dispatch-observe.mjs',
   'worker-recovery.mjs',
   'worker-report-store.mjs',
-  'worker-status-store.mjs',
 ] as const;
 
 function copyAoSpawnProbeStubPackDocs(packRoot: string) {
