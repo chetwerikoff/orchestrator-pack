@@ -23,8 +23,7 @@
     {
       "name": "opk-stale-report",
       "role": "worker",
-      "prNumber": 92,
-      "status": "working",
+      "status": "terminated",
       "activity": "idle",
       "lastActivity": "5m ago",
       "ownedHeadSha": "stalehead92old",

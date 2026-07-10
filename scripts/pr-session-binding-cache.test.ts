@@ -476,6 +476,52 @@ describe('pr-session-binding-cache ambiguity', () => {
     expect(resolution.deferReason).toBe('ambiguous_issue_pr_binding');
   });
 
+
+  it('Codex: cache hit fails closed when live corpus has PR-to-many-session ambiguity', () => {
+    const store = seedStore({ sessionId: 'opk-a', prNumber: 88, headSha: 'shared' });
+    const sessions = [
+      liveWorker('opk-a', 719, { prNumber: 88 }),
+      liveWorker('opk-b', 720, { prNumber: 88 }),
+    ];
+    const openPrs = [openPr(88, 'shared')];
+
+    const resolution = resolvePrSessionBindingForConsumer({
+      store,
+      repoSlug,
+      prNumber: 88,
+      headSha: 'shared',
+      sessions,
+      openPrs,
+      nowMs,
+      writeBackfill: false,
+      isLive: (session) => isLiveWorkerSession(session),
+    });
+    expect(resolution.failClosed).toBe(true);
+    expect(resolution.deferReason).toBe('ambiguous_pr_session_binding');
+    expect(resolution.source).toBe('cache');
+  });
+
+  it('Codex: backfill does not write stale head when session lacks head ownership', () => {
+    const cachePath = tempCachePath();
+    const sessions = [liveWorker('opk-stale', 501, { prNumber: 501, ownedHeadSha: 'oldhead' })];
+    const openPrs = [openPr(501, 'newhead')];
+
+    const resolution = resolvePrSessionBindingForConsumer({
+      cachePath,
+      repoSlug,
+      prNumber: 501,
+      headSha: 'newhead',
+      sessions,
+      openPrs,
+      nowMs,
+      isLive: (session) => isLiveWorkerSession(session),
+    });
+    expect(resolution.failClosed).toBe(true);
+    expect(resolution.diagnostic).toBe('head_owner_mismatch');
+    const store = readPrSessionBindingCacheFile(cachePath);
+    expect(lookupBindingByPr(store, repoSlug, 501)).toBeNull();
+  });
+
   it('AC#5 class F: ambiguous PR to sessions fail closed', () => {
     const cachePath = tempCachePath();
     const sessions = [

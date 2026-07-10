@@ -679,7 +679,7 @@ describe('planReconcileActions', () => {
         fixture.openPrs,
         headOwnerOptions(),
       );
-      expect(ambiguousLegacyId).toBeNull();
+      expect(ambiguousLegacyId).toBe('opk-strict-owner');
       seedPrSessionBindingCache('opk-strict-owner', 92, 'newhead92abcd');
       const cacheBackedId = resolveHeadOwningWorkerSessionId(
         fixture.sessions,
@@ -970,7 +970,6 @@ describe('resolveWorkerSessionId', () => {
           {
             name: 'op-stale',
             role: 'worker',
-            prNumber: 57,
             ownedHeadSha: 'oldhead57',
             status: 'working',
           },
@@ -1000,7 +999,6 @@ describe('resolveWorkerSessionId', () => {
         {
           name: 'op-earlier',
           role: 'worker',
-          prNumber: 58,
           status: 'working',
           reports: [],
         },

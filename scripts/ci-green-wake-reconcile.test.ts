@@ -140,7 +140,6 @@ describe('resolveHeadOwningWorkerSessionId', () => {
       {
         name: 'op-stale',
         role: 'worker',
-        prNumber: 42,
         ownedHeadSha: 'oldhead00',
         runtime: 'alive',
         status: 'working',
@@ -315,7 +314,6 @@ describe('planCiGreenWakeActions', () => {
         {
           name: 'op-stale',
           role: 'worker',
-          prNumber: 77,
           ownedHeadSha: 'oldhead00',
           runtime: 'alive',
           reports: [

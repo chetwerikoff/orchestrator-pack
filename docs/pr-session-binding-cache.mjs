@@ -14,6 +14,7 @@ import {
   DEFER_AMBIGUOUS_PR_SESSION_BINDING,
   getSessionIssueNumber,
   resolvePrOwningWorkerSessionBinding,
+  isEnrichedPrBinding,
   resolveSessionPrBinding,
 } from './session-pr-binding-resolver.mjs';
 
@@ -44,6 +45,75 @@ function normalizeRepoSlug(value) {
 
 function getSessionIdentifier(session) {
   return trimText(session?.sessionId ?? session?.id ?? session?.name) || null;
+}
+
+
+function sessionHasExplicitPrOnRow(session) {
+  return asFiniteNumber(session?.prNumber ?? session?.pr) > 0;
+}
+
+function sessionOwnsRequestedHead(session, prNumber, headSha, openPrs = [], sessionDetail = null) {
+  const prList = toArray(openPrs);
+  const binding = resolveSessionPrBinding(session, prList, {
+    headSha,
+    sessionDetail,
+  });
+  if (!binding.bound || Number(binding.prNumber) !== Number(prNumber)) {
+    return false;
+  }
+  const target = normalizeSha(headSha);
+  if (!target) {
+    return false;
+  }
+  const pr = prList.find((row) => Number(row?.number) === Number(prNumber));
+  const currentHead = normalizeSha(pr?.headRefOid);
+  if (currentHead && currentHead !== target) {
+    return false;
+  }
+  const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  if (sessionHead) {
+    return sessionHead === target;
+  }
+  if (isEnrichedPrBinding(binding)) {
+    if (binding.source === 'display_name' && currentHead && currentHead === target) {
+      return true;
+    }
+    return false;
+  }
+  return Boolean(currentHead && currentHead === target);
+}
+
+function resolveLivePrOwnerBinding(sessions, prNumber, openPrs, sessionDetailsById, headSha, isLive) {
+  return resolvePrOwningWorkerSessionBinding(sessions, prNumber, openPrs, {
+    headSha,
+    sessionDetailsById,
+    requireLive: true,
+    isLive,
+  });
+}
+
+function failClosedOwnerResolution(resolution, source) {
+  if (resolution.deferReason === DEFER_AMBIGUOUS_ISSUE_PR_BINDING) {
+    return {
+      sessionId: null,
+      reason: 'ambiguous_issue_pr_binding',
+      failClosed: true,
+      deferReason: DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
+      source,
+      diagnostic: 'ambiguous_binding',
+    };
+  }
+  if (resolution.failClosed || resolution.deferReason === DEFER_AMBIGUOUS_PR_SESSION_BINDING) {
+    return {
+      sessionId: null,
+      reason: resolution.reason ?? 'ambiguous_pr_session_binding',
+      failClosed: true,
+      deferReason: resolution.deferReason ?? DEFER_AMBIGUOUS_PR_SESSION_BINDING,
+      source,
+      diagnostic: 'ambiguous_binding',
+    };
+  }
+  return null;
 }
 
 function findSessionById(sessions, sessionId) {
@@ -650,6 +720,21 @@ function backfillAndMaybeWrite({
   }
 
   const session = findSessionById(sessions, resolution.sessionId);
+  const sessionDetail = sessionDetailsById[resolution.sessionId] ?? null;
+  if (
+    headSha
+    && session
+    && sessionHasExplicitPrOnRow(session)
+    && !sessionOwnsRequestedHead(session, prNumber, headSha, openPrs, sessionDetail)
+  ) {
+    return {
+      sessionId: null,
+      reason: 'head_owner_mismatch',
+      failClosed: true,
+      source: 'miss',
+      diagnostic: 'head_owner_mismatch',
+    };
+  }
   const issueNumber = getSessionIssueNumber(session);
   if (writeBackfill && cachePath) {
     const cas = updatePrSessionBindingCacheWithCas(
@@ -764,6 +849,28 @@ export function resolvePrSessionBindingForConsumer({
 
   const cached = lookupBindingByPr(store, repoSlug, targetPr);
   if (cached) {
+    const ownerResolution = resolveLivePrOwnerBinding(
+      sessions,
+      targetPr,
+      openPrs,
+      sessionDetailsById,
+      headSha,
+      isLive,
+    );
+    const ownerFailure = failClosedOwnerResolution(ownerResolution, 'cache');
+    if (ownerFailure) {
+      return ownerFailure;
+    }
+    if (ownerResolution.sessionId && ownerResolution.sessionId !== cached.sessionId) {
+      return {
+        sessionId: null,
+        reason: 'binding_cache_conflict',
+        failClosed: true,
+        deferReason: DEFER_AMBIGUOUS_PR_SESSION_BINDING,
+        source: 'cache',
+        diagnostic: 'binding_cache_conflict',
+      };
+    }
     const session = findSessionById(sessions, cached.sessionId);
     if (session) {
       const binding = resolveSessionPrBinding(session, openPrs, {
