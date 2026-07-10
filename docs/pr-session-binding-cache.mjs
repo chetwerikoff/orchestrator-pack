@@ -17,6 +17,7 @@ import {
   isEnrichedPrBinding,
   resolveSessionPrBinding,
 } from './session-pr-binding-resolver.mjs';
+import { parseGhArgv } from '../scripts/lib/gh-parse-argv.mjs';
 
 export const PR_SESSION_BINDING_CACHE_SCHEMA_VERSION = 1;
 export const PACK_PR_SESSION_BINDING_CACHE_SURFACE = 'pack-pr-session-binding-cache';
@@ -1000,7 +1001,8 @@ export function parsePrNumberFromGhPrCreateOutput(stdout = '', stderr = '') {
 }
 
 export function isGhPrCreateArgv(argv = []) {
-  return argv[0] === 'pr' && argv[1] === 'create';
+  const parsed = parseGhArgv(argv);
+  return parsed.subcommand[0] === 'pr' && parsed.subcommand[1] === 'create';
 }
 
 /**

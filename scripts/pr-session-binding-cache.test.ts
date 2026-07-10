@@ -19,6 +19,7 @@ import {
   sessionRowFromAoSessionGetPayload,
   resolvePrSessionBindingCachePath,
   resolvePrSessionBindingForConsumer,
+  isGhPrCreateArgv,
   tryPushRegisterFromPrCreate,
   updatePrSessionBindingCacheWithCas,
   writePrSessionBindingCacheFile,
@@ -112,6 +113,14 @@ describe('pr-session-binding-cache matrix', () => {
 });
 
 describe('pr-session-binding-cache push-register', () => {
+  it('Codex: recognizes gh global flags before pr create', () => {
+    expect(isGhPrCreateArgv(['pr', 'create', '--title', 'x'])).toBe(true);
+    expect(isGhPrCreateArgv(['--repo', 'owner/repo', 'pr', 'create', '--title', 'x'])).toBe(true);
+    expect(isGhPrCreateArgv(['-R', 'owner/repo', 'pr', 'create', '--title', 'x'])).toBe(true);
+    expect(isGhPrCreateArgv(['--repo', 'owner/repo', 'pr', 'view', '42'])).toBe(false);
+    expect(isGhPrCreateArgv(['issue', 'create', '--title', 'x'])).toBe(false);
+  });
+
   it('AC#1 class A/K: push-register writes binding before consumer read', () => {
     const cachePath = tempCachePath();
     const store = seedStore({ sessionId: 'opk-719', prNumber: 719, headSha: 'deadbeef' });
@@ -172,6 +181,28 @@ describe('pr-session-binding-cache push-register', () => {
     });
     expect(register.registered).toBe(false);
     expect(register.reason).toBe('push_register_session_verify_failed');
+  });
+
+
+  it('Codex: push-register runs for gh --repo pr create argv shape', () => {
+    const cachePath = tempCachePath();
+    const env = {
+      AO_WORKER_SESSION_ID: 'opk-verified',
+      AO_REPO_SLUG: repoSlug,
+      AO_PROJECT_ID: 'orchestrator-pack',
+      AO_PR_SESSION_BINDING_CACHE: cachePath,
+    };
+    const sessions = [liveWorker('opk-verified', 719)];
+    const register = tryPushRegisterFromPrCreate({
+      argv: ['--repo', repoSlug, 'pr', 'create', '--title', 'x', '--body', 'y'],
+      status: 0,
+      stdout: 'https://github.com/org/orchestrator-pack/pull/89\n',
+      stderr: '',
+      env,
+      sessions,
+    });
+    expect(register.registered).toBe(true);
+    expect(lookupBindingByPr(readPrSessionBindingCacheFile(cachePath), repoSlug, 89)?.sessionId).toBe('opk-verified');
   });
 
   it('accepts push-register only with verified session corpus', () => {
