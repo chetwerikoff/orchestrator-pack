@@ -508,7 +508,7 @@
       "rowId": "site-docs-pr-session-binding-cache-mjs-139",
       "caller": {
         "file": "docs/pr-session-binding-cache.mjs",
-        "line": 139
+        "line": 209
       },
       "callee": {
         "kind": "ao",
@@ -519,7 +519,7 @@
       "validatorId": "ao-cli-argv-shape",
       "discoveryMatch": {
         "file": "docs/pr-session-binding-cache.mjs",
-        "line": 139,
+        "line": 209,
         "patternIds": [
           "spawnSync"
         ]
@@ -529,18 +529,22 @@
       "rowId": "site-docs-pr-session-binding-cache-mjs-835",
       "caller": {
         "file": "docs/pr-session-binding-cache.mjs",
-        "line": 835
+        "line": 942
       },
       "callee": {
-        "kind": "ao",
-        "identity": "ao session get"
+        "kind": "gh",
+        "identity": "gh pr view (push-register prior-pr lookup)"
       },
-      "calleeContractSourceClass": "captured-external-help",
-      "coverageKind": "validator-backed",
-      "validatorId": "ao-cli-argv-shape",
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Push-register prior-PR lookup uses direct gh spawn until pack gh wrapper argv is inventory-backed for this callsite.",
+        "followUpOwner": "issue-719-pr-session-binding-cache"
+      },
+      "hashPinnedSourceHash": "sha256:2ed441c1e79ce8481496e53e900115d7f121486b68337accf98ec35354b20766",
       "discoveryMatch": {
         "file": "docs/pr-session-binding-cache.mjs",
-        "line": 835,
+        "line": 942,
         "patternIds": [
           "spawnSync"
         ]

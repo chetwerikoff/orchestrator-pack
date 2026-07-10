@@ -12,7 +12,8 @@
   "declared_paths": [],
   "declared_globs": [
     "scripts/**",
-    "docs/**"
+    "docs/**",
+    "tests/**"
   ],
   "amendments": []
 }

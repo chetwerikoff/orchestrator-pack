@@ -636,6 +636,16 @@ function validatorBackedForHit(hit) {
     };
   }
   if (hit.file === 'docs/pr-session-binding-cache.mjs' && hit.patternId === 'spawnSync') {
+    const full = path.join(process.cwd(), hit.file);
+    const source = readFileSync(full, 'utf8');
+    const span = source.split('\n').slice(Math.max(0, hit.line - 3), hit.line + 2).join('\n');
+    if (span.includes('ghCommand')) {
+      return {
+        validatorId: null,
+        calleeContractSourceClass: 'allowlist-only',
+        callee: { kind: 'gh', identity: 'gh pr view (push-register prior-pr lookup)' },
+      };
+    }
     return {
       validatorId: 'ao-cli-argv-shape',
       calleeContractSourceClass: 'captured-external-help',
