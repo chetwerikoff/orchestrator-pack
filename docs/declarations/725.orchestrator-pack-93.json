@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "770485ca589202488a440bf7c2eb378acd37608b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:5327682fdcf8620971e6fa2961372d5c4d890c6631c6dd590a410ef50ad3bfd1"
+    "active_scope_hash": "sha256:d958b47d631f33dfc95c5377041466d5f9fe5e7e72868690cc29d479df62e39b"
   },
   "declared_paths": [
     "scripts/cursor-agent-tui-shim.sh",
@@ -21,6 +21,8 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
     "scripts/launch-argv-inventory.json",
+    "scripts/test-runtime-budget.config.json",
+    "scripts/test-runtime-budget.test.ts",
     "docs/migration_notes.md",
     "docs/ubuntu-setup-runbook.md",
     "docs/cursor-agent-tui-shim-runbook.md"
@@ -28,5 +30,21 @@
   "declared_globs": [
     "tests/fixtures/cursor-agent-tui-shim/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:5327682fdcf8620971e6fa2961372d5c4d890c6631c6dd590a410ef50ad3bfd1",
+      "new_active_scope_hash": "sha256:d958b47d631f33dfc95c5377041466d5f9fe5e7e72868690cc29d479df62e39b",
+      "changed": {
+        "added": [
+          "scripts/test-runtime-budget.config.json",
+          "scripts/test-runtime-budget.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "CI fix: per-file Vitest budget bump for testmode-fleet-reaper GHA variance",
+      "actor": "orchestrator-pack-93",
+      "timestamp": "2026-07-10T07:01:30.284Z",
+      "applied": true
+    }
+  ]
 }
