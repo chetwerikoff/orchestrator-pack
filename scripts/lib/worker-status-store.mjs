@@ -146,6 +146,20 @@ export function shouldReloadMixedGeneration(existingRow, writerGenerationVector)
   return hasMixedOlderAndNewer(writer, existing);
 }
 
+const MERGE_GENERATION_VECTOR_KEYS = ['repoTickGeneration', 'reportStoreGeneration', 'journalCursor', 'bindingCacheGeneration'];
+
+export function mergeGenerationVectorMax(existingRow = {}, writerGenerationVector = {}) {
+  const existingRaw = existingRow.generationVector ?? existingRow.sourceGeneration ?? existingRow.writerGenerationVector ?? existingRow;
+  const writerRaw = writerGenerationVector ?? {};
+  const merged = {};
+  for (const key of MERGE_GENERATION_VECTOR_KEYS) {
+    merged[key] = Math.max(Number(existingRaw[key] ?? 0), Number(writerRaw[key] ?? 0));
+  }
+  const writerSessionId = String(writerRaw.writerSessionId ?? existingRaw.writerSessionId ?? '').trim();
+  if (writerSessionId) merged.writerSessionId = writerSessionId;
+  return merged;
+}
+
 function githubPrIsOpen(input = {}) {
   const gh = input.github ?? {};
   const pr = input.githubPr ?? input.pr ?? gh.pr ?? null;
@@ -236,7 +250,11 @@ export function fuseWorkerStatus(input = {}) {
   const ci = deriveCiClass(input.ciChecks ?? gh.ciChecks, input.requiredCheckNames ?? gh.requiredCheckNames, Boolean(input.requiredCheckLookupFailed ?? gh.requiredCheckLookupFailed));
   diagnostics.push(...ci.diagnostics);
   if (reportValidation.valid && reportState === 'ready_for_review') {
-    if (prOpen && ci.ciClass === 'failed') {
+    if (!prOpen) {
+      diagnostics.push('pr_not_open');
+      return { status: 'unknown', derivedStatus: 'unknown', winningSource: 'degraded', degradedReason: 'pr_not_open', diagnostics };
+    }
+    if (ci.ciClass === 'failed') {
       return { status: 'ci_failed', derivedStatus: 'ci_failed', winningSource: 'github_ci', requiredCheckSource: ci.requiredCheckSource, diagnostics };
     }
     return { status: 'ready_for_review', derivedStatus: 'ready_for_review', winningSource: 'report_store', diagnostics, webhookAccelerated: Boolean(input.webhookHint) };
@@ -282,10 +300,11 @@ export function recomputeWorkerStatusRow(input = {}) {
   const sessionId = sessionIdOf(input.session ?? input);
   const existing = store?.records?.[sessionId];
   const writerVector = asGenerationVector(input.writerGenerationVector ?? input.generationVector ?? input.sourceGeneration ?? {});
-  if (existing && shouldReloadMixedGeneration(existing, writerVector)) {
-    return { ok: false, reason: 'mixed_generation_reload_required', store };
-  }
-  if (existing && shouldRefuseMonotonicWrite(existing, writerVector)) {
+  const reloadedMixedGeneration = Boolean(existing && shouldReloadMixedGeneration(existing, writerVector));
+  const effectiveVector = reloadedMixedGeneration
+    ? mergeGenerationVectorMax(existing, writerVector)
+    : writerVector;
+  if (existing && !reloadedMixedGeneration && shouldRefuseMonotonicWrite(existing, writerVector)) {
     return { ok: false, reason: 'monotonic_refused', store };
   }
   const fusion = fuseWorkerStatus(input);
@@ -302,17 +321,18 @@ export function recomputeWorkerStatusRow(input = {}) {
     lastUpdatedMs: input.webhookObservedAtMs ? Math.max(nowMs, Number(input.webhookObservedAtMs)) : nowMs,
     freshnessMs: Number(input.freshnessMs ?? input.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS),
     freshnessBoundMs: Number(input.freshnessMs ?? input.freshnessBoundMs ?? DEFAULT_FRESHNESS_MS),
-    generationVector: writerVector,
-    sourceGeneration: input.sourceGeneration ?? writerVector,
+    generationVector: effectiveVector,
+    sourceGeneration: input.sourceGeneration ?? effectiveVector,
+    reloadedMixedGeneration,
   };
   if (store) {
     store.records[sessionId] = row;
     store.rows = store.records;
     store.generation += 1;
     store.lastUpdatedMs = nowMs;
-    return { ok: true, row, store };
+    return { ok: true, row, store, reloadedMixedGeneration };
   }
-  return row;
+  return { ...row, reloadedMixedGeneration };
 }
 
 export function evictWorkerStatusRecords(store, sessions = [], nowMs = Date.now()) {
@@ -406,10 +426,17 @@ function writeRow(payload) {
   if (row.ok === false) return row;
   const key = rowKey(row);
   const existing = store.records[key];
-  if (shouldReloadMixedGeneration(existing, row.generationVector)) {
-    return { ok: false, reason: 'mixed_generation_reload_required', generation: store.generation };
+  const rowVector = asGenerationVector(row.generationVector ?? row.sourceGeneration ?? {});
+  const reloadedMixedGeneration = Boolean(existing && shouldReloadMixedGeneration(existing, rowVector));
+  const effectiveVector = reloadedMixedGeneration
+    ? mergeGenerationVectorMax(existing, rowVector)
+    : rowVector;
+  if (reloadedMixedGeneration) {
+    row.generationVector = effectiveVector;
+    row.sourceGeneration = effectiveVector;
+    row.reloadedMixedGeneration = true;
   }
-  if (shouldRefuseMonotonicWrite(existing, row.generationVector)) {
+  if (existing && !reloadedMixedGeneration && shouldRefuseMonotonicWrite(existing, rowVector)) {
     return { ok: false, reason: 'stale_generation', generation: store.generation };
   }
   store.records[key] = row;
@@ -450,7 +477,7 @@ runStdinJsonCli('scripts/lib/worker-status-store.mjs', {
     const existing = payload.existingRow ?? null;
     const vector = payload.writerGenerationVector ?? {};
     return {
-      shouldWrite: !shouldRefuseMonotonicWrite(existing, vector) && !shouldReloadMixedGeneration(existing, vector),
+      shouldWrite: shouldReloadMixedGeneration(existing, vector) || !shouldRefuseMonotonicWrite(existing, vector),
       refuseMonotonic: shouldRefuseMonotonicWrite(existing, vector),
       reloadMixedGeneration: shouldReloadMixedGeneration(existing, vector),
     };

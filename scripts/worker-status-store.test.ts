@@ -13,6 +13,7 @@ import {
   recomputeWorkerStatusRow,
   shouldRefuseMonotonicWrite,
   shouldReloadMixedGeneration,
+  mergeGenerationVectorMax,
   testSiblingReadiness,
   validateReportAgainstHead,
   writeWorkerStatusStoreFile,
@@ -113,6 +114,28 @@ describe('worker-status fusion precedence', () => {
     });
     expect(result.derivedStatus).toBe('ci_failed');
     expect(result.winningSource).toBe('github_ci');
+  });
+
+  it('requires open PR before accepting ready_for_review report', () => {
+    const result = fuseWorkerStatus({
+      sessionId: 'opk-c2c',
+      binding: { ok: true, prNumber: 2, headSha: 'head2' },
+      github: {
+        prOpen: false,
+        headSha: 'head2',
+        reviewRuns: [],
+        ciChecks: [],
+        requiredCheckNames: [],
+        repoTickGeneration: 1,
+      },
+      report: { reportState: 'ready_for_review', headSha: 'head2', prNumber: 2 },
+      osLiveness: 'pane-alive',
+      sourceGeneration: { repoTickGeneration: 1, reportStoreGeneration: 1, journalCursor: 0, bindingCacheGeneration: 1 },
+      nowMs: 1_700_000_000_000,
+    });
+    expect(result.derivedStatus).toBe('unknown');
+    expect(result.degradedReason).toBe('pr_not_open');
+    expect(result.winningSource).toBe('degraded');
   });
 
   it('valid ready_for_review at current head wins (C2)', () => {
@@ -408,6 +431,52 @@ describe('worker-status mixed generation vector', () => {
     };
     expect(shouldReloadMixedGeneration(existing, writer)).toBe(true);
     expect(shouldRefuseMonotonicWrite(existing, writer)).toBe(false);
+    expect(mergeGenerationVectorMax(existing, writer)).toEqual({
+      repoTickGeneration: 10,
+      reportStoreGeneration: 10,
+      journalCursor: 5,
+      bindingCacheGeneration: 5,
+    });
+  });
+
+  it('mixed-generation reload merges vectors and writes the fused row', () => {
+    const result = recomputeWorkerStatusRow({
+      sessionId: 'opk-c12b',
+      store: createDefaultWorkerStatusStore({
+        records: {
+          'opk-c12b': {
+            sessionId: 'opk-c12b',
+            status: 'pr_open',
+            derivedStatus: 'pr_open',
+            generationVector: {
+              repoTickGeneration: 10,
+              reportStoreGeneration: 5,
+              journalCursor: 5,
+              bindingCacheGeneration: 5,
+            },
+            lastUpdatedMs: 1000,
+          },
+        },
+      }),
+      binding: { ok: true, prNumber: 12, headSha: 'head12' },
+      github: { prOpen: true, headSha: 'head12', reviewRuns: [], repoTickGeneration: 5 },
+      sourceGeneration: {
+        repoTickGeneration: 5,
+        reportStoreGeneration: 10,
+        journalCursor: 5,
+        bindingCacheGeneration: 5,
+      },
+      nowMs: 2000,
+    }) as RecomputeWorkerStatusRowResult;
+    expect(result.ok).toBe(true);
+    expect(result.reloadedMixedGeneration).toBe(true);
+    expect(result.row?.generationVector).toEqual({
+      repoTickGeneration: 10,
+      reportStoreGeneration: 10,
+      journalCursor: 5,
+      bindingCacheGeneration: 5,
+    });
+    expect(result.store?.records['opk-c12b']?.generationVector?.repoTickGeneration).toBe(10);
   });
 });
 
