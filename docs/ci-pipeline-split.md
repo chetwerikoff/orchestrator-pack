@@ -130,7 +130,7 @@ the successor file set from Issue #692 mega-file splits.
 | Surface | Role |
 | --- | --- |
 | `scripts/vitest-wallclock-e2e-split.manifest.json` | Enumerated logical move set, post-merge execution map, red-signal contract |
-| `scripts/vitest-wallclock-e2e-split.pre-move-manifest.json` | Pinned pre-move PR-required union at baseline SHA |
+| `scripts/vitest-wallclock-e2e-split.pre-move-manifest.json` | Pinned pre-move PR-required union; guard derives the union from `preMoveBaselineSha` via detached git worktree and rejects checkout manifest drift |
 | `postMergeWallclock` lane in `vitest-ci-lanes.config.json` | Classification for relocated files (not PR light/heavy) |
 | `scripts/run-vitest-wallclock-stage.ps1` | Serial post-merge runner |
 | `wall-clock-e2e-containment` job output | Machine-readable containment while stage pending/red |

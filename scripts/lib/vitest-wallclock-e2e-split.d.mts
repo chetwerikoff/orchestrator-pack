@@ -31,6 +31,18 @@ export interface ImmutableApprovalResult {
 }
 
 export declare function loadSplitManifest(repoRoot?: string): SplitManifest;
+export declare function normalizeBaselineSha(sha: string | null | undefined): string | null;
+export declare function gitCommitExists(commitSha: string, repoRoot?: string): boolean;
+export declare function derivePreMoveUnionAtBaseline(
+  repoRoot?: string,
+  baselineSha?: string,
+  options?: Record<string, unknown>,
+): Promise<{ ok: true; baselineSha: string; union: string[]; source: string } | { ok: false; reason: string }> | { ok: true; baselineSha: string; union: string[]; source: string } | { ok: false; reason: string };
+export declare function validatePreMoveManifestAgainstBaseline(
+  repoRoot?: string,
+  options?: Record<string, unknown>,
+): { ok: true; baselineSha: string; union: string[]; source: string } | { ok: false; reason: string; missingFromManifest?: string[]; extraInManifest?: string[] };
+
 export declare function loadPreMoveManifest(repoRoot?: string): { prRequiredUnion: string[] };
 export declare function listPostMergeExecutionFiles(manifest?: SplitManifest): string[];
 export declare function buildCoverageDeltaReport(repoRoot?: string): {

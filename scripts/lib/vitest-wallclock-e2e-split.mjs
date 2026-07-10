@@ -2,7 +2,9 @@
 /**
  * Coverage-delta and approval helpers for Issue #694 wall-clock e2e stage split.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildLanePlan, resolveRepoRoot } from './vitest-ci-lanes.mjs';
 
@@ -25,6 +27,129 @@ export function loadPreMoveManifest(repoRoot = resolveRepoRoot()) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+
+const FULL_SHA_RE = /^[0-9a-f]{40}$/;
+
+export function normalizeBaselineSha(sha) {
+  if (typeof sha !== 'string') {
+    return null;
+  }
+  const trimmed = sha.trim().toLowerCase();
+  return FULL_SHA_RE.test(trimmed) ? trimmed : null;
+}
+
+export function gitCommitExists(commitSha, repoRoot = resolveRepoRoot()) {
+  const normalized = normalizeBaselineSha(commitSha);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    execFileSync('git', ['cat-file', '-e', `${normalized}^{commit}`], {
+      cwd: resolveRepoRoot(repoRoot),
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function withDetachedGitWorktree(repoRoot, commitSha, callback) {
+  const root = resolveRepoRoot(repoRoot);
+  const normalized = normalizeBaselineSha(commitSha);
+  if (!normalized) {
+    throw new Error('invalid baseline commit sha');
+  }
+  if (!gitCommitExists(normalized, root)) {
+    throw new Error(`baseline commit missing: ${normalized}`);
+  }
+  const tempBase = mkdtempSync(join(tmpdir(), 'opk-wallclock-baseline-'));
+  const worktreePath = join(tempBase, 'tree');
+  try {
+    execFileSync('git', ['worktree', 'add', '--detach', worktreePath, normalized], {
+      cwd: root,
+      stdio: 'pipe',
+    });
+    return callback(worktreePath);
+  } finally {
+    try {
+      execFileSync('git', ['worktree', 'remove', '--force', worktreePath], {
+        cwd: root,
+        stdio: 'ignore',
+      });
+    } catch {
+      /* best effort */
+    }
+    try {
+      rmSync(tempBase, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
+export function derivePreMoveUnionAtBaseline(repoRoot = resolveRepoRoot(), baselineSha, options = {}) {
+  const sha = normalizeBaselineSha(baselineSha);
+  if (!sha) {
+    return { ok: false, reason: 'pre-move-baseline-sha-invalid' };
+  }
+  if (!gitCommitExists(sha, repoRoot)) {
+    return { ok: false, reason: `pre-move-baseline-commit-unavailable:${sha}` };
+  }
+  try {
+    const union = withDetachedGitWorktree(repoRoot, sha, (worktreePath) => {
+      const plan = buildLanePlan(worktreePath);
+      if (!plan.ok) {
+        throw new Error(plan.errors.join('; '));
+      }
+      return [...plan.light, ...plan.heavy].sort();
+    });
+    return { ok: true, baselineSha: sha, union, source: 'git-baseline' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: `pre-move-baseline-derivation-failed:${message}` };
+  }
+}
+
+export function validatePreMoveManifestAgainstBaseline(repoRoot = resolveRepoRoot(), options = {}) {
+  const manifest = loadSplitManifest(repoRoot);
+  const checkoutManifest = loadPreMoveManifest(repoRoot);
+  const baselineSha = manifest.preMoveBaselineSha;
+  const manifestBaselineSha = normalizeBaselineSha(checkoutManifest.baselineSha ?? '');
+  const pinnedBaselineSha = normalizeBaselineSha(baselineSha);
+  if (!pinnedBaselineSha) {
+    return { ok: false, reason: 'pre-move-baseline-sha-invalid' };
+  }
+  if (manifestBaselineSha && manifestBaselineSha !== pinnedBaselineSha) {
+    return { ok: false, reason: 'pre-move-manifest-baseline-sha-mismatch' };
+  }
+  const derived = derivePreMoveUnionAtBaseline(repoRoot, pinnedBaselineSha, options);
+  if (!derived.ok) {
+    return derived;
+  }
+  const manifestUnion = [...checkoutManifest.prRequiredUnion].sort();
+  const immutableUnion = derived.union;
+  if (manifestUnion.length !== immutableUnion.length
+    || manifestUnion.some((file, index) => file !== immutableUnion[index])) {
+    const manifestSet = new Set(manifestUnion);
+    const immutableSet = new Set(immutableUnion);
+    return {
+      ok: false,
+      reason: 'pre-move-manifest-baseline-mismatch',
+      baselineSha: derived.baselineSha,
+      missingFromManifest: immutableUnion.filter((file) => !manifestSet.has(file)),
+      extraInManifest: manifestUnion.filter((file) => !immutableSet.has(file)),
+    };
+  }
+  return {
+    ok: true,
+    baselineSha: derived.baselineSha,
+    union: immutableUnion,
+    source: 'git-baseline-validated',
+  };
+}
+
+
 export function listPostMergeExecutionFiles(manifest = loadSplitManifest()) {
   const files = Object.values(manifest.preMoveToPostMergeMap).flat();
   return [...new Set(files)].sort();
@@ -32,7 +157,7 @@ export function listPostMergeExecutionFiles(manifest = loadSplitManifest()) {
 
 export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
   const manifest = loadSplitManifest(repoRoot);
-  const preMove = loadPreMoveManifest(repoRoot);
+  const baselineValidation = validatePreMoveManifestAgainstBaseline(repoRoot);
   const plan = buildLanePlan(repoRoot);
   if (!plan.ok) {
     return { ok: false, errors: plan.errors };
@@ -44,6 +169,31 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
   const discovered = [...plan.discovered].sort();
   const discoveredActive = discovered.filter((file) => !parked.includes(file));
   const errors = [];
+
+  if (!baselineValidation.ok) {
+    if (baselineValidation.reason === 'pre-move-manifest-baseline-mismatch') {
+      errors.push('pre-move manifest does not match pinned baseline derivation (mutable checkout rejected)');
+      if (baselineValidation.missingFromManifest?.length) {
+        errors.push(`pre-move manifest missing baseline files: ${baselineValidation.missingFromManifest.join(', ')}`);
+      }
+      if (baselineValidation.extraInManifest?.length) {
+        errors.push(`pre-move manifest extra vs baseline: ${baselineValidation.extraInManifest.join(', ')}`);
+      }
+    } else {
+      errors.push(`pre-move baseline validation failed: ${baselineValidation.reason}`);
+    }
+    return {
+      ok: false,
+      errors,
+      report: {
+        issue: manifest.issue,
+        charterIssue: manifest.charterIssue,
+        preMoveBaselineSha: manifest.preMoveBaselineSha,
+        preMoveUnionCount: baselineValidation.union?.length ?? null,
+        discoveredCount: discovered.length,
+      },
+    };
+  }
 
   const movedEnumerated = [...manifest.preMoveEnumeratedFiles].sort();
   if (movedEnumerated.length !== 6) {
@@ -84,7 +234,7 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
     }
   }
 
-  const preMoveUnion = [...preMove.prRequiredUnion].sort();
+  const preMoveUnion = [...baselineValidation.union].sort();
   const expectedPostMoveUnion = [...prRetained, ...postMergeExecution].sort();
   if (preMoveUnion.length !== expectedPostMoveUnion.length
     || preMoveUnion.some((file, index) => file !== expectedPostMoveUnion[index])) {

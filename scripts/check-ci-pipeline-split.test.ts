@@ -586,6 +586,38 @@ describe('wall-clock e2e stage split (#694)', () => {
     expect(successors).toHaveLength(17);
   });
 
+  it('validates pre-move manifest against pinned git baseline (#694 AC#2)', async () => {
+    const {
+      validatePreMoveManifestAgainstBaseline,
+      buildCoverageDeltaReport,
+      loadSplitManifest,
+    } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const validation = validatePreMoveManifestAgainstBaseline(repoRoot);
+    expect(validation.ok).toBe(true);
+    expect(validation.union?.length).toBeGreaterThan(0);
+    const manifest = loadSplitManifest(repoRoot);
+    expect(validation.baselineSha).toBe(manifest.preMoveBaselineSha);
+    const coverage = buildCoverageDeltaReport(repoRoot);
+    expect(coverage.ok).toBe(true);
+  });
+
+  it('rejects tampered pre-move manifest that omits baseline files (#694 AC#2)', async () => {
+    const preMovePath = join(repoRoot, 'scripts/vitest-wallclock-e2e-split.pre-move-manifest.json');
+    const original = readFileSync(preMovePath, 'utf8');
+    const parsed = JSON.parse(original) as { baselineSha: string; prRequiredUnion: string[] };
+    parsed.prRequiredUnion = parsed.prRequiredUnion.slice(1);
+    writeFileSync(preMovePath, `${JSON.stringify(parsed, null, 2)}
+`, 'utf8');
+    try {
+      const { buildCoverageDeltaReport } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+      const coverage = buildCoverageDeltaReport(repoRoot);
+      expect(coverage.ok).toBe(false);
+      expect(coverage.errors.some((err: string) => err.includes('mutable checkout rejected'))).toBe(true);
+    } finally {
+      writeFileSync(preMovePath, original, 'utf8');
+    }
+  });
+
   it('post-merge workflow is main/schedule only with fail-closed aggregate', () => {
     const yaml = readFileSync(
       join(repoRoot, '.github/workflows/vitest-wallclock-e2e.yml'),

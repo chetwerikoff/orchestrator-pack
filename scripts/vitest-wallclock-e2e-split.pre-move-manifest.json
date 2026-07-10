@@ -1,5 +1,5 @@
 {
-  "baselineSha": "c8c8a40aa0d1a53934f85b9082a2ce37c92b303c",
+  "baselineSha": "b7fa7a8ce6da64979d6bca137d605e518090db0e",
   "prRequiredUnion": [
     "plugins/_shared/tests/declaration_schema.test.ts",
     "plugins/_shared/tests/git_fixture.test.ts",
