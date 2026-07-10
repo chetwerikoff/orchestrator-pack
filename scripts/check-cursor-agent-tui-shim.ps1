@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  verify.ps1 hook: fixture-based cursor-agent TUI shim checks (Issue #725).
+  verify.ps1 hook: fixture-based cursor-agent TUI shim checks (Issue #725). Regenerated launch-argv inventory ships with shim PRs.
   Uses isolated temp HOME — never mutates operator ~/.local/bin.
 #>
 $ErrorActionPreference = 'Stop'
