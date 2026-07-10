@@ -307,6 +307,46 @@ describe('pr-session-binding-cache push-register', () => {
 });
 
 describe('pr-session-binding-cache backfill', () => {
+  it('CAS backfill writes preserve prior bindings across sequential consumers', () => {
+    const cachePath = tempCachePath();
+    const first = updatePrSessionBindingCacheWithCas(
+      cachePath,
+      (store, writeMs) => registerPrSessionBindingRecord(
+        store,
+        {
+          sessionId: 'opk-a',
+          prNumber: 100,
+          repoSlug,
+          headSha: 'h100',
+          source: BINDING_SOURCE_BACKFILL_RESOLVER,
+        },
+        writeMs,
+      ),
+      nowMs,
+    );
+    const second = updatePrSessionBindingCacheWithCas(
+      cachePath,
+      (store, writeMs) => registerPrSessionBindingRecord(
+        store,
+        {
+          sessionId: 'opk-b',
+          prNumber: 101,
+          repoSlug,
+          headSha: 'h101',
+          source: BINDING_SOURCE_BACKFILL_RESOLVER,
+        },
+        writeMs,
+      ),
+      nowMs + 1,
+    );
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    const store = readPrSessionBindingCacheFile(cachePath);
+    expect(lookupBindingByPr(store, repoSlug, 100)?.sessionId).toBe('opk-a');
+    expect(lookupBindingByPr(store, repoSlug, 101)?.sessionId).toBe('opk-b');
+  });
+
+
   it('AC#3 class B/C: backfills issue-only session row then serves cache', () => {
     const cachePath = tempCachePath();
     const sessions = [liveWorker('opk-issue-only', 690)];

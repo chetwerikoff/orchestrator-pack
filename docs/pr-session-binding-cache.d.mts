@@ -60,7 +60,7 @@ export declare function writePrSessionBindingCacheFileWithCas(
   path: string,
   store: PrSessionBindingCacheStore,
   expectedGeneration: number,
-): { ok: boolean; reason?: string; generation?: number };
+): { ok: boolean; reason?: string; generation?: number; diagnostic?: string };
 
 export declare function updatePrSessionBindingCacheWithCas(
   cachePath: string,
