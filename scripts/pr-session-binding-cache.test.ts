@@ -252,6 +252,31 @@ describe('pr-session-binding-cache push-register', () => {
     expect(lookupBindingBySession(store, repoSlug, 'opk-rebind')?.prNumber).toBe(12);
   });
 
+  it('push-register supersedes terminal same-session rebind via prior-pr lookup', () => {
+    const cachePath = tempCachePath();
+    const env = {
+      AO_WORKER_SESSION_ID: 'opk-rebind-terminal',
+      AO_REPO_SLUG: repoSlug,
+      AO_PROJECT_ID: 'orchestrator-pack',
+      AO_PR_SESSION_BINDING_CACHE: cachePath,
+    };
+    const sessions = [liveWorker('opk-rebind-terminal', 719)];
+    const store = seedStore({ sessionId: 'opk-rebind-terminal', prNumber: 11, headSha: 'old11' });
+    writePrSessionBindingCacheFile(cachePath, store);
+
+    const register = tryPushRegisterFromPrCreate({
+      argv: ['pr', 'create', '--title', 'x', '--body', 'y'],
+      status: 0,
+      stdout: 'https://github.com/org/orchestrator-pack/pull/12\n',
+      stderr: '',
+      env,
+      sessions,
+      fetchPriorPrOpenRow: (_slug, pr) => openPr(pr, pr === 11 ? 'old11' : 'new12', pr === 11 ? 'MERGED' : 'OPEN'),
+    });
+    expect(register.registered).toBe(true);
+    expect(lookupBindingBySession(readPrSessionBindingCacheFile(cachePath), repoSlug, 'opk-rebind-terminal')?.prNumber).toBe(12);
+  });
+
   it('isolates corrupt cache IO from successful gh pr create registration path', () => {
     const env = {
       AO_WORKER_SESSION_ID: 'opk-io',

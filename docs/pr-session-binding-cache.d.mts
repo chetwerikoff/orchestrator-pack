@@ -162,6 +162,20 @@ export declare function resolveBindingRepoSlug(
   cwd?: string,
 ): string;
 
+export interface PushRegisterOpenPrRow {
+  number: number;
+  state?: string;
+  headRefOid?: string;
+  repoSlug?: string;
+}
+
+export declare function fetchPriorPrOpenRowForPushRegister(
+  repoSlug: string,
+  prNumber: number,
+  cwd?: string,
+  env?: NodeJS.ProcessEnv,
+): PushRegisterOpenPrRow | null;
+
 export declare function parsePrNumberFromGhPrCreateOutput(stdout?: string, stderr?: string): number;
 
 export declare function isGhPrCreateArgv(argv?: string[]): boolean;
@@ -174,4 +188,10 @@ export declare function tryPushRegisterFromPrCreate(input: {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   sessions?: Array<Record<string, unknown>>;
+  fetchPriorPrOpenRow?: (
+    repoSlug: string,
+    prNumber: number,
+    cwd?: string,
+    env?: NodeJS.ProcessEnv,
+  ) => PushRegisterOpenPrRow | null;
 }): { registered: boolean; reason?: string; diagnostic?: string };

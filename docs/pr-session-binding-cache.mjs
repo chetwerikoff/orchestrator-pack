@@ -818,6 +818,67 @@ export function resolveBindingRepoSlug(options = {}, openPrs = [], env = process
   return resolveRepoSlugFromEnvOrCwd(env, cwd);
 }
 
+
+export function fetchPriorPrOpenRowForPushRegister(
+  repoSlug,
+  prNumber,
+  cwd = process.cwd(),
+  env = process.env,
+) {
+  const slug = normalizeRepoSlug(repoSlug);
+  const number = asFiniteNumber(prNumber);
+  if (!slug || number <= 0) {
+    return null;
+  }
+  const ghCommand = trimText(env.GH_BIN ?? env.AO_GH_COMMAND) || 'gh';
+  const args = ['pr', 'view', String(number), '--repo', slug, '--json', 'number,state,headRefOid'];
+  const result = spawnSync(ghCommand, args, {
+    cwd,
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(String(result.stdout ?? '').trim());
+    const parsedNumber = asFiniteNumber(parsed?.number);
+    if (parsedNumber <= 0) {
+      return null;
+    }
+    return {
+      number: parsedNumber,
+      state: trimText(parsed?.state) || 'OPEN',
+      headRefOid: normalizeSha(parsed?.headRefOid),
+      repoSlug: slug,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {import('./pr-session-binding-cache.mjs').PrSessionBindingCacheStore} store
+ * @param {string} repoSlug
+ * @param {string} sessionId
+ * @param {number} newPrNumber
+ * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, fetchPriorPrOpenRow?: typeof fetchPriorPrOpenRowForPushRegister }} [options]
+ */
+function buildPushRegisterRebindOpenPrs(store, repoSlug, sessionId, newPrNumber, options = {}) {
+  const existing = lookupBindingBySession(store, repoSlug, sessionId);
+  if (!existing) {
+    return [];
+  }
+  const priorPrNumber = asFiniteNumber(existing.prNumber);
+  if (priorPrNumber <= 0 || priorPrNumber === asFiniteNumber(newPrNumber)) {
+    return [];
+  }
+  const fetcher = options.fetchPriorPrOpenRow ?? fetchPriorPrOpenRowForPushRegister;
+  const priorRow = fetcher(repoSlug, priorPrNumber, options.cwd, options.env);
+  return priorRow ? [priorRow] : [];
+}
+
 export function parsePrNumberFromGhPrCreateOutput(stdout = '', stderr = '') {
   const combined = `${stdout}\n${stderr}`;
   const urlMatch = combined.match(/https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/i);
@@ -836,7 +897,7 @@ export function isGhPrCreateArgv(argv = []) {
 }
 
 /**
- * @param {{ argv: string[], status: number, stdout: string, stderr: string, env?: NodeJS.ProcessEnv, cwd?: string }} input
+ * @param {{ argv: string[], status: number, stdout: string, stderr: string, env?: NodeJS.ProcessEnv, cwd?: string, sessions?: Array<Record<string, unknown>>, fetchPriorPrOpenRow?: typeof fetchPriorPrOpenRowForPushRegister }} input
  */
 export function tryPushRegisterFromPrCreate({
   argv,
@@ -846,6 +907,7 @@ export function tryPushRegisterFromPrCreate({
   env = process.env,
   cwd = process.cwd(),
   sessions,
+  fetchPriorPrOpenRow,
 }) {
   if (!isGhPrCreateArgv(argv) || status !== 0) {
     return { registered: false, reason: 'not_applicable' };
@@ -891,6 +953,19 @@ export function tryPushRegisterFromPrCreate({
 
   try {
     const cachePath = resolvePrSessionBindingCachePath(env);
+    let rebindOpenPrs = [];
+    try {
+      const existingStore = readPrSessionBindingCacheFile(cachePath);
+      rebindOpenPrs = buildPushRegisterRebindOpenPrs(
+        existingStore,
+        identity.repoSlug,
+        identity.sessionId,
+        prNumber,
+        { cwd, env, fetchPriorPrOpenRow },
+      );
+    } catch {
+      // missing or unreadable cache — first push-register for this session
+    }
     const nowMs = Date.now();
     const cas = updatePrSessionBindingCacheWithCas(
       cachePath,
@@ -903,6 +978,7 @@ export function tryPushRegisterFromPrCreate({
           issueNumber: identity.issueNumber,
           headSha,
           source: BINDING_SOURCE_PUSH_REGISTER,
+          openPrs: rebindOpenPrs,
         },
         writeMs,
       ),
