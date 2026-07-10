@@ -333,11 +333,27 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
             }
         }
         else {
-            Write-Host "  discovered: $($plan.discovered.Count) files; light: $($plan.light.Count); heavy: $($plan.heavy.Count); parked: $($plan.parked.Count)"
+            Write-Host "  discovered: $($plan.discovered.Count) files; light: $($plan.light.Count); heavy: $($plan.heavy.Count); postMergeWallclock: $($plan.postMergeWallclock.Count); parked: $($plan.parked.Count)"
             $union = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             $duplicates = [System.Collections.Generic.List[string]]::new()
             foreach ($file in $plan.light) {
                 if ($union.Contains($file)) { $duplicates.Add($file) | Out-Null } else { [void]$union.Add($file) }
+            }
+            foreach ($file in $plan.postMergeWallclock) {
+                if ($union.Contains($file)) {
+                    $duplicates.Add($file) | Out-Null
+                }
+                else {
+                    [void]$union.Add($file)
+                }
+            }
+            foreach ($file in $plan.parked) {
+                if ($union.Contains($file)) {
+                    $duplicates.Add($file) | Out-Null
+                }
+                else {
+                    [void]$union.Add($file)
+                }
             }
             foreach ($shard in $plan.heavyShards) {
                 foreach ($file in $shard.files) {
@@ -350,9 +366,6 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
                 }
             }
             foreach ($file in $plan.discovered) {
-                if ($plan.parked -contains $file) {
-                    continue
-                }
                 if (-not $union.Contains($file)) {
                     Add-Fail "lane union missing discovered Vitest file: $file"
                 }
@@ -369,13 +382,10 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
                 Add-Fail "heavy shard assignment count ($($plan.heavyShards.Count)) does not match derived topology ($derivedHeavyShardCount)"
             }
 
-            # Negative fixture: wall-clock fleet e2e must be parked out of PR lanes (#694).
+            # Negative fixture: heavy file cannot be classified light without review.
             $negativeHeavy = 'scripts/orchestrator-wake-supervisor.test.ts'
             if ($plan.config.classification.$negativeHeavy -eq 'light') {
                 Add-Fail "negative fixture: $negativeHeavy must not be classified light"
-            }
-            if ($plan.config.classification.$negativeHeavy -ne 'parked') {
-                Add-Fail "negative fixture: $negativeHeavy must be classified parked (wall-clock e2e → #694)"
             }
 
             # Negative fixture: synthetic unclassified file must fail plan validation.
@@ -523,6 +533,246 @@ if (Test-Path -LiteralPath $rpcArtifactValidator) {
     }
 }
 
+# Issue #694 — wall-clock e2e stage split guards
+Write-Host '== CI wall-clock e2e split guard (Issue #694) =='
+
+$wallclockManifestPath = Join-Path $RepoRoot 'scripts/vitest-wallclock-e2e-split.manifest.json'
+$wallclockPreMovePath = Join-Path $RepoRoot 'scripts/vitest-wallclock-e2e-split.pre-move-manifest.json'
+$wallclockSplitLib = Join-Path $RepoRoot 'scripts/lib/vitest-wallclock-e2e-split.mjs'
+$wallclockWorkflowPath = Join-Path $RepoRoot '.github/workflows/vitest-wallclock-e2e.yml'
+$wallclockRunnerScript = Join-Path $RepoRoot 'scripts/run-vitest-wallclock-stage.ps1'
+$wallclockAggregateScript = Join-Path $RepoRoot 'scripts/ci-wallclock-e2e-aggregate.ps1'
+$wallclockNotifyScript = Join-Path $RepoRoot 'scripts/ci-wallclock-e2e-notify.ps1'
+$wallclockContainmentScript = Join-Path $RepoRoot 'scripts/emit-wallclock-e2e-containment.mjs'
+
+foreach ($required in @(
+        $wallclockManifestPath,
+        $wallclockPreMovePath,
+        $wallclockSplitLib,
+        $wallclockWorkflowPath,
+        $wallclockRunnerScript,
+        $wallclockAggregateScript,
+        $wallclockNotifyScript,
+        $wallclockContainmentScript
+    )) {
+    if (-not (Test-Path -LiteralPath $required)) {
+        Add-Fail "missing wall-clock split artifact: $(Split-Path -Leaf $required)"
+    }
+}
+
+if ((Test-Path -LiteralPath $wallclockSplitLib) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    try {
+        $coverageJson = & node -e "
+import { buildCoverageDeltaReport, validateRollbackDocumentation, validateRollbackOrderViolationFixture } from './scripts/lib/vitest-wallclock-e2e-split.mjs';
+const coverage = buildCoverageDeltaReport('$($RepoRoot.Replace('\', '/'))');
+const rollbackDoc = validateRollbackDocumentation('$($RepoRoot.Replace('\', '/'))');
+const rollbackOrder = validateRollbackOrderViolationFixture();
+console.log(JSON.stringify({ coverage, rollbackDoc, rollbackOrder }));
+" 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Add-Fail "wall-clock coverage-delta evaluation failed: $coverageJson"
+        }
+        else {
+            $payload = $coverageJson | ConvertFrom-Json
+            if (-not $payload.coverage.ok) {
+                foreach ($err in $payload.coverage.errors) {
+                    Add-Fail "wall-clock coverage-delta: $err"
+                }
+            }
+            else {
+                Write-Host "  coverage-delta: prRetained=$($payload.coverage.report.prRetainedCount) postMerge=$($payload.coverage.report.postMergeExecutionCount)"
+            }
+            if (-not $payload.rollbackDoc.ok) {
+                foreach ($err in $payload.rollbackDoc.errors) {
+                    Add-Fail "wall-clock rollback docs: $err"
+                }
+            }
+            if (-not $payload.rollbackOrder.ok) {
+                Add-Fail 'negative fixture: rollback-order violation must be detectable'
+            }
+        }
+    }
+    catch {
+        Add-Fail "wall-clock split lib validation failed: $_"
+    }
+}
+
+if (Test-Path -LiteralPath $wallclockWorkflowPath) {
+    $wallclockText = Get-Content -LiteralPath $wallclockWorkflowPath -Raw
+    $wallclockJobs = Get-YamlJobs -Text $wallclockText
+    if ($wallclockText -match 'pull_request:') {
+        Add-Fail 'vitest-wallclock-e2e.yml must not trigger on pull_request'
+    }
+    if ($wallclockText -notmatch 'push:[\s\S]*branches:[\s\S]*main') {
+        Add-Fail 'vitest-wallclock-e2e.yml must trigger on push to main'
+    }
+    if ($wallclockText -notmatch 'schedule:') {
+        Add-Fail 'vitest-wallclock-e2e.yml must declare schedule backstop'
+    }
+    if (-not $wallclockJobs.ContainsKey('test-vitest-wallclock')) {
+        Add-Fail 'vitest-wallclock-e2e.yml missing test-vitest-wallclock job'
+    }
+    if (-not $wallclockJobs.ContainsKey('test-wallclock-aggregate')) {
+        Add-Fail 'vitest-wallclock-e2e.yml missing test-wallclock-aggregate job'
+    }
+    if (-not $wallclockJobs.ContainsKey('emit-containment')) {
+        Add-Fail 'vitest-wallclock-e2e.yml missing emit-containment job'
+    }
+    if ($wallclockText -notmatch 'Upload containment artifact[\s\S]*if: always\(\)') {
+        Add-Fail 'wall-clock containment artifact upload must run on red/pending heads (if: always())'
+    }
+    if ($wallclockText -notmatch '--write-only') {
+        Add-Fail 'emit-containment must pass --write-only so artifact is written before job failure'
+    }
+    if ($wallclockText -notmatch 'emit-containment:[\s\S]*env:[\s\S]*STAGE_RESULT:') {
+        Add-Fail 'emit-containment job must define STAGE_RESULT at job env so later steps can read it'
+    }
+    if ($wallclockText -notmatch "Fail closed on uncontained head[\s\S]*STAGE_RESULT != 'success'") {
+        Add-Fail 'vitest-wallclock-e2e.yml must fail closed when STAGE_RESULT is not success'
+    }
+    if ($wallclockText -notmatch 'Fail closed on uncontained head') {
+        Add-Fail 'vitest-wallclock-e2e.yml must fail closed after uploading uncontained containment artifact'
+    }
+    if ((Get-Content -LiteralPath (Join-Path $RepoRoot '.github/workflows/scope-guard.yml') -Raw) -match 'members:\s*read') {
+        Add-Fail 'scope-guard.yml must not declare unsupported members: read workflow permission'
+    }
+    if (-not $wallclockJobs.ContainsKey('notify-on-failure')) {
+        Add-Fail 'vitest-wallclock-e2e.yml missing notify-on-failure job'
+    }
+    if ($wallclockText -notmatch 'notify-on-failure:[\s\S]*needs:[\s\S]*emit-containment') {
+        Add-Fail 'notify-on-failure must depend on emit-containment so containment failures alert'
+    }
+    if ($wallclockJobs.ContainsKey('test-vitest-wallclock')) {
+        $wcJob = $wallclockJobs['test-vitest-wallclock']
+        if ($wcJob -notmatch 'run-vitest-wallclock-stage\.ps1') {
+            Add-Fail 'test-vitest-wallclock job must invoke run-vitest-wallclock-stage.ps1'
+        }
+        if ($wcJob -match 'continue-on-error:\s*true') {
+            Add-Fail 'test-vitest-wallclock job must not use continue-on-error: true'
+        }
+    }
+    if ($wallclockJobs.ContainsKey('test-wallclock-aggregate')) {
+        $aggJob = $wallclockJobs['test-wallclock-aggregate']
+        if ($aggJob -notmatch 'ci-wallclock-e2e-aggregate\.ps1') {
+            Add-Fail 'test-wallclock-aggregate job must invoke ci-wallclock-e2e-aggregate.ps1'
+        }
+        if ($aggJob -match 'continue-on-error:\s*true') {
+            Add-Fail 'test-wallclock-aggregate job must not use continue-on-error: true'
+        }
+    }
+}
+
+$mainEvidenceFixture = $env:OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE
+if (-not $mainEvidenceFixture -and $env:GITHUB_ACTIONS -ne 'true') {
+    $mainEvidenceFixture = 'bootstrap'
+}
+if ($mainEvidenceFixture) {
+    $env:OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE = $mainEvidenceFixture
+}
+if ($mainEvidenceFixture -eq 'missing-steady-state') {
+    Add-Fail 'wall-clock latest-main evidence missing (negative fixture)'
+}
+
+$approvalFixture = $env:OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE
+if (-not $approvalFixture -and $env:GITHUB_ACTIONS -ne 'true') {
+    $approvalFixture = 'approved'
+}
+if ($approvalFixture) {
+    $env:OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE = $approvalFixture
+}
+if ($approvalFixture -eq 'missing') {
+    Add-Fail 'wall-clock split approval missing (negative fixture)'
+}
+elseif ($approvalFixture -eq 'self-created') {
+    Add-Fail 'wall-clock split same-PR self-created approval rejected (negative fixture)'
+}
+else {
+    try {
+        $approvalJson = & node -e "
+import { resolveImmutableApproval } from './scripts/lib/vitest-wallclock-e2e-split.mjs';
+const result = await resolveImmutableApproval('$($RepoRoot.Replace('\', '/'))');
+console.log(JSON.stringify(result));
+" 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Add-Fail "wall-clock approval resolution failed: $approvalJson"
+        }
+        else {
+            $approval = $approvalJson | ConvertFrom-Json
+            if (-not $approval.ok) {
+                Add-Fail "wall-clock split missing immutable GitHub approval (#487 AC#8): $($approval.reason)"
+            }
+        }
+    }
+    catch {
+        Add-Fail "wall-clock approval guard failed: $_"
+    }
+}
+
+if ((Test-Path -LiteralPath $wallclockSplitLib) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    try {
+        $mainEvidenceJson = & node -e "
+import { verifyLatestMainWallClockEvidence } from './scripts/lib/vitest-wallclock-e2e-split.mjs';
+const result = await verifyLatestMainWallClockEvidence('$($RepoRoot.Replace('\', '/'))');
+console.log(JSON.stringify(result));
+"
+        if (-not $mainEvidenceJson) {
+            Add-Fail 'wall-clock latest-main evidence evaluation returned no output'
+        }
+        else {
+            $mainEvidence = $mainEvidenceJson | ConvertFrom-Json
+            if (-not $mainEvidence.ok) {
+                Add-Fail "wall-clock latest-main evidence (#694 AC#3): $($mainEvidence.reason) head=$($mainEvidence.mainHeadSha)"
+            }
+            else {
+                Write-Host "  latest-main evidence: mode=$($mainEvidence.mode) reason=$($mainEvidence.reason) head=$($mainEvidence.mainHeadSha)"
+            }
+        }
+    }
+    catch {
+        Add-Fail "wall-clock latest-main evidence guard failed: $_"
+    }
+}
+
+& $wallclockAggregateScript -WallclockResult 'failure' -HeadSha 'abc' -RunId '1' 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Add-Fail 'ci-wallclock-e2e-aggregate.ps1 must fail closed on failure result'
+}
+& $wallclockAggregateScript -WallclockResult 'success' -HeadSha '' -RunId '1' 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Add-Fail 'ci-wallclock-e2e-aggregate.ps1 must fail closed on missing head'
+}
+& $wallclockAggregateScript -WallclockResult 'success' -HeadSha 'abc' -RunId '1' 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-Fail 'ci-wallclock-e2e-aggregate.ps1 must pass when wall-clock lane succeeds with head binding'
+}
+
+& $wallclockNotifyScript -HeadSha 'deadbeef' -DryRun 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-Fail 'wall-clock alert dry-run must prove delivery payload'
+}
+& $wallclockNotifyScript -HeadSha 'deadbeef' -DryRun -SimulateDeliveryFailure 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Add-Fail 'wall-clock alert delivery failure must not silently swallow red stage'
+}
+
+& node $wallclockContainmentScript --head abc --stage-result success 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-Fail 'emit-wallclock-e2e-containment.mjs must exit 0 when stage succeeds'
+}
+& node $wallclockContainmentScript --head abc --stage-result failure 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Add-Fail 'emit-wallclock-e2e-containment.mjs must fail closed when stage is failure'
+}
+& node $wallclockContainmentScript --head abc --stage-result pending 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Add-Fail 'emit-wallclock-e2e-containment.mjs must fail closed when stage is pending'
+}
+& node $wallclockContainmentScript --head abc --stage-result failure --write-only 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Add-Fail 'emit-wallclock-e2e-containment.mjs --write-only must exit 0 after writing uncontained artifact'
+}
+
+
 if ($failures.Count -gt 0) {
     Write-Host '[FAIL] CI pipeline split guard:'
     foreach ($item in $failures) {
@@ -531,5 +781,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] CI pipeline split lane classification, derived weighted heavy shards, oversized-file guard, runtime-history refresh producer guards, aggregate fail-closed, and worker-RPC guard OK.'
+Write-Host '[PASS] CI pipeline split lane classification, derived weighted heavy shards, oversized-file guard, runtime-history refresh producer guards, wall-clock e2e split, aggregate fail-closed, and worker-RPC guard OK.'
 exit 0

@@ -1,5 +1,5 @@
 {
-  "issue": 556,
+  "issue": 694,
   "lightMaxWorkers": 2,
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
@@ -58,6 +58,7 @@
     "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy",
     "scripts/contract-evidence-reverify.test.ts": "heavy",
     "scripts/contract-evidence.test.ts": "light",
+    "scripts/cursor-agent-tui-shim.test.ts": "light",
     "scripts/dead-worker-reconcile.test.ts": "heavy",
     "scripts/draft-author-relocation-contract.test.ts": "light",
     "scripts/draft-discipline.test.ts": "light",
@@ -92,16 +93,16 @@
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
     "scripts/orchestrator-wake-heartbeat.test.ts": "light",
-    "scripts/orchestrator-wake-listener-evaluate.test.ts": "heavy",
-    "scripts/orchestrator-wake-listener-helpers.test.ts": "heavy",
-    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "heavy",
-    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "heavy",
+    "scripts/orchestrator-wake-listener-evaluate.test.ts": "postMergeWallclock",
+    "scripts/orchestrator-wake-listener-helpers.test.ts": "postMergeWallclock",
+    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "postMergeWallclock",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts": "heavy",
-    "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts": "heavy",
-    "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts": "heavy",
+    "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts": "postMergeWallclock",
+    "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": "light",
-    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "heavy",
-    "scripts/orchestrator-wake-supervisor-startup.test.ts": "heavy",
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "postMergeWallclock",
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
     "scripts/pr-scope-check.test.ts": "heavy",
     "scripts/publish-issue-body-sync.test.ts": "heavy",
@@ -161,25 +162,24 @@
     "scripts/spawn-worktree-repository-identity-binding.test.ts": "heavy",
     "scripts/stage-completeness-guard.test.ts": "light",
     "scripts/submit-worker-input-draft.test.ts": "heavy",
-    "scripts/supervisor-auto-recovery.test.ts": "heavy",
+    "scripts/supervisor-auto-recovery.test.ts": "postMergeWallclock",
     "scripts/supervisor-child-openprs-null.test.ts": "heavy",
-    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "heavy",
-    "scripts/supervisor-degraded-backoff-restart.test.ts": "heavy",
-    "scripts/supervisor-fault-boundary-child-entry-null.test.ts": "heavy",
-    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "heavy",
-    "scripts/supervisor-fault-boundary-escalate.test.ts": "heavy",
-    "scripts/supervisor-fault-boundary-recovery-stop.test.ts": "heavy",
-    "scripts/supervisor-fault-boundary-redirect-disposed.test.ts": "heavy",
-    "scripts/supervisor-fault-boundary-status-entry.test.ts": "heavy",
+    "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "postMergeWallclock",
+    "scripts/supervisor-degraded-backoff-restart.test.ts": "postMergeWallclock",
+    "scripts/supervisor-fault-boundary-child-entry-null.test.ts": "postMergeWallclock",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "postMergeWallclock",
+    "scripts/supervisor-fault-boundary-escalate.test.ts": "postMergeWallclock",
+    "scripts/supervisor-fault-boundary-recovery-stop.test.ts": "postMergeWallclock",
+    "scripts/supervisor-fault-boundary-redirect-disposed.test.ts": "postMergeWallclock",
+    "scripts/supervisor-fault-boundary-status-entry.test.ts": "postMergeWallclock",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "heavy",
     "scripts/supervisor-test-wait-race.fixture.test.ts": "light",
     "scripts/terminal-flood-detect.test.ts": "heavy",
     "scripts/test-runtime-budget.test.ts": "heavy",
-    "scripts/testmode-fleet-reaper.test.ts": "heavy",
     "scripts/testmode-fleet-reaper-wallclock.test.ts": "heavy",
+    "scripts/testmode-fleet-reaper.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/trust-ao-worktree.test.ts": "light",
-    "scripts/cursor-agent-tui-shim.test.ts": "light",
     "scripts/worker-iteration-cycle.test.ts": "heavy",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
     "scripts/worker-nudge-gate.test.ts": "heavy",
@@ -196,13 +196,6 @@
     "tests/agents-md-relocation.test.ts": "light",
     "tests/agents-md-size-budget.test.ts": "light"
   },
-  "parkedWallclockE2e": {
-    "trackingIssue": 694,
-    "trackingNote": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md (#694 wall-clock CI stage)",
-    "files": [
-      "scripts/orchestrator-wake-supervisor.test.ts"
-    ]
-  },
   "heavyTopology": {
     "targetShardSeconds": 900,
     "minShardCount": 1,
@@ -210,5 +203,12 @@
     "fallbackHeavyShardCount": 7
   },
   "heavyVitestPerFilePool": "threads",
-  "heavyVitestPoolByFile": {}
+  "heavyVitestPoolByFile": {},
+  "parkedWallclockE2e": {
+    "trackingIssue": 694,
+    "trackingNote": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md (#694 wall-clock CI stage)",
+    "files": [
+      "scripts/orchestrator-wake-supervisor.test.ts"
+    ]
+  }
 }

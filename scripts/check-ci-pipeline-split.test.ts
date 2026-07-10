@@ -135,8 +135,10 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
       return;
     }
     expect(plan.discovered.length).toBeGreaterThan(0);
-    expect(plan.light.length + plan.heavy.length + plan.parked.length).toBe(plan.discovered.length);
-    const union = new Set([...plan.light, ...plan.heavy, ...plan.parked]);
+    expect(
+      plan.light.length + plan.heavy.length + plan.postMergeWallclock.length + plan.parked.length,
+    ).toBe(plan.discovered.length);
+    const union = new Set([...plan.light, ...plan.heavy, ...plan.postMergeWallclock, ...plan.parked]);
     expect(union.size).toBe(plan.discovered.length);
   });
 
@@ -572,3 +574,206 @@ describe('heavy topology weight-input fail-closed (#695)', () => {
     }
   });
 });
+
+describe('wall-clock e2e stage split (#694)', () => {
+  it('manifest maps six logical pre-move files to post-merge execution successors', () => {
+    const manifest = JSON.parse(
+      readFileSync(join(repoRoot, 'scripts/vitest-wallclock-e2e-split.manifest.json'), 'utf8'),
+    ) as { preMoveEnumeratedFiles: string[]; preMoveToPostMergeMap: Record<string, string[]> };
+    expect(manifest.preMoveEnumeratedFiles).toHaveLength(6);
+    const successors = Object.values(manifest.preMoveToPostMergeMap).flat();
+    expect(new Set(successors).size).toBe(successors.length);
+    expect(successors).toHaveLength(17);
+  });
+
+  it('post-merge workflow is main/schedule only with fail-closed aggregate', () => {
+    const yaml = readFileSync(
+      join(repoRoot, '.github/workflows/vitest-wallclock-e2e.yml'),
+      'utf8',
+    );
+    expect(yaml).toMatch(/push:[\s\S]*branches:[\s\S]*main/);
+    expect(yaml).toMatch(/schedule:/);
+    expect(yaml).not.toMatch(/pull_request:/);
+    expect(yaml).toMatch(/run-vitest-wallclock-stage\.ps1/);
+    expect(yaml).toMatch(/ci-wallclock-e2e-aggregate\.ps1/);
+    expect(yaml).toMatch(/wall-clock-e2e-containment/);
+  });
+
+  it('approval body requires marker and full enumerated move set (#487 AC#8)', async () => {
+    const { loadSplitManifest, validateApprovalBody } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const manifest = loadSplitManifest(repoRoot);
+    const fullBody = [
+      manifest.approvalMarker,
+      ...manifest.preMoveEnumeratedFiles.map((file: string) => `- \`${file}\``),
+    ].join('\n');
+    expect(validateApprovalBody(fullBody, manifest).ok).toBe(true);
+    const partial = validateApprovalBody(`${manifest.approvalMarker}\n- \`${manifest.preMoveEnumeratedFiles[0]}\``, manifest);
+    expect(partial.ok).toBe(false);
+  });
+
+  it('approval gate accepts only write+ collaborator permissions', async () => {
+    const { isAuthorizedCollaboratorPermission } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    expect(isAuthorizedCollaboratorPermission('admin')).toBe(true);
+    expect(isAuthorizedCollaboratorPermission('write')).toBe(true);
+    expect(isAuthorizedCollaboratorPermission('read')).toBe(false);
+  });
+
+  it('requires immutable approval when no valid Issue #694 comment exists (#694 AC#1)', async () => {
+    const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+    if (!token) {
+      return;
+    }
+    const { resolveImmutableApproval } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const prevRepo = process.env.GITHUB_REPOSITORY;
+    const prevFixture = process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE;
+    process.env.GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack';
+    delete process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER;
+    process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE = 'missing';
+    try {
+      const result = await resolveImmutableApproval(repoRoot);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('missing-approval');
+    } finally {
+      if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
+      else process.env.GITHUB_REPOSITORY = prevRepo;
+      if (prevFixture === undefined) delete process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE;
+      else process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE = prevFixture;
+    }
+  });
+
+  it('accepts pinned Issue #694 comment ref for solo-maintainer repos (#694 AC#1)', async () => {
+    const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+    if (!token) {
+      return;
+    }
+    const { resolvePinnedImmutableApproval, loadSplitManifest } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const manifest = loadSplitManifest(repoRoot);
+    manifest.immutableApprovalCommentRef = { issueNumber: 694, commentId: 4932626404 };
+    const prevRepo = process.env.GITHUB_REPOSITORY;
+    const prevPr = process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER;
+    process.env.GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack';
+    process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER = '727';
+    try {
+      const [owner, name] = 'chetwerikoff/orchestrator-pack'.split('/');
+      const result = await resolvePinnedImmutableApproval(manifest, owner, name, token, {
+        prNumber: '727',
+        prAuthor: 'chetwerikoff',
+      });
+      expect(result.ok).toBe(true);
+      expect(result.source).toBe('pinned-issue-comment');
+    } finally {
+      if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
+      else process.env.GITHUB_REPOSITORY = prevRepo;
+      if (prevPr === undefined) delete process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER;
+      else process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER = prevPr;
+    }
+  });
+
+  it('accepts PR author unpinned issue comments when no other write+ reviewer exists (#694 AC#1)', async () => {
+    const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+    if (!token) {
+      return;
+    }
+    const { resolveImmutableApproval } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const prevRepo = process.env.GITHUB_REPOSITORY;
+    const prevPr = process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER;
+    const prevIgnore = process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_IGNORE_PINNED_REF;
+    process.env.GITHUB_REPOSITORY = 'chetwerikoff/orchestrator-pack';
+    process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER = '727';
+    process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_IGNORE_PINNED_REF = '1';
+    try {
+      const result = await resolveImmutableApproval(repoRoot);
+      expect(result.ok).toBe(true);
+      expect(result.source).toBe('issue-comment');
+    } finally {
+      if (prevRepo === undefined) delete process.env.GITHUB_REPOSITORY;
+      else process.env.GITHUB_REPOSITORY = prevRepo;
+      if (prevPr === undefined) delete process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER;
+      else process.env.GITHUB_EVENT_PULL_REQUEST_NUMBER = prevPr;
+      if (prevIgnore === undefined) delete process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_IGNORE_PINNED_REF;
+      else process.env.OPK_WALLCLOCK_SPLIT_APPROVAL_IGNORE_PINNED_REF = prevIgnore;
+    }
+  });
+
+  it('latest-main wall-clock evidence accepts bootstrap fixture (#694 AC#3)', async () => {
+    const { verifyLatestMainWallClockEvidence } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const prev = process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE;
+    process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE = 'bootstrap';
+    try {
+      const result = await verifyLatestMainWallClockEvidence(repoRoot);
+      expect(result.ok).toBe(true);
+      expect(result.mode).toBe('bootstrap');
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE;
+      } else {
+        process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE = prev;
+      }
+    }
+  });
+
+  it('latest-main wall-clock evidence fails closed on missing steady-state fixture (#694 AC#3)', async () => {
+    const { verifyLatestMainWallClockEvidence } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const prev = process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE;
+    process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE = 'missing-steady-state';
+    try {
+      const result = await verifyLatestMainWallClockEvidence(repoRoot);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('latest-main-head-lacks-wall-clock-evidence');
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE;
+      } else {
+        process.env.OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE = prev;
+      }
+    }
+  });
+
+
+  it('approval body rejects marker-only or single-file partial approvals (#487 AC#8)', async () => {
+    const { loadSplitManifest, validateApprovalBody } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    const manifest = loadSplitManifest(repoRoot);
+    const markerOnly = validateApprovalBody(manifest.approvalMarker, manifest);
+    expect(markerOnly.ok).toBe(false);
+    const oneFile = validateApprovalBody(
+      [manifest.approvalMarker, `- \`${manifest.preMoveEnumeratedFiles[0]}\``].join('\n'),
+      manifest,
+    );
+    expect(oneFile.ok).toBe(false);
+    const unquoted = validateApprovalBody(
+      [manifest.approvalMarker, ...manifest.preMoveEnumeratedFiles].join('\n'),
+      manifest,
+    );
+    expect(unquoted.ok).toBe(false);
+  });
+
+  it('approval gate accepts only APPROVED PR reviews, not COMMENTED (#487 AC#8)', async () => {
+    const { isApprovedReviewState } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+    expect(isApprovedReviewState('APPROVED')).toBe(true);
+    expect(isApprovedReviewState('COMMENTED')).toBe(false);
+    expect(isApprovedReviewState('CHANGES_REQUESTED')).toBe(false);
+  });
+
+  it('containment emitter documents fail-closed workflow binding', () => {
+    const yaml = readFileSync(
+      join(repoRoot, '.github/workflows/vitest-wallclock-e2e.yml'),
+      'utf8',
+    );
+    expect(yaml).toMatch(/emit-wallclock-e2e-containment\.mjs/);
+    expect(yaml).toMatch(/Upload containment artifact[\s\S]*if: always\(\)/);
+    expect(yaml).toMatch(/--write-only/);
+    expect(yaml).toMatch(/STAGE_RESULT != 'success'/);
+    expect(yaml).toMatch(/Fail closed on uncontained head/);
+    expect(yaml).toMatch(/notify-on-failure:[\s\S]*needs:[\s\S]*emit-containment/);
+    expect(yaml).toMatch(/emit-containment:[\s\S]*env:[\s\S]*STAGE_RESULT:/);
+    expect(yaml).toMatch(/stage_result=\$\{STAGE_RESULT\}.*GITHUB_OUTPUT/);
+    expect(yaml).toMatch(/--write-only/);
+    expect(yaml).toMatch(/STAGE_RESULT != 'success'/);
+  });
+
+  it('scope-guard verify-pack does not declare unsupported members permission', () => {
+    const yaml = readFileSync(join(repoRoot, '.github/workflows/scope-guard.yml'), 'utf8');
+    expect(yaml).not.toMatch(/members:\s*read/);
+  });
+});
+

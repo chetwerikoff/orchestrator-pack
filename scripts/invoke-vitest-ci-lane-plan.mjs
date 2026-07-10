@@ -5,6 +5,7 @@
  * Usage:
  *   node scripts/invoke-vitest-ci-lane-plan.mjs light
  *   node scripts/invoke-vitest-ci-lane-plan.mjs heavy --shard 3
+ *   node scripts/invoke-vitest-ci-lane-plan.mjs wallclock
  */
 import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
 
@@ -47,5 +48,10 @@ if (mode === 'heavy') {
   process.exit(0);
 }
 
-console.error('usage: invoke-vitest-ci-lane-plan.mjs <light|heavy> [--shard N]');
+if (mode === 'wallclock') {
+  console.log(JSON.stringify({ files: plan.postMergeWallclock ?? [] }));
+  process.exit(0);
+}
+
+console.error('usage: invoke-vitest-ci-lane-plan.mjs <light|heavy|wallclock> [--shard N]');
 process.exit(1);

@@ -120,6 +120,43 @@ CI `testTimeout` in `vitest.config.ts` matches the Issue #488 slow-test budget
 (`perTestMs` = **120s**). CI must not use a lower Vitest timeout than the declared
 per-test budget unless a file or lane documents a narrower timeout.
 
+## Wall-clock acceptance stage (Issue #694)
+
+Supervisor/wake subprocess e2e files with multi-second wall-clock polling moved off the
+PR-blocking path into `.github/workflows/vitest-wallclock-e2e.yml` (main push + daily
+schedule). PR-required **Run pack contract tests** excludes them; post-merge stage runs
+the successor file set from Issue #692 mega-file splits.
+
+| Surface | Role |
+| --- | --- |
+| `scripts/vitest-wallclock-e2e-split.manifest.json` | Enumerated logical move set, post-merge execution map, red-signal contract |
+| `scripts/vitest-wallclock-e2e-split.pre-move-manifest.json` | Pinned pre-move PR-required union at baseline SHA |
+| `postMergeWallclock` lane in `vitest-ci-lanes.config.json` | Classification for relocated files (not PR light/heavy) |
+| `scripts/run-vitest-wallclock-stage.ps1` | Serial post-merge runner |
+| `wall-clock-e2e-containment` job output | Machine-readable containment while stage pending/red |
+
+Coverage-delta proof: `scripts/lib/vitest-wallclock-e2e-split.mjs` + guard in
+`scripts/check-ci-pipeline-split.ps1`. Charter linkage: Issue #487 AC#8 requires immutable
+GitHub approval on Issue #694 before merge (write+ collaborator). Live GitHub resolution runs on every guard invocation including `pull_request` CI. When another write+ collaborator exists, PR-author issue comments and PR reviews are rejected; solo-maintainer repos with no other eligible reviewer accept charter issue comments from the owner. A pinned immutable comment id in `scripts/vitest-wallclock-e2e-split.manifest.json` is validated live on GitHub with the same author rules.
+
+**Latest-main wall-clock evidence (Issue #694 AC#3):** after the workflow exists on `main`,
+`check-ci-pipeline-split.ps1` requires a completed successful `vitest-wallclock-e2e` run for
+the newest `main` head (via GitHub Actions API). Bootstrap passes when the workflow is not yet
+on `main`, no main runs exist yet, or the head is younger than the bounded age window (48h).
+
+Red-signal on post-merge failure: `scripts/ci-wallclock-e2e-notify.ps1` records an
+episode-keyed alert (`wallclock-e2e-main:{sha}`) and opens an Issue #694 comment idempotently
+(matching `dedupe:` / `episode:` keys; repeated failures for the same head do not spam);
+delivery miss stays fail-closed (stage red + containment blocks promotion).
+
+### Wall-clock rollback (ordered — disable-alone is invalid)
+
+1. Reclassify every `postMergeWallclock` file back to `heavy` (or `light` where proven safe)
+   in `scripts/vitest-ci-lanes.config.json`.
+2. Prove green **Run pack contract tests** on a representative PR including the restored files.
+3. Only then disable or remove `.github/workflows/vitest-wallclock-e2e.yml`.
+4. **Disabling post-merge alone** without step 1–2 drops coverage and is an invalid rollback.
+
 ## Pre-change baseline (GHA, 2026-06-30)
 
 Eight-way round-robin (#536) baseline is documented in

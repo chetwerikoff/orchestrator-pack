@@ -1,0 +1,75 @@
+{
+  "issue": 694,
+  "charterIssue": 487,
+  "approvalIssue": 694,
+  "approvalMarker": "vitest-wallclock-e2e-split-approved",
+  "preMoveBaselineSha": "c8c8a40aa0d1a53934f85b9082a2ce37c92b303c",
+  "preMoveEnumeratedFiles": [
+    "scripts/supervisor-fault-boundary.test.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/orchestrator-wake-listener.test.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-integration.test.ts",
+    "scripts/supervisor-auto-recovery.test.ts",
+    "scripts/supervisor-degraded-backoff.test.ts"
+  ],
+  "preMoveToPostMergeMap": {
+    "scripts/supervisor-fault-boundary.test.ts": [
+      "scripts/supervisor-fault-boundary-redirect-disposed.test.ts",
+      "scripts/supervisor-fault-boundary-child-entry-null.test.ts",
+      "scripts/supervisor-fault-boundary-status-entry.test.ts",
+      "scripts/supervisor-fault-boundary-recovery-stop.test.ts",
+      "scripts/supervisor-fault-boundary-escalate.test.ts",
+      "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts"
+    ],
+    "scripts/orchestrator-wake-supervisor.test.ts": [
+      "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
+    ],
+    "scripts/orchestrator-wake-listener.test.ts": [
+      "scripts/orchestrator-wake-listener-evaluate.test.ts",
+      "scripts/orchestrator-wake-listener-helpers.test.ts"
+    ],
+    "scripts/orchestrator-wake-supervisor-orphan-integration.test.ts": [
+      "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts",
+      "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts"
+    ],
+    "scripts/supervisor-auto-recovery.test.ts": [
+      "scripts/supervisor-auto-recovery.test.ts"
+    ],
+    "scripts/supervisor-degraded-backoff.test.ts": [
+      "scripts/supervisor-degraded-backoff-restart.test.ts",
+      "scripts/supervisor-degraded-backoff-crash-preserve.test.ts"
+    ]
+  },
+  "postMergeSupportAllowlist": [
+    "scripts/orchestrator-wake-supervisor-orphan-integration.shared.js"
+  ],
+  "postMergeStageJobName": "Vitest wall-clock acceptance",
+  "postMergeAggregateJobName": "Wall-clock acceptance gate",
+  "containmentCheckName": "wall-clock-e2e-containment",
+  "scheduleCron": "0 6 * * *",
+  "runner": {
+    "os": "ubuntu-latest",
+    "shell": "pwsh",
+    "nodeVersion": "20"
+  },
+  "redSignal": {
+    "owner": "orchestrator-pack-operator",
+    "deliveryTarget": "ci-failure-notification-reconcile",
+    "episodeKey": "wallclock-e2e-main:{sha}",
+    "dedupeKey": "wallclock-e2e-failure:{sha}",
+    "retryRule": "single-attempt-per-head; reconcile tick retries delivery only",
+    "deliveryFailureBehavior": "fail-closed: stage stays red and containment blocks promotion even when alert delivery misses"
+  },
+  "mainHeadEvidence": {
+    "workflowFile": ".github/workflows/vitest-wallclock-e2e.yml",
+    "workflowName": "vitest-wallclock-e2e",
+    "boundedHeadAgeHours": 48
+  },
+  "immutableApprovalCommentRef": {
+    "issueNumber": 694,
+    "commentId": 4932626404
+  }
+}

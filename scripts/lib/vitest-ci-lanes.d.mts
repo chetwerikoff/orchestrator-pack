@@ -13,11 +13,6 @@ export interface LanesConfig {
   heavyForkPoolMinRuntimeMs: number;
   heavyPerTestIsolate: string[];
   classification: Record<string, string>;
-  parkedWallclockE2e: {
-    trackingIssue: number;
-    trackingNote: string;
-    files: string[];
-  };
 }
 
 export interface HeavyShardAssignment {
@@ -32,6 +27,7 @@ export interface LanePlanSuccess {
   config: LanesConfig;
   light: string[];
   heavy: string[];
+  postMergeWallclock: string[];
   parked: string[];
   heavyShards: HeavyShardAssignment[];
   runtimeHistory: Record<string, number>;
@@ -58,14 +54,10 @@ export declare function validateClassification(
   discoveredFiles: string[],
   classification: Record<string, string>,
 ): string[];
-export declare function validateParkedWallclockE2e(
-  classification: Record<string, string>,
-  parkedWallclockE2e: LanesConfig['parkedWallclockE2e'],
-): string[];
 export declare function partitionByLane(
   discoveredFiles: string[],
   classification: Record<string, string>,
-): { light: string[]; heavy: string[]; parked: string[] };
+): { light: string[]; heavy: string[]; postMergeWallclock: string[]; parked: string[] };
 export declare function resolveHeavyRuntimeMs(
   file: string,
   runtimeHistory: Record<string, number>,

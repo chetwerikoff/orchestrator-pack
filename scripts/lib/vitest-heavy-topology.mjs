@@ -218,12 +218,13 @@ export function findOversizedFiles(discovered, artifact, policy, repoRoot, optio
   const offenders = [];
   const unresolved = [];
   const changedFiles = new Set(options.changedFiles ?? []);
-  const parkedFiles = new Set(options.parkedFiles ?? []);
 
-  for (const file of discovered) {
-    if (parkedFiles.has(file)) {
-      continue;
-    }
+  const classification = options.classification ?? {};
+  const guardDiscoveredFiles = discovered.filter((file) => {
+    const lane = classification[file];
+    return lane !== 'postMergeWallclock' && lane !== 'parked';
+  });
+  for (const file of guardDiscoveredFiles) {
     const resolved = resolveGuardWeightSeconds(file, artifact, repoRoot, {
       ...options,
       changedFiles: [...changedFiles],
@@ -295,15 +296,12 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
   if (classificationErrors.length > 0) {
     return { ok: false, errors: classificationErrors, discovered };
   }
-  const parkedErrors = validateParkedWallclockE2e(
-    lanesConfig.classification,
-    lanesConfig.parkedWallclockE2e,
-  );
+  const parkedErrors = validateParkedWallclockE2e(lanesConfig.classification, lanesConfig.parkedWallclockE2e);
   if (parkedErrors.length > 0) {
     return { ok: false, errors: parkedErrors, discovered };
   }
 
-  const { light, heavy, parked } = partitionByLane(discovered, lanesConfig.classification);
+  const { light, heavy, postMergeWallclock, parked } = partitionByLane(discovered, lanesConfig.classification);
   const runtimeHistory = historyLoad.state === 'valid' ? historyLoad.artifact.files : {};
   const heavyLaneTotalWeightSeconds = sumHeavyLaneWeightSeconds(
     heavy,
@@ -337,7 +335,7 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
         : null;
   const oversized = findOversizedFiles(discovered, artifactForGuard, policy, root, {
     ...options,
-    parkedFiles: parked,
+    classification: lanesConfig.classification,
   });
 
   const topology = {
@@ -366,6 +364,7 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
     discovered,
     light,
     heavy,
+    postMergeWallclock,
     parked,
     runtimeHistory,
     lanesConfig,
