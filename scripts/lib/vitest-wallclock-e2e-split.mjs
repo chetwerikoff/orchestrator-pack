@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * Coverage-delta and approval helpers for Issue #694 wall-clock e2e stage split.
+ * Pre-move union proof derives from preMoveBaselineSha via detached git worktree (AC#2).
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
