@@ -834,6 +834,23 @@ else {
     Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'
 }
 
+Write-Host '== review delivery stdout-first guard (Issue #718) =='
+$reviewDeliveryStdoutCheck = Join-Path $Root 'scripts/check-review-delivery-no-visibility-poll.ps1'
+if (Test-Path -LiteralPath $reviewDeliveryStdoutCheck -PathType Leaf) {
+    & pwsh -NoProfile -File $reviewDeliveryStdoutCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'review delivery stdout-first guard failed (Issue #718)'
+    }
+    else {
+        Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-review-delivery-no-visibility-poll.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing review delivery stdout-first guard (Issue #718)'
+}
+
 Write-Host ''
 Write-Host '== worker message submit reconcile (Issue #232) =='
 $workerSubmitCheck = Join-Path $Root 'scripts/check-worker-message-submit-reconcile.ps1'

@@ -84,29 +84,34 @@ export function parsePackReviewTerminalStdout(stdout) {
     ok: true,
     packVerdict: parsed.verdict,
     gateVerdict: parsed.verdict === 'clean' ? 'approved' : 'changes_requested',
+    findings: parsed.findings,
+    findingCount: parsed.findingCount,
   };
 }
 
 /**
- * @param {{ prNumber?: number, runId?: string, gateVerdict?: string }} input
+ * @param {{ prNumber?: number, runId?: string, deliveryKey?: string, headSha?: string, gateVerdict?: string }} input
  */
 export function buildScriptedReviewDeliveryMessage(input) {
   const prNumber = Number(input.prNumber ?? 0);
   const runId = String(input.runId ?? '').trim();
+  const deliveryKey = String(input.deliveryKey ?? '').trim();
+  const headSha = normalizeSha(input.headSha);
   const gateVerdict = String(input.gateVerdict ?? '').trim();
-  if (!prNumber || !runId) {
-    return { ok: false, reason: 'missing_pr_or_run' };
+  const identity = runId || deliveryKey || (headSha ? headSha.slice(0, 12) : '');
+  if (!prNumber || !identity) {
+    return { ok: false, reason: 'missing_pr_or_identity' };
   }
   if (gateVerdict === 'approved') {
     return {
       ok: true,
-      message: `Review approved for PR #${prNumber} (run ${runId}). Report ready_for_review when CI is green on the current head.`,
+      message: `Review approved for PR #${prNumber} (${identity}). Report ready_for_review when CI is green on the current head.`,
     };
   }
   if (gateVerdict === 'changes_requested') {
     return {
       ok: true,
-      message: `Review findings for PR #${prNumber} (run ${runId}). Check pending AO review findings, report addressing_reviews, or report terminal failure with a reason.`,
+      message: `Review findings for PR #${prNumber} (${identity}). Check pending AO review findings, report addressing_reviews, or report terminal failure with a reason.`,
     };
   }
   return { ok: false, reason: 'unsupported_gate_verdict' };

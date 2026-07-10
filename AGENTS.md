@@ -340,6 +340,15 @@ evidence. On delivered findings: **must not** idle — use `addressing_reviews` 
 Script-owned orchestrator review starters and predicates:
 [`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
 
+#### Review delivery telemetry (Issue #718)
+
+Pack scripted review delivery is **stdout-first**: worker notification is sourced from the
+reviewer wrapper terminal JSON and the dispatch journal — not from daemon `GET /reviews`
+visibility. Best-effort `ao review submit`, `GET /reviews`, and `POST /reviews/trigger`
+telemetry runs after stdout capture; **on telemetry failure, skip silently — never post
+substitute notifications** that fabricate finding text from daemon state or pretend daemon
+delivery succeeded.
+
 #### Review-cycle cap (Issue #646)
 
 Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on

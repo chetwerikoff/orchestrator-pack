@@ -236,6 +236,7 @@ const AO_SPAWN_PROBE_STUB_PACK_DOCS = [
   'review-cycle-cap.mjs',
   'review-trigger-reconcile.mjs',
   'session-pr-binding-resolver.mjs',
+    'review-delivery-lifecycle.mjs',
   'session-runtime-liveness.mjs',
   'spawn-worktree-git-ref.mjs',
   'spawn-worktree-grant.mjs',
