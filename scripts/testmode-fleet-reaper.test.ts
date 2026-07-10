@@ -76,20 +76,22 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       const liveLane = registerLeaseForOwner(leaseRoot, liveOwner.pid, liveOwner.startTime, 'live-lane');
       const liveState = makeStateDir();
       const liveHeartbeat = startLeaseHeartbeat(leaseRoot, liveLane.leaseId);
-      const liveFleet = await startDetachedTestModeFleet(
-        liveState,
-        withLeaseEnv(leaseRoot, liveLane.leaseId),
-      );
+      try {
+        const liveFleet = await startDetachedTestModeFleet(
+          liveState,
+          withLeaseEnv(leaseRoot, liveLane.leaseId),
+        );
 
-      clearInterval(liveHeartbeat);
-
-      const currentLane = registerLaneLease({ leaseRoot, laneId: 'bootstrap-lane' });
-      const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, currentLane.leaseId));
-      expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
-      await waitForProcessesStopped([orphanPid], 20_000);
-      expect(harnessIsAlive(orphanPid)).toBe(false);
-      expect(isAlive(liveFleet.supervisorPid)).toBe(true);
-      expect(isAlive(liveFleet.listener.pid)).toBe(true);
+        const currentLane = registerLaneLease({ leaseRoot, laneId: 'bootstrap-lane' });
+        const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, currentLane.leaseId));
+        expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
+        await waitForProcessesStopped([orphanPid], 20_000);
+        expect(harnessIsAlive(orphanPid)).toBe(false);
+        expect(isAlive(liveFleet.supervisorPid)).toBe(true);
+        expect(isAlive(liveFleet.listener.pid)).toBe(true);
+      } finally {
+        clearInterval(liveHeartbeat);
+      }
 
       runReaperCli('teardown', { LeaseId: liveLane.leaseId }, withLeaseEnv(leaseRoot, liveLane.leaseId));
       killProcess(liveOwner.pid);

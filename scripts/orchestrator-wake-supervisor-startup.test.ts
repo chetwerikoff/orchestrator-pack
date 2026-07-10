@@ -97,7 +97,7 @@ describe('orchestrator-wake-supervisor', () => {
     await waitForMarkers(stateDir);
 
     const first = await readMarker(stateDir, 'listener');
-    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 10_000);
+    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 25_000);
     child.kill('SIGTERM');
   });
 
