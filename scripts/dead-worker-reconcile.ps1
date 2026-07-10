@@ -152,7 +152,7 @@ function Get-DeadWorkerAbsentSessions {
 }
 
 function Get-DeadWorkerLivePayload {
-    $sessions = @(Get-AoStatusSessionsWithReportsIncludingTerminated)
+    $sessions = @(Get-WorkerStatusDecisionSessionsIncludingTerminated)
     return @{
         sessions = $sessions
         aoEvents = @(Get-AoEventsSince -SinceMinutes 60)

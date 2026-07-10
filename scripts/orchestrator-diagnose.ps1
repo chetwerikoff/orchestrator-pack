@@ -168,7 +168,7 @@ Write-Host ''
 
 # --- status ---
 $reportProject = if ($ProjectId) { $ProjectId } else { 'orchestrator-pack' }
-$sessions = @(Get-AoStatusSessionsWithReports -Project $reportProject)
+$sessions = @(Get-WorkerStatusDecisionSessions -Project $reportProject)
 $reportSourceSummary = 'ao status --json --reports full'
 if ($sessions.Count -gt 0 -and $sessions[0].reportSourcePath) {
     $reportSourceSummary = [string]$sessions[0].reportSourcePath
@@ -309,6 +309,7 @@ if ($reviewReports.Count -gt 0) {
 # --- review runs (AO 0.10 fan-out) ---
 Write-Host ''
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+
 $runs = @(Get-AoReviewRuns -Project $ProjectId)
 
 $actionable = @($runs | Where-Object {

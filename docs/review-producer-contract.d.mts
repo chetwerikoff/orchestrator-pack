@@ -3,6 +3,8 @@ export declare const BOARD_COLUMN_STATUSES: readonly string[];
 export declare const COVERED_TERMINAL_PR_REVIEW_STATUSES: ReadonlySet<string>;
 export declare const IN_FLIGHT_PR_REVIEW_STATUSES: ReadonlySet<string>;
 export declare const IN_FLIGHT_LATEST_RUN_STATUSES: ReadonlySet<string>;
+export declare const REMOVED_REPORT_RECEIPT_SURFACES: readonly string[];
+export declare const REMOVED_DECISION_STATUS_SURFACES: readonly string[];
 
 export interface NormalizedReviewRun {
   id?: string;
@@ -60,3 +62,5 @@ export declare function attachProjectIdToNormalizedRuns(
   runs: NormalizedReviewRun[],
   projectId: string,
 ): NormalizedReviewRun[];
+export declare function assertNoRemovedReportReceiptSurface(value: unknown): true;
+export declare function assertNoDaemonStatusDecisionRead(value: unknown): true;

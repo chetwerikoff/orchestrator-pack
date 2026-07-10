@@ -517,7 +517,7 @@ function Invoke-SubmitReconcileTick {
         }
     }
     else {
-        $sessions = Get-AoStatusSessionsWithReports
+        $sessions = Get-WorkerStatusDecisionSessions
         $aoEvents = @()
         Write-ReconcileSignalSource -Surface 'worker-message-submit-reconcile' -Source 'packDispatchJournal+reviewRuns' -LogPrefix $Script:ReconcileLogPrefix
         $reviewRuns = Get-AoReviewRuns -Project $Project
