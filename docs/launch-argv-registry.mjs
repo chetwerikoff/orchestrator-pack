@@ -635,6 +635,13 @@ function validatorBackedForHit(hit) {
       callee: { kind: 'ao', identity: 'ao CLI session/status/send' },
     };
   }
+  if (hit.file === 'docs/pr-session-binding-cache.mjs' && hit.patternId === 'spawnSync') {
+    return {
+      validatorId: 'ao-cli-argv-shape',
+      calleeContractSourceClass: 'captured-external-help',
+      callee: { kind: 'ao', identity: 'ao session get' },
+    };
+  }
   const ghFiles = new Set(GH_INVENTORY_SCAN_FILES);
   if (ghFiles.has(hit.file)) {
     return {
