@@ -19,6 +19,11 @@ import {
   evaluateWorkerStatusKillSwitch,
   WORKER_STATUS_STORE_SCHEMA_VERSION,
 } from './lib/worker-status-store.mjs';
+import type { RecomputeWorkerStatusRowResult } from './lib/worker-status-store.mjs';
+declare module '../docs/review-producer-contract.mjs' {
+  export function assertNoDaemonStatusDecisionRead(value: unknown): true;
+}
+
 import { assertNoDaemonStatusDecisionRead } from '../docs/review-producer-contract.mjs';
 import { planCiGreenWakeActions } from '../docs/ci-green-wake-reconcile.mjs';
 
@@ -296,13 +301,13 @@ describe('stale status skip silent', () => {
           workerStatusStale: true,
           reports: [],
           runtime: 'active',
-        },
+        } as Record<string, unknown>,
       ],
       ciChecksByPr: { 99: [{ name: 'scope-guard', conclusion: 'success', status: 'completed' }] },
       requiredCheckNamesByPr: { 99: [] },
       state: {},
       nowMs: 1_700_000_000_000,
-    });
+    } as Parameters<typeof planCiGreenWakeActions>[0]);
     const nudges = (actions.actions ?? actions).filter((a: { type?: string }) => a.type === 'nudge');
     expect(nudges.length).toBe(0);
   });
@@ -358,7 +363,7 @@ describe('worker-status monotonic generations', () => {
       github: { prOpen: true, headSha: 'head12', reviewRuns: [], repoTickGeneration: 5 },
       sourceGeneration: writer,
       nowMs: 2000,
-    });
+    }) as RecomputeWorkerStatusRowResult;
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('monotonic_refused');
   });
@@ -401,10 +406,10 @@ describe('worker-status concurrent cross-session', () => {
         sourceGeneration: { repoTickGeneration: 13, reportStoreGeneration: 1, journalCursor: 0, bindingCacheGeneration: 1 },
         nowMs: 1_700_000_000_000,
       };
-      const a = recomputeWorkerStatusRow({ ...common, sessionId: 'session-a', store: readWorkerStatusStoreFile(storePath) });
-      writeWorkerStatusStoreFile(storePath, a.store);
-      const b = recomputeWorkerStatusRow({ ...common, sessionId: 'session-b', store: readWorkerStatusStoreFile(storePath) });
-      writeWorkerStatusStoreFile(storePath, b.store);
+      const a = recomputeWorkerStatusRow({ ...common, sessionId: 'session-a', store: readWorkerStatusStoreFile(storePath) }) as RecomputeWorkerStatusRowResult;
+      writeWorkerStatusStoreFile(storePath, a.store!);
+      const b = recomputeWorkerStatusRow({ ...common, sessionId: 'session-b', store: readWorkerStatusStoreFile(storePath) }) as RecomputeWorkerStatusRowResult;
+      writeWorkerStatusStoreFile(storePath, b.store!);
       const finalStore = readWorkerStatusStoreFile(storePath);
       expect(finalStore.records['session-a']).toBeTruthy();
       expect(finalStore.records['session-b']).toBeTruthy();

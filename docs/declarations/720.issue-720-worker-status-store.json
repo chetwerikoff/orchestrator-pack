@@ -13,7 +13,6 @@
     "AGENTS.md",
     "docs/migration_notes.md",
     "docs/review-producer-contract.mjs",
-    "docs/review-producer-contract.d.mts",
     "docs/review-status-consumer-inventory.md"
   ],
   "declared_globs": [
