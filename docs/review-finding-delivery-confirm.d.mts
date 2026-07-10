@@ -94,6 +94,12 @@ export declare function isLinkedSessionLiveOwner(
   run: ReviewRun,
   sessions: AoSession[],
   openPrs?: OpenPr[],
+  options?: {
+    cachePath?: string;
+    nowMs?: number;
+    writeBackfill?: boolean;
+    repoSlug?: string;
+  },
 ): boolean;
 export declare function linkedRunSessionsMatch(
   sessions: AoSession[],
