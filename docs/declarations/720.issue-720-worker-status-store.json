@@ -13,12 +13,13 @@
     "AGENTS.md",
     "docs/migration_notes.md",
     "docs/review-producer-contract.mjs",
-    "docs/review-status-consumer-inventory.md"
+    "docs/review-status-consumer-inventory.md",
+    "vitest.config.ts"
   ],
   "declared_globs": [
     "scripts/**",
     "tests/**"
   ],
   "amendments": [],
-  "commit_sha": "7b43769f0b53f29b62812570e785c9731410cb11"
+  "commit_sha": "feb2f5e9ae877e7292eda6b6b9f378f84a5d16a8"
 }
