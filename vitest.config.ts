@@ -14,8 +14,8 @@ export default defineConfig({
       'tests/agents-md-*.test.ts',
     ],
     environment: 'node',
-    // Issue #488 slow-test budget: per-test ceiling must not be below perTestMs in CI.
-    testTimeout: ci ? 125_000 : 15_000,
+    // Issue #488 slow-test budget: per-test ceiling must not be below 120s in CI.
+    testTimeout: ci ? 120_000 : 15_000,
     // Heavy lanes stay serial in-runner (#487/#536). Only classified light files
     // may use bounded in-process parallelism (#556).
     ...(ci

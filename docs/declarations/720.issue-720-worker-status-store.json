@@ -13,8 +13,7 @@
     "AGENTS.md",
     "docs/migration_notes.md",
     "docs/review-producer-contract.mjs",
-    "docs/review-status-consumer-inventory.md",
-    "vitest.config.ts"
+    "docs/review-status-consumer-inventory.md"
   ],
   "declared_globs": [
     "scripts/**",
