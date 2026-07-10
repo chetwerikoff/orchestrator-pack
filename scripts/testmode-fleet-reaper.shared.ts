@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { expect } from 'vitest';
+import { afterEach, expect } from 'vitest';
 import {
+  cleanupSupervisorTests,
   isAlive,
   makeStateDir,
   readMarker,
@@ -204,4 +205,27 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
       clearInterval(heartbeat);
     }
   }
+}
+
+export function registerFleetReaperAfterEach(): void {
+  afterEach(() => {
+    for (const leaseRoot of trackedLeaseRoots.splice(0)) {
+      try {
+        const indexPath = path.join(leaseRoot, 'index.json');
+        if (fs.existsSync(indexPath)) {
+          const index = JSON.parse(fs.readFileSync(indexPath, 'utf8')) as { leaseIds?: string[] };
+          for (const leaseId of index.leaseIds ?? []) {
+            runReaperCli('teardown', { LeaseId: leaseId }, {
+              OPK_TESTMODE_LEASE_ROOT: leaseRoot,
+              AO_TESTMODE_FLEET_LANE_LEASE_ID: leaseId,
+              AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
+            });
+          }
+        }
+      } catch {
+        // best-effort lane cleanup
+      }
+    }
+    cleanupSupervisorTests();
+  });
 }

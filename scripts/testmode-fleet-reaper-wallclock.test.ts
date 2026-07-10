@@ -1,9 +1,6 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  cleanupSupervisorTests,
   isAlive,
   makeStateDir,
   runSupervisor,
@@ -17,38 +14,19 @@ import {
   runReaperCli,
 } from './testmode-fleet-harness.js';
 import {
+  registerFleetReaperAfterEach,
   registerLeaseForOwner,
   reaperScript,
   startDetachedTestModeFleet,
   startLiveDetachedSupervisor,
   startRenewalOwner,
-  trackedLeaseRoots,
   waitForLiveChildPids,
   withLeaseEnv,
 } from './testmode-fleet-reaper.shared.js';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
-afterEach(() => {
-  for (const leaseRoot of trackedLeaseRoots.splice(0)) {
-    try {
-      const indexPath = path.join(leaseRoot, 'index.json');
-      if (fs.existsSync(indexPath)) {
-        const index = JSON.parse(fs.readFileSync(indexPath, 'utf8')) as { leaseIds?: string[] };
-        for (const leaseId of index.leaseIds ?? []) {
-          runReaperCli('teardown', { LeaseId: leaseId }, {
-            OPK_TESTMODE_LEASE_ROOT: leaseRoot,
-            AO_TESTMODE_FLEET_LANE_LEASE_ID: leaseId,
-            AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
-          });
-        }
-      }
-    } catch {
-      // best-effort lane cleanup
-    }
-  }
-  cleanupSupervisorTests();
-});
+registerFleetReaperAfterEach();
 
 describe('Issue #710 live fleet inert (AC#4)', () => {
   it.skipIf(process.platform === 'win32')(
