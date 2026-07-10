@@ -3929,7 +3929,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:68cc261502198b9a801f0a63722973dbe5b518e69b8523f55bf81d13c550adaf",
+      "hashPinnedSourceHash": "sha256:32f73a5f929eea915b0c75a934e684a679f60ab59ec1569733a494fcd06cfb96",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
         "line": 170,
@@ -3939,10 +3939,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-173",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-178",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 173
+        "line": 178
       },
       "callee": {
         "kind": "other-external",
@@ -3954,20 +3954,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:d02f5f2e3645cb1da494cd9ac8f82f0817c16301e7a44db4ec53ccf0e4f95ae4",
+      "hashPinnedSourceHash": "sha256:58e9afbd37c93597eaabebe2836b478a313c1cce91864206cca63c93647132be",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 173,
+        "line": 178,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-179",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-184",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 179
+        "line": 184
       },
       "callee": {
         "kind": "other-external",
@@ -3982,17 +3982,17 @@
       "hashPinnedSourceHash": "sha256:d3567b14d9254fe78b86d72bb90a327b9a68f8f916700e2756079db0faad8518",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 179,
+        "line": 184,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-260",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-265",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 260
+        "line": 265
       },
       "callee": {
         "kind": "other-external",
@@ -4007,17 +4007,17 @@
       "hashPinnedSourceHash": "sha256:96e6b5481f3e017f3a9843dc659ad788659aeae6c46632c9f1b49e4ede74e0ae",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 260,
+        "line": 265,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-275",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-280",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 275
+        "line": 280
       },
       "callee": {
         "kind": "other-external",
@@ -4032,17 +4032,17 @@
       "hashPinnedSourceHash": "sha256:9c547cbdb9a94c7fc5a6983d12b66e8301e97b67c1b6de50dc192dc7969fc0aa",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 275,
+        "line": 280,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-278",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-283",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 278
+        "line": 283
       },
       "callee": {
         "kind": "other-external",
@@ -4057,17 +4057,17 @@
       "hashPinnedSourceHash": "sha256:e710e7ec70b80240ce69c143bc81fc29bf18e946cc07d7650253f74985594ecb",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 278,
+        "line": 283,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-295",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-300",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 295
+        "line": 300
       },
       "callee": {
         "kind": "other-external",
@@ -4082,17 +4082,17 @@
       "hashPinnedSourceHash": "sha256:ad2166d21cb87d33b3d61c9eb72cdb2707d3d46e89ef194c0cc14e61a85e1064",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 295,
+        "line": 300,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-298",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-303",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 298
+        "line": 303
       },
       "callee": {
         "kind": "other-external",
@@ -4107,17 +4107,17 @@
       "hashPinnedSourceHash": "sha256:6eab8850c758ff419552439ac56888bf2011deedd976dc3ed100166948fba3f4",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 298,
+        "line": 303,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-299",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-304",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 299
+        "line": 304
       },
       "callee": {
         "kind": "other-external",
@@ -4132,32 +4132,7 @@
       "hashPinnedSourceHash": "sha256:e693db8eab67000c6a9c871c142fe11d85e795fbf4b2bddc176fd01d7db20299",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 299,
-        "patternIds": [
-          "ps-call-op"
-        ]
-      }
-    },
-    {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-368",
-      "caller": {
-        "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 368
-      },
-      "callee": {
-        "kind": "other-external",
-        "identity": "per-callsite (discovery census)"
-      },
-      "calleeContractSourceClass": "allowlist-only",
-      "coverageKind": "allowlist-debt",
-      "allowlistDebt": {
-        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
-        "followUpOwner": "future-draft-callee-validators"
-      },
-      "hashPinnedSourceHash": "sha256:6abe575eaaf67550ea7b779805d27415cf746a55eb1545d95a12e97109a293bd",
-      "discoveryMatch": {
-        "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 368,
+        "line": 304,
         "patternIds": [
           "ps-call-op"
         ]
@@ -4179,7 +4154,7 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:495da886a46d9b233cb5256bd31dae5a7a670ce842c74382ba8320640e774869",
+      "hashPinnedSourceHash": "sha256:6abe575eaaf67550ea7b779805d27415cf746a55eb1545d95a12e97109a293bd",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
         "line": 373,
@@ -4189,10 +4164,35 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-391",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-378",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 391
+        "line": 378
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:495da886a46d9b233cb5256bd31dae5a7a670ce842c74382ba8320640e774869",
+      "discoveryMatch": {
+        "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+        "line": 378,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-396",
+      "caller": {
+        "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
+        "line": 396
       },
       "callee": {
         "kind": "other-external",
@@ -4207,17 +4207,17 @@
       "hashPinnedSourceHash": "sha256:1fbe77b61befc3c0dbd27a85b8593492fb59441967a7ce717e882505f6723147",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 391,
+        "line": 396,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-399",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-404",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 399
+        "line": 404
       },
       "callee": {
         "kind": "other-external",
@@ -4232,17 +4232,17 @@
       "hashPinnedSourceHash": "sha256:843923ff421faf449f981b3266468517c90d34e1d51ab25260dc2f72d7ebce26",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 399,
+        "line": 404,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-428",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-433",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 428
+        "line": 433
       },
       "callee": {
         "kind": "other-external",
@@ -4257,17 +4257,17 @@
       "hashPinnedSourceHash": "sha256:9c233cc2086a96f07c9f8a5e64af2a102600331c533603a681b5e61f16c7ff3b",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 428,
+        "line": 433,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-578",
+      "rowId": "site-scripts-lib-Invoke-ReviewReadyReportStateSeed-ps1-583",
       "caller": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 578
+        "line": 583
       },
       "callee": {
         "kind": "other-external",
@@ -4282,7 +4282,7 @@
       "hashPinnedSourceHash": "sha256:a0c3ebb6effe583c2fed515d709024f99ef907c90370fa6dbe5a6d2c7aa99137",
       "discoveryMatch": {
         "file": "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
-        "line": 578,
+        "line": 583,
         "patternIds": [
           "ps-call-op"
         ]
