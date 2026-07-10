@@ -74,7 +74,7 @@ describe('test runtime budget guard (Issue #488)', () => {
           {
             name: 'scripts/setup-heavy.test.ts',
             startTime: 1_000,
-            endTime: 501_000,
+            endTime: 516_000,
             assertionResults: [
               { ancestorTitles: ['suite'], title: 'fast case', duration: 40, status: 'passed' },
             ],
@@ -88,7 +88,7 @@ describe('test runtime budget guard (Issue #488)', () => {
     });
     rmSync(dir, { recursive: true, force: true });
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/slow file: scripts\/setup-heavy\.test\.ts took 500000ms file wall time/i);
+    expect(result.stderr).toMatch(/slow file: scripts\/setup-heavy\.test\.ts took 515000ms file wall time/i);
     expect(result.stderr).not.toMatch(/slow test:/);
   });
 
