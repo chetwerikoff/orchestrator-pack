@@ -27,25 +27,25 @@ export const BINDING_SOURCE_BACKFILL_RESOLVER = 'backfill_resolver';
 const COLLISION_REASON = 'binding_collision';
 const SUPERSEDED_REASON = 'binding_superseded';
 
-function numberOrZero(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+function asFiniteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function normalizeString(value) {
+function trimText(value) {
   return String(value ?? '').trim();
 }
 
 function normalizeRepoSlug(value) {
-  return normalizeString(value).toLowerCase();
+  return trimText(value).toLowerCase();
 }
 
 function getSessionIdentifier(session) {
-  return normalizeString(session?.sessionId ?? session?.id ?? session?.name) || null;
+  return trimText(session?.sessionId ?? session?.id ?? session?.name) || null;
 }
 
 function findSessionById(sessions, sessionId) {
-  const target = normalizeString(sessionId);
+  const target = trimText(sessionId);
   if (!target) {
     return null;
   }
@@ -54,15 +54,15 @@ function findSessionById(sessions, sessionId) {
 
 function parseIssueNumberFromEnv(env = process.env) {
   for (const key of ['AO_ISSUE_NUMBER', 'GITHUB_ISSUE_NUMBER']) {
-    const parsed = numberOrZero(env[key]);
+    const parsed = asFiniteNumber(env[key]);
     if (parsed > 0) {
       return parsed;
     }
   }
-  const issueRef = normalizeString(env.AO_ISSUE_ID ?? env.GITHUB_ISSUE);
+  const issueRef = trimText(env.AO_ISSUE_ID ?? env.GITHUB_ISSUE);
   if (issueRef) {
     const bare = issueRef.replace(/^#/, '');
-    const parsed = numberOrZero(bare);
+    const parsed = asFiniteNumber(bare);
     if (parsed > 0) {
       return parsed;
     }
@@ -92,7 +92,7 @@ function resolveRepoSlugFromEnvOrCwd(env = process.env, cwd = process.cwd()) {
 }
 
 function isTerminalOpenPr(pr) {
-  const state = normalizeString(pr?.state).toLowerCase();
+  const state = trimText(pr?.state).toLowerCase();
   return state === 'closed' || state === 'merged' || pr?.merged === true || pr?.closed === true;
 }
 
@@ -100,7 +100,7 @@ function bindingRecordIsLive(record, openPrs = [], openListAuthoritative = false
   if (!record || record.superseded) {
     return false;
   }
-  const prNumber = numberOrZero(record.prNumber);
+  const prNumber = asFiniteNumber(record.prNumber);
   if (prNumber <= 0) {
     return false;
   }
@@ -111,7 +111,7 @@ function bindingRecordIsLive(record, openPrs = [], openListAuthoritative = false
   }
   const prRow = toArray(openPrs).find((pr) => {
     const prRepo = normalizeRepoSlug(pr?.repoSlug ?? pr?.repository ?? recordRepo);
-    return numberOrZero(pr?.number) === prNumber && (!scopeRepo || !prRepo || prRepo === scopeRepo);
+    return asFiniteNumber(pr?.number) === prNumber && (!scopeRepo || !prRepo || prRepo === scopeRepo);
   });
   if (!prRow) {
     return openListAuthoritative ? false : true;
@@ -182,11 +182,11 @@ export function writePrSessionBindingCacheFile(path, store) {
 }
 
 export function buildSessionBindingKey(repoSlug, sessionId) {
-  return `${normalizeRepoSlug(repoSlug)}|session:${normalizeString(sessionId)}`;
+  return `${normalizeRepoSlug(repoSlug)}|session:${trimText(sessionId)}`;
 }
 
 export function buildPrBindingKey(repoSlug, prNumber) {
-  return `${normalizeRepoSlug(repoSlug)}|pr:${numberOrZero(prNumber)}`;
+  return `${normalizeRepoSlug(repoSlug)}|pr:${asFiniteNumber(prNumber)}`;
 }
 
 function buildBindingRecord({
@@ -201,9 +201,9 @@ function buildBindingRecord({
 }) {
   return {
     schemaVersion: PR_SESSION_BINDING_CACHE_SCHEMA_VERSION,
-    sessionId: normalizeString(sessionId),
-    prNumber: numberOrZero(prNumber),
-    issueNumber: numberOrZero(issueNumber) > 0 ? numberOrZero(issueNumber) : null,
+    sessionId: trimText(sessionId),
+    prNumber: asFiniteNumber(prNumber),
+    issueNumber: asFiniteNumber(issueNumber) > 0 ? asFiniteNumber(issueNumber) : null,
     headSha: normalizeSha(headSha) || null,
     repoSlug: normalizeRepoSlug(repoSlug),
     source,
@@ -230,13 +230,13 @@ function enforceRecordCap(store, maxRecords, nowMs) {
     return;
   }
   entries
-    .sort((a, b) => numberOrZero(a[1]?.lastUpdatedMs) - numberOrZero(b[1]?.lastUpdatedMs))
+    .sort((a, b) => asFiniteNumber(a[1]?.lastUpdatedMs) - asFiniteNumber(b[1]?.lastUpdatedMs))
     .slice(0, entries.length - maxRecords)
     .forEach(([key]) => {
       delete store.records[key];
     });
   store.lastUpdatedMs = nowMs;
-  store.generation = numberOrZero(store.generation) + 1;
+  store.generation = asFiniteNumber(store.generation) + 1;
 }
 
 /**
@@ -244,16 +244,16 @@ function enforceRecordCap(store, maxRecords, nowMs) {
  * @param {{ claimedSessionId?: string, cwd?: string, sessions?: Array<Record<string, unknown>> }} [options]
  */
 export function provePushRegisterWorkerIdentity(env = process.env, options = {}) {
-  const sessionId = normalizeString(env.AO_WORKER_SESSION_ID ?? env.AO_SESSION_ID);
+  const sessionId = trimText(env.AO_WORKER_SESSION_ID ?? env.AO_SESSION_ID);
   if (!sessionId) {
     return { ok: false, reason: 'push_register_missing_session_identity' };
   }
-  const claimed = normalizeString(options.claimedSessionId);
+  const claimed = trimText(options.claimedSessionId);
   if (claimed && claimed !== sessionId) {
     return { ok: false, reason: 'push_register_session_identity_mismatch' };
   }
-  const child = normalizeString(env.AO_SIDE_PROCESS_CHILD_ID);
-  const consumer = normalizeString(env.GH_GOVERNOR_CONSUMER);
+  const child = trimText(env.AO_SIDE_PROCESS_CHILD_ID);
+  const consumer = trimText(env.GH_GOVERNOR_CONSUMER);
   if (child && !/worker|interactive|orchestrator/i.test(consumer) && env.GH_GOVERNOR_LANE !== 'interactive') {
     return { ok: false, reason: 'push_register_non_worker_context' };
   }
@@ -266,7 +266,7 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
     if (!session) {
       return { ok: false, reason: 'push_register_session_not_found' };
     }
-    const role = normalizeString(session.role).toLowerCase();
+    const role = trimText(session.role).toLowerCase();
     if (role && role !== 'worker' && role !== 'coding') {
       return { ok: false, reason: 'push_register_non_worker_role' };
     }
@@ -279,8 +279,8 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
  * @param {Record<string, unknown>} store
  */
 export function registerPrSessionBindingRecord(store, record, nowMs) {
-  const sessionId = normalizeString(record.sessionId);
-  const prNumber = numberOrZero(record.prNumber);
+  const sessionId = trimText(record.sessionId);
+  const prNumber = asFiniteNumber(record.prNumber);
   const repoSlug = normalizeRepoSlug(record.repoSlug);
   if (!sessionId || prNumber <= 0 || !repoSlug) {
     return { ok: false, reason: 'invalid_binding_record' };
@@ -294,8 +294,8 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
 
   const samePair =
     existingSession
-    && numberOrZero(existingSession.prNumber) === prNumber
-    && normalizeString(existingSession.sessionId) === sessionId
+    && asFiniteNumber(existingSession.prNumber) === prNumber
+    && trimText(existingSession.sessionId) === sessionId
     && !existingSession.superseded;
 
   if (samePair) {
@@ -303,7 +303,7 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
       sessionId,
       prNumber,
       repoSlug,
-      issueNumber: numberOrZero(record.issueNumber ?? existingSession.issueNumber),
+      issueNumber: asFiniteNumber(record.issueNumber ?? existingSession.issueNumber),
       headSha: normalizeSha(record.headSha ?? existingSession.headSha),
       source: record.source,
       nowMs,
@@ -311,7 +311,7 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
     store.records[sessionKey] = merged;
     store.records[prKey] = merged;
     store.lastUpdatedMs = nowMs;
-    store.generation = numberOrZero(store.generation) + 1;
+    store.generation = asFiniteNumber(store.generation) + 1;
     return { ok: true, reason: 'converged' };
   }
 
@@ -320,12 +320,12 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
 
   const sessionCollision =
     sessionLive
-    && (normalizeString(existingSession.sessionId) !== sessionId
-      || numberOrZero(existingSession.prNumber) !== prNumber);
+    && (trimText(existingSession.sessionId) !== sessionId
+      || asFiniteNumber(existingSession.prNumber) !== prNumber);
   const prCollision =
     prLive
-    && (normalizeString(existingPr.sessionId) !== sessionId
-      || numberOrZero(existingPr.prNumber) !== prNumber);
+    && (trimText(existingPr.sessionId) !== sessionId
+      || asFiniteNumber(existingPr.prNumber) !== prNumber);
 
   if (sessionCollision || prCollision) {
     return {
@@ -340,7 +340,7 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
     const oldPrKey = buildPrBindingKey(repoSlug, existingSession.prNumber);
     markRecordSuperseded(store, oldPrKey, nowMs);
   }
-  if (existingPr && !prLive && normalizeString(existingPr.sessionId) !== sessionId) {
+  if (existingPr && !prLive && trimText(existingPr.sessionId) !== sessionId) {
     markRecordSuperseded(store, prKey, nowMs);
     const oldSessionKey = buildSessionBindingKey(repoSlug, existingPr.sessionId);
     markRecordSuperseded(store, oldSessionKey, nowMs);
@@ -358,8 +358,8 @@ export function registerPrSessionBindingRecord(store, record, nowMs) {
   store.records[sessionKey] = next;
   store.records[prKey] = next;
   store.lastUpdatedMs = nowMs;
-  store.generation = numberOrZero(store.generation) + 1;
-  enforceRecordCap(store, numberOrZero(record.maxRecords) || DEFAULT_BINDING_MAX_RECORDS, nowMs);
+  store.generation = asFiniteNumber(store.generation) + 1;
+  enforceRecordCap(store, asFiniteNumber(record.maxRecords) || DEFAULT_BINDING_MAX_RECORDS, nowMs);
   return { ok: true, reason: existingSession || existingPr ? SUPERSEDED_REASON : 'registered' };
 }
 
@@ -392,7 +392,7 @@ export function evictPrSessionBindings({
 }) {
   let removed = 0;
   for (const [key, record] of Object.entries(store.records ?? {})) {
-    const stale = numberOrZero(record?.lastUpdatedMs) > 0 && nowMs - numberOrZero(record.lastUpdatedMs) > ttlMs;
+    const stale = asFiniteNumber(record?.lastUpdatedMs) > 0 && nowMs - asFiniteNumber(record.lastUpdatedMs) > ttlMs;
     const live = bindingRecordIsLive(record, openPrs, openListAuthoritative, repoSlug);
     if (record.superseded || stale || (openListAuthoritative && !live)) {
       delete store.records[key];
@@ -401,7 +401,7 @@ export function evictPrSessionBindings({
   }
   if (removed > 0) {
     store.lastUpdatedMs = nowMs;
-    store.generation = numberOrZero(store.generation) + 1;
+    store.generation = asFiniteNumber(store.generation) + 1;
   }
   enforceRecordCap(store, maxRecords, nowMs);
   return { removed, recordCount: Object.keys(store.records ?? {}).length };
@@ -509,7 +509,7 @@ export function resolvePrSessionBindingForConsumer({
   writeBackfill = true,
   isLive,
 }) {
-  const targetPr = numberOrZero(prNumber);
+  const targetPr = asFiniteNumber(prNumber);
   if (targetPr <= 0) {
     return {
       sessionId: null,
@@ -588,11 +588,11 @@ export function parsePrNumberFromGhPrCreateOutput(stdout = '', stderr = '') {
   const combined = `${stdout}\n${stderr}`;
   const urlMatch = combined.match(/https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/i);
   if (urlMatch?.[1]) {
-    return numberOrZero(urlMatch[1]);
+    return asFiniteNumber(urlMatch[1]);
   }
   const bareMatch = combined.match(/pull request #(\d+)/i);
   if (bareMatch?.[1]) {
-    return numberOrZero(bareMatch[1]);
+    return asFiniteNumber(bareMatch[1]);
   }
   return 0;
 }

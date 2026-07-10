@@ -9,7 +9,7 @@ param(
   [string]$Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 )
 
-$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Invoke-PackStaticGuardExit.ps1')
 
 $cacheModule = Join-Path $Root 'docs/pr-session-binding-cache.mjs'
 $cacheTest = Join-Path $Root 'scripts/pr-session-binding-cache.test.ts'
@@ -30,35 +30,16 @@ $consumerModules = @(
 $requiredImport = "from './pr-session-binding-cache.mjs'"
 $requiredSymbol = 'resolvePrSessionBindingForConsumer'
 
-$forbiddenPatterns = @(
-  'daemonPrDiscovery',
-  'discoverPrFromDaemon',
-  'agent-report-audit',
-  '\.sqlite',
-  'ndjson'
-)
-
-$failures = [System.Collections.Generic.List[string]]::new()
-
-foreach ($rel in $consumerModules) {
-  $path = Join-Path $Root $rel
-  if (-not (Test-Path -LiteralPath $path)) {
-    $failures.Add("missing consumer module: $rel") | Out-Null
-    continue
-  }
-
-  $text = Get-Content -LiteralPath $path -Raw
+$failures = Invoke-ConsumerModuleStaticGuard -Root $Root -ConsumerModules $consumerModules -ValidateModule {
+  param($rel, $text, $failures)
   if ($text -notlike "*$requiredImport*") {
     $failures.Add("$rel must import $requiredImport") | Out-Null
   }
   if ($text -notlike "*$requiredSymbol*") {
     $failures.Add("$rel must reference $requiredSymbol") | Out-Null
   }
-
-  foreach ($pattern in $forbiddenPatterns) {
-    if ($text -match $pattern) {
-      $failures.Add("$rel must not contain forbidden daemon/store pattern: $pattern") | Out-Null
-    }
+  if ($text -match 'daemonPrDiscovery|discoverPrFromDaemon|agent-report-audit') {
+    $failures.Add("$rel must not call daemon PR-discovery helpers for binding resolution") | Out-Null
   }
 }
 
@@ -76,12 +57,4 @@ else {
   }
 }
 
-if ($failures.Count -gt 0) {
-  foreach ($item in $failures) {
-    Write-Host "[FAIL] $item"
-  }
-  exit 1
-}
-
-Write-Host '[PASS] pr-session-binding cache-first sole path (Issue #719)'
-exit 0
+Complete-PackStaticGuard -Failures $failures -PassMessage '[PASS] pr-session-binding cache-first sole path (Issue #719)'

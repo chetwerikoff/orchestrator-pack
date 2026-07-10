@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createDefaultPrSessionBindingCache, writePrSessionBindingCacheFile } from '../docs/pr-session-binding-cache.mjs';
 import {
   DEFAULT_CONFIRMATION_WINDOW_MS,
   DEFAULT_MAX_REDELIVERIES,
@@ -22,6 +24,20 @@ import {
   sessionOwnsRunHead,
   type DeliveryConfirmAction,
 } from '../docs/review-finding-delivery-confirm.mjs';
+
+let isolatedBindingCachePath = '';
+
+beforeEach(() => {
+  isolatedBindingCachePath = path.join(
+    mkdtempSync(path.join(tmpdir(), 'delivery-confirm-binding-cache-')),
+    'cache.json',
+  );
+  process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
+  writePrSessionBindingCacheFile(
+    isolatedBindingCachePath,
+    createDefaultPrSessionBindingCache(),
+  );
+});
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

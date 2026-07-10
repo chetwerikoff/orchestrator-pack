@@ -18,8 +18,13 @@ import {
   sessionOwnsRunHead,
   toArray,
 } from './review-trigger-reconcile.mjs';
-import { resolveBindingRepoSlug, resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
-export { resolvePrSessionBindingForConsumer };
+import {
+  lookupBindingByPr,
+  readPrSessionBindingCacheFile,
+  resolveBindingRepoSlug,
+  resolvePrSessionBindingCachePath,
+} from './pr-session-binding-cache.mjs';
+export { resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
 import {
   isPendingWorkerDeliveryConfirmation,
 } from './review-producer-contract.mjs';
@@ -165,18 +170,13 @@ export function isLinkedSessionLiveOwner(run, sessions, openPrs, options = {}) {
 
   const headSha = String(run?.targetSha ?? '');
   const repoSlug = resolveBindingRepoSlug(options, openPrs);
-  const binding = resolvePrSessionBindingForConsumer({
+  const cachePath = options.cachePath ?? resolvePrSessionBindingCachePath();
+  const cached = lookupBindingByPr(
+    readPrSessionBindingCacheFile(cachePath),
     repoSlug,
     prNumber,
-    headSha,
-    sessions,
-    openPrs,
-    sessionDetailsById: options.sessionDetailsById ?? {},
-    cachePath: options.cachePath,
-    writeBackfill: options.writeBackfill !== false,
-    isLive: (row) => isLiveWorkerSession(row),
-  });
-  if (binding.failClosed || !binding.sessionId || binding.sessionId !== linkedId) {
+  );
+  if (cached?.sessionId && cached.sessionId !== linkedId) {
     return false;
   }
 

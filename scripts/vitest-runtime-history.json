@@ -186,7 +186,8 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": 45000,
     "tests/agents-md-relocation.test.ts": 45000,
     "tests/agents-md-size-budget.test.ts": 45000,
-    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000
+    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000,
+    "scripts/pr-session-binding-cache.test.ts": 120000
   },
   "contentSha": {
     "plugins/_shared/tests/declaration_schema.test.ts": "e5fc7c206705715762b3cbdab6d9d7d8e0f87b4d2613d90742d72c7e28ab2f59",
@@ -325,7 +326,7 @@
     "scripts/review-start-supervised-gh-pid.test.ts": "ece568f731961a31b1736c5f55847a5f34a20a56d7fc4597dd6a8e3b6e0efb60",
     "scripts/review-status-consumer.test.ts": "9ed3a4d089f262fdf85f023d77d6bea05e105a92f0678e43e849e46c1a682fb4",
     "scripts/review-stuck-run-reaper.test.ts": "9279583494196a204a066133034f8506c18d5c752cf18c9adb271e4d54286006",
-    "scripts/review-trigger-reconcile.test.ts": "2b8da4e00d468f9757866bd0129124fb0d770a0e7f286782a92ce5b9d0227ebc",
+    "scripts/review-trigger-reconcile.test.ts": "aec2f894d288bc5237f6c768f0c9ba41e6818fc56bc3af8854d49425c34d91dd",
     "scripts/review-trigger-reeval.test.ts": "8b31ddf122c69bc3a0a8107ffd8d7eb334a1618d121b4a4316f2bbac6517f3eb",
     "scripts/review-wake-trigger.test.ts": "64176ba0f613b76c1a696b2f0820ae7736c6fb5fa614af61eb72b84dc63ea3c4",
     "scripts/reviewer-contract-mapping.test.ts": "6fec728ec33cd3bceea5ef9a05e554cfd489b6218dd428e5e162dbcd36d52685",
@@ -374,7 +375,8 @@
     "tests/agents-md-relocation.test.ts": "b87abdbf7f34383103b97c21cbc7fefa3ea51e27eae76165401ddcf57861d0b9",
     "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3",
     "scripts/orchestrator-wake-supervisor.test.ts": "7242ebe0c142ff54ec904b0e7646af5a8f9a12be31ada0f6bf1a55945b60320a",
-    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": "da3de5eb04509c6b4cc45c4eeb042f23ca4bcbf127f896b46a5034c2dfca3760"
+    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": "da3de5eb04509c6b4cc45c4eeb042f23ca4bcbf127f896b46a5034c2dfca3760",
+    "scripts/pr-session-binding-cache.test.ts": "01e5af3484fe789c11fe6260b8a9a3a337f8e20213ea1d31dc9e6ceab3c07f25"
   },
   "provenance": {},
   "dataChangedAt": "2026-07-10T03:00:00Z"
