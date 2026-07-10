@@ -333,7 +333,7 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
             }
         }
         else {
-            Write-Host "  discovered: $($plan.discovered.Count) files; light: $($plan.light.Count); heavy: $($plan.heavy.Count)"
+            Write-Host "  discovered: $($plan.discovered.Count) files; light: $($plan.light.Count); heavy: $($plan.heavy.Count); parked: $($plan.parked.Count)"
             $union = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             $duplicates = [System.Collections.Generic.List[string]]::new()
             foreach ($file in $plan.light) {
@@ -350,6 +350,9 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
                 }
             }
             foreach ($file in $plan.discovered) {
+                if ($plan.parked -contains $file) {
+                    continue
+                }
                 if (-not $union.Contains($file)) {
                     Add-Fail "lane union missing discovered Vitest file: $file"
                 }
@@ -366,10 +369,13 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
                 Add-Fail "heavy shard assignment count ($($plan.heavyShards.Count)) does not match derived topology ($derivedHeavyShardCount)"
             }
 
-            # Negative fixture: heavy file cannot be classified light without review.
+            # Negative fixture: wall-clock fleet e2e must be parked out of PR lanes (#694).
             $negativeHeavy = 'scripts/orchestrator-wake-supervisor.test.ts'
             if ($plan.config.classification.$negativeHeavy -eq 'light') {
                 Add-Fail "negative fixture: $negativeHeavy must not be classified light"
+            }
+            if ($plan.config.classification.$negativeHeavy -ne 'parked') {
+                Add-Fail "negative fixture: $negativeHeavy must be classified parked (wall-clock e2e → #694)"
             }
 
             # Negative fixture: synthetic unclassified file must fail plan validation.

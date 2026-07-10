@@ -99,9 +99,10 @@
     "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts": "heavy",
+    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": "light",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "heavy",
     "scripts/orchestrator-wake-supervisor-startup.test.ts": "heavy",
-    "scripts/orchestrator-wake-supervisor.test.ts": "heavy",
+    "scripts/orchestrator-wake-supervisor.test.ts": "parked",
     "scripts/pr-scope-check.test.ts": "heavy",
     "scripts/publish-issue-body-sync.test.ts": "heavy",
     "scripts/reaction-config-messages.test.ts": "light",
@@ -177,6 +178,7 @@
     "scripts/testmode-fleet-reaper.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/trust-ao-worktree.test.ts": "light",
+    "scripts/cursor-agent-tui-shim.test.ts": "light",
     "scripts/worker-iteration-cycle.test.ts": "heavy",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
     "scripts/worker-nudge-gate.test.ts": "heavy",
@@ -190,6 +192,13 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "tests/agents-md-relocation.test.ts": "light",
     "tests/agents-md-size-budget.test.ts": "light"
+  },
+  "parkedWallclockE2e": {
+    "trackingIssue": 694,
+    "trackingNote": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md (#694 wall-clock CI stage)",
+    "files": [
+      "scripts/orchestrator-wake-supervisor.test.ts"
+    ]
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
