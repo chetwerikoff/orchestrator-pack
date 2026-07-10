@@ -83,6 +83,8 @@ export declare function registerPrSessionBindingRecord(
     issueNumber?: number;
     headSha?: string;
     source: BindingSource;
+    openPrs?: Array<Record<string, unknown>>;
+    maxRecords?: number;
   },
   nowMs: number,
 ): { ok: boolean; reason?: string; diagnostic?: string };

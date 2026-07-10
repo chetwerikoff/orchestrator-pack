@@ -2,10 +2,10 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isLiveWorkerSession } from '../docs/review-reconcile-primitives.mjs';
 import {
   BINDING_SOURCE_BACKFILL_RESOLVER,
   BINDING_SOURCE_PUSH_REGISTER,
+  type BindingSource,
   createDefaultPrSessionBindingCache,
   evictPrSessionBindings,
   lookupBindingByPr,
@@ -19,6 +19,11 @@ import {
   writePrSessionBindingCacheFile,
 } from '../docs/pr-session-binding-cache.mjs';
 import { resolveHeadOwningWorkerSessionId } from '../docs/review-trigger-reconcile.mjs';
+
+function isLiveWorkerSession(session: Record<string, unknown>) {
+  const status = String(session?.status ?? '').toLowerCase();
+  return !['terminated', 'dead', 'completed', 'cancelled'].includes(status);
+}
 
 const repoSlug = 'org/orchestrator-pack';
 const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
@@ -48,7 +53,7 @@ function seedStore(record: {
   prNumber: number;
   headSha?: string;
   issueNumber?: number;
-  source?: string;
+  source?: BindingSource;
 }) {
   const store = createDefaultPrSessionBindingCache();
   registerPrSessionBindingRecord(
