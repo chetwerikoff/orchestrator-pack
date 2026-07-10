@@ -7307,10 +7307,85 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-30",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-22",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 30
+        "line": 22
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:f27fd43882608d612d553cbfd57e28dd80a4362411b6de748515d702be79dbad",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 22,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-46",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 46
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:e7cc417d3c702803fcedb4205b4adb6b91f9cbfd89d62638ddb96d4280a51fdb",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 46,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-62",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 62
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:121583966867e306e1fb44472622a3d7cf5a3534a98c502017bd9a6153092b00",
+      "discoveryMatch": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 62,
+        "patternIds": [
+          "execFileSync"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-90",
+      "caller": {
+        "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+        "line": 90
       },
       "callee": {
         "kind": "other-external",
@@ -7325,17 +7400,17 @@
       "hashPinnedSourceHash": "sha256:a3a84253a0546bdd768e726e172793998b3dce047f6fe91007a27a31547e3177",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 30,
+        "line": 90,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-41",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-101",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 41
+        "line": 101
       },
       "callee": {
         "kind": "other-external",
@@ -7350,17 +7425,17 @@
       "hashPinnedSourceHash": "sha256:249cba9487890b12443becd13e084301f363eee45d665a206b9ca4aa57e1ca30",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 41,
+        "line": 101,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-55",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-115",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 55
+        "line": 115
       },
       "callee": {
         "kind": "other-external",
@@ -7375,17 +7450,17 @@
       "hashPinnedSourceHash": "sha256:14dc7e08362fe8cc610b5547a62d896685324e2ffb13540335fc0badcfa5e9cf",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 55,
+        "line": 115,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-66",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-126",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 66
+        "line": 126
       },
       "callee": {
         "kind": "other-external",
@@ -7400,17 +7475,17 @@
       "hashPinnedSourceHash": "sha256:32758df664b54fc7fd1141dd7d128bc975f122d763e7d8ce514b140127fbe8cf",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 66,
+        "line": 126,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-76",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-136",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 76
+        "line": 136
       },
       "callee": {
         "kind": "other-external",
@@ -7425,17 +7500,17 @@
       "hashPinnedSourceHash": "sha256:0b7770b7dc0d60bf1481d713198175793fbb18646cb19167b1c8ba7ac937b64c",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 76,
+        "line": 136,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-117",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-203",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 117
+        "line": 203
       },
       "callee": {
         "kind": "other-external",
@@ -7450,7 +7525,7 @@
       "hashPinnedSourceHash": "sha256:ba83e83d8fbefe6cf5b4c2177161c28491c88dd553ecf74419b3737231329b45",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 117,
+        "line": 203,
         "patternIds": [
           "execFileSync"
         ]

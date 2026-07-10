@@ -14,11 +14,71 @@ const RPC_FIXTURE_PREFIX = 'scripts/fixtures/supervisor-test-waits-heavy-lane-rp
 const RPC_ARTIFACT_BINDING_SCOPE_RE =
   /^scripts\/(orchestrator-wake-supervisor|supervisor-fault-boundary|supervisor-recovery\.test-helpers|lib\/supervisor-test-wait-inventory|lib\/validate-supervisor-heavy-lane-rpc-artifacts|lib\/bind-supervisor-heavy-lane-rpc-metadata|lib\/vitest-ci-lanes|check-supervisor-test-wait-inventory|vitest-runtime-history\.json)/;
 
+function commitObjectExists(commitSha, repoRootOverride) {
+  if (!commitSha || !FULL_SHA_RE.test(commitSha)) {
+    return false;
+  }
+  try {
+    execFileSync('git', ['cat-file', '-e', `${commitSha}^{commit}`], {
+      cwd: repoRootOverride,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveGithubEventPrHeadSha(repoRootOverride) {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath || !existsSync(eventPath)) {
+    return null;
+  }
+  try {
+    const head = loadJsonFile(eventPath)?.pull_request?.head?.sha;
+    return head && FULL_SHA_RE.test(head) ? head : null;
+  } catch {
+    return null;
+  }
+}
+
+function listBindingScopePaths(repoRootOverride) {
+  return execFileSync('git', ['ls-files'], {
+    cwd: repoRootOverride,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((path) => path && RPC_ARTIFACT_BINDING_SCOPE_RE.test(path));
+}
+
+function bindingScopeMatchesCaptureWorktree(repoRootOverride, captureSha) {
+  if (!commitObjectExists(captureSha, repoRootOverride)) {
+    return null;
+  }
+  for (const path of listBindingScopePaths(repoRootOverride)) {
+    let atCapture;
+    try {
+      atCapture = execFileSync('git', ['show', `${captureSha}:${path}`], {
+        cwd: repoRootOverride,
+      });
+    } catch {
+      return false;
+    }
+    const worktree = readFileSync(join(repoRootOverride, path));
+    if (!atCapture.equals(worktree)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function resolvePrHeadSha(repoRootOverride = repoRoot) {
   for (const candidate of [
     process.env.SUPERVISOR_RPC_BIND_HEAD,
     process.env.PR_HEAD_SHA,
     process.env.AO_PR_HEAD_SHA,
+    resolveGithubEventPrHeadSha(repoRootOverride),
   ]) {
     if (candidate && FULL_SHA_RE.test(candidate)) {
       return candidate;
@@ -108,7 +168,33 @@ export function resolveExpectedCaptureSha(repoRootOverride = repoRoot) {
     cliFail('RPC manifest missing captureCommitSha');
   }
 
-  const changed = pathsChangedInCommit(head, repoRootOverride);
+  if (!commitObjectExists(head, repoRootOverride)) {
+    if (capture === head) {
+      return capture;
+    }
+    const worktreeMatch = bindingScopeMatchesCaptureWorktree(repoRootOverride, capture);
+    if (worktreeMatch === true || (worktreeMatch === null && isPrValidationContext())) {
+      return capture;
+    }
+    cliFail(
+      `RPC captureCommitSha ${capture} does not match binding-scope worktree at PR head ${head}; refresh heavy-lane RPC artifacts`,
+    );
+  }
+
+  let changed;
+  try {
+    changed = pathsChangedInCommit(head, repoRootOverride);
+  } catch {
+    if (bindingScopeTreeMatches(repoRootOverride, capture, head)) {
+      return capture;
+    }
+    if (capture === head) {
+      return head;
+    }
+    cliFail(
+      `RPC captureCommitSha ${capture} does not match binding-scope tree at HEAD ${head}; refresh heavy-lane RPC artifacts`,
+    );
+  }
   const changedFixtures = changed.filter((path) => path.startsWith(RPC_FIXTURE_PREFIX));
   const changedNonFixtures = changed.filter((path) => !path.startsWith(RPC_FIXTURE_PREFIX));
 
@@ -154,6 +240,15 @@ export function assertRpcMetadataCommitSha(commitSha, expectedCaptureSha, passId
 
   const head = resolveBindingHead(repoRootOverride);
   if (commitSha !== head) {
+    if (!commitObjectExists(head, repoRootOverride) || !commitObjectExists(commitSha, repoRootOverride)) {
+      const worktreeMatch = bindingScopeMatchesCaptureWorktree(repoRootOverride, commitSha);
+      if (worktreeMatch === false) {
+        cliFail(
+          `${passId}: RPC artifacts bound to ${commitSha} but binding-scope worktree no longer matches capture; refresh heavy-lane RPC artifacts at HEAD`,
+        );
+      }
+      return;
+    }
     const stalePaths = bindingScopePathsChangedSince(repoRootOverride, commitSha, head);
     if (stalePaths.length > 0) {
       cliFail(
