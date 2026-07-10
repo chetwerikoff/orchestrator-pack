@@ -301,6 +301,8 @@ export function writePrSessionBindingCacheFileWithCas(path, store, expectedGener
   return locked;
 }
 
+const BINDING_CACHE_CAS_MAX_ATTEMPTS = 8;
+
 /**
  * @param {string} cachePath
  * @param {(store: Record<string, unknown>, nowMs: number) => { ok: boolean, reason?: string, diagnostic?: string }} mutator
