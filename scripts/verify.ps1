@@ -1025,6 +1025,8 @@ else {
     Add-Failure 'Missing cursor-agent TUI shim check script (Issue #725)'
 }
 
+Write-Check 'verify-runtime/cursor-agent-tui-shim-vitest' 'SKIP' 'owned by scripts/check-cursor-agent-tui-shim.ps1 + scripts/cursor-agent-tui-shim.test.ts full Vitest lane (Issue #488)'
+
 $terminalFloodCheck = Join-Path $Root 'scripts/check-terminal-flood-detect.ps1'
 if (Test-Path -LiteralPath $terminalFloodCheck -PathType Leaf) {
     & $terminalFloodCheck

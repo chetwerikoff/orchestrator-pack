@@ -59,14 +59,20 @@ the pack shim.
 
 **Option A — keep trust-watcher running (workspace trust unchanged):**
 
+1. Stop the live watcher (or restart it with the disable flag in **its** environment):
+
 ```bash
+pkill -f 'orchestrator-worktree-trust-watcher\.ps1' || true
 export OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1
+# When re-starting the watcher, launch it in a shell/unit that already exports the flag above.
 ln -sf "$(ls -d ~/.local/share/cursor-agent/versions/2026* | sort | tail -1)/cursor-agent" ~/.local/bin/cursor-agent
 ```
 
-Persist the disable flag in the shell profile or systemd/cron unit that launches
-`orchestrator-worktree-trust-watcher.ps1` until you intentionally re-enable pack
-interposition.
+Exporting `OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE=1` only in your current interactive
+shell does **not** affect an already-running watcher process. Persist the disable
+flag in the shell profile, systemd unit, or cron entry that launches
+`orchestrator-worktree-trust-watcher.ps1`, then restart the watcher before or
+immediately after the `ln -sf` step.
 
 **Option B — stop trust-watcher, then restore stock:**
 

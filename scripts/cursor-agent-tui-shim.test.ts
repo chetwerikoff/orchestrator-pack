@@ -216,6 +216,7 @@ describe('cursor-agent TUI shim (Issue #725)', () => {
     expect(notes).toMatch(/cursor-agent TUI shim/i);
     expect(notes).toMatch(/ln -sf/);
     expect(notes).toMatch(/OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE/);
+    expect(notes).toMatch(/restart|pkill/i);
     expect(notes).not.toMatch(/~\/\.local\/bin\/agent.*shim/i);
   });
 

@@ -1,41 +1,100 @@
 #requires -Version 5.1
 <#
-  verify.ps1 hook: fixture-based cursor-agent TUI shim checks (Issue #725). Regenerated launch-argv inventory ships with shim PRs.
-  Uses isolated temp HOME — never mutates operator ~/.local/bin.
+  Structural guard for cursor-agent TUI shim wiring (Issue #725).
+  Behavioral regression lives in scripts/cursor-agent-tui-shim.test.ts (full Vitest lane).
 #>
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
-$modulePath = Join-Path $Root 'scripts/lib/Cursor-Agent-TuiShim.ps1'
-$shimSource = Join-Path $Root 'scripts/cursor-agent-tui-shim.sh'
-$testFile = Join-Path $Root 'scripts/cursor-agent-tui-shim.test.ts'
+$selfPath = Join-Path $Root 'scripts/check-cursor-agent-tui-shim.ps1'
 
-foreach ($path in @($modulePath, $shimSource, $testFile)) {
-    if (-not (Test-Path -LiteralPath $path)) {
-        Write-Host "missing required file: $path"
+$requiredFiles = @(
+    'scripts/cursor-agent-tui-shim.sh',
+    'scripts/install-cursor-agent-tui-shim.ps1',
+    'scripts/verify-cursor-agent-tui-shim.ps1',
+    'scripts/lib/Cursor-Agent-TuiShim.ps1',
+    'scripts/cursor-agent-tui-shim.test.ts',
+    'scripts/orchestrator-worktree-trust-watcher.ps1',
+    'docs/cursor-agent-tui-shim-runbook.md'
+)
+
+foreach ($rel in $requiredFiles) {
+    $full = Join-Path $Root $rel
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        Write-Host "missing required file: $rel"
         exit 1
     }
 }
 
-Push-Location $Root
-try {
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules') -PathType Container)) {
-        & npm ci --include=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "npm ci failed exit=$LASTEXITCODE"
-            exit 1
-        }
-    }
+$selfText = Get-Content -LiteralPath $selfPath -Raw
+if ($selfText -match '(?m)(?:&\s+npm\s+ci|npm\s+ci\s+--)') {
+    Write-Host 'check-cursor-agent-tui-shim.ps1 must not run npm ci; full Vitest lane owns behavioral checks (Issue #488)'
+    exit 1
+}
+if ($selfText -match '(?m)&\s+npx\s+vitest|npx\s+vitest\s+run') {
+    Write-Host 'check-cursor-agent-tui-shim.ps1 must not invoke Vitest; full Vitest lane owns behavioral checks (Issue #488)'
+    exit 1
+}
 
-    & npx vitest run scripts/cursor-agent-tui-shim.test.ts
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "cursor-agent-tui-shim vitest failed exit=$LASTEXITCODE"
+$shimText = Get-Content -LiteralPath (Join-Path $Root 'scripts/cursor-agent-tui-shim.sh') -Raw
+if ($shimText -notmatch '\[cursor-agent-tui-shim\] FATAL') {
+    Write-Host 'scripts/cursor-agent-tui-shim.sh must emit loud FATAL diagnostics on resolution failure'
+    exit 1
+}
+
+$moduleText = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Cursor-Agent-TuiShim.ps1') -Raw
+foreach ($pattern in @(
+    'Test-CursorAgentTuiShimSelfHealEnabled',
+    'Invoke-CursorAgentTuiShimSelfHeal',
+    'OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE'
+)) {
+    if ($moduleText -notmatch [regex]::Escape($pattern)) {
+        Write-Host "Cursor-Agent-TuiShim.ps1 missing required symbol/pattern: $pattern"
         exit 1
     }
 }
-finally {
-    Pop-Location
+
+$watcherText = Get-Content -LiteralPath (Join-Path $Root 'scripts/orchestrator-worktree-trust-watcher.ps1') -Raw
+if ($watcherText -notmatch 'Invoke-CursorAgentTuiShimSelfHeal') {
+    Write-Host 'orchestrator-worktree-trust-watcher.ps1 must invoke Invoke-CursorAgentTuiShimSelfHeal'
+    exit 1
 }
 
-Write-Host 'cursor-agent TUI shim check passed'
+$verifyText = Get-Content -LiteralPath (Join-Path $Root 'scripts/verify.ps1') -Raw
+if ($verifyText -notmatch 'check-cursor-agent-tui-shim\.ps1') {
+    Write-Host 'scripts/verify.ps1 must invoke scripts/check-cursor-agent-tui-shim.ps1'
+    exit 1
+}
+if ($verifyText -notmatch 'verify-runtime/cursor-agent-tui-shim-vitest') {
+    Write-Host 'scripts/verify.ps1 must SKIP cursor-agent TUI shim Vitest ownership to Issue #488 lane'
+    exit 1
+}
+
+$lanes = Get-Content -LiteralPath (Join-Path $Root 'scripts/vitest-ci-lanes.config.json') -Raw | ConvertFrom-Json
+$lane = $lanes.classification.'scripts/cursor-agent-tui-shim.test.ts'
+if ($lane -ne 'light') {
+    Write-Host 'scripts/cursor-agent-tui-shim.test.ts must be classified light in vitest-ci-lanes.config.json'
+    exit 1
+}
+
+$migration = Get-Content -LiteralPath (Join-Path $Root 'docs/migration_notes.md') -Raw
+foreach ($pattern in @(
+    'cursor-agent TUI shim',
+    'ln -sf',
+    'OPK_CURSOR_AGENT_SHIM_SELF_HEAL_DISABLE',
+    'orchestrator-worktree-trust-watcher'
+)) {
+    if ($migration -notmatch [regex]::Escape($pattern)) {
+        Write-Host "docs/migration_notes.md missing cursor-agent shim rollback/adoption pattern: $pattern"
+        exit 1
+    }
+}
+
+$runbook = Get-Content -LiteralPath (Join-Path $Root 'docs/cursor-agent-tui-shim-runbook.md') -Raw
+if ($runbook -notmatch 'restart|pkill') {
+    Write-Host 'docs/cursor-agent-tui-shim-runbook.md must document stopping or restarting trust-watcher for rollback'
+    exit 1
+}
+
+Write-Host '[PASS] cursor-agent TUI shim structural wiring (Issue #725)'
 exit 0

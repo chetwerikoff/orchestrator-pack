@@ -238,7 +238,7 @@
     "scripts/contract-evidence-legacy-list-guard.test.ts": "ffa8aa5991f9ef4d175c05dccd95c7e9a5bfa8b63f9358b993661dceab414941",
     "scripts/contract-evidence-reverify.test.ts": "c193205271457936867c7147d61babb666c2118ff6602996174a019e957e2114",
     "scripts/contract-evidence.test.ts": "ef6bbaf8b923a6140a9dcedbcf98ce51639d64ffd3ce5bf132b156150f50a431",
-    "scripts/cursor-agent-tui-shim.test.ts": "88fde538c62b14001f38210c3c655455180578db1e58238169bf414c0f58aac5",
+    "scripts/cursor-agent-tui-shim.test.ts": "8b5b9110d27720820a2eade806244aee45e68383107887fd6ec584c1f37fcbd2",
     "scripts/dead-worker-reconcile.test.ts": "8013f492cd2e2ea019b4dcd13bead00988545ddc23e82839197bfdf74a203800",
     "scripts/draft-author-relocation-contract.test.ts": "0ea58d26cbe42264875151ded5595cb02319f13cfbbe566116f17929b0b815e3",
     "scripts/draft-discipline.test.ts": "7901b3b0fa2fc65cb07769c8940d320636369cf35ca4221e746d220d84687190",
