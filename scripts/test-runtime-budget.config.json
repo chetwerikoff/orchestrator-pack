@@ -1,10 +1,10 @@
 {
   "issue": 488,
   "description": "Commit-stage slow-test budget for the full Vitest regression lane. Adjust thresholds intentionally when test class legitimately grows.",
-  "perTestMs": 125000,
+  "perTestMs": 120000,
   "perFileMs": 510000,
   "notes": {
-    "perTestMs": "Fail when any single Vitest case exceeds this duration (default 125s). Raised from 120s: testmode-fleet-reaper-wallclock AC#6 observe case legitimately ~120s on cold GHA shard 1 and exceeded 120s budget by <1s.",
+    "perTestMs": "Fail when any single Vitest case exceeds this duration (default 120s).",
     "perFileMs": "Fail when any test file total exceeds this duration (default 510s / 8.5 min). CI integration-heavy script files (e.g. orchestrator-wake-supervisor, testmode-fleet-reaper) legitimately approach this on cold GHA runners; raise only with documented justification (e.g. testmode-fleet-reaper exceeded 488s on shard 2/10)."
   }
 }
