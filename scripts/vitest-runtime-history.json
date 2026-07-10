@@ -162,10 +162,10 @@
     "scripts/ao-events-correlation-degraded.test.ts": 45000,
     "scripts/events-optional-consumer-signal-recovery.test.ts": 120000,
     "scripts/review-start-preflight-shield-classifier.test.ts": 45000,
-    "scripts/orchestrator-wake-supervisor-startup.test.ts": 180000,
-    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": 200000,
-    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 120000,
-    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": 90000,
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": 164000,
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": 184000,
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 109000,
+    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": 84000,
     "scripts/orchestrator-wake-listener-evaluate.test.ts": 60000,
     "scripts/orchestrator-wake-listener-helpers.test.ts": 60000,
     "scripts/supervisor-fault-boundary-redirect-disposed.test.ts": 50000,
@@ -358,7 +358,7 @@
     "scripts/supervisor-fault-boundary-status-entry.test.ts": "e87cc93cba99e7f16308c916f2b469a1c1068a49c03402d13c2b51f6fcd49b19",
     "scripts/supervisor-fault-boundary-recovery-stop.test.ts": "104f49ec0843d2b4fdc0800c96b4388d7d28c8b9d09076ba9b4128d518de28c4",
     "scripts/supervisor-fault-boundary-escalate.test.ts": "371a71d8216c114396e56b4dee3fdf5467c18ef592f39cb1ffacf6de459d18ee",
-    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "53f443aac9afc760a53a68969ddc2c69094a9e7cae258c90f32d5defd2fe574b",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "39b9ceb7a40f3cef005cd0e70c569545fa3516fcea1811ba925b2f0f6219ac90",
     "scripts/supervisor-degraded-backoff-restart.test.ts": "82c6ee10e62b4dae7f082965f277c2c18cd8f37d9de8fdf94aabf08037198a6f",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts": "27a3a094684417e63867e5aba7763d87dd8939ec87203320342ec1a1bd231605",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "b172afc635b2c754bfb4bc4ceccb30d61862d3b3a418857d6681455efa0caaef",
@@ -384,5 +384,5 @@
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": 300000,
     "scripts/orchestrator-wake-supervisor.test.ts": 720000
   },
-  "dataChangedAt": "2026-07-10T05:26:58Z"
+  "dataChangedAt": "2026-07-10T05:42:14Z"
 }
