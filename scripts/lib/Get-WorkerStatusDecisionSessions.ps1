@@ -129,6 +129,25 @@ function Get-WorkerStatusDecisionSessionsCore {
     return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
 }
 
+function Get-WorkerStatusReadOnlyProjection {
+    param(
+        [string]$Project = 'orchestrator-pack',
+        [string]$RepoSlug = '',
+        [string]$AoCommand = 'ao',
+        [long]$RepoTickGeneration = 0
+    )
+
+    $sessions = @(Get-AoStatusSessions -Project $Project -AoCommand $AoCommand)
+    if (Test-WorkerStatusKillSwitchActive) {
+        return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'kill_switch_active')
+    }
+    $readiness = Test-WorkerStatusSiblingReadiness
+    if (-not $readiness.ok) {
+        return @(New-WorkerStatusDecisionUnknownRows -Sessions $sessions -Reason 'sibling_not_ready')
+    }
+    return @(Merge-AoSessionRowsWithWorkerStatusStore -Sessions $sessions -RepoTickGeneration $RepoTickGeneration)
+}
+
 function Get-WorkerStatusDecisionSessions {
     param(
         [string]$Project = '',

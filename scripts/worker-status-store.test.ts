@@ -759,6 +759,25 @@ describe('worker-status PowerShell bridge', () => {
   });
 });
 
+
+describe('worker-status operator report', () => {
+  it('uses read-only projection without store writes', () => {
+    const report = readFileSync(join(import.meta.dirname, 'show-worker-status-report.ps1'), 'utf8');
+    const reader = readFileSync(join(import.meta.dirname, 'lib/Get-WorkerStatusDecisionSessions.ps1'), 'utf8');
+    expect(report).toContain('Get-WorkerStatusReadOnlyProjection');
+    expect(report).not.toContain('Get-WorkerStatusDecisionSessions');
+    expect(reader).toContain('function Get-WorkerStatusReadOnlyProjection');
+    expect(reader).toContain('Merge-AoSessionRowsWithWorkerStatusStore');
+    expect(reader.split('function Get-WorkerStatusReadOnlyProjection')[1].split('function Get-WorkerStatusDecisionSessions')[0]).not.toContain('Write-WorkerStatusRow');
+  });
+
+  it('computes freshness age from workerStatusLastUpdatedMs', () => {
+    const report = readFileSync(join(import.meta.dirname, 'show-worker-status-report.ps1'), 'utf8');
+    expect(report).toContain('workerStatusLastUpdatedMs');
+    expect(report).not.toContain('workerStatusFreshnessMs');
+  });
+});
+
 describe('worker-status sibling readiness', () => {
   it('reports ready when docs sibling modules are present', () => {
     const result = testSiblingReadiness({});

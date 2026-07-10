@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 
 $killSwitch = Test-WorkerStatusKillSwitchActive
 $readiness = Test-WorkerStatusSiblingReadiness
-$sessions = @(Get-WorkerStatusDecisionSessions -Project $Project -RepoSlug $RepoSlug)
+$sessions = @(Get-WorkerStatusReadOnlyProjection -Project $Project -RepoSlug $RepoSlug)
 $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
 $rows = @()
@@ -24,8 +24,11 @@ foreach ($session in $sessions) {
         elseif ($session.name) { $session.name }
         else { $session.sessionId }
     )
-    $freshnessMs = if ($session.workerStatusFreshnessMs) { [int]$session.workerStatusFreshnessMs } else { 0 }
-    $ageMs = if ($freshnessMs -gt 0) { $nowMs - $freshnessMs } else { -1 }
+    $lastUpdatedMs = 0
+    if ($session.workerStatusLastUpdatedMs) {
+        $lastUpdatedMs = [int]$session.workerStatusLastUpdatedMs
+    }
+    $ageMs = if ($lastUpdatedMs -gt 0) { $nowMs - $lastUpdatedMs } else { -1 }
     $rows += [pscustomobject]@{
         sessionId              = $sessionId
         derivedStatus          = [string]$(if ($session.workerStatusDerived) { $session.workerStatusDerived } elseif ($session.status) { $session.status } else { 'unknown' })
