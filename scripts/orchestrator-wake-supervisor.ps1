@@ -100,7 +100,7 @@ switch ($Action) {
             exit 1
         }
 
-        Set-OrchestratorWakeSupervisorStoppingFlag -Paths $paths
+        Enter-OrchestratorWakeSupervisorStopMaintenanceEpoch -Paths $paths -Reason 'stop'
         try {
             $supervisorPid = $resolution.ResolvedPid
             Write-OrchestratorWakeSupervisorLog -Message 'stopping wake supervisor and children' -LogPath $paths.SupervisorLog
@@ -122,7 +122,7 @@ switch ($Action) {
             Write-OrchestratorWakeSupervisorLog -Message 'stopped' -LogPath $paths.SupervisorLog
         }
         finally {
-            Clear-OrchestratorWakeSupervisorStoppingFlag -Paths $paths
+            Exit-OrchestratorWakeSupervisorStopMaintenanceEpoch -Paths $paths
         }
         exit 0
     }

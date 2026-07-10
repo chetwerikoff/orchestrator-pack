@@ -889,9 +889,52 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     );
     expect((packStatus.stdout ?? '').trim()).toBe('True');
 
+    const heartbeatChild = spawn(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1'),
+        '-Role',
+        'heartbeat',
+        '-OrchestratorSessionId',
+        'fleet-force-project',
+        '-MarkerDir',
+        packMarkerDir,
+      ],
+      {
+        detached: true,
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          AO_WAKE_SUPERVISOR_TEST_MARKER_DIR: packMarkerDir,
+          AO_SIDE_PROCESS_STATE_DIR: stateDir,
+        },
+      },
+    );
+    heartbeatChild.unref();
+    const heartbeatPid = heartbeatChild.pid ?? 0;
+    expect(heartbeatPid).toBeGreaterThan(0);
+    await sleep(2000);
+    const heartbeatFindCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId heartbeat; Write-Output (($pids | Sort-Object -Unique) -join ',')`;
+    const heartbeatFind = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', heartbeatFindCommand],
+      { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
+    );
+    const heartbeatMatched = (heartbeatFind.stdout ?? '')
+      .trim()
+      .split(',')
+      .map((v) => Number(v))
+      .filter((v) => v > 0);
+    expect(heartbeatMatched).toContain(heartbeatPid);
+
     try {
       process.kill(packPid, 'SIGKILL');
       process.kill(foreignPid, 'SIGKILL');
+      if (heartbeatPid > 0) process.kill(heartbeatPid, 'SIGKILL');
     } catch {
       // ignore
     }
@@ -920,6 +963,61 @@ describe.sequential('orchestrator-wake-supervisor fleet cardinality (#709)', () 
     expect(blocked.status).not.toBe(0);
     expect(blocked.stderr + blocked.stdout).toMatch(/maintenance epoch active/i);
     fs.unlinkSync(path.join(stateDir, 'maintenance.epoch'));
+  }, fleetTimeoutMs);
+  it('AC#8c: ordinary Stop enters maintenance epoch to block concurrent Start', async () => {
+    const stateDir = makeStateDir();
+    const sessionId = 'fleet-8c';
+    const start = await runSupervisorAsync(
+      [
+        '-Action',
+        'Start',
+        '-SkipInitialWait',
+        '-OrchestratorSessionId',
+        sessionId,
+        '-StateDir',
+        stateDir,
+      ],
+      fleetLeaseEnv,
+      fleetTimeoutMs,
+    );
+    expect(start.status).toBe(0);
+    await waitForSupervisorPid(stateDir);
+
+    const maintenancePath = path.join(stateDir, 'maintenance.epoch');
+    const stopPromise = runSupervisorAsync(
+      ['-Action', 'Stop', '-StateDir', stateDir],
+      fleetLeaseEnv,
+      fleetTimeoutMs,
+    );
+
+    let sawMaintenance = false;
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if (fs.existsSync(maintenancePath)) {
+        sawMaintenance = true;
+        const blocked = await runSupervisorAsync(
+          [
+            '-Action',
+            'Start',
+            '-SkipInitialWait',
+            '-OrchestratorSessionId',
+            sessionId,
+            '-StateDir',
+            stateDir,
+          ],
+          fleetLeaseEnv,
+          30_000,
+        );
+        expect(blocked.status).not.toBe(0);
+        expect(blocked.stderr + blocked.stdout).toMatch(/maintenance epoch active/i);
+        break;
+      }
+      await sleep(200);
+    }
+    expect(sawMaintenance).toBe(true);
+    const stop = await stopPromise;
+    expect(stop.status).toBe(0);
+    expect(fs.existsSync(maintenancePath)).toBe(false);
   }, fleetTimeoutMs);
 
   it('AC#12a: adopt/reap and restart paths enforce lease epoch fencing', () => {

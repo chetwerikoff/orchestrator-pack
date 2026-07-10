@@ -878,7 +878,8 @@ function Test-OrchestratorWakeSupervisorManagedChildProjectIdentity {
         return $false
     }
 
-    return $expectedProject -eq $defaultProject
+    # Registry children without -ProjectId (e.g. heartbeat) are fleet-scoped by state root only.
+    return $true
 }
 
 function Remove-OrchestratorWakeSupervisorSupervisorPidFileIfOwned {
