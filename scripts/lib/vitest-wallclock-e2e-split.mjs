@@ -109,6 +109,29 @@ export function withDetachedGitWorktree(repoRoot, commitSha, callback) {
   }
 }
 
+
+function buildLanePlanFromBaselineWorktree(worktreePath) {
+  const script = `
+import { buildLanePlan } from './scripts/lib/vitest-ci-lanes.mjs';
+const plan = buildLanePlan(process.cwd());
+if (!plan.ok) {
+  process.stderr.write(JSON.stringify({ ok: false, errors: plan.errors }));
+  process.exit(1);
+}
+process.stdout.write(JSON.stringify({ ok: true, light: plan.light, heavy: plan.heavy }));
+`;
+  const output = execFileSync('node', ['--input-type=module', '-e', script], {
+    cwd: worktreePath,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const parsed = JSON.parse(output.trim());
+  if (!parsed.ok) {
+    throw new Error(Array.isArray(parsed.errors) ? parsed.errors.join('; ') : 'baseline lane plan failed');
+  }
+  return parsed;
+}
+
 export function derivePreMoveUnionAtBaseline(repoRoot = resolveRepoRoot(), baselineSha, options = {}) {
   const sha = normalizeBaselineSha(baselineSha);
   if (!sha) {
@@ -119,10 +142,7 @@ export function derivePreMoveUnionAtBaseline(repoRoot = resolveRepoRoot(), basel
   }
   try {
     const union = withDetachedGitWorktree(repoRoot, sha, (worktreePath) => {
-      const plan = buildLanePlan(worktreePath);
-      if (!plan.ok) {
-        throw new Error(plan.errors.join('; '));
-      }
+      const plan = buildLanePlanFromBaselineWorktree(worktreePath);
       return [...plan.light, ...plan.heavy].sort();
     });
     return { ok: true, baselineSha: sha, union, source: 'git-baseline' };

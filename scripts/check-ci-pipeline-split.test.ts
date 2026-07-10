@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assignHeavyShards,
   buildLanePlan,
@@ -602,6 +602,23 @@ describe('wall-clock e2e stage split (#694)', () => {
     expect(validation.baselineSha).toBe(manifest.preMoveBaselineSha);
     const coverage = buildCoverageDeltaReport(repoRoot);
     expect(coverage.ok).toBe(true);
+  });
+
+
+  it('derives pre-move union from baseline worktree planner, not PR checkout (#694 AC#2)', async () => {
+    const lanes = await import('./lib/vitest-ci-lanes.mjs');
+    const spy = vi.spyOn(lanes, 'buildLanePlan').mockReturnValue({
+      ok: false,
+      errors: ['tampered-pr-checkout-planner'],
+      discovered: [],
+    });
+    try {
+      const { validatePreMoveManifestAgainstBaseline } = await import('./lib/vitest-wallclock-e2e-split.mjs');
+      const validation = validatePreMoveManifestAgainstBaseline(repoRoot);
+      expect(validation.ok).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('rejects tampered pre-move manifest that omits baseline files (#694 AC#2)', async () => {

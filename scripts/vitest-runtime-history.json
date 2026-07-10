@@ -230,7 +230,7 @@
     "scripts/autonomous-spawn-policy.test.ts": "f3979df5f84917dee256c4f88b7ef4b3d12208121b23b6fe54e95fcb30e6fb4e",
     "scripts/autonomous-spawn-worktree-gate.test.ts": "3987e5a2a83d6938b3e13a487c327fdb3274412097812b23ea2dc89326d6d63d",
     "scripts/autonomous-worker-nudge-boundary.test.ts": "0a7ad226de90e8db6a013392bcf0b59bdcd0c784d47a6d48a8f2f644832905c0",
-    "scripts/check-ci-pipeline-split.test.ts": "34a40d40c261e4571ab382229c0eb6600bcde3de2a3e594e9a5a619b5d0cc410",
+    "scripts/check-ci-pipeline-split.test.ts": "74cdd6bd389bf58db0b90dcf2f497da974197369d6b7466f46a7b867d6518881",
     "scripts/check-supervisor-test-wait-inventory.test.ts": "a498c661eab724aef88c8cb43cf273f5ddb61bded4dd20254eaa6d514b903ab3",
     "scripts/ci-failure-fixing-stint-reconcile.test.ts": "7c11cb6ccb343ecdbd9a6c452d6875d445d44154699aa8222dcb1d8362adb106",
     "scripts/ci-failure-notification.test.ts": "84942a5a8151efbf7b5b796beacfb9cf8b359dddb1291dbb13078813242a3d0f",
@@ -386,7 +386,8 @@
     "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
     "docs/review-finding-delivery-confirm.mjs": "c2b1b223623c59801ed5a9a89f5b24e8e286ad68120a47797adcee3f7c5c8343",
     "docs/review-trigger-reconcile.mjs": "54c891d3f0f18dea0d56f3ee14dd4d6a60ccc31852dfffe40e666c1af724f806",
-    "docs/read-delegation-review-hook-capability.json": "517a1acfae130ff68ce36309c03fb85aa36355dd843fff72273723596adc80c6"
+    "docs/read-delegation-review-hook-capability.json": "517a1acfae130ff68ce36309c03fb85aa36355dd843fff72273723596adc80c6",
+    "scripts/lib/vitest-wallclock-e2e-split.mjs": "43f6dc5bc7ef3ced856d8a169e6f5e6f88874078e49e2876d4c5dd54e5fb7efe"
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
