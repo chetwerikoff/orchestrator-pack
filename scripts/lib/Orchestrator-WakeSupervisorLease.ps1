@@ -690,6 +690,24 @@ function Invoke-OrchestratorWakeSupervisorStaleLiveReclaim {
         priorScriptPath  = if ($Lease.holderScriptPath) { (Split-Path -Leaf $Lease.holderScriptPath) } else { '' }
         priorHeartbeatMs = $Lease.heartbeatMs
     }
+    $leasePath = Get-OrchestratorWakeSupervisorLeasePath -Paths $Paths
+    $freshLease = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+        -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+    if ($freshLease) {
+        $holderPid = [int]$freshLease.holderPid
+        $Lease = $freshLease
+        $recheckStale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $freshLease -LogPath $LogPath -Paths $Paths
+        if (-not $recheckStale -or $recheckStale -eq 'stale-heartbeat-grace-pending') {
+            Write-OrchestratorWakeSupervisorStructuredAudit -Kind 'stale-live-reclaim-aborted' -LogPath $LogPath -Fields @{
+                reason             = if ($recheckStale) { 'grace-pending' } else { 'heartbeat-recovered' }
+                holderPid          = $holderPid
+                priorStaleEvidence = $StaleEvidence
+                recheckStale       = if ($recheckStale) { $recheckStale } else { '' }
+            }
+            return $false
+        }
+        $StaleEvidence = $recheckStale
+    }
     if ($holderPid -gt 0 -and (Test-ProcessAlive -ProcessId $holderPid)) {
         Stop-OrchestratorWakeSupervisorProcess -ProcessId $holderPid -ManagedRole 'supervisor' `
             -LogPath $LogPath -ProjectId $Lease.projectId -StateRoot $Paths.Root
@@ -1047,16 +1065,40 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
         if ($stalePreHandoff -and $stalePreHandoff -ne 'stale-heartbeat-grace-pending') {
             $fencedPreHandoff = Invoke-OrchestratorWakeSupervisorStaleLiveReclaim -Paths $Paths -Lease $existing `
                 -StaleEvidence $stalePreHandoff -LogPath $LogPath
-            if (-not $fencedPreHandoff) {
-                return @{
-                    Outcome  = 'reclaim-failed'
-                    ExitCode = 2
-                    Message  = "stale lease reclaim failed for holder pid=$($existing.holderPid)"
-                }
+            if ($fencedPreHandoff) {
+                $nextEpochAfterReclaim = [int]$existing.epoch + 1
+                Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
+                $existing = $null
             }
-            $nextEpochAfterReclaim = [int]$existing.epoch + 1
-            Clear-OrchestratorWakeSupervisorStaleGraceSidecar -Paths $Paths
-            $existing = $null
+            else {
+                $existing = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+                    -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+                if (-not $existing) {
+                    return @{
+                        Outcome  = 'reclaim-failed'
+                        ExitCode = 2
+                        Message  = 'stale lease reclaim failed: lease payload unreadable after reclaim attempt'
+                    }
+                }
+                $staleAfterReclaim = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $existing -LogPath $LogPath -Paths $Paths
+                if ($staleAfterReclaim -and $staleAfterReclaim -ne 'stale-heartbeat-grace-pending') {
+                    return @{
+                        Outcome  = 'reclaim-failed'
+                        ExitCode = 2
+                        Message  = "stale lease reclaim failed for holder pid=$($existing.holderPid)"
+                    }
+                }
+                if ($staleAfterReclaim -eq 'stale-heartbeat-grace-pending') {
+                    return @{
+                        Outcome  = 'lease-grace-pending'
+                        ExitCode = 2
+                        Message  = "lease heartbeat stale but grace pending for holder pid=$($existing.holderPid)"
+                    }
+                }
+                $liveHolderOutcome = Resolve-OrchestratorWakeSupervisorLiveHolderStartOutcome -Lease $existing `
+                    -ProjectId $ProjectId -Paths $Paths -LogPath $LogPath
+                if ($liveHolderOutcome) { return $liveHolderOutcome }
+            }
         }
     }
 
@@ -1111,10 +1153,22 @@ function Resolve-OrchestratorWakeSupervisorStartLeaseDecision {
                 Message  = 'start blocked: could not reserve state-root lease after stale reclaim'
             }
         }
-        return @{
-            Outcome  = 'reclaim-failed'
-            ExitCode = 2
-            Message  = "stale lease reclaim failed for holder pid=$($lease.holderPid)"
+        $lease = ConvertTo-OrchestratorWakeSupervisorLeaseHashtable `
+            -Document (Read-OrchestratorWakeSupervisorLeaseDocument -LeasePath $leasePath)
+        if (-not $lease) {
+            return @{
+                Outcome  = 'reclaim-failed'
+                ExitCode = 2
+                Message  = 'stale lease reclaim failed: lease payload unreadable after reclaim attempt'
+            }
+        }
+        $stale = Test-OrchestratorWakeSupervisorLeaseStaleEvidence -Lease $lease -LogPath $LogPath -Paths $Paths
+        if ($stale -and $stale -ne 'stale-heartbeat-grace-pending') {
+            return @{
+                Outcome  = 'reclaim-failed'
+                ExitCode = 2
+                Message  = "stale lease reclaim failed for holder pid=$($lease.holderPid)"
+            }
         }
     }
     if ($stale -eq 'stale-heartbeat-grace-pending') {

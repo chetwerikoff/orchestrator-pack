@@ -376,7 +376,7 @@
     "docs/review-producer-contract.mjs": "973f012fdf3e03eb0b2d1e683f93450428022ef38d68a44879b990340529297d",
     "docs/worker-report-store.mjs": "b460e06d80d3849b41bd377a9b48ef51db8c08a912ad2ac77f4b76d6b4c9a7df",
     "docs/worker-report-store.d.mts": "ee7f417f473da419df4eef6b9c224d4a748a7f04c580133a744b7f7ca802dcef",
-    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1": "f034ada1904861edaf810b4ac3e03b7dcba172fe09622df97dacd81469e14985",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1": "b3c755a307c16e3c5061f670e79ec86fd2779e46366584486151c932020778df",
     "scripts/orchestrator-wake-supervisor.ps1": "61821d425b76462ab1c371b60a8f1111c6d5fd669b2c340a98f6eee85af6244f"
   },
   "provenance": {},

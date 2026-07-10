@@ -2055,7 +2055,7 @@ function Restart-OrchestratorWakeSupervisorChildStaggered {
             $jitter = Get-Random -Minimum 0 -Maximum ([Math]::Max(1, [int]($staggerMs / 2)))
             Start-Sleep -Milliseconds ($staggerMs + $jitter)
         }
-        Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $childId -LogPath $LogPath
+        Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $childId -LogPath $LogPath -ProjectId $ProjectId
         Start-OrchestratorWakeSupervisorChild -ChildId $childId -OrchestratorSessionId $SessionId `
             -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
         $index++
@@ -2320,7 +2320,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     if ($recovery.terminal) {
                         if ($status.Alive) {
                             Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
-                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                         }
                         continue
                     }
@@ -2336,7 +2336,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                         $recoveryAfterDecision = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $child.Id
                         if ($recoveryAfterDecision.terminal -and $status.Alive) {
                             Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
-                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                            Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                         }
                         continue
                     }
@@ -2344,7 +2344,7 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                     $attemptLabel = if ($degradedDecision.degradedAttempts) { $degradedDecision.degradedAttempts } else { 1 }
                     Write-OrchestratorWakeSupervisorLog -Message "$($child.Id) recovering (degraded attempt $attemptLabel)" -LogPath $Paths.SupervisorLog
                     Invoke-OrchestratorWakeSupervisorTestFaultInjection -ChildId $child.Id -Phase 'recovery-stop'
-                    Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog
+                    Stop-OrchestratorWakeSupervisorChildById -Paths $Paths -ChildId $child.Id -LogPath $Paths.SupervisorLog -ProjectId $ProjectId
                     Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $currentSessionId `
                         -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode -TestChildScript $TestChildScript
                 }
