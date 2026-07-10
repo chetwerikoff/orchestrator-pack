@@ -170,6 +170,8 @@ function tempStore() {
 }
 
 describe('CI failure notification predicate (Issue #283 regressions)', () => {
+  useIsolatedPrSessionBindingCache();
+
 
   it('does not suppress on notify-only ci-failed reaction events', () => {
     const notifyEvent = {

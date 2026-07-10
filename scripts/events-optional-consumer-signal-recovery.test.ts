@@ -49,6 +49,8 @@ function consumerSource(rel: string) {
 }
 
 describe('events-optional consumer signal recovery (Issue #700)', () => {
+  useIsolatedPrSessionBindingCache();
+
   it('five consumers do not call Get-AoEventsSince on live paths', () => {
     for (const rel of FIVE_CONSUMERS) {
       const source = consumerSource(rel);
