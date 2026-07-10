@@ -10,6 +10,92 @@ export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wak
 const supervisorHookTimeoutMs = 180_000;
 const tmpRoots: string[] = [];
 
+/** Minimum poll cadence for supervisor/wake integration tests (Issue #693). */
+export const SUPERVISOR_TEST_POLL_INTERVAL_MS = 200;
+
+export async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Full observation window for negative/quiescence assertions — never early-exit. */
+export async function fixedObservationWindow(ms: number): Promise<void> {
+  await sleepMs(ms);
+}
+
+export async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+  intervalMs: number = SUPERVISOR_TEST_POLL_INTERVAL_MS,
+  label = 'condition',
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) {
+      return;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      break;
+    }
+    await sleepMs(Math.min(intervalMs, remaining));
+  }
+  if (await predicate()) {
+    return;
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+export async function waitForStdoutContains(
+  getStdout: () => string,
+  needle: string,
+  timeoutMs: number,
+): Promise<void> {
+  await waitForCondition(
+    () => getStdout().includes(needle),
+    timeoutMs,
+    SUPERVISOR_TEST_POLL_INTERVAL_MS,
+    `stdout to contain ${JSON.stringify(needle)}`,
+  );
+}
+
+export async function waitForMarkerPidChange(
+  stateDir: string,
+  role: string,
+  priorPid: number,
+  timeoutMs: number,
+): Promise<void> {
+  await waitForCondition(
+    async () => {
+      try {
+        const marker = await readMarker(stateDir, role, 500);
+        return marker.pid !== priorPid && isAlive(marker.pid);
+      } catch {
+        return false;
+      }
+    },
+    timeoutMs,
+    SUPERVISOR_TEST_POLL_INTERVAL_MS,
+    `${role} marker pid change from ${priorPid}`,
+  );
+}
+
+export async function waitForSupervisorLogMatchFromOffset(
+  stateDir: string,
+  pattern: RegExp,
+  startOffset: number,
+  timeoutMs = 20_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const log = readSupervisorLog(stateDir);
+    if (log.length >= startOffset && pattern.test(log.slice(startOffset))) {
+      return log;
+    }
+    await sleepMs(300);
+  }
+  throw new Error(`timed out waiting for supervisor log match after offset ${startOffset}: ${pattern}`);
+}
+
 export const managedChildRoles = [
   'listener',
   'heartbeat',
@@ -195,7 +281,7 @@ export async function waitForSupervisorHealthyStatus(
     if (last.status === 0) {
       return last;
     }
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await sleepMs(300);
     last = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
   }
   return last;
@@ -214,7 +300,7 @@ export async function waitForMarkers(
     if (ready) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await sleepMs(SUPERVISOR_TEST_POLL_INTERVAL_MS);
   }
   throw new Error(`timed out waiting for supervisor child markers: ${roles.join(', ')}`);
 }
@@ -229,7 +315,7 @@ export async function waitForMarker(
     if (fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`))) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await sleepMs(SUPERVISOR_TEST_POLL_INTERVAL_MS);
   }
   throw new Error(`timed out waiting for ${role} marker`);
 }
@@ -244,19 +330,19 @@ export async function readMarker(
   let lastError: unknown;
   while (Date.now() < deadline) {
     if (!fs.existsSync(markerPath)) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await sleepMs(50);
       continue;
     }
     try {
       const raw = fs.readFileSync(markerPath, 'utf8').trim();
       if (!raw) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await sleepMs(50);
         continue;
       }
       return JSON.parse(raw) as WakeMarker;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await sleepMs(50);
     }
   }
   throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
@@ -280,7 +366,7 @@ export async function waitForProcessesStopped(
     if (pids.every((pid) => !isAlive(pid))) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await sleepMs(SUPERVISOR_TEST_POLL_INTERVAL_MS);
   }
   throw new Error(`timed out waiting for processes to stop: ${pids.join(', ')}`);
 }
@@ -324,9 +410,29 @@ export async function waitForSupervisorLogMatch(
     if (pattern.test(log)) {
       return log;
     }
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await sleepMs(300);
   }
   throw new Error(`timed out waiting for supervisor log match: ${pattern}`);
+}
+
+export async function stopSupervisorChild(
+  child: { kill: (signal: NodeJS.Signals) => void },
+  stateDir: string,
+  settleMs = 1000,
+): Promise<void> {
+  child.kill('SIGTERM');
+  const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
+  if (fs.existsSync(supervisorPidPath)) {
+    const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
+    if (supervisorPid > 0) {
+      await waitForProcessesStopped([supervisorPid], settleMs);
+    } else {
+      await sleepMs(settleMs);
+    }
+  } else {
+    await sleepMs(settleMs);
+  }
+  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
 }
 
 export function runPwsh(script: string): { stdout: string; stderr: string; status: number | null } {

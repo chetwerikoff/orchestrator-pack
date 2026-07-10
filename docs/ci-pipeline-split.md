@@ -128,6 +128,19 @@ under round-robin because assignment ignored runtime.
 
 ## Rollback
 
+### Supervisor test sleep-to-poll (Issue #693)
+
+If repeat-run CI shows new timing flake after the sleep-to-poll conversion:
+
+1. Revert positive-wait helper usage in the split supervisor/wake test files
+   (`orchestrator-wake-supervisor-*.test.ts`) to the prior fixed `setTimeout` budgets.
+2. Remove or disable `scripts/check-supervisor-test-wait-inventory.ps1` from local/PR
+   verification until the inventory is regenerated.
+3. Restore prior `scripts/vitest-runtime-history.json` weights for affected files if
+   measured p75 regresses.
+4. Heavy-lane assignment (#556) and shard topology are unchanged — do not alter
+   `vitest-ci-lanes.config.json` classification or lane counts for this rollback.
+
 ### To fixed-count topology (pre-#695 emergency)
 
 1. Restore hand-listed `shard: [1..7]` (or prior fixed list) in `test-vitest-heavy`.

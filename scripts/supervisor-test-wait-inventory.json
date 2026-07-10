@@ -1,0 +1,297 @@
+{
+  "issue": 693,
+  "legacyMegafiles": {
+    "scripts/orchestrator-wake-supervisor.test.ts": [
+      "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
+    ],
+    "scripts/supervisor-fault-boundary.test.ts": [
+      "scripts/supervisor-fault-boundary-redirect-disposed.test.ts",
+      "scripts/supervisor-fault-boundary-child-entry-null.test.ts",
+      "scripts/supervisor-fault-boundary-status-entry.test.ts",
+      "scripts/supervisor-fault-boundary-recovery-stop.test.ts",
+      "scripts/supervisor-fault-boundary-escalate.test.ts",
+      "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts"
+    ]
+  },
+  "inScopeFiles": [
+    "scripts/orchestrator-wake-supervisor-startup.test.ts",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts",
+    "scripts/supervisor-fault-boundary-redirect-disposed.test.ts",
+    "scripts/supervisor-fault-boundary-child-entry-null.test.ts",
+    "scripts/supervisor-fault-boundary-status-entry.test.ts",
+    "scripts/supervisor-fault-boundary-recovery-stop.test.ts",
+    "scripts/supervisor-fault-boundary-escalate.test.ts",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts",
+    "scripts/supervisor-fault-boundary.shared.ts",
+    "scripts/orchestrator-wake-supervisor.shared.ts",
+    "scripts/supervisor-recovery.test-helpers.ts"
+  ],
+  "approvedPositiveHelpers": [
+    "waitForCondition",
+    "waitForStdoutContains",
+    "waitForMarkerPidChange",
+    "waitForSupervisorLogMatch",
+    "waitForSupervisorLogMatchFromOffset",
+    "waitForMarker",
+    "waitForMarkers",
+    "waitForProcessesStopped",
+    "waitForSupervisorHealthyStatus",
+    "readMarker",
+    "stopSupervisorChild"
+  ],
+  "sites": [
+    {
+      "id": "helpers-sleepMs-core",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "export async function sleepMs",
+      "classification": "poll-interval",
+      "followingAssertion": "shared bounded sleep primitive",
+      "rationale": "Centralized delay used by poll loops; not a blind budget sleep before assertions"
+    },
+    {
+      "id": "helpers-fixedObservationWindow",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "export async function fixedObservationWindow",
+      "classification": "negative/quiescence-fixed",
+      "followingAssertion": "negative/quiescence window entrypoint",
+      "rationale": "Explicit full-window primitive; callers must not early-exit",
+      "startSnapshot": "caller captures pid/log/marker baseline before invoke"
+    },
+    {
+      "id": "helpers-waitForHealthyStatus-interval",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "waitForSupervisorHealthyStatus",
+      "classification": "poll-interval",
+      "followingAssertion": "status.status === 0",
+      "rationale": "Poll interval inside healthy-status loop"
+    },
+    {
+      "id": "helpers-waitForMarkers-interval",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "waitForMarkers",
+      "classification": "poll-interval",
+      "followingAssertion": "all role marker files exist",
+      "rationale": "Poll interval inside marker wait loop"
+    },
+    {
+      "id": "helpers-waitForMarker-interval",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "export async function waitForMarker",
+      "classification": "poll-interval",
+      "followingAssertion": "marker file exists",
+      "rationale": "Poll interval inside single-marker wait loop"
+    },
+    {
+      "id": "helpers-readMarker-interval",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "export async function readMarker",
+      "classification": "poll-interval",
+      "followingAssertion": "parsed marker JSON",
+      "rationale": "Short interval while marker file is being written"
+    },
+    {
+      "id": "helpers-waitForProcessesStopped-interval",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "waitForProcessesStopped",
+      "classification": "poll-interval",
+      "followingAssertion": "all pids !isAlive",
+      "rationale": "Poll interval inside process-exit wait loop"
+    },
+    {
+      "id": "helpers-waitForSupervisorLogMatch-interval",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "waitForSupervisorLogMatch",
+      "classification": "poll-interval",
+      "followingAssertion": "supervisor log regex match",
+      "rationale": "Poll interval inside log wait loop"
+    },
+    {
+      "id": "helpers-stopSupervisorChild-teardown",
+      "file": "scripts/supervisor-recovery.test-helpers.ts",
+      "anchor": "export async function stopSupervisorChild",
+      "classification": "teardown-poll",
+      "followingAssertion": "Stop action after supervisor pid exits",
+      "rationale": "Poll-for-exit before Stop instead of blind post-kill sleep",
+      "generationBoundary": "supervisor.pid read before SIGTERM",
+      "raceFixture": "process-exit"
+    },
+    {
+      "id": "startup-restart-listener-poll",
+      "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "anchor": "waitForMarkerPidChange(stateDir, 'listener', first.pid",
+      "classification": "positive-convertible",
+      "followingAssertion": "listener pid changed and alive",
+      "rationale": "Positive wait for listener restart after SIGKILL",
+      "generationBoundary": "first listener pid before kill",
+      "raceFixture": "marker"
+    },
+    {
+      "id": "startup-no-shared-fate-window",
+      "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "anchor": "fixedObservationWindow(2000)",
+      "classification": "negative/quiescence-fixed",
+      "followingAssertion": "heartbeat still alive after listener kill",
+      "rationale": "Quiescence window proving heartbeat survives listener death",
+      "startSnapshot": "heartbeatPidAtKill captured before observation window"
+    },
+    {
+      "id": "startup-session-wait-log",
+      "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "anchor": "waitForStdoutContains",
+      "classification": "positive-convertible",
+      "followingAssertion": "stdout contains waiting for orchestrator session",
+      "rationale": "Positive wait for operator-facing stdout instead of blind sleep",
+      "generationBoundary": "accumulated child stdout buffer",
+      "raceFixture": "stdout"
+    },
+    {
+      "id": "startup-session-appear-marker-poll",
+      "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "anchor": "readMarker(stateDir, 'listener')",
+      "classification": "poll-interval",
+      "followingAssertion": "listener orchestratorSessionId === op-orchestrator-old",
+      "rationale": "Poll interval while waiting for session-backed listener marker",
+      "generationBoundary": "fixture swap to status-orchestrator-op-old.json"
+    },
+    {
+      "id": "startup-session-change-poll",
+      "file": "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "anchor": "op-orchestrator-new",
+      "classification": "poll-interval",
+      "followingAssertion": "listener+heartbeat session id changed and listener pid changed",
+      "rationale": "Poll interval while waiting for debounced session-id restart"
+    },
+    {
+      "id": "lifecycle-status-stop-teardown",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "waitForProcessesStopped([supervisorPid], 500)",
+      "classification": "teardown-poll",
+      "followingAssertion": "Stop then status shows stopped",
+      "rationale": "Poll supervisor exit after SIGTERM before Stop",
+      "generationBoundary": "supervisor.pid before child.kill",
+      "raceFixture": "process-exit"
+    },
+    {
+      "id": "lifecycle-stop-order-exit",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 1500)",
+      "classification": "positive-convertible",
+      "followingAssertion": "children !isAlive after Stop",
+      "rationale": "Positive poll-for-exit replaces blind post-Stop sleep",
+      "generationBoundary": "listener+heartbeat pids before Stop",
+      "raceFixture": "process-exit"
+    },
+    {
+      "id": "lifecycle-status-orphan-teardown",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "status exits non-zero when supervisor is stopped",
+      "classification": "teardown-poll",
+      "followingAssertion": "statusOrphan.status not 0 with supervisor stopped",
+      "rationale": "Poll supervisor exit after background child SIGTERM",
+      "generationBoundary": "supervisorPid before child.kill",
+      "raceFixture": "process-exit"
+    },
+    {
+      "id": "lifecycle-status-orphan-settle",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "await ows.sleepMs(300)",
+      "classification": "poll-interval",
+      "followingAssertion": "status orphan path when listener still alive",
+      "rationale": "Short settle between supervisor kill and status probe"
+    },
+    {
+      "id": "lifecycle-detached-child-logs-poll",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "childLogs.every",
+      "classification": "poll-interval",
+      "followingAssertion": "each managed child log file exists",
+      "rationale": "Poll interval while detached child logs are created"
+    },
+    {
+      "id": "lifecycle-detached-still-alive-window",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "fixedObservationWindow(2500)",
+      "classification": "negative/quiescence-fixed",
+      "followingAssertion": "supervisor still alive after detach settle",
+      "rationale": "Quiescence window proving detached supervisor stays up",
+      "startSnapshot": "supervisorPidAtDetach before window"
+    },
+    {
+      "id": "lifecycle-detached-stop-exit",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "waitForProcessesStopped([supervisorPid], 500)",
+      "classification": "teardown-poll",
+      "followingAssertion": "supervisor !isAlive after Stop",
+      "rationale": "Poll supervisor exit after Stop action",
+      "generationBoundary": "supervisorPid before Stop",
+      "raceFixture": "process-exit"
+    },
+    {
+      "id": "lifecycle-crash-backoff-log-poll",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "crash backoff: listener",
+      "classification": "poll-interval",
+      "followingAssertion": "supervisorLog matches crash backoff",
+      "rationale": "Poll interval while collecting crash-backoff evidence"
+    },
+    {
+      "id": "lifecycle-crash-backoff-teardown",
+      "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "anchor": "stopSupervisorChild(child, stateDir, 1500)",
+      "classification": "teardown-poll",
+      "followingAssertion": "supervisor stopped after crash-backoff test",
+      "rationale": "Shared teardown poller after crash-loop exercise",
+      "generationBoundary": "stateDir supervisor.pid before teardown",
+      "raceFixture": "process-exit"
+    },
+    {
+      "id": "registry-stall-recovery-poll",
+      "file": "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "anchor": "waitForMarkerPidChange(stateDir, 'review-trigger-reconcile'",
+      "classification": "positive-convertible",
+      "followingAssertion": "stalled child pid changed and alive",
+      "rationale": "Positive wait for hung-child recovery",
+      "generationBoundary": "first review-trigger-reconcile pid",
+      "raceFixture": "marker"
+    },
+    {
+      "id": "registry-slow-side-effect-window",
+      "file": "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "anchor": "fixedObservationWindow(6000)",
+      "classification": "negative/quiescence-fixed",
+      "followingAssertion": "ci-green-wake-reconcile pid unchanged after slow side effect",
+      "rationale": "Quiescence window proving slow side effect does not trigger restart",
+      "startSnapshot": "pidAtWindowStart before 6s window"
+    }
+  ],
+  "assertionFingerprints": {
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": "4e21da4a832e4a9a4ac130d7a272f34e81501f6f82177cdb30c36c8c7db5c7ea",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "afabe7de4d15e92a0af34067db1102d57608f91d9dabf24c7f880c125ab55be3",
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "0ff3a06c6abf8ac35a9f4f0d2a3db7dc13f3accafdbcd2dcb1871fb2373708d7",
+    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "31d76172aa340f4ea11276bb2d883c3ed073d8630ed30e261ee56744a4aaff8b",
+    "scripts/supervisor-fault-boundary.shared.ts": "8f41c67d3473b1b2c07fd524235b281e9a1de0834504ce5cb71c13d1c3bc9e82",
+    "scripts/supervisor-fault-boundary-escalate.test.ts": "1ba1addd54c0cddc5ea9ad995954a06ca5f9d258586287ab1f8ca337503afe4b",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "fae44143a6ea486c7bc7d99b543ea8c699d949aa8a0e208b219f3aa60bef8318"
+  },
+  "runtimeEvidence": {
+    "mergeBaseRef": "origin/main",
+    "heavyLaneFingerprint": "CI=true maxWorkers=1 fileParallelism=false",
+    "trackedFiles": [
+      "scripts/orchestrator-wake-supervisor-startup.test.ts",
+      "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+      "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+      "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
+    ]
+  },
+  "raceFixtures": {
+    "log": "scripts/supervisor-test-wait-race.fixture.test.ts#log-generation-boundary",
+    "marker": "scripts/supervisor-test-wait-race.fixture.test.ts#marker-generation-boundary",
+    "stdout": "scripts/supervisor-test-wait-race.fixture.test.ts#stdout-generation-boundary",
+    "process-exit": "scripts/supervisor-test-wait-race.fixture.test.ts#process-exit-generation-boundary"
+  }
+}
