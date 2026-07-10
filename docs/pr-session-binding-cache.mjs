@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execSync, spawnSync } from 'node:child_process';
-import { withDedupStateFileLock } from './orchestrator-wake-filter.mjs';
+import { withJsonStateFileLock } from './json-state-file-lock.mjs';
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import {
   DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
@@ -281,7 +281,7 @@ export function writePrSessionBindingCacheFile(path, store) {
  * @param {number} expectedGeneration
  */
 export function writePrSessionBindingCacheFileWithCas(path, store, expectedGeneration) {
-  const locked = withDedupStateFileLock(path, () => {
+  const locked = withJsonStateFileLock(path, () => {
     const expected = asFiniteNumber(expectedGeneration);
     const liveGeneration = existsSync(path)
       ? asFiniteNumber(JSON.parse(readFileSync(path, 'utf8'))?.generation)
@@ -295,7 +295,7 @@ export function writePrSessionBindingCacheFileWithCas(path, store, expectedGener
     renameSync(tempPath, path);
     return { ok: true, generation: asFiniteNumber(store.generation) };
   });
-  if (locked && typeof locked === 'object' && locked.ok === false && locked.reason === 'dedup_lock_timeout') {
+  if (locked && typeof locked === 'object' && locked.ok === false && locked.reason === 'state_file_lock_timeout') {
     return { ok: false, reason: 'binding_cache_lock_timeout' };
   }
   return locked;
