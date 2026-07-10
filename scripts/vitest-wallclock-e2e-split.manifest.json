@@ -3,7 +3,7 @@
   "charterIssue": 487,
   "approvalIssue": 694,
   "approvalMarker": "vitest-wallclock-e2e-split-approved",
-  "preMoveBaselineSha": "b7fa7a8ce6da64979d6bca137d605e518090db0e",
+  "preMoveBaselineSha": "624772414d663bbf20c8d9eedd25d5f8c8e90f6b",
   "preMoveEnumeratedFiles": [
     "scripts/supervisor-fault-boundary.test.ts",
     "scripts/orchestrator-wake-supervisor.test.ts",

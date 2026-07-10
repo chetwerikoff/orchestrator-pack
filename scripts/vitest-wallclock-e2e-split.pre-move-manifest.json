@@ -1,5 +1,5 @@
 {
-  "baselineSha": "b7fa7a8ce6da64979d6bca137d605e518090db0e",
+  "baselineSha": "624772414d663bbf20c8d9eedd25d5f8c8e90f6b",
   "prRequiredUnion": [
     "plugins/_shared/tests/declaration_schema.test.ts",
     "plugins/_shared/tests/git_fixture.test.ts",
@@ -184,10 +184,9 @@
     "scripts/worker-recovery-spawn-argv.test.ts",
     "scripts/worker-recovery.test.ts",
     "scripts/worker-report-store.test.ts",
+    "scripts/worker-status-store.test.ts",
     "scripts/worktree-gate-claim-completion-seam.test.ts",
     "tests/agents-md-relocation.test.ts",
     "tests/agents-md-size-budget.test.ts"
-  ],
-  "generatedAt": "2026-07-10",
-  "issue": 694
+  ]
 }

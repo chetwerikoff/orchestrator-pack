@@ -574,7 +574,8 @@
     "scripts/worker-report-store.test.ts": "measured",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "measured",
     "tests/agents-md-relocation.test.ts": "measured",
-    "tests/agents-md-size-budget.test.ts": "measured"
+    "tests/agents-md-size-budget.test.ts": "measured",
+    "scripts/worker-status-store.test.ts": "measured"
   },
   "dataChangedAt": "2026-07-10T03:00:00Z"
 }
