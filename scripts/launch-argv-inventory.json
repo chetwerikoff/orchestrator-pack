@@ -7507,10 +7507,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-203",
+      "rowId": "site-scripts-lib-validate-supervisor-heavy-lane-rpc-artifacts-mjs-220",
       "caller": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 203
+        "line": 220
       },
       "callee": {
         "kind": "other-external",
@@ -7525,7 +7525,7 @@
       "hashPinnedSourceHash": "sha256:ba83e83d8fbefe6cf5b4c2177161c28491c88dd553ecf74419b3737231329b45",
       "discoveryMatch": {
         "file": "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
-        "line": 203,
+        "line": 220,
         "patternIds": [
           "execFileSync"
         ]

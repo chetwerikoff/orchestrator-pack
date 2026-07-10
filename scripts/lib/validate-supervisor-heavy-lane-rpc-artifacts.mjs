@@ -143,8 +143,25 @@ function bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha) {
   return changed.filter((path) => RPC_ARTIFACT_BINDING_SCOPE_RE.test(path));
 }
 
+function bindingScopePathsChangedSinceSafe(repoRootOverride, fromSha, toSha) {
+  if (!commitObjectExists(fromSha, repoRootOverride) || !commitObjectExists(toSha, repoRootOverride)) {
+    const worktreeMatch = bindingScopeMatchesCaptureWorktree(repoRootOverride, fromSha);
+    if (worktreeMatch === true) {
+      return [];
+    }
+    if (worktreeMatch === false) {
+      return listBindingScopePaths(repoRootOverride);
+    }
+    if (isPrValidationContext()) {
+      return [];
+    }
+    return bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha);
+  }
+  return bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha);
+}
+
 function bindingScopeTreeMatches(repoRootOverride, fromSha, toSha) {
-  return bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha).length === 0;
+  return bindingScopePathsChangedSinceSafe(repoRootOverride, fromSha, toSha).length === 0;
 }
 
 function isPrValidationContext() {
@@ -168,7 +185,7 @@ export function resolveExpectedCaptureSha(repoRootOverride = repoRoot) {
     cliFail('RPC manifest missing captureCommitSha');
   }
 
-  if (!commitObjectExists(head, repoRootOverride)) {
+  if (!commitObjectExists(head, repoRootOverride) || !commitObjectExists(capture, repoRootOverride)) {
     if (capture === head) {
       return capture;
     }
@@ -249,7 +266,7 @@ export function assertRpcMetadataCommitSha(commitSha, expectedCaptureSha, passId
       }
       return;
     }
-    const stalePaths = bindingScopePathsChangedSince(repoRootOverride, commitSha, head);
+    const stalePaths = bindingScopePathsChangedSinceSafe(repoRootOverride, commitSha, head);
     if (stalePaths.length > 0) {
       cliFail(
         `${passId}: RPC artifacts bound to ${commitSha} but binding-scope paths changed since capture (${stalePaths.join(', ')}); refresh heavy-lane RPC artifacts at HEAD`,
