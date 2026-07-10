@@ -207,7 +207,6 @@ export function validateParkedWallclockE2e(classification, parkedWallclockE2e) {
   if (!trackingNote.includes('239-ci-vitest-wallclock-e2e-separate-stage')) {
     errors.push('parkedWallclockE2e.trackingNote must reference #694 wall-clock stage draft');
   }
-  const parkedFiles = new Set(parkedWallclockE2e?.files ?? []);
   for (const file of parkedFiles) {
     if (classification[file] !== 'parked') {
       errors.push(`parkedWallclockE2e file must be classified parked: ${file}`);
