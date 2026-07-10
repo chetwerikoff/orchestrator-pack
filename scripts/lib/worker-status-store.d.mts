@@ -74,6 +74,7 @@ export interface RecomputeWorkerStatusRowResult {
   reason?: string;
   row?: WorkerStatusRow;
   store?: WorkerStatusStore;
+  reloadedMixedGeneration?: boolean;
 }
 
 export declare function resolveWorkerStatusStorePath(env?: Record<string, unknown>): string;
@@ -100,6 +101,10 @@ export declare function shouldReloadMixedGeneration(
   existingRow: WorkerStatusRow | Record<string, unknown> | null | undefined,
   writerGenerationVector: WorkerStatusGenerationVector,
 ): boolean;
+export declare function mergeGenerationVectorMax(
+  existingRow?: WorkerStatusRow | Record<string, unknown>,
+  writerGenerationVector?: WorkerStatusGenerationVector | Record<string, unknown>,
+): WorkerStatusGenerationVector;
 export declare function recomputeWorkerStatusRow(
   input: Record<string, unknown>,
 ): WorkerStatusRow | RecomputeWorkerStatusRowResult;
