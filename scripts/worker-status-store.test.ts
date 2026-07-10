@@ -18,7 +18,7 @@ import {
   writeWorkerStatusStoreFile,
   evaluateWorkerStatusKillSwitch,
   WORKER_STATUS_STORE_SCHEMA_VERSION,
-} from '../docs/worker-status-store.mjs';
+} from './lib/worker-status-store.mjs';
 import { assertNoDaemonStatusDecisionRead } from '../docs/review-producer-contract.mjs';
 import { planCiGreenWakeActions } from '../docs/ci-green-wake-reconcile.mjs';
 

@@ -5,7 +5,7 @@
   "supersedes": null,
   "created_at": "2026-07-10T05:48:00.000Z",
   "baseline": {
-    "commit_sha": "da1e1d1b0f783b5df6566b48afc3e74d0baac947",
+    "commit_sha": "77c194ce7336e9930121cb8c1d2003fed173506d",
     "worktree_dirty": false,
     "active_scope_hash": "sha256:720-worker-status-store-scope-v1"
   },
@@ -14,9 +14,7 @@
     "docs/migration_notes.md",
     "docs/review-producer-contract.mjs",
     "docs/review-producer-contract.d.mts",
-    "docs/review-status-consumer-inventory.md",
-    "docs/worker-status-store.mjs",
-    "docs/worker-status-store.d.mts"
+    "docs/review-status-consumer-inventory.md"
   ],
   "declared_globs": [
     "scripts/**",

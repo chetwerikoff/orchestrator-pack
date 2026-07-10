@@ -4,7 +4,7 @@
   Pack-derived worker-status store PowerShell bridge (Issue #720).
 #>
 
-$Script:WorkerStatusStoreCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/worker-status-store.mjs'
+$Script:WorkerStatusStoreCli = Join-Path $PSScriptRoot 'worker-status-store.mjs'
 $Script:PackWorkerStatusStoreSurface = 'pack-worker-status-store'
 $Script:WorkerStatusKillSwitchEnv = 'PACK_WORKER_STATUS_STORE_DISABLED'
 

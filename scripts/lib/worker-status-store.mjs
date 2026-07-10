@@ -5,9 +5,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
-import { classifyRequiredCiLevel } from './review-ready-stuck-guard.mjs';
-import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { normalizeSha, toArray } from '../../docs/review-reconcile-primitives.mjs';
+import { classifyRequiredCiLevel } from '../../docs/review-ready-stuck-guard.mjs';
+import { readStdinJson, runStdinJsonCli } from '../../docs/review-mechanical-cli.mjs';
 
 export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
@@ -417,7 +417,7 @@ function writeRow(payload) {
   return { ok: true, row, generation: store.generation };
 }
 
-runStdinJsonCli('worker-status-store.mjs', {
+runStdinJsonCli('scripts/lib/worker-status-store.mjs', {
   migrate: () => createDefaultWorkerStatusStore(readStdinJson()),
   fuse: () => fuseWorkerStatus(readStdinJson()),
   recompute: () => recomputeWorkerStatusRow(readStdinJson()),
