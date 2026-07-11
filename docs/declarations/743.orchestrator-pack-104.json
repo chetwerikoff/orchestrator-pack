@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b8d1ae902e920c3aab52e141074b1a2f9ec30025",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:2758d3f3eb6342b00800ad9704141fba7534bce96921e0a33f349c8e9c58b11b"
+    "active_scope_hash": "sha256:0a3fd1e4b7edabf1f61826b86fd724e36a4cf9f18cf219427cc15d3c62a81e39"
   },
   "declared_paths": [
     "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
@@ -20,10 +20,26 @@
     "scripts/supervisor-prompt-block-crash-backoff.test.ts",
     "scripts/supervisor-degraded-backoff-crash-preserve.test.ts",
     "scripts/supervisor-degraded-backoff-restart.test.ts",
-    "scripts/supervisor-degraded-backoff.shared.ts"
+    "scripts/supervisor-degraded-backoff.shared.ts",
+    "scripts/launch-argv-inventory.json"
   ],
   "declared_globs": [
     "scripts/fixtures/orchestrator-wake-supervisor/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:2758d3f3eb6342b00800ad9704141fba7534bce96921e0a33f349c8e9c58b11b",
+      "new_active_scope_hash": "sha256:0a3fd1e4b7edabf1f61826b86fd724e36a4cf9f18cf219427cc15d3c62a81e39",
+      "changed": {
+        "added": [
+          "scripts/launch-argv-inventory.json"
+        ],
+        "removed": []
+      },
+      "reason": "refresh launch-argv inventory after crash-backoff/supervisor line drift",
+      "actor": "orchestrator-pack-104",
+      "timestamp": "2026-07-11T16:02:23.107Z",
+      "applied": true
+    }
+  ]
 }

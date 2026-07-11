@@ -5837,10 +5837,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-147",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-289",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 147
+        "line": 289
       },
       "callee": {
         "kind": "other-external",
@@ -5852,20 +5852,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:a0a2736bf271c2b7d35a0a19b6dd7dcc9b6d2a4b3d896fd4773c409513c7cfe2",
+      "hashPinnedSourceHash": "sha256:83ecd9c9d57b231beb7926627810fe5877d662ebadc817202f724b265bced42d",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 147,
+        "line": 289,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-155",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-297",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 155
+        "line": 297
       },
       "callee": {
         "kind": "other-external",
@@ -5880,17 +5880,17 @@
       "hashPinnedSourceHash": "sha256:ebfe169f710dbcc1868aaf759f14ea6c5ee384358ab924b737394da2431c49d5",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 155,
+        "line": 297,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-194",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-348",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 194
+        "line": 348
       },
       "callee": {
         "kind": "other-external",
@@ -5902,20 +5902,20 @@
         "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
         "followUpOwner": "future-draft-callee-validators"
       },
-      "hashPinnedSourceHash": "sha256:1404679e594e7b1a07b34de257df742c37b7bce054448ef2db663635d549c641",
+      "hashPinnedSourceHash": "sha256:6c82effd6598dc805d95c500cb55ed34202a597271a81fae070502513b3c1f1b",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 194,
+        "line": 348,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-207",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-369",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 207
+        "line": 369
       },
       "callee": {
         "kind": "other-external",
@@ -5930,7 +5930,32 @@
       "hashPinnedSourceHash": "sha256:c8a7f28ee077fb7906d9e12f0118c99748e9af78a3a0e026cdf44d36198c54d0",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
-        "line": 207,
+        "line": 369,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessCrashBackoff-ps1-485",
+      "caller": {
+        "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
+        "line": 485
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:8f56cb47ef7dfd3e4f124991287ffbe6d9ceee859c27107d65f56d7c7eaa4c28",
+      "discoveryMatch": {
+        "file": "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
+        "line": 485,
         "patternIds": [
           "ps-call-op"
         ]
@@ -6171,10 +6196,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2491",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2574",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2491
+        "line": 2574
       },
       "callee": {
         "kind": "ao",
@@ -6185,17 +6210,17 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2491,
+        "line": 2574,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2508",
+      "rowId": "site-scripts-lib-Orchestrator-SideProcessSupervisor-ps1-2591",
       "caller": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2508
+        "line": 2591
       },
       "callee": {
         "kind": "pack-ps1",
@@ -6206,7 +6231,7 @@
       "validatorId": "side-process-launch-contract",
       "discoveryMatch": {
         "file": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
-        "line": 2508,
+        "line": 2591,
         "patternIds": [
           "start-process"
         ]
