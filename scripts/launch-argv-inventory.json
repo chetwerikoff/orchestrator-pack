@@ -7878,10 +7878,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-vitest-pr-scoped-selection-mjs-188",
+      "rowId": "site-scripts-lib-vitest-pr-scoped-selection-mjs-192",
       "caller": {
         "file": "scripts/lib/vitest-pr-scoped-selection.mjs",
-        "line": 188
+        "line": 192
       },
       "callee": {
         "kind": "other-external",
@@ -7896,7 +7896,7 @@
       "hashPinnedSourceHash": "sha256:9bd3ffd8767376297dff226f10233d527c3c277637b4975607b830f96a4d9702",
       "discoveryMatch": {
         "file": "scripts/lib/vitest-pr-scoped-selection.mjs",
-        "line": 188,
+        "line": 192,
         "patternIds": [
           "spawnSync"
         ]
