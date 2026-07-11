@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_ISOLATE_TEST_BATCH_SIZE,
@@ -73,6 +75,17 @@ describe('batched invocation grouping', () => {
 });
 
 describe('RPC flake retry under batching', () => {
+  it('validates clean RPC-flake batch reports before accepting the invocation', () => {
+    const source = readFileSync(join(process.cwd(), 'scripts/run-vitest-heavy-shard.ps1'), 'utf8');
+    const cleanBranchStart = source.indexOf("if ($cleanReport -eq '1')");
+    const invocationPassedIndex = source.indexOf('$invocationPassed = $true', cleanBranchStart);
+    const validateIndex = source.indexOf('validate-report --report $partialReportPath', cleanBranchStart);
+
+    expect(cleanBranchStart).toBeGreaterThanOrEqual(0);
+    expect(validateIndex).toBeGreaterThan(cleanBranchStart);
+    expect(validateIndex).toBeLessThan(invocationPassedIndex);
+  });
+
   it('validates exactly one reported entry per planned batch member after retry resolves', () => {
     const units = buildHeavyInvocationUnits([
       { file: 'scripts/a.test.ts', mode: 'file', pool: 'threads' },

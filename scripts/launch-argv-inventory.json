@@ -9082,10 +9082,35 @@
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-260",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-225",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 260
+        "line": 225
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:ba2a8e8e6d8e9447c66eb1f3a993be196e8d22e1c1210f6a4c4300b87583f4f5",
+      "discoveryMatch": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 225,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-266",
+      "caller": {
+        "file": "scripts/run-vitest-heavy-shard.ps1",
+        "line": 266
       },
       "callee": {
         "kind": "other-external",
@@ -9100,17 +9125,17 @@
       "hashPinnedSourceHash": "sha256:57c089e0178abbb62947f15d4e00c52835423d325a16d09ccdbab5f9ce36a0a5",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 260,
+        "line": 266,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-288",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-294",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 288
+        "line": 294
       },
       "callee": {
         "kind": "other-external",
@@ -9125,17 +9150,17 @@
       "hashPinnedSourceHash": "sha256:3776d0265bba429d92b2b8eef35b201adfe671c2387a2975f800848b858f6051",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 288,
+        "line": 294,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-303",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-309",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 303
+        "line": 309
       },
       "callee": {
         "kind": "other-external",
@@ -9150,17 +9175,17 @@
       "hashPinnedSourceHash": "sha256:4e6225cfee589d143ae6c49719ab14cf94062f4f4858e9ee558efdaf9d97d7f7",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 303,
+        "line": 309,
         "patternIds": [
           "ps-call-op"
         ]
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-342",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-348",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 342
+        "line": 348
       },
       "callee": {
         "kind": "other-external",
@@ -9175,7 +9200,7 @@
       "hashPinnedSourceHash": "sha256:3a9ef5387514c9c1f7e2c656241dd6afb73ba57af18a775016f28d1e1e2ad65c",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 342,
+        "line": 348,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile",
@@ -9184,10 +9209,10 @@
       }
     },
     {
-      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-354",
+      "rowId": "site-scripts-run-vitest-heavy-shard-ps1-360",
       "caller": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 354
+        "line": 360
       },
       "callee": {
         "kind": "other-external",
@@ -9202,7 +9227,7 @@
       "hashPinnedSourceHash": "sha256:e3f5b0425a0e2e20e2ada41b16458b1eb80bc0f1927536062b4e30e4ca29942e",
       "discoveryMatch": {
         "file": "scripts/run-vitest-heavy-shard.ps1",
-        "line": 354,
+        "line": 360,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile",

@@ -221,6 +221,12 @@ try {
                                 Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard invocation $($invocation.label)"
                                 exit 1
                             }
+                            $plannedJson = @{ members = @($invocation.members) } | ConvertTo-Json -Compress -Depth 6
+                            & node $BatchingScript validate-report --report $partialReportPath --repo-root $Root --planned-json $plannedJson
+                            if ($LASTEXITCODE -ne 0) {
+                                Write-Host "[FAIL] Vitest runtime report for heavy shard $Shard invocation $($invocation.label) does not match planned batch members"
+                                exit 1
+                            }
                             $invocationPassed = $true
                             break
                         }
