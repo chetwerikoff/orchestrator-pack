@@ -2429,3 +2429,19 @@ Pack consumers resolve PR↔session ownership from the durable binding cache bef
 
 No operator restart required for the cache file itself; reconcile side processes pick up
 the module on next tick after deploy.
+## Vitest runtime-history protected-branch delivery (Issue #731)
+
+**Operator adoption** — after merge:
+
+1. Add the `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN` repo/org secret for
+   `chetwerikoff/orchestrator-pack`.
+2. Scope that credential to this repository only; it must be able to push the
+   fixed branch `ci/vitest-runtime-history-refresh` and open/update/merge its PR.
+3. Keep `main` branch protection unchanged for ordinary contributors. This flow is
+   designed to use the normal PR gate, not a bypass actor entry.
+4. Verify the live `main` rules still match
+   `docs/vitest-runtime-history-delivery-branch-protection.snapshot.json`; if the
+   required-check set changes, refresh the snapshot in a follow-up PR before
+   relying on automated delivery again.
+5. Run one end-to-end refresh after the secret is present and confirm the trusted
+   `pull_request_target` delivery workflow merges the generated PR.

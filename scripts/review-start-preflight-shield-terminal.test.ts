@@ -7,6 +7,7 @@ import {
   functionBody,
   ghPrChecksPath,
   it,
+  missingGhPath,
   path,
   psString,
   readFileSync,
@@ -16,7 +17,6 @@ import {
   shieldHelperPath,
   snapshotPath,
   stableHead,
-  tmpdir,
 } from './_test-review-start-preflight-shield-heavy.shared.js';
 
 describe('review-start preflight transient shield (#584)', () => {
@@ -75,7 +75,7 @@ describe('review-start preflight transient shield (#584)', () => {
     });
 
     it('returns gh_binary_missing for a missing scoped gh adoption command', () => {
-      const missingGh = path.join(tmpdir(), `missing-gh-${Date.now()}-${process.pid}.ps1`);
+      const missingGh = missingGhPath('missing-gh-');
       const result = runScopedPreflight(
         `
       $lookup = Invoke-ReviewStartPreflightGhPrView -RepoRoot ${psString(repoRoot)} -PrNumber 584
@@ -102,7 +102,7 @@ describe('review-start preflight transient shield (#584)', () => {
   describe('missing gh infra classification', () => {
     it('preserves infra_transport for gh_binary_missing recheck handling', () => {
       const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
-      const missingGh = path.join(tmpdir(), `missing-gh-recheck-${Date.now()}.ps1`);
+      const missingGh = missingGhPath('missing-gh-recheck-');
       const result = JSON.parse(runPwsh(
         `
         . ${psString(shieldHelperPath)}

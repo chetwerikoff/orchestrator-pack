@@ -1,0 +1,61 @@
+name: vitest-runtime-history-delivery
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('event-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event.pull_request.number != '' }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge-runtime-history-delivery:
+    name: Merge runtime-history delivery PR
+    if: >-
+      github.event.pull_request.base.ref == 'main'
+      && github.event.pull_request.head.ref == 'ci/vitest-runtime-history-refresh'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted base workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Require delivery credential and trusted actor
+        id: delivery_actor
+        shell: bash
+        env:
+          DELIVERY_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+          EVENT_SENDER_LOGIN: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DELIVERY_TOKEN}" ]; then
+            echo "VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN is required for protected-branch delivery" >&2
+            exit 1
+          fi
+          trusted_actor="$(GH_TOKEN="${DELIVERY_TOKEN}" ./scripts/gh api user --jq .login)"
+          if [ -z "${trusted_actor}" ]; then
+            echo "unable to resolve trusted delivery actor from VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN" >&2
+            exit 1
+          fi
+          if [ "${EVENT_SENDER_LOGIN}" != "${trusted_actor}" ]; then
+            echo "delivery event sender ${EVENT_SENDER_LOGIN} does not match trusted actor ${trusted_actor}; skipping privileged merge path" >&2
+            exit 1
+          fi
+          echo "trusted_actor=${trusted_actor}" >> "$GITHUB_OUTPUT"
+
+      - name: Monitor and merge delivery PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/vitest-runtime-history-delivery.mjs monitor-pr \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --expected-head-sha "${{ github.event.pull_request.head.sha }}"

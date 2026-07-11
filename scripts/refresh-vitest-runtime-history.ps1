@@ -81,6 +81,21 @@ function Invoke-RuntimeHistoryStaleReconcile {
     }
 }
 
+function Assert-OnlyRuntimeHistoryStaged {
+    $staged = git -C $RepoRoot diff --cached --name-only --diff-filter=ACMR
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[FAIL] runtime-history commit-back failed to inspect staged paths'
+        exit 1
+    }
+
+    $paths = @($staged | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($paths.Count -ne 1 -or $paths[0] -ne 'scripts/vitest-runtime-history.json') {
+        $joined = if ($paths.Count -eq 0) { '<none>' } else { ($paths -join ', ') }
+        Write-Host "[FAIL] runtime-history delivery path must stage only scripts/vitest-runtime-history.json (saw: $joined)"
+        exit 1
+    }
+}
+
 if ($CommitBack -and -not $DryRun) {
     Sync-RemoteRuntimeHistoryBase
 }
@@ -138,6 +153,7 @@ try {
             Write-Host '[PASS] runtime-history commit-back skipped (idempotent no-op after stale-base reconcile)'
             exit 0
         }
+        Assert-OnlyRuntimeHistoryStaged
 
         git -C $RepoRoot -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
             commit -m "chore(ci): refresh vitest runtime-history from measured heavy-shard reports"
@@ -146,14 +162,11 @@ try {
             exit 1
         }
 
-        git -C $RepoRoot push origin HEAD:main
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host '[PASS] runtime-history commit-back pushed to main'
-            exit 0
-        }
+        Write-Host '[PASS] runtime-history commit-back prepared delivery commit for dedicated branch PR'
+        exit 0
     }
 
-    Write-Host '[FAIL] runtime-history push failed after stale-base reconcile retries'
+    Write-Host '[FAIL] runtime-history delivery commit could not be prepared after stale-base reconcile retries'
     exit 1
 }
 finally {

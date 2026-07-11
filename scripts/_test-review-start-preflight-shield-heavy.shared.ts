@@ -10,6 +10,7 @@ export {
   fakeGhPath,
   ghPrChecksPath,
   listShieldAuditRecords,
+  missingGhPath,
   runScopedPreflight,
   shieldHelperPath,
   snapshotPath,
