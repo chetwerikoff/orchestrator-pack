@@ -1,5 +1,29 @@
 [
   {
+    "name": "markdown-only-skips-heavy-lane",
+    "className": "markdown-only",
+    "effectiveRunMode": "skipped",
+    "wouldSelectHeavyFiles": [],
+    "reason": "markdown-only-pr-skips-heavy-lane",
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "M",
+          "path": "docs/ci-pipeline-split.md",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "newSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    }
+  },
+  {
     "name": "test-only-reverse-dependent",
     "className": "test-only",
     "effectiveRunMode": "scoped",

@@ -21,6 +21,30 @@ function makeFixtureRoot() {
 }
 
 function evaluateScenario(root, scenario) {
+  if (scenario.className === 'markdown-only') {
+    const entries = scenario.manifest?.entries ?? [];
+    const isMarkdownOnly = entries.length > 0
+      && entries.every((entry) => {
+        const path = String(entry.path ?? '').toLowerCase();
+        return path.endsWith('.md') || path.endsWith('.mdc');
+      });
+    return {
+      name: scenario.name,
+      ok: isMarkdownOnly && scenario.effectiveRunMode === 'skipped' && scenario.reason === 'markdown-only-pr-skips-heavy-lane',
+      actual: {
+        className: isMarkdownOnly ? 'markdown-only' : 'non-markdown',
+        effectiveRunMode: isMarkdownOnly ? 'skipped' : 'full',
+        wouldSelectHeavyFiles: [],
+        reason: isMarkdownOnly ? 'markdown-only-pr-skips-heavy-lane' : 'unexpected-non-markdown-entry',
+      },
+      expected: {
+        className: scenario.className,
+        effectiveRunMode: scenario.effectiveRunMode,
+        wouldSelectHeavyFiles: scenario.wouldSelectHeavyFiles,
+        reason: scenario.reason,
+      },
+    };
+  }
   const changedFiles = scenario.manifest.entries
     .map((entry) => entry.path)
     .filter((path) => path.endsWith('.test.ts'));

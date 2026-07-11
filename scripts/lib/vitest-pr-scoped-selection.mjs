@@ -267,7 +267,7 @@ export function parseChangedPathManifest(raw) {
   if (!Array.isArray(parsed.entries)) {
     return { ok: false, reason: 'manifest-entries-invalid' };
   }
-  if (parsed.entryCount !== parsed.entries.length) {
+  if (parsed.diffOk && parsed.entryCount !== parsed.entries.length) {
     return { ok: false, reason: 'manifest-entry-count-mismatch' };
   }
 
@@ -671,8 +671,11 @@ export function resolveVitestPrScopeSelection(input) {
 }
 
 export function parseChangedPathManifestFromEnv(raw = process.env.OPK_CHANGED_VITEST_FILES) {
-  if (!raw) {
+  if (raw == null) {
     return null;
+  }
+  if (raw === '') {
+    return buildFailureManifest('', '', 'manifest-missing');
   }
   const parsed = parseChangedPathManifest(raw);
   if (!parsed.ok) {

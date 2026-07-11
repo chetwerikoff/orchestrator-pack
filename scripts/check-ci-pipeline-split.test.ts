@@ -38,6 +38,7 @@ import {
   buildChangedPathManifest,
   normalizePrScopeMode,
   parseChangedPathManifest,
+  parseChangedPathManifestFromEnv,
   resolveVitestPrScopeSelection,
 } from './lib/vitest-pr-scoped-selection.mjs';
 
@@ -857,6 +858,7 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
     className: string;
     effectiveRunMode: string;
     wouldSelectHeavyFiles: string[];
+    reason?: string;
     manifest: {
       version: number;
       baseSha: string;
@@ -870,6 +872,18 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
   it.each(scenarioMatrix)('matches scenario fixture %s', (scenario) => {
     const root = makePrScopeFixtureRoot();
     try {
+      if (scenario.className === 'markdown-only') {
+        const isMarkdownOnly = scenario.manifest.entries.length > 0
+          && scenario.manifest.entries.every((entry) => {
+            const path = String(entry.path ?? '').toLowerCase();
+            return path.endsWith('.md') || path.endsWith('.mdc');
+          });
+        expect(isMarkdownOnly).toBe(true);
+        expect(scenario.effectiveRunMode).toBe('skipped');
+        expect(scenario.wouldSelectHeavyFiles).toEqual([]);
+        expect(scenario.reason).toBe('markdown-only-pr-skips-heavy-lane');
+        return;
+      }
       const changedFiles = scenario.manifest.entries
         .map((entry) => String(entry.path ?? ''))
         .filter((path) => path.endsWith('.test.ts'));
@@ -933,6 +947,34 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
   it('fails closed on invalid manifest payloads instead of treating them as empty scope', () => {
     const parsed = parseChangedPathManifest('{"version":1,"baseSha":"a","headSha":"b","diffOk":true,"entryCount":1,"entries":[]}');
     expect(parsed.ok).toBe(false);
+  });
+
+  it('preserves oversized export failure manifests for fail-closed provenance', () => {
+    const parsed = parseChangedPathManifest(JSON.stringify({
+      version: 1,
+      baseSha: 'a',
+      headSha: 'b',
+      diffOk: false,
+      failureReason: 'changed-path-export-oversized',
+      entryCount: 42,
+      entries: [],
+      oversized: true,
+    }));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      throw new Error('expected oversized failure manifest to parse');
+    }
+    expect(parsed.manifest.diffOk).toBe(false);
+    expect(parsed.manifest.failureReason).toBe('changed-path-export-oversized');
+    expect(parsed.manifest.entryCount).toBe(42);
+    expect(parsed.manifest.entries).toEqual([]);
+  });
+
+  it('treats an empty changed-path export as a diff-computation failure manifest', () => {
+    const manifest = parseChangedPathManifestFromEnv('');
+    expect(manifest).not.toBeNull();
+    expect(manifest?.diffOk).toBe(false);
+    expect(manifest?.failureReason).toBe('manifest-missing');
   });
 
   it('normalizes kill-switch modes conservatively', () => {
