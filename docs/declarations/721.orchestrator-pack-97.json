@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "84ba4cb1140cfd043e3a361975429429f34a1326",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:2cf3cea99b901be4242f981885baf42dee6f21a88b199175084548eab78dccb2"
+    "active_scope_hash": "sha256:1b25d57b98db43f17d1e0d784d97086daa28674361d7f8c2eaaf5a0541c0c24b"
   },
   "declared_paths": [
     "AGENTS.md",
@@ -38,6 +38,7 @@
     "scripts/testmode-fleet-reaper.shared.ts",
     "scripts/testmode-fleet-reaper.test.ts",
     "scripts/testmode-fleet-reaper-wallclock.test.ts",
+    "scripts/invoke-testmode-fleet-reaper.ps1",
     "scripts/verify.ps1",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json",
@@ -70,7 +71,7 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:3d022e8e26b5aa3b34b3034a672ad8ed37a5325d771a42832121605a92ad45de",
-      "new_active_scope_hash": "sha256:2cf3cea99b901be4242f981885baf42dee6f21a88b199175084548eab78dccb2",
+      "new_active_scope_hash": "sha256:1b25d57b98db43f17d1e0d784d97086daa28674361d7f8c2eaaf5a0541c0c24b",
       "changed": {
         "added": [
           "docs/worker-report-store.mjs",
@@ -82,7 +83,8 @@
           "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts",
           "scripts/supervisor-fault-boundary-escalate.test.ts",
           "scripts/supervisor-fault-boundary.shared.ts",
-          "scripts/worker-report-store.test.ts"
+          "scripts/worker-report-store.test.ts",
+          "scripts/invoke-testmode-fleet-reaper.ps1"
         ],
         "removed": []
       },
