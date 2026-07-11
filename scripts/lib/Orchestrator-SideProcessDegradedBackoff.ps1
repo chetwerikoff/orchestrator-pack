@@ -292,6 +292,9 @@ function Update-OrchestratorWakeSupervisorChildStableWorkingRecovery {
 
     $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
     $fields = Get-OrchestratorWakeSupervisorChildDegradedBackoffFields -RecoveryEntry $recovery
+    if ($recovery.terminal) {
+        return
+    }
     if ($fields.failureClass -eq 'deterministic') {
         return
     }
@@ -307,7 +310,8 @@ function Update-OrchestratorWakeSupervisorChildStableWorkingRecovery {
         if (-not $progress -or -not $progress.lastProgressMs) {
             return
         }
-        Reset-OrchestratorWakeSupervisorChildCrashRecoveryState -Paths $Paths -ChildId $ChildId
+        Reset-OrchestratorWakeSupervisorChildCrashRecoveryState `
+            -Paths $Paths -ChildId $ChildId -ClearTerminalMetadata -ClearOutageEpisode
         if ($fields.stableWorkingPolls -gt 0) {
             Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
                     stableWorkingPolls = 0

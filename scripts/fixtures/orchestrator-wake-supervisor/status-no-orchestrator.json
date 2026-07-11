@@ -1,4 +1,7 @@
 {
+  "state": "ready",
+  "health": "ok",
+  "ready": "ready",
   "data": [
     {
       "id": "opk-worker",

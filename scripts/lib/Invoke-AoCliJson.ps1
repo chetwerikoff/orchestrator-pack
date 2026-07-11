@@ -258,7 +258,9 @@ function Get-AoStatusSessionsWithReportsFromPayload {
 
 
 function Get-AoDaemonHealthJson {
-    return Invoke-AoCliJson -AoArgs @('status', '--json') -FailureLabel 'ao status'
+    param([string]$AoCommand = 'ao')
+
+    return Invoke-AoCliJson -AoArgs @('status', '--json') -FailureLabel 'ao status' -AoCommand $AoCommand
 }
 
 function Assert-AoListPayloadShape {

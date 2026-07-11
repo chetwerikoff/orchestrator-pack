@@ -44,6 +44,137 @@ function Get-OrchestratorWakeSupervisorCrashMaxBackoffSeconds {
     return 600
 }
 
+function Get-OrchestratorWakeSupervisorTerminalRearmGraceSeconds {
+    $fromEnv = $env:AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS
+    if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$null)) {
+        return [Math]::Max(0, [int]$fromEnv)
+    }
+    return 5
+}
+
+function Get-OrchestratorWakeSupervisorTerminalRearmTtlSeconds {
+    $fromEnv = $env:AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS
+    if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$null)) {
+        return [Math]::Max(0, [int]$fromEnv)
+    }
+    return 60
+}
+
+function Get-OrchestratorWakeSupervisorTerminalRearmMaxAttempts {
+    $fromEnv = $env:AO_WAKE_SUPERVISOR_TERMINAL_REARM_MAX_ATTEMPTS
+    if ($fromEnv -and [int]::TryParse($fromEnv, [ref]$null)) {
+        return [Math]::Max(1, [int]$fromEnv)
+    }
+    return Get-OrchestratorSideProcessHealthRecoveryMaxAttempts
+}
+
+function Get-OrchestratorWakeSupervisorCurrentBootId {
+    $bootPath = '/proc/sys/kernel/random/boot_id'
+    try {
+        if (Test-Path -LiteralPath $bootPath) {
+            return [string](Get-Content -LiteralPath $bootPath -Raw -Encoding UTF8).Trim()
+        }
+    }
+    catch {
+        return ''
+    }
+    return ''
+}
+
+function Test-OrchestratorWakeSupervisorOutageClassTerminal {
+    param($RecoveryEntry)
+
+    return [string]$RecoveryEntry.terminalDaemonHealthClass -eq 'unhealthy-confirmed'
+}
+
+function Resolve-OrchestratorWakeSupervisorDaemonHealthPayloadClass {
+    param($Health)
+
+    $state = [string]$Health.state
+    $ready = [string]$Health.ready
+    $status = [string]$Health.status
+    $signal = [string]$Health.health
+    $unhealthy = $false
+
+    foreach ($value in @($state, $ready, $status, $signal)) {
+        $normalized = $value.Trim().ToLowerInvariant()
+        if (-not $normalized) {
+            continue
+        }
+        if ($normalized -in @('ok', 'ready', 'healthy', 'running', 'active', 'up', 'working', 'true')) {
+            continue
+        }
+        $unhealthy = $true
+        break
+    }
+
+    return @{
+        class = if ($unhealthy) { 'unhealthy-confirmed' } else { 'healthy' }
+        reason = if ($unhealthy) {
+            "ao status reported unhealthy state (state='$state', ready='$ready', status='$status', health='$signal')"
+        }
+        else {
+            "ao status healthy (state='$state', ready='$ready', status='$status', health='$signal')"
+        }
+    }
+}
+
+function Get-OrchestratorWakeSupervisorDaemonHealthClass {
+    param(
+        [string]$AoCommand = 'ao'
+    )
+
+    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    try {
+        $health = Get-AoDaemonHealthJson -AoCommand $AoCommand
+        $classification = Resolve-OrchestratorWakeSupervisorDaemonHealthPayloadClass -Health $health
+        return @{
+            class   = [string]$classification.class
+            reason  = [string]$classification.reason
+            observedAtMs = $nowMs
+        }
+    }
+    catch {
+        $message = [string]$_.Exception.Message
+        $stubFailure = [string]$env:AO_WAKE_SUPERVISOR_STATUS_FAILURE
+        if ($stubFailure -and ((-not $message) -or ($message -match '^ao status failed \(exit ?\):\s*$'))) {
+            $message = $stubFailure
+        }
+        $jsonStart = $message.IndexOf('{')
+        if ($jsonStart -ge 0) {
+            try {
+                $parsed = $message.Substring($jsonStart) | ConvertFrom-Json
+                $classification = Resolve-OrchestratorWakeSupervisorDaemonHealthPayloadClass -Health $parsed
+                return @{
+                    class = [string]$classification.class
+                    reason = [string]$classification.reason
+                    observedAtMs = $nowMs
+                }
+            }
+            catch {
+                # Fall through to textual classification.
+            }
+        }
+        $normalized = $message.ToLowerInvariant()
+        $unhealthyPattern = 'connection[ -]refused|econnrefused|connection[ -]reset|econnreset|reset by peer|http 5\d\d| 5\d\d|service unavailable|bad gateway|gateway timeout'
+        return @{
+            class   = if ($normalized -match $unhealthyPattern) { 'unhealthy-confirmed' } else { 'unknown' }
+            reason  = $message
+            observedAtMs = $nowMs
+        }
+    }
+}
+
+function New-OrchestratorWakeSupervisorTerminalEpisodeId {
+    param(
+        [string]$ChildId,
+        [long]$NowMs
+    )
+
+    $prefix = if ($ChildId) { $ChildId } else { 'child' }
+    return "$prefix-outage-$NowMs"
+}
+
 function Get-OrchestratorWakeSupervisorChildCrashBackoffFields {
     param($RecoveryEntry)
 
@@ -139,13 +270,24 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
         [string]$ChildId,
         [long]$ChildStartedMs,
         [int]$ChildPid = 0,
+        [string]$AoCommand = 'ao',
         [scriptblock]$LogWriter
     )
 
     $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
     if ($recovery.terminal) {
-        & $LogWriter "crash backoff: $($ChildId) terminal degraded; not restarting ($($recovery.reason))"
-        return @{ allowed = $false; reason = 'terminal'; recovery = $recovery }
+        $terminalDecision = Test-OrchestratorWakeSupervisorTerminalRearmAllowed `
+            -Paths $Paths -ChildId $ChildId -AoCommand $AoCommand -LogWriter $LogWriter
+        if ($terminalDecision.allowed) {
+            return @{
+                allowed = $true
+                reason = 'terminal_rearm'
+                recovery = $terminalDecision.recovery
+                rearmReason = $terminalDecision.rearmReason
+            }
+        }
+        & $LogWriter "crash backoff: $($ChildId) terminal degraded; not restarting ($($terminalDecision.reasonDetail))"
+        return @{ allowed = $false; reason = 'terminal'; recovery = $terminalDecision.recovery }
     }
 
     $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -190,6 +332,18 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
 
     $terminalRapidExits = Get-OrchestratorWakeSupervisorCrashTerminalRapidExits
     if ($updatedCrash.rapidExits -ge $terminalRapidExits) {
+        $probe = Get-OrchestratorWakeSupervisorDaemonHealthClass -AoCommand $AoCommand
+        $priorEpisodeId = [string]$recovery.terminalEpisodeId
+        $priorAttempts = if ($null -ne $recovery.terminalRearmAttempts) { [int]$recovery.terminalRearmAttempts } else { 0 }
+        $episodeId = ''
+        if ($probe.class -eq 'unhealthy-confirmed') {
+            if ($priorEpisodeId) {
+                $episodeId = $priorEpisodeId
+            }
+            else {
+                $episodeId = New-OrchestratorWakeSupervisorTerminalEpisodeId -ChildId $ChildId -NowMs $nowMs
+            }
+        }
         $terminalReason = "crash-loop circuit breaker: $($updatedCrash.rapidExits) rapid exits within ${rapidThresholdMs}ms lifespan threshold"
         & $LogWriter "$($ChildId) $terminalReason"
         Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates @{
@@ -199,6 +353,14 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
             rapidExits     = $updatedCrash.rapidExits
             backoffUntilMs = 0
             lastExitMs     = $updatedCrash.lastExitMs
+            terminalDaemonHealthClass = [string]$probe.class
+            terminalAtMs = $nowMs
+            terminalBootId = Get-OrchestratorWakeSupervisorCurrentBootId
+            terminalEpisodeId = $episodeId
+            terminalRearmAttempts = $priorAttempts
+            lastDaemonHealthClass = [string]$probe.class
+            lastDaemonHealthObservedAtMs = [long]$probe.observedAtMs
+            lastTerminalRearmMs = if ($null -ne $recovery.lastTerminalRearmMs) { [long]$recovery.lastTerminalRearmMs } else { 0 }
         })
         return @{ allowed = $false; reason = 'circuit_breaker'; recovery = $recovery }
     }
@@ -231,4 +393,102 @@ function Test-OrchestratorWakeSupervisorChildCrashRestartAllowed {
     })
 
     return @{ allowed = $true; reason = 'restart'; rapidExit = $rapidExit; rapidExits = $updatedCrash.rapidExits }
+}
+
+function Test-OrchestratorWakeSupervisorTerminalRearmAllowed {
+    param(
+        [hashtable]$Paths,
+        [string]$ChildId,
+        [string]$AoCommand = 'ao',
+        [scriptblock]$LogWriter
+    )
+
+    $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId
+    if (-not $recovery.terminal) {
+        return @{ allowed = $false; reason = 'not_terminal'; reasonDetail = 'not terminal'; recovery = $recovery }
+    }
+
+    $probe = Get-OrchestratorWakeSupervisorDaemonHealthClass -AoCommand $AoCommand
+    $updates = @{
+        lastDaemonHealthClass = [string]$probe.class
+        lastDaemonHealthObservedAtMs = [long]$probe.observedAtMs
+    }
+    $reasonDetail = [string]$probe.reason
+
+    if (-not (Test-OrchestratorWakeSupervisorOutageClassTerminal -RecoveryEntry $recovery)) {
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (
+            Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates $updates
+        )
+        return @{ allowed = $false; reason = 'non_outage_terminal'; reasonDetail = "terminal provenance '$($recovery.terminalDaemonHealthClass)' is not auto-reclaimable"; recovery = $recovery }
+    }
+
+    if ($probe.class -ne 'healthy') {
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (
+            Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates $updates
+        )
+        return @{ allowed = $false; reason = 'daemon_not_healthy'; reasonDetail = $reasonDetail; recovery = $recovery }
+    }
+
+    $nowMs = [long]$probe.observedAtMs
+    $graceMs = (Get-OrchestratorWakeSupervisorTerminalRearmGraceSeconds) * 1000
+    $ttlMs = (Get-OrchestratorWakeSupervisorTerminalRearmTtlSeconds) * 1000
+    $terminalAtMs = if ($null -ne $recovery.terminalAtMs) { [long]$recovery.terminalAtMs } else { 0 }
+    $lastHealthClass = if ($recovery.lastDaemonHealthClass) { [string]$recovery.lastDaemonHealthClass } else { [string]$recovery.terminalDaemonHealthClass }
+    $currentBootId = Get-OrchestratorWakeSupervisorCurrentBootId
+    $bootEligible = $false
+    if ($currentBootId -and [string]$recovery.terminalBootId) {
+        $bootEligible = ($currentBootId -ne [string]$recovery.terminalBootId)
+    }
+    $gracePassed = ($terminalAtMs -le 0) -or (($nowMs - $terminalAtMs) -ge $graceMs)
+    $ageEligible = $gracePassed -and $ttlMs -gt 0 -and $terminalAtMs -gt 0 -and (($nowMs - $terminalAtMs) -ge $ttlMs)
+    $edgeEligible = $gracePassed -and $lastHealthClass -ne 'healthy'
+
+    if (-not ($edgeEligible -or $ageEligible -or $bootEligible)) {
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (
+            Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates $updates
+        )
+        return @{ allowed = $false; reason = 'predicate_not_met'; reasonDetail = 'no outage recovery edge, TTL expiry, or boot-id reclaim predicate matched'; recovery = $recovery }
+    }
+
+    $attempts = if ($null -ne $recovery.terminalRearmAttempts) { [int]$recovery.terminalRearmAttempts } else { 0 }
+    $maxAttempts = Get-OrchestratorWakeSupervisorTerminalRearmMaxAttempts
+    if ($attempts -ge $maxAttempts) {
+        Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (
+            Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates $updates
+        )
+        return @{ allowed = $false; reason = 'attempt_cap'; reasonDetail = "re-arm attempt cap reached ($attempts/$maxAttempts)"; recovery = $recovery }
+    }
+
+    $rearmReason = if ($bootEligible) {
+        'boot_id_reclaim'
+    }
+    elseif ($ageEligible -and -not $edgeEligible) {
+        'terminal_ttl_reclaim'
+    }
+    else {
+        'health_recovery'
+    }
+    $episodeId = if ($recovery.terminalEpisodeId) {
+        [string]$recovery.terminalEpisodeId
+    }
+    else {
+        New-OrchestratorWakeSupervisorTerminalEpisodeId -ChildId $ChildId -NowMs $nowMs
+    }
+    $updates.terminalEpisodeId = $episodeId
+    $updates.terminalRearmAttempts = $attempts + 1
+    $updates.lastTerminalRearmMs = $nowMs
+
+    Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $Paths -ChildId $ChildId -RecoveryEntry (
+        Merge-OrchestratorWakeSupervisorChildRecoveryEntry -Recovery $recovery -Updates $updates
+    )
+    if ($LogWriter) {
+        & $LogWriter "terminal re-arm: $ChildId eligible via $rearmReason (attempt $($attempts + 1)/$maxAttempts)"
+    }
+    return @{
+        allowed = $true
+        reason = 'terminal_rearm'
+        reasonDetail = $rearmReason
+        rearmReason = $rearmReason
+        recovery = $recovery
+    }
 }

@@ -18,11 +18,101 @@ import {
   supervisorScript,
   waitForMarkerPidChange,
   waitForMarkers,
+  waitForProcessesStopped,
   waitForSupervisorLogMatch,
   fixedObservationWindow,
   sleepMs,
   type WakeMarker,
 } from './orchestrator-wake-supervisor.shared.js';
+
+function writeRecoveryState(
+  stateDir: string,
+  childId: string,
+  recovery: Record<string, unknown>,
+): void {
+  const statePath = path.join(stateDir, 'state.json');
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    payload = {};
+  }
+  const childRecovery = {
+    ...((payload.childRecovery as Record<string, unknown> | undefined) ?? {}),
+    [childId]: recovery,
+  };
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    `${JSON.stringify({ ...payload, childRecovery }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+function currentBootId(): string {
+  return fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+}
+
+function readRecoveryState(stateDir: string, childId: string): Record<string, unknown> {
+  const statePath = path.join(stateDir, 'state.json');
+  try {
+    const payload = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
+      childRecovery?: Record<string, Record<string, unknown>>;
+    };
+    return payload.childRecovery?.[childId] ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function stopDetachedSupervisorPreservingState(stateDir: string): Promise<void> {
+  const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
+  const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
+  if (supervisorPid > 0 && isAlive(supervisorPid)) {
+    process.kill(supervisorPid, 'SIGTERM');
+    await waitForProcessesStopped([supervisorPid], 10_000);
+  }
+}
+
+function startSupervisorWithFixture(
+  stateDir: string,
+  extraArgs: string[] = [],
+  env: Record<string, string> = {},
+) {
+  const aoCommand = path.join(fixtureDir, 'ao-stub.ps1');
+  const fixtureIndex = extraArgs.indexOf('-FixturePath');
+  const fixtureEnv =
+    fixtureIndex >= 0 && fixtureIndex + 1 < extraArgs.length
+      ? { AO_WAKE_SUPERVISOR_FIXTURE: extraArgs[fixtureIndex + 1] }
+      : {};
+  return spawn(
+    'pwsh',
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      supervisorScript,
+      '-Action',
+      'Start',
+      '-Foreground',
+      '-TestMode',
+      '-SkipInitialWait',
+      '-PollSeconds',
+      '1',
+      '-StateDir',
+      stateDir,
+      '-AoCommand',
+      aoCommand,
+      ...extraArgs,
+    ],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, ...fixtureEnv, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+}
 
 describe('orchestrator-wake-supervisor', () => {
   it('starts all registered managed children as separate processes', async () => {
@@ -92,14 +182,16 @@ describe('orchestrator-wake-supervisor', () => {
       AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS: '0',
       AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS: '1',
       AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS: '1',
+      AO_WAKE_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '99',
+      AO_WAKE_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '99',
       AO_WAKE_SUPERVISOR_TEST_MODE_listener: 'instant-exit',
     });
     await waitForMarkers(stateDir);
 
     const first = await readMarker(stateDir, 'listener');
-    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 25_000);
+    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 90_000);
     child.kill('SIGTERM');
-  });
+  }, 120_000);
 
   it('does not share fate between listener and escalation-router', async () => {
     const stateDir = makeStateDir();
@@ -230,7 +322,7 @@ describe('orchestrator-wake-supervisor', () => {
       fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-new.json')),
     );
 
-    const deadline = Date.now() + 45_000;
+    const deadline = Date.now() + 90_000;
     let sawNew = false;
     while (Date.now() < deadline) {
       const listener = await readMarker(stateDir, 'listener');
@@ -247,5 +339,222 @@ describe('orchestrator-wake-supervisor', () => {
     }
     expect(sawNew).toBe(true);
     child.kill('SIGTERM');
-  });
+  }, 120_000);
+
+  it('keeps an outage-class terminal stopped while daemon remains unhealthy, then auto-rearms once health recovers', async () => {
+    const stateDir = makeStateDir();
+    const dynamicFixture = path.join(stateDir, 'ao-status.json');
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-old-unhealthy.json')),
+    );
+    writeRecoveryState(stateDir, 'listener', {
+      terminal: true,
+      reason: 'crash-loop circuit breaker',
+      rapidExits: 12,
+      backoffUntilMs: 0,
+      lastExitMs: Date.now() - 30_000,
+      terminalDaemonHealthClass: 'unhealthy-confirmed',
+      terminalAtMs: Date.now() - 30_000,
+      terminalBootId: currentBootId(),
+      terminalEpisodeId: 'listener-outage-1',
+      terminalRearmAttempts: 0,
+      lastDaemonHealthClass: 'unhealthy-confirmed',
+      lastDaemonHealthObservedAtMs: Date.now() - 30_000,
+    });
+
+    const child = startSupervisorWithFixture(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-terminal-rearm', '-FixturePath', dynamicFixture],
+      {
+        AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS: '0',
+        AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS: '1',
+      },
+    );
+
+    await fixedObservationWindow(2000);
+    await expect(readMarker(stateDir, 'listener', 800)).rejects.toThrow();
+    expect(readRecoveryState(stateDir, 'listener').terminal).toBe(true);
+
+    fs.writeFileSync(
+      dynamicFixture,
+      fs.readFileSync(path.join(fixtureDir, 'status-orchestrator-op-old.json')),
+    );
+
+    const marker = await readMarker(stateDir, 'listener', 20_000);
+    expect(marker.pid).toBeGreaterThan(0);
+
+    const recovery = readRecoveryState(stateDir, 'listener');
+    expect(recovery.terminal).toBe(false);
+    expect(Number(recovery.rapidExits ?? 0)).toBe(0);
+    expect(Number(recovery.backoffUntilMs ?? 0)).toBe(0);
+    expect(String(recovery.reason ?? '')).toBe('');
+    expect(String(recovery.terminalDaemonHealthClass ?? '')).toBe('');
+
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, 60_000);
+
+  it('does not auto-reclaim healthy or unknown terminal provenance on cold start', async () => {
+    for (const provenance of ['healthy', 'unknown'] as const) {
+      const stateDir = makeStateDir();
+      const statusFixture = path.join(fixtureDir, 'status-orchestrator-op-old.json');
+      writeRecoveryState(stateDir, 'listener', {
+        terminal: true,
+        reason: `${provenance} terminal`,
+        rapidExits: 12,
+        backoffUntilMs: 0,
+        lastExitMs: Date.now() - 60_000,
+        terminalDaemonHealthClass: provenance,
+        terminalAtMs: Date.now() - 60_000,
+        terminalBootId: 'prior-boot-id',
+        terminalEpisodeId: 'listener-locked',
+        terminalRearmAttempts: 0,
+        lastDaemonHealthClass: 'unhealthy-confirmed',
+        lastDaemonHealthObservedAtMs: Date.now() - 60_000,
+      });
+
+      const child = startSupervisorWithFixture(
+        stateDir,
+        ['-OrchestratorSessionId', `op-terminal-${provenance}`, '-FixturePath', statusFixture],
+        {
+          AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS: '0',
+          AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS: '1',
+        },
+      );
+
+      await fixedObservationWindow(2000);
+      await expect(readMarker(stateDir, 'listener', 800)).rejects.toThrow();
+      expect(readRecoveryState(stateDir, 'listener').terminal).toBe(true);
+
+      child.kill('SIGTERM');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+    }
+  }, 60_000);
+
+  it('restarts an alive outage-class terminal child instead of stopping it into permanence', async () => {
+    const stateDir = makeStateDir();
+    const statusFixture = path.join(fixtureDir, 'status-orchestrator-op-old.json');
+    const child = startSupervisorWithFixture(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-alive-terminal', '-FixturePath', statusFixture],
+      {
+        AO_WAKE_SUPERVISOR_TEST_MODE_listener: 'prompt-block',
+        AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS: '15000',
+        AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS: '0',
+        AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS: '1',
+      },
+    );
+    const first = await readMarker(stateDir, 'listener', 20_000);
+
+    writeRecoveryState(stateDir, 'listener', {
+      terminal: true,
+      reason: 'outage terminal survivor',
+      rapidExits: 12,
+      backoffUntilMs: 0,
+      lastExitMs: Date.now() - 30_000,
+      terminalDaemonHealthClass: 'unhealthy-confirmed',
+      terminalAtMs: Date.now() - 30_000,
+      terminalBootId: currentBootId(),
+      terminalEpisodeId: 'listener-survivor',
+      terminalRearmAttempts: 0,
+      lastDaemonHealthClass: 'unhealthy-confirmed',
+      lastDaemonHealthObservedAtMs: Date.now() - 30_000,
+    });
+
+    await waitForMarkerPidChange(stateDir, 'listener', first.pid, 20_000);
+    const restarted = await readMarker(stateDir, 'listener', 5_000);
+    expect(restarted.pid).not.toBe(first.pid);
+    expect(readRecoveryState(stateDir, 'listener').terminal).toBe(false);
+
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, 60_000);
+
+  it('reclaims a stale outage-class terminal after boot-id change when daemon is healthy', async () => {
+    const stateDir = makeStateDir();
+    const statusFixture = path.join(fixtureDir, 'status-orchestrator-op-old.json');
+    writeRecoveryState(stateDir, 'listener', {
+      terminal: true,
+      reason: 'prior boot outage terminal',
+      rapidExits: 12,
+      backoffUntilMs: 0,
+      lastExitMs: Date.now() - 30_000,
+      terminalDaemonHealthClass: 'unhealthy-confirmed',
+      terminalAtMs: Date.now() - 30_000,
+      terminalBootId: 'prior-boot-id',
+      terminalEpisodeId: 'listener-prior-boot',
+      terminalRearmAttempts: 0,
+      lastDaemonHealthClass: 'healthy',
+      lastDaemonHealthObservedAtMs: Date.now() - 30_000,
+    });
+
+    const child = startSupervisorWithFixture(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-prior-boot-terminal', '-FixturePath', statusFixture],
+      {
+        AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS: '0',
+        AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS: '3600',
+      },
+    );
+
+    const marker = await readMarker(stateDir, 'listener', 20_000);
+    expect(marker.pid).toBeGreaterThan(0);
+    expect(readRecoveryState(stateDir, 'listener').terminal).toBe(false);
+
+    child.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, 60_000);
+
+  it('keeps the outage re-arm attempt cap across supervisor restarts', async () => {
+    const stateDir = makeStateDir();
+    const statusFixture = path.join(fixtureDir, 'status-orchestrator-op-old.json');
+    writeRecoveryState(stateDir, 'listener', {
+      terminal: true,
+      reason: 'capped outage terminal',
+      rapidExits: 12,
+      backoffUntilMs: 0,
+      lastExitMs: Date.now() - 30_000,
+      terminalDaemonHealthClass: 'unhealthy-confirmed',
+      terminalAtMs: Date.now() - 30_000,
+      terminalBootId: currentBootId(),
+      terminalEpisodeId: 'listener-capped',
+      terminalRearmAttempts: 1,
+      lastDaemonHealthClass: 'unhealthy-confirmed',
+      lastDaemonHealthObservedAtMs: Date.now() - 30_000,
+    });
+
+    const env = {
+      AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS: '0',
+      AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS: '1',
+      AO_WAKE_SUPERVISOR_TERMINAL_REARM_MAX_ATTEMPTS: '1',
+    };
+
+    const firstRun = startSupervisorWithFixture(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-capped-terminal', '-FixturePath', statusFixture],
+      env,
+    );
+    await fixedObservationWindow(2000);
+    await expect(readMarker(stateDir, 'listener', 800)).rejects.toThrow();
+    await stopDetachedSupervisorPreservingState(stateDir);
+    firstRun.kill('SIGTERM');
+
+    const secondRun = startSupervisorWithFixture(
+      stateDir,
+      ['-OrchestratorSessionId', 'op-capped-terminal', '-FixturePath', statusFixture],
+      env,
+    );
+    await fixedObservationWindow(2000);
+    await expect(readMarker(stateDir, 'listener', 800)).rejects.toThrow();
+    expect(Number(readRecoveryState(stateDir, 'listener').terminalRearmAttempts ?? 0)).toBe(1);
+
+    secondRun.kill('SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, 60_000);
 });

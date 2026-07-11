@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   cleanupSupervisorTests,
   countLogMatches,
@@ -71,5 +74,76 @@ describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
     child.kill('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 1000));
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  }, timeoutMs);
+
+  it('records outage-class terminal provenance and preserves the existing outage episode on retrip', async () => {
+    const stateDir = makeStateDir();
+    const repoRoot = process.cwd();
+    const aoStub = path.join(
+      repoRoot,
+      'scripts',
+      'fixtures',
+      'orchestrator-wake-supervisor',
+      'ao-stub.ps1',
+    );
+    const healthyFixture = path.join(
+      repoRoot,
+      'scripts',
+      'fixtures',
+      'orchestrator-wake-supervisor',
+      'status-orchestrator-op-old.json',
+    );
+    const supervisorLib = path.join(repoRoot, 'scripts', 'lib', 'Orchestrator-SideProcessSupervisor.ps1');
+    const scriptPath = path.join(stateDir, 'outage-provenance.ps1');
+
+    const ps = `
+      . '${supervisorLib.replace(/'/g, "''")}';
+      $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}';
+      Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'listener' -RecoveryEntry @{
+        terminal = $false
+        terminalEpisodeId = 'listener-outage-episode-1'
+        terminalRearmAttempts = 1
+        lastDaemonHealthClass = 'healthy'
+      };
+      $log = { param([string]$Message) };
+      $null = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId 'listener' -ChildStartedMs 0 -ChildPid 0 -AoCommand '${aoStub.replace(/'/g, "''")}' -LogWriter $log;
+      $decision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId 'listener' -ChildStartedMs 0 -ChildPid 0 -AoCommand '${aoStub.replace(/'/g, "''")}' -LogWriter $log;
+      $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'listener';
+      [pscustomobject]@{
+        allowed = [bool]$decision.allowed
+        reason = [string]$decision.reason
+        terminal = [bool]$recovery.terminal
+        terminalDaemonHealthClass = [string]$recovery.terminalDaemonHealthClass
+        terminalEpisodeId = [string]$recovery.terminalEpisodeId
+        terminalRearmAttempts = [int]$recovery.terminalRearmAttempts
+      } | ConvertTo-Json -Compress
+    `;
+    writeFileSync(scriptPath, ps, 'utf8');
+    const result = spawnSync(
+      'bash',
+      ['-lc', `timeout 20s pwsh -NoProfile -ExecutionPolicy Bypass -File '${scriptPath.replace(/'/g, "'\\''")}'`],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_WAKE_SUPERVISOR_FIXTURE: healthyFixture,
+          AO_WAKE_SUPERVISOR_STATUS_FAILURE: 'connection-refused',
+          AO_WAKE_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '99',
+          AO_WAKE_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '2',
+          AO_WAKE_SUPERVISOR_CRASH_BASE_BACKOFF_SECONDS: '1',
+          AO_WAKE_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS: '5000',
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(payload.allowed).toBe(false);
+    expect(payload.reason).toBe('circuit_breaker');
+    expect(payload.terminal).toBe(true);
+    expect(payload.terminalDaemonHealthClass).toBe('unhealthy-confirmed');
+    expect(payload.terminalEpisodeId).toBe('listener-outage-episode-1');
+    expect(payload.terminalRearmAttempts).toBe(1);
   }, timeoutMs);
 });
