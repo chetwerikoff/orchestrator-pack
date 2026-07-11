@@ -247,6 +247,10 @@ try {
                             Write-Host "[FAIL] Vitest heavy shard $Shard invocation $($invocation.label) reported a genuine test failure; not retrying a non-flake assertion failure"
                             break
                         }
+                        if (@($invocation.members).Count -gt 1) {
+                            Write-Host "[FAIL] Vitest heavy shard $Shard invocation $($invocation.label) crashed without RPC-flake signature or reported assertion failure; batched crashes fail closed to preserve batch-member attribution"
+                            break
+                        }
                         if ($attempt -lt $maxFileAttempts) {
                             Write-Host "[WARN] Vitest heavy shard $Shard invocation $($invocation.label) failed (attempt $attempt/$maxFileAttempts, exit=$failedExitCode); cleaning fleet and retrying..."
                             Invoke-HeavyShardFleetCleanup -Shard $Shard

@@ -157,6 +157,17 @@ describe('heavyPerTestIsolate batching safety default', () => {
 });
 
 describe('batch crash fail-closed attribution', () => {
+  it('fails closed on non-flake batched process crashes before retrying', () => {
+    const source = readFileSync(join(process.cwd(), 'scripts/run-vitest-heavy-shard.ps1'), 'utf8');
+    const nonZeroBranchStart = source.indexOf('if ($LASTEXITCODE -ne 0)');
+    const batchCrashGuardIndex = source.indexOf('@($invocation.members).Count -gt 1', nonZeroBranchStart);
+    const retryWarningIndex = source.indexOf('failed (attempt $attempt/$maxFileAttempts', nonZeroBranchStart);
+
+    expect(nonZeroBranchStart).toBeGreaterThanOrEqual(0);
+    expect(batchCrashGuardIndex).toBeGreaterThan(nonZeroBranchStart);
+    expect(batchCrashGuardIndex).toBeLessThan(retryWarningIndex);
+  });
+
   it('names missing batch members as unresolved instead of silently passing partial reports', () => {
     const units = buildHeavyInvocationUnits([
       { file: 'scripts/a.test.ts', mode: 'file', pool: 'threads' },
