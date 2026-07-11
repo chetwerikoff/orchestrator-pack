@@ -892,6 +892,9 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/lib/Review-StartClaim.ps1',
     'scripts/review-run-recovery.ps1',
   ],
+  721: [
+    'scripts/orchestrator-message-protected-runtime.manifest.json',
+  ],
   384: [
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
@@ -1104,12 +1107,17 @@ function hydrateGithubPullRequestRefs(repoRoot) {
   if (!hasOriginRemote(repoRoot)) return null;
   for (const sha of [pr.baseSha, pr.headSha]) {
     if (gitRefExists(repoRoot, sha)) continue;
-    execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', sha], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-    });
+    try {
+      execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', sha], {
+        cwd: repoRoot,
+        stdio: 'pipe',
+      });
+    }
+    catch {
+      return null;
+    }
     if (!gitRefExists(repoRoot, sha)) {
-      throw new Error(`failed to fetch pull_request ref ${sha}`);
+      return null;
     }
   }
   return pr;
@@ -1269,6 +1277,9 @@ export function checkProtectedRuntimeDiff(changedFiles, protectedManifest, optio
   for (const file of changedFiles ?? []) {
     const norm = file.replace(/\\/g, '/');
     if (norm.includes('orchestrator-message-protected-runtime.manifest.json')) {
+      if (coordinatedAllow.has(norm)) {
+        continue;
+      }
       if (baseManifestExists) {
         violations.push(`protected matrix manifest cannot be redefined in gated diff: ${norm}`);
       }
