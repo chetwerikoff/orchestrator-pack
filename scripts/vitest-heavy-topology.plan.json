@@ -1,6 +1,6 @@
 {
   "issue": 695,
-  "heavyShardCount": 10,
+  "heavyShardCount": 8,
   "heavyShardIndices": [
     1,
     2,
@@ -9,9 +9,7 @@
     5,
     6,
     7,
-    8,
-    9,
-    10
+    8
   ],
   "heavyShardMatrix": [
     1,
@@ -21,15 +19,13 @@
     5,
     6,
     7,
-    8,
-    9,
-    10
+    8
   ],
   "fallbackClassification": "derived",
   "targetShardSeconds": 900,
-  "heavyLaneTotalWeightSeconds": 8618,
+  "heavyLaneTotalWeightSeconds": 7030,
   "underProvisioned": false,
-  "rawDerivedCount": 10,
+  "rawDerivedCount": 8,
   "weightInputReason": null,
   "policy": {
     "targetShardSeconds": 900,
@@ -38,8 +34,8 @@
     "fallbackHeavyShardCount": 7
   },
   "parity": {
-    "count": 10,
-    "matrixLength": 10
+    "count": 8,
+    "matrixLength": 8
   },
   "oversizedOffenders": [],
   "unresolvedGuardWeights": []
