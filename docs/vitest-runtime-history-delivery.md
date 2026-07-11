@@ -19,6 +19,14 @@ the base-branch definition, validates the PR file list through GitHub API, waits
 for the required checks named in the committed snapshot, and merges only when
 they pass.
 
+When the fixed delivery branch already exists, the refresh workflow fetches that
+branch first, reconciles its pending `vitest-runtime-history.json` into the newly
+measured artifact, amends the prepared delivery commit if the merged history
+changes, and only then pushes with an explicit `--force-with-lease` bound to the
+fetched branch tip. That preserves pending measurements from an earlier still-open
+delivery PR instead of overwriting them with a stale-base recomputation from
+`main` alone.
+
 ## Why this path
 
 - `main` rejects direct pushes with required status checks (`GH006`), so the old

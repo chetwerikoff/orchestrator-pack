@@ -276,6 +276,10 @@ and a trusted PR merge path instead of a direct `git push origin HEAD:main`.
   on `pull_request_target`, using the base-branch workflow definition
 - Delivery diff gate: only `scripts/vitest-runtime-history.json` may appear in the
   PR; any extra path fails closed before merge
+- Overlap handling: when the fixed delivery branch already exists, the refresh run
+  fetches that branch, reconciles the pending history file into the newly measured
+  artifact, amends the prepared delivery commit if needed, and then pushes with an
+  explicit `--force-with-lease` bound to the fetched branch tip
 - Live ruleset evidence: `docs/vitest-runtime-history-delivery-branch-protection.snapshot.json`
   records the captured `main` protection state used by the guard
 

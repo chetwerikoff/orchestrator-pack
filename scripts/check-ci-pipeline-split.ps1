@@ -570,6 +570,15 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
         if ($refreshJob -notmatch 'ci/vitest-runtime-history-refresh') {
             Add-Fail 'refresh-runtime-history job must push the fixed runtime-history delivery branch'
         }
+        if ($refreshJob -notmatch 'refs/remotes/origin/\$\{DELIVERY_BRANCH\}' -and $refreshJob -notmatch 'refs/remotes/origin/\$\{\s*DELIVERY_BRANCH\s*\}') {
+            Add-Fail 'refresh-runtime-history job must fetch the fixed delivery branch before updating it'
+        }
+        if ($refreshJob -notmatch 'refresh-vitest-runtime-history\.mjs reconcile') {
+            Add-Fail 'refresh-runtime-history job must reconcile pending delivery-branch history before force-pushing the fixed branch'
+        }
+        if ($refreshJob -notmatch 'force-with-lease="refs/heads/\$\{DELIVERY_BRANCH\}:\$\{REMOTE_SHA\}"' -and $refreshJob -notmatch 'force-with-lease="refs/heads/\$\{\s*DELIVERY_BRANCH\s*\}:\$\{\s*REMOTE_SHA\s*\}"') {
+            Add-Fail 'refresh-runtime-history job must bind force-with-lease to the fetched delivery-branch tip when reusing the fixed branch'
+        }
         if ($refreshJob -notmatch 'vitest-runtime-history-delivery\.mjs upsert-pr') {
             Add-Fail 'refresh-runtime-history job must open or update the dedicated runtime-history delivery PR'
         }
