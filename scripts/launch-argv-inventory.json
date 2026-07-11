@@ -7328,10 +7328,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-reverify-command-resolution-ts-384",
+      "rowId": "site-scripts-lib-reverify-command-resolution-ts-339",
       "caller": {
         "file": "scripts/lib/reverify-command-resolution.ts",
-        "line": 384
+        "line": 339
       },
       "callee": {
         "kind": "other-external",
@@ -7346,7 +7346,7 @@
       "hashPinnedSourceHash": "sha256:1886447ada815fdd875cafa54f64b838827923d3b7d0c814d293061729a94e5b",
       "discoveryMatch": {
         "file": "scripts/lib/reverify-command-resolution.ts",
-        "line": 384,
+        "line": 339,
         "patternIds": [
           "spawnSync"
         ]
@@ -7878,10 +7878,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-vitest-pr-scoped-selection-mjs-194",
+      "rowId": "site-scripts-lib-vitest-pr-scoped-selection-mjs-188",
       "caller": {
         "file": "scripts/lib/vitest-pr-scoped-selection.mjs",
-        "line": 194
+        "line": 188
       },
       "callee": {
         "kind": "other-external",
@@ -7896,7 +7896,7 @@
       "hashPinnedSourceHash": "sha256:9bd3ffd8767376297dff226f10233d527c3c277637b4975607b830f96a4d9702",
       "discoveryMatch": {
         "file": "scripts/lib/vitest-pr-scoped-selection.mjs",
-        "line": 194,
+        "line": 188,
         "patternIds": [
           "spawnSync"
         ]

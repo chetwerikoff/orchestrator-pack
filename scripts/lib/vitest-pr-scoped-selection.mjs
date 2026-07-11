@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
+import { collectLocalModuleSpecifiers } from './module-specifiers.mjs';
 
 const MANIFEST_VERSION = 1;
 const DEFAULT_EXPORT_MAX_BYTES = 60_000;
@@ -43,13 +44,6 @@ const SELF_REFERENTIAL_PATHS = new Set([
   'scripts/run-vitest-heavy-shard.ps1',
   'scripts/vitest-ci-lanes.config.json',
 ]);
-
-const STATIC_MODULE_IMPORT_RE =
-  /\b(?:import|export)\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g;
-const DYNAMIC_MODULE_IMPORT_LITERAL_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-const FROM_CLAUSE_IMPORT_RE = /\bfrom\s+['"]([^'"]+)['"]/g;
-const UNESTABLISHABLE_DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(?![\s]*['"])/m;
-const UNESTABLISHABLE_DYNAMIC_IMPORT_TEMPLATE_RE = /\bimport\s*\(\s*`/m;
 
 function normalizePath(value) {
   return String(value).replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/$/, '');
@@ -311,44 +305,45 @@ export function parseChangedPathManifest(raw) {
   };
 }
 
-function collectLocalModuleSpecifiers(content) {
-  const specifiers = [];
-  let establishable = !UNESTABLISHABLE_DYNAMIC_IMPORT_RE.test(content)
-    && !UNESTABLISHABLE_DYNAMIC_IMPORT_TEMPLATE_RE.test(content);
+function isRegularGitFileMode(mode) {
+  return mode === '100644' || mode === '100755';
+}
 
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('"') || trimmed.startsWith("'") || trimmed.startsWith('`')) {
-      continue;
-    }
+function isAnalyzableSourceEntry(entry) {
+  if (!isSourceLikePath(entry.path)) {
+    return false;
+  }
+  if (entry.status === 'A') {
+    return isRegularGitFileMode(entry.newMode);
+  }
+  return isRegularGitFileMode(entry.oldMode) && isRegularGitFileMode(entry.newMode);
+}
 
-    STATIC_MODULE_IMPORT_RE.lastIndex = 0;
-    let match;
-    while ((match = STATIC_MODULE_IMPORT_RE.exec(line)) !== null) {
-      const specifier = match[1] ?? match[2];
-      if (specifier) {
-        specifiers.push(specifier);
-      }
-    }
-
-    DYNAMIC_MODULE_IMPORT_LITERAL_RE.lastIndex = 0;
-    while ((match = DYNAMIC_MODULE_IMPORT_LITERAL_RE.exec(line)) !== null) {
-      const specifier = match[1];
-      if (specifier) {
-        specifiers.push(specifier);
-      }
-    }
-
-    FROM_CLAUSE_IMPORT_RE.lastIndex = 0;
-    while ((match = FROM_CLAUSE_IMPORT_RE.exec(line)) !== null) {
-      const specifier = match[1];
-      if (specifier) {
-        specifiers.push(specifier);
-      }
-    }
+function decodeAnalyzableSourceContent(absolute) {
+  let stats;
+  try {
+    stats = lstatSync(absolute);
+  } catch {
+    return null;
+  }
+  if (!stats.isFile()) {
+    return null;
   }
 
-  return { specifiers, establishable };
+  let bytes;
+  try {
+    bytes = readFileSync(absolute);
+  } catch {
+    return null;
+  }
+  if (bytes.includes(0)) {
+    return null;
+  }
+  const content = bytes.toString('utf8');
+  if (content.includes('\uFFFD')) {
+    return null;
+  }
+  return content;
 }
 
 function resolveLocalModulePath(fromFile, specifier) {
@@ -504,10 +499,8 @@ function buildDependencyGraph(repoRoot) {
 
   for (const relPath of listFirstPartySourceFiles(repoRoot)) {
     const absolute = join(repoRoot, relPath);
-    let content = '';
-    try {
-      content = readFileSync(absolute, 'utf8');
-    } catch {
+    const content = decodeAnalyzableSourceContent(absolute);
+    if (content === null) {
       nodes.set(relPath, { imports: new Set(), establishable: false });
       continue;
     }
@@ -730,7 +723,7 @@ export function resolveVitestPrScopeSelection(input) {
     if (isMarkdownPath(entry.path)) {
       continue;
     }
-    if (!isSourceLikePath(entry.path)) {
+    if (!isAnalyzableSourceEntry(entry)) {
       lowConfidence = true;
       continue;
     }

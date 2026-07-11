@@ -1073,6 +1073,78 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
     }
   });
 
+  it('fails closed on source-looking symlink mode changes', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-a.test.ts'],
+        heavyFiles: ['scripts/heavy-a.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'M',
+              path: 'scripts/feature-a.ts',
+              oldMode: '100644',
+              newMode: '120000',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('source-only');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('low-confidence-or-unmapped-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on source-looking binary changes', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      writeFileSync(join(root, 'scripts/feature-a.ts'), Buffer.from([0x65, 0x78, 0x70, 0x00, 0xff]));
+
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-a.test.ts'],
+        heavyFiles: ['scripts/heavy-a.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'M',
+              path: 'scripts/feature-a.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('source-only');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('low-confidence-or-unmapped-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('builds a bounded failure manifest when changed-path export would exceed transport size', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-git-'));
     try {
