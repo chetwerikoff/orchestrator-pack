@@ -31,6 +31,7 @@ const WORKFLOW_CONFIG_PATHS = new Set([
   'package.json',
   'scripts/vitest-ci-lanes.config.json',
 ]);
+const VITEST_CONFIG_RE = /(^|\/)(?:[^/]+\.)?vitest\.config\.(?:[cm]?[jt]s|[jt]sx)$/i;
 
 const SELF_REFERENTIAL_PATHS = new Set([
   '.github/workflows/scope-guard.yml',
@@ -69,6 +70,9 @@ function isWorkflowConfigPath(path) {
     return true;
   }
   if (WORKFLOW_CONFIG_PATHS.has(normalized)) {
+    return true;
+  }
+  if (VITEST_CONFIG_RE.test(normalized)) {
     return true;
   }
   return /^tsconfig(?:\..+)?\.json$/i.test(normalized);

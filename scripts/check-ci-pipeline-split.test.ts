@@ -1145,6 +1145,49 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
     }
   });
 
+  it('treats vitest config changes as workflow/config full-run triggers', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-a.test.ts'],
+        heavyFiles: ['scripts/heavy-a.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 2,
+          entries: [
+            {
+              status: 'M',
+              path: 'vitest.config.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+            {
+              status: 'M',
+              path: 'configs/custom.vitest.config.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '3'.repeat(40),
+              newSha: '4'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('workflow/config');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('workflow-or-config-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('builds a bounded failure manifest when changed-path export would exceed transport size', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-git-'));
     try {
