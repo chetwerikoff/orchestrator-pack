@@ -30,8 +30,6 @@ const UNANALYZABLE_PATTERNS = [
 ];
 
 const BASELINE_CLASS_IDS = [
-  'orchestrator-wake-webhook',
-  'orchestrator-wake-heartbeat',
   'ci-green-worker-nudge',
   'ci-failure-reaction-routed',
   'ci-failure-reconcile-ping',
@@ -267,7 +265,7 @@ export function validateEscalationClassEntry(entry, bundle) {
     violations.push(`${entry.escalation_class_id}: invalid route ${entry.route}`);
   }
   const childIds = bundle.supervisorRegistry.children?.map((c) => c.id) ?? [];
-  const allowedOwners = new Set(['orchestrator-rules', 'journaled-worker-send', 'escalation-router']);
+  const allowedOwners = new Set(['orchestrator-rules', 'journaled-worker-send', 'escalation-router', 'worker']);
   if (entry.owning_process && !childIds.includes(entry.owning_process) && !allowedOwners.has(entry.owning_process)) {
     violations.push(`${entry.escalation_class_id}: owning_process ${entry.owning_process} not in supervisor inventory`);
   }
@@ -923,7 +921,6 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   ],
   641: [
     'scripts/orchestrator-wake-common.ps1',
-    'scripts/orchestrator-wake-heartbeat.ps1',
     'scripts/orchestrator-wake-listener.ps1',
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',

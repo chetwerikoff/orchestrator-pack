@@ -157,5 +157,6 @@ describe('orchestrator escalation contract (#641)', () => {
     const matrix = JSON.parse(readFileSync(join(fixtureDir, 'scenario-matrix.json'), 'utf8'));
     expect(matrix.classes).toContain('escalation-dead-worker-recovery');
     expect(matrix.classes).toContain('escalation-worker-recovery');
+    expect(matrix.classes).toContain('escalation-worker-degraded-ci-handoff');
   });
 });

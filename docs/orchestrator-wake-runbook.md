@@ -1,64 +1,47 @@
-# Orchestrator wake listener and heartbeat runbook
+# Orchestrator wake listener runbook
 
-For the full supervised fleet (16 registry children + crash/stall/adoption scenarios), see
+This runbook covers the post-#721 listener contract. The webhook listener still admits
+wake-relevant AO notifications and may trigger review-start actuation, but the retired FYI
+orchestrator paste channel and the old heartbeat child are gone.
+
+For the full supervised fleet, see
 [`wake-supervisor-fleet-operator-reference.md`](wake-supervisor-fleet-operator-reference.md).
 
-**Event path:** AO `webhook` notifier → loopback HTTP POST →
-`ao send <orchestrator-session-id> <wake message>`.
+## Contract
 
-**Fast review trigger (Issue #207):** on `merge.ready` (approved-and-green completion wake),
-the listener first evaluates `docs/review-wake-trigger.mjs` (HEAD READY FOR REVIEW #195,
-covered-head dedupe #189) and may `ao review run` before forwarding the merge-intent wake.
-Processing bound: **5 seconds** from wake receipt to run decision (excluding AO/GitHub
-command latency). The listener is reclassified as **side-effecting** under the wake
-supervisor (`listener-side-effect.lock` drain/fence). See `scripts/lib/Invoke-ReviewWakeTrigger.ps1`.
+- Listener role: accept loopback AO webhook POSTs, classify wake-relevant events, preserve
+  review-start actuation for `merge.ready` / `ready_for_review`, and stamp listener progress.
+- Orchestrator-facing delivery: escalation-router only. The listener does **not** paste wake
+  text into the orchestrator pane.
+- Orchestrator liveness during event silence: escalation-router poll cadence, not heartbeat.
 
-**Deferred-head re-evaluation (Issue #235):** when the wake defers as not-yet-ready,
-`scripts/review-trigger-reeval.ps1` (supervised child, `review-trigger-reeval-side-effect.lock`)
-watches the scoped deferred-head set and may `ao review run` within **5 seconds** of
-observed readiness (5-minute bounded window; poll default **5 s**). Watch state:
-`{stateRoot}/review-trigger-reeval-watch.json`. Not a full-PR reconcile — classification
-`scoped_deferred_head_watch`. See `docs/review-trigger-reeval.mjs` and
-`scripts/lib/Record-ReviewTriggerReevalWatch.ps1`.
+## Active paths
 
-**Heartbeat path (issue #59):** separate process
-`scripts/orchestrator-wake-heartbeat.ps1` → periodic labelled `ao send` on a
-low-frequency interval, independent of webhook traffic.
+**Webhook listener:** AO `webhook` notifier → loopback HTTP POST → listener filter and
+actuation logic.
 
-For the full autonomous review-loop go-live checklist (live YAML, review command,
-verification), see [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md).
+**Fast review trigger (Issue #207):** on `merge.ready` and qualifying `ready_for_review`
+wakes, the listener may trigger `ao review run` before dedup. The listener also emits the
+`escalation-handoff-envelope` class through the #641 escalation contract. See
+`docs/review-wake-trigger.mjs` and `scripts/lib/Invoke-ReviewWakeTrigger.ps1`.
 
-The orchestrator applies its `orchestratorRules` decision procedure on the next
-AO-message-induced turn; the wake message is only a nudge naming the event kind
-and affected worker session / PR.
+**Deferred-head re-evaluation (Issue #235):** `review-trigger-reeval` remains the bounded
+follow-up for heads that were not yet ready at wake time.
 
-## Merged PR — review wakes are not triage work
+**Report-state review-start seed (Issue #391):** `review-ready-report-state-seed` still
+bridges accepted `ready_for_review` worker reports into the deferred re-evaluation flow. The
+listener itself stays escalation-only, but the seeded follow-up remains active and documented
+in `docs/review-ready-report-state-seed.mjs`.
 
-Review-related wakes (`review.needs_triage`, `ready_for_review`, `merge.ready`,
-etc.) may still be **accepted** by the listener and delivered as `ao send` to the
-orchestrator. That is expected: the wake path only schedules a turn.
-
-When the linked worker PR is **already merged on GitHub**, the orchestrator MUST
-**not** act on that wake as review backlog — no `ao review send`, no new
-`ao review run`, no review-loop ping or respawn for that PR. Suppression is
-entirely in **`orchestratorRules`** (**MERGED PR — REVIEW LOOP TERMINAL**, Issue
-#54), applied on the next orchestrator turn after verifying merge via GitHub
-(e.g. `gh pr view`), not from `ao status` session state alone.
-
-`docs/orchestrator-wake-filter.mjs` (`evaluateWakePayload`) is a **stateless**
-function over one payload; it cannot know PR merge state. Do **not** add
-merge-state logic to the filter for this issue — a future listener-level guard
-would be a separate change. After merge, operators may ignore stale review cards
-on the dashboard for that PR; see
-[`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md#after-manual-pr-merge).
+**Escalation router:** `orchestrator-escalation-router.ps1` is now the only supervised child
+that continues to deliver orchestrator-facing `llm-orchestrator` messages on its poll tick.
 
 ## Prerequisites
 
-- AO configured with `notifiers.webhook` and `notificationRouting` for `urgent`
-  and `action` pointing at the listener URL (see `agent-orchestrator.yaml.example`).
-- Node.js on PATH (used only to evaluate `docs/orchestrator-wake-filter.mjs`;
-  no `tsx` or `npm ci` required for the listener itself).
-- Orchestrator session id from `ao status` (e.g. `op-orchestrator`).
+- AO configured with `notifiers.webhook` and `notificationRouting` for `urgent` / `action`
+  to the listener URL.
+- Node.js on PATH for `docs/orchestrator-wake-filter.mjs`.
+- Orchestrator session id available to the supervisor or listener process.
 
 ## Defaults
 
@@ -66,86 +49,43 @@ on the dashboard for that PR; see
 |--------|---------|----------|
 | Port | `17487` | `-Port`, `AO_WAKE_LISTENER_PORT` |
 | Path | `/ao-wake` | `-Path` |
-| Bind address | `127.0.0.1` only | not configurable (by design) |
-| Webhook URL in example | `http://127.0.0.1:17487/ao-wake` | `notifiers.webhook.url` in local YAML |
-| Dedup window | 30 seconds | `-DedupWindowSeconds` (listener and heartbeat) |
-| Heartbeat interval | 15 minutes | `-IntervalMinutes`, `AO_WAKE_HEARTBEAT_INTERVAL_MINUTES` |
+| Bind address | `127.0.0.1` only | not configurable |
+| Webhook URL in example | `http://127.0.0.1:17487/ao-wake` | local YAML |
+| Dedup window | 30 seconds | `-DedupWindowSeconds` |
 | Shared dedup state file | `%TEMP%\orchestrator-wake-dedup.json` | `AO_WAKE_DEDUP_STATE` |
 | Orchestrator session | — | `-OrchestratorSessionId`, `AO_ORCHESTRATOR_SESSION_ID` |
 
-## Start (supervisor — preferred, Issue #168)
-
-Single entry point for **both** the listener and heartbeat (two separate processes).
-The supervisor resolves the orchestrator session id (override or `ao status`),
-restarts children on exit, and re-targets both when the session id changes.
+## Start (supervisor preferred)
 
 ```powershell
 cd <orchestrator-pack-root>
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
-```
-
-```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
 ```
 
-| Supervisor env | Default | Purpose |
-|----------------|---------|---------|
-| `AO_ORCHESTRATOR_SESSION_ID` | — | Pin orchestrator session (honoured by supervisor and passed to children) |
-| `AO_WAKE_SUPERVISOR_WAIT_SECONDS` | `120` | Max wait for orchestrator session before actionable exit |
-| `AO_WAKE_SUPERVISOR_POLL_SECONDS` | `5` | Supervisor poll interval |
-| `AO_WAKE_SUPERVISOR_STATE_DIR` | OS state dir | PID/log/state root |
-| `AO_WAKE_SUPERVISOR_PROJECT_ID` | `orchestrator-pack` | Project for `ao status` resolution |
+The supervisor now manages the listener plus the escalation-router as the active
+orchestrator-facing pair. Per-child logs include `<state-dir>/listener.log` and
+`<state-dir>/escalation-router.log`.
 
-Per-child logs: `<state-dir>/listener.log`, `<state-dir>/heartbeat.log`.
-
-## Start (event listener — manual fallback)
+## Manual listener fallback
 
 ```powershell
 cd <orchestrator-pack-root>
-$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'   # your id
+$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
 pwsh -File scripts/orchestrator-wake-listener.ps1
 ```
 
-Start this **alongside** `ao start` in a dedicated terminal. AO does not start the
-listener for you.
-
-Dry-run (no `ao send`):
+Dry-run:
 
 ```powershell
 pwsh -File scripts/orchestrator-wake-listener.ps1 -DryRun
 ```
 
-## Start (heartbeat backstop — manual fallback)
-
-Run in a **separate** terminal from the webhook listener (or use the supervisor above):
+Manual escalation-router fallback:
 
 ```powershell
-cd <orchestrator-pack-root>
-$env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
-pwsh -File scripts/orchestrator-wake-heartbeat.ps1
-```
-
-The heartbeat does not bind a port and does not read webhook POSTs. Stopping the
-listener does **not** stop the heartbeat; stopping AO notification delivery does
-**not** stop the heartbeat.
-
-Dry-run (logs `ao send` decisions without calling AO):
-
-```powershell
-pwsh -File scripts/orchestrator-wake-heartbeat.ps1 -DryRun
-```
-
-One-shot tick (smoke test):
-
-```powershell
-pwsh -File scripts/orchestrator-wake-heartbeat.ps1 -Once -DryRun
-```
-
-Heartbeat wake message format (distinct from events):
-
-```text
-wake heartbeat.reconcile periodic=reconcile
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-escalation-router.ps1 -OrchestratorSessionId op-orchestrator -Once
 ```
 
 ## Verify reachability
@@ -153,8 +93,6 @@ wake heartbeat.reconcile periodic=reconcile
 ```powershell
 Test-NetConnection -ComputerName 127.0.0.1 -Port 17487
 ```
-
-The listener logs `listening` on startup. Non-loopback clients receive HTTP 403.
 
 Synthetic POST (dry-run listener recommended):
 
@@ -182,74 +120,47 @@ $body = @{
 Invoke-RestMethod -Method POST -Uri 'http://127.0.0.1:17487/ao-wake' -Body $body -ContentType 'application/json'
 ```
 
-Expect a log line `accepted: ci.failing` or `dry-run: ao send ...`.
+Expect `accepted: ci.failing` in the listener log and no raw wake-text paste to the
+orchestrator pane.
 
 ## Wake-relevant event kinds
 
-The listener forwards when the payload semantic type or event type matches:
+The listener still accepts:
 
-- `review.needs_triage` (including AO `review.pending` notifications and
-  `codeReview.status: needs_triage` when present)
-- `pr_created`, `ready_for_review` (agent report semantic types)
+- `review.needs_triage`
+- `pr_created`
+- `ready_for_review`
 - `ci.failing`
-- `report.stale` (including `report-stale` reaction notifications)
+- `report.stale`
 - `merge.ready`
 
-Dropped without `ao send`:
-
-- `info` / `warning` priority (not routed to this webhook in the example config)
-- Other chatter (`summary.*`, `session.working`, etc.)
-- Malformed JSON or missing worker `sessionId`
+It drops malformed payloads, missing `sessionId`, and non-action/info chatter exactly as
+before. The difference after #721 is only the retired FYI send path.
 
 ## Single-flight deduplication
 
-The same wake kind + worker session + PR/run id within **30 seconds** produces one
-`ao send`. AO webhook retries therefore do not storm the orchestrator. Adjust
-with `-DedupWindowSeconds` if needed.
+The listener retains the same file-backed 30-second dedup window for wake admission. An
+accepted wake now means actuator work plus listener progress stamping; it no longer implies a
+raw orchestrator `ao send`.
 
-Listener and heartbeat share dedup state in `%TEMP%\orchestrator-wake-dedup.json`
-(override with `AO_WAKE_DEDUP_STATE`), coordinated by an exclusive sidecar
-`orchestrator-wake-dedup.json.lock` during each read-modify-write. A global key
-prevents **any** second orchestrator wake within the window — including a heartbeat
-immediately after an event-driven wake (or the reverse). If the lock cannot be
-acquired within 500 ms, the wake is skipped (`dedup_lock_timeout`) rather than
-risking a double `ao send`.
-
-## Detect listener / AO problems
+## Detect listener / escalation problems
 
 | Symptom | What to check |
 |--------|----------------|
-| No log lines after startup | AO not POSTing — confirm `notifiers.webhook.url`, routing, and `ao start` |
-| `quiet-period: no accepted wake events in 300s` | Listener up but no urgent/action notifications in 5 minutes |
-| `rejected non-loopback` | Something other than localhost hit the port — expected 403 |
+| No log lines after startup | AO not POSTing, or listener not running |
+| `quiet-period: no accepted wake events in 300s` | Listener is healthy but AO has not produced accepted wake traffic |
+| `rejected non-loopback` | Expected 403 for non-local callers |
 | `rejected: missing session id` | Malformed AO payload |
-| `ao send failed` | Orchestrator session id wrong or session not running |
-| Port bind failure | Another process on 17487 — change port in YAML and listener |
-| No heartbeat log lines | Heartbeat process not running — start `orchestrator-wake-heartbeat.ps1` |
-| `heartbeat skipped: interval_not_elapsed` | Normal between 15-minute ticks |
-| `heartbeat skipped: global_deduped` | Recent event wake within 30s — expected |
-
-## Webhook authentication
-
-The example uses loopback binding only (no shared secret). If your AO install
-adds `notifiers.webhook.headers` (e.g. `Authorization`), configure the same
-headers in local `agent-orchestrator.yaml` only; do not commit secrets.
+| Port bind failure | Another process on 17487 |
+| Escalation JSON not reaching the orchestrator pane | Check `orchestrator-escalation-router.log` and the #641 ack flow |
 
 ## Stop
 
-Press Ctrl+C in each wake terminal. AO and worker sessions are unaffected;
-only automatic orchestrator wakes stop until the processes are started again.
-Stopping the listener alone leaves the heartbeat path active (and vice versa).
+Press Ctrl+C in the listener terminal or stop the supervisor. AO and worker sessions are
+unaffected; only automatic webhook wake admission stops.
 
 ## See also
 
-- [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md) — end-to-end autoloop adoption
-- [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) — orchestrator `stuck` / `probe_failure`
-
-## review-ready-report-state-seed.ps1
-
-State-derived co-primary backstop (Issue #391): polls `ao status --include-terminated`
-for accepted `ready_for_review` reports, seeds `review-trigger-reeval-watch.json`, and
-starts review with `report_state_seed` when #195-ready. Distinct from webhook handoff and
-`review-trigger-reconcile.ps1` (`periodic=reconcile`).
-
+- [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md)
+- [`orchestrator-autoloop-go-live.md`](orchestrator-autoloop-go-live.md)
+- [`review-ready-report-state-seed.mjs`](review-ready-report-state-seed.mjs)

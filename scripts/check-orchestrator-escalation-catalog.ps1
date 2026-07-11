@@ -21,7 +21,8 @@ $matrixClasses = @(
     'escalation-gated-nudge',
     'escalation-envelope-ledger',
     'escalation-review-start-claim',
-    'escalation-worker-recovery'
+    'escalation-worker-recovery',
+    'escalation-worker-degraded-ci-handoff'
 )
 
 if (-not (Test-Path -LiteralPath $catalogPath)) {

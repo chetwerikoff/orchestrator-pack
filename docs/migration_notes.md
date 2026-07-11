@@ -808,7 +808,8 @@ that an orchestrator `ao send` appeared before `report-stale` (~30 min). See
 
 Issue #207 teaches `orchestrator-wake-listener.ps1` to issue the first `ao review run`
 on `merge.ready` (approved-and-green) completion wakes when HEAD READY FOR REVIEW (#195)
-holds. Additive to `review-trigger-reconcile.ps1` (#163) and the heartbeat backstop.
+holds. Additive to `review-trigger-reconcile.ps1` (#163); the post-#721 active
+orchestrator liveness path is the escalation-router poll, not heartbeat.
 
 **No new operator process** — restart the existing wake supervisor so the listener picks
 up the behaviour and side-effect fencing:
@@ -1796,6 +1797,22 @@ Full operator steps, dedup window, heartbeat interval, and failure detection are
 continue normally; the heartbeat still delivers periodic orchestrator turns until
 it is stopped too (and vice versa).
 
+## Issue #721 — retire orchestrator FYI wake/heartbeat channel
+
+**What changed:** the listener no longer pastes FYI wake text into the orchestrator pane,
+`scripts/orchestrator-wake-heartbeat.ps1` is retired from the side-process registry, and
+worker degraded-CI hand-off is documented against the #641 escalation router path. Active
+orchestrator liveness during webhook silence is the **escalation-router poll**.
+
+Operator adoption after merge:
+
+1. Pull the updated registry, `AGENTS.md`, and wake docs.
+2. Restart `scripts/orchestrator-wake-supervisor.ps1` from the operator checkout so the
+   retired heartbeat child is no longer running from stale local state.
+3. Confirm `-Action Status` shows no `heartbeat` child and does show `escalation-router`.
+4. Verify the orchestrator pane no longer accumulates `wake ...` / heartbeat FYI lines while
+   escalation JSON deliveries still arrive via the router/ack flow.
+
 ## Orchestrator stuck / probe_failure recovery
 
 When AO observability flags the orchestrator session (e.g. `op-orchestrator`) as
@@ -2408,5 +2425,4 @@ Pack consumers resolve PR↔session ownership from the durable binding cache bef
 
 No operator restart required for the cache file itself; reconcile side processes pick up
 the module on next tick after deploy.
-
 

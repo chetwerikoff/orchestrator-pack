@@ -2,44 +2,6 @@
   "schemaVersion": 1,
   "entries": [
     {
-      "message_class_id": "orchestrator-wake-webhook",
-      "trigger": {
-        "summary": "AO webhook POST routed through wake filter yields a wake message",
-        "event": "webhook_wake"
-      },
-      "owning_process": "listener",
-      "recipient_key": "orchestrator-session",
-      "intent_key": "wake-nudge",
-      "mechanism": "ao-send",
-      "delivery_idempotency_owner": "none",
-      "semantic_dedup_owner": "none",
-      "callsite": {
-        "file": "scripts/orchestrator-wake-listener.ps1",
-        "function": "Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $wakeMessage",
-        "anchor": "callsite-snippet",
-        "predicateBodyHash": "765270f7016a18a6"
-      }
-    },
-    {
-      "message_class_id": "orchestrator-wake-heartbeat",
-      "trigger": {
-        "summary": "Periodic heartbeat tick when orchestrator session is live",
-        "event": "heartbeat_tick"
-      },
-      "owning_process": "heartbeat",
-      "recipient_key": "orchestrator-session",
-      "intent_key": "heartbeat-nudge",
-      "mechanism": "ao-send",
-      "delivery_idempotency_owner": "none",
-      "semantic_dedup_owner": "none",
-      "callsite": {
-        "file": "scripts/orchestrator-wake-heartbeat.ps1",
-        "function": "Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $tick.wakeMessage",
-        "anchor": "callsite-snippet",
-        "predicateBodyHash": "02179ea69838b53e"
-      }
-    },
-    {
       "message_class_id": "ci-green-worker-nudge",
       "trigger": {
         "summary": "Required CI green + worker pre-hand-off state after reconcile",
@@ -380,6 +342,19 @@
         "summary": "Worker recovery lib escalation branch",
         "event": "worker_recovery_escalated"
       }
+    },
+    {
+      "code": "E16",
+      "escalation_class_id": "escalation-worker-degraded-ci-handoff",
+      "name": "worker-degraded-ci-handoff",
+      "owning_process": "worker",
+      "route": "llm-orchestrator",
+      "delivery_guarantee": "at-least-once-until-ack",
+      "dedupe_owner": "issue-641",
+      "trigger": {
+        "summary": "Worker degraded-CI hand-off routed through escalation contract",
+        "event": "worker_degraded_ci_handoff"
+      }
     }
   ],
   "overlapOverrides": [
@@ -418,24 +393,6 @@
       ],
       "evidenceKind": "trigger-mutual-exclusion",
       "evidence": "ci-green requires green required CI; ci-failure reconcile requires red required CI"
-    },
-    {
-      "id": "orch-wake-webhook-vs-heartbeat",
-      "rationale": "Webhook wakes and heartbeat ticks target orchestrator with distinct intents and dedup paths",
-      "reviewer": "issue-298",
-      "linkedIssue": 298,
-      "messageClassIds": [
-        "orchestrator-wake-webhook",
-        "orchestrator-wake-heartbeat"
-      ],
-      "pairs": [
-        [
-          "orchestrator-wake-webhook",
-          "orchestrator-wake-heartbeat"
-        ]
-      ],
-      "evidenceKind": "recipient-non-equivalence",
-      "evidence": "Heartbeat uses periodic tick predicate; webhook uses HTTP filter evaluation"
     }
   ]
 }

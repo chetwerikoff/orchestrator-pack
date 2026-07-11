@@ -13,17 +13,17 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     );
 
     const child = ows.startSupervisorBackground(stateDir, ['-FixturePath', dynamicFixture]);
-    await ows.waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
+    await ows.waitForMarkers(stateDir, 25_000, ['listener', 'escalation-router']);
 
     const listenerBefore = await ows.readMarker(stateDir, 'listener');
-    const heartbeatBefore = await ows.readMarker(stateDir, 'heartbeat');
+    const routerBefore = await ows.readMarker(stateDir, 'escalation-router');
     ows.fs.writeFileSync(
       dynamicFixture,
       ows.fs.readFileSync(ows.path.join(ows.fixtureDir, 'status-no-orchestrator.json')),
     );
-    await ows.waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 25_000);
+    await ows.waitForProcessesStopped([listenerBefore.pid, routerBefore.pid], 25_000);
     expect(ows.isAlive(listenerBefore.pid)).toBe(false);
-    expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
+    expect(ows.isAlive(routerBefore.pid)).toBe(false);
     child.kill('SIGTERM');
     },
     ows.detachedSupervisorTimeoutMs,
@@ -37,13 +37,13 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       '-OrchestratorSessionId',
       'op-status-stop',
     ]);
-    await ows.waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
+    await ows.waitForMarkers(stateDir, 25_000, ['listener', 'escalation-router']);
 
     const statusUp = await ows.waitForSupervisorHealthyStatus(stateDir);
     expect(statusUp.status).toBe(0);
     expect(statusUp.stdout).toContain('supervisor: running');
     expect(statusUp.stdout).toContain('listener:   working');
-    expect(statusUp.stdout).toContain('heartbeat:  working');
+    expect(statusUp.stdout).toContain('escalation-router:  working');
 
     const supervisorPid = Number(
       ows.fs.readFileSync(ows.path.join(stateDir, 'supervisor.pid'), 'utf8').trim(),
@@ -66,19 +66,19 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
     async () => {
     const stateDir = ows.makeStateDir();
     ows.startSupervisorBackground(stateDir, ['-OrchestratorSessionId', 'op-stop-order']);
-    await ows.waitForMarkers(stateDir, 25_000, ['listener', 'heartbeat']);
+    await ows.waitForMarkers(stateDir, 25_000, ['listener', 'escalation-router']);
 
     const listenerBefore = await ows.readMarker(stateDir, 'listener');
-    const heartbeatBefore = await ows.readMarker(stateDir, 'heartbeat');
+    const routerBefore = await ows.readMarker(stateDir, 'escalation-router');
     expect(ows.isAlive(listenerBefore.pid)).toBe(true);
-    expect(ows.isAlive(heartbeatBefore.pid)).toBe(true);
+    expect(ows.isAlive(routerBefore.pid)).toBe(true);
 
     const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     expect(stop.status).toBe(0);
 
-    await ows.waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 1500);
+    await ows.waitForProcessesStopped([listenerBefore.pid, routerBefore.pid], 1500);
     expect(ows.isAlive(listenerBefore.pid)).toBe(false);
-    expect(ows.isAlive(heartbeatBefore.pid)).toBe(false);
+    expect(ows.isAlive(routerBefore.pid)).toBe(false);
 
     const statusDown = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(statusDown.stdout).toContain('stopped');

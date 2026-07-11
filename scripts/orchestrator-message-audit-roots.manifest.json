@@ -7,7 +7,6 @@
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/dead-worker-reconcile.ps1",
     "scripts/orchestrator-escalation-router.ps1",
-    "scripts/orchestrator-wake-heartbeat.ps1",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-finding-delivery-confirm.ps1",
     "scripts/review-run-recovery.ps1",

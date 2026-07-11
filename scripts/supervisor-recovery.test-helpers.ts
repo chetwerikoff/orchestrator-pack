@@ -124,7 +124,6 @@ export async function waitForSupervisorLogMatchFromOffset(
 
 export const managedChildRoles = [
   'listener',
-  'heartbeat',
   'review-trigger-reconcile',
   'review-trigger-reeval',
   'review-ready-report-state-seed',
@@ -136,6 +135,7 @@ export const managedChildRoles = [
   'ci-failure-notification-reaction',
   'review-finding-delivery-confirm',
   'worker-message-submit-reconcile',
+  'escalation-router',
 ] as const;
 
 export type ManagedChildRole = (typeof managedChildRoles)[number];
