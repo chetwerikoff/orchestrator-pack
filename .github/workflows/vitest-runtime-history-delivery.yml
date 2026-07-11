@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('event-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event.pull_request.number != '' }}
+
 permissions:
   contents: write
   pull-requests: write
