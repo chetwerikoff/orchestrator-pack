@@ -7,12 +7,37 @@ $requiredCommits = @{
     '711' = 'afa96f0d'
 }
 
+function Resolve-SequencingBaseRef {
+    $candidates = @(
+        $env:GITHUB_BASE_SHA,
+        $env:PR_BASE_SHA,
+        'origin/main',
+        'refs/remotes/origin/main',
+        'main'
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    foreach ($candidate in $candidates) {
+        $resolved = (& git rev-parse --verify --quiet $candidate 2>$null)
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($resolved)) {
+            return [string]$candidate
+        }
+    }
+
+    return $null
+}
+
 Push-Location $Root
 try {
-    $mergeBase = (& git merge-base HEAD origin/main).Trim()
-    if (-not $mergeBase) {
-        throw 'unable to resolve merge-base with origin/main'
+    $baseRef = Resolve-SequencingBaseRef
+    if ([string]::IsNullOrWhiteSpace($baseRef)) {
+        throw 'unable to resolve base ref for sequencing guard (tried GITHUB_BASE_SHA, PR_BASE_SHA, origin/main, refs/remotes/origin/main, main)'
     }
+
+    $mergeBaseRaw = (& git merge-base HEAD $baseRef 2>$null)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mergeBaseRaw)) {
+        throw "unable to resolve merge-base with $baseRef"
+    }
+    $mergeBase = $mergeBaseRaw.Trim()
 
     $missing = [System.Collections.Generic.List[string]]::new()
     foreach ($issue in $requiredCommits.Keys) {
