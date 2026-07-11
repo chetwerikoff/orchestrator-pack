@@ -29,6 +29,14 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
   const managedAoBaseDir = inheritedAoBaseDir || explicitAoBaseDir
     ? null
     : mkdtempSync(path.join(tmpdir(), 'opk-vitest-ao-base-'));
+  const scopedGhHarnessEnv = {
+    AO_REVIEW_START_SCOPED_GH_COMMAND: '',
+    AO_REVIEW_START_SCOPED_GH_SCENARIO: '',
+    AO_REVIEW_START_SCOPED_GH_STATE_FILE: '',
+    AO_REVIEW_START_SCOPED_GH_HEAD_SHA: '',
+    AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A: '',
+    AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B: '',
+  };
   if (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.AO_ORCHESTRATOR_ESCALATION_STATE) {
     applyOpkVitestHarnessEscalationEnv();
   }
@@ -43,6 +51,7 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
         AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
         AO_OPERATOR_ESCALATION_INBOX: process.env.AO_OPERATOR_ESCALATION_INBOX ?? '',
         AO_ESCALATION_HEALTH_SPOOL: process.env.AO_ESCALATION_HEALTH_SPOOL ?? '',
+        ...scopedGhHarnessEnv,
         ...extraEnv,
       },
     });
