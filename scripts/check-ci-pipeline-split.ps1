@@ -608,6 +608,9 @@ if (Test-Path -LiteralPath $deliveryWorkflowPath) {
     if ($deliveryText -notmatch 'ci/vitest-runtime-history-refresh') {
         Add-Fail 'vitest-runtime-history-delivery.yml must scope itself to the fixed runtime-history delivery branch'
     }
+    if ($deliveryText -notmatch 'head\.repo\.full_name == github\.repository') {
+        Add-Fail 'vitest-runtime-history-delivery.yml must restrict pull_request_target delivery to branches from this repository'
+    }
     if ($deliveryText -notmatch 'vitest-runtime-history-delivery\.mjs monitor-pr') {
         Add-Fail 'vitest-runtime-history-delivery.yml must monitor and merge the dedicated runtime-history delivery PR'
     }
@@ -648,6 +651,9 @@ if (Test-Path -LiteralPath $deliveryDocPath) {
     }
     if ($deliveryDocText -notmatch 'pull_request_target') {
         Add-Fail 'runtime-history delivery doc must describe the trusted pull_request_target merge owner'
+    }
+    if ($deliveryDocText -notmatch 'head\.repo\.full_name == github\.repository') {
+        Add-Fail 'runtime-history delivery doc must describe the same-repository guard for the trusted pull_request_target flow'
     }
 }
 

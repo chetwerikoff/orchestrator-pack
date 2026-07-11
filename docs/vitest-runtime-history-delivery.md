@@ -17,7 +17,10 @@ history file is staged, pushes the fixed delivery branch with a non-`GITHUB_TOKE
 credential, and opens or updates one PR. The trusted delivery workflow runs from
 the base-branch definition, validates the PR file list through GitHub API, waits
 for the required checks named in the committed snapshot, and merges only when
-they pass.
+they pass. Because the merge owner runs on `pull_request_target`, it also requires
+`github.event.pull_request.head.repo.full_name == github.repository` before it
+exposes the delivery credential or attempts a merge, so a fork cannot reuse the
+fixed branch name to enter the privileged path.
 
 When the fixed delivery branch already exists, the refresh workflow fetches that
 branch first, reconciles its pending `vitest-runtime-history.json` into the newly
