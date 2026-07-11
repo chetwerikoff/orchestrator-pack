@@ -23,6 +23,12 @@ function runScopedPreflight(scriptBody: string, env: Record<string, string> = {}
   return JSON.parse(runPwsh(script, env));
 }
 
+function missingGhPath(prefix: string) {
+  const missingRoot = mkdtempSync(path.join(tmpdir(), prefix));
+  rmSync(missingRoot, { recursive: true, force: true });
+  return path.join(missingRoot, 'gh.ps1');
+}
+
 function listShieldAuditRecords(auditRoot: string) {
   const dir = path.join(auditRoot, 'preflight-shield');
   try {
@@ -44,5 +50,6 @@ export {
   stableHead,
   driftHeadB,
   runScopedPreflight,
+  missingGhPath,
   listShieldAuditRecords,
 };

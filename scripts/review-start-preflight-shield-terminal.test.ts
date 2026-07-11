@@ -7,25 +7,17 @@ import {
   functionBody,
   ghPrChecksPath,
   it,
-  mkdtempSync,
+  missingGhPath,
   path,
   psString,
   readFileSync,
   repoRoot,
-  rmSync,
   runPwsh,
   runScopedPreflight,
   shieldHelperPath,
   snapshotPath,
   stableHead,
-  tmpdir,
 } from './_test-review-start-preflight-shield-heavy.shared.js';
-
-function missingGhPath(prefix: string) {
-  const missingRoot = mkdtempSync(path.join(tmpdir(), prefix));
-  rmSync(missingRoot, { recursive: true, force: true });
-  return path.join(missingRoot, 'gh.ps1');
-}
 
 describe('review-start preflight transient shield (#584)', () => {
   describe('AC6 terminal guard', () => {
