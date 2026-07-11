@@ -37,22 +37,22 @@ export async function runFaultBoundaryInjectionCase(inject: string): Promise<voi
     stateDir,
     ['-OrchestratorSessionId', 'op-fault-boundary'],
     {
-      AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'tick-error',
-      AO_WAKE_SUPERVISOR_TEST_INJECT_FAULT_heartbeat: inject,
+      AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'tick-error',
+      AO_WAKE_SUPERVISOR_TEST_INJECT_FAULT_escalation_router: inject,
       AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '3',
     },
   );
 
-  await waitForMarker(stateDir, 'heartbeat', 25_000);
+  await waitForMarker(stateDir, 'escalation-router', 25_000);
   const supervisorLog = await waitForSupervisorLogMatch(
     stateDir,
-    /fault boundary: heartbeat:/,
+    /fault boundary: escalation-router:/,
     25_000,
   );
 
   const supervisorPid = Number(fs.readFileSync(`${stateDir}/supervisor.pid`, 'utf8').trim());
   expect(isAlive(supervisorPid)).toBe(true);
-  expect(supervisorLog).toMatch(/fault boundary: heartbeat:/);
+  expect(supervisorLog).toMatch(/fault boundary: escalation-router:/);
 
   const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
   expect(status.stdout).toContain('supervisor: running');
@@ -60,16 +60,16 @@ export async function runFaultBoundaryInjectionCase(inject: string): Promise<voi
   await stopSupervisorChild(child, stateDir);
 }
 
-export async function assertTerminalHeartbeatStopped(stateDir: string): Promise<void> {
+export async function assertTerminalEscalationRouterStopped(stateDir: string): Promise<void> {
   await waitForCondition(
-    async () => readChildRecovery(stateDir, 'heartbeat').terminal === true,
+    async () => readChildRecovery(stateDir, 'escalation-router').terminal === true,
     25_000,
     undefined,
-    'heartbeat child recovery terminal',
+    'escalation-router child recovery terminal',
   );
   try {
-    const heartbeatPid = readChildPid(stateDir, 'heartbeat');
-    expect(isAlive(heartbeatPid)).toBe(false);
+    const routerPid = readChildPid(stateDir, 'escalation-router');
+    expect(isAlive(routerPid)).toBe(false);
   } catch {
     // pid file removed after terminal stop is acceptable
   }

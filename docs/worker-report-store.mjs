@@ -18,7 +18,7 @@ export const PACK_WORKER_REPORT_STORE_SURFACE = 'pack-worker-report-store';
 export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_NONTERMINAL_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
-/** @typedef {{ reportState?: string, accepted?: boolean, repoSlug?: string, sessionId?: string, prNumber?: number, headSha?: string, reportedAtMs?: number, lastObservedMs?: number, deliveryRunId?: string }} WorkerReportRecord */
+/** @typedef {{ reportState?: string, accepted?: boolean, repoSlug?: string, sessionId?: string, prNumber?: number, headSha?: string, reportedAtMs?: number, lastObservedMs?: number, deliveryRunId?: string, note?: string, reason?: string, handoffKind?: string, degradedCiEscalation?: boolean }} WorkerReportRecord */
 
 export const WORKER_REPORT_STATES = Object.freeze([
   'ready_for_review',
@@ -156,6 +156,13 @@ export function upsertWorkerReportRecord(store, record, nowMs) {
     reportedAtMs: Number(record.reportedAtMs ?? nowMs),
     lastObservedMs: nowMs,
     deliveryRunId: record.deliveryRunId ? String(record.deliveryRunId) : existing.deliveryRunId,
+    note: record.note !== undefined ? String(record.note) : existing.note,
+    reason: record.reason !== undefined ? String(record.reason) : existing.reason,
+    handoffKind: record.handoffKind !== undefined ? String(record.handoffKind) : existing.handoffKind,
+    degradedCiEscalation:
+      record.degradedCiEscalation !== undefined
+        ? Boolean(record.degradedCiEscalation)
+        : Boolean(existing.degradedCiEscalation ?? false),
   };
   store.lastUpdatedMs = nowMs;
   store.generation = Number(store.generation ?? 0) + 1;
@@ -190,6 +197,11 @@ export function workerReportRecordToSessionReportRow(record) {
     headSha: normalizeSha(record?.headSha) || undefined,
     repoSlug: String(record?.repoSlug ?? '').trim() || undefined,
     deliveryRunId: record?.deliveryRunId ? String(record.deliveryRunId) : undefined,
+    note: record?.note ? String(record.note) : undefined,
+    reason: record?.reason ? String(record.reason) : undefined,
+    handoffKind: record?.handoffKind ? String(record.handoffKind) : undefined,
+    degradedCiEscalation:
+      record?.degradedCiEscalation !== undefined ? Boolean(record.degradedCiEscalation) : undefined,
     reportedAt: reportedAtMs > 0 ? new Date(reportedAtMs).toISOString() : undefined,
     timestamp: reportedAtMs > 0 ? new Date(reportedAtMs).toISOString() : undefined,
     source: PACK_WORKER_REPORT_STORE_SURFACE,

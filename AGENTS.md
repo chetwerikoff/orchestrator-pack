@@ -342,7 +342,7 @@ green, red, or degraded-CI escalation. If CI fails after `ready_for_review`, imm
 
 **Worker self-drive is primary.** `pr_created` is transient — drive to hand-off before idling.
 **Stop categories:** (A) `ready_for_review` with green required CI, or terminal failure with
-reason; (B) evidence-backed degraded-CI escalation via the #641 escalation router (`scripts/lib/Orchestrator-Escalation.ps1` / catalogued `llm-orchestrator` delivery), not a raw worker `ao send`. Green CI alone is not exit.
+reason; (B) evidence-backed degraded-CI escalation via the #641 escalation router (`scripts/lib/Orchestrator-Escalation.ps1` / catalogued `llm-orchestrator` delivery), not a raw worker `ao send`. Use `pack-worker-report --state completed -HandoffKind degraded_ci -DegradedCiEscalation -Reason "<required-check reason>" -Note "Evidence-backed degraded CI escalation: <required-check reason>"` so the worker report store and routed emitter stay in sync. Green CI alone is not exit.
 Forbidden: silent disengagement while PR lacks hand-off for current head.
 
 #### Review feedback and AO review response

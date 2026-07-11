@@ -315,6 +315,10 @@ function Write-PackWorkerReportRecord {
         [int]$PrNumber,
         [string]$HeadSha,
         [bool]$Accepted = $true,
+        [string]$Note = '',
+        [string]$Reason = '',
+        [string]$HandoffKind = '',
+        [bool]$DegradedCiEscalation = $false,
         [string]$StorePath = '',
         [long]$NowMs = 0,
         [string]$CallerSessionId = '',
@@ -369,6 +373,18 @@ function Write-PackWorkerReportRecord {
     }
     if ($resolvedDeliveryRunId) {
         $recordPayload.deliveryRunId = $resolvedDeliveryRunId
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Note)) {
+        $recordPayload.note = [string]$Note
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+        $recordPayload.reason = [string]$Reason
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HandoffKind)) {
+        $recordPayload.handoffKind = [string]$HandoffKind
+    }
+    if ($DegradedCiEscalation) {
+        $recordPayload.degradedCiEscalation = $true
     }
     $writeResult = $null
     $captured = @{}
