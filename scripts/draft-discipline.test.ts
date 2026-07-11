@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -22,6 +24,18 @@ function loadFixture(name: string): string {
 
 function loadMockIssues(name: string): Record<string, MockIssue> {
   return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as Record<string, MockIssue>;
+}
+
+function createTempRepoPathFixture() {
+  const root = mkdtempSync(path.join(repoRoot, 'draft-discipline-wake-fixture-'));
+  const extensionlessDir = path.join(root, 'orchestrator-wake');
+  const extensionlessFile = path.join(extensionlessDir, 'token');
+  mkdirSync(extensionlessDir, { recursive: true });
+  writeFileSync(extensionlessFile, 'fixture\n', 'utf8');
+  return {
+    root,
+    extensionlessToken: path.relative(repoRoot, extensionlessFile).replaceAll(path.sep, '/'),
+  };
 }
 
 describe('checkPositiveOutcome', () => {
@@ -49,6 +63,222 @@ describe('checkPositiveOutcome', () => {
     const result = checkPositiveOutcome(loadFixture('external-input-no-provenance.md'));
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/provenance/);
+  });
+
+  it('excludes taxonomy hits inside a machine-parsed fence label', () => {
+    const result = checkPositiveOutcome(`# Named-fence fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records existing references without assigning action to the draft.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+
+\`\`\`denylist
+scripts/orchestrator-wake-supervisor.ps1
+\`\`\`
+
+\`\`\`allowed-roots
+scripts/fixtures/orchestrator-wake-supervisor/
+\`\`\`
+`);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('still counts a taxonomy hit inside an anonymous or unlabeled code fence', () => {
+    const result = checkPositiveOutcome(`# Anonymous-fence fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records existing references without assigning action to the draft.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+
+\`\`\`
+The supervisor reconciles wake retries.
+\`\`\`
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/record-only/);
+    expect(result.errors.join(' ')).toMatch(/supervisor|reconcile|wake/);
+  });
+
+  it('excludes taxonomy hits inside a token resolving to a real repository path', () => {
+    const fixture = createTempRepoPathFixture();
+    try {
+      const result = checkPositiveOutcome(`# Real-path fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records existing references at docs/wake-supervisor-fleet-operator-reference.md, ${fixture.extensionlessToken}, and scripts/fixtures/orchestrator-wake-supervisor/.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+`);
+
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('still counts a taxonomy hit inside a path-looking token that does not resolve to a real repository path', () => {
+    const result = checkPositiveOutcome(`# Fake-path fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records existing references at docs/not-a-real-wake-supervisor.md.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/record-only/);
+    expect(result.errors.join(' ')).toMatch(/wake|supervisor/);
+  });
+
+  it('still fails record-only drafts with a bare taxonomy term in ordinary prose', () => {
+    const result = checkPositiveOutcome(`# Bare-prose fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records an existing supervisor reference without adding new work.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/record-only/);
+    expect(result.errors.join(' ')).toMatch(/supervisor/);
+  });
+
+  it('still fails record-only drafts that plainly attribute action to themselves', () => {
+    const result = checkPositiveOutcome(`# Self-attributed action fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This draft wakes the review listener when CI turns green.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/record-only/);
+    expect(result.errors.join(' ')).toMatch(/wake|listener/);
+  });
+
+  it('passes both guard CLIs end-to-end on a path-and-fence-only record-only fixture', () => {
+    const fixture = createTempRepoPathFixture();
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'draft-discipline-e2e-'));
+    const draftPath = path.join(tempDir, 'issue-733-record-only.md');
+    try {
+      writeFileSync(
+        draftPath,
+        `# End-to-end fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records existing references at docs/wake-supervisor-fleet-operator-reference.md, ${fixture.extensionlessToken}, and scripts/fixtures/orchestrator-wake-supervisor/.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+
+\`\`\`complexity-tier
+tier: T2
+advisory-prior: T2
+\`\`\`
+
+## Acceptance criteria
+
+1. Existing references are recorded without assigning action to the draft.
+
+   \`\`\`producer-emission
+   producer: orchestrator-pack-scripts
+   datum: checkPositiveOutcome:e2e-path-and-fence-fixture
+   expected: 0
+   proof-command: pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath <temp-file>
+   \`\`\`
+
+\`\`\`denylist
+scripts/review-trigger-reconcile.ps1
+\`\`\`
+
+\`\`\`allowed-roots
+scripts/fixtures/orchestrator-wake-supervisor/
+\`\`\`
+
+## Verification
+
+1. ` + '`pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath <temp-file>`' + ` exits 0.
+
+## Contract evidence
+
+\`\`\`contract-evidence
+binding-id: orchestrator-pack-scripts:checkPositiveOutcome:e2e-path-and-fence-fixture:0
+binding: end-to-end path and fence fixture
+producer: orchestrator-pack-scripts
+binding-type: structured
+evidence: NEW(produced-by AC#1)
+\`\`\`
+`,
+        'utf8',
+      );
+
+      const tierGate = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', path.join(repoRoot, 'scripts/check-tier-gate-guard.ps1'), '-DraftPath', draftPath],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      expect(tierGate.status, tierGate.stderr || tierGate.stdout).toBe(0);
+
+      const positiveOutcome = spawnSync(
+        'pwsh',
+        [
+          '-NoProfile',
+          '-File',
+          path.join(repoRoot, 'scripts/check-draft-discipline.ps1'),
+          '-Command',
+          'positive-outcome',
+          '-DraftPath',
+          draftPath,
+        ],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      expect(positiveOutcome.status, positiveOutcome.stderr || positiveOutcome.stdout).toBe(0);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
