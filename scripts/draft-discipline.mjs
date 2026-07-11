@@ -257,10 +257,6 @@ function extractPathTokenCandidate(token) {
   return match?.[1] ?? null;
 }
 
-function looksPathShaped(token) {
-  return token.includes('/') || /[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+$/.test(token);
-}
-
 function isPathWithinRepo(repoRoot, absolutePath) {
   const relative = path.relative(repoRoot, absolutePath);
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
@@ -268,7 +264,7 @@ function isPathWithinRepo(repoRoot, absolutePath) {
 
 function isRealRepositoryPathToken(token, repoRoot = DEFAULT_REPO_ROOT) {
   const candidate = extractPathTokenCandidate(token);
-  if (!candidate || !looksPathShaped(candidate)) {
+  if (!candidate) {
     return false;
   }
 

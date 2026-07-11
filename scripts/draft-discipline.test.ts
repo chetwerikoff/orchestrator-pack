@@ -38,6 +38,13 @@ function createTempRepoPathFixture() {
   };
 }
 
+function createTopLevelExtensionlessRepoFileFixture() {
+  const token = `draftdisciplinewakefixture${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const filePath = path.join(repoRoot, token);
+  writeFileSync(filePath, 'fixture\n', 'utf8');
+  return { filePath, token };
+}
+
 describe('checkPositiveOutcome', () => {
   it('flags action-producing drafts with only negative outcomes', () => {
     const result = checkPositiveOutcome(loadFixture('negative-only-action.md'));
@@ -134,6 +141,29 @@ record-only
       expect(result.errors).toEqual([]);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('excludes taxonomy hits inside a top-level extensionless token resolving to a real repository path', () => {
+    const fixture = createTopLevelExtensionlessRepoFileFixture();
+    try {
+      const result = checkPositiveOutcome(`# Root-token fixture
+
+GitHub Issue: TBD
+
+## Goal
+
+This note records existing references at ${fixture.token} without assigning new work.
+
+\`\`\`behavior-kind
+record-only
+\`\`\`
+`);
+
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    } finally {
+      rmSync(fixture.filePath, { force: true });
     }
   });
 
