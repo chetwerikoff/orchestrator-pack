@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b8d1ae902e920c3aab52e141074b1a2f9ec30025",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:c49545c71cf73a5d0b4b6995c783551ff98123ae05fe73f8c824faee1918609e"
+    "active_scope_hash": "sha256:a40fc20469898b0bb1638d6b8bdb531abaa511e99535e0d2283455411ef210bc"
   },
   "declared_paths": [
     "scripts/dead-worker-reconcile.ps1",
@@ -17,8 +17,24 @@
     "scripts/clear-dead-worker-reconcile-quarantine.ps1",
     "scripts/launch-argv-inventory.json",
     "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
-    "scripts/fixtures/mechanical-json-state/clean-dead-worker-maps.json"
+    "scripts/fixtures/mechanical-json-state/clean-dead-worker-maps.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:c49545c71cf73a5d0b4b6995c783551ff98123ae05fe73f8c824faee1918609e",
+      "new_active_scope_hash": "sha256:a40fc20469898b0bb1638d6b8bdb531abaa511e99535e0d2283455411ef210bc",
+      "changed": {
+        "added": [
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "CI fix requires runtime-history contentSha refresh for changed dead-worker test",
+      "actor": "orchestrator-pack-103",
+      "timestamp": "2026-07-11T15:15:30.596Z",
+      "applied": true
+    }
+  ]
 }

@@ -741,7 +741,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         },
       );
       expect(evidence.verdict, sessionId).toBe(testCase.expected);
-      if (testCase.reason) {
+      if ('reason' in testCase) {
         expect(evidence.reason, sessionId).toBe(testCase.reason);
       }
     }
