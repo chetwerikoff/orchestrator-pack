@@ -148,6 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           remote_sha=""
+          should_push="true"
           if git ls-remote --exit-code origin "refs/heads/${DELIVERY_BRANCH}" >/dev/null 2>&1; then
             git fetch origin main "refs/heads/${DELIVERY_BRANCH}:refs/remotes/origin/${DELIVERY_BRANCH}"
             remote_sha="$(git rev-parse "origin/${DELIVERY_BRANCH}")"
@@ -163,13 +164,18 @@ jobs:
               git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
                 commit --amend --no-edit
             fi
+            if git diff --quiet "origin/${DELIVERY_BRANCH}" -- scripts/vitest-runtime-history.json; then
+              should_push="false"
+              echo "runtime-history delivery skipped: pending PR already matches reconciled history payload"
+            fi
           else
             git fetch origin main
           fi
           echo "remote_sha=${remote_sha}" >> "$GITHUB_OUTPUT"
+          echo "should_push=${should_push}" >> "$GITHUB_OUTPUT"
 
       - name: Push delivery branch
-        if: steps.delivery.outputs.ahead != '0'
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
         shell: bash
         env:
           DELIVERY_BRANCH: ci/vitest-runtime-history-refresh
@@ -185,7 +191,7 @@ jobs:
           fi
 
       - name: Write delivery PR body
-        if: steps.delivery.outputs.ahead != '0'
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -202,7 +208,7 @@ jobs:
           EOF
 
       - name: Open or update delivery PR
-        if: steps.delivery.outputs.ahead != '0'
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}

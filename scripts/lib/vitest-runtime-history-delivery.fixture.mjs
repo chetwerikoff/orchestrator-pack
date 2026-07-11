@@ -169,6 +169,25 @@ function testMergeRequestPinsExpectedHeadSha() {
   );
 }
 
+function testWorkflowBindsPrivilegedMergeToTrustedActor() {
+  const workflow = readFileSync(
+    new URL('../../.github/workflows/vitest-runtime-history-delivery.yml', import.meta.url),
+    'utf8',
+  );
+  assert(
+    workflow.includes('./scripts/gh api user --jq .login'),
+    'delivery workflow must resolve the trusted actor from VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN',
+  );
+  assert(
+    workflow.includes('EVENT_SENDER_LOGIN: ${{ github.event.sender.login }}'),
+    'delivery workflow must bind the event sender login into the trusted merge gate',
+  );
+  assert(
+    workflow.includes('[ "${EVENT_SENDER_LOGIN}" != "${trusted_actor}" ]'),
+    'delivery workflow must fail closed when a non-delivery actor triggers the branch update',
+  );
+}
+
 function main() {
   const tests = [
     testProtectedBranchRejectionThenBranchSuccess,
@@ -176,6 +195,7 @@ function main() {
     testCheckDecisionMatrix,
     testSupersededHead,
     testMergeRequestPinsExpectedHeadSha,
+    testWorkflowBindsPrivilegedMergeToTrustedActor,
   ];
   const failures = [];
   for (const test of tests) {

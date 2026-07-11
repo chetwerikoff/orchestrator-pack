@@ -20,7 +20,11 @@ for the required checks named in the committed snapshot, and merges only when
 they pass. Because the merge owner runs on `pull_request_target`, it also requires
 `github.event.pull_request.head.repo.full_name == github.repository` before it
 exposes the delivery credential or attempts a merge, so a fork cannot reuse the
-fixed branch name to enter the privileged path.
+fixed branch name to enter the privileged path. It then resolves the login behind
+`VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN` and requires
+`github.event.sender.login` to match that trusted actor before the privileged
+merge path continues, so same-repo writers cannot reuse the fixed branch name as
+a broader bypass.
 
 When the fixed delivery branch already exists, the refresh workflow fetches that
 branch first, reconciles its pending `vitest-runtime-history.json` into the newly
@@ -28,7 +32,10 @@ measured artifact, amends the prepared delivery commit if the merged history
 changes, and only then pushes with an explicit `--force-with-lease` bound to the
 fetched branch tip. That preserves pending measurements from an earlier still-open
 delivery PR instead of overwriting them with a stale-base recomputation from
-`main` alone.
+`main` alone. If reconciliation yields the same runtime-history payload already
+present on the pending delivery PR, the workflow skips the push and PR update
+entirely so overlapping refreshes converge on one stable head instead of
+restarting required checks with a no-op commit reset.
 
 ## Why this path
 

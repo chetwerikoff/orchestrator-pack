@@ -26,16 +26,28 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
 
-      - name: Require delivery credential
+      - name: Require delivery credential and trusted actor
+        id: delivery_actor
         shell: bash
         env:
           DELIVERY_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+          EVENT_SENDER_LOGIN: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
           if [ -z "${DELIVERY_TOKEN}" ]; then
             echo "VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN is required for protected-branch delivery" >&2
             exit 1
           fi
+          trusted_actor="$(GH_TOKEN="${DELIVERY_TOKEN}" ./scripts/gh api user --jq .login)"
+          if [ -z "${trusted_actor}" ]; then
+            echo "unable to resolve trusted delivery actor from VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN" >&2
+            exit 1
+          fi
+          if [ "${EVENT_SENDER_LOGIN}" != "${trusted_actor}" ]; then
+            echo "delivery event sender ${EVENT_SENDER_LOGIN} does not match trusted actor ${trusted_actor}; skipping privileged merge path" >&2
+            exit 1
+          fi
+          echo "trusted_actor=${trusted_actor}" >> "$GITHUB_OUTPUT"
 
       - name: Monitor and merge delivery PR
         shell: bash

@@ -576,8 +576,14 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
         if ($refreshJob -notmatch 'refresh-vitest-runtime-history\.mjs reconcile') {
             Add-Fail 'refresh-runtime-history job must reconcile pending delivery-branch history before force-pushing the fixed branch'
         }
+        if ($refreshJob -notmatch 'should_push="false"' -or $refreshJob -notmatch 'pending PR already matches reconciled history payload') {
+            Add-Fail 'refresh-runtime-history job must detect when the pending delivery PR already matches and skip resetting its head'
+        }
         if ($refreshJob -notmatch 'force-with-lease="refs/heads/\$\{DELIVERY_BRANCH\}:\$\{REMOTE_SHA\}"' -and $refreshJob -notmatch 'force-with-lease="refs/heads/\$\{\s*DELIVERY_BRANCH\s*\}:\$\{\s*REMOTE_SHA\s*\}"') {
             Add-Fail 'refresh-runtime-history job must bind force-with-lease to the fetched delivery-branch tip when reusing the fixed branch'
+        }
+        if ($refreshJob -notmatch "steps\.delivery_branch\.outputs\.should_push == 'true'") {
+            Add-Fail 'refresh-runtime-history delivery push/update steps must be gated by the reconciled should_push decision'
         }
         if ($refreshJob -notmatch 'vitest-runtime-history-delivery\.mjs upsert-pr') {
             Add-Fail 'refresh-runtime-history job must open or update the dedicated runtime-history delivery PR'
@@ -610,6 +616,9 @@ if (Test-Path -LiteralPath $deliveryWorkflowPath) {
     }
     if ($deliveryText -notmatch 'head\.repo\.full_name == github\.repository') {
         Add-Fail 'vitest-runtime-history-delivery.yml must restrict pull_request_target delivery to branches from this repository'
+    }
+    if ($deliveryText -notmatch '\./scripts/gh api user --jq \.login' -or $deliveryText -notmatch 'github\.event\.sender\.login') {
+        Add-Fail 'vitest-runtime-history-delivery.yml must bind privileged delivery to the actor behind VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN'
     }
     if ($deliveryText -notmatch 'vitest-runtime-history-delivery\.mjs monitor-pr') {
         Add-Fail 'vitest-runtime-history-delivery.yml must monitor and merge the dedicated runtime-history delivery PR'
@@ -654,6 +663,9 @@ if (Test-Path -LiteralPath $deliveryDocPath) {
     }
     if ($deliveryDocText -notmatch 'head\.repo\.full_name == github\.repository') {
         Add-Fail 'runtime-history delivery doc must describe the same-repository guard for the trusted pull_request_target flow'
+    }
+    if ($deliveryDocText -notmatch 'github\.event\.sender\.login' -or $deliveryDocText -notmatch 'trusted actor') {
+        Add-Fail 'runtime-history delivery doc must describe the trusted delivery actor binding'
     }
 }
 
