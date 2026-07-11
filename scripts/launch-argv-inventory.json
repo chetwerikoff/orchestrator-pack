@@ -12246,6 +12246,31 @@
           "ps-call-op"
         ]
       }
+    },
+    {
+      "rowId": "site-scripts-check-side-process-registry-709-711-sequencing-ps1-62",
+      "caller": {
+        "file": "scripts/check-side-process-registry-709-711-sequencing.ps1",
+        "line": 62
+      },
+      "callee": {
+        "kind": "other-external",
+        "identity": "per-callsite (discovery census)"
+      },
+      "calleeContractSourceClass": "allowlist-only",
+      "coverageKind": "allowlist-debt",
+      "allowlistDebt": {
+        "reason": "Census row for fail-closed discovery; capture-backed validator deferred.",
+        "followUpOwner": "future-draft-callee-validators"
+      },
+      "hashPinnedSourceHash": "sha256:fd3113b7911e58835d4bfe91e4e6182a9df6aae14eedb69dd8a3273d8fc05665",
+      "discoveryMatch": {
+        "file": "scripts/check-side-process-registry-709-711-sequencing.ps1",
+        "line": 62,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
     }
   ]
 }
