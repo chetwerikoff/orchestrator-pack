@@ -2,7 +2,6 @@
   "schemaVersion": 1,
   "requiredChildIds": [
     "listener",
-    "heartbeat",
     "review-trigger-reconcile",
     "review-trigger-reeval",
     "review-ready-report-state-seed",
@@ -31,15 +30,6 @@
         "-SideEffectStateDir",
         "{stateRoot}"
       ]
-    },
-    {
-      "id": "heartbeat",
-      "script": "orchestrator-wake-heartbeat.ps1",
-      "sideEffecting": false,
-      "requiresOrchestratorSession": true,
-      "passProjectId": false,
-      "cadenceSeconds": 900,
-      "stallGraceMultiplier": 4
     },
     {
       "id": "review-trigger-reconcile",

@@ -19,7 +19,7 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
       stateDir,
       ['-OrchestratorSessionId', 'op-auto-recovery'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'tick-error',
+        AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'tick-error',
         AO_WAKE_SUPERVISOR_TEST_ERROR_UNTIL_MS: errorUntilMs,
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '2',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
@@ -27,7 +27,7 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForMarker(stateDir, 'escalation-router', 25_000);
     await waitForMarker(stateDir, 'listener', 25_000);
 
     const listener = await readMarker(stateDir, 'listener');
@@ -38,14 +38,14 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const log = readSupervisorLog(stateDir);
-      recoveringAfterHeal = countLogMatches(log, /heartbeat recovering \(degraded attempt/g);
+      recoveringAfterHeal = countLogMatches(log, /escalation-router recovering \(degraded attempt/g);
       if (Date.now() > Number(errorUntilMs) + 8000) {
         break;
       }
     }
 
-    const heartbeat = await readMarker(stateDir, 'heartbeat');
-    expect(isAlive(heartbeat.pid)).toBe(true);
+    const router = await readMarker(stateDir, 'escalation-router');
+    expect(isAlive(router.pid)).toBe(true);
     expect(isAlive(listener.pid)).toBe(true);
     expect(recoveringAfterHeal).toBeLessThanOrEqual(4);
 

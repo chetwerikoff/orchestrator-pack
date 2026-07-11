@@ -11,7 +11,7 @@ import {
   waitForMarker,
   waitForSupervisorLogMatch,
   stopSupervisorChild,
-  assertTerminalHeartbeatStopped,
+  assertTerminalEscalationRouterStopped,
 } from './supervisor-fault-boundary.shared.js';
 
 describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => {
@@ -21,19 +21,19 @@ describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => 
       stateDir,
       ['-OrchestratorSessionId', 'op-fault-boundary-escalate'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'tick-error',
-        AO_WAKE_SUPERVISOR_TEST_INJECT_FAULT_heartbeat: 'status-entry',
+        AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'tick-error',
+        AO_WAKE_SUPERVISOR_TEST_INJECT_FAULT_escalation_router: 'status-entry',
         AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '2',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '2',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForMarker(stateDir, 'escalation-router', 25_000);
     await waitForMarker(stateDir, 'listener', 25_000);
     await waitForSupervisorLogMatch(
       stateDir,
-      /heartbeat terminal degraded: deterministic defect/,
+      /escalation-router terminal degraded: deterministic defect/,
       25_000,
     );
 
@@ -41,12 +41,14 @@ describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => 
     expect(isAlive(supervisorPid)).toBe(true);
 
     const supervisorLog = readSupervisorLog(stateDir);
-    expect(countLogMatches(supervisorLog, /fault boundary: heartbeat:/)).toBeGreaterThan(0);
-    expect(countLogMatches(supervisorLog, /heartbeat recovering \(degraded attempt/)).toBe(0);
+    expect(countLogMatches(supervisorLog, /fault boundary: escalation-router:/)).toBeGreaterThan(0);
+    expect(countLogMatches(supervisorLog, /escalation-router recovering \(degraded attempt/)).toBe(
+      0,
+    );
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
-    await assertTerminalHeartbeatStopped(stateDir);
+    await assertTerminalEscalationRouterStopped(stateDir);
 
     await stopSupervisorChild(child, stateDir);
   }, supervisorTestTimeoutMs);

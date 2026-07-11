@@ -179,7 +179,7 @@
     {
       "id": "lifecycle-stop-order-exit",
       "file": "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
-      "anchor": "waitForProcessesStopped([listenerBefore.pid, heartbeatBefore.pid], 1500)",
+      "anchor": "waitForProcessesStopped([listenerBefore.pid, routerBefore.pid], 1500)",
       "classification": "positive-convertible",
       "followingAssertion": "children !isAlive after Stop",
       "rationale": "Positive poll-for-exit replaces blind post-Stop sleep",
@@ -270,12 +270,12 @@
     }
   ],
   "assertionFingerprints": {
-    "scripts/orchestrator-wake-supervisor-startup.test.ts": "4e21da4a832e4a9a4ac130d7a272f34e81501f6f82177cdb30c36c8c7db5c7ea",
-    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "afabe7de4d15e92a0af34067db1102d57608f91d9dabf24c7f880c125ab55be3",
-    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "0ff3a06c6abf8ac35a9f4f0d2a3db7dc13f3accafdbcd2dcb1871fb2373708d7",
+    "scripts/orchestrator-wake-supervisor-startup.test.ts": "f7aaae23355d21510b74a57d709d7669daeebe3a0ca1e52b6d02e3ea8b4502a3",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "e8cf33358372d1a1060315ba313c039f7561366110a848e66230caf7402cc45f",
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "9f4f78fd88ab10509e95a41158a716992388ceabe8a4fb05c8c5245af0f77079",
     "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "31d76172aa340f4ea11276bb2d883c3ed073d8630ed30e261ee56744a4aaff8b",
-    "scripts/supervisor-fault-boundary.shared.ts": "8f41c67d3473b1b2c07fd524235b281e9a1de0834504ce5cb71c13d1c3bc9e82",
-    "scripts/supervisor-fault-boundary-escalate.test.ts": "1ba1addd54c0cddc5ea9ad995954a06ca5f9d258586287ab1f8ca337503afe4b",
+    "scripts/supervisor-fault-boundary.shared.ts": "bec3bf01da26071db14471c6a966f6744e2709a416e66395bdf3bd42481a4278",
+    "scripts/supervisor-fault-boundary-escalate.test.ts": "fe97951f80dcf5e820ce890c644823a3c27016e550cd227334d0255f07b7c050",
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts": "fae44143a6ea486c7bc7d99b543ea8c699d949aa8a0e208b219f3aa60bef8318"
   },
   "runtimeEvidence": {

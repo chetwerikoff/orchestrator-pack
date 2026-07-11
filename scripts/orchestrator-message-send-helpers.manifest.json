@@ -2,11 +2,6 @@
   "schemaVersion": 1,
   "helpers": [
     {
-      "name": "Send-OrchestratorWakeMessage",
-      "file": "scripts/orchestrator-wake-common.ps1",
-      "mechanisms": ["ao-send"]
-    },
-    {
       "name": "Invoke-PlannedCiGreenWakeSend",
       "file": "scripts/ci-green-wake-reconcile.ps1",
       "mechanisms": ["ao-send"]

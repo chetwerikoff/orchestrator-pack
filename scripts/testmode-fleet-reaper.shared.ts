@@ -125,15 +125,15 @@ export function spawnOrphanTestModeChild(stateDir: string): number {
 export async function waitForLiveChildPids(
   stateDir: string,
   timeoutMs = 45_000,
-): Promise<{ listener: number; heartbeat: number }> {
+): Promise<{ listener: number; escalationRouter: number }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const listenerPath = path.join(stateDir, 'listener.pid');
-    const heartbeatPath = path.join(stateDir, 'heartbeat.pid');
-    if (fs.existsSync(listenerPath) && fs.existsSync(heartbeatPath)) {
+    const escalationRouterPath = path.join(stateDir, 'escalation-router.pid');
+    if (fs.existsSync(listenerPath) && fs.existsSync(escalationRouterPath)) {
       return {
         listener: Number(fs.readFileSync(listenerPath, 'utf8').trim()),
-        heartbeat: Number(fs.readFileSync(heartbeatPath, 'utf8').trim()),
+        escalationRouter: Number(fs.readFileSync(escalationRouterPath, 'utf8').trim()),
       };
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -216,13 +216,13 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     }
     expect(fs.existsSync(supervisorPidPath)).toBe(true);
     const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
-    await waitForMarkers(stateDir, 60_000, ['listener', 'heartbeat']);
+    await waitForMarkers(stateDir, 60_000, ['listener', 'escalation-router']);
     if (leaseId && leaseRoot) {
       renewLaneLease(leaseRoot, leaseId);
     }
     const listener = await readMarker(stateDir, 'listener');
-    const heartbeatMarker = await readMarker(stateDir, 'heartbeat');
-    return { supervisorPid, listener, heartbeat: heartbeatMarker };
+    const escalationRouterMarker = await readMarker(stateDir, 'escalation-router');
+    return { supervisorPid, listener, escalationRouter: escalationRouterMarker };
   } finally {
     if (heartbeat) {
       clearInterval(heartbeat);

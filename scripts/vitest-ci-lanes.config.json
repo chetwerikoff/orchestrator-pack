@@ -89,6 +89,7 @@
     "scripts/merge-triage.test.ts": "heavy",
     "scripts/orchestrator-claimed-review-run.test.ts": "heavy",
     "scripts/orchestrator-escalation.test.ts": "light",
+    "scripts/orchestrator-escalation-router.test.ts": "parked",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "heavy",
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
@@ -208,6 +209,7 @@
     "trackingIssue": 694,
     "trackingNote": "docs/issues_drafts/239-ci-vitest-wallclock-e2e-separate-stage.md (#694 wall-clock CI stage)",
     "files": [
+      "scripts/orchestrator-escalation-router.test.ts",
       "scripts/orchestrator-wake-supervisor.test.ts"
     ]
   }

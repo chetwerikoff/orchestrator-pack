@@ -50,6 +50,10 @@
       "anchor": "adoption escalated|escalate action"
     },
     {
+      "file": "scripts/lib/Invoke-WorkerDegradedCiHandoff.ps1",
+      "anchor": "degraded-ci worker handoff"
+    },
+    {
       "file": "scripts/orchestrator-wake-listener.ps1",
       "anchor": "handoff-envelope admission"
     }

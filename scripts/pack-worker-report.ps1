@@ -7,6 +7,11 @@ param(
     [string]$RepoSlug = '',
     [int]$PrNumber = 0,
     [string]$HeadSha = '',
+    [string]$Note = '',
+    [string]$Reason = '',
+    [string]$HandoffKind = '',
+    [switch]$DegradedCiEscalation,
+    [string]$OrchestratorSessionId = '',
     [string]$DeliveryRunId = '',
     [switch]$DryRun
 )
@@ -14,6 +19,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $Root 'scripts/lib/WorkerReportStore.ps1')
+. (Join-Path $Root 'scripts/lib/Invoke-WorkerDegradedCiHandoff.ps1')
 
 $DebugBinding = $env:AO_WORKER_REPORT_DEBUG -eq '1'
 function Write-WorkerReportDebug {
@@ -36,6 +42,9 @@ if (-not $SessionId) {
 if (-not $RepoSlug) {
     if ($env:AO_REPO_SLUG) { $RepoSlug = $env:AO_REPO_SLUG }
     elseif ($env:GITHUB_REPOSITORY) { $RepoSlug = $env:GITHUB_REPOSITORY }
+}
+if (-not $OrchestratorSessionId -and $env:AO_ORCHESTRATOR_SESSION_ID) {
+    $OrchestratorSessionId = $env:AO_ORCHESTRATOR_SESSION_ID
 }
 if (-not $PrNumber -and $env:AO_PR_NUMBER) {
     $PrNumber = [int]$env:AO_PR_NUMBER
@@ -120,6 +129,18 @@ if ($DryRun) {
     if ($DeliveryRunId) {
         $record.deliveryRunId = $DeliveryRunId
     }
+    if ($Note) {
+        $record.note = $Note
+    }
+    if ($Reason) {
+        $record.reason = $Reason
+    }
+    if ($HandoffKind) {
+        $record.handoffKind = $HandoffKind
+    }
+    if ($DegradedCiEscalation) {
+        $record.degradedCiEscalation = $true
+    }
     [pscustomobject]@{
         ok     = $true
         dryRun = $true
@@ -129,9 +150,48 @@ if ($DryRun) {
 }
 
 try {
+    $emitResult = $null
+    if (($DegradedCiEscalation -or $HandoffKind -eq 'degraded_ci') -and $State -eq 'completed') {
+        $emitReason = if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+            $Reason
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($Note)) {
+            $Note
+        }
+        else {
+            'degraded CI handoff'
+        }
+        try {
+            $emitResult = Invoke-WorkerDegradedCiHandoff -PrNumber $PrNumber -PrHeadSha $HeadSha `
+                -WorkerSessionId $SessionId -Reason $emitReason -Message $Note `
+                -OrchestratorSessionId $OrchestratorSessionId
+        }
+        catch {
+            [pscustomobject]@{
+                ok                 = $false
+                accepted           = $false
+                reportState        = $State
+                sessionId          = $SessionId
+                repoSlug           = $RepoSlug
+                prNumber           = $PrNumber
+                headSha            = $HeadSha
+                escalationEmission = @{
+                    ok     = $false
+                    status = 'emit_failed'
+                    reason = "$_"
+                }
+            } | ConvertTo-Json -Compress -Depth 20
+            exit 0
+        }
+    }
+
     $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
         -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId -RepoRoot $RepoRoot `
-        -TrustedBinding $trustedBinding -DeliveryRunId $DeliveryRunId
+        -TrustedBinding $trustedBinding -DeliveryRunId $DeliveryRunId -Note $Note -Reason $Reason `
+        -HandoffKind $HandoffKind -DegradedCiEscalation:$DegradedCiEscalation
+    if ($null -ne $emitResult) {
+        $result | Add-Member -NotePropertyName escalationEmission -NotePropertyValue $emitResult -Force
+    }
     $result | ConvertTo-Json -Compress -Depth 20
 }
 catch {

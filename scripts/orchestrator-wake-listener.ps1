@@ -500,7 +500,6 @@ try {
                     continue
                 }
 
-                Send-OrchestratorWakeMessage -OrchestratorId $orchestratorId -Message $wakeMessage -DryRun:$DryRun
                 $lastAcceptedAt = Get-Date
                 $lastProgressAt = Get-Date
                 Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'accepted'

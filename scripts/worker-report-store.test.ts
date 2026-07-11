@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -421,6 +421,40 @@ describe('delivery-confirm-pack-ack', () => {
     expect(reports?.[0]?.deliveryRunId).toBe('run-1');
   });
 
+  it('mergePackWorkerReportsIntoSessions preserves degraded-CI handoff metadata on projected rows', () => {
+    const store = defaultWorkerReportStore();
+    store.sourceRecords['org/a|opk-degraded|717|abc'] = {
+      reportState: 'completed',
+      accepted: true,
+      repoSlug: 'org/a',
+      sessionId: 'opk-degraded',
+      prNumber: 717,
+      headSha: 'abc',
+      note: 'Evidence-backed degraded CI escalation: required checks missing',
+      reason: 'required checks missing',
+      handoffKind: 'degraded_ci',
+      degradedCiEscalation: true,
+      reportedAtMs: Date.parse('2026-07-09T12:10:00.000Z'),
+    };
+    const [session] = mergePackWorkerReportsIntoSessions(
+      [{ id: 'opk-degraded', repoSlug: 'org/a' }],
+      store,
+      'org/a',
+    );
+    const reports = (session as {
+      reports?: Array<{
+        note?: string;
+        reason?: string;
+        handoffKind?: string;
+        degradedCiEscalation?: boolean;
+      }>;
+    }).reports;
+    expect(reports?.[0]?.note).toContain('degraded CI escalation');
+    expect(reports?.[0]?.reason).toBe('required checks missing');
+    expect(reports?.[0]?.handoffKind).toBe('degraded_ci');
+    expect(reports?.[0]?.degradedCiEscalation).toBe(true);
+  });
+
 });
 
 describe('events-optional-consumer-signal-recovery', () => {
@@ -777,6 +811,76 @@ describe('worker-report-store-blocked-state', () => {
       },
     });
     expect(trust.ok).toBe(true);
+  });
+
+  it('pack-worker-report completed degraded-CI handoff emits through the worker helper', () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), 'worker-degraded-handoff-'));
+    const statePath = path.join(tempDir, 'escalation-state.json');
+    const inboxPath = path.join(tempDir, 'operator-inbox');
+    const healthPath = path.join(tempDir, 'health');
+    const reportScript = path.join(repoRoot, 'scripts/pack-worker-report.ps1').replace(/'/g, "''");
+    const repoEscaped = repoRoot.replace(/'/g, "''");
+
+    try {
+      const out = runWorkerStorePwsh(
+        `
+        $env:AO_SESSION_ID = 'opk-degraded-handoff'
+        $env:AO_PR_NUMBER = '717'
+        $env:AO_HEAD_SHA = 'abc717'
+        $env:GITHUB_REPOSITORY = 'org/a'
+        $env:AO_ORCHESTRATOR_SESSION_ID = 'orch-717'
+        Set-Location '${repoEscaped}'
+        & '${reportScript}' completed -RepoRoot '${repoEscaped}' -Note 'Evidence-backed degraded CI escalation: required checks missing' -Reason 'required checks missing' -HandoffKind 'degraded_ci' -DegradedCiEscalation
+      `,
+        {
+          AO_ORCHESTRATOR_ESCALATION_STATE: statePath,
+          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inboxPath,
+          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: healthPath,
+        },
+      ).trim();
+
+      const parsed = JSON.parse(out) as {
+        ok?: boolean;
+        record?: {
+          reportState?: string;
+          note?: string;
+          reason?: string;
+          handoffKind?: string;
+          degradedCiEscalation?: boolean;
+        };
+        escalationEmission?: {
+          ok?: boolean;
+          status?: string;
+        };
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.record?.reportState).toBe('completed');
+      expect(parsed.record?.handoffKind).toBe('degraded_ci');
+      expect(parsed.record?.degradedCiEscalation).toBe(true);
+      expect(['delivered', 'fail_closed']).toContain(parsed.escalationEmission?.status);
+
+      const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+        records: Record<
+          string,
+          {
+            escalationClassId?: string;
+            correlationKey?: string;
+            route?: string;
+            lastPayload?: { reason?: string; workerSessionId?: string };
+          }
+        >;
+      };
+      const record = Object.values(state.records).find(
+        (entry) =>
+          entry.escalationClassId === 'escalation-worker-degraded-ci-handoff' &&
+          entry.correlationKey === 'corr:worker-degraded-ci:717:abc717',
+      );
+      expect(record?.route).toBe('llm-orchestrator');
+      expect(record?.lastPayload?.reason).toBe('required checks missing');
+      expect(record?.lastPayload?.workerSessionId).toBe('opk-degraded-handoff');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

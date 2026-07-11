@@ -54,7 +54,11 @@ if ($triggerIdx -lt 0 -or $dedupIdx -lt 0 -or $triggerIdx -gt $dedupIdx) {
     exit 1
 }
 if ($listener -notmatch 'review_trigger_failed') {
-    Write-Host 'orchestrator-wake-listener.ps1 must forward merge.ready wakes when review trigger fails'
+    Write-Host 'orchestrator-wake-listener.ps1 must preserve review_trigger_failed classification when review wake trigger fails'
+    exit 1
+}
+if ($listener -match 'Send-OrchestratorWakeMessage') {
+    Write-Host 'orchestrator-wake-listener.ps1 must not emit retired FYI wake sends to the orchestrator session'
     exit 1
 }
 

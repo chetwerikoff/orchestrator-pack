@@ -9,8 +9,6 @@
 | ci-failure-reaction-routed | AO ci-failed reaction routed through journaled-worker-send wrapper | journaled-worker-send | specific-session | ci-failure-fix | ao-send | issue-283 |
 | ci-failure-reconcile-ping | Pending red-CI episode eligible after reconcile preflight | ci-failure-notification-reconcile | head-owning-worker | ci-failure-fix | ao-send | issue-283 |
 | ci-green-worker-nudge | Required CI green + worker pre-hand-off state after reconcile | ci-green-wake-reconcile | head-owning-worker | ci-green-handoff | ao-send | none |
-| orchestrator-wake-heartbeat | Periodic heartbeat tick when orchestrator session is live | heartbeat | orchestrator-session | heartbeat-nudge | ao-send | none |
-| orchestrator-wake-webhook | AO webhook POST routed through wake filter yields a wake message | listener | orchestrator-session | wake-nudge | ao-send | none |
 | review-findings-first-send | AO 0.10 auto-delivery on review submit (pack first-send reconcile REMOVED) | review-finding-delivery-confirm | specific-session | review-findings-first | ao-auto-delivery | none |
 | review-findings-redelivery | Bounded re-delivery when first send unconfirmed | review-finding-delivery-confirm | specific-session | review-findings-redelivery | ao-review-send | none |
 | worker-input-draft-submit | Pending worker-input draft observed in dispatch journal | worker-message-submit-reconcile | specific-session | worker-input-submit | draft-submit | none |
@@ -34,6 +32,7 @@
 | E13 | escalation-envelope-ledger | Review-start envelope ledger mark-escalated | review-start-claim-reaper | operator | at-least-once-operator-inbox | issue-641 |
 | E14 | escalation-review-start-claim | Review-start claim escalation path | review-start-claim-reaper | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E15 | escalation-worker-recovery | Worker recovery lib escalation branch | dead-worker-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
+| E16 | escalation-worker-degraded-ci-handoff | Worker degraded-CI hand-off routed through escalation contract | worker | llm-orchestrator | at-least-once-until-ack | issue-641 |
 
 ## Overlap summary
 

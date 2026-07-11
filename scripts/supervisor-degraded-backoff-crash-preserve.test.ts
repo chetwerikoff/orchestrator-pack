@@ -8,41 +8,41 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
       stateDir,
       ['-OrchestratorSessionId', 'op-degraded-crash-preserve'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'tick-error',
+        AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'tick-error',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '3',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS: '2',
       },
     );
 
-    await bdb.waitForMarker(stateDir, 'heartbeat', 30_000);
-    await bdb.waitForSupervisorLogMatch(stateDir, /degraded backoff: heartbeat/, 30_000);
+    await bdb.waitForMarker(stateDir, 'escalation-router', 30_000);
+    await bdb.waitForSupervisorLogMatch(stateDir, /degraded backoff: escalation-router/, 30_000);
 
     let beforeCrash: Record<string, unknown> = {};
     let killed = false;
     let killedPid = 0;
     const killDeadline = Date.now() + 45_000;
     while (Date.now() < killDeadline && !killed) {
-      const recovery = bdb.readChildRecovery(stateDir, 'heartbeat');
+      const recovery = bdb.readChildRecovery(stateDir, 'escalation-router');
       if (Number(recovery.degradedAttempts ?? 0) === 0) {
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }
-      let heartbeatPid = 0;
+      let routerPid = 0;
       try {
-        heartbeatPid = bdb.readChildPid(stateDir, 'heartbeat');
+        routerPid = bdb.readChildPid(stateDir, 'escalation-router');
       } catch {
         try {
-          const marker = await bdb.readMarker(stateDir, 'heartbeat', 500);
-          heartbeatPid = marker.pid;
+          const marker = await bdb.readMarker(stateDir, 'escalation-router', 500);
+          routerPid = marker.pid;
         } catch {
           // pid file and marker may be absent briefly during degraded-path restart
         }
       }
-      if (heartbeatPid > 0 && bdb.isAlive(heartbeatPid)) {
+      if (routerPid > 0 && bdb.isAlive(routerPid)) {
         beforeCrash = { ...recovery };
-        process.kill(heartbeatPid, 'SIGKILL');
-        killedPid = heartbeatPid;
+        process.kill(routerPid, 'SIGKILL');
+        killedPid = routerPid;
         killed = true;
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -54,19 +54,19 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
     const crashDeadline = Date.now() + 60_000;
     let crashObserved = false;
     while (Date.now() < crashDeadline) {
-      const recovery = bdb.readChildRecovery(stateDir, 'heartbeat');
+      const recovery = bdb.readChildRecovery(stateDir, 'escalation-router');
       const log = bdb.readSupervisorLog(stateDir);
-      let heartbeatPid = 0;
+      let routerPid = 0;
       try {
-        heartbeatPid = bdb.readChildPid(stateDir, 'heartbeat');
+        routerPid = bdb.readChildPid(stateDir, 'escalation-router');
       } catch {
         // absent until supervisor restarts the child
       }
       crashObserved =
         Number(recovery.lastExitMs ?? 0) > Number(beforeCrash.lastExitMs ?? 0) ||
         Number(recovery.rapidExits ?? 0) > Number(beforeCrash.rapidExits ?? 0) ||
-        (killedPid > 0 && heartbeatPid > 0 && heartbeatPid !== killedPid) ||
-        /(heartbeat exited; restarting|crash backoff: heartbeat)/.test(log);
+        (killedPid > 0 && routerPid > 0 && routerPid !== killedPid) ||
+        /(escalation-router exited; restarting|crash backoff: escalation-router)/.test(log);
       if (crashObserved) {
         break;
       }
@@ -75,7 +75,7 @@ describe('supervisor-degraded-backoff crash preserve (Issue #450 C3)', () => {
     expect(crashObserved).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    const afterCrash = bdb.readChildRecovery(stateDir, 'heartbeat');
+    const afterCrash = bdb.readChildRecovery(stateDir, 'escalation-router');
     expect(Number(afterCrash.degradedAttempts ?? 0)).toBeGreaterThanOrEqual(
       Number(beforeCrash.degradedAttempts ?? 0),
     );

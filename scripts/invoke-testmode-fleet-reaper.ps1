@@ -22,11 +22,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $PackRoot = Split-Path -Parent $PSScriptRoot
 
-. (Join-Path $PSScriptRoot 'lib/Orchestrator-ProcessAlive.ps1')
-. (Join-Path $PSScriptRoot 'lib/Get-ProcessCommandLine.ps1')
-. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
-. (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-TestModeFleetReaper.ps1')
+if ($Action -in @('register-lane', 'heartbeat', 'progress')) {
+    . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
+}
+else {
+    . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
+    . (Join-Path $PSScriptRoot 'lib/Orchestrator-ProcessAlive.ps1')
+    . (Join-Path $PSScriptRoot 'lib/Get-ProcessCommandLine.ps1')
+    . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
+    . (Join-Path $PSScriptRoot 'lib/Invoke-TestModeFleetReaper.ps1')
+}
 
 switch ($Action) {
     'register-lane' {

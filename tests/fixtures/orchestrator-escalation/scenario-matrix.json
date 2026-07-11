@@ -15,7 +15,8 @@
     "escalation-gated-nudge",
     "escalation-envelope-ledger",
     "escalation-review-start-claim",
-    "escalation-worker-recovery"
+    "escalation-worker-recovery",
+    "escalation-worker-degraded-ci-handoff"
   ],
   "notes": "Fixture anchor for Issue #641 escalation scenario matrix; executable behavior is covered in scripts/orchestrator-escalation.test.ts."
 }

@@ -37,7 +37,7 @@ describe('orchestrator-wake-supervisor', () => {
     const pids = new Set(markers.map((m) => m.pid));
     expect(pids.size).toBe(managedChildRoles.length);
     for (const marker of markers) {
-      if (marker.role === 'listener' || marker.role === 'heartbeat') {
+      if (marker.role === 'listener' || marker.role === 'escalation-router') {
         expect(marker.orchestratorSessionId).toBe('op-test-override');
       }
     }
@@ -101,7 +101,7 @@ describe('orchestrator-wake-supervisor', () => {
     child.kill('SIGTERM');
   });
 
-  it('does not share fate between listener and heartbeat', async () => {
+  it('does not share fate between listener and escalation-router', async () => {
     const stateDir = makeStateDir();
     const child = startSupervisorBackground(stateDir, [
       '-OrchestratorSessionId',
@@ -110,13 +110,13 @@ describe('orchestrator-wake-supervisor', () => {
     await waitForMarkers(stateDir);
 
     const listener = await readMarker(stateDir, 'listener');
-    const heartbeat = await readMarker(stateDir, 'heartbeat');
-    const heartbeatPidAtKill = heartbeat.pid;
+    const router = await readMarker(stateDir, 'escalation-router');
+    const routerPidAtKill = router.pid;
     if (isAlive(listener.pid)) {
       process.kill(listener.pid, 'SIGKILL');
     }
     await fixedObservationWindow(2000);
-    expect(isAlive(heartbeatPidAtKill)).toBe(true);
+    expect(isAlive(routerPidAtKill)).toBe(true);
     child.kill('SIGTERM');
   });
 
@@ -234,10 +234,10 @@ describe('orchestrator-wake-supervisor', () => {
     let sawNew = false;
     while (Date.now() < deadline) {
       const listener = await readMarker(stateDir, 'listener');
-      const heartbeat = await readMarker(stateDir, 'heartbeat');
+      const router = await readMarker(stateDir, 'escalation-router');
       if (
         listener.orchestratorSessionId === 'op-orchestrator-new' &&
-        heartbeat.orchestratorSessionId === 'op-orchestrator-new' &&
+        router.orchestratorSessionId === 'op-orchestrator-new' &&
         listener.pid !== oldListener.pid
       ) {
         sawNew = true;

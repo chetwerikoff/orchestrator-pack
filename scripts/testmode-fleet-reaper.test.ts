@@ -52,12 +52,12 @@ describe('Issue #710 TestMode fleet lease TTL (AC#1)', () => {
 
       killProcess(owner.pid);
       await waitForProcessesStopped(
-        [fleet.supervisorPid, fleet.listener.pid, fleet.heartbeat.pid],
+        [fleet.supervisorPid, fleet.listener.pid, fleet.escalationRouter.pid],
         45_000,
       );
       expect(isAlive(fleet.supervisorPid)).toBe(false);
       expect(isAlive(fleet.listener.pid)).toBe(false);
-      expect(isAlive(fleet.heartbeat.pid)).toBe(false);
+      expect(isAlive(fleet.escalationRouter.pid)).toBe(false);
     },
     90_000,
   );
@@ -128,7 +128,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       const recoveryLane = registerLaneLease({ leaseRoot, laneId: 'recovery-lane' });
       const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, recoveryLane.leaseId));
       expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
-      await waitForProcessesStopped([fleet.listener.pid, fleet.heartbeat.pid], 45_000);
+      await waitForProcessesStopped([fleet.listener.pid, fleet.escalationRouter.pid], 45_000);
       expect(isAlive(fleet.listener.pid)).toBe(false);
     },
     120_000,
@@ -194,7 +194,7 @@ describe('Issue #710 teardown post-sweep (AC#3)', () => {
       const teardown = runReaperCli('teardown', { LeaseId: lane.leaseId }, withLeaseEnv(leaseRoot, lane.leaseId));
       expect(teardown.status).toBe(0);
       await waitForProcessesStopped(
-        [fleet.supervisorPid, fleet.listener.pid, fleet.heartbeat.pid],
+        [fleet.supervisorPid, fleet.listener.pid, fleet.escalationRouter.pid],
         20_000,
       );
       killProcess(owner.pid);

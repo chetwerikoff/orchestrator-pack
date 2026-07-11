@@ -608,6 +608,38 @@ else {
     Add-Failure 'Missing event-driven review wake trigger check script (Issue #207)'
 }
 
+$wakeFyiRetiredCheck = Join-Path $Root 'scripts/check-orchestrator-wake-fyi-retired.ps1'
+if (Test-Path -LiteralPath $wakeFyiRetiredCheck -PathType Leaf) {
+    & $wakeFyiRetiredCheck $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-wake-fyi-retired.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-wake-fyi-retired.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Orchestrator FYI wake retirement guard failed (Issue #721)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-wake-fyi-retired.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing orchestrator FYI wake retirement check script (Issue #721)'
+}
+
+$wakeHeartbeatRetiredCheck = Join-Path $Root 'scripts/check-orchestrator-wake-heartbeat-retired.ps1'
+if (Test-Path -LiteralPath $wakeHeartbeatRetiredCheck -PathType Leaf) {
+    & $wakeHeartbeatRetiredCheck $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-orchestrator-wake-heartbeat-retired.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-orchestrator-wake-heartbeat-retired.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Heartbeat retirement doc guard failed (Issue #721)'
+    }
+}
+else {
+    Write-Check 'scripts/check-orchestrator-wake-heartbeat-retired.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing heartbeat retirement doc check script (Issue #721)'
+}
+
 Write-Host ''
 Write-Host '== AO 0.10 review harness + trigger loop (Issue #623) =='
 $ao010ReviewTriggerCheck = Join-Path $Root 'scripts/check-ao-0-10-review-trigger.ps1'
@@ -1839,6 +1871,22 @@ if (Test-Path -LiteralPath $escalationCatalogCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-orchestrator-escalation-catalog.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing orchestrator escalation catalog check script (Issue #641)'
+}
+
+$registrySequencingCheck = Join-Path $Root 'scripts/check-side-process-registry-709-711-sequencing.ps1'
+if (Test-Path -LiteralPath $registrySequencingCheck -PathType Leaf) {
+    & $registrySequencingCheck $Root
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'scripts/check-side-process-registry-709-711-sequencing.ps1' 'PASS' 'completed'
+    }
+    else {
+        Write-Check 'scripts/check-side-process-registry-709-711-sequencing.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'Side-process registry sequencing guard failed (Issue #721)'
+    }
+}
+else {
+    Write-Check 'scripts/check-side-process-registry-709-711-sequencing.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing side-process registry sequencing check script (Issue #721)'
 }
 
 Write-Host ''

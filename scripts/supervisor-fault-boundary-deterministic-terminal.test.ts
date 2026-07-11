@@ -7,7 +7,7 @@ import {
   startSupervisorBackground,
   waitForSupervisorLogMatch,
   stopSupervisorChild,
-  assertTerminalHeartbeatStopped,
+  assertTerminalEscalationRouterStopped,
 } from './supervisor-fault-boundary.shared.js';
 
 describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
@@ -17,8 +17,8 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       stateDir,
       ['-OrchestratorSessionId', 'op-deterministic-terminal'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'deterministic-defect',
-        AO_WAKE_SUPERVISOR_TEST_FAILURE_CLASS_heartbeat: 'deterministic',
+        AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'deterministic-defect',
+        AO_WAKE_SUPERVISOR_TEST_FAILURE_CLASS_escalation_router: 'deterministic',
         AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
@@ -27,13 +27,13 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
 
     await waitForSupervisorLogMatch(
       stateDir,
-      /heartbeat terminal degraded: deterministic defect/,
+      /escalation-router terminal degraded: deterministic defect/,
       supervisorTestTimeoutMs,
     );
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
     expect(status.stdout).toContain('supervisor: running');
-    await assertTerminalHeartbeatStopped(stateDir);
+    await assertTerminalEscalationRouterStopped(stateDir);
 
     await stopSupervisorChild(child, stateDir);
   }, supervisorTestTimeoutMs);
@@ -44,7 +44,7 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
       stateDir,
       ['-OrchestratorSessionId', 'op-deterministic-progress'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'deterministic-defect',
+        AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'deterministic-defect',
         AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
@@ -53,7 +53,7 @@ describe.sequential('supervisor deterministic terminal (Issue #450 C7)', () => {
 
     await waitForSupervisorLogMatch(
       stateDir,
-      /heartbeat terminal degraded: deterministic defect/,
+      /escalation-router terminal degraded: deterministic defect/,
       supervisorTestTimeoutMs,
     );
 

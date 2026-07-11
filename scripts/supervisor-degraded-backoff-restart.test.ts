@@ -16,14 +16,14 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
       stateDir,
       ['-OrchestratorSessionId', 'op-degraded-backoff'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_heartbeat: 'tick-error',
+        AO_WAKE_SUPERVISOR_TEST_MODE_escalation_router: 'tick-error',
         AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS: '4',
         AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF: '1',
         AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS: '2',
       },
     );
 
-    await waitForMarker(stateDir, 'heartbeat', 25_000);
+    await waitForMarker(stateDir, 'escalation-router', 25_000);
 
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
@@ -31,10 +31,13 @@ describe('supervisor-degraded-backoff (Issue #450 C3)', () => {
     }
 
     const supervisorLog = readSupervisorLog(stateDir);
-    const recoveringCount = countLogMatches(supervisorLog, /heartbeat recovering \(degraded attempt/g);
-    const backoffCount = countLogMatches(supervisorLog, /degraded backoff: heartbeat/g);
+    const recoveringCount = countLogMatches(
+      supervisorLog,
+      /escalation-router recovering \(degraded attempt/g,
+    );
+    const backoffCount = countLogMatches(supervisorLog, /degraded backoff: escalation-router/g);
 
-    expect(supervisorLog).toMatch(/degraded backoff: heartbeat/);
+    expect(supervisorLog).toMatch(/degraded backoff: escalation-router/);
     expect(recoveringCount).toBeLessThanOrEqual(3);
     expect(backoffCount).toBeGreaterThan(0);
 
