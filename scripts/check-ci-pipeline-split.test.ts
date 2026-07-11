@@ -34,6 +34,12 @@ import {
   resolveGuardWeightSeconds,
   validateTopologyPolicy,
 } from './lib/vitest-heavy-topology.mjs';
+import {
+  buildChangedPathManifest,
+  normalizePrScopeMode,
+  parseChangedPathManifest,
+  resolveVitestPrScopeSelection,
+} from './lib/vitest-pr-scoped-selection.mjs';
 
 const repoRoot = join(import.meta.dirname, '..');
 const aggregateScript = join(repoRoot, 'scripts/ci-test-aggregate.ps1');
@@ -41,6 +47,7 @@ const configPath = join(repoRoot, 'scripts/ci-pipeline-split.config.json');
 const scopeGuardPath = join(repoRoot, '.github/workflows/scope-guard.yml');
 const lanesConfigPath = join(repoRoot, 'scripts/vitest-ci-lanes.config.json');
 const fixtureRoot = join(repoRoot, 'tests/fixtures/vitest-heavy-topology');
+const prScopeFixtureRoot = join(repoRoot, 'tests/fixtures/vitest-pr-scope');
 
 function runAggregate(env: Record<string, string>) {
   const merged = { ...process.env, ...env };
@@ -115,8 +122,12 @@ describe('ci-pipeline-split config and workflow binding (#556/#695 lanes)', () =
     expect(yaml).toMatch(/test-typecheck:/);
     expect(yaml).toMatch(/test-pester:/);
     expect(yaml).toMatch(/test-aggregate:/);
+    expect(yaml).toMatch(/emit-pr-changed-paths-manifest\.mjs/);
     expect(yaml).toMatch(/emit-vitest-heavy-topology\.mjs/);
+    expect(yaml).toMatch(/OPK_VITEST_PR_SCOPE_MODE/);
     expect(yaml).toMatch(/fromJson\(needs\.plan-vitest-ci-topology\.outputs\.heavy_shard_matrix\)/);
+    expect(yaml).toMatch(/download-artifact@v4[\s\S]*vitest-heavy-topology/);
+    expect(yaml).toMatch(/OPK_VITEST_TOPOLOGY_PLAN_PATH/);
     expect(yaml).toMatch(/run-vitest-light-lane\.ps1/);
     expect(yaml).toMatch(/run-vitest-heavy-shard\.ps1/);
     expect(yaml).toMatch(/ci-test-aggregate\.ps1/);
@@ -260,6 +271,16 @@ function makeTopologyFixtureRoot(runtimeHistoryFixture: string) {
   cpSync(join(fixtureRoot, 'scripts'), scriptsDir, { recursive: true });
   cpSync(join(fixtureRoot, 'lanes-config.json'), join(scriptsDir, 'vitest-ci-lanes.config.json'));
   cpSync(runtimeHistoryFixture, join(scriptsDir, 'vitest-runtime-history.json'));
+  return root;
+}
+
+function makePrScopeFixtureRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-'));
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, 'plugins'), { recursive: true });
+  cpSync(join(prScopeFixtureRoot, 'scripts'), join(root, 'scripts'), { recursive: true });
+  cpSync(join(prScopeFixtureRoot, 'lanes-config.json'), join(root, 'scripts/vitest-ci-lanes.config.json'));
+  cpSync(join(prScopeFixtureRoot, 'runtime-history.json'), join(root, 'scripts/vitest-runtime-history.json'));
   return root;
 }
 
@@ -828,3 +849,152 @@ describe('wall-clock e2e stage split (#694)', () => {
   });
 });
 
+describe('vitest PR-scoped heavy lane classification (#732)', () => {
+  const scenarioMatrix = JSON.parse(
+    readFileSync(join(prScopeFixtureRoot, 'scenario-matrix.json'), 'utf8'),
+  ) as Array<{
+    name: string;
+    className: string;
+    effectiveRunMode: string;
+    wouldSelectHeavyFiles: string[];
+    manifest: {
+      version: number;
+      baseSha: string;
+      headSha: string;
+      diffOk: boolean;
+      entryCount: number;
+      entries: Array<Record<string, unknown>>;
+    };
+  }>;
+
+  it.each(scenarioMatrix)('matches scenario fixture %s', (scenario) => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const changedFiles = scenario.manifest.entries
+        .map((entry) => String(entry.path ?? ''))
+        .filter((path) => path.endsWith('.test.ts'));
+      const result = buildLanePlan(root, {
+        changedFiles,
+        changedPathManifest: scenario.manifest,
+        prScopeMode: 'enforce',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.prScope.className).toBe(scenario.className);
+      expect(result.topology.prScope.effectiveRunMode).toBe(scenario.effectiveRunMode);
+      expect(result.topology.prScope.wouldSelectHeavyFiles).toEqual(scenario.wouldSelectHeavyFiles);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps PR scoping disabled in shipped shadow mode while recording would-be selection', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const scenario = scenarioMatrix.find((entry) => entry.name === 'source-only-confident');
+      if (!scenario) {
+        throw new Error('missing scenario fixture');
+      }
+      const result = buildLanePlan(root, {
+        changedPathManifest: scenario.manifest,
+        changedFiles: [],
+        prScopeMode: 'shadow',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.prScope.wouldRunMode).toBe('scoped');
+      expect(result.topology.prScope.effectiveRunMode).toBe('full');
+      expect(result.topology.prScope.wouldSelectHeavyFiles).toEqual(['scripts/heavy-a.test.ts']);
+      expect(result.heavy).not.toEqual(['scripts/heavy-a.test.ts']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats missing PR manifest as non-applicable on main-style runs', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const result = buildLanePlan(root, { prScopeMode: 'enforce' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.prScope.applicable).toBe(false);
+      expect(result.topology.prScope.effectiveRunMode).toBe('full');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on invalid manifest payloads instead of treating them as empty scope', () => {
+    const parsed = parseChangedPathManifest('{"version":1,"baseSha":"a","headSha":"b","diffOk":true,"entryCount":1,"entries":[]}');
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('normalizes kill-switch modes conservatively', () => {
+    expect(normalizePrScopeMode('enforce')).toBe('enforce');
+    expect(normalizePrScopeMode('full')).toBe('full');
+    expect(normalizePrScopeMode('disabled')).toBe('full');
+    expect(normalizePrScopeMode('')).toBe('shadow');
+  });
+
+  it('resolves tie-breaks to full for delete-only changed tests', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: [],
+        heavyFiles: ['scripts/reverse-helper.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'D',
+              path: 'scripts/reverse-helper.test.ts',
+              oldMode: '100644',
+              newMode: '000000',
+              oldSha: '1'.repeat(40),
+              newSha: '0'.repeat(40),
+            },
+          ],
+        },
+      });
+      expect(selection.className).toBe('rename/delete-only');
+      expect(selection.effectiveRunMode).toBe('full');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('builds a bounded failure manifest when changed-path export would exceed transport size', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-git-'));
+    try {
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      execFileSync('git', ['init'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 'scope@test.local'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 'scope-fixture'], { cwd: root });
+      writeFileSync(join(root, 'scripts/huge-a.test.ts'), 'export const a = 1;\n', 'utf8');
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      writeFileSync(join(root, 'scripts/huge-b.test.ts'), 'export const b = 2;\n', 'utf8');
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'head'], { cwd: root });
+      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const manifest = buildChangedPathManifest(root, baseSha, headSha, { maxBytes: 5 });
+      expect(manifest.diffOk).toBe(false);
+      expect(manifest.failureReason).toBe('changed-path-export-oversized');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

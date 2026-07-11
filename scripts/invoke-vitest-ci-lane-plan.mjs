@@ -7,6 +7,7 @@
  *   node scripts/invoke-vitest-ci-lane-plan.mjs heavy --shard 3
  *   node scripts/invoke-vitest-ci-lane-plan.mjs wallclock
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
 
 function parseArgs(argv) {
@@ -21,8 +22,33 @@ function parseArgs(argv) {
   return { mode, shard };
 }
 
+function loadArtifactPlan() {
+  const artifactPath = process.env.OPK_VITEST_TOPOLOGY_PLAN_PATH?.trim();
+  if (!artifactPath || !existsSync(artifactPath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync(artifactPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 const { mode, shard } = parseArgs(process.argv);
-const plan = buildLanePlan();
+const artifactPlan = loadArtifactPlan();
+const plan = artifactPlan
+  ? {
+      ok: true,
+      config: { lightMaxWorkers: Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? 0) || 2 },
+      light: artifactPlan.lightFiles ?? [],
+      heavy: artifactPlan.heavyFiles ?? [],
+      postMergeWallclock: artifactPlan.postMergeWallclockFiles ?? [],
+      parked: artifactPlan.parkedFiles ?? [],
+      discovered: artifactPlan.discovered ?? [],
+      heavyShards: artifactPlan.heavyShards ?? [],
+      topology: artifactPlan,
+    }
+  : buildLanePlan();
 
 if (!plan.ok) {
   console.error(plan.errors.join('\n'));

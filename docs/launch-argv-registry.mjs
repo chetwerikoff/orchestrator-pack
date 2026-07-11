@@ -727,15 +727,31 @@ export function buildDefaultInventoryRows(repoRoot) {
     const backed = validatorBackedForHit(hit);
     const slug = `${hit.file.replace(/[^a-zA-Z0-9]+/g, '-')}-${hit.line}`.slice(0, 90);
     if (backed) {
-      rows.push({
-        rowId: `site-${slug}`,
-        caller: { file: hit.file, line: hit.line },
-        callee: backed.callee,
-        calleeContractSourceClass: backed.calleeContractSourceClass,
-        coverageKind: 'validator-backed',
-        validatorId: backed.validatorId,
-        discoveryMatch: { file: hit.file, line: hit.line, patternIds },
-      });
+      if (backed.validatorId) {
+        rows.push({
+          rowId: `site-${slug}`,
+          caller: { file: hit.file, line: hit.line },
+          callee: backed.callee,
+          calleeContractSourceClass: backed.calleeContractSourceClass,
+          coverageKind: 'validator-backed',
+          validatorId: backed.validatorId,
+          discoveryMatch: { file: hit.file, line: hit.line, patternIds },
+        });
+      } else {
+        rows.push({
+          rowId: `site-${slug}`,
+          caller: { file: hit.file, line: hit.line },
+          callee: backed.callee,
+          calleeContractSourceClass: backed.calleeContractSourceClass,
+          coverageKind: 'allowlist-debt',
+          allowlistDebt: {
+            reason: 'Census row for fail-closed discovery; capture-backed validator deferred.',
+            followUpOwner: 'future-draft-callee-validators',
+          },
+          hashPinnedSourceHash: hashPinnedSpanForHit(repoRoot, hit),
+          discoveryMatch: { file: hit.file, line: hit.line, patternIds },
+        });
+      }
       continue;
     }
     rows.push({

@@ -7,10 +7,14 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildHeavyTopology,
   formatOversizedGuardFailures,
   topologyArtifactPath,
 } from './lib/vitest-heavy-topology.mjs';
+import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
+import {
+  normalizePrScopeMode,
+  parseChangedPathManifestFromEnv,
+} from './lib/vitest-pr-scoped-selection.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = join(scriptDir, '..');
@@ -37,20 +41,16 @@ function writeGhaOutput(topology) {
   );
 }
 
-function parseChangedVitestFilesFromEnv() {
-  const raw = process.env.OPK_CHANGED_VITEST_FILES;
-  if (!raw) {
-    return [];
-  }
-  return raw
-    .split('\n')
-    .map((line) => line.trim().replace(/\\/g, '/'))
-    .filter((line) => line.endsWith('.test.ts'));
-}
-
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const changedFiles = parseChangedVitestFilesFromEnv();
-const result = buildHeavyTopology(repoRoot, { changedFiles });
+const changedPathManifest = parseChangedPathManifestFromEnv();
+const changedFiles = (changedPathManifest?.entries ?? [])
+  .map((entry) => entry.path)
+  .filter((path) => path.endsWith('.test.ts'));
+const result = buildLanePlan(repoRoot, {
+  changedFiles,
+  changedPathManifest,
+  prScopeMode: normalizePrScopeMode(),
+});
 
 if (!result.ok) {
   console.error(result.errors.join('\n'));
@@ -58,7 +58,17 @@ if (!result.ok) {
 }
 
 const artifactPath = topologyArtifactPath(repoRoot);
-writeFileSync(artifactPath, `${JSON.stringify(result.topology, null, 2)}\n`);
+const artifact = {
+  ...result.topology,
+  discovered: result.discovered,
+  fullDiscovered: result.fullDiscovered ?? result.discovered,
+  heavyFiles: result.heavy,
+  lightFiles: result.light,
+  postMergeWallclockFiles: result.postMergeWallclock,
+  parkedFiles: result.parked,
+  heavyShards: result.heavyShards,
+};
+writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
 if (result.topology.underProvisioned) {
   console.warn(
@@ -81,4 +91,4 @@ if (ghaOutput) {
   writeGhaOutput(result.topology);
 }
 
-console.log(JSON.stringify(result.topology));
+console.log(JSON.stringify(artifact));

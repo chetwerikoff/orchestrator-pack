@@ -1,0 +1,18 @@
+{
+  "source": "ci-measured",
+  "files": {
+    "scripts/heavy-a.test.ts": 45000,
+    "scripts/heavy-b.test.ts": 60000,
+    "scripts/light-only.test.ts": 15000,
+    "scripts/reverse-dependent.test.ts": 30000,
+    "scripts/reverse-helper.test.ts": 30000
+  },
+  "provenance": {
+    "scripts/heavy-a.test.ts": "measured",
+    "scripts/heavy-b.test.ts": "measured",
+    "scripts/light-only.test.ts": "measured",
+    "scripts/reverse-dependent.test.ts": "measured",
+    "scripts/reverse-helper.test.ts": "measured"
+  },
+  "contentSha": {}
+}
