@@ -387,8 +387,12 @@
   },
   "contentSha": {
     "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
+    "scripts/orchestrator-escalation-router.test.ts": "895598451ff65868260badf7a163f18fb35ae16303752f4c706d1630a5886d24",
+    "scripts/orchestrator-escalation.test.ts": "0d27b8d9be36c119d7959cbdb728d4e58f63f325d43e4f80c5e622c21e5e01bf",
     "scripts/run-vitest-heavy-shard.test.ts": "d3de2b049fb69d107f95d2e3f65e5b0cf9a98888e1b279d6f67415b0bb1813d1",
-    "scripts/supervisor-prompt-block-crash-backoff.test.ts": "2e011cebca197efac3c37560bd645a901ec4799dd2858118d6eae4c880cdcad1"
+    "scripts/supervisor-prompt-block-crash-backoff.test.ts": "2e011cebca197efac3c37560bd645a901ec4799dd2858118d6eae4c880cdcad1",
+    "scripts/worker-message-submit-reconcile.test.ts": "1ee617ca12b88f014708492b386ab324c38cb15b72b5c56c7f402d0c2ac389df",
+    "scripts/worker-report-store.test.ts": "cc33c7a9239c2ce11af46dd127bb5074bdb18fbe1172a59c16b3c6d2e5dc6a79"
   },
   "recentSamples": {},
   "fileChangedAt": {}
