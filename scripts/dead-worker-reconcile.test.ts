@@ -730,7 +730,9 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     ] as const;
 
     for (const testCase of cases) {
-      const sessionId = testCase.sessionId ?? testCase.row?.sessionId ?? 'opk-test';
+      const sessionId = 'sessionId' in testCase
+        ? testCase.sessionId
+        : (testCase.row?.sessionId ?? 'opk-test');
       const evidence = classifyWorkerLivenessEvidence(
         { sessionId, issueNumber: 688, status: 'terminated' },
         {
