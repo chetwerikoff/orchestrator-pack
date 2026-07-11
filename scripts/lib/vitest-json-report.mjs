@@ -82,6 +82,14 @@ export function isCleanVitestJsonReport(payload) {
   return payload?.success === true && Number(payload?.numFailedTests ?? 1) === 0;
 }
 
+export function hasFailedTestsVitestJsonReport(payload) {
+  return Number(payload?.numFailedTests ?? 0) > 0 ||
+    (Array.isArray(payload?.testResults) &&
+      payload.testResults.some((fileResult) =>
+        (fileResult.assertionResults ?? []).some((assertion) => assertion.status === 'failed'),
+      ));
+}
+
 export function isCleanVitestJsonReportFile(reportPath) {
   if (!reportPath) {
     return false;
@@ -89,6 +97,18 @@ export function isCleanVitestJsonReportFile(reportPath) {
   try {
     const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
     return isCleanVitestJsonReport(payload);
+  } catch {
+    return false;
+  }
+}
+
+export function hasFailedTestsVitestJsonReportFile(reportPath) {
+  if (!reportPath) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
+    return hasFailedTestsVitestJsonReport(payload);
   } catch {
     return false;
   }
@@ -125,6 +145,11 @@ function parseMergeCli(argv) {
   if (argv[0] === 'is-clean') {
     const reportPath = argv[1] ?? '';
     process.stdout.write(isCleanVitestJsonReportFile(reportPath) ? '1\n' : '0\n');
+    process.exit(0);
+  }
+  if (argv[0] === 'has-failed-tests') {
+    const reportPath = argv[1] ?? '';
+    process.stdout.write(hasFailedTestsVitestJsonReportFile(reportPath) ? '1\n' : '0\n');
     process.exit(0);
   }
   if (argv[0] !== 'merge') {

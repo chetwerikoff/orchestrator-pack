@@ -14,6 +14,8 @@ $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard.json"
 $PlanScript = Join-Path $Root 'scripts/invoke-vitest-ci-lane-plan.mjs'
 $FileRunPlanScript = Join-Path $Root 'scripts/resolve-vitest-heavy-file-run-plan.mjs'
+$BatchingScript = Join-Path $Root 'scripts/lib/vitest-heavy-batching.mjs'
+$JsonReportScript = Join-Path $Root 'scripts/lib/vitest-json-report.mjs'
 
 $env:CI = 'true'
 $env:VITEST_HEAVY_SHARD = [string]$Shard
@@ -45,6 +47,54 @@ function Invoke-HeavyShardFleetCleanup {
     }
 }
 
+function Resolve-PositiveIntOrDefault {
+    param(
+        [string]$Value,
+        [int]$Default
+    )
+
+    $parsed = 0
+    if ([int]::TryParse($Value, [ref]$parsed) -and $parsed -gt 0) {
+        return $parsed
+    }
+    return $Default
+}
+
+function New-HeavyShardBatch {
+    param(
+        [object[]]$Members,
+        [string]$Pool
+    )
+
+    $files = @($Members | ForEach-Object { [string]$_.file } | Select-Object -Unique)
+    $label = if ($Members.Count -eq 1) {
+        [string]$Members[0].label
+    }
+    else {
+        "batch($($Members.Count)): $(([string[]]($Members | ForEach-Object { [string]$_.label })) -join ', ')"
+    }
+    $testPattern = if ($Members.Count -eq 1) { $Members[0].testPattern } else { $null }
+    [pscustomobject]@{
+        label       = $label
+        pool        = $Pool
+        files       = $files
+        testPattern = $testPattern
+        members     = $Members
+    }
+}
+
+function Add-OpenHeavyShardBatch {
+    param(
+        [System.Collections.Generic.List[object]]$Invocations,
+        [object[]]$Members,
+        [string]$Pool
+    )
+
+    if ($Members.Count -gt 0) {
+        $Invocations.Add((New-HeavyShardBatch -Members $Members -Pool $Pool)) | Out-Null
+    }
+}
+
 Push-Location $Root
 try {
     $planJson = & node $PlanScript heavy --shard $Shard 2>&1
@@ -68,9 +118,16 @@ try {
     $failedExitCode = 0
     $shardExitCode = 0
     $maxFileAttempts = if ($env:CI -eq 'true') { 5 } else { 1 }
+    $nonIsolateFileBatchSize = Resolve-PositiveIntOrDefault -Value $env:VITEST_HEAVY_FILE_BATCH_SIZE -Default 4
+    $isolateTestBatchSize = 1
     $partialReportSeq = 0
 
     try {
+        $invocations = [System.Collections.Generic.List[object]]::new()
+        $openMembers = @()
+        $openPool = $null
+        $baselineInvocationCount = 0
+
         foreach ($file in $shardPlan.files) {
             $filePlanJson = & node $FileRunPlanScript $file 2>&1
             if ($LASTEXITCODE -ne 0) {
@@ -79,17 +136,50 @@ try {
             }
             $runPlan = $filePlanJson | ConvertFrom-Json
             $pool = [string]$runPlan.pool
-            $invocations = @(
-                @{ label = $file; testPattern = $null }
-            )
             if ($runPlan.mode -eq 'tests') {
-                $invocations = @()
+                Add-OpenHeavyShardBatch -Invocations $invocations -Members $openMembers -Pool $openPool
+                $openMembers = @()
+                $openPool = $null
                 foreach ($testTitle in @($runPlan.tests)) {
-                    $invocations += @{ label = "$file > $testTitle"; testPattern = [string]$testTitle }
+                    $baselineInvocationCount++
+                    $member = [pscustomobject]@{
+                        kind        = 'test'
+                        file        = [string]$file
+                        pool        = $pool
+                        label       = "$file > $testTitle"
+                        testPattern = [string]$testTitle
+                    }
+                    $invocations.Add((New-HeavyShardBatch -Members @($member) -Pool $pool)) | Out-Null
                 }
+                continue
             }
 
-            foreach ($invocation in $invocations) {
+            $baselineInvocationCount++
+            $member = [pscustomobject]@{
+                kind        = 'file'
+                file        = [string]$file
+                pool        = $pool
+                label       = [string]$file
+                testPattern = $null
+            }
+            if ($openMembers.Count -eq 0) {
+                $openPool = $pool
+                $openMembers = @($member)
+            }
+            elseif ($openPool -eq $pool -and $openMembers.Count -lt $nonIsolateFileBatchSize) {
+                $openMembers += $member
+            }
+            else {
+                Add-OpenHeavyShardBatch -Invocations $invocations -Members $openMembers -Pool $openPool
+                $openPool = $pool
+                $openMembers = @($member)
+            }
+        }
+        Add-OpenHeavyShardBatch -Invocations $invocations -Members $openMembers -Pool $openPool
+
+        Write-Host "vitest-heavy-batching shard=$Shard files=$($shardPlan.files.Count) invocations=$($invocations.Count) baseline_invocations=$baselineInvocationCount non_isolate_file_batch_size=$nonIsolateFileBatchSize isolate_test_batch_size=$isolateTestBatchSize"
+
+        foreach ($invocation in $invocations) {
                 $partialReportSeq++
                 $safeLabel = ($invocation.label -replace '[^\w.\-]+', '_')
                 $partialReportPath = Join-Path $Root ".vitest-runtime-report-heavy-$Shard-$partialReportSeq-$safeLabel.json"
@@ -105,19 +195,26 @@ try {
                         $testArgs += '-t'
                         $testArgs += [string]$invocation.testPattern
                     }
+                    $fileArgs = @($invocation.files | ForEach-Object { [string]$_ })
                     $poolArgs = @()
-                    if ($pool -eq 'forks') {
-                        $poolArgs += "--pool=$pool"
+                    if ([string]$invocation.pool -eq 'forks') {
+                        $poolArgs += "--pool=$($invocation.pool)"
                     }
 
-                    # One invocation per heavy file or per isolated test so long suites do not
-                    # starve vitest-worker onTaskUpdate RPC (#487/#556/#648).
-                    $output = & npm test -- $file @poolArgs @testArgs --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
+                    # Bounded batches amortize npm/vitest process boot while preserving serial
+                    # heavy-lane execution and the existing RPC-flake retry posture.
+                    $output = & npm test -- @fileArgs @poolArgs @testArgs --reporter=default --reporter=json --outputFile=$partialReportPath 2>&1
                     $text = ($output | Out-String)
                     Write-Host $text
 
                     if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
-                        $cleanReport = & node (Join-Path $Root 'scripts/lib/vitest-json-report.mjs') is-clean $partialReportPath
+                        $hasFailedReport = & node $JsonReportScript has-failed-tests $partialReportPath
+                        if ($hasFailedReport -eq '1') {
+                            $failedExitCode = if ($LASTEXITCODE -ne 0) { $LASTEXITCODE } else { 1 }
+                            Write-Host "[FAIL] Vitest heavy shard $Shard invocation $($invocation.label) reported genuine test failure alongside RPC-flake text; not retrying over a reported failure"
+                            break
+                        }
+                        $cleanReport = & node $JsonReportScript is-clean $partialReportPath
                         if ($cleanReport -eq '1') {
                             Write-Host "[WARN] Post-success vitest-worker onTaskUpdate shutdown flake suppressed for $($invocation.label)"
                             if (-not (Test-Path -LiteralPath $partialReportPath)) {
@@ -139,17 +236,30 @@ try {
 
                     if ($LASTEXITCODE -ne 0) {
                         $failedExitCode = $LASTEXITCODE
+                        $hasFailedReport = & node $JsonReportScript has-failed-tests $partialReportPath
+                        if ($hasFailedReport -eq '1') {
+                            Write-Host "[FAIL] Vitest heavy shard $Shard invocation $($invocation.label) reported a genuine test failure; not retrying a non-flake assertion failure"
+                            break
+                        }
                         if ($attempt -lt $maxFileAttempts) {
                             Write-Host "[WARN] Vitest heavy shard $Shard invocation $($invocation.label) failed (attempt $attempt/$maxFileAttempts, exit=$failedExitCode); cleaning fleet and retrying..."
                             Invoke-HeavyShardFleetCleanup -Shard $Shard
                             Start-Sleep -Seconds 5
                             continue
                         }
+                        Write-Host "[FAIL] Vitest heavy shard $Shard invocation $($invocation.label) failed closed after $attempt attempt(s), exit=$failedExitCode"
                         break
                     }
 
                     if (-not (Test-Path -LiteralPath $partialReportPath)) {
                         Write-Host "[FAIL] Vitest runtime report missing for heavy shard $Shard invocation $($invocation.label)"
+                        exit 1
+                    }
+
+                    $plannedJson = @{ members = @($invocation.members) } | ConvertTo-Json -Compress -Depth 6
+                    & node $BatchingScript validate-report --report $partialReportPath --repo-root $Root --planned-json $plannedJson
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "[FAIL] Vitest runtime report for heavy shard $Shard invocation $($invocation.label) does not match planned batch members"
                         exit 1
                     }
 
@@ -163,7 +273,6 @@ try {
                 }
 
                 $partialReports.Add($partialReportPath) | Out-Null
-            }
         }
 
         if ($failedExitCode -ne 0) {
@@ -171,7 +280,7 @@ try {
         }
         else {
             $mergeArgs = @(
-                (Join-Path $Root 'scripts/lib/vitest-json-report.mjs'),
+                $JsonReportScript,
                 'merge',
                 '--output',
                 $RuntimeReportPath

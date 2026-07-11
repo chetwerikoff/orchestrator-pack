@@ -24,6 +24,7 @@ jobs:
     name: Classify PR changes
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -81,6 +82,7 @@ jobs:
   verify-pack:
     name: Verify orchestrator-pack structure
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       issues: read
@@ -125,6 +127,7 @@ jobs:
     name: PR scope guard
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -198,6 +201,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -228,6 +232,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -255,6 +260,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       heavy_shard_count: ${{ steps.plan.outputs.heavy_shard_count }}
       heavy_shard_matrix: ${{ steps.plan.outputs.heavy_shard_matrix }}
@@ -305,6 +311,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -344,6 +351,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -374,6 +382,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -400,6 +409,7 @@ jobs:
       github.event_name == 'pull_request' &&
       needs.classify-pr-changes.outputs.markdown_only != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

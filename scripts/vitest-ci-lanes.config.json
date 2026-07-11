@@ -151,6 +151,7 @@
     "scripts/review-wake-trigger.test.ts": "heavy",
     "scripts/reviewer-contract-mapping.test.ts": "light",
     "scripts/reviewer-failure-evidence.test.ts": "light",
+    "scripts/run-vitest-heavy-shard.test.ts": "light",
     "scripts/sanctioned-worker-kill-record.test.ts": "light",
     "scripts/scripted-review-confirmed-delivery-gate.test.ts": "light",
     "scripts/seed-snapshot-failure-bounded-read-economy.test.ts": "heavy",
