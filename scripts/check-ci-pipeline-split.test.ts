@@ -625,6 +625,7 @@ describe('wall-clock e2e stage split (#694)', () => {
     expect(validation.baselineSha).toBe(manifest.preMoveBaselineSha);
     const coverage = buildCoverageDeltaReport(repoRoot);
     expect(coverage.ok).toBe(true);
+    expect(coverage.report.postBaselineAdditions).toContain('scripts/run-vitest-heavy-shard.test.ts');
   });
 
 
