@@ -28,7 +28,7 @@
     "Review-cycle cap (Issue #646)",
     "Worker pre-flight (blocking)",
     "Operator-only merge and failed runs",
-    "ao acknowledge",
+    "ao session get",
     "Self-fix is primary",
     "ready_for_review",
     "stop and escalate upward",
