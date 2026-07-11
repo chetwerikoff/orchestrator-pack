@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { ChangedPathManifest } from './lib/vitest-heavy-topology.d.mts';
 import {
   assignHeavyShards,
   buildLanePlan,
@@ -859,14 +860,7 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
     effectiveRunMode: string;
     wouldSelectHeavyFiles: string[];
     reason?: string;
-    manifest: {
-      version: number;
-      baseSha: string;
-      headSha: string;
-      diffOk: boolean;
-      entryCount: number;
-      entries: Array<Record<string, unknown>>;
-    };
+    manifest: ChangedPathManifest;
   }>;
 
   it.each(scenarioMatrix)('matches scenario fixture %s', (scenario) => {

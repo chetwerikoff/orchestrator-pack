@@ -1,0 +1,20 @@
+{
+  "issue_number": 732,
+  "iteration_id": "issue-732-pr-scoped-heavy-vitest-lane",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-11T00:00:00.000Z",
+  "baseline": {
+    "commit_sha": "d269587bf9667baa2f4861c787726e56e9e13cd8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:issue732prscopedheavyvitestlane"
+  },
+  "declared_paths": [],
+  "declared_globs": [
+    ".github/workflows/**",
+    "scripts/**",
+    "docs/**",
+    "tests/**"
+  ],
+  "amendments": []
+}
