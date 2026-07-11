@@ -2931,10 +2931,10 @@
       }
     },
     {
-      "rowId": "site-scripts-dead-worker-reconcile-ps1-226",
+      "rowId": "site-scripts-dead-worker-reconcile-ps1-403",
       "caller": {
         "file": "scripts/dead-worker-reconcile.ps1",
-        "line": 226
+        "line": 403
       },
       "callee": {
         "kind": "ao",
@@ -2945,7 +2945,28 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/dead-worker-reconcile.ps1",
-        "line": 226,
+        "line": 403,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-dead-worker-reconcile-ps1-438",
+      "caller": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 438
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 438,
         "patternIds": [
           "call-pwsh"
         ]

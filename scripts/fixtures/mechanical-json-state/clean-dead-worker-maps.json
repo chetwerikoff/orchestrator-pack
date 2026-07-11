@@ -12,6 +12,13 @@
       "sessionId": "opk-dead-593"
     }
   },
+  "pendingActions": {
+    "dead-worker-abc123": {
+      "sessionId": "opk-dead-593",
+      "issueNumber": 746
+    }
+  },
+  "quarantinedActions": {},
   "audit": [],
   "lastTickMs": 2000
 }

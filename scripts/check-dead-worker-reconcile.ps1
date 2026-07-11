@@ -75,12 +75,28 @@ if (-not $child) {
 }
 
 $ps1 = Get-Content -LiteralPath $reconcileScript -Raw
+if ($ps1 -match 'Get-AoEventsSince' -or $ps1 -match 'aoEvents\s*=') {
+    Write-Host 'dead-worker-reconcile.ps1 must not call Get-AoEventsSince or build aoEvents payloads'
+    exit 1
+}
+if ($mjs -notmatch 'input\.livenessContext\s*\?\s*classifyWorkerLivenessEvidence') {
+    Write-Host 'dead-worker-reconciler.mjs must prefer classifyWorkerLivenessEvidence on the live plan path'
+    exit 1
+}
+if ($ps1 -match 'GetTempPath\(\).+orchestrator-dead-worker-reconcile-state') {
+    Write-Host 'dead-worker-reconcile.ps1 must persist state under the stable wake-supervisor state root, not temp'
+    exit 1
+}
 if ($ps1 -notmatch 'ProbedDeadEvidence') {
     Write-Host 'dead-worker-reconcile.ps1 must pass -ProbedDeadEvidence to invoke-worker-recovery.ps1'
     exit 1
 }
 if ($ps1 -notmatch '@recoveryArgv' -or $ps1 -match '&\s*pwsh\s+@args') {
     Write-Host 'dead-worker-reconcile.ps1 must invoke recovery with @recoveryArgv (not scriptblock-shadowed @args)'
+    exit 1
+}
+if ($ps1 -notmatch 'Invoke-DeadWorkerGhListJsonArray') {
+    Write-Host 'dead-worker-reconcile.ps1 must use the prefix-safe gh JSON bridge'
     exit 1
 }
 

@@ -1,0 +1,24 @@
+{
+  "issue_number": 746,
+  "iteration_id": "orchestrator-pack-103",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-11T15:01:35.220Z",
+  "baseline": {
+    "commit_sha": "b8d1ae902e920c3aab52e141074b1a2f9ec30025",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:c49545c71cf73a5d0b4b6995c783551ff98123ae05fe73f8c824faee1918609e"
+  },
+  "declared_paths": [
+    "scripts/dead-worker-reconcile.ps1",
+    "docs/dead-worker-reconciler.mjs",
+    "scripts/dead-worker-reconcile.test.ts",
+    "scripts/check-dead-worker-reconcile.ps1",
+    "scripts/clear-dead-worker-reconcile-quarantine.ps1",
+    "scripts/launch-argv-inventory.json",
+    "scripts/fixtures/mechanical-json-state/state-coverage-manifest.json",
+    "scripts/fixtures/mechanical-json-state/clean-dead-worker-maps.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

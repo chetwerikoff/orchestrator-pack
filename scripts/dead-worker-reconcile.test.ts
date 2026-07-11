@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
@@ -53,6 +53,21 @@ function enabledPlanInput(overrides: Record<string, unknown> = {}) {
     issueOnlyPrAmbiguous: false,
     prLookupFailed: false,
     nowMs: 1_780_000_105_500,
+    ...overrides,
+  };
+}
+
+function compatibleWorkerStatusRow(sessionId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId,
+    schemaVersion: 1,
+    producerCapability: 'pack-worker-status-store/v1',
+    writerEpochObserved: true,
+    lifecycleState: 'terminated',
+    heartbeatTimestampMs: 1_780_000_105_500 - (16 * 60 * 1000),
+    freshnessMs: 15 * 60 * 1000,
+    generationToken: `${sessionId}-gen`,
+    lastUpdatedMs: 1_780_000_105_500,
     ...overrides,
   };
 }
@@ -507,6 +522,112 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(output).toMatch(/attempt_started|dry-run|recoverable/i);
   });
 
+  it('completes a live-shaped tick when terminal PR JSON is prefixed before JSON payload', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-live-'));
+    const statePath = join(tempDir, 'dead-worker-state.json');
+    const livePayloadPath = join(tempDir, 'live-payload.json');
+    const openPrsPath = join(tempDir, 'open-prs.json');
+    const mergedRawPath = join(tempDir, 'merged-raw.txt');
+    const closedRawPath = join(tempDir, 'closed-raw.txt');
+    const policyPath = join(tempDir, 'respawn-policy.json');
+    writeFileSync(openPrsPath, '[]');
+    writeFileSync(mergedRawPath, '[notifier] prefixed terminal list\n[]\n');
+    writeFileSync(closedRawPath, '[notifier] prefixed terminal list\n[]\n');
+    writeFileSync(policyPath, JSON.stringify({
+      version: AUTONOMOUS_RESPAWN_POLICY_VERSION,
+      allowReconcileDeadWorkerRespawn: true,
+    }));
+    writeFileSync(livePayloadPath, JSON.stringify({
+      sessions: [{
+        sessionId: 'opk-live-prefixed',
+        issueNumber: 688,
+        prNumber: 688,
+        status: 'terminated',
+        worktree: '/tmp/opk-live-prefixed',
+      }],
+      workerStatusStore: {
+        schemaVersion: 1,
+        records: {
+          'opk-live-prefixed': compatibleWorkerStatusRow('opk-live-prefixed'),
+        },
+      },
+      livenessContext: {
+        osLiveness: { 'opk-live-prefixed': 'pane-gone' },
+        sanctionedKillSurface: { healthy: true, records: [] },
+      },
+    }));
+
+    const output = execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-File',
+        join(repoRoot, 'scripts/dead-worker-reconcile.ps1'),
+        '-Once',
+        '-DryRun',
+        '-StateFile',
+        statePath,
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE: livePayloadPath,
+          AO_DEAD_WORKER_OPEN_PRS_FIXTURE: openPrsPath,
+          AO_DEAD_WORKER_GH_MERGED_RAW_FIXTURE: mergedRawPath,
+          AO_DEAD_WORKER_GH_CLOSED_RAW_FIXTURE: closedRawPath,
+          AO_DEAD_WORKER_RESPAWN_POLICY_FIXTURE: policyPath,
+          AO_DEAD_WORKER_EFFECTIVE_RUNTIME_POLICY: 'allow',
+          AO_DEAD_WORKER_RECONCILE_STATE: statePath,
+        },
+      },
+    );
+
+    expect(output).toMatch(/tick complete/);
+    expect(output).not.toMatch(/ConvertFrom-Json/);
+  });
+
+  it('clears quarantine only when no pending or quarantined actions remain', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-clear-'));
+    const statePath = join(tempDir, 'dead-worker-state.json');
+    writeFileSync(statePath, JSON.stringify({
+      schemaVersion: 'dead-worker-reconcile/v2',
+      attempts: {},
+      leases: {},
+      audit: [],
+      pendingActions: {},
+      quarantinedActions: {},
+      lastTickMs: null,
+      _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' },
+    }));
+
+    const cleared = JSON.parse(execFileSync(
+      'pwsh',
+      ['-NoProfile', '-File', join(repoRoot, 'scripts/clear-dead-worker-reconcile-quarantine.ps1'), '-StateFile', statePath],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ));
+    expect(cleared.ok).toBe(true);
+    expect(cleared.outcome).toBe('cleared');
+
+    writeFileSync(statePath, JSON.stringify({
+      schemaVersion: 'dead-worker-reconcile/v2',
+      attempts: {},
+      leases: {},
+      audit: [],
+      pendingActions: { one: { sessionId: 'opk-688' } },
+      quarantinedActions: {},
+      lastTickMs: null,
+      _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' },
+    }));
+
+    expect(() => execFileSync(
+      'pwsh',
+      ['-NoProfile', '-File', join(repoRoot, 'scripts/clear-dead-worker-reconcile-quarantine.ps1'), '-StateFile', statePath],
+      { cwd: repoRoot, encoding: 'utf8' },
+    )).toThrow(/cannot clear dead-worker reconcile quarantine/i);
+  });
+
   it('audit-only when enablement gate fails even for recoverable death', () => {
     const fixture = readCapture('recoverable-crash.raw.json');
     const plan = planDeadWorkerReconcile({
@@ -537,8 +658,8 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         records: [{ sessionId: 'opk-688-old-session', issueNumber: 688, prNumber: 0, killKind: 'manual', timestampMs: 1 }],
       },
     });
-    expect(evidence.verdict).toBe('dead');
-    expect(evidence.reason).toBe('session_row_and_os_liveness_dead');
+    expect(evidence.verdict).toBe('audit_only');
+    expect(evidence.reason).toBe('missing_worker_status_row');
   });
 
   it('does not suppress reused sessionId when kill record issue binding differs', () => {
@@ -554,8 +675,8 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         records: [{ sessionId: 'opk-reused', issueNumber: 688, prNumber: 0, killKind: 'manual', timestampMs: 1 }],
       },
     });
-    expect(evidence.verdict).toBe('dead');
-    expect(evidence.reason).toBe('session_row_and_os_liveness_dead');
+    expect(evidence.verdict).toBe('audit_only');
+    expect(evidence.reason).toBe('missing_worker_status_row');
   });
 
   it('suppresses when sessionId and issue binding both match', () => {
@@ -575,7 +696,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(evidence.reason).toBe('sanctioned_kill');
   });
 
-  it('detects AO 0.10 terminated session row plus pane-gone as dead without ao events', () => {
+  it('detects AO 0.10 terminated session row plus stale heartbeat and dead OS as pack-owned dead', () => {
     const capture = JSON.parse(readFileSync(join(repoRoot, 'tests/external-output-references/captures/ao-0-10-cli/session-get-terminated.raw.json'), 'utf8'));
     const session = {
       ...capture.session,
@@ -585,44 +706,60 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     const evidence = classifyWorkerLivenessEvidence(session, {
       osLiveness: { [session.sessionId]: 'pane-gone' },
       sanctionedKillSurface: { healthy: true, records: [] },
+      workerStatusRows: [compatibleWorkerStatusRow(session.sessionId)],
+      evaluationNowMs: 1_780_000_105_500,
     });
     expect(evidence.verdict).toBe('dead');
-    expect(evidence.reason).toBe('session_row_and_os_liveness_dead');
+    expect(evidence.reason).toBe('pack_owned_liveness_dead');
   });
 
-  it('classifies AO 0.10 session row, OS liveness, and sanctioned kill evidence matrix', () => {
-    const rows = ['active', 'terminated', 'absent'] as const;
-    const panes = ['pane-alive', 'pane-gone', 'unknown'] as const;
-    const kills = [true, false] as const;
-    const cases = rows.flatMap((row) => panes.flatMap((pane) => kills.map((kill) => ({ row, pane, kill }))));
-    expect(cases).toHaveLength(18);
+  it('classifies the pack-owned liveness decision matrix', () => {
+    const cases = [
+      { row: compatibleWorkerStatusRow('opk-live-fresh', { heartbeatTimestampMs: 1_780_000_105_500 }), os: 'pane-alive', expected: 'live_or_unknown' },
+      { row: compatibleWorkerStatusRow('opk-live-stale'), os: 'pane-alive', expected: 'live_or_unknown' },
+      { row: compatibleWorkerStatusRow('opk-dead-fresh', { heartbeatTimestampMs: 1_780_000_105_500 }), os: 'pane-gone', expected: 'live_or_unknown' },
+      { row: compatibleWorkerStatusRow('opk-dead-stale'), os: 'pane-gone', expected: 'dead' },
+      { row: compatibleWorkerStatusRow('opk-dead-missing-heartbeat', { heartbeatTimestampMs: 0 }), os: 'pane-gone', expected: 'audit_only', reason: 'missing_heartbeat_timestamp' },
+      { row: null, os: 'pane-gone', sessionId: 'opk-missing-row', expected: 'audit_only', reason: 'missing_worker_status_row' },
+      { row: compatibleWorkerStatusRow('opk-os-unknown'), os: 'unknown', expected: 'audit_only', reason: 'os_liveness_unknown' },
+      { row: compatibleWorkerStatusRow('opk-row-unknown', { rowValidity: 'unknown' }), os: 'pane-gone', expected: 'audit_only', reason: 'unknown_row_validity' },
+      { row: compatibleWorkerStatusRow('opk-lifecycle', { lifecycleState: 'active' }), os: 'pane-gone', expected: 'audit_only', reason: 'ineligible_lifecycle_state' },
+      { row: compatibleWorkerStatusRow('opk-epoch', { abandonedProducerEpoch: true }), os: 'pane-gone', expected: 'audit_only', reason: 'abandoned_producer_epoch' },
+      { row: compatibleWorkerStatusRow('opk-schema', { schemaVersion: 999 }), os: 'pane-gone', expected: 'audit_only', reason: 'unsupported_worker_status_schema' },
+      { row: compatibleWorkerStatusRow('opk-capability', { producerCapability: 'future-capability/v2' }), os: 'pane-gone', expected: 'audit_only', reason: 'unsupported_worker_status_producer' },
+    ] as const;
 
     for (const testCase of cases) {
-      const session = {
-        sessionId: `opk-688-${testCase.row}-${testCase.pane}-${testCase.kill}`,
-        issueNumber: 688,
-        status: testCase.row,
-      };
-      const livenessContext = {
-        osLiveness: { [session.sessionId]: testCase.pane },
-        sanctionedKillSurface: {
-          healthy: true,
-          records: testCase.kill ? [{ sessionId: session.sessionId, issueNumber: 688, prNumber: 0, killKind: 'manual', timestampMs: 1 }] : [],
+      const sessionId = testCase.sessionId ?? testCase.row?.sessionId ?? 'opk-test';
+      const evidence = classifyWorkerLivenessEvidence(
+        { sessionId, issueNumber: 688, status: 'terminated' },
+        {
+          osLiveness: { [sessionId]: testCase.os },
+          sanctionedKillSurface: { healthy: true, records: [] },
+          workerStatusRows: testCase.row ? [testCase.row] : [],
+          evaluationNowMs: 1_780_000_105_500,
         },
-      };
-      const evidence = classifyWorkerLivenessEvidence(session, livenessContext);
-      if (testCase.kill && testCase.row === 'active' && testCase.pane === 'pane-alive') {
-        expect(evidence.verdict, JSON.stringify(testCase)).toBe('live_or_unknown');
-      } else if (testCase.kill) {
-        expect(evidence.verdict, JSON.stringify(testCase)).toBe('suppressed');
-      } else if ((testCase.row === 'terminated' || testCase.row === 'absent') && testCase.pane === 'pane-gone') {
-        expect(evidence.verdict, JSON.stringify(testCase)).toBe('dead');
-      } else if (testCase.row === 'active' && testCase.pane === 'pane-alive') {
-        expect(evidence.verdict, JSON.stringify(testCase)).toBe('live_or_unknown');
-      } else {
-        expect(evidence.verdict, JSON.stringify(testCase)).toBe('audit_only');
+      );
+      expect(evidence.verdict, sessionId).toBe(testCase.expected);
+      if (testCase.reason) {
+        expect(evidence.reason, sessionId).toBe(testCase.reason);
       }
     }
+
+    const conflicting = classifyWorkerLivenessEvidence(
+      { sessionId: 'opk-conflict', issueNumber: 688, status: 'terminated' },
+      {
+        osLiveness: { 'opk-conflict': 'pane-gone' },
+        sanctionedKillSurface: { healthy: true, records: [] },
+        workerStatusRows: [
+          compatibleWorkerStatusRow('opk-conflict', { heartbeatTimestampMs: 1_780_000_105_500 }),
+          compatibleWorkerStatusRow('opk-conflict', { heartbeatTimestampMs: 1_780_000_105_500 - (16 * 60 * 1000) }),
+        ],
+        evaluationNowMs: 1_780_000_105_500,
+      },
+    );
+    expect(conflicting.verdict).toBe('audit_only');
+    expect(conflicting.reason).toBe('conflicting_duplicate_rows');
   });
 
   it('uses livenessContext for absent sessions and escalates unreadable kill record surface as audit-only', () => {
@@ -632,6 +769,8 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       livenessContext: {
         osLiveness: { 'opk-688-absent': 'pane-gone' },
         sanctionedKillSurface: { healthy: true, records: [] },
+        workerStatusRows: [compatibleWorkerStatusRow('opk-688-absent')],
+        evaluationNowMs: 1_780_000_105_500,
       },
     }));
     expect(plan.actions.some((a) => a.type === 'attempt_started' && a.sessionId === 'opk-688-absent')).toBe(true);
@@ -641,6 +780,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       livenessContext: {
         osLiveness: { 'opk-688-unreadable': 'pane-gone' },
         sanctionedKillSurface: { healthy: false, reason: 'sanctioned_kill_record_unreadable' },
+        workerStatusRows: [compatibleWorkerStatusRow('opk-688-unreadable')],
       },
     }));
     expect(unreadable.actions[0]?.type).toBe('audit_only');
@@ -651,6 +791,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       livenessContext: {
         osLiveness: { 'opk-688-absent-surface': 'pane-gone' },
         sanctionedKillSurface: { healthy: false, reason: 'sanctioned_kill_record_surface_absent' },
+        workerStatusRows: [compatibleWorkerStatusRow('opk-688-absent-surface')],
       },
     }));
     expect(absentSurface.actions[0]?.type).toBe('audit_only');
@@ -695,6 +836,8 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(src).toMatch(/function Get-DeadWorkerAbsentSessions/);
     expect(src).toMatch(/discover-absent-sessions/);
     expect(src).toMatch(/absentSessions = @\(\$absentSessions\)/);
-    expect(src).toMatch(/Get-WorkerOsLivenessMap -Sessions \$livenessProbeSessions/);
+    expect(src).toMatch(/Get-DeadWorkerLivenessContext -Sessions \$livenessProbeSessions/);
+    expect(src).not.toMatch(/Get-AoEventsSince/);
+    expect(src).not.toMatch(/aoEvents =/);
   });
 });
