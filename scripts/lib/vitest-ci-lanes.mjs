@@ -149,6 +149,8 @@ export function resolveHeavyLaneFingerprint(repoRoot = defaultRepoRoot) {
   return `CI=true maxWorkers=${maxWorkersRaw} fileParallelism=false`;
 }
 
+const VALID_LANES = new Set(['light', 'heavy', 'postMergeWallclock', 'parked']);
+
 export function validateClassification(discoveredFiles, classification) {
   const errors = [];
   const classified = new Set(Object.keys(classification));
@@ -159,7 +161,7 @@ export function validateClassification(discoveredFiles, classification) {
       errors.push(`classification-required: ${file} (new, renamed, or unclassified)`);
       continue;
     }
-    if (lane !== 'light' && lane !== 'heavy' && lane !== 'parked') {
+    if (!VALID_LANES.has(lane)) {
       errors.push(`invalid lane for ${file}: ${lane}`);
     }
   }
@@ -176,6 +178,7 @@ export function validateClassification(discoveredFiles, classification) {
 export function partitionByLane(discoveredFiles, classification) {
   const light = [];
   const heavy = [];
+  const postMergeWallclock = [];
   const parked = [];
   for (const file of discoveredFiles) {
     const lane = classification[file];
@@ -183,11 +186,13 @@ export function partitionByLane(discoveredFiles, classification) {
       light.push(file);
     } else if (lane === 'heavy') {
       heavy.push(file);
+    } else if (lane === 'postMergeWallclock') {
+      postMergeWallclock.push(file);
     } else if (lane === 'parked') {
       parked.push(file);
     }
   }
-  return { light, heavy, parked };
+  return { light, heavy, postMergeWallclock, parked };
 }
 
 export function validateParkedWallclockE2e(classification, parkedWallclockE2e) {
@@ -323,7 +328,16 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
     };
   }
 
-  const { topology, discovered, light, heavy, parked, runtimeHistory, lanesConfig } = topologyResult;
+  const {
+    topology,
+    discovered,
+    light,
+    heavy,
+    postMergeWallclock,
+    parked,
+    runtimeHistory,
+    lanesConfig,
+  } = topologyResult;
   const heavyShards = assignHeavyShards(
     heavy,
     runtimeHistory,
@@ -337,6 +351,7 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
     config: lanesConfig,
     light,
     heavy,
+    postMergeWallclock,
     parked,
     heavyShards,
     runtimeHistory,

@@ -1,0 +1,166 @@
+name: vitest-wallclock-e2e
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: vitest-wallclock-e2e
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  test-vitest-wallclock:
+    name: Vitest wall-clock acceptance
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --include=dev
+
+      - name: Run wall-clock Vitest acceptance stage
+        shell: pwsh
+        run: ./scripts/run-vitest-wallclock-stage.ps1
+
+  test-wallclock-aggregate:
+    name: Wall-clock acceptance gate
+    needs: test-vitest-wallclock
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail-closed wall-clock aggregate
+        shell: pwsh
+        env:
+          WALLCLOCK_RESULT: ${{ needs.test-vitest-wallclock.result }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: ./scripts/ci-wallclock-e2e-aggregate.ps1 -WallclockResult $env:WALLCLOCK_RESULT
+
+  emit-containment:
+    name: wall-clock-e2e-containment
+    needs: [test-vitest-wallclock, test-wallclock-aggregate]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      STAGE_RESULT: ${{ needs.test-wallclock-aggregate.result == 'success' && needs.test-vitest-wallclock.result == 'success' && 'success' || (needs.test-vitest-wallclock.result == 'failure' || needs.test-wallclock-aggregate.result == 'failure') && 'failure' || 'pending' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Emit containment status
+        id: emit-containment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "stage_result=${STAGE_RESULT}" >> "$GITHUB_OUTPUT"
+          node scripts/emit-wallclock-e2e-containment.mjs \
+            --head "${GITHUB_SHA}" \
+            --stage-result "${STAGE_RESULT}" \
+            --write-only
+
+      - name: Upload containment artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallclock-e2e-containment
+          path: scratch/wallclock-e2e-containment.json
+          if-no-files-found: error
+
+      - name: Fail closed on uncontained head
+        if: env.STAGE_RESULT != 'success'
+        shell: bash
+        run: |
+          echo "Wall-clock containment blocks promotion for pending/red stage result (stage=${STAGE_RESULT})"
+          exit 1
+
+  notify-on-failure:
+    name: Wall-clock failure alert
+    needs: [test-vitest-wallclock, test-wallclock-aggregate, emit-containment]
+    if: failure() && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Emit operator-visible red signal
+        shell: pwsh
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/ci-wallclock-e2e-notify.ps1 -HeadSha $env:GITHUB_SHA
+
+      - name: Record immutable failure comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('scripts/vitest-wallclock-e2e-split.manifest.json', 'utf8'));
+            const episodeKey = manifest.redSignal.episodeKey.replace('{sha}', context.sha);
+            const dedupeKey = manifest.redSignal.dedupeKey.replace('{sha}', context.sha);
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: manifest.issue,
+              per_page: 100,
+            });
+            const alreadyDelivered = comments.some((comment) => {
+              const body = String(comment.body ?? '');
+              return body.includes(`dedupe: ${dedupeKey}`)
+                || body.includes(`episode: \`${episodeKey}\``);
+            });
+            if (alreadyDelivered) {
+              core.info(`Skipping duplicate wall-clock failure alert for ${dedupeKey}`);
+              return;
+            }
+            const body = [
+              '## Wall-clock acceptance stage failed',
+              '',
+              `- head: \`${context.sha}\``,
+              `- run: ${context.runId}`,
+              `- episode: \`${episodeKey}\``,
+              `- dedupe: ${dedupeKey}`,
+              `- workflow: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              'Containment blocks supervisor/wake-sensitive promotion until green.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: manifest.issue,
+              body,
+            });

@@ -7,5 +7,9 @@
   "typecheckJobName": "Type-check pack sources",
   "pesterJobName": "Pester regression",
   "rollbackVitestShardCount": 8,
-  "rollbackVitestShardJobPrefix": "Vitest shard"
+  "rollbackVitestShardJobPrefix": "Vitest shard",
+  "postMergeWallclockJobName": "Vitest wall-clock acceptance",
+  "postMergeWallclockAggregateJobName": "Wall-clock acceptance gate",
+  "postMergeWallclockWorkflowFile": "vitest-wallclock-e2e.yml",
+  "postMergeWallclockContainmentCheckName": "wall-clock-e2e-containment"
 }
