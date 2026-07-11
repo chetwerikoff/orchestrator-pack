@@ -12,6 +12,53 @@ export interface HeavyTopologyPolicy {
   fallbackHeavyShardCount: number;
 }
 
+export type PrScopeMode = 'full' | 'shadow' | 'enforce';
+
+export interface ChangedPathManifestEntry {
+  status: string;
+  path: string;
+  previousPath?: string;
+  oldMode?: string | null;
+  newMode?: string | null;
+  oldSha?: string | null;
+  newSha?: string | null;
+}
+
+export interface ChangedPathManifest {
+  version: number;
+  baseSha: string;
+  headSha: string;
+  diffOk: boolean;
+  failureReason?: string | null;
+  entryCount: number;
+  entries: ChangedPathManifestEntry[];
+  oversized?: boolean;
+}
+
+export interface VitestPrScopeSelection {
+  applicable: boolean;
+  mode: PrScopeMode;
+  killSwitchState: PrScopeMode;
+  effectiveRunMode: 'full' | 'scoped';
+  wouldRunMode: 'full' | 'scoped';
+  className:
+    | 'not-applicable'
+    | 'test-only'
+    | 'source-only'
+    | 'source+test'
+    | 'workflow/config'
+    | 'mixed/cross-cutting'
+    | 'rename/delete-only'
+    | 'diff-computation-failure';
+  reason: string;
+  baseSha: string | null;
+  headSha: string | null;
+  changedEntries: ChangedPathManifestEntry[];
+  changedEntryCount?: number;
+  selectedHeavyFiles: string[];
+  wouldSelectHeavyFiles: string[];
+}
+
 export declare const FRESH_GUARD_PROVENANCE: Set<string>;
 
 export declare function artifactRequiresFreshnessProvenance(artifact: RuntimeHistoryArtifact | null | undefined): boolean;
@@ -37,6 +84,8 @@ export interface HeavyTopologyArtifact {
   weightInputReason: string | null;
   policy: HeavyTopologyPolicy;
   parity: { count: number; matrixLength: number };
+  fullDiscoveryCount: number;
+  prScope: VitestPrScopeSelection;
   oversizedOffenders: Array<{ file: string; weightSeconds: number; targetShardSeconds: number }>;
   unresolvedGuardWeights: Array<{ file: string; reason: string }>;
 }
@@ -45,6 +94,7 @@ export interface HeavyTopologySuccess {
   ok: true;
   topology: HeavyTopologyArtifact;
   discovered: string[];
+  fullDiscovered: string[];
   light: string[];
   heavy: string[];
   parked: string[];
@@ -113,7 +163,12 @@ export declare function deriveHeavyShardCountFromTotal(
 export declare function buildHeavyShardIndices(heavyShardCount: number): number[];
 export declare function buildHeavyTopology(
   repoRoot?: string,
-  options?: { changedFiles?: string[]; preTopologyMeasurements?: Record<string, number> },
+  options?: {
+    changedFiles?: string[];
+    changedPathManifest?: ChangedPathManifest | null;
+    preTopologyMeasurements?: Record<string, number>;
+    prScopeMode?: PrScopeMode;
+  },
 ): HeavyTopologyResult;
 export declare function topologyArtifactPath(repoRoot?: string): string;
 export declare function formatOversizedGuardFailures(result: HeavyTopologyResult): string[];
