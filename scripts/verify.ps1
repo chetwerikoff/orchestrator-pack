@@ -1396,6 +1396,25 @@ else {
 
 Write-Host ''
 
+Write-Host '== CI job timeout walls (Issue #730) =='
+$ciJobTimeoutCheck = Join-Path $Root 'scripts/check-ci-job-timeouts.mjs'
+if (Test-Path -LiteralPath $ciJobTimeoutCheck -PathType Leaf) {
+    & node $ciJobTimeoutCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Check 'scripts/check-ci-job-timeouts.mjs' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'CI job timeout wall structural check failed (Issue #730)'
+    }
+    else {
+        Write-Check 'scripts/check-ci-job-timeouts.mjs' 'PASS' 'completed'
+    }
+}
+else {
+    Write-Check 'scripts/check-ci-job-timeouts.mjs' 'FAIL' 'missing'
+    Add-Failure 'Missing CI job timeout wall structural check (Issue #730)'
+}
+
+Write-Host ''
+
 Write-Host ''
 Write-Host '== github fleet inventory cache (Issue #453) =='
 $fleetCacheBypassCheck = Join-Path $Root 'scripts/check-github-fleet-cache-bypass.ps1'

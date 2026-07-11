@@ -277,12 +277,15 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
 
   const preMoveUnion = [...baselineValidation.union].sort();
   const expectedPostMoveUnion = [...prRetained, ...postMergeExecution].sort();
-  if (preMoveUnion.length !== expectedPostMoveUnion.length
-    || preMoveUnion.some((file, index) => file !== expectedPostMoveUnion[index])) {
+  const expectedPostMoveSet = new Set(expectedPostMoveUnion);
+  const missingPreMoveCoverage = preMoveUnion.filter((file) => !expectedPostMoveSet.has(file));
+  if (missingPreMoveCoverage.length > 0) {
     errors.push(
-      'post-move PR ∪ post-merge execution does not match pinned pre-move PR-required union',
+      `post-move PR ∪ post-merge execution is missing pinned pre-move files: ${missingPreMoveCoverage.join(', ')}`,
     );
   }
+  const preMoveSet = new Set(preMoveUnion);
+  const postBaselineAdditions = expectedPostMoveUnion.filter((file) => !preMoveSet.has(file));
 
   const mappedExecution = new Set(listPostMergeExecutionFiles(manifest));
   for (const [logical, successors] of Object.entries(manifest.preMoveToPostMergeMap)) {
@@ -306,6 +309,7 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
       prRetainedCount: prRetained.length,
       postMergeExecutionCount: postMergeExecution.length,
       preMoveUnionCount: preMoveUnion.length,
+      postBaselineAdditions,
       discoveredCount: discovered.length,
     },
   };
