@@ -385,6 +385,9 @@
     "tests/agents-md-size-budget.test.ts": "measured",
     "scripts/worker-status-store.test.ts": "measured"
   },
+  "contentSha": {
+    "scripts/run-vitest-heavy-shard.test.ts": "a9277e27e8179a91f80f1673cd07491aa1250ae54e86e8a9dfaa20653529e0d5"
+  },
   "recentSamples": {},
   "fileChangedAt": {}
 }
