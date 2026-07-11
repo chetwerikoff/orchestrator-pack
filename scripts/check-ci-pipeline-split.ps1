@@ -61,10 +61,11 @@ $aggregateScript = Join-Path $RepoRoot 'scripts/ci-test-aggregate.ps1'
 $lightLaneScript = Join-Path $RepoRoot 'scripts/run-vitest-light-lane.ps1'
 $heavyShardScript = Join-Path $RepoRoot 'scripts/run-vitest-heavy-shard.ps1'
 $rollbackDoc = Join-Path $RepoRoot 'docs/ci-pipeline-split.md'
+$prScopeScenarioScript = Join-Path $RepoRoot 'scripts/check-vitest-pr-scope-scenarios.mjs'
 
 Write-Host '== CI pipeline split guard (Issues #487/#556/#695) =='
 
-foreach ($required in @($aggregateScript, $lightLaneScript, $heavyShardScript, $lanesConfigPath, $runtimeHistoryPath, $lanesLib, $topologyLib, $topologyEmitScript, $rollbackDoc)) {
+foreach ($required in @($aggregateScript, $lightLaneScript, $heavyShardScript, $lanesConfigPath, $runtimeHistoryPath, $lanesLib, $topologyLib, $topologyEmitScript, $rollbackDoc, $prScopeScenarioScript)) {
     if (-not (Test-Path -LiteralPath $required)) {
         Add-Fail "missing required artifact: $(Split-Path -Leaf $required)"
     }
@@ -139,6 +140,15 @@ else {
         if ($planJob -notmatch 'emit-vitest-heavy-topology\.mjs') {
             Add-Fail 'plan-vitest-ci-topology job must invoke scripts/emit-vitest-heavy-topology.mjs'
         }
+        if ($planJob -notmatch 'emit-pr-changed-paths-manifest\.mjs') {
+            Add-Fail 'plan-vitest-ci-topology job must emit the widened changed-path manifest exactly once'
+        }
+        if ($planJob -match "git diff .*'\*\.test\.ts'") {
+            Add-Fail 'plan-vitest-ci-topology must not retain a test-only git diff export'
+        }
+        if ($planJob -notmatch 'OPK_VITEST_PR_SCOPE_MODE') {
+            Add-Fail 'plan-vitest-ci-topology job must bind OPK_VITEST_PR_SCOPE_MODE for shadow-mode kill-switch control'
+        }
         if ($planJob -notmatch 'heavy_shard_count') {
             Add-Fail 'plan-vitest-ci-topology job must expose heavy_shard_count output'
         }
@@ -177,6 +187,12 @@ else {
         }
         if ($heavyJob -notmatch 'plan-vitest-ci-topology') {
             Add-Fail 'test-vitest-heavy job must need plan-vitest-ci-topology for derived matrix'
+        }
+        if ($heavyJob -notmatch 'download-artifact@v4' -or $heavyJob -notmatch 'vitest-heavy-topology') {
+            Add-Fail 'test-vitest-heavy job must download the saved heavy topology artifact before execution'
+        }
+        if ($heavyJob -notmatch 'OPK_VITEST_TOPOLOGY_PLAN_PATH') {
+            Add-Fail 'test-vitest-heavy job must point shard execution at the saved topology plan artifact'
         }
         if ($heavyJob -match 'shard:\s*\[1,\s*2,\s*3') {
             Add-Fail 'test-vitest-heavy matrix must be derived from plan output, not hand-listed shard indices'
@@ -321,6 +337,28 @@ if ((Test-Path -LiteralPath $topologyLib) -and (Get-Command node -ErrorAction Si
     }
     catch {
         Add-Fail "heavy topology validation failed: $_"
+    }
+}
+
+if ((Test-Path -LiteralPath $prScopeScenarioScript) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    try {
+        $scenarioJson = & node $prScopeScenarioScript 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Add-Fail "vitest PR-scope scenario matrix failed: $scenarioJson"
+        }
+        else {
+            $scenario = $scenarioJson | ConvertFrom-Json
+            if (-not $scenario.ok) {
+                foreach ($case in $scenario.cases) {
+                    if (-not $case.ok) {
+                        Add-Fail "pr-scope scenario mismatch: $($case.name)"
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        Add-Fail "vitest PR-scope scenario matrix errored: $_"
     }
 }
 
@@ -781,5 +819,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] CI pipeline split lane classification, derived weighted heavy shards, oversized-file guard, runtime-history refresh producer guards, wall-clock e2e split, aggregate fail-closed, and worker-RPC guard OK.'
+Write-Host '[PASS] CI pipeline split lane classification, PR-scoped heavy-lane guard, derived weighted heavy shards, oversized-file guard, runtime-history refresh producer guards, wall-clock e2e split, aggregate fail-closed, and worker-RPC guard OK.'
 exit 0

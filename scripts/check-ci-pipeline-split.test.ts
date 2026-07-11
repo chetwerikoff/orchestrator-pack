@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { ChangedPathManifest } from './lib/vitest-heavy-topology.d.mts';
 import {
   assignHeavyShards,
   buildLanePlan,
@@ -34,6 +35,13 @@ import {
   resolveGuardWeightSeconds,
   validateTopologyPolicy,
 } from './lib/vitest-heavy-topology.mjs';
+import {
+  buildChangedPathManifest,
+  normalizePrScopeMode,
+  parseChangedPathManifest,
+  parseChangedPathManifestFromEnv,
+  resolveVitestPrScopeSelection,
+} from './lib/vitest-pr-scoped-selection.mjs';
 
 const repoRoot = join(import.meta.dirname, '..');
 const aggregateScript = join(repoRoot, 'scripts/ci-test-aggregate.ps1');
@@ -41,6 +49,7 @@ const configPath = join(repoRoot, 'scripts/ci-pipeline-split.config.json');
 const scopeGuardPath = join(repoRoot, '.github/workflows/scope-guard.yml');
 const lanesConfigPath = join(repoRoot, 'scripts/vitest-ci-lanes.config.json');
 const fixtureRoot = join(repoRoot, 'tests/fixtures/vitest-heavy-topology');
+const prScopeFixtureRoot = join(repoRoot, 'tests/fixtures/vitest-pr-scope');
 
 function runAggregate(env: Record<string, string>) {
   const merged = { ...process.env, ...env };
@@ -115,8 +124,12 @@ describe('ci-pipeline-split config and workflow binding (#556/#695 lanes)', () =
     expect(yaml).toMatch(/test-typecheck:/);
     expect(yaml).toMatch(/test-pester:/);
     expect(yaml).toMatch(/test-aggregate:/);
+    expect(yaml).toMatch(/emit-pr-changed-paths-manifest\.mjs/);
     expect(yaml).toMatch(/emit-vitest-heavy-topology\.mjs/);
+    expect(yaml).toMatch(/OPK_VITEST_PR_SCOPE_MODE/);
     expect(yaml).toMatch(/fromJson\(needs\.plan-vitest-ci-topology\.outputs\.heavy_shard_matrix\)/);
+    expect(yaml).toMatch(/download-artifact@v4[\s\S]*vitest-heavy-topology/);
+    expect(yaml).toMatch(/OPK_VITEST_TOPOLOGY_PLAN_PATH/);
     expect(yaml).toMatch(/run-vitest-light-lane\.ps1/);
     expect(yaml).toMatch(/run-vitest-heavy-shard\.ps1/);
     expect(yaml).toMatch(/ci-test-aggregate\.ps1/);
@@ -260,6 +273,16 @@ function makeTopologyFixtureRoot(runtimeHistoryFixture: string) {
   cpSync(join(fixtureRoot, 'scripts'), scriptsDir, { recursive: true });
   cpSync(join(fixtureRoot, 'lanes-config.json'), join(scriptsDir, 'vitest-ci-lanes.config.json'));
   cpSync(runtimeHistoryFixture, join(scriptsDir, 'vitest-runtime-history.json'));
+  return root;
+}
+
+function makePrScopeFixtureRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-'));
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, 'plugins'), { recursive: true });
+  cpSync(join(prScopeFixtureRoot, 'scripts'), join(root, 'scripts'), { recursive: true });
+  cpSync(join(prScopeFixtureRoot, 'lanes-config.json'), join(root, 'scripts/vitest-ci-lanes.config.json'));
+  cpSync(join(prScopeFixtureRoot, 'runtime-history.json'), join(root, 'scripts/vitest-runtime-history.json'));
   return root;
 }
 
@@ -828,3 +851,363 @@ describe('wall-clock e2e stage split (#694)', () => {
   });
 });
 
+describe('vitest PR-scoped heavy lane classification (#732)', () => {
+  const scenarioMatrix = JSON.parse(
+    readFileSync(join(prScopeFixtureRoot, 'scenario-matrix.json'), 'utf8'),
+  ) as Array<{
+    name: string;
+    className: string;
+    effectiveRunMode: string;
+    wouldSelectHeavyFiles: string[];
+    reason?: string;
+    manifest: ChangedPathManifest;
+  }>;
+
+  it.each(scenarioMatrix)('matches scenario fixture %s', (scenario) => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      if (scenario.className === 'markdown-only') {
+        const isMarkdownOnly = scenario.manifest.entries.length > 0
+          && scenario.manifest.entries.every((entry) => {
+            const path = String(entry.path ?? '').toLowerCase();
+            return path.endsWith('.md') || path.endsWith('.mdc');
+          });
+        expect(isMarkdownOnly).toBe(true);
+        expect(scenario.effectiveRunMode).toBe('skipped');
+        expect(scenario.wouldSelectHeavyFiles).toEqual([]);
+        expect(scenario.reason).toBe('markdown-only-pr-skips-heavy-lane');
+        return;
+      }
+      const changedFiles = scenario.manifest.entries
+        .map((entry) => String(entry.path ?? ''))
+        .filter((path) => path.endsWith('.test.ts'));
+      const result = buildLanePlan(root, {
+        changedFiles,
+        changedPathManifest: scenario.manifest,
+        prScopeMode: 'enforce',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.prScope.className).toBe(scenario.className);
+      expect(result.topology.prScope.effectiveRunMode).toBe(scenario.effectiveRunMode);
+      expect(result.topology.prScope.wouldSelectHeavyFiles).toEqual(scenario.wouldSelectHeavyFiles);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps PR scoping disabled in shipped shadow mode while recording would-be selection', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const scenario = scenarioMatrix.find((entry) => entry.name === 'source-only-confident');
+      if (!scenario) {
+        throw new Error('missing scenario fixture');
+      }
+      const result = buildLanePlan(root, {
+        changedPathManifest: scenario.manifest,
+        changedFiles: [],
+        prScopeMode: 'shadow',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.prScope.wouldRunMode).toBe('scoped');
+      expect(result.topology.prScope.effectiveRunMode).toBe('full');
+      expect(result.topology.prScope.wouldSelectHeavyFiles).toEqual(['scripts/heavy-a.test.ts']);
+      expect(result.heavy).not.toEqual(['scripts/heavy-a.test.ts']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats missing PR manifest as non-applicable on main-style runs', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const result = buildLanePlan(root, { prScopeMode: 'enforce' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.topology.prScope.applicable).toBe(false);
+      expect(result.topology.prScope.effectiveRunMode).toBe('full');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on invalid manifest payloads instead of treating them as empty scope', () => {
+    const parsed = parseChangedPathManifest('{"version":1,"baseSha":"a","headSha":"b","diffOk":true,"entryCount":1,"entries":[]}');
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('preserves oversized export failure manifests for fail-closed provenance', () => {
+    const parsed = parseChangedPathManifest(JSON.stringify({
+      version: 1,
+      baseSha: 'a',
+      headSha: 'b',
+      diffOk: false,
+      failureReason: 'changed-path-export-oversized',
+      entryCount: 42,
+      entries: [],
+      oversized: true,
+    }));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      throw new Error('expected oversized failure manifest to parse');
+    }
+    expect(parsed.manifest.diffOk).toBe(false);
+    expect(parsed.manifest.failureReason).toBe('changed-path-export-oversized');
+    expect(parsed.manifest.entryCount).toBe(42);
+    expect(parsed.manifest.entries).toEqual([]);
+  });
+
+  it('treats an empty changed-path export as a diff-computation failure manifest', () => {
+    const manifest = parseChangedPathManifestFromEnv('');
+    expect(manifest).not.toBeNull();
+    expect(manifest?.diffOk).toBe(false);
+    expect(manifest?.failureReason).toBe('manifest-missing');
+  });
+
+  it('normalizes kill-switch modes conservatively', () => {
+    expect(normalizePrScopeMode('enforce')).toBe('enforce');
+    expect(normalizePrScopeMode('full')).toBe('full');
+    expect(normalizePrScopeMode('disabled')).toBe('full');
+    expect(normalizePrScopeMode('')).toBe('shadow');
+  });
+
+  it('resolves tie-breaks to full for delete-only changed tests', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: [],
+        heavyFiles: ['scripts/reverse-helper.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'D',
+              path: 'scripts/reverse-helper.test.ts',
+              oldMode: '100644',
+              newMode: '000000',
+              oldSha: '1'.repeat(40),
+              newSha: '0'.repeat(40),
+            },
+          ],
+        },
+      });
+      expect(selection.className).toBe('rename/delete-only');
+      expect(selection.effectiveRunMode).toBe('full');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a changed first-party module is only reached through bare package imports', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      mkdirSync(join(root, 'plugins/_shared/lib'), { recursive: true });
+      writeFileSync(
+        join(root, 'plugins/_shared/package.json'),
+        `${JSON.stringify({ name: '@orchestrator-pack/shared' }, null, 2)}\n`,
+        'utf8',
+      );
+      writeFileSync(
+        join(root, 'plugins/_shared/lib/normalize.ts'),
+        'export function normalizeFixture(input: string) { return input.trim(); }\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(root, 'scripts/heavy-bare-import.test.ts'),
+        [
+          "import { describe, expect, it } from 'vitest';",
+          "import { normalizeFixture } from '@orchestrator-pack/shared/lib/normalize.js';",
+          '',
+          "describe('heavy-bare-import', () => {",
+          "  it('uses the bare first-party import fixture', () => {",
+          "    expect(normalizeFixture('  ok  ')).toBe('ok');",
+          '  });',
+          '});',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-bare-import.test.ts'],
+        heavyFiles: ['scripts/heavy-bare-import.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'M',
+              path: 'plugins/_shared/lib/normalize.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('source-only');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('low-confidence-or-unmapped-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on source-looking symlink mode changes', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-a.test.ts'],
+        heavyFiles: ['scripts/heavy-a.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'M',
+              path: 'scripts/feature-a.ts',
+              oldMode: '100644',
+              newMode: '120000',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('source-only');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('low-confidence-or-unmapped-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on source-looking binary changes', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      writeFileSync(join(root, 'scripts/feature-a.ts'), Buffer.from([0x65, 0x78, 0x70, 0x00, 0xff]));
+
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-a.test.ts'],
+        heavyFiles: ['scripts/heavy-a.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'M',
+              path: 'scripts/feature-a.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('source-only');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('low-confidence-or-unmapped-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats vitest config changes as workflow/config full-run triggers', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-a.test.ts'],
+        heavyFiles: ['scripts/heavy-a.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 2,
+          entries: [
+            {
+              status: 'M',
+              path: 'vitest.config.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+            {
+              status: 'M',
+              path: 'configs/custom.vitest.config.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '3'.repeat(40),
+              newSha: '4'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('workflow/config');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('workflow-or-config-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('builds a bounded failure manifest when changed-path export would exceed transport size', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-git-'));
+    try {
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      execFileSync('git', ['init'], { cwd: root });
+      execFileSync('git', ['config', 'user.email', 'scope@test.local'], { cwd: root });
+      execFileSync('git', ['config', 'user.name', 'scope-fixture'], { cwd: root });
+      writeFileSync(join(root, 'scripts/huge-a.test.ts'), 'export const a = 1;\n', 'utf8');
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'base'], { cwd: root });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      writeFileSync(join(root, 'scripts/huge-b.test.ts'), 'export const b = 2;\n', 'utf8');
+      execFileSync('git', ['add', '.'], { cwd: root });
+      execFileSync('git', ['commit', '-m', 'head'], { cwd: root });
+      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const manifest = buildChangedPathManifest(root, baseSha, headSha, { maxBytes: 5 });
+      expect(manifest.diffOk).toBe(false);
+      expect(manifest.failureReason).toBe('changed-path-export-oversized');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

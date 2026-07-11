@@ -18,6 +18,7 @@ import {
   validateClassification,
   validateParkedWallclockE2e,
 } from './vitest-ci-lanes.mjs';
+import { resolveVitestPrScopeSelection } from './vitest-pr-scoped-selection.mjs';
 
 /** Canonical CI-generated topology artifact (not committed). */
 export const topologyArtifactRelPath = 'scripts/vitest-heavy-topology.plan.json';
@@ -291,16 +292,28 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
     };
   }
 
-  const discovered = discoverVitestFiles(root);
-  const classificationErrors = validateClassification(discovered, lanesConfig.classification);
+  const fullDiscovered = discoverVitestFiles(root);
+  const classificationErrors = validateClassification(fullDiscovered, lanesConfig.classification);
   if (classificationErrors.length > 0) {
-    return { ok: false, errors: classificationErrors, discovered };
+    return { ok: false, errors: classificationErrors, discovered: fullDiscovered };
   }
   const parkedErrors = validateParkedWallclockE2e(lanesConfig.classification, lanesConfig.parkedWallclockE2e);
   if (parkedErrors.length > 0) {
-    return { ok: false, errors: parkedErrors, discovered };
+    return { ok: false, errors: parkedErrors, discovered: fullDiscovered };
   }
 
+  const fullLanePlan = partitionByLane(fullDiscovered, lanesConfig.classification);
+  const prScope = resolveVitestPrScopeSelection({
+    repoRoot: root,
+    changedPathManifest: options.changedPathManifest ?? null,
+    discoveredTests: fullDiscovered,
+    heavyFiles: fullLanePlan.heavy,
+    prScopeMode: options.prScopeMode,
+  });
+  const discovered =
+    prScope.applicable && prScope.effectiveRunMode === 'scoped'
+      ? [...prScope.selectedHeavyFiles]
+      : [...fullDiscovered];
   const { light, heavy, postMergeWallclock, parked } = partitionByLane(discovered, lanesConfig.classification);
   const runtimeHistory = historyLoad.state === 'valid' ? historyLoad.artifact.files : {};
   const heavyLaneTotalWeightSeconds = sumHeavyLaneWeightSeconds(
@@ -339,7 +352,7 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
   });
 
   const topology = {
-    issue: 695,
+    issue: 732,
     heavyShardCount,
     heavyShardIndices,
     heavyShardMatrix: heavyShardIndices,
@@ -354,6 +367,8 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
       count: heavyShardCount,
       matrixLength: heavyShardIndices.length,
     },
+    fullDiscoveryCount: fullDiscovered.length,
+    prScope,
     oversizedOffenders: oversized.offenders,
     unresolvedGuardWeights: oversized.unresolved,
   };
@@ -362,6 +377,7 @@ export function buildHeavyTopology(repoRoot = defaultRepoRoot, options = {}) {
     ok: true,
     topology,
     discovered,
+    fullDiscovered,
     light,
     heavy,
     postMergeWallclock,

@@ -1,0 +1,252 @@
+[
+  {
+    "name": "markdown-only-skips-heavy-lane",
+    "className": "markdown-only",
+    "effectiveRunMode": "skipped",
+    "wouldSelectHeavyFiles": [],
+    "reason": "markdown-only-pr-skips-heavy-lane",
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "M",
+          "path": "docs/ci-pipeline-split.md",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "newSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    }
+  },
+  {
+    "name": "test-only-reverse-dependent",
+    "className": "test-only",
+    "effectiveRunMode": "scoped",
+    "wouldSelectHeavyFiles": [
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "M",
+          "path": "scripts/reverse-helper.test.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "2222222222222222222222222222222222222222"
+        }
+      ]
+    }
+  },
+  {
+    "name": "source-only-confident",
+    "className": "source-only",
+    "effectiveRunMode": "scoped",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "M",
+          "path": "scripts/feature-a.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "2222222222222222222222222222222222222222"
+        }
+      ]
+    }
+  },
+  {
+    "name": "source-and-test-confident",
+    "className": "source+test",
+    "effectiveRunMode": "scoped",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts",
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 2,
+      "entries": [
+        {
+          "status": "M",
+          "path": "scripts/feature-a.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "2222222222222222222222222222222222222222"
+        },
+        {
+          "status": "M",
+          "path": "scripts/reverse-helper.test.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "3333333333333333333333333333333333333333",
+          "newSha": "4444444444444444444444444444444444444444"
+        }
+      ]
+    }
+  },
+  {
+    "name": "workflow-config",
+    "className": "workflow/config",
+    "effectiveRunMode": "full",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts",
+      "scripts/heavy-b.test.ts",
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "M",
+          "path": ".github/workflows/scope-guard.yml",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "2222222222222222222222222222222222222222"
+        }
+      ]
+    }
+  },
+  {
+    "name": "mixed-cross-cutting",
+    "className": "mixed/cross-cutting",
+    "effectiveRunMode": "full",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts",
+      "scripts/heavy-b.test.ts",
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 2,
+      "entries": [
+        {
+          "status": "M",
+          "path": "scripts/feature-a.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "2222222222222222222222222222222222222222"
+        },
+        {
+          "status": "M",
+          "path": "plugins/sample/helper.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "3333333333333333333333333333333333333333",
+          "newSha": "4444444444444444444444444444444444444444"
+        }
+      ]
+    }
+  },
+  {
+    "name": "rename-delete-only",
+    "className": "rename/delete-only",
+    "effectiveRunMode": "full",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts",
+      "scripts/heavy-b.test.ts",
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "D",
+          "path": "scripts/reverse-helper.test.ts",
+          "oldMode": "100644",
+          "newMode": "000000",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "0000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  },
+  {
+    "name": "diff-computation-failure",
+    "className": "diff-computation-failure",
+    "effectiveRunMode": "full",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts",
+      "scripts/heavy-b.test.ts",
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": false,
+      "failureReason": "missing-base-or-head-sha",
+      "entryCount": 0,
+      "entries": []
+    }
+  },
+  {
+    "name": "source-only-low-confidence",
+    "className": "source-only",
+    "effectiveRunMode": "full",
+    "wouldSelectHeavyFiles": [
+      "scripts/heavy-a.test.ts",
+      "scripts/heavy-b.test.ts",
+      "scripts/reverse-dependent.test.ts",
+      "scripts/reverse-helper.test.ts"
+    ],
+    "manifest": {
+      "version": 1,
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "diffOk": true,
+      "entryCount": 1,
+      "entries": [
+        {
+          "status": "M",
+          "path": "scripts/ambiguous.ts",
+          "oldMode": "100644",
+          "newMode": "100644",
+          "oldSha": "1111111111111111111111111111111111111111",
+          "newSha": "2222222222222222222222222222222222222222"
+        }
+      ]
+    }
+  }
+]

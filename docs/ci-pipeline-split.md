@@ -230,6 +230,37 @@ The refresh does **not** run on ordinary PR events.
 Guards and fixtures live in `scripts/check-ci-pipeline-split.ps1` and
 `scripts/lib/vitest-runtime-history-merge.fixture.mjs`.
 
+## PR-scoped heavy lane (Issue #732)
+
+PR runs keep the required check name **Run pack contract tests**, but the heavy
+Vitest lane now computes a single changed-path manifest once in
+`scope-guard.yml`, records its classification/provenance in
+`scripts/vitest-heavy-topology.plan.json`, and may narrow the heavy file set
+only when the PR diff lands in a narrow-safe class.
+
+- Fail closed to **FULL** on workflow/config changes, self-referential lane changes,
+  rename/delete/type changes, mixed cross-area diffs, generated/vendored fixture
+  paths, malformed/oversized changed-path exports, and low-confidence mapping.
+- Confident `test-only`, `source-only`, and `source+test` diffs may compute a
+  scoped heavy set; an empty scoped set is intentional and still posts a passing
+  required check through a one-shard no-op.
+- `push` to `main` stays untouched: the PR-scope classifier is not invoked there,
+  and the full heavy regression still runs for every merged SHA.
+
+### Kill-switch and shipped default
+
+`scope-guard.yml` reads repository variable `OPK_VITEST_PR_SCOPE_MODE` at runtime.
+
+- Unset or `shadow`: shipped default. Every PR still executes the **FULL** heavy set,
+  but the plan artifact records the classifier's would-be class, would-be scoped set,
+  base/head SHAs, and kill-switch state.
+- `enforce`: allow confident PR narrowing.
+- `full`, `disabled`, or `off`: immediate rollback to FULL on the next automatic PR run.
+
+Enable `enforce` only after reviewing accumulated shadow artifacts across multiple
+ordinary PRs and confirming no misses between the would-be scoped set and the full
+heavy runs that actually executed on those same heads.
+
 ## Verification
 
 ```powershell

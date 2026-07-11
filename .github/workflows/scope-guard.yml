@@ -282,13 +282,11 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
         run: |
           set -euo pipefail
           if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
-            mapfile -t changed < <(git diff --name-only "${PR_BASE_SHA}...${PR_HEAD_SHA}" -- '*.test.ts' || true)
-            if [ "${#changed[@]}" -gt 0 ]; then
-              export OPK_CHANGED_VITEST_FILES="$(printf '%s\n' "${changed[@]}")"
-            fi
+            export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "${PR_BASE_SHA}" --head "${PR_HEAD_SHA}")"
           fi
           node scripts/emit-vitest-heavy-topology.mjs --gha-output
 
@@ -326,8 +324,16 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --include=dev
 
+      - name: Download heavy topology artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vitest-heavy-topology
+          path: scripts
+
       - name: Run Vitest heavy shard
         shell: pwsh
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-heavy-shard.ps1 -Shard ${{ matrix.shard }}
 
   test-pester:

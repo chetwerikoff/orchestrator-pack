@@ -331,6 +331,7 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
   const {
     topology,
     discovered,
+    fullDiscovered,
     light,
     heavy,
     postMergeWallclock,
@@ -348,6 +349,7 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
   return {
     ok: true,
     discovered,
+    fullDiscovered,
     config: lanesConfig,
     light,
     heavy,
