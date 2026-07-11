@@ -466,6 +466,19 @@ function runCoverageAndDurableProvenanceFixture() {
   assert(shortfall.shortfall, 'mostly seeded heavy set must surface measured-coverage shortfall');
 }
 
+function runCommitBackNoOpOrderingFixture() {
+  const source = readFileSync(join(defaultRepoRoot, 'scripts/refresh-vitest-runtime-history.ps1'), 'utf8');
+  const statusIndex = source.indexOf("$status = git -C $RepoRoot status --porcelain -- 'scripts/vitest-runtime-history.json'");
+  const noOpIndex = source.indexOf(
+    "[PASS] runtime-history commit-back skipped (idempotent no-op after stale-base reconcile)",
+    statusIndex,
+  );
+  const assertIndex = source.indexOf('Assert-OnlyRuntimeHistoryStaged', statusIndex);
+  assert(statusIndex >= 0, 'commit-back flow must inspect runtime-history status after git add');
+  assert(noOpIndex > statusIndex, 'commit-back flow must preserve the stale-base reconcile no-op exit');
+  assert(assertIndex > noOpIndex, 'commit-back staged-path assertion must run only after the no-op exit check');
+}
+
 export function runRuntimeHistoryRefreshFixtures() {
   failures.length = 0;
   runMeasuredRefreshFixture();
@@ -478,6 +491,7 @@ export function runRuntimeHistoryRefreshFixtures() {
   runRaceSafeFixture();
   runProvenanceGateFixtures();
   runCoverageAndDurableProvenanceFixture();
+  runCommitBackNoOpOrderingFixture();
   return failures;
 }
 

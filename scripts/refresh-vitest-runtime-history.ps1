@@ -148,12 +148,12 @@ try {
         Invoke-RuntimeHistoryStaleReconcile -RemoteHistoryFile $remoteSnapshot -ProposedHistoryFile $proposedSnapshot
 
         git -C $RepoRoot add -- 'scripts/vitest-runtime-history.json'
-        Assert-OnlyRuntimeHistoryStaged
         $status = git -C $RepoRoot status --porcelain -- 'scripts/vitest-runtime-history.json'
         if ([string]::IsNullOrWhiteSpace($status)) {
             Write-Host '[PASS] runtime-history commit-back skipped (idempotent no-op after stale-base reconcile)'
             exit 0
         }
+        Assert-OnlyRuntimeHistoryStaged
 
         git -C $RepoRoot -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' `
             commit -m "chore(ci): refresh vitest runtime-history from measured heavy-shard reports"
