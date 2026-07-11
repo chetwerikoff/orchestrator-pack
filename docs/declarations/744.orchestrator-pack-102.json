@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "b8d1ae902e920c3aab52e141074b1a2f9ec30025",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:755a6c7e5b6663aa32afa85b6b37d42788b49621e641983df09d40823770574c"
+    "active_scope_hash": "sha256:7fb38b093016a698c5e7eaa818da66dc6368dad95723f5e97fda9172506988e5"
   },
   "declared_paths": [
     "scripts/worker-message-submit-reconcile.ps1",
@@ -16,11 +16,33 @@
     "scripts/lib/Orchestrator-Escalation.ps1",
     "scripts/orchestrator-message-catalog.json",
     "docs/orchestrator-recovery-runbook.md",
-    "docs/migration_notes.md"
+    "docs/migration_notes.md",
+    "docs/orchestrator-message-map.md",
+    "scripts/check-worker-message-submit-reconcile.ps1",
+    "scripts/launch-argv-inventory.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [
     "tests/**",
     "scripts/*.test.ts"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:755a6c7e5b6663aa32afa85b6b37d42788b49621e641983df09d40823770574c",
+      "new_active_scope_hash": "sha256:7fb38b093016a698c5e7eaa818da66dc6368dad95723f5e97fda9172506988e5",
+      "changed": {
+        "added": [
+          "docs/orchestrator-message-map.md",
+          "scripts/check-worker-message-submit-reconcile.ps1",
+          "scripts/launch-argv-inventory.json",
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "Include generated support files and Vitest runtime-history required by the landed issue-744 implementation",
+      "actor": "orchestrator-pack-102",
+      "timestamp": "2026-07-11T15:17:13.319Z",
+      "applied": true
+    }
+  ]
 }
