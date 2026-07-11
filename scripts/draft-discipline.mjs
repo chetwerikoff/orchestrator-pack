@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,8 +102,8 @@ export function parseParkedRootBlocks(markdown) {
   });
 }
 
-export function countActionTaxonomyHits(markdown, terms = taxonomy.terms) {
-  const lower = markdown.toLowerCase();
+export function countActionTaxonomyHits(markdown, terms = taxonomy.terms, repoRoot = DEFAULT_REPO_ROOT) {
+  const lower = stripActionTaxonomyExemptions(markdown, repoRoot).toLowerCase();
   return terms.filter((term) => {
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`\\b${escaped}\\b`, 'i').test(lower);
@@ -237,6 +237,77 @@ export function fetchLiveIssue(issueNumber, repo = process.env.GITHUB_REPOSITORY
   } catch {
     return null;
   }
+}
+
+const ANY_FENCE_PATTERN = /```([a-z0-9-]*)\s*\r?\n([\s\S]*?)```/gi;
+const DEFAULT_REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MACHINE_PARSED_FENCE_LABELS = new Set([
+  'denylist',
+  'allowed-roots',
+  'contract-evidence',
+  'producer-emission',
+  'positive-outcome',
+  'behavior-kind',
+  'complexity-tier',
+  'parked-root-cause',
+]);
+
+function extractPathTokenCandidate(token) {
+  const match = token.match(/^[`"'(<[{]*([^`"'()<>[\]{},:;!?]+?)[`"')\]>.,:;!?]*$/);
+  return match?.[1] ?? null;
+}
+
+function isPathWithinRepo(repoRoot, absolutePath) {
+  const relative = path.relative(repoRoot, absolutePath);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function isRealRepositoryPathToken(token, repoRoot = DEFAULT_REPO_ROOT) {
+  const candidate = extractPathTokenCandidate(token);
+  if (!candidate) {
+    return false;
+  }
+
+  const normalized = candidate.replace(/\/+$/u, '').replace(/^(?:\.\/)+/u, '');
+  if (!normalized) {
+    return false;
+  }
+
+  const absolutePath = path.resolve(repoRoot, normalized);
+  return isPathWithinRepo(repoRoot, absolutePath) && existsSync(absolutePath);
+}
+
+function stripRealRepositoryPathTokens(markdown, repoRoot = DEFAULT_REPO_ROOT) {
+  return markdown
+    .split(/(\s+)/)
+    .map((token) => {
+      if (/^\s+$/u.test(token) || !isRealRepositoryPathToken(token, repoRoot)) {
+        return token;
+      }
+
+      const candidate = extractPathTokenCandidate(token);
+      return candidate ? token.replace(candidate, '') : token;
+    })
+    .join('');
+}
+
+function stripActionTaxonomyExemptions(markdown, repoRoot = DEFAULT_REPO_ROOT) {
+  let sanitized = '';
+  let lastIndex = 0;
+  let match;
+  const pattern = new RegExp(ANY_FENCE_PATTERN.source, ANY_FENCE_PATTERN.flags);
+
+  while ((match = pattern.exec(markdown)) !== null) {
+    sanitized += stripRealRepositoryPathTokens(markdown.slice(lastIndex, match.index), repoRoot);
+    const kind = match[1].toLowerCase();
+    if (!MACHINE_PARSED_FENCE_LABELS.has(kind)) {
+      sanitized += match[0];
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  sanitized += stripRealRepositoryPathTokens(markdown.slice(lastIndex), repoRoot);
+  return sanitized;
 }
 
 export function resolveParkedRootIssueMap(blocks, mockIssues = {}, options = {}) {

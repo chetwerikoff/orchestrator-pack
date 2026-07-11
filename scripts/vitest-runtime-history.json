@@ -245,7 +245,7 @@
     "scripts/cursor-agent-tui-shim.test.ts": "8b5b9110d27720820a2eade806244aee45e68383107887fd6ec584c1f37fcbd2",
     "scripts/dead-worker-reconcile.test.ts": "8013f492cd2e2ea019b4dcd13bead00988545ddc23e82839197bfdf74a203800",
     "scripts/draft-author-relocation-contract.test.ts": "0ea58d26cbe42264875151ded5595cb02319f13cfbbe566116f17929b0b815e3",
-    "scripts/draft-discipline.test.ts": "7901b3b0fa2fc65cb07769c8940d320636369cf35ca4221e746d220d84687190",
+    "scripts/draft-discipline.test.ts": "8bc4f21d1ea3e09bbc3f70a5e14d4b73cff05b88e7fe75e1e7b3f6fc8f0767ea",
     "scripts/escalation-state-test-isolation.test.ts": "60da74f4752bfece6ebd8fa2ccb770e7f346e67bc1a73da70e0fe23db6e0fde5",
     "scripts/event-consumer-rebind-scenario-matrix.test.ts": "3f4c03a69ae86b06b2c9e21375692d0de8b49d3fdeb694ed561a3709e459e4d4",
     "scripts/events-optional-consumer-signal-recovery.test.ts": "8ecb5a408cb8585359688043967ee28ef278e7b83d8f051d1fb5ab558f57e973",
