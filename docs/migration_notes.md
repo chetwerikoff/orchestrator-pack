@@ -924,8 +924,8 @@ To adopt:
    into live `agent-orchestrator.yaml` (MERGED PR section and EXIT condition 5).
 2. Restart AO: `ao stop` then `ao start`.
 3. If you use the wake listener, restart `scripts/orchestrator-wake-listener.ps1`
-   (and heartbeat if used) in their terminals — no wake-filter code change ships
-   with this issue.
+   in its terminal — no wake-filter code change ships with this issue. Do not restart
+   `scripts/orchestrator-wake-heartbeat.ps1`; the heartbeat path is retired.
 
 Operator reference: `docs/orchestrator-recovery-runbook.md` (**After manual PR merge**)
 and `docs/orchestrator-wake-runbook.md` (merged-PR wakes).
@@ -1460,7 +1460,8 @@ runtime target (decision §P).
    CLIs).
 4. Recycle only affected AO sessions/processes: for orchestrator runtime changes use
    `ao orchestrator ls --json`, `ao session kill <id> -p orchestrator-pack`, then
-   `ao session restore <id> -p orchestrator-pack`; restart wake listener/heartbeat if used.
+   `ao session restore <id> -p orchestrator-pack`; restart the wake listener or
+   supervisor if used, but not the retired heartbeat script.
 
 See also [`README.md`](../README.md) (Linux baseline) and decision §P in
 [`issues_drafts/00-architecture-decisions.md`](issues_drafts/00-architecture-decisions.md).
@@ -1559,20 +1560,23 @@ Minimum live YAML fixes not in older copies:
 2. Set `reactions.approved-and-green.priority: action` (otherwise mergeable events
    never hit the webhook listener).
 3. `ao stop` then `ao start`; run `scripts/orchestrator-wake-supervisor.ps1 -Action Start`
-   (preferred — Issue #168) or the manual listener + heartbeat pair in separate
-   terminals, and `scripts/review-trigger-reconcile.ps1` in another terminal.
+   (preferred — updated post-#721) or, only for temporary local debugging, the manual
+   listener alone in a separate terminal, plus `scripts/review-trigger-reconcile.ps1`
+   in another terminal. Do not start `scripts/orchestrator-wake-heartbeat.ps1`; that
+   script is retired and exits 1.
 
 ## Orchestrator wake supervisor (Issue #168)
 
 After merge, replace the two-terminal wake startup with the supervisor:
 
-1. Stop any manual `orchestrator-wake-listener.ps1` / `orchestrator-wake-heartbeat.ps1`
-   processes (Ctrl+C or close those terminals).
+1. Stop any manual `orchestrator-wake-listener.ps1` processes and any stale pre-#721
+   `orchestrator-wake-heartbeat.ps1` process that may still be running from an old checkout
+   (Ctrl+C or close those terminals).
 2. From the pack root, with AO 0.10.2 daemon healthy (`ao status --json`) and an
    orchestrator session visible in `ao orchestrator ls --json`:
    `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
-3. Confirm: `... orchestrator-wake-supervisor.ps1 -Action Status` shows listener and
-   heartbeat running.
+3. Confirm: `... orchestrator-wake-supervisor.ps1 -Action Status` shows `listener` and
+   `escalation-router` running, and does not show `heartbeat`.
 4. Optional: set `AO_ORCHESTRATOR_SESSION_ID` before Start to pin the session id;
    otherwise the supervisor resolves from `ao status` and re-targets on change.
 
@@ -1586,12 +1590,13 @@ Manual two-script startup remains documented as fallback in
 ## Side-process supervisor — full autoloop set (Issue #205)
 
 After merge, use **one** supervisor for all registry-managed side-processes (listener,
-heartbeat, review-trigger reconcile, CI-green wake reconcile, review-send reconcile,
-delivery-confirm). Replaces separate Terminal D/F reconcile launches and the
-#168-only listener+heartbeat+review-send scope.
+escalation-router, review-trigger reconcile, CI-green wake reconcile, review-send
+reconcile, delivery-confirm, and the remaining registry children). Replaces separate
+Terminal D/F reconcile launches and the older #168-era listener+heartbeat+review-send scope.
 
 1. `pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop` (best effort).
-2. Stop any manual reconcile / listener / heartbeat processes still running.
+2. Stop any manual reconcile / listener processes still running, plus any stale
+   pre-#721 heartbeat process that survived from an older checkout.
 3. `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
 4. Confirm: `-Action Status` lists **all** registry children as `running`.
 5. Optional env: `AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS` (default 2),
@@ -1770,8 +1775,9 @@ To adopt after merge:
 ## Orchestrator wake listener (webhook + local HTTP)
 
 Issue #39 adds an event-driven wake path so the orchestrator session gets a turn
-when AO emits urgent/action notifications. Issue #59 adds a separate low-frequency
-heartbeat process so the orchestrator still gets turns during event silence.
+when AO emits urgent/action notifications. Issue #721 retires the old Issue #59
+heartbeat backstop; orchestrator liveness during event silence now comes from the
+supervised `escalation-router` poll.
 
 To adopt on an existing live `agent-orchestrator.yaml`:
 
@@ -1783,19 +1789,17 @@ To adopt on an existing live `agent-orchestrator.yaml`:
    `ao status`) or pass `-OrchestratorSessionId` when starting the listener.
 4. Prefer the supervisor (Issue #168):
    `pwsh -File scripts/orchestrator-wake-supervisor.ps1 -Action Start`
-   **Manual fallback:** start the listener and heartbeat in separate terminals:
-   `pwsh -File scripts/orchestrator-wake-listener.ps1` and
-   `pwsh -File scripts/orchestrator-wake-heartbeat.ps1`
+   **Manual fallback:** start only the listener:
+   `pwsh -File scripts/orchestrator-wake-listener.ps1`
 6. Verify reachability:
    `Test-NetConnection -ComputerName 127.0.0.1 -Port 17487`
 7. Optional dry-run (logs forward decisions without calling `ao send`):
    `pwsh -File scripts/orchestrator-wake-listener.ps1 -DryRun`
-   `pwsh -File scripts/orchestrator-wake-heartbeat.ps1 -DryRun -Once`
 
-Full operator steps, dedup window, heartbeat interval, and failure detection are in
-`docs/orchestrator-wake-runbook.md`. When the listener is stopped, AO and workers
-continue normally; the heartbeat still delivers periodic orchestrator turns until
-it is stopped too (and vice versa).
+Full operator steps, dedup window, escalation-router poll behavior, and failure detection are
+in `docs/orchestrator-wake-runbook.md`. When the listener is stopped, AO and workers continue
+normally; orchestrator-facing delivery continues only through the supervisor-managed
+escalation-router path.
 
 ## Issue #721 — retire orchestrator FYI wake/heartbeat channel
 
@@ -2425,4 +2429,3 @@ Pack consumers resolve PR↔session ownership from the durable binding cache bef
 
 No operator restart required for the cache file itself; reconcile side processes pick up
 the module on next tick after deploy.
-
