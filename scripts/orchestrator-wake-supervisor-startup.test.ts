@@ -392,7 +392,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(String(recovery.terminalDaemonHealthClass ?? '')).toBe('');
 
     child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await sleepMs(1000);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   }, 60_000);
 
@@ -429,7 +429,7 @@ describe('orchestrator-wake-supervisor', () => {
       expect(readRecoveryState(stateDir, 'listener').terminal).toBe(true);
 
       child.kill('SIGTERM');
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleepMs(1000);
       runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     }
   }, 60_000);
@@ -470,7 +470,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(readRecoveryState(stateDir, 'listener').terminal).toBe(false);
 
     child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await sleepMs(1000);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   }, 60_000);
 
@@ -506,7 +506,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(readRecoveryState(stateDir, 'listener').terminal).toBe(false);
 
     child.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await sleepMs(1000);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   }, 60_000);
 
@@ -554,7 +554,7 @@ describe('orchestrator-wake-supervisor', () => {
     expect(Number(readRecoveryState(stateDir, 'listener').terminalRearmAttempts ?? 0)).toBe(1);
 
     secondRun.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await sleepMs(1000);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
   }, 60_000);
 });
