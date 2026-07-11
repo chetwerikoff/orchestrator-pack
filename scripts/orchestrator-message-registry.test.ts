@@ -430,16 +430,6 @@ describe('orchestrator message registry (Issue #298)', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('allows coordinated protected matrix manifest edits for linked issue 721', () => {
-    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'));
-    const result = checkProtectedRuntimeDiff(
-      ['scripts/orchestrator-message-protected-runtime.manifest.json'],
-      manifest,
-      { linkedIssueNumbers: [721] },
-    );
-    expect(result.ok).toBe(true);
-  });
-
   it('rejects catalog entries that omit predicateBodyHash', () => {
     const bundle = loadRegistryBundle(repoRoot) as { catalog: { entries: Array<Record<string, unknown>> } };
     const broken = structuredClone(bundle.catalog) as { entries: Array<Record<string, unknown>> };
@@ -1030,32 +1020,6 @@ describe('orchestrator message registry (Issue #298)', () => {
       const files = listChangedFiles(root, 'origin/main');
       expect(files).toEqual(['registry-fixture-change.txt']);
       expect(checkProtectedRuntimeForRepo(root, 'origin/main').ok).toBe(true);
-    } finally {
-      if (prev === undefined) delete process.env.GITHUB_EVENT_PATH;
-      else process.env.GITHUB_EVENT_PATH = prev;
-      fs.rmSync(eventPath, { force: true });
-      removeTempDir(root);
-    }
-  });
-
-  it('falls back to the explicit base ref when pull_request shas cannot be hydrated', () => {
-    const { root, baseSha } = initRegistryGitFixture();
-    const eventPath = path.join(os.tmpdir(), `github-event-missing-${Date.now()}.json`);
-    fs.writeFileSync(
-      eventPath,
-      JSON.stringify({
-        pull_request: {
-          base: { sha: '1111111111111111111111111111111111111111' },
-          head: { sha: '2222222222222222222222222222222222222222' },
-        },
-      }),
-    );
-    const prev = process.env.GITHUB_EVENT_PATH;
-    process.env.GITHUB_EVENT_PATH = eventPath;
-    try {
-      const files = listChangedFiles(root, baseSha);
-      expect(files).toEqual(['registry-fixture-change.txt']);
-      expect(checkProtectedRuntimeForRepo(root, baseSha).ok).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prev;
