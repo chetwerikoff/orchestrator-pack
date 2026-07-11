@@ -156,7 +156,11 @@ export function headRefCorrelatesToIssue(headRefName, issueNumber, session = nul
   }
 
   const issuePrefix = `issue-${issue}`;
-  if (head === issuePrefix || head.startsWith(`${issuePrefix}-`)) {
+  if (
+    head === issuePrefix ||
+    head.startsWith(`${issuePrefix}-`) ||
+    new RegExp(`(?:^|/)${issuePrefix}(?:-|$)`).test(head)
+  ) {
     return true;
   }
 

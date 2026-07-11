@@ -15,6 +15,14 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $Root 'scripts/lib/WorkerReportStore.ps1')
 
+$DebugBinding = $env:AO_WORKER_REPORT_DEBUG -eq '1'
+function Write-WorkerReportDebug {
+    param([string]$Message)
+    if ($DebugBinding) {
+        [Console]::Error.WriteLine("pack-worker-report debug: $Message")
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($State)) {
     # Workers may lack a reportable state in defensive invocations; skip only the report write.
     exit 0
@@ -66,9 +74,11 @@ $RepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $Rep
 
 if (-not $CallerSessionId -or -not $SessionId -or [string]::IsNullOrWhiteSpace($HeadSha)) {
     # Binding is the trust boundary. Do not invent a substitute report channel.
+    Write-WorkerReportDebug "binding inputs incomplete callerSessionId=$([bool]$CallerSessionId) sessionId=$([bool]$SessionId) headSha=$([bool]$HeadSha)"
     exit 0
 }
 if ($CallerSessionId -ne $SessionId) {
+    Write-WorkerReportDebug "session mismatch caller=$CallerSessionId target=$SessionId"
     exit 0
 }
 
@@ -77,6 +87,8 @@ $requestedHeadSha = $HeadSha
 $trustedBinding = Resolve-PackWorkerReportTrustedBinding -SessionId $CallerSessionId `
     -RepoRoot $RepoRoot -RepoSlug $RepoSlug -WorktreeHeadSha $HeadSha
 if (-not $trustedBinding -or -not $trustedBinding.ok) {
+    $reason = if ($trustedBinding -and $trustedBinding.reason) { [string]$trustedBinding.reason } else { 'trust_boundary_binding_unresolved' }
+    Write-WorkerReportDebug "trusted binding rejected reason=$reason repoSlug=$RepoSlug headSha=$HeadSha"
     exit 0
 }
 $SessionId = [string]$CallerSessionId
@@ -92,6 +104,7 @@ $DeliveryRunId = Resolve-PackWorkerReportDeliveryRunId -ReportState $State -Sess
     -PrNumber $PrNumber -HeadSha $HeadSha -DeliveryRunId $DeliveryRunId
 if (($requestedPrNumber -gt 0 -and $requestedPrNumber -ne $PrNumber) `
         -or (-not [string]::IsNullOrWhiteSpace($requestedHeadSha) -and $requestedHeadSha -ne $HeadSha)) {
+    Write-WorkerReportDebug "requested binding differs from trusted binding requestedPr=$requestedPrNumber trustedPr=$PrNumber"
     exit 0
 }
 
@@ -122,5 +135,6 @@ try {
     $result | ConvertTo-Json -Compress -Depth 20
 }
 catch {
+    Write-WorkerReportDebug "store write failed: $($_.Exception.Message)"
     exit 0
 }
