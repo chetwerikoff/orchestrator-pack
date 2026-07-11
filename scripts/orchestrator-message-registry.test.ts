@@ -337,7 +337,6 @@ describe('orchestrator message registry (Issue #298)', () => {
       helpers: Record<string, unknown>;
     };
     const roots = collectAuditRootFiles(repoRoot, bundle.auditRoots, bundle.helpers);
-    expect(roots).toContain('scripts/orchestrator-wake-common.ps1');
     expect(roots).toContain('scripts/lib/Submit-WorkerInputDraft.ps1');
   });
 
@@ -353,12 +352,12 @@ describe('orchestrator message registry (Issue #298)', () => {
         commandEntrypoints: [],
         orchestratorRulesBindings: [],
       });
-      const wakeCommon = fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-wake-common.ps1'), 'utf8');
+      const wakeListener = fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-wake-listener.ps1'), 'utf8');
       fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
-      fs.writeFileSync(path.join(tmp, 'scripts/orchestrator-wake-common.ps1'), `${wakeCommon}\n& ao send worker-1 "rogue"\n`);
+      fs.writeFileSync(path.join(tmp, 'scripts/orchestrator-wake-listener.ps1'), `${wakeListener}\n& ao send worker-1 "rogue"\n`);
       const result = auditRegistration(tmp);
       expect(result.verdict).toBe('FAIL');
-      expect(result.violations.some((v: string) => v.includes('scripts/orchestrator-wake-common.ps1'))).toBe(true);
+      expect(result.violations.some((v: string) => v.includes('scripts/orchestrator-wake-listener.ps1'))).toBe(true);
     } finally {
       removeTempDir(tmp);
     }

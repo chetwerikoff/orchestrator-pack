@@ -221,11 +221,11 @@ describe('Issue #613 orphan supervisor discovery (unit)', () => {
       fixturePath,
       JSON.stringify({
         [String(livePid)]: {
-          tokens: ['pwsh', '-NoProfile', '-File', testChildScript, '-Role', 'heartbeat'],
+          tokens: ['pwsh', '-NoProfile', '-File', testChildScript, '-Role', 'escalation-router'],
         },
       }),
     );
-    expect(testManagedChildIdentity(fixturePath, livePid, 'heartbeat')).toBe(true);
+    expect(testManagedChildIdentity(fixturePath, livePid, 'escalation-router')).toBe(true);
     expect(testManagedChildIdentity(fixturePath, livePid, 'listener')).toBe(false);
   });
 
