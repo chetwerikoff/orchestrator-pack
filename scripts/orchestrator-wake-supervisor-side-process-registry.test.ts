@@ -57,12 +57,12 @@ describe('Issue #205 side-process registry', () => {
       },
     );
     expect(start.status).toBe(0);
-    await waitForMarkers(stateDir, 25_000, ['review-trigger-reconcile', 'heartbeat']);
+    await waitForMarkers(stateDir, 25_000, ['review-trigger-reconcile', 'escalation-router']);
 
     const first = await readMarker(stateDir, 'review-trigger-reconcile');
-    const heartbeatBefore = await readMarker(stateDir, 'heartbeat');
+    const escalationRouterBefore = await readMarker(stateDir, 'escalation-router');
     await waitForMarkerPidChange(stateDir, 'review-trigger-reconcile', first.pid, 25_000);
-    expect(isAlive(heartbeatBefore.pid)).toBe(true);
+    expect(isAlive(escalationRouterBefore.pid)).toBe(true);
     runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
     },
     issue205TimeoutMs,

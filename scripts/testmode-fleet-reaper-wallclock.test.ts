@@ -38,7 +38,7 @@ describe('Issue #710 live fleet inert (AC#4)', () => {
       const supervisorPid = await startLiveDetachedSupervisor(stateDir);
       const liveChildren = await waitForLiveChildPids(stateDir);
       const listener = { pid: liveChildren.listener };
-      const heartbeat = { pid: liveChildren.heartbeat };
+      const escalationRouter = { pid: liveChildren.escalationRouter };
 
       const fixture = spawn('sleep', ['3600'], { stdio: 'ignore', detached: true });
       fixture.unref();
@@ -48,7 +48,7 @@ describe('Issue #710 live fleet inert (AC#4)', () => {
       runReaperCli('teardown', { LeaseId: lane.leaseId }, withLeaseEnv(leaseRoot, lane.leaseId));
 
       expect(isAlive(listener.pid)).toBe(true);
-      expect(isAlive(heartbeat.pid)).toBe(true);
+      expect(isAlive(escalationRouter.pid)).toBe(true);
       expect(isAlive(supervisorPid)).toBe(true);
       expect(harnessIsAlive(fixturePid)).toBe(true);
 

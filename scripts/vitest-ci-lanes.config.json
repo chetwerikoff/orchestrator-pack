@@ -89,6 +89,7 @@
     "scripts/merge-triage.test.ts": "heavy",
     "scripts/orchestrator-claimed-review-run.test.ts": "heavy",
     "scripts/orchestrator-escalation.test.ts": "light",
+    "scripts/orchestrator-escalation-router.test.ts": "light",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "heavy",
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
