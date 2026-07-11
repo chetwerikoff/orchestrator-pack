@@ -377,6 +377,95 @@ function resolveLocalModulePath(fromFile, specifier) {
   return null;
 }
 
+function resolveModuleCandidates(base) {
+  const extMatch = base.match(/(\.[^/.]+)$/);
+  const stem = extMatch ? base.slice(0, -extMatch[1].length) : base;
+  const candidates = [
+    base,
+    `${stem}.mjs`,
+    `${stem}.js`,
+    `${stem}.ts`,
+    `${stem}.tsx`,
+    `${stem}.cjs`,
+    `${stem}.cts`,
+    `${stem}.mts`,
+    join(base, 'index.mjs'),
+    join(base, 'index.js'),
+    join(base, 'index.ts'),
+  ];
+  return [...new Set(candidates)];
+}
+
+function listFirstPartyPackageRoots(repoRoot) {
+  const packageRoots = new Map();
+
+  function walk(currentDir) {
+    for (const entry of readdirSync(currentDir)) {
+      if (entry === '.git' || entry === 'node_modules') {
+        continue;
+      }
+      const absolute = join(currentDir, entry);
+      const stats = statSync(absolute);
+      const rel = normalizePath(relative(repoRoot, absolute));
+      if (stats.isDirectory()) {
+        const rootSegment = rel.split('/')[0];
+        if (IGNORED_ROOTS.has(rootSegment)) {
+          continue;
+        }
+        walk(absolute);
+        continue;
+      }
+      if (entry !== 'package.json') {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(readFileSync(absolute, 'utf8'));
+        const name = typeof parsed?.name === 'string' ? parsed.name.trim() : '';
+        if (name.startsWith('@orchestrator-pack/')) {
+          packageRoots.set(name, normalizePath(relative(repoRoot, currentDir)));
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  walk(repoRoot);
+  return packageRoots;
+}
+
+function resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots) {
+  let matchedPackage = null;
+  for (const packageName of packageRoots.keys()) {
+    if (specifier === packageName || specifier.startsWith(`${packageName}/`)) {
+      if (!matchedPackage || packageName.length > matchedPackage.length) {
+        matchedPackage = packageName;
+      }
+    }
+  }
+  if (!matchedPackage) {
+    return [];
+  }
+
+  const packageRoot = packageRoots.get(matchedPackage);
+  const suffix = specifier === matchedPackage ? '' : specifier.slice(matchedPackage.length + 1);
+  const base = suffix
+    ? join(repoRoot, packageRoot, suffix)
+    : join(repoRoot, packageRoot, 'index');
+  const resolved = [];
+  for (const candidate of resolveModuleCandidates(base)) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    const relPath = normalizePath(relative(repoRoot, candidate));
+    if (!relPath || relPath.startsWith('..') || !isSourceLikePath(relPath)) {
+      continue;
+    }
+    resolved.push(relPath);
+  }
+  return [...new Set(resolved)];
+}
+
 function listFirstPartySourceFiles(repoRoot) {
   const files = [];
 
@@ -410,6 +499,8 @@ function listFirstPartySourceFiles(repoRoot) {
 function buildDependencyGraph(repoRoot) {
   const nodes = new Map();
   const reverse = new Map();
+  const bareImportTargets = new Map();
+  const packageRoots = listFirstPartyPackageRoots(repoRoot);
 
   for (const relPath of listFirstPartySourceFiles(repoRoot)) {
     const absolute = join(repoRoot, relPath);
@@ -426,6 +517,16 @@ function buildDependencyGraph(repoRoot) {
     let establishable = collected.establishable;
     for (const specifier of collected.specifiers) {
       if (!specifier.startsWith('.')) {
+        const resolvedBareImports = resolveBareFirstPartyModulePaths(repoRoot, specifier, packageRoots);
+        if (resolvedBareImports.length > 0 || specifier.startsWith('@orchestrator-pack/')) {
+          establishable = false;
+        }
+        for (const relImport of resolvedBareImports) {
+          if (!bareImportTargets.has(relImport)) {
+            bareImportTargets.set(relImport, new Set());
+          }
+          bareImportTargets.get(relImport).add(relPath);
+        }
         continue;
       }
       const resolved = resolveLocalModulePath(absolute, specifier);
@@ -453,7 +554,7 @@ function buildDependencyGraph(repoRoot) {
     }
   }
 
-  return { nodes, reverse };
+  return { nodes, reverse, bareImportTargets };
 }
 
 function topLevelArea(path) {
@@ -635,6 +736,9 @@ export function resolveVitestPrScopeSelection(input) {
     }
     const node = graph.nodes.get(entry.path);
     if (!node || !node.establishable) {
+      lowConfidence = true;
+    }
+    if (graph.bareImportTargets.has(entry.path)) {
       lowConfidence = true;
     }
     const closure = collectImpactedTests(entry.path, graph.reverse, graph.nodes);

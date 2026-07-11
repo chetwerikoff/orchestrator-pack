@@ -1011,6 +1011,68 @@ describe('vitest PR-scoped heavy lane classification (#732)', () => {
     }
   });
 
+  it('fails closed when a changed first-party module is only reached through bare package imports', () => {
+    const root = makePrScopeFixtureRoot();
+    try {
+      mkdirSync(join(root, 'plugins/_shared/lib'), { recursive: true });
+      writeFileSync(
+        join(root, 'plugins/_shared/package.json'),
+        `${JSON.stringify({ name: '@orchestrator-pack/shared' }, null, 2)}\n`,
+        'utf8',
+      );
+      writeFileSync(
+        join(root, 'plugins/_shared/lib/normalize.ts'),
+        'export function normalizeFixture(input: string) { return input.trim(); }\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(root, 'scripts/heavy-bare-import.test.ts'),
+        [
+          "import { describe, expect, it } from 'vitest';",
+          "import { normalizeFixture } from '@orchestrator-pack/shared/lib/normalize.js';",
+          '',
+          "describe('heavy-bare-import', () => {",
+          "  it('uses the bare first-party import fixture', () => {",
+          "    expect(normalizeFixture('  ok  ')).toBe('ok');",
+          '  });',
+          '});',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const selection = resolveVitestPrScopeSelection({
+        repoRoot: root,
+        discoveredTests: ['scripts/heavy-bare-import.test.ts'],
+        heavyFiles: ['scripts/heavy-bare-import.test.ts'],
+        prScopeMode: 'enforce',
+        changedPathManifest: {
+          version: 1,
+          baseSha: 'a'.repeat(40),
+          headSha: 'b'.repeat(40),
+          diffOk: true,
+          entryCount: 1,
+          entries: [
+            {
+              status: 'M',
+              path: 'plugins/_shared/lib/normalize.ts',
+              oldMode: '100644',
+              newMode: '100644',
+              oldSha: '1'.repeat(40),
+              newSha: '2'.repeat(40),
+            },
+          ],
+        },
+      });
+
+      expect(selection.className).toBe('source-only');
+      expect(selection.effectiveRunMode).toBe('full');
+      expect(selection.reason).toBe('low-confidence-or-unmapped-change');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('builds a bounded failure manifest when changed-path export would exceed transport size', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-vitest-pr-scope-git-'));
     try {
