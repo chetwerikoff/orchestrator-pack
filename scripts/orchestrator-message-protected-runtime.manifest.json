@@ -3,7 +3,6 @@
   "manifestIntegrityHash": "sha256:issue-298-protected-runtime-v1",
   "prerequisiteIssues": [205, 232, 267, 281, 283],
   "runtimeSendHelpers": [
-    "scripts/orchestrator-wake-common.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
     "scripts/review-finding-delivery-confirm.ps1",
@@ -27,6 +26,7 @@
     "scripts/lib/Review-StartClaim.ps1"
   ],
   "prerequisiteDeclaredPaths": [
+    "scripts/orchestrator-wake-common.ps1",
     "scripts/review-run-recovery.ps1",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
     "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
