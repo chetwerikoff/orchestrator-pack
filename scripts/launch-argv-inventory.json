@@ -12298,10 +12298,10 @@
       }
     },
     {
-      "rowId": "site-scripts-vitest-runtime-history-delivery-mjs-230",
+      "rowId": "site-scripts-vitest-runtime-history-delivery-mjs-234",
       "caller": {
         "file": "scripts/vitest-runtime-history-delivery.mjs",
-        "line": 230
+        "line": 234
       },
       "callee": {
         "kind": "other-external",
@@ -12316,7 +12316,7 @@
       "hashPinnedSourceHash": "sha256:329c47bd3a7e5dbdd2c81c3926a0e5c38d047611c04be2e169f3d5dbf535af59",
       "discoveryMatch": {
         "file": "scripts/vitest-runtime-history-delivery.mjs",
-        "line": 230,
+        "line": 234,
         "patternIds": [
           "spawnSync"
         ]

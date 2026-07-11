@@ -195,6 +195,10 @@ export function evaluateDeliveryState({
     return { action: 'fail', reason: fileGate.reason };
   }
 
+  if (pr.mergeable === null || pr.mergeable_state === 'unknown') {
+    return { action: 'wait', reason: 'delivery PR mergeability still computing' };
+  }
+
   if (pr.mergeable === false || pr.mergeable_state === 'dirty') {
     return { action: 'fail', reason: 'delivery PR is conflicted or unmergeable' };
   }
@@ -368,6 +372,8 @@ async function monitorPr(options) {
           `repos/${owner}/${repo}/pulls/${options.prNumber}/merge`,
           '-f',
           'merge_method=squash',
+          '-f',
+          `sha=${options.expectedHeadSha}`,
         ],
         { allowedExitCodes: [0] },
       );

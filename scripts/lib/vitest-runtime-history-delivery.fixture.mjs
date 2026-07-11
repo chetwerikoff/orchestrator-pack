@@ -110,6 +110,21 @@ function testCheckDecisionMatrix() {
   });
   assert(merge.action === 'merge', 'passing required checks should merge');
 
+  const computingMergeability = evaluateDeliveryState({
+    pr: { head: { sha: 'abc' }, mergeable: null, mergeable_state: 'unknown' },
+    files: [{ filename: DELIVERY_PATH }],
+    checks: [
+      { name: 'Verify orchestrator-pack structure', state: 'SUCCESS', bucket: 'pass' },
+      { name: 'Contract evidence legacy list guard', state: 'SUCCESS', bucket: 'pass' },
+    ],
+    requiredChecks: ['Verify orchestrator-pack structure', 'Contract evidence legacy list guard'],
+    expectedHeadSha: 'abc',
+  });
+  assert(
+    computingMergeability.action === 'wait',
+    'unknown GitHub mergeability must wait instead of merging',
+  );
+
   const pending = evaluateDeliveryState({
     pr: { head: { sha: 'abc' }, mergeable: true, mergeable_state: 'unknown' },
     files: [{ filename: DELIVERY_PATH }],
@@ -146,12 +161,21 @@ function testSupersededHead() {
   assert(result.action === 'superseded', 'stale monitor runs must yield to newer heads');
 }
 
+function testMergeRequestPinsExpectedHeadSha() {
+  const source = readFileSync(new URL('../vitest-runtime-history-delivery.mjs', import.meta.url), 'utf8');
+  assert(
+    source.includes('`sha=${options.expectedHeadSha}`'),
+    'merge request must pin the validated PR head SHA',
+  );
+}
+
 function main() {
   const tests = [
     testProtectedBranchRejectionThenBranchSuccess,
     testSinglePathGate,
     testCheckDecisionMatrix,
     testSupersededHead,
+    testMergeRequestPinsExpectedHeadSha,
   ];
   const failures = [];
   for (const test of tests) {
