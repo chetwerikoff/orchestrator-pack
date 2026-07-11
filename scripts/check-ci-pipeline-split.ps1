@@ -481,10 +481,26 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host '== CI runtime-history refresh guard (Issue #691) =='
 
 $refreshMergeFixture = Join-Path $RepoRoot 'scripts/lib/vitest-runtime-history-merge.fixture.mjs'
+$deliveryFixture = Join-Path $RepoRoot 'scripts/lib/vitest-runtime-history-delivery.fixture.mjs'
 $refreshWorkflowPath = Join-Path $RepoRoot '.github/workflows/vitest-runtime-history-refresh.yml'
+$deliveryWorkflowPath = Join-Path $RepoRoot '.github/workflows/vitest-runtime-history-delivery.yml'
 $refreshScriptPath = Join-Path $RepoRoot 'scripts/refresh-vitest-runtime-history.mjs'
+$deliveryScriptPath = Join-Path $RepoRoot 'scripts/vitest-runtime-history-delivery.mjs'
+$deliverySnapshotPath = Join-Path $RepoRoot 'docs/vitest-runtime-history-delivery-branch-protection.snapshot.json'
+$deliveryDocPath = Join-Path $RepoRoot 'docs/vitest-runtime-history-delivery.md'
+$migrationNotesPath = Join-Path $RepoRoot 'docs/migration_notes.md'
 
-foreach ($required in @($refreshMergeFixture, $refreshWorkflowPath, $refreshScriptPath)) {
+foreach ($required in @(
+        $refreshMergeFixture,
+        $deliveryFixture,
+        $refreshWorkflowPath,
+        $deliveryWorkflowPath,
+        $refreshScriptPath,
+        $deliveryScriptPath,
+        $deliverySnapshotPath,
+        $deliveryDocPath,
+        $migrationNotesPath
+    )) {
     if (-not (Test-Path -LiteralPath $required)) {
         Add-Fail "missing runtime-history refresh artifact: $(Split-Path -Leaf $required)"
     }
@@ -495,6 +511,14 @@ if (Test-Path -LiteralPath $refreshMergeFixture) {
     Write-Host $fixtureOutput
     if ($LASTEXITCODE -ne 0) {
         Add-Fail 'runtime-history refresh fixture suite failed'
+    }
+}
+
+if (Test-Path -LiteralPath $deliveryFixture) {
+    $deliveryFixtureOutput = & node $deliveryFixture 2>&1 | Out-String
+    Write-Host $deliveryFixtureOutput
+    if ($LASTEXITCODE -ne 0) {
+        Add-Fail 'runtime-history delivery fixture suite failed'
     }
 }
 
@@ -511,6 +535,9 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
     }
     if ($refreshText -notmatch 'workflow_dispatch:') {
         Add-Fail 'vitest-runtime-history-refresh.yml must declare workflow_dispatch'
+    }
+    if ($refreshText -notmatch 'paths-ignore:\s*[\s\S]*scripts/vitest-runtime-history\.json') {
+        Add-Fail 'vitest-runtime-history-refresh.yml must ignore runtime-history-only main pushes to prevent self-trigger loops'
     }
     if ($refreshText -notmatch 'concurrency:') {
         Add-Fail 'vitest-runtime-history-refresh.yml must declare a concurrency guard'
@@ -537,6 +564,15 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
         if ($refreshJob -notmatch 'refresh-vitest-runtime-history\.ps1') {
             Add-Fail 'refresh-runtime-history job must invoke scripts/refresh-vitest-runtime-history.ps1'
         }
+        if ($refreshJob -notmatch 'VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN') {
+            Add-Fail 'refresh-runtime-history job must require VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN for protected-branch delivery'
+        }
+        if ($refreshJob -notmatch 'ci/vitest-runtime-history-refresh') {
+            Add-Fail 'refresh-runtime-history job must push the fixed runtime-history delivery branch'
+        }
+        if ($refreshJob -notmatch 'vitest-runtime-history-delivery\.mjs upsert-pr') {
+            Add-Fail 'refresh-runtime-history job must open or update the dedicated runtime-history delivery PR'
+        }
     }
     if ($refreshJobs.ContainsKey('test-vitest-heavy')) {
         $heavyRefreshJob = $refreshJobs['test-vitest-heavy']
@@ -552,6 +588,64 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
         if ($heavyRefreshJob -notmatch 'run-vitest-heavy-shard\.ps1') {
             Add-Fail 'test-vitest-heavy refresh workflow job must invoke run-vitest-heavy-shard.ps1'
         }
+    }
+}
+
+if (Test-Path -LiteralPath $deliveryWorkflowPath) {
+    $deliveryText = Get-Content -LiteralPath $deliveryWorkflowPath -Raw
+    if ($deliveryText -notmatch 'pull_request_target:') {
+        Add-Fail 'vitest-runtime-history-delivery.yml must trigger on pull_request_target'
+    }
+    if ($deliveryText -notmatch 'ci/vitest-runtime-history-refresh') {
+        Add-Fail 'vitest-runtime-history-delivery.yml must scope itself to the fixed runtime-history delivery branch'
+    }
+    if ($deliveryText -notmatch 'vitest-runtime-history-delivery\.mjs monitor-pr') {
+        Add-Fail 'vitest-runtime-history-delivery.yml must monitor and merge the dedicated runtime-history delivery PR'
+    }
+    if ($deliveryText -notmatch 'VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN') {
+        Add-Fail 'vitest-runtime-history-delivery.yml must require VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN'
+    }
+}
+
+if (Test-Path -LiteralPath $deliverySnapshotPath) {
+    $deliverySnapshot = Get-Content -LiteralPath $deliverySnapshotPath -Raw | ConvertFrom-Json
+    if (-not $deliverySnapshot.capturedAt) {
+        Add-Fail 'runtime-history delivery branch-protection snapshot must record capturedAt'
+    }
+    if (-not $deliverySnapshot.capturedBy.login) {
+        Add-Fail 'runtime-history delivery branch-protection snapshot must record capturedBy.login'
+    }
+    if (-not $deliverySnapshot.repository.fullName) {
+        Add-Fail 'runtime-history delivery branch-protection snapshot must record repository.fullName'
+    }
+    if (-not $deliverySnapshot.branchProtection.requiredStatusChecks -or $deliverySnapshot.branchProtection.requiredStatusChecks.Count -lt 1) {
+        Add-Fail 'runtime-history delivery branch-protection snapshot must list required status checks'
+    }
+    if (-not $deliverySnapshot.maxAgeDays) {
+        Add-Fail 'runtime-history delivery branch-protection snapshot must declare maxAgeDays'
+    }
+    if ($deliverySnapshot.capturedAt -and $deliverySnapshot.maxAgeDays) {
+        $snapshotAge = (Get-Date) - ([datetime]::Parse($deliverySnapshot.capturedAt))
+        if ($snapshotAge.TotalDays -gt [double]$deliverySnapshot.maxAgeDays) {
+            Add-Fail "runtime-history delivery branch-protection snapshot stale: $($deliverySnapshot.capturedAt)"
+        }
+    }
+}
+
+if (Test-Path -LiteralPath $deliveryDocPath) {
+    $deliveryDocText = Get-Content -LiteralPath $deliveryDocPath -Raw
+    if ($deliveryDocText -notmatch 'VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN') {
+        Add-Fail 'runtime-history delivery doc must name the delivery credential surface'
+    }
+    if ($deliveryDocText -notmatch 'pull_request_target') {
+        Add-Fail 'runtime-history delivery doc must describe the trusted pull_request_target merge owner'
+    }
+}
+
+if (Test-Path -LiteralPath $migrationNotesPath) {
+    $migrationNotesText = Get-Content -LiteralPath $migrationNotesPath -Raw
+    if ($migrationNotesText -notmatch 'Vitest runtime-history protected-branch delivery \(Issue #731\)') {
+        Add-Fail 'migration notes must include Issue #731 operator adoption guidance'
     }
 }
 
@@ -819,5 +913,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] CI pipeline split lane classification, PR-scoped heavy-lane guard, derived weighted heavy shards, oversized-file guard, runtime-history refresh producer guards, wall-clock e2e split, aggregate fail-closed, and worker-RPC guard OK.'
+Write-Host '[PASS] CI pipeline split lane classification, PR-scoped heavy-lane guard, derived weighted heavy shards, oversized-file guard, runtime-history refresh + protected-branch delivery guards, wall-clock e2e split, aggregate fail-closed, and worker-RPC guard OK.'
 exit 0

@@ -261,6 +261,27 @@ Enable `enforce` only after reviewing accumulated shadow artifacts across multip
 ordinary PRs and confirming no misses between the would-be scoped set and the full
 heavy runs that actually executed on those same heads.
 
+## Protected-branch delivery (Issue #731)
+
+The refresh producer still runs on **main push**, **weekly schedule**, and
+**workflow_dispatch**, but delivery to `main` now goes through a fixed bot branch
+and a trusted PR merge path instead of a direct `git push origin HEAD:main`.
+
+- Push recursion barrier: `.github/workflows/vitest-runtime-history-refresh.yml`
+  ignores `scripts/vitest-runtime-history.json`-only pushes on `main`, so the
+  generated delivery commit does not re-trigger a fresh measurement loop.
+- Delivery branch: `ci/vitest-runtime-history-refresh`
+- PR open/update identity: `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN`
+- Trusted merge owner: `.github/workflows/vitest-runtime-history-delivery.yml`
+  on `pull_request_target`, using the base-branch workflow definition
+- Delivery diff gate: only `scripts/vitest-runtime-history.json` may appear in the
+  PR; any extra path fails closed before merge
+- Live ruleset evidence: `docs/vitest-runtime-history-delivery-branch-protection.snapshot.json`
+  records the captured `main` protection state used by the guard
+
+Operator adoption for the credential surface and repo settings is documented in
+`docs/vitest-runtime-history-delivery.md` and `docs/migration_notes.md`.
+
 ## Verification
 
 ```powershell

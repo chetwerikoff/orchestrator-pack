@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-11T05:15:00Z",
+  "maxAgeDays": 45,
+  "capturedBy": {
+    "login": "chetwerikoff",
+    "api": "repos/chetwerikoff/orchestrator-pack"
+  },
+  "repository": {
+    "fullName": "chetwerikoff/orchestrator-pack",
+    "allowAutoMerge": false,
+    "pullRequestCreationPolicy": "all"
+  },
+  "branchProtection": {
+    "branch": "main",
+    "strict": true,
+    "requiredApprovingReviewCount": 0,
+    "enforceAdmins": true,
+    "requiredStatusChecks": [
+      "Verify orchestrator-pack structure",
+      "Contract evidence legacy list guard"
+    ],
+    "sourceEndpoints": {
+      "repository": "repos/chetwerikoff/orchestrator-pack",
+      "branchProtection": "repos/chetwerikoff/orchestrator-pack/branches/main/protection"
+    }
+  }
+}
