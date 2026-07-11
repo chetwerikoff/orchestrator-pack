@@ -335,7 +335,7 @@
     "scripts/sanctioned-worker-kill-record.test.ts": "43a5c8f9c2a5b678226429667d31dd7d6d0f5d887f990b5f95bde0809dba80ce",
     "scripts/scripted-review-confirmed-delivery-gate.test.ts": "273e4548c03e72cccac0999b65070f3fd277ab20060df7722943bb9ca7fd53ee",
     "scripts/seed-snapshot-failure-bounded-read-economy.test.ts": "ac138fc5a44777a298024c0c1abdb985918257e75cb06b19776af693511f073c",
-    "scripts/session-pr-binding-resolver.test.ts": "0080c5e4fc053ddcc6272e4b5e6df81a81200ed3161bd52e142e99febc061385",
+    "scripts/session-pr-binding-resolver.test.ts": "46c8c8fc07ebe3ad73408bba1d1ebb4c2dc9afb02e19f13b0e7fe0ffa95e0eed",
     "scripts/session-runtime-liveness.test.ts": "6a25b956b35e6ed0dc1f1d4bceff3024c801f734b72032b64406b121f8112864",
     "scripts/side-process-launch-contract.test.ts": "84159dd1a61845370f2506eba0cbe945703a79e35acfbf1e08c71454f8427b91",
     "scripts/spawn-worktree-branch-operand-binding.test.ts": "7c5ebbd64855dd8bc9464a4a56796a52f6db60c2e9efd0dd297910d1071e5c87",

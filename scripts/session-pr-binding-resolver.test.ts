@@ -360,6 +360,16 @@ describe('session-pr-binding-resolver branch patterns', () => {
       ]),
     ).toHaveLength(1);
   });
+
+  it('recognizes AO namespaced issue branches', () => {
+    const branch = 'ao/orchestrator-pack-98/issue-731-vitest-history-delivery';
+    expect(headRefCorrelatesToIssue(branch, 731)).toBe(true);
+    expect(
+      listIssueCorrelatedOpenPrs(731, [
+        { number: 738, headRefOid: 'd47c931', headRefName: branch },
+      ]),
+    ).toHaveLength(1);
+  });
 });
 
 describe('ci-failure reaction owner non-null', () => {

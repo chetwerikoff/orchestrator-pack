@@ -34,8 +34,8 @@ chain-level token/cost accounting. Do **not** port Windows PowerShell wrapper in
 ## Coworker CLI delegation
 
 Operating principle: **delegate I/O, keep reasoning**. Bulk reading goes to the external
-`coworker` CLI; analysis and conclusions stay on the reasoning model. Run `ao acknowledge`
-before the first `coworker` invocation.
+`coworker` CLI; analysis and conclusions stay on the reasoning model. In an AO worker, run
+`ao session get "$env:AO_SESSION_ID" --json` before the first `coworker` invocation.
 
 **Mandatory profiles.** Every `coworker ask` MUST pass `--profile code`. Every
 `coworker write` MUST pass `--profile write` unless the task issue names another.
@@ -207,14 +207,14 @@ sessions use `opencode-merge-and-pull` instead.
 
 ### First action (AO pickup)
 
-After reading the initial task prompt, your **mandatory first action** in the AO worktree is:
+After reading the initial task prompt, your **mandatory first action** is live-session verification:
 
 ```powershell
-ao acknowledge
+ao session get "$env:AO_SESSION_ID" --json
 ```
 
 Run within **60 seconds** of session start — before `ao-declare`, file edits, research, commits, or
-PR work. Missing pickup is `no_acknowledge` and marks the session `stuck`. See
+PR work. Missing session verification marks the session `stuck`. See
 [`docs/orchestrator-recovery-runbook.md`](docs/orchestrator-recovery-runbook.md).
 
 ### Tracker and role policy
