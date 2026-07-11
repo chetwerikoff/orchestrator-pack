@@ -33,9 +33,11 @@ changes, and only then pushes with an explicit `--force-with-lease` bound to the
 fetched branch tip. That preserves pending measurements from an earlier still-open
 delivery PR instead of overwriting them with a stale-base recomputation from
 `main` alone. If reconciliation yields the same runtime-history payload already
-present on the pending delivery PR, the workflow skips the push and PR update
-entirely so overlapping refreshes converge on one stable head instead of
-restarting required checks with a no-op commit reset.
+present on the pending delivery branch, the workflow skips the push so
+overlapping refreshes converge on one stable head instead of restarting required
+checks with a no-op commit reset. It still rewrites the delivery PR body and
+runs the `upsert-pr` helper on retries, so a prior crash after the branch push
+cannot leave an unadopted fixed branch behind.
 
 ## Why this path
 

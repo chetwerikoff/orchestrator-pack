@@ -583,7 +583,10 @@ if (Test-Path -LiteralPath $refreshWorkflowPath) {
             Add-Fail 'refresh-runtime-history job must bind force-with-lease to the fetched delivery-branch tip when reusing the fixed branch'
         }
         if ($refreshJob -notmatch "steps\.delivery_branch\.outputs\.should_push == 'true'") {
-            Add-Fail 'refresh-runtime-history delivery push/update steps must be gated by the reconciled should_push decision'
+            Add-Fail 'refresh-runtime-history push step must be gated by the reconciled should_push decision'
+        }
+        if ($refreshJob -match "Write delivery PR body:[\s\S]*steps\.delivery_branch\.outputs\.should_push == 'true'" -or $refreshJob -match "Open or update delivery PR:[\s\S]*steps\.delivery_branch\.outputs\.should_push == 'true'") {
+            Add-Fail 'refresh-runtime-history PR body/upsert recovery must still run when the fixed branch already matches'
         }
         if ($refreshJob -notmatch 'vitest-runtime-history-delivery\.mjs upsert-pr') {
             Add-Fail 'refresh-runtime-history job must open or update the dedicated runtime-history delivery PR'
@@ -666,6 +669,9 @@ if (Test-Path -LiteralPath $deliveryDocPath) {
     }
     if ($deliveryDocText -notmatch 'github\.event\.sender\.login' -or $deliveryDocText -notmatch 'trusted actor') {
         Add-Fail 'runtime-history delivery doc must describe the trusted delivery actor binding'
+    }
+    if ($deliveryDocText -notmatch 'skips the push' -or $deliveryDocText -notmatch 'upsert') {
+        Add-Fail 'runtime-history delivery doc must describe that no-op branch convergence still upserts the delivery PR'
     }
 }
 

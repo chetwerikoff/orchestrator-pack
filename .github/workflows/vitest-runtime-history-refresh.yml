@@ -191,7 +191,7 @@ jobs:
           fi
 
       - name: Write delivery PR body
-        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        if: steps.delivery.outputs.ahead != '0'
         shell: bash
         run: |
           set -euo pipefail
@@ -208,7 +208,7 @@ jobs:
           EOF
 
       - name: Open or update delivery PR
-        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        if: steps.delivery.outputs.ahead != '0'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
