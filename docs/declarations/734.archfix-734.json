@@ -1,0 +1,17 @@
+{
+  "issue_number": 734,
+  "iteration_id": "archfix-734",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-11T04:53:27.697Z",
+  "baseline": {
+    "commit_sha": "c48a6fb6c28aef1f5744a8e5a822f2aab9601ab6",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:17a8bcfad8358fcaad9ec318160b0d88db69577787a2f7282d2e38722fe11e25"
+  },
+  "declared_paths": [
+    "AGENTS.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

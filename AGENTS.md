@@ -104,7 +104,7 @@ excepted reasoning step, route the read through `coworker ask` on **Claude and C
 (mandatory). On **Cursor**, advisory corpus is **SHOULD**, not MUST — see carve-outs below.
 
 **Bounded fallback** only when `coworker` is missing/unavailable/rate-limited or corpus cannot
-be made fence-clean. Cost/size is **not** a fallback once a trigger fires.
+be made fence-clean. Cost/size is **not** a fallback once a trigger fires. **Wait for exit, not patience** — coworker answers typically take 1–2 minutes; await process exit before judging the call, and on harnesses whose shell tool returns before the child finishes (e.g. Codex background exec) keep polling the same session until it exits rather than interrupting after tens of seconds. **"Unavailable" requires observed evidence**: a failed `command -v coworker` probe, or the coworker process itself exiting non-zero/erroring — the agent's own waiting patience running out is not unavailability and does not justify the fallback. Stderr `WARNING (override)` lines about the allowed-file list are advisories, not failures; the answer still lands on stdout once the process finishes.
 
 Ask triggers (delegable out-of-index corpus):
 
