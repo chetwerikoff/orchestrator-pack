@@ -150,10 +150,7 @@ if ($DryRun) {
 }
 
 try {
-    $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
-        -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId -RepoRoot $RepoRoot `
-        -TrustedBinding $trustedBinding -DeliveryRunId $DeliveryRunId -Note $Note -Reason $Reason `
-        -HandoffKind $HandoffKind -DegradedCiEscalation:$DegradedCiEscalation
+    $emitResult = $null
     if (($DegradedCiEscalation -or $HandoffKind -eq 'degraded_ci') -and $State -eq 'completed') {
         $emitReason = if (-not [string]::IsNullOrWhiteSpace($Reason)) {
             $Reason
@@ -168,15 +165,32 @@ try {
             $emitResult = Invoke-WorkerDegradedCiHandoff -PrNumber $PrNumber -PrHeadSha $HeadSha `
                 -WorkerSessionId $SessionId -Reason $emitReason -Message $Note `
                 -OrchestratorSessionId $OrchestratorSessionId
-            $result | Add-Member -NotePropertyName escalationEmission -NotePropertyValue $emitResult -Force
         }
         catch {
-            $result | Add-Member -NotePropertyName escalationEmission -NotePropertyValue @{
-                ok     = $false
-                status = 'emit_failed'
-                reason = "$_"
-            } -Force
+            [pscustomobject]@{
+                ok                 = $false
+                accepted           = $false
+                reportState        = $State
+                sessionId          = $SessionId
+                repoSlug           = $RepoSlug
+                prNumber           = $PrNumber
+                headSha            = $HeadSha
+                escalationEmission = @{
+                    ok     = $false
+                    status = 'emit_failed'
+                    reason = "$_"
+                }
+            } | ConvertTo-Json -Compress -Depth 20
+            exit 0
         }
+    }
+
+    $result = Write-PackWorkerReportRecord -ReportState $State -SessionId $SessionId -RepoSlug $RepoSlug `
+        -PrNumber $PrNumber -HeadSha $HeadSha -CallerSessionId $CallerSessionId -RepoRoot $RepoRoot `
+        -TrustedBinding $trustedBinding -DeliveryRunId $DeliveryRunId -Note $Note -Reason $Reason `
+        -HandoffKind $HandoffKind -DegradedCiEscalation:$DegradedCiEscalation
+    if ($null -ne $emitResult) {
+        $result | Add-Member -NotePropertyName escalationEmission -NotePropertyValue $emitResult -Force
     }
     $result | ConvertTo-Json -Compress -Depth 20
 }

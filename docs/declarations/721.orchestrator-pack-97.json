@@ -57,7 +57,11 @@
     "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts",
     "scripts/supervisor-fault-boundary-escalate.test.ts",
     "scripts/supervisor-fault-boundary.shared.ts",
-    "scripts/worker-report-store.test.ts"
+    "scripts/worker-report-store.test.ts",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.meta.json",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.meta.json",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json"
   ],
   "declared_globs": [],
   "amendments": [
