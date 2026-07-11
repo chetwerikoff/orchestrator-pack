@@ -18,21 +18,70 @@ $ErrorActionPreference = 'Stop'
 
 $orchId = Get-OrchestratorSessionId -CliValue $OrchestratorSessionId
 
+function Test-EscalationRouterForeignRecord {
+    param($Record)
+    $correlationKey = [string]$Record.correlationKey
+    $sourceProcess = if ($Record.lastPayload) { [string]$Record.lastPayload.source_process } else { '' }
+    return $correlationKey -like 'foreign:*' -or $sourceProcess -eq 'vitest-foreign'
+}
+
 function Invoke-EscalationRouterTick {
     $path = Get-OrchestratorEscalationStatePath
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+    $catalog = Get-OrchestratorEscalationCatalog
     $redelivered = 0
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     foreach ($key in @($state.records.Keys)) {
-        $record = $state.records[$key]
+        $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $key
+        Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
         if ([string]$record.route -ne 'llm-orchestrator') { continue }
-        if (Test-OrchestratorEscalationAcked -Record $record) { continue }
+        if ([int]($record.schemaVersion ?? 1) -gt $Script:OrchestratorEscalationSupportedSchemaVersion) {
+            $record.status = 'deferred'
+            $record.updatedAtMs = $now
+            continue
+        }
+        if ([int]($record.schemaVersion ?? 1) -lt 1) {
+            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'quarantined' -Now $now -Reason 'invalid_schema_version' | Out-Null
+            continue
+        }
+        if (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$record.terminalState)) { continue }
+        try {
+            $class = Resolve-OrchestratorEscalationClass -EscalationClassId ([string]$record.escalationClassId) -CatalogPath $Script:OrchestratorEscalationCatalogPath
+            if (-not $class) { throw 'unknown_escalation_class' }
+        }
+        catch {
+            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'quarantined' -Now $now -Reason 'unknown_escalation_class' | Out-Null
+            continue
+        }
+        if (Test-EscalationRouterForeignRecord -Record $record) {
+            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'quarantined' -Now $now -Reason 'foreign_record' | Out-Null
+            continue
+        }
+        if (Test-OrchestratorEscalationAcked -Record $record) {
+            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now $now | Out-Null
+            continue
+        }
+        $attempts = [int]($record.attempts ?? 0)
+        $firstAttemptAtMs = [long]($record.firstAttemptAtMs ?? 0)
+        $lastAttemptAtMs = [long]($record.lastAttemptAtMs ?? 0)
+        if ($attempts -ge $Script:OrchestratorEscalationMaxAttempts -or ($firstAttemptAtMs -gt 0 -and ($now - $firstAttemptAtMs) -ge $Script:OrchestratorEscalationMaxElapsedMs)) {
+            Complete-OrchestratorEscalationDeadLetter -State $state -Record $record -Class $class -Now $now | Out-Null
+            continue
+        }
+        if ($attempts -gt 0 -and $lastAttemptAtMs -gt 0 -and ($now - $lastAttemptAtMs) -lt $Script:OrchestratorEscalationMinBackoffMs) {
+            $record.status = 'backoff_waiting'
+            continue
+        }
         $payload = @{}
         if ($record.lastPayload) { $payload = ConvertTo-OrchestratorEscalationHashtable -Value $record.lastPayload }
         $result = Publish-OrchestratorEscalation -EscalationClassId ([string]$record.escalationClassId) `
             -CorrelationKey ([string]$record.correlationKey) -Payload $payload `
-            -Message ([string]$record.lastMessage) -OrchestratorSessionId $orchId
+            -Message ([string]$record.lastMessage) -OrchestratorSessionId $orchId `
+            -StatePath $path -ReplayEscalationId $key -SkipWakeSuppression -NowMs $now
+        $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
         if ($result.delivered) { $redelivered++ }
     }
+    Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
     return $redelivered
 }
 

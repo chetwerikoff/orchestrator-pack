@@ -47,9 +47,8 @@ if ($mjs -notmatch 'validateBusyDispatchMarker' -or $mjs -notmatch 'resolveBusyD
     exit 1
 }
 if ($mjs -notmatch 'isSubmitEnterAuthorizedByAdoption' -or
-    $mjs -notmatch 'ADOPTION_STATUS_WRAPPER_NOT_ADOPTED' -or
-    $mjs -notmatch 'buildAdoptionBlockedDecision') {
-    Write-Host 'worker-message-submit-reconcile.mjs must block Enter while wrapper_not_adopted is active'
+    $mjs -notmatch 'ADOPTION_STATUS_WRAPPER_NOT_ADOPTED') {
+    Write-Host 'worker-message-submit-reconcile.mjs must retain wrapper_not_adopted telemetry wiring'
     exit 1
 }
 if ($mjs -notmatch 'DEFAULT_DELIVERY_BACKSTOP_MS' -or $mjs -notmatch 'DEFAULT_POST_DISPATCH_LEASE_MS') {

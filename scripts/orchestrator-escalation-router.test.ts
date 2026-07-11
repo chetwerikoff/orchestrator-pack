@@ -150,7 +150,7 @@ describe('orchestrator escalation router', () => {
         (record.attempts ?? 0) > 0,
     );
     expect(canonicalRecord).toBeDefined();
-    expect(canonicalRecord?.status).toBe('fail_closed');
+    expect(canonicalRecord?.status).toBe('pending');
     expect(canonicalRecord?.acknowledgedAtMs ?? null).toBeNull();
   });
 });

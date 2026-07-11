@@ -776,24 +776,9 @@ export function applySubmitOutcomes(tracking, outcomes, nowMs) {
 }
 
 
-export function isSubmitEnterAuthorizedByAdoption(tracking) {
-  const status = trimString(tracking?.adoptionStatus);
-  if (!status) {
-    return true;
-  }
-  return status !== ADOPTION_STATUS_WRAPPER_NOT_ADOPTED;
-}
-
-function buildAdoptionBlockedDecision(deliveryId, sessionId, deliveryBackstopExpired) {
-  if (deliveryBackstopExpired) {
-    return buildBackstopEscalation(
-      deliveryId,
-      sessionId,
-      'wrapper_not_adopted',
-      `${OPERATOR_ESCALATION_PREFIX} delivery ${deliveryId} cannot be Enter-submitted because orchestrator worker-send routing is not adopted (wrapper_not_adopted).`,
-    );
-  }
-  return { action: 'noop', reason: 'wrapper_not_adopted', deliveryId, sessionId };
+export function isSubmitEnterAuthorizedByAdoption() {
+  // On AO 0.10.2 the adoption probe is telemetry-only and must not gate Enter.
+  return true;
 }
 
 function buildBackstopEscalation(deliveryId, sessionId, reason, diagnosis) {
@@ -803,6 +788,7 @@ function buildBackstopEscalation(deliveryId, sessionId, reason, diagnosis) {
     deliveryId,
     sessionId,
     diagnosis,
+    failureKind: classifyFailureTerminalReason(reason),
   };
 }
 
@@ -1025,10 +1011,6 @@ export function evaluateSubmitDecision({
   const isBusy = isSessionStreaming(session);
   const priorDispatchExists = submitAttempts > 0 || Number(record.lastSubmitAtMs ?? 0) > 0;
 
-  if (!isSubmitEnterAuthorizedByAdoption(tracking)) {
-    return buildAdoptionBlockedDecision(deliveryId, sessionId, deliveryBackstopExpired);
-  }
-
   if (!priorDispatchExists) {
     if (isBusy && !busyDispatch.allowed) {
       if (deliveryBackstopExpired) {
@@ -1125,10 +1107,6 @@ export function evaluateSubmitDecision({
       deliveryId,
       sessionId,
     };
-  }
-
-  if (!isSubmitEnterAuthorizedByAdoption(tracking)) {
-    return buildAdoptionBlockedDecision(deliveryId, sessionId, deliveryBackstopExpired);
   }
 
   if (submitAttempts >= maxSubmitAttempts) {
@@ -1469,6 +1447,7 @@ export function planWorkerMessageSubmitActions(input) {
           sessionId,
           reason: decision.reason,
           diagnosis: decision.diagnosis,
+          failureKind: escalation.escalationReason,
         });
       }
     }
@@ -1520,6 +1499,7 @@ export function planWorkerMessageSubmitActions(input) {
         sessionId,
         reason: 'lost_delivery_overwritten',
         diagnosis: escalation.diagnosis,
+        failureKind: escalation.escalationReason,
       });
       audit.push({ deliveryId: lostId, action: 'escalate', reason: 'lost_delivery_overwritten' });
     }
@@ -1673,6 +1653,7 @@ export function planWorkerMessageSubmitActions(input) {
           sessionId,
           reason: decision.reason,
           diagnosis: decision.diagnosis,
+          failureKind: escalation.escalationReason,
         });
         break;
       }
@@ -1759,6 +1740,7 @@ export function planWorkerMessageSubmitActions(input) {
       sessionId: trimString(existing?.sessionId),
       reason,
       diagnosis: escalation.diagnosis,
+      failureKind: escalation.escalationReason,
     });
     audit.push({ deliveryId, action: 'escalate', reason });
   }

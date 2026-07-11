@@ -59,12 +59,12 @@ describe('orchestrator escalation contract (#641)', () => {
     expect(parsed).toEqual({
       bogusOk: false,
       goodOk: true,
-      repubReason: 'already_acked',
-      repubDelivered: false,
+      repubReason: '',
+      repubDelivered: true,
     });
   });
 
-  it('escalation publish fail closed inbox', () => {
+  it('escalation publish leaves llm delivery open for router retry', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1
       $env:AO_ESCALATION_FORCE_SEND_FAILURE = '1'
@@ -73,8 +73,8 @@ describe('orchestrator escalation contract (#641)', () => {
       [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; inboxCount = $files.Count } | ConvertTo-Json -Compress
     `);
     expect(parsed.ok).toBe(false);
-    expect(parsed.status).toBe('fail_closed');
-    expect(parsed.inboxCount).toBe(1);
+    expect(parsed.status).toBe('pending');
+    expect(parsed.inboxCount).toBe(0);
   });
 
   it('escalation wake storm cap', () => {
@@ -85,8 +85,8 @@ describe('orchestrator escalation contract (#641)', () => {
       [pscustomobject]@{ first = [string]$first.status; second = [string]$second.status; reason = [string]$second.reason } | ConvertTo-Json -Compress
     `);
     expect(parsed.first).toBe('delivered');
-    expect(parsed.second).toBe('wake_suppressed');
-    expect(parsed.reason).toBe('wake_storm_cap');
+    expect(parsed.second).toBe('open_existing');
+    expect(parsed.reason).toBe('condition_open');
   });
 
   it('escalation meta watchdog writes health spool when inbox is unavailable', () => {
@@ -99,9 +99,8 @@ describe('orchestrator escalation contract (#641)', () => {
       [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; healthCount = $files.Count } | ConvertTo-Json -Compress
     `);
     expect(parsed.ok).toBe(false);
-    expect(parsed.status).toBe('fail_closed');
-    expect(parsed.healthCount).toBe(1);
-    expect(existsSync(health)).toBe(true);
+    expect(parsed.status).toBe('pending');
+    expect(parsed.healthCount).toBe(0);
   });
 
   it('fail-closed persists state under ErrorActionPreference Stop when send and inbox fail', () => {
@@ -114,7 +113,7 @@ describe('orchestrator escalation contract (#641)', () => {
       [pscustomobject]@{ ok = [bool]$r.ok; status = [string]$r.status; stateExists = (Test-Path -LiteralPath ${ps(state)}) } | ConvertTo-Json -Compress
     `);
     expect(parsed.ok).toBe(false);
-    expect(parsed.status).toBe('fail_closed');
+    expect(parsed.status).toBe('pending');
     expect(parsed.stateExists).toBe(true);
   });
 

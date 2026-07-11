@@ -380,7 +380,7 @@ function Invoke-SubmitAdoptionPreflightObservation {
     )
 
     if ($DryRunMode) {
-        return @{ tracking = $Tracking; escalated = 0 }
+        return @{ tracking = $Tracking; escalated = 0; telemetryOnly = $true; reason = 'dry_run' }
     }
 
     $binding = Get-WorkerMessageAdoptionBinding -PackRoot $PackRoot
@@ -395,26 +395,25 @@ function Invoke-SubmitAdoptionPreflightObservation {
         $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
         $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
         $nextTracking.adoptionStatus = 'adopted'
-        return @{ tracking = $nextTracking; escalated = 0 }
+        return @{ tracking = $nextTracking; escalated = 0; telemetryOnly = $true; reason = 'adopted' }
     }
 
     $dedupeKey = "$($preflight.aoEpochHash):$($preflight.configPathHash):wrapper_not_adopted"
     $alreadyEscalated = [string]$nextTracking.lastAdoptionEscalationKey -eq $dedupeKey
-    $escalated = 0
     if (-not $alreadyEscalated) {
         Write-SubmitReconcileLog $preflight.diagnosis
         $nextTracking.lastAdoptionEscalationKey = $dedupeKey
-        $escalated = 1
     }
     $nextTracking.adoptionStatus = 'wrapper_not_adopted'
     $nextTracking.adoptionEpochHash = [string]$preflight.aoEpochHash
     $nextTracking.adoptionConfigPathHash = [string]$preflight.configPathHash
 
     return @{
-        tracking   = $nextTracking
-        escalated  = $escalated
-        reason     = [string]$preflight.reason
-        diagnosis  = [string]$preflight.diagnosis
+        tracking     = $nextTracking
+        escalated    = 0
+        telemetryOnly = $true
+        reason       = [string]$preflight.reason
+        diagnosis    = [string]$preflight.diagnosis
     }
 }
 
@@ -688,11 +687,19 @@ function Invoke-SubmitReconcileTick {
             'escalate' {
                 Write-SubmitReconcileLog $action.diagnosis
                 $deliveryId = [string]$action.deliveryId
+                $sessionId = [string]$action.sessionId
+                $failureKind = if ($action.failureKind) { [string]$action.failureKind } else { [string]$action.reason }
                 $corr = "corr:submit:$deliveryId"
-                $dedupe = "dedupe:submit:$deliveryId`:adoption"
+                $dedupe = "dedupe:submit:$sessionId`:$failureKind"
                 Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
                     -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
-                    -Diagnosis @{ deliveryId = $deliveryId; diagnosis = $action.diagnosis; reason = $action.reason } | Out-Null
+                    -Diagnosis @{
+                        deliveryId   = $deliveryId
+                        session_id   = $sessionId
+                        failure_kind = $failureKind
+                        diagnosis    = $action.diagnosis
+                        reason       = $action.reason
+                    } | Out-Null
                 $escalated++
             }
             'mark_consumed' {
@@ -779,14 +786,6 @@ try {
                     -StatePath $statePath `
                     -Tracking $state `
                     -DryRunMode:$DryRun
-                if ($adoptionObservation.escalated -gt 0 -and $adoptionObservation.diagnosis) {
-                    $adoptionTickError = [string]$adoptionObservation.diagnosis
-                    $corr = 'corr:submit:adoption-preflight'
-                    $dedupe = "dedupe:submit:adoption:$($adoptionObservation.reason)"
-                    Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
-                        -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
-                        -Diagnosis @{ diagnosis = $adoptionObservation.diagnosis; reason = $adoptionObservation.reason } | Out-Null
-                }
                 $state = $adoptionObservation.tracking
                 if (-not $DryRun) {
                     Set-SubmitReconcileState -Path $statePath -State $state -JournalPath $journalPath
@@ -797,14 +796,9 @@ try {
                 if (-not $DryRun) {
                     Set-SubmitReconcileState -Path $statePath -State $result.tracking -JournalPath $journalPath
                 }
-                $totalEscalated = $result.escalated + $adoptionObservation.escalated
+                $totalEscalated = $result.escalated
                 Write-SubmitReconcileLog "tick complete (submitted=$($result.submitted) escalated=$totalEscalated noop=$($result.noop) adoption=$($adoptionObservation.reason))"
-                if ($adoptionObservation.escalated -gt 0 -and $adoptionObservation.diagnosis) {
-                    Write-OrchestratorSideProcessTickError -ChildId 'worker-message-submit-reconcile' -ErrorMessage $adoptionObservation.diagnosis
-                }
-                else {
-                    Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
-                }
+                Write-OrchestratorSideProcessTickSuccess -ChildId 'worker-message-submit-reconcile'
             }
             catch {
                 $tickFailed = $true

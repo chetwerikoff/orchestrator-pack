@@ -2753,7 +2753,7 @@ describe('issue #373 vanish and worktree-drift handling', () => {
 });
 
 describe('issue #373 supervised adoption preflight', () => {
-  it('escalates wrapper_not_adopted without blocking reconcile', () => {
+  it('records wrapper_not_adopted as telemetry without blocking reconcile', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-'));
     const journal = path.join(dir, 'journal.json');
     const state = path.join(dir, 'state.json');
@@ -2780,7 +2780,7 @@ describe('issue #373 supervised adoption preflight', () => {
   });
 
 
-  it('surfaces wrapper_not_adopted through the supervised tick_error channel', () => {
+  it('does not surface wrapper_not_adopted through the supervised tick_error channel', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-tick-error-'));
     const journal = path.join(dir, 'journal.json');
     const state = path.join(dir, 'state.json');
@@ -2803,11 +2803,10 @@ describe('issue #373 supervised adoption preflight', () => {
     });
     expect(result.status).toBe(0);
     const progress = JSON.parse(readFileSync(path.join(progressDir, 'worker-message-submit-reconcile.progress.json'), 'utf8')) as Record<string, unknown>;
-    expect(progress.tickOutcome).toBe('error');
-    expect(String(progress.lastError)).toContain('wrapper_not_adopted');
+    expect(progress.tickOutcome).toBe('success');
   });
 
-  it('deduplicates adoption escalation per epoch/config while reconcile continues', () => {
+  it('does not mint adoption escalation per epoch/config while reconcile continues', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'submit-reconcile-adoption-dedupe-'));
     const journal = path.join(dir, 'journal.json');
     const state = path.join(dir, 'state.json');
@@ -2829,7 +2828,7 @@ describe('issue #373 supervised adoption preflight', () => {
     expect(second.stdout).toContain('tick complete');
   });
 
-  it('blocks Enter for review-send deliveries when adoption is red', () => {
+  it('allows Enter for review-send deliveries when adoption is red', () => {
     const id = 'opk-review:1717601000000:review-send:run-1';
     const { actions } = planWorkerMessageSubmitActions({
       sessions: [{ sessionId: 'opk-review', name: 'opk-review', role: 'worker', status: 'working', runtime: 'alive', activity: 'idle', reports: [] }],
@@ -2852,13 +2851,7 @@ describe('issue #373 supervised adoption preflight', () => {
       },
       nowMs: 1717601010000,
     });
-    expect(submitActions(actions)).toHaveLength(0);
-    expect(
-      actions.some(
-        (a: WorkerMessageSubmitAction) =>
-          a.type === 'noop' && a.deliveryId === id && a.reason === 'wrapper_not_adopted',
-      ),
-    ).toBe(true);
+    expect(submitActions(actions)).toHaveLength(1);
   });
 });
 
@@ -3773,7 +3766,7 @@ describe('issue #602 adoption and consumption proof (S1-S7)', () => {
     expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed' && a.deliveryId === id)).toBe(true);
   });
 
-  it('S2: wrapper_not_adopted blocks Enter', () => {
+  it('S2: wrapper_not_adopted still permits Enter on AO 0.10.2', () => {
     const id = 'opk-scenario:1717601000000:ao-send:s2';
     const { actions } = planWorkerMessageSubmitActions({
       sessions: [baseSession],
@@ -3792,8 +3785,8 @@ describe('issue #602 adoption and consumption proof (S1-S7)', () => {
       tracking: { deliveries: {}, audit: [], adoptionStatus: 'wrapper_not_adopted' },
       nowMs: 1717601010000,
     });
-    expect(submitActions(actions)).toHaveLength(0);
-    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'noop' && a.reason === 'wrapper_not_adopted')).toBe(true);
+    expect(submitActions(actions)).toHaveLength(1);
+    expect(actions.some((a: WorkerMessageSubmitAction) => a.type === 'submit' && a.deliveryId === id)).toBe(true);
   });
 
   it('S3: busy_dispatch_environment_unknown never marks consumed', () => {
@@ -4055,4 +4048,3 @@ describe('issue #602 delivery source audit', () => {
     expect(bySource['submit-reconcile-backstop']).toBe('draft-submit');
   });
 });
-

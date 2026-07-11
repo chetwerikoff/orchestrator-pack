@@ -206,7 +206,7 @@
       "delivery_guarantee": "at-least-once-until-ack",
       "dedupe_owner": "issue-641",
       "trigger": {
-        "summary": "Worker message submit adoption escalated",
+        "summary": "Worker message submit reconcile escalated",
         "event": "submit_adoption_escalated"
       }
     },
