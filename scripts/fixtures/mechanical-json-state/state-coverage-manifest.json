@@ -108,11 +108,14 @@
       "id": "dead-worker-reconcile",
       "stateFile": "orchestrator-dead-worker-reconcile-state.json",
       "callerScripts": [
-        "scripts/dead-worker-reconcile.ps1"
+        "scripts/dead-worker-reconcile.ps1",
+        "scripts/clear-dead-worker-reconcile-quarantine.ps1"
       ],
       "mapFields": [
         "attempts",
-        "leases"
+        "leases",
+        "pendingActions",
+        "quarantinedActions"
       ],
       "actionTracking": true
     },

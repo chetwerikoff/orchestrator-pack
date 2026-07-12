@@ -85,6 +85,18 @@ export function stripMarkdownFencedCodeBlocks(text) {
   return text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
 }
 
+/**
+ * Remove backtick-quoted finding-type tags so a review that *discusses* the
+ * carve-out rules — e.g. `` `type: security` `` inside prose — is not read as an
+ * emitted finding. A real reviewer tag is a plain `type: security` line, never
+ * backtick-wrapped. Narrowly scoped to quoted `type:` tags only, so protected
+ * vocabulary a real finding cites (`` `denylist` ``, `` `allowed_roots` ``) still
+ * counts as a signal and the fail-closed contract is preserved.
+ */
+export function stripQuotedTypeTags(text) {
+  return text.replace(/`\s*type:\s*[a-z][a-z0-9-]*\s*`/gi, ' ');
+}
+
 function hasEchoedReviewContext(text) {
   return ECHOED_ARTIFACT_MARKER.test(text) || ECHOED_DRAFT_REVIEW_PROMPT.test(text);
 }
@@ -142,7 +154,7 @@ function indexOfFirstFindingSignal(text, fromIndex = 0) {
 
 /** Scope parsing to reviewer findings — skip echoed rubric, draft body, and fenced blocks. */
 export function extractFindingsScanText(capture) {
-  const withoutFences = stripMarkdownFencedCodeBlocks(capture);
+  const withoutFences = stripQuotedTypeTags(stripMarkdownFencedCodeBlocks(capture));
   if (isCleanNoFindings(withoutFences)) {
     return withoutFences;
   }

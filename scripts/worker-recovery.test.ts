@@ -288,18 +288,18 @@ describe('worker recovery post-claim revalidation', () => {
       selection: {
         canonicalPath: worktree,
         sessionId: 'opk-522',
-        session: { runtime: 'exited', worktree },
+        generationToken: 'gen-a',
+        session: { runtime: 'exited', worktree, generationToken: 'gen-a' },
       },
       current: {
         canonicalPath: worktree,
         sessionId: 'opk-522',
-        session: { runtime: 'alive', worktree },
+        session: { runtime: 'alive', worktree, generationToken: 'gen-a' },
       },
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('became_live');
   });
-
 
   it('worker recovery post-claim revalidation: blocks when worktree ownership marker changes', () => {
     const worktree = '/tmp/orchestrator-pack/worktrees/opk-522';
@@ -307,13 +307,14 @@ describe('worker recovery post-claim revalidation', () => {
       selection: {
         canonicalPath: worktree,
         sessionId: 'opk-522',
-        session: { runtime: 'exited', worktree },
+        generationToken: 'gen-a',
+        session: { runtime: 'exited', worktree, generationToken: 'gen-a' },
         worktreeRecord: { sessionId: 'opk-522', head: 'aaa111', projectId: 'orchestrator-pack' },
       },
       current: {
         canonicalPath: worktree,
         sessionId: 'opk-522',
-        session: { runtime: 'exited', worktree },
+        session: { runtime: 'exited', worktree, generationToken: 'gen-a' },
         worktreeRecord: { sessionId: 'opk-999', head: 'aaa111', projectId: 'orchestrator-pack' },
       },
     });
@@ -330,6 +331,11 @@ describe('worker recovery post-claim revalidation', () => {
     expect(recoveryText).toMatch(/Get-WorkerRecoveryWorktreeRecordFromRepo/);
     expect(recoveryText).toMatch(/selectionWorktreeRecord/);
     expect(recoveryText).toMatch(/liveWorktreeRecord/);
+    expect(recoveryText).toMatch(/workerStatusRow/);
+    expect(recoveryText).toMatch(/Resolve-WorkerRecoveryGenerationToken/);
+    expect(recoveryText).toMatch(/\$requireGenerationFence = \(\$Trigger -eq 'reconcile_dead_worker'\) -or \[bool\]\$expectedGenerationToken/);
+    expect(recoveryText).toMatch(/reason = 'missing_generation_token'/);
+    expect(recoveryText).toMatch(/reason = 'generation_changed'/);
   });
 
   it('worker recovery destructive audit: persists decision before worktree remove', () => {
@@ -356,7 +362,7 @@ describe('worker recovery cleanup failure', () => {
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
       $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
-      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))} } -WorktreePresent -SkipSpawn -FixtureMode
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -GenerationToken 'gen-a' -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))}; generationToken='gen-a' } -WorktreePresent -SkipSpawn -FixtureMode
       [pscustomobject]@{ ok = [bool]$result.ok; outcome = [string]$result.outcome; cleanup = [bool]$result.cleanup } | ConvertTo-Json -Compress
     `;
     const result = JSON.parse(runPwsh(script));
@@ -373,7 +379,7 @@ describe('worker recovery cleanup failure', () => {
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
       $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
-      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))} } -WorktreePresent -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId ${psString(sessionId)} -GenerationToken 'gen-a' -CanonicalPath ${psString(bogusPath.replace(/\\/g, '/'))} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString(bogusPath.replace(/\\/g, '/'))}; generationToken='gen-a' } -WorktreePresent -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true }
       [pscustomobject]@{ ok = [bool]$result.ok; outcome = [string]$result.outcome; cleanup = [bool]$result.cleanup; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `;
     const result = JSON.parse(runPwsh(script));
@@ -677,11 +683,43 @@ describe('worker recovery repository identity / pack-root spawn path (#522 AC#12
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
       $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
-      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreeRecord @{ sessionId='opk-522'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-522' -GenerationToken 'gen-a' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')}; generationToken='gen-a' } -WorktreeRecord @{ sessionId='opk-522'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
       [pscustomobject]@{ packRootMatch = ($result.packRoot -eq $result.repoRoot); outcome = $result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
     const result = JSON.parse(runPwsh(script));
     expect(result.packRootMatch).toBe(true);
+    expect(result.spawn).toBe('spawn_started');
+  });
+
+  it('worker recovery operator path: does not require a supplied generation token', () => {
+    const packRoot = repoRoot;
+    const ns = tempNs();
+    const worktreePath = path.join(packRoot, 'worktrees', 'opk-operator-recover');
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-operator-recover' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')}; generationToken='gen-a' } -WorktreeRecord @{ sessionId='opk-operator-recover'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
+      [pscustomobject]@{ outcome = [string]$result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
+    `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
+    const result = JSON.parse(runPwsh(script));
+    expect(result.outcome).not.toBe('skipped_ambiguous');
+    expect(result.spawn).toBe('spawn_started');
+  });
+
+  it('worker recovery dead-worker fence: revalidates generation against fixture worker-status store', () => {
+    const packRoot = repoRoot;
+    const ns = tempNs();
+    const worktreePath = path.join(packRoot, 'worktrees', 'opk-dead-worker-store');
+    const generationToken =
+      '{"bindingCacheGeneration":1,"journalCursor":1,"reportStoreGeneration":1,"repoTickGeneration":1}';
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $result = Invoke-WorkerRecovery -Trigger 'reconcile_dead_worker' -ProbedDeadEvidence -SessionId 'opk-dead-worker-store' -GenerationToken ${psString(generationToken)} -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreeRecord @{ sessionId='opk-dead-worker-store'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -FixtureWorkerStatusStore @{ schemaVersion=1; records=@{ 'opk-dead-worker-store' = @{ sessionId='opk-dead-worker-store'; schemaVersion=1; sourceGeneration=@{ repoTickGeneration=1; reportStoreGeneration=1; journalCursor=1; bindingCacheGeneration=1 } } } } -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
+      [pscustomobject]@{ outcome = [string]$result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
+    `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
+    const result = JSON.parse(runPwsh(script));
+    expect(result.outcome).not.toBe('skipped_ambiguous');
     expect(result.spawn).toBe('spawn_started');
   });
 
@@ -795,4 +833,3 @@ describe('invoke-worker-recovery entrypoint', () => {
     );
   });
 });
-

@@ -61,10 +61,127 @@ function ConvertTo-WorkerRecoverySessionSnapshot {
         }
     }
     return @{
-        runtime  = $AoRow.runtime
-        status   = $AoRow.status
-        worktree = $worktree
+        runtime           = $AoRow.runtime
+        status            = $AoRow.status
+        worktree          = $worktree
+        generationToken   = [string]$AoRow.generationToken
+        sessionGeneration = [string]$AoRow.sessionGeneration
+        generation        = [string]$AoRow.generation
     }
+}
+
+function ConvertTo-WorkerRecoveryGenerationValue {
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+
+    if ($Value -is [string]) {
+        $normalized = $Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($normalized)) { return $null }
+        return $normalized
+    }
+
+    if ($Value -is [bool] -or
+        $Value -is [byte] -or
+        $Value -is [sbyte] -or
+        $Value -is [int16] -or
+        $Value -is [uint16] -or
+        $Value -is [int32] -or
+        $Value -is [uint32] -or
+        $Value -is [int64] -or
+        $Value -is [uint64] -or
+        $Value -is [single] -or
+        $Value -is [double] -or
+        $Value -is [decimal]) {
+        return $Value
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in @($Value.Keys | ForEach-Object { [string]$_ } | Sort-Object)) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationValue $Value[$key]
+            if ($null -ne $normalized) {
+                $ordered[$key] = $normalized
+            }
+        }
+        if ($ordered.Count -eq 0) { return $null }
+        return $ordered
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $items = @()
+        foreach ($entry in $Value) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationValue $entry
+            if ($null -ne $normalized) {
+                $items += ,$normalized
+            }
+        }
+        if ($items.Count -eq 0) { return $null }
+        return $items
+    }
+
+    $properties = $Value.PSObject.Properties
+    if ($properties.Count -gt 0) {
+        $ordered = [ordered]@{}
+        foreach ($property in @($properties.Name | Sort-Object)) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationValue $Value.$property
+            if ($null -ne $normalized) {
+                $ordered[$property] = $normalized
+            }
+        }
+        if ($ordered.Count -eq 0) { return $null }
+        return $ordered
+    }
+
+    return $Value
+}
+
+function ConvertTo-WorkerRecoveryGenerationToken {
+    param($Value)
+
+    $normalized = ConvertTo-WorkerRecoveryGenerationValue $Value
+    if ($null -eq $normalized) { return '' }
+    if ($normalized -is [string]) { return $normalized }
+    return [string](ConvertTo-Json $normalized -Compress -Depth 16)
+}
+
+function Resolve-WorkerRecoveryGenerationToken {
+    param($Snapshot)
+
+    if (-not $Snapshot) { return '' }
+    $session = $null
+    if ($Snapshot.session) {
+        $session = $Snapshot.session
+    }
+    $workerStatusRow = $null
+    if ($Snapshot.workerStatusRow) {
+        $workerStatusRow = $Snapshot.workerStatusRow
+    }
+    $candidates = @(
+        $Snapshot.generationToken,
+        $workerStatusRow.generationToken,
+        $workerStatusRow.sessionGeneration,
+        $workerStatusRow.generation,
+        $workerStatusRow.sourceGeneration,
+        $workerStatusRow.generationVector,
+        $workerStatusRow.reloadedMixedGeneration,
+        $Snapshot.sessionGeneration,
+        $Snapshot.generation
+    )
+    if ($session) {
+        $candidates += @(
+            $session.generationToken,
+            $session.sessionGeneration,
+            $session.generation
+        )
+    }
+    foreach ($candidate in $candidates) {
+        $normalized = ConvertTo-WorkerRecoveryGenerationToken $candidate
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            return $normalized.Trim()
+        }
+    }
+    return ''
 }
 
 
@@ -108,6 +225,59 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
     return $FallbackRecord
 }
 
+function Resolve-WorkerRecoveryStatusStorePath {
+    if ($env:AO_WORKER_STATUS_STORE) {
+        return [string]$env:AO_WORKER_STATUS_STORE
+    }
+    if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
+        return [string](Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'worker-status-store.json')
+    }
+    if ($env:AO_REPORT_STATE_SEED_STATE) {
+        $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
+        if ($seedPath) {
+            return [string](Join-Path (Split-Path -Parent $seedPath) 'worker-status-store.json')
+        }
+    }
+    return [string](Join-Path (Join-Path (Join-Path $HOME '.local') 'state') 'orchestrator-pack-wake-supervisor/worker-status-store.json')
+}
+
+function Get-WorkerRecoveryWorkerStatusRow {
+    param(
+        [string]$SessionId,
+        $FixtureWorkerStatusStore = $null,
+        [switch]$FixtureMode
+    )
+
+    if (-not $SessionId) { return $null }
+    $store = $null
+    if ($FixtureMode) {
+        $store = $FixtureWorkerStatusStore
+    }
+    else {
+        $storePath = Resolve-WorkerRecoveryStatusStorePath
+        if (-not $storePath -or -not (Test-Path -LiteralPath $storePath)) {
+            return $null
+        }
+        try {
+            $store = Get-Content -LiteralPath $storePath -Raw | ConvertFrom-Json
+        }
+        catch {
+            return $null
+        }
+    }
+
+    $storeMap = ConvertTo-WorkerRecoveryRecordMap $store
+    if (-not $storeMap) { return $null }
+    $records = ConvertTo-WorkerRecoveryRecordMap $storeMap.records
+    if (-not $records) {
+        $records = ConvertTo-WorkerRecoveryRecordMap $storeMap.rows
+    }
+    if (-not $records -or -not $records.ContainsKey($SessionId)) {
+        return $null
+    }
+    return ConvertTo-WorkerRecoveryRecordMap $records[$SessionId]
+}
+
 function Get-WorkerRecoveryPostClaimSnapshot {
     param(
         [string]$SessionId,
@@ -117,6 +287,7 @@ function Get-WorkerRecoveryPostClaimSnapshot {
         [string]$RepoRoot = '',
         [hashtable]$WorktreeRecord = $null,
         [hashtable]$FixtureSession = $null,
+        $FixtureWorkerStatusStore = $null,
         [switch]$FixtureMode
     )
 
@@ -136,14 +307,35 @@ function Get-WorkerRecoveryPostClaimSnapshot {
 
     $liveWorktreeRecord = Get-WorkerRecoveryWorktreeRecordFromRepo -RepoRoot $RepoRoot `
         -CanonicalPath $CanonicalPath -ProjectId $ProjectId -FallbackRecord $WorktreeRecord -FixtureMode:$FixtureMode
+    $workerStatusRow = Get-WorkerRecoveryWorkerStatusRow -SessionId $SessionId `
+        -FixtureWorkerStatusStore $FixtureWorkerStatusStore -FixtureMode:$FixtureMode
+    $generationToken = ''
+    if ($workerStatusRow) {
+        foreach ($candidate in @(
+                $workerStatusRow.generationToken,
+                $workerStatusRow.sessionGeneration,
+                $workerStatusRow.generation,
+                $workerStatusRow.sourceGeneration,
+                $workerStatusRow.generationVector,
+                $workerStatusRow.reloadedMixedGeneration
+            )) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationToken $candidate
+            if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+                $generationToken = $normalized
+                break
+            }
+        }
+    }
 
     return @{
-        canonicalPath  = $CanonicalPath
-        sessionId      = $SessionId
-        session        = $session
-        projectId      = $ProjectId
-        worktreeRecord = $liveWorktreeRecord
-        aoBaseDir      = $AoBaseDir
+        canonicalPath   = $CanonicalPath
+        sessionId       = $SessionId
+        session         = $session
+        projectId       = $ProjectId
+        worktreeRecord  = $liveWorktreeRecord
+        workerStatusRow = $workerStatusRow
+        generationToken = $generationToken
+        aoBaseDir       = $AoBaseDir
     }
 }
 
@@ -387,6 +579,7 @@ function Invoke-WorkerRecovery {
     param(
         [string]$Trigger = 'operator_request',
         [string]$SessionId = '',
+        [string]$GenerationToken = '',
         [string]$CanonicalPath = '',
         [string]$ProjectId = 'orchestrator-pack',
         [string]$PackRoot = '',
@@ -406,6 +599,7 @@ function Invoke-WorkerRecovery {
         [hashtable]$FixtureBranchObservation = $null,
         [hashtable]$FixtureBranchState = $null,
         [array]$FixtureWorktreeRecords = $null,
+        $FixtureWorkerStatusStore = $null,
         [switch]$FixtureMode,
         [switch]$SkipSpawn,
         [switch]$TaskClosed,
@@ -530,6 +724,7 @@ function Invoke-WorkerRecovery {
     $selectionSnapshot = @{
         canonicalPath  = $pathCanon.canonical
         sessionId      = $SessionId
+        generationToken = $GenerationToken
         session        = $Session
         projectId      = $ProjectId
         worktreeRecord = $selectionWorktreeRecord
@@ -537,7 +732,28 @@ function Invoke-WorkerRecovery {
     }
     $currentSnapshot = Get-WorkerRecoveryPostClaimSnapshot -SessionId $SessionId `
         -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase -RepoRoot $RepoRoot `
-        -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureMode:$FixtureMode
+        -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureWorkerStatusStore $FixtureWorkerStatusStore -FixtureMode:$FixtureMode
+
+    $expectedGenerationToken = [string]$GenerationToken
+    if (-not [string]::IsNullOrWhiteSpace($expectedGenerationToken)) {
+        $expectedGenerationToken = $expectedGenerationToken.Trim()
+    }
+    $requireGenerationFence = ($Trigger -eq 'reconcile_dead_worker') -or [bool]$expectedGenerationToken
+    if ($requireGenerationFence) {
+        if (-not $expectedGenerationToken) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+            return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
+        }
+        $currentGenerationToken = Resolve-WorkerRecoveryGenerationToken -Snapshot $currentSnapshot
+        if (-not $currentGenerationToken) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+            return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
+        }
+        if ($currentGenerationToken -ne $expectedGenerationToken) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+            return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'generation_changed' }
+        }
+    }
 
     $revalidate = Invoke-WorkerRecoveryCli -Subcommand 'evaluatePostClaim' -Payload @{
         selection = $selectionSnapshot
@@ -646,7 +862,7 @@ function Invoke-WorkerRecovery {
         }
         $spawnSnapshot = Get-WorkerRecoveryPostClaimSnapshot -SessionId $SessionId `
             -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase -RepoRoot $RepoRoot `
-            -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureMode:$FixtureMode
+            -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureWorkerStatusStore $FixtureWorkerStatusStore -FixtureMode:$FixtureMode
         $liveOwnerCheck = Get-WorkerRecoveryLiveDifferentOwner -RecoverySessionId $SessionId `
             -CanonicalPath $pathCanon.canonical -FixtureMode:$FixtureMode
         $freshness = Invoke-WorkerRecoveryCli -Subcommand 'evaluateSpawnFreshness' -Payload @{

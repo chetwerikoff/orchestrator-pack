@@ -259,3 +259,19 @@ describe('red-flag marker vocabulary (#574 / #187 verbatim)', () => {
     }
   });
 });
+
+describe('durable-state-evidence marker distinguishes a review-artifact ledger from durable production state', () => {
+  const patterns = MARKER_HEURISTICS['durable-state-evidence'];
+
+  it('does not fire on bare "finding-disposition ledger" review-governance prose', () => {
+    expect(patterns.some((pattern) => pattern.test('This draft amends the finding-disposition ledger rules.'))).toBe(
+      false,
+    );
+  });
+
+  it('still fires on a durable evidence ledger / provenance / audit-log mechanism', () => {
+    expect(patterns.some((pattern) => pattern.test('the worker mutates an evidence ledger'))).toBe(true);
+    expect(patterns.some((pattern) => pattern.test('records durable provenance'))).toBe(true);
+    expect(patterns.some((pattern) => pattern.test('appends to an audit log'))).toBe(true);
+  });
+});
