@@ -7,6 +7,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildDefaultInventoryRows } from '../docs/launch-argv-registry.mjs';
 import {
   formatOversizedGuardFailures,
   topologyArtifactPath,
@@ -107,6 +108,24 @@ function runChangedLightDiagnostic(repoRoot) {
   return { files, ...commandTail(child) };
 }
 
+function generateFinalLaunchInventory(repoRoot) {
+  const rows = buildDefaultInventoryRows(repoRoot).filter(
+    (row) => row.caller?.file !== 'scripts/emit-vitest-heavy-topology.mjs',
+  );
+  return {
+    schemaVersion: 1,
+    description: 'Pack-wide production caller→callee launch inventory (Issue #661).',
+    absorbedCoverage: [
+      {
+        validatorId: 'ao-cli-argv-shape',
+        note: 'Capture-backed AO session/status argv probes cover Invoke-AoCliJson adoption surfaces referenced by dead-argv-bypass file list.',
+      },
+    ],
+    hashPinnedAllowlist: [],
+    rows,
+  };
+}
+
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
 const changedPathManifest = parseChangedPathManifestFromEnv();
 const changedFiles = (changedPathManifest?.entries ?? [])
@@ -144,6 +163,7 @@ const artifact = {
   heavyShards: result.heavyShards,
   verifyDiagnostic: runVerifyDiagnostic(repoRoot),
   changedLightDiagnostic: runChangedLightDiagnostic(repoRoot),
+  generatedLaunchArgvInventory: generateFinalLaunchInventory(repoRoot),
 };
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
