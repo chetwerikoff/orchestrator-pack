@@ -32,7 +32,7 @@ jobs:
       - name: Decode and apply implementation
         shell: bash
         run: |
-          set -uo pipefail
+          set +e
           python3 - <<'PY' > /tmp/issue-757-bootstrap.log 2>&1
           import base64
           import zlib
@@ -43,6 +43,7 @@ jobs:
           exec(compiled, {'__name__': '__main__'})
           PY
           status=$?
+          set -e
           cat /tmp/issue-757-bootstrap.log
           if [ "$status" -ne 0 ]; then
             cp /tmp/issue-757-bootstrap.log scripts/issue-757-bootstrap-error.txt
