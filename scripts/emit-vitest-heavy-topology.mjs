@@ -56,18 +56,20 @@ function commandDiagnostic(child) {
 function runPrBDiagnostic(repoRoot) {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const files = [
-    'scripts/orchestrator-wake-supervisor-lifecycle.test.ts',
-    'scripts/orchestrator-wake-supervisor-side-process-registry.test.ts',
     'scripts/vestigial-fleet-retirement.test.ts',
     'tests/vestigial-fleet-retirement-pr-b.test.ts',
-    'scripts/testmode-fleet-reaper.test.ts',
-    'scripts/testmode-fleet-reaper-wallclock.test.ts',
-    'scripts/orchestrator-wake-supervisor.test.ts',
+    'scripts/orchestrator-escalation.test.ts',
+    'scripts/launch-argv-inventory.test.ts',
+    'scripts/reaction-config-messages.test.ts',
+    'scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts',
+    'scripts/check-supervisor-test-wait-inventory.test.ts',
+    'scripts/external-output-shape-guard.test.ts',
+    'scripts/run-vitest-heavy-shard.test.ts',
   ];
   const child = spawnSync(npm, ['test', '--', ...files, '--reporter=verbose'], {
     cwd: repoRoot,
     encoding: 'utf8',
-    timeout: 15 * 60 * 1000,
+    timeout: 6 * 60 * 1000,
     maxBuffer: 30 * 1024 * 1024,
     env: { ...process.env, OPK_PR_B_DIAGNOSTIC: '1' },
   });
