@@ -24,7 +24,10 @@ $bindingFiles = @(
     'scripts/orchestrator-wake-supervisor.ps1',
     'scripts/launch-argv-inventory.json',
     'scripts/orchestrator-escalation-emitter-inventory.json',
-    'scripts/orchestrator-message-audit-roots.manifest.json'
+    'scripts/orchestrator-message-audit-roots.manifest.json',
+    'scripts/orchestrator-message-protected-runtime.manifest.json',
+    'scripts/orchestrator-message-send-helpers.manifest.json',
+    'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json'
 )
 
 $failures = [System.Collections.Generic.List[object]]::new()
