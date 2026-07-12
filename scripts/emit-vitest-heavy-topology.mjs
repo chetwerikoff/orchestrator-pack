@@ -98,44 +98,54 @@ if (!prBDiagnosticMode && result.ok && shouldMeasurePreTopology(repoRoot, laneOp
   }
 }
 
-if (!result.ok) {
+const diagnostic = prBDiagnosticMode ? runPrBDiagnostic(repoRoot) : null;
+if (!result.ok && !prBDiagnosticMode) {
   console.error(result.errors.join('\n'));
   process.exit(1);
 }
 
+const topology = result.ok
+  ? result.topology
+  : {
+      heavyShardCount: 0,
+      heavyShardMatrix: [],
+      fallbackClassification: 'diagnostic-planner-failure',
+      plannerErrors: result.errors,
+    };
 const artifactPath = topologyArtifactPath(repoRoot);
 const artifact = {
-  ...result.topology,
-  discovered: result.discovered,
-  fullDiscovered: result.fullDiscovered ?? result.discovered,
-  heavyFiles: result.heavy,
-  lightFiles: result.light,
-  postMergeWallclockFiles: result.postMergeWallclock,
-  parkedFiles: result.parked,
-  heavyShards: result.heavyShards,
+  ...topology,
+  discovered: result.discovered ?? [],
+  fullDiscovered: result.fullDiscovered ?? result.discovered ?? [],
+  heavyFiles: result.heavy ?? [],
+  lightFiles: result.light ?? [],
+  postMergeWallclockFiles: result.postMergeWallclock ?? [],
+  parkedFiles: result.parked ?? [],
+  heavyShards: result.heavyShards ?? [],
+  plannerErrors: result.ok ? [] : result.errors,
   prBDiagnostic: prBDiagnosticMode
-    ? { measurementError, changedSuites: runPrBDiagnostic(repoRoot) }
+    ? { measurementError, changedSuites: diagnostic }
     : null,
 };
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
-if (result.topology.underProvisioned) {
+if (result.ok && result.topology.underProvisioned) {
   console.warn(
     `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
   );
 }
-if (result.topology.fallbackClassification === 'fixed-fallback') {
+if (result.ok && result.topology.fallbackClassification === 'fixed-fallback') {
   console.warn(
     `[WARN] heavy shard topology using fixed fallback count ${result.topology.heavyShardCount} (${result.topology.weightInputReason})`,
   );
 }
 
-const guardFailures = formatOversizedGuardFailures(result);
+const guardFailures = result.ok ? formatOversizedGuardFailures(result) : [];
 if (!prBDiagnosticMode && failOnGuard && guardFailures.length > 0) {
   console.error(guardFailures.join('\n'));
   process.exit(1);
 }
-if (ghaOutput) writeGhaOutput(result.topology);
+if (ghaOutput) writeGhaOutput(topology);
 
 const logArtifact = {
   ...artifact,
