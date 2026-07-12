@@ -100,29 +100,11 @@ Write-Output 'ok'
 `,
     },
     {
-      id: 'review-finding-delivery-confirm',
-      script: `
-$ErrorActionPreference = 'Stop'
-. '${path.join(libDir, 'Gh-PrChecks.ps1').replace(/'/g, "''")}'
-$openPrs = ConvertTo-GhOpenPrArray -OpenPrs $null
-Write-Output 'ok'
-`,
-    },
-    {
       id: 'ci-failure-notification-reconcile',
       script: `
 $ErrorActionPreference = 'Stop'
 . '${path.join(libDir, 'Get-ReconcileChecksByPr.ps1').replace(/'/g, "''")}'
 $bundle = Get-ReconcileChecksByPr -RepoRoot ${psString(scriptsDir)} -OpenPrs $null
-Write-Output 'ok'
-`,
-    },
-    {
-      id: 'ci-failure-notification-reaction',
-      script: `
-$ErrorActionPreference = 'Stop'
-. '${path.join(libDir, 'Gh-PrChecks.ps1').replace(/'/g, "''")}'
-$openPrs = ConvertTo-GhOpenPrArray -OpenPrs $null
 Write-Output 'ok'
 `,
     },
