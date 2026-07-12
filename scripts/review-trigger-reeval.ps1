@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Scoped deferred-head review re-evaluation loop (Issue #235).
+  Scoped deferred-head review re-evaluation loop (Issues #235, #748).
 
 .DESCRIPTION
   Supervised side-effecting child. Watches recently-deferred-not-ready PR heads and
@@ -107,23 +107,170 @@ function Get-ReviewTriggerReevalSnapshot {
     }
 }
 
+function Get-ReviewTriggerReevalActiveWatchMap {
+    param([hashtable]$WatchMap)
+
+    $active = @{}
+    foreach ($entry in $WatchMap.GetEnumerator()) {
+        $watch = $entry.Value
+        if (-not $watch) { continue }
+        if ($watch.status -in @('expired', 'discarded', 'triggered')) { continue }
+        $active[[string]$entry.Key] = $watch
+    }
+    return $active
+}
+
 function Get-ReviewTriggerReevalScopedOpenPrsFromGitHub {
     param([hashtable]$WatchMap)
 
-    $activePrNumbers = @{}
-    foreach ($entry in $WatchMap.Values) {
-        if (-not $entry) { continue }
-        if ($entry.status -eq 'expired' -or $entry.status -eq 'discarded' -or $entry.status -eq 'triggered') {
-            continue
-        }
-        $activePrNumbers[[string][int]$entry.prNumber] = $true
+    $active = Get-ReviewTriggerReevalActiveWatchMap -WatchMap $WatchMap
+    if ($active.Count -eq 0) { return @() }
+
+    $openPrList = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot `
+            -Consumer 'review-trigger-reeval-terminal-classification')
+    $trackedNumbers = @{}
+    foreach ($entry in $active.GetEnumerator()) {
+        $prNumber = [int]$entry.Value.prNumber
+        if ($prNumber -gt 0) { $trackedNumbers[[string]$prNumber] = $true }
     }
-    if ($activePrNumbers.Count -eq 0) {
-        return @()
+    return @($openPrList | Where-Object { $trackedNumbers.ContainsKey([string][int]$_.number) })
+}
+
+function Get-ReviewTriggerReevalScopedPrStateSnapshot {
+    param([hashtable]$WatchMap)
+
+    $active = Get-ReviewTriggerReevalActiveWatchMap -WatchMap $WatchMap
+    if ($active.Count -eq 0) {
+        return @{
+            authoritative     = $true
+            reasonCode        = 'no_active_watches'
+            openPrs           = @()
+            terminalWatchKeys = @()
+            unknownWatchKeys  = @()
+        }
     }
 
-    $openPrList = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot)
-    return @($openPrList | Where-Object { $activePrNumbers.ContainsKey([string][int]$_.number) })
+    try {
+        $repoTickRecord = $null
+        if (Get-Command Ensure-GhFleetRepoTickSnapshot -ErrorAction SilentlyContinue) {
+            $repoTickRecord = Ensure-GhFleetRepoTickSnapshot -RepoRoot $RepoRoot `
+                -Consumer 'review-trigger-reeval-terminal-classification' -DataClass 'open_pr_list'
+        }
+        $openPrList = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot `
+                -Consumer 'review-trigger-reeval-terminal-classification')
+        $trackedNumbers = @{}
+        foreach ($entry in $active.GetEnumerator()) {
+            $prNumber = [int]$entry.Value.prNumber
+            if ($prNumber -gt 0) { $trackedNumbers[[string]$prNumber] = $true }
+        }
+        $scopedOpenPrs = @($openPrList | Where-Object { $trackedNumbers.ContainsKey([string][int]$_.number) })
+
+        if ($repoTickRecord) {
+            $freshnessCommand = Get-Command Test-GhFleetRepoTickGenerationFresh -ErrorAction SilentlyContinue
+            if (-not $freshnessCommand) {
+                return @{
+                    authoritative     = $false
+                    reasonCode        = 'repo_tick_freshness_unknown'
+                    openPrs           = $scopedOpenPrs
+                    terminalWatchKeys = @()
+                    unknownWatchKeys  = @($active.Keys | Sort-Object -Unique)
+                }
+            }
+            $intervalSeconds = Get-GhFleetRepoTickIntervalSeconds
+            if (-not (Test-GhFleetRepoTickGenerationFresh -Record $repoTickRecord -IntervalSeconds $intervalSeconds)) {
+                return @{
+                    authoritative     = $false
+                    reasonCode        = 'repo_tick_snapshot_stale'
+                    openPrs           = $scopedOpenPrs
+                    terminalWatchKeys = @()
+                    unknownWatchKeys  = @($active.Keys | Sort-Object -Unique)
+                }
+            }
+        }
+
+        $openNumbers = @{}
+        foreach ($pr in @($openPrList)) {
+            $number = [int]$pr.number
+            if ($number -gt 0) { $openNumbers[[string]$number] = $true }
+        }
+        $terminalKeys = @()
+        foreach ($entry in $active.GetEnumerator()) {
+            $prNumber = [int]$entry.Value.prNumber
+            if ($prNumber -le 0 -or -not $openNumbers.ContainsKey([string]$prNumber)) {
+                $terminalKeys += [string]$entry.Key
+            }
+        }
+        return @{
+            authoritative     = $true
+            reasonCode        = 'authoritative_open_pr_snapshot'
+            openPrs           = $scopedOpenPrs
+            terminalWatchKeys = @($terminalKeys | Sort-Object -Unique)
+            unknownWatchKeys  = @()
+        }
+    }
+    catch {
+        return @{
+            authoritative     = $false
+            reasonCode        = 'github_snapshot_unknown'
+            openPrs           = @()
+            terminalWatchKeys = @()
+            unknownWatchKeys  = @($active.Keys | Sort-Object -Unique)
+        }
+    }
+}
+
+function Get-ReviewTriggerReevalFixturePrStateSnapshot {
+    param(
+        [hashtable]$WatchMap,
+        [hashtable]$FixturePayload
+    )
+
+    $active = Get-ReviewTriggerReevalActiveWatchMap -WatchMap $WatchMap
+    $terminalKeys = if ($FixturePayload.ContainsKey('terminalWatchKeys')) { @($FixturePayload['terminalWatchKeys']) } else { @() }
+    $unknownKeys = if ($FixturePayload.ContainsKey('unknownWatchKeys')) { @($FixturePayload['unknownWatchKeys']) } else { @() }
+    $authoritativeSpecified = $FixturePayload.ContainsKey('prSnapshotAuthoritative')
+    $authoritative = $authoritativeSpecified -and [bool]$FixturePayload['prSnapshotAuthoritative']
+    if ($terminalKeys.Count -eq 0 -and $unknownKeys.Count -eq 0 -and $authoritativeSpecified) {
+        if ($authoritative) {
+            $openNumbers = @{}
+            foreach ($pr in @($FixturePayload.openPrs)) {
+                $number = [int]$pr.number
+                if ($number -gt 0) { $openNumbers[[string]$number] = $true }
+            }
+            foreach ($entry in $active.GetEnumerator()) {
+                $prNumber = [int]$entry.Value.prNumber
+                if ($prNumber -le 0 -or -not $openNumbers.ContainsKey([string]$prNumber)) {
+                    $terminalKeys += [string]$entry.Key
+                }
+            }
+        }
+        else {
+            $unknownKeys = @($active.Keys)
+        }
+    }
+    return @{
+        authoritative     = $authoritative
+        reasonCode        = if ($unknownKeys.Count -gt 0) { 'fixture_snapshot_unknown' } else { 'fixture_snapshot' }
+        openPrs           = @($FixturePayload.openPrs)
+        terminalWatchKeys = @($terminalKeys | Where-Object { $_ } | Sort-Object -Unique)
+        unknownWatchKeys  = @($unknownKeys | Where-Object { $_ } | Sort-Object -Unique)
+    }
+}
+
+function Remove-ReviewTriggerReevalWatchKeysFromMap {
+    param(
+        [hashtable]$WatchMap,
+        [string[]]$Keys
+    )
+
+    $copy = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $WatchMap
+    foreach ($key in @($Keys)) {
+        $normalized = [string]$key
+        if ($normalized -and $copy.ContainsKey($normalized)) {
+            $copy.Remove($normalized)
+        }
+    }
+    return $copy
 }
 
 function Invoke-ReviewTriggerReevalTick {
@@ -145,8 +292,17 @@ function Invoke-ReviewTriggerReevalTick {
     else {
         [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
+    $terminalWatchKeys = @()
+    $unknownWatchKeys = @()
 
     if ($FixturePayload) {
+        if ($FixturePayload.watchEntries) {
+            $watchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $FixturePayload.watchEntries
+        }
+        $prStateSnapshot = Get-ReviewTriggerReevalFixturePrStateSnapshot -WatchMap $watchMap -FixturePayload $FixturePayload
+        $terminalWatchKeys = @($prStateSnapshot.terminalWatchKeys)
+        $unknownWatchKeys = @($prStateSnapshot.unknownWatchKeys)
+        $watchMap = Remove-ReviewTriggerReevalWatchKeysFromMap -WatchMap $watchMap -Keys $terminalWatchKeys
         $snapshot = @{
             openPrs                       = @($FixturePayload.openPrs)
             reviewRuns                    = @($FixturePayload.reviewRuns)
@@ -154,9 +310,6 @@ function Invoke-ReviewTriggerReevalTick {
             ciChecksByPr                  = $FixturePayload.ciChecksByPr
             requiredCheckNamesByPr        = $FixturePayload.requiredCheckNamesByPr
             requiredCheckLookupFailedByPr = $FixturePayload.requiredCheckLookupFailedByPr
-        }
-        if ($FixturePayload.watchEntries) {
-            $watchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $FixturePayload.watchEntries
         }
     }
     else {
@@ -176,8 +329,17 @@ function Invoke-ReviewTriggerReevalTick {
             }
         }
         else {
-            $scopedPrs = Get-ReviewTriggerReevalScopedOpenPrsFromGitHub -WatchMap $watchMap
-            $snapshot = Get-ReviewTriggerReevalSnapshot -OpenPrs $scopedPrs -ScopedOnly
+            $prStateSnapshot = Get-ReviewTriggerReevalScopedPrStateSnapshot -WatchMap $watchMap
+            $terminalWatchKeys = @($prStateSnapshot.terminalWatchKeys)
+            $unknownWatchKeys = @($prStateSnapshot.unknownWatchKeys)
+            $watchMap = Remove-ReviewTriggerReevalWatchKeysFromMap -WatchMap $watchMap -Keys $terminalWatchKeys
+            if ($terminalWatchKeys.Count -gt 0) {
+                Write-ReviewTriggerReevalLog "terminal watch eviction planned count=$($terminalWatchKeys.Count)"
+            }
+            if ($unknownWatchKeys.Count -gt 0) {
+                Write-ReviewTriggerReevalLog "watch PR classification unknown; retaining count=$($unknownWatchKeys.Count) reason=$($prStateSnapshot.reasonCode)"
+            }
+            $snapshot = Get-ReviewTriggerReevalSnapshot -OpenPrs @($prStateSnapshot.openPrs) -ScopedOnly
         }
     }
 
@@ -192,6 +354,14 @@ function Invoke-ReviewTriggerReevalTick {
         }
     }
 
+    $snapshotErrorsByKey = @{}
+    if ($FixturePayload -and $FixturePayload.snapshotErrorsByKey) {
+        $snapshotErrorsByKey = Copy-MechanicalJsonMap -Map $FixturePayload.snapshotErrorsByKey
+    }
+    foreach ($key in @($unknownWatchKeys)) {
+        $snapshotErrorsByKey[[string]$key] = $true
+    }
+
     $capCycleState = Get-ReviewCycleCapState -Path (Get-ReviewCycleCapStatePath -ProjectId $ProjectId)
     $planPayload = @{
         watchEntries                  = $watchMap
@@ -202,7 +372,7 @@ function Invoke-ReviewTriggerReevalTick {
         requiredCheckNamesByPr        = $snapshot.requiredCheckNamesByPr
         requiredCheckLookupFailedByPr = $snapshot.requiredCheckLookupFailedByPr
         nowMs                         = $nowMs
-        snapshotErrorsByKey           = if ($FixturePayload.snapshotErrorsByKey) { $FixturePayload.snapshotErrorsByKey } else { @{} }
+        snapshotErrorsByKey           = $snapshotErrorsByKey
         capCycleState                 = $capCycleState
     }
     $issueBodiesByPr = Get-ReviewCycleCapIssueBodiesByPr -OpenPrs @($snapshot.openPrs) -RepoRoot $RepoRoot `
@@ -274,17 +444,30 @@ function Invoke-ReviewTriggerReevalTick {
         }
     }
 
+    $mutation = $null
     if (-not $DryRunMode) {
-        Update-ReviewTriggerReevalWatchStateMerged -Path $watchPath -IncomingWatchEntries $watchEntriesToPersist `
-            -NowMs $nowMs
+        if ($terminalWatchKeys.Count -gt 0) {
+            $mutation = Update-ReviewTriggerReevalWatchStateMutation -Path $watchPath `
+                -IncomingWatchEntries $watchEntriesToPersist -RemoveWatchKeys $terminalWatchKeys -NowMs $nowMs
+        }
+        else {
+            $mutation = Update-ReviewTriggerReevalWatchStateMerged -Path $watchPath `
+                -IncomingWatchEntries $watchEntriesToPersist -NowMs $nowMs
+        }
+        if ($mutation.corruptRemoved -gt 0) {
+            Write-ReviewTriggerReevalLog "bounded corrupt watch cleanup removed=$($mutation.corruptRemoved) retained=$($mutation.corruptRetained)"
+        }
     }
 
     $persistedWatchMap = ConvertTo-ReviewTriggerReevalWatchMap -WatchEntries $watchEntriesToPersist
+    $persistedCount = if ($mutation) { [int]$mutation.watchCount } else { $persistedWatchMap.Count }
     return @{
-        started      = $started
-        actions      = @($plan.actions)
-        watchEntries = $watchEntriesToPersist
-        watchCount   = $persistedWatchMap.Count
+        started         = $started
+        actions         = @($plan.actions)
+        watchEntries    = $watchEntriesToPersist
+        watchCount      = $persistedCount
+        terminalEvicted = @($terminalWatchKeys).Count
+        unknownRetained = @($unknownWatchKeys).Count
     }
 }
 
@@ -299,7 +482,7 @@ $reviewCommand = Get-PackReviewCommandFromYaml -YamlPath $configYaml
 $claimNamespace = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId
 Get-ReviewStartClaimStaleMinutes -LogWriter { param($m) Write-ReviewTriggerReevalLog $m } | Out-Null
 Write-ReviewTriggerReevalLog "starting (project=$ProjectId, poll=${PollSeconds}s, stateRoot=$stateRoot, claimNamespace=$claimNamespace, dryRun=$DryRun, once=$Once, fixture=$FixturePath)"
-Write-ReviewTriggerReevalLog "pollClass=scoped_deferred_head_watch windowMs=300000 incidentDelayMs=77000"
+Write-ReviewTriggerReevalLog 'pollClass=scoped_deferred_head_watch windowMs=300000 incidentDelayMs=77000'
 
 if ($FixturePath) {
     $payload = Get-FixtureReviewTriggerReevalPayload -Path $FixturePath
@@ -308,7 +491,7 @@ if ($FixturePath) {
     }
     $result = Invoke-ReviewTriggerReevalTick -StateRoot $stateRoot -ReviewCommand $reviewCommand `
         -ProjectId $ProjectId -DryRunMode:$DryRun -FixturePayload $payload
-    Write-ReviewTriggerReevalLog "fixture tick complete (started=$($result.started))"
+    Write-ReviewTriggerReevalLog "fixture tick complete (started=$($result.started), terminalEvicted=$($result.terminalEvicted), unknownRetained=$($result.unknownRetained))"
     exit 0
 }
 
@@ -322,7 +505,7 @@ try {
         try {
             $result = Invoke-ReviewTriggerReevalTick -StateRoot $stateRoot -ReviewCommand $reviewCommand `
                 -ProjectId $ProjectId -DryRunMode:$DryRun
-            Write-ReviewTriggerReevalLog "tick complete (started=$($result.started), watches=$($result.watchCount))"
+            Write-ReviewTriggerReevalLog "tick complete (started=$($result.started), watches=$($result.watchCount), terminalEvicted=$($result.terminalEvicted), unknownRetained=$($result.unknownRetained))"
             Write-OrchestratorSideProcessTickSuccess -ChildId 'review-trigger-reeval'
         }
         catch {

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "worker-status-diagnosis/v1",
+  "issueNumber": 748,
+  "capturedAt": "2026-07-11T14:45:45Z",
+  "evidenceSource": "issue-748-live-observation",
+  "observedBranch": "main",
+  "sanitized": true,
+  "observations": {
+    "storeRecordCount": 0,
+    "storeFileBytes": 133,
+    "reconcileTickObserved": true,
+    "reconcileTickIntervalSeconds": 20,
+    "liveSessionCount": {
+      "value": 0,
+      "confidence": "fleet-down-window"
+    },
+    "killSwitch": {
+      "outcome": "indeterminate",
+      "reasonCode": "not_distinguishable_before_issue_748"
+    },
+    "siblingReadiness": {
+      "outcome": "indeterminate",
+      "reasonCode": "not_distinguishable_before_issue_748"
+    },
+    "writeResult": {
+      "outcome": "indeterminate",
+      "reasonCode": "silent_write_outcome"
+    }
+  },
+  "conclusion": {
+    "writeDefectReproduced": false,
+    "observabilityDefectReproduced": true,
+    "reasonCode": "empty_fleet_gate_closed_and_write_failure_indistinguishable",
+    "selectedFix": "extract_explicit_refresh_and_emit_bounded_diagnostics"
+  },
+
+  "redactedFields": [
+    "commandLine",
+    "environment",
+    "filesystemPath",
+    "stdout",
+    "stderr",
+    "exceptionText"
+  ]
+}
