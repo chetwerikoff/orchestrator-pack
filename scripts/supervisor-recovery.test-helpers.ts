@@ -35,7 +35,6 @@ export function freezeSupervisorPid(pid: number): void {
   }
 }
 
-
 /** Minimum poll cadence for supervisor/wake integration tests (Issue #693). */
 export const SUPERVISOR_TEST_POLL_INTERVAL_MS = 200;
 
@@ -123,14 +122,14 @@ export async function waitForSupervisorLogMatchFromOffset(
 }
 
 export const managedChildRoles = [
-  'listener',
   'review-trigger-reconcile',
   'review-trigger-reeval',
   'review-ready-report-state-seed',
   'ci-green-wake-reconcile',
+  'worker-message-submit-reconcile',
   'review-start-claim-reaper',
   'ci-failure-notification-reconcile',
-  'worker-message-submit-reconcile',
+  'dead-worker-reconcile',
   'escalation-router',
 ] as const;
 
@@ -150,8 +149,6 @@ export function makeStateDir(): string {
   return dir;
 }
 
-
-
 export function cleanupSupervisorTests(): void {
   thawFrozenSupervisorPids();
   for (const root of tmpRoots.splice(0)) {
@@ -159,6 +156,7 @@ export function cleanupSupervisorTests(): void {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
 function killSupervisorStateDir(root: string): void {
   const fastStopEnv = { ...process.env, AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
   try {
@@ -430,69 +428,18 @@ export async function readMarker(
       continue;
     }
     try {
-      const raw = fs.readFileSync(markerPath, 'utf8').trim();
-      if (!raw) {
-        await sleepMs(50);
-        continue;
-      }
-      return JSON.parse(raw) as WakeMarker;
+      return JSON.parse(fs.readFileSync(markerPath, 'utf8')) as WakeMarker;
     } catch (error) {
       lastError = error;
       await sleepMs(50);
     }
   }
-  throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
-}
-
-export function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function waitForProcessesStopped(
-  pids: number[],
-  timeoutMs = 25_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (pids.every((pid) => !isAlive(pid))) {
-      return;
-    }
-    await sleepMs(SUPERVISOR_TEST_POLL_INTERVAL_MS);
-  }
-  throw new Error(`timed out waiting for processes to stop: ${pids.join(', ')}`);
-}
-
-export function countLogMatches(log: string, pattern: RegExp): number {
-  return (log.match(pattern) ?? []).length;
+  throw lastError instanceof Error ? lastError : new Error(`timed out reading marker ${role}`);
 }
 
 export function readSupervisorLog(stateDir: string): string {
   const logPath = path.join(stateDir, 'supervisor.log');
   return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-}
-
-export function readChildRecovery(
-  stateDir: string,
-  childId: string,
-): Record<string, unknown> {
-  const statePath = path.join(stateDir, 'state.json');
-  if (!fs.existsSync(statePath)) {
-    return {};
-  }
-  const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
-    childRecovery?: Record<string, Record<string, unknown>>;
-  };
-  return state.childRecovery?.[childId] ?? {};
-}
-
-export function readChildPid(stateDir: string, childId: string): number {
-  const pidPath = path.join(stateDir, `${childId}.pid`);
-  return Number(fs.readFileSync(pidPath, 'utf8').trim());
 }
 
 export async function waitForSupervisorLogMatch(
@@ -511,39 +458,53 @@ export async function waitForSupervisorLogMatch(
   throw new Error(`timed out waiting for supervisor log match: ${pattern}`);
 }
 
+export function isAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function waitForProcessesStopped(
+  pids: number[],
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pids.every((pid) => !isAlive(pid))) {
+      return;
+    }
+    await sleepMs(50);
+  }
+}
+
 export async function stopSupervisorChild(
-  child: { kill: (signal: NodeJS.Signals) => void },
+  child: ChildProcess,
   stateDir: string,
   settleMs = 1000,
 ): Promise<void> {
-  child.kill('SIGTERM');
+  let supervisorPid = 0;
   const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
   if (fs.existsSync(supervisorPidPath)) {
-    const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
-    if (supervisorPid > 0) {
-      await waitForProcessesStopped([supervisorPid], settleMs);
-    } else {
-      await sleepMs(settleMs);
-    }
-  } else {
-    await sleepMs(settleMs);
+    supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
   }
-  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
-}
-
-export function runPwsh(script: string): { stdout: string; stderr: string; status: number | null } {
-  const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    timeout: 60_000,
+  if (supervisorPid > 0 && isAlive(supervisorPid)) {
+    try {
+      process.kill(supervisorPid, 'SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+  child.kill('SIGTERM');
+  if (supervisorPid > 0) {
+    await waitForProcessesStopped([supervisorPid], settleMs);
+  }
+  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir], {
+    AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
   });
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    status: result.status,
-  };
-}
-
-export function psString(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
 }
