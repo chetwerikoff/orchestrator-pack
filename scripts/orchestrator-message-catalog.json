@@ -92,7 +92,7 @@
         "summary": "AO 0.10 auto-delivery on review submit (pack first-send reconcile REMOVED)",
         "event": "review_auto_delivery_on_submit"
       },
-      "owning_process": "review-finding-delivery-confirm",
+      "owning_process": "worker-message-submit-reconcile",
       "recipient_key": "specific-session",
       "intent_key": "review-findings-first",
       "mechanism": "ao-auto-delivery",
@@ -111,17 +111,17 @@
         "summary": "Bounded re-delivery when first send unconfirmed",
         "event": "review_delivery_unconfirmed"
       },
-      "owning_process": "review-finding-delivery-confirm",
+      "owning_process": "worker-message-submit-reconcile",
       "recipient_key": "specific-session",
       "intent_key": "review-findings-redelivery",
       "mechanism": "ao-review-send",
       "delivery_idempotency_owner": "issue-281",
       "semantic_dedup_owner": "none",
       "callsite": {
-        "file": "scripts/review-finding-delivery-confirm.ps1",
-        "function": "Invoke-PlannedReviewSend",
+        "file": "docs/review-finding-delivery-confirm.mjs",
+        "function": "getReportState",
         "anchor": "helper-body",
-        "predicateBodyHash": "11550b49a8f0293e"
+        "predicateBodyHash": "d5b4f6bf29eb5586"
       }
     },
     {
@@ -186,9 +186,9 @@
     },
     {
       "code": "E4",
-      "escalation_class_id": "escalation-review-run-recovery",
-      "name": "review-run-recovery",
-      "owning_process": "review-run-recovery",
+      "escalation_class_id": "escalation-review-liveness-recovery",
+      "name": "review-liveness-recovery",
+      "owning_process": "review-start-claim-reaper",
       "route": "llm-orchestrator",
       "delivery_guarantee": "at-least-once-until-ack",
       "dedupe_owner": "issue-641",
@@ -227,7 +227,7 @@
       "code": "E7",
       "escalation_class_id": "escalation-protected-finding",
       "name": "protected-finding",
-      "owning_process": "review-finding-delivery-confirm",
+      "owning_process": "worker-message-submit-reconcile",
       "route": "operator",
       "delivery_guarantee": "at-least-once-operator-inbox",
       "dedupe_owner": "issue-641",

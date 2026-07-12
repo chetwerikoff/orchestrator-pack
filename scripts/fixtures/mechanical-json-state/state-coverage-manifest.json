@@ -8,7 +8,7 @@
     {
       "childId": "review-run-recovery",
       "path": "{project}/code-reviews/review-run-recovery-state.json",
-      "owner": "docs/review-run-recovery.mjs",
+      "owner": "docs/review-run-liveness.mjs",
       "reason": "JS-owned AO runtime recovery state uses atomic file replace outside the PowerShell mechanical state helper"
     },
     {
@@ -84,18 +84,6 @@
         "watchEntries"
       ],
       "actionTracking": true
-    },
-    {
-      "id": "review-finding-delivery-confirm",
-      "stateFile": "orchestrator-review-delivery-confirm-state.json",
-      "callerScripts": [
-        "scripts/review-finding-delivery-confirm.ps1"
-      ],
-      "mapFields": [
-        "runs"
-      ],
-      "actionTracking": true,
-      "bespoke": true
     },
     {
       "id": "worker-message-dispatch-journal",

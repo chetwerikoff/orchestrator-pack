@@ -10,7 +10,7 @@ $matrixClasses = @(
     'escalation-dead-worker-recovery',
     'escalation-claim-store-integrity',
     'escalation-review-trigger-degraded-ci',
-    'escalation-review-run-recovery',
+    'escalation-review-liveness-recovery',
     'escalation-submit-adoption',
     'escalation-handoff-envelope',
     'escalation-protected-finding',

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { getAoProjectDir } from '../../docs/review-run-recovery.mjs';
+import { getAoProjectDir } from '../../docs/review-run-liveness.mjs';
 import { hashIssueBodySnapshot } from './reviewer-contract-mapping.js';
 
 export const BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION = 1;

@@ -36,7 +36,6 @@ and the matching steps in
 | Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs`, `docs/review-head-ready.mjs` (Issues #163, #195) |
 | CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
 | First-send review delivery reconcile | **REMOVED on AO 0.10** — `scripts/review-send-reconcile.ps1` stub only (Issue #202 / #625) |
-| Review-finding delivery confirm | `scripts/review-finding-delivery-confirm.ps1`, `docs/review-finding-delivery-confirm.mjs` (Issue #171) |
 | Worker message submit reconcile | `scripts/worker-message-submit-reconcile.ps1`, `docs/worker-message-submit-reconcile.mjs` (Issue #232) |
 | Terminal mux flood detect | `scripts/terminal-flood-detect.ps1`, `docs/terminal-flood-detect.mjs` (Issue #173; upstream [#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)) |
 | Review-ready false stuck guard | `docs/review-ready-stuck-guard.mjs` (Issue #174; rules in prompts + example YAML) |
@@ -90,7 +89,6 @@ Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (defa
   `scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
 - Review-trigger reconcile: `scripts/review-trigger-reconcile.ps1` (default 10 min).
 - CI-green wake: `scripts/ci-green-wake-reconcile.ps1` (default 1 min).
-- Delivery confirm: `scripts/review-finding-delivery-confirm.ps1` (default 5 min).
 - Worker message submit: `scripts/worker-message-submit-reconcile.ps1` (default 30 s).
 
 Each supports `-Once -DryRun` for fixture/contract checks without live `ao`/`gh`.
@@ -212,34 +210,3 @@ worker: pr_created / ready_for_review (+ CI green)
 - [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) — heartbeat backstop (`orchestrator-wake-heartbeat.ps1`)
 - [#623](https://github.com/chetwerikoff/orchestrator-pack/issues/623) — AO 0.10 review harness + trigger loop
 - [#625](https://github.com/chetwerikoff/orchestrator-pack/issues/625) — review vocabulary migration
-
-## Review run recovery child (Issue #287)
-
-The side-process registry includes `review-run-recovery`, which runs
-`scripts/review-run-recovery.ps1` and writes only local AO review-run state under
-the project `code-reviews` runtime tree. It is side-effect fenced by
-`review-run-recovery-side-effect.lock` and must be supervised exactly once. It
-never starts a replacement review directly; after it terminalizes a dead or stale
-ambiguous run as non-clean `failed`, the existing periodic review-trigger
-reconciler observes that the head is no longer covered by the failed run and owns
-any replacement start through the normal review-start claim.
-
-Post-merge operator checklist:
-
-```powershell
-# Validate source registration/config.
-pwsh -NoProfile -File scripts/check-review-run-recovery.ps1
-# Expected: review-run-recovery registration/config OK
-
-# Operator terminal only: restart AO + wake supervisor so children reload registry/harness.
-ao stop
-ao start
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
-
-# Confirm the supervisor/status output includes exactly one live child:
-#   review-run-recovery ... working
-```
-
-If the child is missing, duplicated, or not live after restart, do not rely on
-crash-safe review recovery; fix the supervisor registry/adoption first.

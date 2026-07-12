@@ -9,7 +9,6 @@
     "scripts/review-orchestrator-loop.test.ts",
     "scripts/review-ready-stuck-guard.test.ts",
     "scripts/review-send-reconcile.test.ts",
-    "scripts/review-finding-delivery-confirm.test.ts",
     "scripts/review-finding-delivery-submit.test.ts",
     "scripts/session-runtime-liveness.test.ts"
   ],
@@ -159,26 +158,6 @@
         },
         {
           "jsonPath": "$.openPr",
-          "command": "gh-pr-open",
-          "variant": "open"
-        },
-        {
-          "jsonPath": "$.reviewRuns[*]",
-          "command": "ao-review-run",
-          "variantFrom": "status"
-        }
-      ]
-    },
-    {
-      "glob": "scripts/fixtures/review-finding-delivery-confirm/*.json",
-      "shapes": [
-        {
-          "jsonPath": "$.sessions[*].reports[*]",
-          "command": "ao-worker-report",
-          "variantFrom": "reportState"
-        },
-        {
-          "jsonPath": "$.openPrs[*]",
           "command": "gh-pr-open",
           "variant": "open"
         },

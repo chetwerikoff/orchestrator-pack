@@ -890,7 +890,7 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
   ],
   417: [
     'scripts/lib/Review-StartClaim.ps1',
-    'scripts/review-run-recovery.ps1',
+    'scripts/review-start-claim-reaper.ps1',
   ],
   721: [
     'scripts/orchestrator-message-protected-runtime.manifest.json',
@@ -899,7 +899,7 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
     'scripts/review-send-reconcile.ps1',
-    'scripts/review-finding-delivery-confirm.ps1',
+    'scripts/worker-message-submit-reconcile.ps1',
     'scripts/journaled-worker-send.ps1',
     'scripts/lib/Worker-NudgeClaim.ps1',
     'scripts/lib/Worker-AutonomousNudgeGate.ps1',
@@ -915,7 +915,7 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/review-trigger-reeval.ps1',
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/review-send-reconcile.ps1',
-    'scripts/review-finding-delivery-confirm.ps1',
+    'scripts/worker-message-submit-reconcile.ps1',
   ],
   619: [
     'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
@@ -928,13 +928,13 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
     'scripts/review-trigger-reconcile.ps1',
-    'scripts/review-run-recovery.ps1',
+    'scripts/review-start-claim-reaper.ps1',
     'scripts/worker-message-submit-reconcile.ps1',
   ],
   624: [
     'scripts/orchestrator-side-process-registry.json',
-    'scripts/review-stuck-run-reaper.ps1',
-    'scripts/review-run-recovery.ps1',
+    'scripts/review-start-claim-reaper.ps1',
+    'scripts/worker-message-submit-reconcile.ps1',
     'scripts/orchestrator-message-audit-roots.manifest.json',
     'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json',
   ],

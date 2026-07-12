@@ -6,13 +6,9 @@
     "review-trigger-reeval",
     "review-ready-report-state-seed",
     "ci-green-wake-reconcile",
-    "review-finding-delivery-confirm",
     "worker-message-submit-reconcile",
-    "review-run-recovery",
-    "review-stuck-run-reaper",
     "review-start-claim-reaper",
     "ci-failure-notification-reconcile",
-    "ci-failure-notification-reaction",
     "dead-worker-reconcile",
     "escalation-router"
   ],
@@ -90,16 +86,6 @@
       "stallGraceMultiplier": 4
     },
     {
-      "id": "review-finding-delivery-confirm",
-      "script": "review-finding-delivery-confirm.ps1",
-      "sideEffecting": true,
-      "sideEffectLockFile": "delivery-confirm-side-effect.lock",
-      "requiresOrchestratorSession": false,
-      "passProjectId": true,
-      "cadenceSeconds": 300,
-      "stallGraceMultiplier": 4
-    },
-    {
       "id": "worker-message-submit-reconcile",
       "script": "worker-message-submit-reconcile.ps1",
       "sideEffecting": true,
@@ -107,26 +93,6 @@
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 30,
-      "stallGraceMultiplier": 4
-    },
-    {
-      "id": "review-run-recovery",
-      "script": "review-run-recovery.ps1",
-      "sideEffecting": true,
-      "sideEffectLockFile": "review-run-recovery-side-effect.lock",
-      "requiresOrchestratorSession": false,
-      "passProjectId": true,
-      "cadenceSeconds": 60,
-      "stallGraceMultiplier": 4
-    },
-    {
-      "id": "review-stuck-run-reaper",
-      "script": "review-stuck-run-reaper.ps1",
-      "sideEffecting": true,
-      "sideEffectLockFile": "review-stuck-run-reaper-side-effect.lock",
-      "requiresOrchestratorSession": false,
-      "passProjectId": true,
-      "cadenceSeconds": 60,
       "stallGraceMultiplier": 4
     },
     {
@@ -144,15 +110,6 @@
       "script": "ci-failure-notification-reconcile.ps1",
       "sideEffecting": true,
       "sideEffectLockFile": "ci-failure-notification-side-effect.lock",
-      "requiresOrchestratorSession": false,
-      "passProjectId": true,
-      "cadenceSeconds": 60,
-      "stallGraceMultiplier": 4
-    },
-    {
-      "id": "ci-failure-notification-reaction",
-      "script": "ci-failure-notification-reaction.ps1",
-      "sideEffecting": false,
       "requiresOrchestratorSession": false,
       "passProjectId": true,
       "cadenceSeconds": 60,

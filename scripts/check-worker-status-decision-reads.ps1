@@ -12,7 +12,6 @@ $consumers = @{
     'scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1'  = 'Get-WorkerStatusDecisionSessionsIncludingTerminated'
     'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1'      = 'Get-WorkerStatusDecisionSessions'
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1'            = 'Get-WorkerStatusDecisionSessions'
-    'scripts/review-finding-delivery-confirm.ps1'         = 'Get-WorkerStatusDecisionSessions'
     'scripts/ci-green-wake-reconcile.ps1'                 = 'Get-WorkerStatusDecisionSessions'
     'scripts/worker-message-submit-reconcile.ps1'         = 'Get-WorkerStatusDecisionSessions'
     'scripts/dead-worker-reconcile.ps1'                   = 'Get-WorkerStatusDecisionSessionsIncludingTerminated'

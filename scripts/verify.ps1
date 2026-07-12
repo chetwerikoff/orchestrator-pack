@@ -711,24 +711,23 @@ else {
     Add-Failure 'Missing AO 0.10 review producer data contract check script (Issue #626)'
 }
 Write-Host ''
-Write-Host '== AO 0.10 stuck review-run reaper (Issue #624) =='
-$ao010StuckReaperCheck = Join-Path $Root 'scripts/check-review-stuck-run-reaper.ps1'
-if (Test-Path -LiteralPath $ao010StuckReaperCheck -PathType Leaf) {
-    & $ao010StuckReaperCheck
+Write-Host '== vestigial fleet retirement guard (Issue #745) =='
+$vestigialFleetRetirementCheck = Join-Path $Root 'scripts/check-vestigial-fleet-children-retired.ps1'
+if (Test-Path -LiteralPath $vestigialFleetRetirementCheck -PathType Leaf) {
+    & $vestigialFleetRetirementCheck
     if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-review-stuck-run-reaper.ps1' 'PASS' 'completed'
+        Write-Check 'scripts/check-vestigial-fleet-children-retired.ps1' 'PASS' 'completed'
     }
     else {
-        Write-Check 'scripts/check-review-stuck-run-reaper.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'AO 0.10 stuck review-run reaper checks failed (Issue #624)'
+        Write-Check 'scripts/check-vestigial-fleet-children-retired.ps1' 'FAIL' "exit=$LASTEXITCODE"
+        Add-Failure 'vestigial fleet retirement guard failed (Issue #745)'
     }
 }
 else {
-    Write-Check 'scripts/check-review-stuck-run-reaper.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing AO 0.10 stuck review-run reaper check script (Issue #624)'
+    Write-Check 'scripts/check-vestigial-fleet-children-retired.ps1' 'FAIL' 'missing'
+    Add-Failure 'Missing vestigial fleet retirement guard (Issue #745)'
 }
 
-Write-Host ''
 Write-Host '== AO 0.10 review vocabulary (Issue #625) =='
 $review010VocabularyCheck = Join-Path $Root 'scripts/check-review-010-vocabulary.ps1'
 if (Test-Path -LiteralPath $review010VocabularyCheck -PathType Leaf) {
@@ -887,23 +886,6 @@ else {
 }
 
 Write-Host ''
-Write-Host '== review-finding delivery confirmation (Issue #171) =='
-$deliveryConfirmCheck = Join-Path $Root 'scripts/check-review-finding-delivery-confirm.ps1'
-if (Test-Path -LiteralPath $deliveryConfirmCheck -PathType Leaf) {
-    & $deliveryConfirmCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'review-finding delivery confirmation checks failed (Issue #171)'
-    }
-}
-else {
-    Write-Check 'scripts/check-review-finding-delivery-confirm.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing review-finding delivery confirmation check script (Issue #171)'
-}
-
 Write-Host '== scripted review confirmed-delivery gate (Issue #669) =='
 $scriptedDeliveryGateCheck = Join-Path $Root 'scripts/check-scripted-review-confirmed-delivery-gate.ps1'
 if (Test-Path -LiteralPath $scriptedDeliveryGateCheck -PathType Leaf) {
@@ -1820,24 +1802,6 @@ if (Test-Path -LiteralPath $skillPointerDriftCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-skill-pointer-drift.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing skill pointer drift check script (Issue #156)'
-}
-
-Write-Host ''
-Write-Host '== Review run recovery registration (Issue #287) =='
-$reviewRunRecoveryCheck = Join-Path $Root 'scripts/check-review-run-recovery.ps1'
-if (Test-Path -LiteralPath $reviewRunRecoveryCheck -PathType Leaf) {
-    & $reviewRunRecoveryCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-review-run-recovery.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-review-run-recovery.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'Review run recovery registration/config check failed (Issue #287)'
-    }
-}
-else {
-    Write-Check 'scripts/check-review-run-recovery.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing review run recovery check script (Issue #287)'
 }
 
 Write-Host ''

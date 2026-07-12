@@ -29,7 +29,7 @@ import {
 } from '../docs/orchestrator-claimed-review-run.mjs';
 import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
 import { preRunHeadReadyRecheck } from '../docs/review-head-ready.mjs';
-import { fingerprintRun } from '../docs/review-run-recovery.mjs';
+import { fingerprintRun } from '../docs/review-run-liveness.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

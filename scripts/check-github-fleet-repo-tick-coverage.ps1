@@ -8,30 +8,24 @@ $Root = Split-Path -Parent $PSScriptRoot
 
 $ExpectedCoverage = @(
     @{ id = 'ci-failure-notification-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-GhChecksBundleByPr') }
-    @{ id = 'ci-failure-notification-reaction'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList') }
     @{ id = 'ci-green-wake-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-GhChecksBundleByPr') }
-    @{ id = 'review-finding-delivery-confirm'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrListForNumbers') }
     @{ id = 'review-trigger-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReconcileChecksByPr') }
     @{ id = 'review-trigger-reeval'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReviewTriggerReevalChecksByPr') }
     @{ id = 'review-ready-report-state-seed'; classification = 'repo-tick snapshot'; helpers = @('Get-GhFleetRepoTickSnapshotIfConsumable', 'Resolve-ReviewReadyReportStateSeedOpenPrs', 'Get-GhChecksBundleByPr', 'Invoke-ReviewStartScopedGhPrView') }
     @{ id = 'listener'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'heartbeat'; classification = 'out of coverage'; helpers = @() }
-    @{ id = 'review-run-recovery'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'worker-message-submit-reconcile'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'review-start-claim-reaper'; classification = 'out of coverage'; helpers = @() }
 )
 
 $ChildScriptMap = @{
     'ci-failure-notification-reconcile' = 'ci-failure-notification-reconcile.ps1'
-    'ci-failure-notification-reaction'  = 'ci-failure-notification-reaction.ps1'
     'ci-green-wake-reconcile'           = 'ci-green-wake-reconcile.ps1'
-    'review-finding-delivery-confirm'   = 'review-finding-delivery-confirm.ps1'
     'review-trigger-reconcile'          = 'review-trigger-reconcile.ps1'
     'review-trigger-reeval'             = 'review-trigger-reeval.ps1'
     'review-ready-report-state-seed'    = 'review-ready-report-state-seed.ps1'
     'listener'                          = 'orchestrator-wake-listener.ps1'
     'heartbeat'                         = 'orchestrator-wake-heartbeat.ps1'
-    'review-run-recovery'               = 'review-run-recovery.ps1'
     'worker-message-submit-reconcile'   = 'worker-message-submit-reconcile.ps1'
     'review-start-claim-reaper'         = 'review-start-claim-reaper.ps1'
 }

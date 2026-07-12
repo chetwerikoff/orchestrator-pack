@@ -38,10 +38,6 @@
       "anchor": "mark-escalated"
     },
     {
-      "file": "scripts/review-run-recovery.ps1",
-      "anchor": "action.escalated|writeFailure"
-    },
-    {
       "file": "scripts/review-trigger-reconcile.ps1",
       "anchor": "escalate_degraded_ci"
     },

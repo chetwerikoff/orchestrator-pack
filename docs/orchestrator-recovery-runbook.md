@@ -569,9 +569,9 @@ The loop sends only when `needs_triage`, `sentFindingCount: 0`, `openFindingCoun
 `targetSha` equals the PR current head, linked session is live and head-owning (see
 **Session runtime liveness** below), and the PR is not merged. It never calls
 `ao spawn`, `--claim-pr`, `ao session kill`, `ao send`, `ao report`, or `ao review run`.
-After send, `#171` owns confirmation / re-delivery. Prefer the wake supervisor
-(`orchestrator-wake-supervisor.ps1 -Action Status`) so the process is supervised — not
-a hand-started orphan daemon.
+Delivery authority is wrapper stdout, the dispatch journal, and the lifecycle store (Issue #718).
+Prefer the wake supervisor (`orchestrator-wake-supervisor.ps1 -Action Status`) so the
+remaining reconciliation processes are supervised rather than hand-started orphans.
 
 ### Session runtime liveness (`linked_session_runtime_not_alive`; Issue #250)
 
@@ -589,39 +589,6 @@ Present but non-`alive` `runtime` (including empty string or values like `unreac
 **non-live** on all action-producing paths — fail closed even when session `status` is
 `working`.
 
-Run the sender-side delivery-confirmation loop (mechanical; no LLM-orchestrator turn
-required):
-
-```powershell
-cd <orchestrator-pack-root>
-pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1
-```
-
-Dry-run one tick (no `ao review send`, no state write):
-
-```powershell
-pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1 -Once -DryRun
-```
-
-### Defaults and env overrides
-
-| Setting | Default | Env var |
-|---------|---------|---------|
-| Tick interval | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` |
-| Confirmation window (wait before re-deliver) | **5** minutes | `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` |
-| Max best-effort re-deliveries per run | **2** | `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` |
-| Persisted delivery state file | `%TEMP%\orchestrator-review-delivery-confirm-state.json` | `AO_REVIEW_DELIVERY_CONFIRM_STATE` |
-
-Confirmation is credited only when the **linked** worker reports
-`addressing_reviews`, `fixing_ci`, or `ready_for_review` **after** the send timestamp
-— not from `sent_to_agent` alone and not from unrelated `working` activity. When two
-or more unconfirmed runs share the same PR head and session, a single review-round
-report does **not** confirm either run (ambiguous overlap stays unconfirmed).
-
-Re-delivery uses `ao review send <run-id>` to the **existing** linked session when it
-is still live and owns the PR. It never calls `ao spawn`, `--claim-pr`, `ao session kill`,
-or `ao send`. If the linked session is dead/orphan, the loop **escalates immediately**
-(zero re-sends).
 
 ### Submit stuck paste draft (Issues #216 / #232)
 
@@ -629,7 +596,7 @@ Draft submit is owned by **`scripts/worker-message-submit-reconcile.ps1`** (Issu
 extended by #293): a source-agnostic arbiter that presses tmux **Enter only** for
 AO-delivered pending-draft messages (multi-line or >200 chars), regardless of sender. It
 observes AO events, the pack dispatch journal, and review-run state — never pane text.
-Issue #216 submit is folded into this process; delivery-confirm (#171) no longer presses
+Issue #216 submit is folded into this process; no other review-delivery backstop presses
 Enter.
 
 Issue #293 changes the submit contract:
@@ -667,31 +634,6 @@ queued submit is flushed and consumed with **no manual Enter**. Record only sani
 runtime/tmux fingerprints, `busy_enter_enqueued_observed=true`,
 `consumed_after_flush_observed=true`, `no_manual_enter=true`, smoke time, and sanitized run id.
 Do **not** store terminal transcript, session URL, or payload text.
-
-### Escalation message and operator remedy
-
-When confirmation never arrives and re-deliveries are exhausted (or the linked session
-is orphan), the process logs:
-
-```text
-[review-finding-delivery-confirm] ESCALATION: unconfirmed delivery for review run <run-id> (PR #<n>, session <session-id>). Operator remedy: ...
-```
-
-**Operator remedy:**
-
-1. Open the worker session terminal — look for a flooded mux, stuck approval prompt, or
-   unsubmitted paste (see **Terminal Device-Attributes flood** below).
-2. Confirm `ao status --json --reports full`: linked session must be **live** and still
-   on the PR. If `terminated` / `killed` / long `detecting`, do **not** `ao review send`
-   into the orphan run — follow **Orphan review run after worker respawn** below.
-3. After a live session owns the PR: `ao review send <run-id>` manually once, or start a
-   fresh review round (`ao review run` on the live session) per orphan recovery steps.
-4. Inspect persisted state (`AO_REVIEW_DELIVERY_CONFIRM_STATE`) — runs are
-   `confirmed` vs `escalated`; escalated runs are not retried forever.
-
-Distinct from `review-trigger-reconcile.ps1` (Issue #163), which only **starts** review
-runs and never contacts workers.
-
 
 ## Stdout-first review delivery (Issue #718)
 
@@ -888,12 +830,11 @@ again.
 
 Only **after** the channel is verified quiet:
 
-1. Prefer Issue **#171** evidence — use the **unconfirmed** or **escalated** review run id
-   from `scripts/review-finding-delivery-confirm.ps1` logs or
-   `AO_REVIEW_DELIVERY_CONFIRM_STATE`, not a blind resend.
+1. Use the review run id recorded by wrapper stdout, the dispatch journal, or the
+   review-delivery lifecycle store — never a blind resend.
 2. Confirm the linked worker is **live** and owns the PR head (`ao status --json --reports full`).
-3. `ao review send <run-id>` once to the live session, or start a fresh review round if the
-   run is orphan (see **Orphan review run after worker respawn** above).
+3. Re-dispatch once to the live session through the current stdout-first delivery path, or start
+   a fresh review round if the run is orphan (see **Orphan review run after worker respawn** above).
 
 Do not re-deliver while the mux signature is still flagged — duplicates and silent loss
 are both possible.
@@ -1034,33 +975,11 @@ without it the next occurrence is again unattributable.
 
 ## Stuck review run (AO 0.10)
 
-On AO **0.10.x**, review runs live in the daemon database. When a reviewer pane
-crashes or the daemon restarts mid-run, `latestRun.status` can remain `running` for
-the current PR head even though no reviewer is alive. The engine will not supersede
-same-head stuck runs on a fresh trigger — only a head advance clears them.
-
-Pack-owned recovery (Issue **#624**):
-
-- Supervised child: `scripts/review-stuck-run-reaper.ps1` (wake-supervisor registry id
-  `review-stuck-run-reaper`).
-- Detection: age floor (default 600s, override `AO_REVIEW_STUCK_AGE_FLOOR_SECONDS`) +
-  reviewer pane probe via `reviewerHandleId` from `GET /api/v1/sessions/{workerId}/reviews`
-  and tmux / session runtime signals.
-- **Healthy pane always wins** — long legitimate reviews are never classified stuck.
-- **Unknown pane liveness is alert-only** — no destructive recovery call.
-- Recovery requires a supported upstream **fail-stale-run** surface
-  ([AgentWrapper/agent-orchestrator#2070](https://github.com/AgentWrapper/agent-orchestrator/issues/2070)).
-  Until that lands, the reaper emits classified supervisor log lines only.
-
-Operator checks:
-
-```bash
-curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/sessions/<workerId>/reviews"   | jq '{reviewerHandleId, statuses: [.reviews[].latestRun.status]}'
-tmux has-session -t "review-<workerId>" && echo pane=alive || echo pane=absent
-```
-
-Legacy local-store recovery (`scripts/review-run-recovery.ps1`, Issue #287) is
-superseded on AO 0.10 — do not expect it to terminalize daemon-backed runs.
+The wake-supervisor no longer runs a dedicated review-run recovery child. Diagnose daemon-backed
+`latestRun.status=running` rows through the session reviews API and reviewer pane/runtime
+evidence. A healthy reviewer always wins; unknown liveness is alert-only. When the reviewer
+is provably gone, follow **Orphan review run after worker respawn** and the current CLI-first
+recovery procedure. Do not assume that a background child will terminalize the daemon row.
 
 ## After manual PR merge
 

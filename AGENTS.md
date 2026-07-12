@@ -290,8 +290,7 @@ AO-injected `orchestratorRules`.
 
 - **Trigger:** `ao-review run` via `scripts/ao-review.ps1`; discover via `Get-AoReviewRuns` or
   `ao-review list --json`.
-- Backstops: `scripts/review-trigger-reconcile.ps1`,
-  `scripts/review-finding-delivery-confirm.ps1`. `orchestratorRules` is **legacy-import-only** on
+- Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
   AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** — retired `ao review send` / `execute` are
   **REMOVED**.
 - **Pack review stdout (issue #663):** On exit 0, `REVIEW_COMMAND` stdout is non-empty terminal

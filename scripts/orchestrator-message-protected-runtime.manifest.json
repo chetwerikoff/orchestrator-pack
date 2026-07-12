@@ -5,7 +5,7 @@
   "runtimeSendHelpers": [
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
-    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
     "scripts/lib/Submit-WorkerInputDraft.ps1",
     "scripts/journaled-worker-send.ps1"
   ],
@@ -15,9 +15,9 @@
     "scripts/review-trigger-reeval.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
-    "scripts/review-finding-delivery-confirm.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
-    "scripts/review-run-recovery.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
+    "scripts/review-start-claim-reaper.ps1",
     "scripts/orchestrator-wake-supervisor.ps1"
   ],
   "ownerImplementationBindings": [
@@ -27,7 +27,7 @@
   ],
   "prerequisiteDeclaredPaths": [
     "scripts/orchestrator-wake-common.ps1",
-    "scripts/review-run-recovery.ps1",
+    "scripts/review-start-claim-reaper.ps1",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
     "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
     "scripts/orchestrator-wake-supervisor-test-child.ps1",
@@ -38,7 +38,7 @@
     "scripts/lib/Record-WorkerMessageDispatch.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
-    "scripts/review-finding-delivery-confirm.ps1",
+    "scripts/worker-message-submit-reconcile.ps1",
     "scripts/orchestrator-side-process-registry.json",
     "scripts/journaled-worker-send.ps1",
     "docs/ci-failure-notification.mjs",

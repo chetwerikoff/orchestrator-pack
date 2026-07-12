@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { readStdinJson, runAsyncStdinJsonCliMain } from './review-mechanical-cli.mjs';
-import { fingerprintRun, findRunForReviewerSession } from './review-run-recovery.mjs';
+import { fingerprintRun, findRunForReviewerSession } from './review-run-liveness.mjs';
 
 export const FAILURE_EVIDENCE_SCHEMA_VERSION = 1;
 export const DEFAULT_OUTPUT_TAIL_LIMIT = 8192;
