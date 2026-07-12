@@ -67,8 +67,11 @@ jobs:
       - name: Verify implementation
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
+          bash -euo pipefail <<'VERIFY' > /tmp/issue-757-verify.log 2>&1
+          echo '[verify] delivery tests'
           node --test scripts/vitest-runtime-history-delivery.test.mjs
+          echo '[verify] isolated vitest tests'
           cat > vitest.issue757.config.ts <<'EOF'
           import { defineConfig } from 'vitest/config';
           export default defineConfig({
@@ -89,16 +92,34 @@ jobs:
             scripts/pr-scope-check.test.ts \
             scripts/check-ci-pipeline-split.test.ts
           rm vitest.issue757.config.ts
+          echo '[verify] TypeScript'
           npx tsc --project tsconfig.base.json --noEmit
+          echo '[verify] pipeline split PowerShell'
           pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
+          echo '[verify] diff check'
           git diff --check
+          VERIFY
+          status=$?
+          set -e
+          cat /tmp/issue-757-verify.log
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/issue-757-verify.log scripts/issue-757-verify-error.txt
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -- scripts/issue-757-verify-error.txt
+            if ! git diff --cached --quiet; then
+              git commit -m 'Record issue 757 verification diagnostic'
+              git push origin HEAD:agent/issue-757-runtime-history-self-heal
+            fi
+            exit "$status"
+          fi
 
       - name: Commit implementation and remove bootstrap artifacts
         shell: bash
         run: |
           set -euo pipefail
           git rm .github/workflows/issue-757-bootstrap.yml
-          git rm -f scripts/.issue-757-bootstrap.py.zlib.b64 scripts/.issue-757-bootstrap.part* scripts/issue-757-bootstrap-error.txt 2>/dev/null || true
+          git rm -f scripts/.issue-757-bootstrap.py.zlib.b64 scripts/.issue-757-bootstrap.part* scripts/issue-757-bootstrap-error.txt scripts/issue-757-verify-error.txt 2>/dev/null || true
           git add -- \
             .github/workflows/scope-guard.yml \
             docs/declarations/757.arch-direct.json \
