@@ -5,9 +5,10 @@
 
 .DESCRIPTION
   This command is intentionally fail-closed: it refuses to clear the quarantine
-  marker while pending or quarantined actions still exist in the reconcile
-  state. Successful clearance appends an audit row in the same durable state
-  file and removes the `_recovery` fence so future ticks may resume planning.
+  marker while pending actions still exist in the reconcile state. Successful
+  clearance drains any quarantined actions, appends an audit row in the same
+  durable state file, and removes the `_recovery` fence so future ticks may
+  resume planning.
 #>
 [CmdletBinding()]
 param(
@@ -43,7 +44,7 @@ $path = Get-ClearStatePath -CliPath $StateFile
 $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $defaultState -ActionTracking
 $pendingCount = @($state.pendingActions.Keys).Count
 $quarantinedCount = @($state.quarantinedActions.Keys).Count
-if ($pendingCount -gt 0 -or $quarantinedCount -gt 0) {
+if ($pendingCount -gt 0) {
     throw "cannot clear dead-worker reconcile quarantine while pendingActions=$pendingCount quarantinedActions=$quarantinedCount"
 }
 
@@ -62,9 +63,11 @@ $audit += @{
     outcome = 'quarantine_cleared'
     reason = 'operator_clearance'
     actor = [string]$Actor
+    clearedQuarantinedActions = $quarantinedCount
     recordedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 }
 $state.Remove('_recovery')
+$state.quarantinedActions = @{}
 $state.audit = $audit
 Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $defaultState -JsonDepth 40
 
@@ -73,5 +76,6 @@ Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $defaultStat
     outcome = 'cleared'
     statePath = $path
     actor = [string]$Actor
+    clearedQuarantinedActions = $quarantinedCount
     auditCount = @($audit).Count
 } | ConvertTo-Json -Compress

@@ -700,7 +700,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     }
   });
 
-  it('clears quarantine only when no pending or quarantined actions remain', () => {
+  it('clears active quarantine while still fail-closing on pending actions', () => {
     const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-clear-'));
     const statePath = join(tempDir, 'dead-worker-state.json');
     writeFileSync(statePath, JSON.stringify({
@@ -709,7 +709,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       leases: {},
       audit: [],
       pendingActions: {},
-      quarantinedActions: {},
+      quarantinedActions: { quarantined: { sessionId: 'opk-688', quarantineReason: 'incomplete_recovery_after_side_effect' } },
       lastTickMs: null,
       _recovery: { fenceTrusted: false, reason: 'unparseable_no_backup', quarantined: '/tmp/corrupt' },
     }));
@@ -721,6 +721,9 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     ));
     expect(cleared.ok).toBe(true);
     expect(cleared.outcome).toBe('cleared');
+    expect(cleared.clearedQuarantinedActions).toBe(1);
+    const clearedState = JSON.parse(readFileSync(statePath, 'utf8'));
+    expect(Object.keys(clearedState.quarantinedActions ?? {})).toHaveLength(0);
 
     writeFileSync(statePath, JSON.stringify({
       schemaVersion: 'dead-worker-reconcile/v2',
