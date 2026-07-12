@@ -303,7 +303,10 @@ When it applies, answer all of, and reflect the conclusions in **Goal** /
 3. **Services / components architecture sketch** — how the pieces fit together
    (responsibilities, data flow, boundaries). Diagrams as ASCII.
 4. **≥ 3 implementation options, each with an explicit trade-off** — not three
-   restatements of one approach. Judge each on **cost, risk, and sufficiency**
+   restatements of one approach.
+   **State the artifact's stakes once, up front: its blast radius, reversibility,
+   and what breaks on failure.**
+   Judge each on **cost, risk, and sufficiency**
    (tests + Codex review as the safety net), then land on the **cheapest
    sufficient executor with acceptable risk** per the repo cost rule — never
    "which is best." Record the chosen option and why the two rejected ones lost
@@ -728,8 +731,20 @@ On competitive and architectural stages:
 3. Update `finding-disposition-ledger.json` — completeness required.
 4. Re-run the stage until `NO_FINDINGS` or the tier cap.
 
+For non-protected findings, `reject` may record **correct but disproportionate**:
+a factually correct observation still fails disposition when the prevented
+failure does not materially matter at the artifact's stated stakes **and** the
+proposed machinery is not the cheapest sufficient guard. `rejectReason` must tie
+the verdict to blast radius, reversibility, and failure impact and name the
+cheaper sufficient alternative; "out of scope" or "too complex" alone is invalid.
+
 Protected `security` / `scope-violation` findings cannot be rejected or omitted;
-escalate contested protected findings to the architect.
+escalate contested protected findings to the architect. Their sole disposition
+remains `addressed`, but that outcome may be reached by eliminating the attack
+surface or specifying an explicit, reasoned defense. When a defense would be
+disproportionate to a near-zero-payoff threat, eliminate the surface or record an
+explicit, reasoned risk-acceptance note with assumptions and residual risk — never
+convert the finding to `rejected` and never omit it.
 
 ### Architect T3 lens pass
 
@@ -745,9 +760,18 @@ After T3 architectural review converges:
    - **пропустили** — what was missed: gaps, unverified or synthesized
      evidence, unsettled conditionals (settle them with live probes, not
      assumptions).
-3. Record the per-axis verdicts in the draft's `.review/NN-<slug>/` directory
-   (e.g. `presync-architect-lens.md`) before accepting the draft.
-4. Run one final architectural (Codex) verification pass over architect edits; save
+3. For each major mechanism in the resulting draft, record an explicit **keep**
+   or **cut** verdict using stated stakes × mechanism cost/risk × cheapest
+   sufficient alternative. Repackaging or splitting an over-built mechanism
+   across sibling drafts is not, by itself, an **излишне** cut.
+4. When a low/contained-stakes artifact exits adversarial review with
+   approximately 100% of findings `addressed`, record a **proportionality smell**
+   and run one re-examination pass. This is neither an automatic failure nor
+   evidence of thoroughness.
+5. Record the per-axis and per-mechanism verdicts in the draft's
+   `.review/NN-<slug>/` directory (e.g. `presync-architect-lens.md`) before
+   accepting the draft.
+6. Run one final architectural (Codex) verification pass over architect edits; save
    verbatim output to `pass-NN-final.capture.txt` like every other pass.
 
 ### Drift escalation
