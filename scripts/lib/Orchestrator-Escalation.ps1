@@ -310,6 +310,27 @@ function Find-OrchestratorEscalationOpenRecordKey {
     return ''
 }
 
+function Find-OrchestratorEscalationCurrentRecordKey {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$ConditionKey
+    )
+    $selectedKey = ''
+    $selectedEpoch = -1
+    foreach ($key in @($State.records.Keys)) {
+        $record = Sync-OrchestratorEscalationMutableRecord -State $State -RecordKey $key
+        Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+        if ([string]$record.conditionKey -ne $ConditionKey) { continue }
+        if ([string]$record.terminalState -eq 'resolved' -or [string]$record.status -eq 'resolved') { continue }
+        $epoch = [int]($record.epoch ?? 0)
+        if ($epoch -gt $selectedEpoch) {
+            $selectedEpoch = $epoch
+            $selectedKey = [string]$key
+        }
+    }
+    return $selectedKey
+}
+
 function Get-OrchestratorEscalationNextEpoch {
     param(
         [Parameter(Mandatory = $true)]$State,
@@ -515,7 +536,7 @@ function Resolve-OrchestratorEscalationCondition {
     $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
     $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey '' -Payload $Payload
-    $recordKey = Find-OrchestratorEscalationOpenRecordKey -State $state -ConditionKey $conditionKey
+    $recordKey = Find-OrchestratorEscalationCurrentRecordKey -State $state -ConditionKey $conditionKey
     if (-not $recordKey) {
         return @{ ok = $true; status = 'not_found'; conditionKey = $conditionKey }
     }
@@ -560,7 +581,7 @@ function Publish-OrchestratorEscalation {
     }
     else {
         $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload
-        $recordKey = Find-OrchestratorEscalationOpenRecordKey -State $state -ConditionKey $conditionKey
+        $recordKey = Find-OrchestratorEscalationCurrentRecordKey -State $state -ConditionKey $conditionKey
         if (-not $recordKey) {
             $epoch = Get-OrchestratorEscalationNextEpoch -State $state -ConditionKey $conditionKey
             $recordKey = Get-OrchestratorEscalationEpochRecordKey -ConditionKey $conditionKey -Epoch $epoch

@@ -824,6 +824,7 @@ describe('worker-report-store-blocked-state', () => {
     try {
       const out = runWorkerStorePwsh(
         `
+        $env:AO_WORKER_SESSION_ID = 'opk-degraded-handoff'
         $env:AO_SESSION_ID = 'opk-degraded-handoff'
         $env:AO_PR_NUMBER = '717'
         $env:AO_HEAD_SHA = 'abc717'
@@ -857,7 +858,7 @@ describe('worker-report-store-blocked-state', () => {
       expect(parsed.record?.reportState).toBe('completed');
       expect(parsed.record?.handoffKind).toBe('degraded_ci');
       expect(parsed.record?.degradedCiEscalation).toBe(true);
-      expect(['delivered', 'fail_closed']).toContain(parsed.escalationEmission?.status);
+      expect(['delivered', 'pending']).toContain(parsed.escalationEmission?.status);
 
       const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
         records: Record<

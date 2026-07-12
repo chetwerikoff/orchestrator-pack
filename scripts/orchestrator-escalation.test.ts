@@ -47,20 +47,65 @@ describe('orchestrator escalation contract (#641)', () => {
     if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('escalation ack stops redelivery and bogus ack is rejected', () => {
+  it('escalation ack holds the condition terminal until it clears and bogus ack is rejected', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1
       $pub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:recovery:s1' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
       $bogus = Write-OrchestratorEscalationAck -EscalationId $pub.escalationId -AckToken 'bogus' -StatePath ${ps(state)} -NowMs 2000
       $good = Write-OrchestratorEscalationAck -EscalationId $pub.escalationId -AckToken $pub.ackToken -StatePath ${ps(state)} -NowMs 3000
       $repub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:recovery:s1' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 40000 -DryRun
-      [pscustomobject]@{ bogusOk = [bool]$bogus.ok; goodOk = [bool]$good.ok; repubReason = [string]$repub.reason; repubDelivered = [bool]$repub.delivered } | ConvertTo-Json -Compress
+      $clear = Resolve-OrchestratorEscalationCondition -EscalationClassId 'escalation-dead-worker-recovery' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -NowMs 50000
+      $afterClear = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:recovery:s1' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 60000 -DryRun
+      [pscustomobject]@{
+        bogusOk = [bool]$bogus.ok
+        goodOk = [bool]$good.ok
+        repubStatus = [string]$repub.status
+        repubReason = [string]$repub.reason
+        repubDelivered = [bool]$repub.delivered
+        clearStatus = [string]$clear.status
+        afterClearStatus = [string]$afterClear.status
+        afterClearDelivered = [bool]$afterClear.delivered
+      } | ConvertTo-Json -Compress
     `);
     expect(parsed).toEqual({
       bogusOk: false,
       goodOk: true,
-      repubReason: '',
-      repubDelivered: true,
+      repubStatus: 'acked',
+      repubReason: 'already_acked',
+      repubDelivered: false,
+      clearStatus: 'resolved',
+      afterClearStatus: 'delivered',
+      afterClearDelivered: true,
+    });
+  });
+
+  it('dead-lettered conditions stay terminal until the condition clears', () => {
+    const parsed = runJson(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $pub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:dead-letter:s1' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $record = $stateFile.records[$pub.escalationId]
+      Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'dead_lettered' -Now 2000 -Reason 'retry_cap_exhausted' | Out-Null
+      Set-MechanicalJsonStateFile -Path ${ps(state)} -State $stateFile -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+      $repub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:dead-letter:s1' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 3000 -DryRun
+      $clear = Resolve-OrchestratorEscalationCondition -EscalationClassId 'escalation-dead-worker-recovery' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -NowMs 4000
+      $afterClear = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:dead-letter:s1' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 50000 -DryRun
+      [pscustomobject]@{
+        repubStatus = [string]$repub.status
+        repubReason = [string]$repub.reason
+        repubDelivered = [bool]$repub.delivered
+        clearStatus = [string]$clear.status
+        afterClearStatus = [string]$afterClear.status
+        afterClearDelivered = [bool]$afterClear.delivered
+      } | ConvertTo-Json -Compress
+    `);
+    expect(parsed).toEqual({
+      repubStatus: 'dead_lettered',
+      repubReason: 'already_terminal',
+      repubDelivered: false,
+      clearStatus: 'resolved',
+      afterClearStatus: 'delivered',
+      afterClearDelivered: true,
     });
   });
 
