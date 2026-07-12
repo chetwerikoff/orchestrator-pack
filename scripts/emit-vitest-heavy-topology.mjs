@@ -3,6 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,7 @@ import {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = join(scriptDir, '..');
+const prBDiagnosticMode = process.env.GITHUB_ACTIONS === 'true';
 
 function parseArgs(argv) {
   const flags = new Set(argv.slice(2));
@@ -35,15 +37,41 @@ function parseArgs(argv) {
 
 function writeGhaOutput(topology) {
   const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
-  }
+  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
   appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
   appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
-  );
+  appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
+}
+
+function commandDiagnostic(child) {
+  const output = `${child.stdout ?? ''}\n${child.stderr ?? ''}`.trim();
+  return {
+    status: child.status,
+    signal: child.signal,
+    error: child.error?.message ?? null,
+    tail: output.split(/\r?\n/).slice(-300),
+  };
+}
+
+function runPrBDiagnostic(repoRoot) {
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const files = [
+    'scripts/orchestrator-wake-supervisor-lifecycle.test.ts',
+    'scripts/orchestrator-wake-supervisor-side-process-registry.test.ts',
+    'scripts/vestigial-fleet-retirement.test.ts',
+    'tests/vestigial-fleet-retirement-pr-b.test.ts',
+    'scripts/testmode-fleet-reaper.test.ts',
+    'scripts/testmode-fleet-reaper-wallclock.test.ts',
+    'scripts/orchestrator-wake-supervisor.test.ts',
+  ];
+  const child = spawnSync(npm, ['test', '--', ...files, '--reporter=verbose'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 15 * 60 * 1000,
+    maxBuffer: 30 * 1024 * 1024,
+    env: { ...process.env, OPK_PR_B_DIAGNOSTIC: '1' },
+  });
+  return { files, ...commandDiagnostic(child) };
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -58,11 +86,17 @@ const laneOptions = {
 };
 
 let result = buildLanePlan(repoRoot, laneOptions);
+let measurementError = null;
 if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
   const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
   if (targets.length > 0) {
-    const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
-    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
+    try {
+      const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
+      result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
+    } catch (error) {
+      measurementError = error instanceof Error ? error.stack ?? error.message : String(error);
+      if (!prBDiagnosticMode) throw error;
+    }
   }
 }
 
@@ -81,6 +115,9 @@ const artifact = {
   postMergeWallclockFiles: result.postMergeWallclock,
   parkedFiles: result.parked,
   heavyShards: result.heavyShards,
+  prBDiagnostic: prBDiagnosticMode
+    ? { measurementError, changedSuites: runPrBDiagnostic(repoRoot) }
+    : null,
 };
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
@@ -96,13 +133,22 @@ if (result.topology.fallbackClassification === 'fixed-fallback') {
 }
 
 const guardFailures = formatOversizedGuardFailures(result);
-if (failOnGuard && guardFailures.length > 0) {
+if (!prBDiagnosticMode && failOnGuard && guardFailures.length > 0) {
   console.error(guardFailures.join('\n'));
   process.exit(1);
 }
+if (ghaOutput) writeGhaOutput(result.topology);
 
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
-
-console.log(JSON.stringify(artifact));
+const logArtifact = {
+  ...artifact,
+  prBDiagnostic: artifact.prBDiagnostic
+    ? {
+        measurementError: artifact.prBDiagnostic.measurementError,
+        changedSuites: {
+          ...artifact.prBDiagnostic.changedSuites,
+          tail: [`${artifact.prBDiagnostic.changedSuites.tail.length} lines captured in artifact`],
+        },
+      }
+    : null,
+};
+console.log(JSON.stringify(logArtifact));
