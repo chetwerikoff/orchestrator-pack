@@ -685,12 +685,13 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         { cwd: repoRoot, encoding: 'utf8' },
       );
       const state = JSON.parse(readFileSync(statePath, 'utf8'));
+      const quarantinedRows = Object.values(
+        state.quarantinedActions ?? {},
+      ) as Array<{ quarantineReason?: string }>;
       expect(Object.keys(state.pendingActions ?? {})).toHaveLength(0);
       expect(Object.keys(state.quarantinedActions ?? {})).toHaveLength(1);
       expect(
-        Object.values(state.quarantinedActions ?? {}).every(
-          (row: { quarantineReason?: string }) => row.quarantineReason === 'incomplete_recovery_after_side_effect',
-        ),
+        quarantinedRows.every((row) => row.quarantineReason === 'incomplete_recovery_after_side_effect'),
       ).toBe(true);
       expect((state.audit ?? []).some((row: { outcome?: string }) => row.outcome === 'recovery_quarantined')).toBe(true);
     } finally {
