@@ -19,7 +19,7 @@ import {
 
 describe('Issue #205 side-process registry', () => {
   const issue205TimeoutMs = 60_000;
-  it('registry JSON lists all required managed children', () => {
+  it('registry JSON lists the current required managed children', () => {
     const registryPath = path.join(repoRoot, 'scripts/orchestrator-side-process-registry.json');
     const doc = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as {
       requiredChildIds: string[];

@@ -164,11 +164,11 @@ export function getSidecarDir(storeDir) {
 }
 
 export function getRecoveryStatePath(storeDir) {
-  return join(storeDir, 'review-run-recovery-state.json');
+  return join(storeDir, 'review-run-liveness-state.json');
 }
 
 export function getRecoveryAuditPath(storeDir) {
-  return join(storeDir, 'review-run-recovery-audit.json');
+  return join(storeDir, 'review-run-liveness-audit.json');
 }
 
 function identitySidecarPath(storeDir, runId) {
@@ -651,7 +651,7 @@ async function main() {
   if (subcommand === 'capture') {
     return captureReviewerLiveness(payload ?? {});
   }
-  throw new Error(`Unknown review-run-recovery subcommand: ${subcommand}`);
+  throw new Error(`Unknown review-run-liveness subcommand: ${subcommand}`);
 }
 
-runAsyncStdinJsonCliMain('review-run-recovery.mjs', main);
+runAsyncStdinJsonCliMain('review-run-liveness.mjs', main);

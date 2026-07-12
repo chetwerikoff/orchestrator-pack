@@ -141,14 +141,6 @@ foreach ($manifestCaller in @($manifestCallers)) {
     }
 }
 
-$bespokePath = Join-Path $Root 'scripts/review-finding-delivery-confirm.ps1'
-if (-not (Test-Path -LiteralPath $bespokePath)) {
-    $errors.Add('missing bespoke state path: review-finding-delivery-confirm.ps1')
-}
-elseif ((Get-Content -LiteralPath $bespokePath -Raw) -notmatch 'Get-MechanicalJsonStateFile') {
-    $errors.Add('bespoke delivery-confirm state path must adopt shared mechanical state helper')
-}
-
 if ($manifest.jsExempt.Count -lt 1) {
     $errors.Add('manifest must document JS-owned wake dedup exemption')
 }

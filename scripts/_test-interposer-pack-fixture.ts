@@ -79,7 +79,7 @@ export function createIsolatedInterposerPack(): IsolatedInterposerPack {
     'review-reconcile-primitives.mjs',
     'review-orchestrator-loop.mjs',
     'review-cycle-cap.mjs',
-    'review-run-recovery.mjs',
+    'review-run-liveness.mjs',
     'review-start-envelope-external-io.mjs',
     'review-start-preflight-shield.mjs',
     'review-trigger-reconcile.mjs',

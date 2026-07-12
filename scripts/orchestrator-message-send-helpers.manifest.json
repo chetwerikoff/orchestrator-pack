@@ -4,28 +4,33 @@
     {
       "name": "Invoke-PlannedCiGreenWakeSend",
       "file": "scripts/ci-green-wake-reconcile.ps1",
-      "mechanisms": ["ao-send"]
+      "mechanisms": [
+        "ao-send"
+      ]
     },
     {
       "name": "Invoke-PlannedCiFailureReconcileSend",
       "file": "scripts/ci-failure-notification-reconcile.ps1",
-      "mechanisms": ["ao-send"]
-    },
-    {
-      "name": "Invoke-PlannedReviewSend",
-      "file": "scripts/review-finding-delivery-confirm.ps1",
-      "mechanisms": ["ao-review-send"]
+      "mechanisms": [
+        "ao-send"
+      ]
     },
     {
       "name": "Invoke-WorkerInputDraftSubmit",
       "file": "scripts/lib/Submit-WorkerInputDraft.ps1",
-      "mechanisms": ["draft-submit"],
-      "relatedFunctions": ["Invoke-TmuxSubmitEnter"]
+      "mechanisms": [
+        "draft-submit"
+      ],
+      "relatedFunctions": [
+        "Invoke-TmuxSubmitEnter"
+      ]
     },
     {
       "name": "Invoke-AoSendViaMessage",
       "file": "scripts/journaled-worker-send.ps1",
-      "mechanisms": ["ao-send"]
+      "mechanisms": [
+        "ao-send"
+      ]
     }
   ]
 }

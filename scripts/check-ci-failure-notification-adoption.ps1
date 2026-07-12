@@ -32,7 +32,6 @@ function Get-YamlWithoutOrchestratorRules {
 $raw = Get-Content -LiteralPath $liveYaml -Raw
 $executableYaml = Get-YamlWithoutOrchestratorRules -Raw $raw
 
-$reactionScript = Join-Path $Root 'scripts/ci-failure-notification-reaction.ps1'
 $reconcileScript = Join-Path $Root 'scripts/ci-failure-notification-reconcile.ps1'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
@@ -44,10 +43,8 @@ $workerStateOk = ($registry.requiredChildIds -contains 'ci-failure-notification-
     ($reconcileRaw -match 'Get-AoStatusSessions')
 $dispatchOk = ($reconcileRaw -match 'Register-WorkerMessageDispatch') -and
     (Test-Path -LiteralPath (Join-Path $Root 'scripts/lib/Record-WorkerMessageDispatch.ps1') -PathType Leaf)
-$reactionRecordOk = (Test-Path -LiteralPath $reactionScript -PathType Leaf) -and
-    ($registry.requiredChildIds -contains 'ci-failure-notification-reaction') -and
-    ($executableYaml -match '(?m)^reactions:\s*[\s\S]*?\bci-failed\s*:') -and
-    ($executableYaml -match 'ci-failure-notification-reaction\.ps1')
+$reactionRecordOk = ($registry.requiredChildIds -notcontains 'ci-failure-notification-reaction') -and
+    ($executableYaml -notmatch 'ci-failure-notification-reaction\.ps1')
 
 $result = @{
     workerStateInputConfigured = [bool]$workerStateOk

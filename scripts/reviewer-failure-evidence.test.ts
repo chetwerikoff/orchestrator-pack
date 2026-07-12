@@ -23,7 +23,7 @@ import {
   RECOVERY_REASON_PROVABLY_DEAD,
   fingerprintRun,
   runRecoveryTick,
-} from '../docs/review-run-recovery.mjs';
+} from '../docs/review-run-liveness.mjs';
 import {
   drainTempRoots,
   readRecoveryAudit,

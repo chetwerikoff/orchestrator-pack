@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -45,5 +45,8 @@ export function readRecoveryRun(store: string, id = 'review-run-a') {
 }
 
 export function readRecoveryAudit(store: string) {
-  return JSON.parse(readFileSync(join(store, 'review-run-recovery-audit.json'), 'utf8'));
+  const livenessAudit = join(store, 'review-run-liveness-audit.json');
+  const recoveryAudit = join(store, 'review-run-recovery-audit.json');
+  const path = existsSync(livenessAudit) ? livenessAudit : recoveryAudit;
+  return JSON.parse(readFileSync(path, 'utf8'));
 }

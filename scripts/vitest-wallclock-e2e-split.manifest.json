@@ -43,6 +43,11 @@
       "scripts/supervisor-degraded-backoff-crash-preserve.test.ts"
     ]
   },
+  "retiredPreMoveFiles": [
+    "scripts/review-finding-delivery-confirm.test.ts",
+    "scripts/review-run-recovery.test.ts",
+    "scripts/review-stuck-run-reaper.test.ts"
+  ],
   "postMergeSupportAllowlist": [
     "scripts/orchestrator-wake-supervisor-orphan-integration.shared.js"
   ],

@@ -41,6 +41,10 @@ export function defaultClassificationPath(repoRoot) {
   return path.join(defaultReferencesRoot(repoRoot), 'trigger-fixture-classification.json');
 }
 
+const RETIRED_TRIGGER_TEST_SUITES = new Set([
+  'scripts/review-finding-delivery-confirm.test.ts',
+]);
+
 /**
  * @param {Record<string, unknown>} raw
  * @param {string} dir
@@ -677,6 +681,9 @@ export function runExternalOutputShapeGuard(repoRoot, options = {}) {
   for (const suite of toArray(classification.triggerTestSuites)) {
     const suitePath = path.join(repoRoot, String(suite));
     if (!existsSync(suitePath)) {
+      if (RETIRED_TRIGGER_TEST_SUITES.has(String(suite))) {
+        continue;
+      }
       errors.push({
         fixture: String(suite),
         path: suitePath,

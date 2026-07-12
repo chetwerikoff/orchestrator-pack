@@ -24,7 +24,7 @@ import {
   resolveFailureEvidenceForRun,
   readFailureEvidenceRunPointer,
 } from './reviewer-failure-evidence.mjs';
-import { fingerprintRun } from './review-run-recovery.mjs';
+import { fingerprintRun } from './review-run-liveness.mjs';
 import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 

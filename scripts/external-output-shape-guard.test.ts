@@ -127,6 +127,25 @@ describe('runExternalOutputShapeGuard', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('ignores missing retired trigger suites while keeping active suite validation', () => {
+    const classification = JSON.parse(
+      readFileSync(path.join(referencesRoot, 'trigger-fixture-classification.json'), 'utf8'),
+    );
+    const retiredMissing = {
+      ...classification,
+      triggerTestSuites: [
+        'scripts/review-finding-delivery-confirm.test.ts',
+        ...classification.triggerTestSuites,
+      ],
+    };
+    const result = runExternalOutputShapeGuard(repoRoot, {
+      classification: retiredMissing,
+      catalog,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
   it('fails on unclassified phantom inline report literals', () => {
     const classification = JSON.parse(
       readFileSync(path.join(referencesRoot, 'trigger-fixture-classification.json'), 'utf8'),

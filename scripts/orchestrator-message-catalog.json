@@ -92,17 +92,17 @@
         "summary": "AO 0.10 auto-delivery on review submit (pack first-send reconcile REMOVED)",
         "event": "review_auto_delivery_on_submit"
       },
-      "owning_process": "review-finding-delivery-confirm",
+      "owning_process": "journaled-worker-send",
       "recipient_key": "specific-session",
       "intent_key": "review-findings-first",
-      "mechanism": "ao-auto-delivery",
+      "mechanism": "ao-send",
       "delivery_idempotency_owner": "issue-281",
       "semantic_dedup_owner": "none",
       "callsite": {
-        "file": "docs/review-send-reconcile.mjs",
-        "function": "planReviewSendActions",
+        "file": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
+        "function": "Invoke-ScriptedReviewStdoutDelivery",
         "anchor": "helper-body",
-        "predicateBodyHash": "e33359a764f44774"
+        "predicateBodyHash": "7d8f21ebaed7e0f2"
       }
     },
     {
@@ -111,17 +111,17 @@
         "summary": "Bounded re-delivery when first send unconfirmed",
         "event": "review_delivery_unconfirmed"
       },
-      "owning_process": "review-finding-delivery-confirm",
+      "owning_process": "journaled-worker-send",
       "recipient_key": "specific-session",
       "intent_key": "review-findings-redelivery",
-      "mechanism": "ao-review-send",
+      "mechanism": "ao-send",
       "delivery_idempotency_owner": "issue-281",
       "semantic_dedup_owner": "none",
       "callsite": {
-        "file": "scripts/review-finding-delivery-confirm.ps1",
-        "function": "Invoke-PlannedReviewSend",
+        "file": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
+        "function": "Resume-ScriptedReviewStdoutDeliveryFromLifecycle",
         "anchor": "helper-body",
-        "predicateBodyHash": "11550b49a8f0293e"
+        "predicateBodyHash": "df83fb8431d84ff2"
       }
     },
     {
@@ -185,19 +185,6 @@
       }
     },
     {
-      "code": "E4",
-      "escalation_class_id": "escalation-review-run-recovery",
-      "name": "review-run-recovery",
-      "owning_process": "review-run-recovery",
-      "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
-      "dedupe_owner": "issue-641",
-      "trigger": {
-        "summary": "Review-run recovery failed",
-        "event": "review_run_recovery_escalated"
-      }
-    },
-    {
       "code": "E5",
       "escalation_class_id": "escalation-submit-adoption",
       "name": "submit-adoption",
@@ -222,20 +209,6 @@
         "summary": "Worker blocked / handoff question admitted",
         "event": "handoff_envelope_admission"
       }
-    },
-    {
-      "code": "E7",
-      "escalation_class_id": "escalation-protected-finding",
-      "name": "protected-finding",
-      "owning_process": "review-finding-delivery-confirm",
-      "route": "operator",
-      "delivery_guarantee": "at-least-once-operator-inbox",
-      "dedupe_owner": "issue-641",
-      "trigger": {
-        "summary": "Contested protected finding (deferred sibling #625)",
-        "event": "protected_finding_contested"
-      },
-      "deferredSibling": 625
     },
     {
       "code": "E8",

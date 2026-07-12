@@ -7,7 +7,7 @@ import {
   IN_FLIGHT_RUN_STATUSES,
   KNOWN_NON_COVERING_RUN_STATUSES,
 } from './review-start-claim-lifecycle.mjs';
-import { toArray } from './review-run-recovery.mjs';
+import { toArray } from './review-run-liveness.mjs';
 import { normalizeLegacyReviewRunStatus } from './review-reconcile-primitives.mjs';
 
 export const REVIEW_START_CLAIM_RUN_BINDING_VERSION = 'review-start-claim-run-binding/v1';

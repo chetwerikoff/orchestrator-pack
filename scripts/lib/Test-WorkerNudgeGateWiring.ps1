@@ -48,8 +48,7 @@ foreach ($rel in $paths) {
 $workerObservableSenders = @(
     'scripts/invoke-gated-worker-nudge.ps1',
     'scripts/ci-green-wake-reconcile.ps1',
-    'scripts/ci-failure-notification-reconcile.ps1',
-    'scripts/review-finding-delivery-confirm.ps1'
+    'scripts/ci-failure-notification-reconcile.ps1'
 )
 foreach ($rel in $workerObservableSenders) {
     $full = Join-Path $RepoRoot $rel
@@ -79,12 +78,6 @@ foreach ($rel in $workerObservableSenders) {
     if ($rel -eq 'scripts/ci-failure-notification-reconcile.ps1') {
         if ($body -match '(?m)^\s*& ao @sendArgs') {
             Write-Host "ci-failure-notification-reconcile still invokes raw ao send"
-            exit 1
-        }
-    }
-    if ($rel -eq 'scripts/review-finding-delivery-confirm.ps1') {
-        if ($body -notmatch 'Set-WorkerNudgeClaimSendAttempted') {
-            Write-Host "review sender missing Set-WorkerNudgeClaimSendAttempted: $rel"
             exit 1
         }
     }

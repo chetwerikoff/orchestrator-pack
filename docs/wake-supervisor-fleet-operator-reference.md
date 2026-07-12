@@ -22,7 +22,7 @@ Default state root: `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
 ## Registry roster
 
 Roster derived from `scripts/orchestrator-side-process-registry.json` after heartbeat
-retirement (**14** children):
+retirement (**10** children):
 
 | `children[].id` | Script | Cadence (s) | Side-effecting |
 | --- | --- | ---: | --- |
@@ -32,13 +32,9 @@ retirement (**14** children):
 | `review-ready-report-state-seed` | `review-ready-report-state-seed.ps1` | 5 | yes |
 | `ci-green-wake-reconcile` | `ci-green-wake-reconcile.ps1` | 60 | yes |
 | `dead-worker-reconcile` | `dead-worker-reconcile.ps1` | 60 | yes |
-| `review-finding-delivery-confirm` | `review-finding-delivery-confirm.ps1` | 300 | yes |
 | `worker-message-submit-reconcile` | `worker-message-submit-reconcile.ps1` | 30 | yes |
-| `review-run-recovery` | `review-run-recovery.ps1` | 60 | yes |
-| `review-stuck-run-reaper` | `review-stuck-run-reaper.ps1` | 60 | yes |
 | `review-start-claim-reaper` | `review-start-claim-reaper.ps1` | 30 | yes |
 | `ci-failure-notification-reconcile` | `ci-failure-notification-reconcile.ps1` | 60 | yes |
-| `ci-failure-notification-reaction` | `ci-failure-notification-reaction.ps1` | 60 | no |
 | `escalation-router` | `orchestrator-escalation-router.ps1` | 30 | yes |
 
 ## Operator summary
@@ -104,21 +100,9 @@ Handles CI-green worker wake decisions. No heartbeat dependency remains after #7
 
 Performs dead-worker recovery checks and emits recovery escalations when needed.
 
-### review-finding-delivery-confirm
-
-Confirms review finding delivery using the stdout-first pipeline contract.
-
 ### worker-message-submit-reconcile
 
 Maintains worker submit-adoption reconciliation. Unchanged by #721.
-
-### review-run-recovery
-
-Repairs stuck review runs and remains supervised as a side-effecting child.
-
-### review-stuck-run-reaper
-
-Reaps review runs stuck beyond bounded thresholds. Registry membership unchanged.
 
 ### review-start-claim-reaper
 
@@ -127,10 +111,6 @@ Reaps stale review-start claims and preserves claim-store hygiene.
 ### ci-failure-notification-reconcile
 
 Produces CI-failure notifications and degraded-CI escalation records.
-
-### ci-failure-notification-reaction
-
-Non-side-effecting reaction child that evaluates CI-failure notification state.
 
 ## Fleet scenarios
 

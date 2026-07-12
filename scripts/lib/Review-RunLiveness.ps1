@@ -74,7 +74,7 @@ function Register-ReviewRunLivenessIdentity {
     if (-not $startTicks -or -not $bootHash) { return @{ ok = $false; reason = 'process_identity_unverifiable' } }
 
     $packRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $cli = Join-Path $packRoot 'docs/review-run-recovery.mjs'
+    $cli = Join-Path $packRoot 'docs/review-run-liveness.mjs'
     $payload = @{
         projectId          = $ProjectId
         storeDir           = $storeDir

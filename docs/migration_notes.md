@@ -20,6 +20,21 @@ Source migration note read read-only from:
 `C:\Users\che\.claude\projects\C--Users-che-Documents-Projects-ai-orchestrator\memory\project_composio_migration.md`
 
 
+## Vestigial wake-supervisor child retirement (Issue #745 PR-A)
+
+After deploying this change, the wake supervisor must be drained and restarted so its runtime
+roster matches the registry:
+
+1. Stop the wake supervisor from the operator terminal.
+2. Inspect the supervisor state directory and process table; terminate only orphaned PIDs that
+   belong to child scripts removed by this release. Do not kill processes by port or PID alone.
+3. Start the wake supervisor from the updated checkout.
+4. Run `-Action Status` and confirm the ten-child PR-A roster: listener plus the nine surviving
+   reconciliation/router children.
+5. Watch one normal supervisor cadence for crash loops or attempts to relaunch an absent script.
+
+This PR does not decide the listener disposition. That remains a separate probe-gated PR-B change.
+
 ## Review-status report-full JSON readers (Issue #611)
 
 Pack review-status consumers (`review-trigger-reconcile.ps1`, wake/reconcile scripts, and
@@ -36,7 +51,7 @@ After merging the #625 vocabulary migration:
 1. **Dead CLI retired:** production scripts use `ao-review run` / `Get-AoReviewRuns` fan-out — not `ao review run|list|send|execute`.
 2. **`review-send-reconcile.ps1` REMOVED:** auto-delivery on submit supersedes first-send `ao review send`; drop the child from wake-supervisor if still registered locally.
 3. **Status vocabulary:** `needs_triage` / `waiting_update` / `sentFindingCount` / `terminationReason` → `changes_requested` / `deliveredAt` / `deliveredFindingCount` / `latestRun.body`.
-4. **Live orchestration:** `orchestratorRules` yaml is legacy-import-only at 0.10; follow `AGENTS.md` + side-process scripts (`review-trigger-reconcile.ps1`, `review-finding-delivery-confirm.ps1`).
+4. **Live orchestration:** `orchestratorRules` yaml is legacy-import-only at 0.10; follow `AGENTS.md` + the supervised `review-trigger-reconcile.ps1` backstop.
 5. **Operator adoption (AC#6):**
    - Apply #210 `reviewers` harness via project-config API.
    - Restart wake-supervisor children (`scripts/orchestrator-wake-supervisor.ps1`).
@@ -418,7 +433,7 @@ Optional env overrides (safe defaults when unset): `AO_WAKE_SUPERVISOR_DEGRADED_
 ## Wake-supervisor child gh PATH (Issue #447)
 
 Wake-supervisor managed children (`review-trigger-reconcile`, `ci-green-wake-reconcile`,
-`review-finding-delivery-confirm`, and other registry entries) now inherit a child env whose
+and other registry entries) now inherit a child env whose
 `PATH` prepends pack `scripts/` so inventory `gh` reads route through `scripts/gh` (Issue #431)
 even when the operator started the supervisor from a shell without pack PATH adoption.
 

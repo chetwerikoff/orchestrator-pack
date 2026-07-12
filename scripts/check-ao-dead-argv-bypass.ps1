@@ -19,7 +19,6 @@ $SessionStatusInScopeRelativePaths = @(
     'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1',
     'scripts/invoke-gated-worker-nudge.ps1',
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
-    'scripts/ci-failure-notification-reaction.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/check-ci-failure-notification-adoption.ps1'
