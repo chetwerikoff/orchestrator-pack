@@ -888,35 +888,12 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'docs/review-wake-trigger.mjs',
     'docs/review-handoff-wake-admission.mjs',
   ],
-  417: [
-    'scripts/lib/Review-StartClaim.ps1',
-    'scripts/review-start-claim-reaper.ps1',
-  ],
+  417: [ 'scripts/lib/Review-StartClaim.ps1', ],
   721: [
     'scripts/orchestrator-message-protected-runtime.manifest.json',
   ],
-  384: [
-    'scripts/ci-green-wake-reconcile.ps1',
-    'scripts/ci-failure-notification-reconcile.ps1',
-    'scripts/review-send-reconcile.ps1',
-    'scripts/worker-message-submit-reconcile.ps1',
-    'scripts/journaled-worker-send.ps1',
-    'scripts/lib/Worker-NudgeClaim.ps1',
-    'scripts/lib/Worker-AutonomousNudgeGate.ps1',
-    'scripts/lib/Worker-NudgeAudit.ps1',
-  ],
-  450: [
-    'scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1',
-    'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
-    'scripts/orchestrator-wake-supervisor-test-child.ps1',
-    'scripts/orchestrator-wake-supervisor.test.ts',
-    'scripts/orchestrator-wake-listener.ps1',
-    'scripts/review-trigger-reconcile.ps1',
-    'scripts/review-trigger-reeval.ps1',
-    'scripts/ci-green-wake-reconcile.ps1',
-    'scripts/review-send-reconcile.ps1',
-    'scripts/worker-message-submit-reconcile.ps1',
-  ],
+  384: [ 'scripts/ci-green-wake-reconcile.ps1', 'scripts/ci-failure-notification-reconcile.ps1', 'scripts/review-send-reconcile.ps1', 'scripts/journaled-worker-send.ps1', 'scripts/lib/Worker-NudgeClaim.ps1', 'scripts/lib/Worker-AutonomousNudgeGate.ps1', 'scripts/lib/Worker-NudgeAudit.ps1', ],
+  450: [ 'scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1', 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1', 'scripts/orchestrator-wake-supervisor-test-child.ps1', 'scripts/orchestrator-wake-supervisor.test.ts', 'scripts/orchestrator-wake-listener.ps1', 'scripts/review-trigger-reconcile.ps1', 'scripts/review-trigger-reeval.ps1', 'scripts/ci-green-wake-reconcile.ps1', 'scripts/review-send-reconcile.ps1', ],
   619: [
     'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
     'scripts/orchestrator-wake-supervisor.ps1',
@@ -931,13 +908,7 @@ const BUILTIN_COORDINATED_ISSUE_DECLARED_PATH_EDITS = {
     'scripts/review-start-claim-reaper.ps1',
     'scripts/worker-message-submit-reconcile.ps1',
   ],
-  624: [
-    'scripts/orchestrator-side-process-registry.json',
-    'scripts/review-start-claim-reaper.ps1',
-    'scripts/worker-message-submit-reconcile.ps1',
-    'scripts/orchestrator-message-audit-roots.manifest.json',
-    'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json',
-  ],
+  624: [ 'scripts/orchestrator-side-process-registry.json', 'scripts/orchestrator-message-audit-roots.manifest.json', 'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json', ],
 };
 
 /**
