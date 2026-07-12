@@ -38,8 +38,23 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerOsLiveness.ps1')
 . (Join-Path $PSScriptRoot 'lib/Sanctioned-Worker-Kill-Record.ps1')
+. (Join-Path $PSScriptRoot 'lib/WorkerStatusStore.ps1')
 
-$Script:DeadWorkerDefaultState = @{ attempts = @{}; leases = @{}; audit = @(); lastTickMs = $null }
+$Script:DeadWorkerDefaultState = @{
+    schemaVersion      = 'dead-worker-reconcile/v2'
+    attempts           = @{}
+    leases             = @{}
+    audit              = @()
+    pendingActions     = @{}
+    quarantinedActions = @{}
+    lastTickMs         = $null
+}
+$Script:DeadWorkerCliPrefixAllowlist = @(
+    '^\[notifier\]\s*',
+    '^\[gh[^\]]*\]\s*',
+    '^\[scripts/gh[^\]]*\]\s*',
+    '^(warn|warning|info):\s*'
+)
 
 function Write-DeadWorkerLog {
     param([string]$Message)
@@ -51,7 +66,10 @@ function Get-DeadWorkerStatePath {
     param([string]$CliPath)
     if ($CliPath) { return $CliPath }
     if ($env:AO_DEAD_WORKER_RECONCILE_STATE) { return $env:AO_DEAD_WORKER_RECONCILE_STATE }
-    return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-dead-worker-reconcile-state.json'
+    if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
+        return Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'orchestrator-dead-worker-reconcile-state.json'
+    }
+    return Join-Path (Join-Path (Join-Path $HOME '.local') 'state/orchestrator-pack-wake-supervisor') 'orchestrator-dead-worker-reconcile-state.json'
 }
 
 function Get-DeadWorkerState {
@@ -67,6 +85,99 @@ function Set-DeadWorkerState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:DeadWorkerDefaultState -JsonDepth 40
 }
 
+function Copy-DeadWorkerActionMap {
+    param([object]$Map)
+
+    $copy = @{}
+    if ($Map -is [System.Collections.IDictionary]) {
+        foreach ($entry in $Map.GetEnumerator()) {
+            $copy[[string]$entry.Key] = $entry.Value
+        }
+        return $copy
+    }
+    if ($Map) {
+        foreach ($prop in $Map.PSObject.Properties) {
+            $copy[[string]$prop.Name] = $prop.Value
+        }
+    }
+    return $copy
+}
+
+function Get-DeadWorkerActionMapCount {
+    param([object]$Map)
+
+    return @((Copy-DeadWorkerActionMap -Map $Map).Keys).Count
+}
+
+function Set-DeadWorkerPendingAction {
+    param(
+        [object]$State,
+        [object]$Action,
+        [long]$NowMs
+    )
+
+    $pending = Copy-DeadWorkerActionMap -Map $State.pendingActions
+    $key = [string]$Action.key
+    $pending[$key] = @{
+        key = $key
+        sessionId = [string]$Action.sessionId
+        issueNumber = [int]$Action.issueNumber
+        prNumber = [int]$Action.prNumber
+        generationToken = [string]$Action.generationToken
+        revalidationToken = [string]$Action.revalidationToken
+        recordedAtMs = $NowMs
+    }
+    $State.pendingActions = $pending
+    return $State
+}
+
+function Clear-DeadWorkerPendingAction {
+    param(
+        [object]$State,
+        [string]$Key
+    )
+
+    $pending = @{}
+    foreach ($entry in (Copy-DeadWorkerActionMap -Map $State.pendingActions).GetEnumerator()) {
+        $entryKey = [string]$entry.Key
+        if ($entryKey -eq $Key) { continue }
+        $pending[$entryKey] = $entry.Value
+    }
+    $State.pendingActions = $pending
+    return $State
+}
+
+function Enter-DeadWorkerRecoveryQuarantine {
+    param(
+        [object]$State,
+        [string]$Reason,
+        [long]$NowMs
+    )
+
+    $pending = Copy-DeadWorkerActionMap -Map $State.pendingActions
+    if (@($pending.Keys).Count -le 0) {
+        return $State
+    }
+    $State.pendingActions = @{}
+    $quarantined = Copy-DeadWorkerActionMap -Map $State.quarantinedActions
+    foreach ($entry in $pending.GetEnumerator()) {
+        $record = Copy-DeadWorkerActionMap -Map $entry.Value
+        $record['quarantineReason'] = [string]$Reason
+        $record['quarantinedAtMs'] = $NowMs
+        $quarantined[[string]$entry.Key] = $record
+    }
+    $State.quarantinedActions = $quarantined
+    $audit = @($State.audit)
+    $audit += @{
+        outcome = 'recovery_quarantined'
+        reason = [string]$Reason
+        pendingKeys = @($pending.Keys)
+        recordedAtMs = $NowMs
+    }
+    $State.audit = $audit
+    return $State
+}
+
 function Invoke-DeadWorkerPlannerCli {
     param(
         [string]$Subcommand,
@@ -77,6 +188,9 @@ function Invoke-DeadWorkerPlannerCli {
 }
 
 function Get-AutonomousRespawnPolicy {
+    if ($env:AO_DEAD_WORKER_RESPAWN_POLICY_FIXTURE) {
+        return Get-Content -LiteralPath $env:AO_DEAD_WORKER_RESPAWN_POLICY_FIXTURE -Raw | ConvertFrom-Json
+    }
     $path = Join-Path $PackRoot 'docs/autonomous-respawn-policy.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         return @{ version = 'autonomous-respawn-policy/v1'; allowReconcileDeadWorkerRespawn = $false }
@@ -98,10 +212,83 @@ function Get-DeadWorkerResolvedBounds {
 function Get-DeadWorkerEffectiveRuntimePolicy {
     param([string]$OrchestratorRules)
 
+    if ($env:AO_DEAD_WORKER_EFFECTIVE_RUNTIME_POLICY) {
+        return [string]$env:AO_DEAD_WORKER_EFFECTIVE_RUNTIME_POLICY
+    }
     $adoption = Invoke-DeadWorkerPlannerCli -Subcommand 'evaluate-adoption' -Payload @{
         orchestratorRules = [string]$OrchestratorRules
     }
     return [string]$adoption.effectiveRuntimePolicy
+}
+
+function Get-DeadWorkerWorkerStatusRows {
+    param($StoreState)
+
+    if ($null -eq $StoreState) { return @() }
+    $rows = $StoreState.records
+    if ($null -eq $rows) { $rows = $StoreState.rows }
+    if ($rows -is [System.Collections.IDictionary]) {
+        return @($rows.GetEnumerator() | ForEach-Object { $_.Value } | Where-Object { $null -ne $_ })
+    }
+    if ($rows) {
+        return @($rows.PSObject.Properties | ForEach-Object { $_.Value } | Where-Object { $null -ne $_ })
+    }
+    return @()
+}
+
+function Test-DeadWorkerWorkerStatusStoreDisabled {
+    $raw = [string]($env:PACK_WORKER_STATUS_STORE_DISABLED ?? '')
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+    switch ($raw.Trim().ToLowerInvariant()) {
+        '1' { return $true }
+        'true' { return $true }
+        'yes' { return $true }
+        'on' { return $true }
+        default { return $false }
+    }
+}
+
+function Resolve-DeadWorkerWorkerStatusStoreState {
+    param([object]$StoreState = $null)
+
+    if (Test-DeadWorkerWorkerStatusStoreDisabled) {
+        return @{
+            schemaVersion = 1
+            records = @{}
+            disabled = $true
+        }
+    }
+
+    if ($null -ne $StoreState) {
+        return $StoreState
+    }
+
+    return Get-WorkerStatusStoreState
+}
+
+function Get-DeadWorkerLivenessContext {
+    param(
+        [object[]]$Sessions,
+        [object]$StoreState = $null,
+        [object]$SanctionedKillSurface = $null,
+        [hashtable]$OsLivenessOverride = $null,
+        [long]$EvaluationNowMs = 0
+    )
+
+    $nowMs = if ($EvaluationNowMs) { $EvaluationNowMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    $resolvedStore = Resolve-DeadWorkerWorkerStatusStoreState -StoreState $StoreState
+    $resolvedKillSurface = if ($null -ne $SanctionedKillSurface) { $SanctionedKillSurface } else { Read-SanctionedWorkerKillSurface }
+    $osLiveness = if ($null -ne $OsLivenessOverride) { $OsLivenessOverride } else { Get-WorkerOsLivenessMap -Sessions $Sessions }
+    return @{
+        evaluationNowMs               = $nowMs
+        osLiveness                    = $osLiveness
+        sanctionedKillSurface         = $resolvedKillSurface
+        workerStatusStore             = $resolvedStore
+        workerStatusRows              = @(Get-DeadWorkerWorkerStatusRows -StoreState $resolvedStore)
+        supportedSchemaVersions       = @(1)
+        supportedProducerCapabilities = @('pack-worker-status-store/v1')
+        lifecycleAllowlist            = @('terminated', 'dead', 'exited')
+    }
 }
 
 function Get-DeadWorkerLivePlanGates {
@@ -152,14 +339,34 @@ function Get-DeadWorkerAbsentSessions {
 }
 
 function Get-DeadWorkerLivePayload {
+    if ($env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE) {
+        $fixture = Get-Content -LiteralPath $env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE -Raw | ConvertFrom-Json
+        $sessions = @($fixture.sessions)
+        $storeState = Resolve-DeadWorkerWorkerStatusStoreState -StoreState $(if ($fixture.workerStatusStore) { $fixture.workerStatusStore } else { @{ records = @{} } })
+        $killSurface = if ($fixture.livenessContext.sanctionedKillSurface) {
+            $fixture.livenessContext.sanctionedKillSurface
+        }
+        else {
+            @{ healthy = $true; records = @() }
+        }
+        $osLiveness = @{}
+        if ($fixture.livenessContext.osLiveness) {
+            foreach ($prop in $fixture.livenessContext.osLiveness.PSObject.Properties) {
+                $osLiveness[$prop.Name] = $prop.Value
+            }
+        }
+        return @{
+            sessions = $sessions
+            livenessContext = Get-DeadWorkerLivenessContext -Sessions $sessions -StoreState $storeState `
+                -SanctionedKillSurface $killSurface -OsLivenessOverride $osLiveness `
+                -EvaluationNowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        }
+    }
     $sessions = @(Get-WorkerStatusDecisionSessionsIncludingTerminated)
+    $storeState = Resolve-DeadWorkerWorkerStatusStoreState
     return @{
         sessions = $sessions
-        aoEvents = @(Get-AoEventsSince -SinceMinutes 60)
-        livenessContext = @{
-            osLiveness = Get-WorkerOsLivenessMap -Sessions $sessions
-            sanctionedKillSurface = Read-SanctionedWorkerKillSurface
-        }
+        livenessContext = Get-DeadWorkerLivenessContext -Sessions $sessions -StoreState $storeState
     }
 }
 
@@ -181,7 +388,6 @@ function Get-DeadWorkerFixturePayload {
     return @{
         sessions = @($fixture.sessions)
         absentSessions = @($fixture.absentSessions)
-        aoEvents = @($fixture.aoEvents)
         livenessContext = $fixture.livenessContext
         respawnPolicy = $respawnPolicy
         tracking = $fixture.tracking
@@ -194,6 +400,135 @@ function Get-DeadWorkerFixturePayload {
         openPrs = @($fixture.openPrs)
         terminalPrs = @($fixture.terminalPrs)
     }
+}
+
+function Get-DeadWorkerCliBridgeText {
+    param([object]$RawOutput)
+
+    return (($RawOutput | ForEach-Object {
+                if ($_ -is [string]) { $_ }
+                elseif ($null -ne $_) { $_.ToString() }
+            }) -join "`n").Trim()
+}
+
+function Test-DeadWorkerAllowedPrefixLine {
+    param([string]$Line)
+
+    foreach ($pattern in $Script:DeadWorkerCliPrefixAllowlist) {
+        if ($Line -match $pattern) { return $true }
+    }
+    return $false
+}
+
+function Get-DeadWorkerJsonBridgePayload {
+    param(
+        [string]$Text,
+        [ValidateSet('Array', 'Object')]
+        [string]$ExpectedRoot,
+        [string]$FailureLabel
+    )
+
+    $trimmed = [string]$Text
+    while ($trimmed.Length -gt 0) {
+        $trimmed = $trimmed.TrimStart()
+        if (-not $trimmed) { break }
+        $lineBreak = $trimmed.IndexOf("`n")
+        $line = if ($lineBreak -ge 0) { $trimmed.Substring(0, $lineBreak).TrimEnd("`r") } else { $trimmed }
+        if (Test-DeadWorkerAllowedPrefixLine -Line $line) {
+            $trimmed = if ($lineBreak -ge 0) { $trimmed.Substring($lineBreak + 1) } else { '' }
+            continue
+        }
+        $expectedChar = if ($ExpectedRoot -eq 'Array') { '[' } else { '{' }
+        if ($trimmed[0] -eq $expectedChar) { break }
+        throw "$FailureLabel parse failed: unrecognized prefix line"
+    }
+
+    if (-not $trimmed) {
+        throw "$FailureLabel produced no JSON output"
+    }
+
+    $openChar = if ($ExpectedRoot -eq 'Array') { '[' } else { '{' }
+    $closeChar = if ($ExpectedRoot -eq 'Array') { ']' } else { '}' }
+    if ($trimmed[0] -ne $openChar) {
+        throw "$FailureLabel parse failed: expected top-level $ExpectedRoot"
+    }
+
+    $depth = 0
+    $inString = $false
+    $escaped = $false
+    $endIndex = -1
+    for ($index = 0; $index -lt $trimmed.Length; $index++) {
+        $ch = $trimmed[$index]
+        if ($inString) {
+            if ($escaped) {
+                $escaped = $false
+            }
+            elseif ($ch -eq '\') {
+                $escaped = $true
+            }
+            elseif ($ch -eq '"') {
+                $inString = $false
+            }
+            continue
+        }
+        if ($ch -eq '"') {
+            $inString = $true
+            continue
+        }
+        if ($ch -eq $openChar) {
+            $depth++
+            continue
+        }
+        if ($ch -eq $closeChar) {
+            $depth--
+            if ($depth -eq 0) {
+                $endIndex = $index
+                break
+            }
+        }
+    }
+
+    if ($endIndex -lt 0) {
+        throw "$FailureLabel parse failed: unterminated JSON"
+    }
+
+    $jsonText = $trimmed.Substring(0, $endIndex + 1)
+    $trailing = $trimmed.Substring($endIndex + 1).Trim()
+    if ($trailing) {
+        throw "$FailureLabel parse failed: trailing non-whitespace after JSON"
+    }
+    return $jsonText
+}
+
+function ConvertFrom-DeadWorkerCliJsonArray {
+    param(
+        [object]$RawOutput,
+        [string]$FailureLabel
+    )
+
+    $text = Get-DeadWorkerCliBridgeText -RawOutput $RawOutput
+    if (-not $text) { return @() }
+    $jsonText = Get-DeadWorkerJsonBridgePayload -Text $text -ExpectedRoot Array -FailureLabel $FailureLabel
+    return @($jsonText | ConvertFrom-Json)
+}
+
+function Invoke-DeadWorkerGhListJsonArray {
+    param(
+        [string[]]$Args,
+        [string]$FailureLabel,
+        [string]$FixturePath = ''
+    )
+
+    $raw = if ($FixturePath) {
+        Get-Content -LiteralPath $FixturePath -Raw
+    }
+    else {
+        & (Join-Path $PackRoot 'scripts/gh') @Args 2>&1
+    }
+    if (-not $FixturePath -and $LASTEXITCODE -ne 0) {
+        throw "$FailureLabel failed (exit $LASTEXITCODE): $(Get-DeadWorkerCliBridgeText -RawOutput $raw)"
+    }
+    return ConvertFrom-DeadWorkerCliJsonArray -RawOutput $raw -FailureLabel $FailureLabel
 }
 
 function Invoke-DeadWorkerRecovery {
@@ -211,6 +546,7 @@ function Invoke-DeadWorkerRecovery {
         '-Trigger', 'reconcile_dead_worker',
         '-ProbedDeadEvidence',
         '-SessionId', [string]$Action.sessionId,
+        '-GenerationToken', [string]$Action.generationToken,
         '-WorktreePath', [string]$Action.worktree,
         '-ProjectId', $ProjectId,
         '-RepoRoot', $RepoRoot,
@@ -247,18 +583,19 @@ function Invoke-DeadWorkerRecovery {
 
 function Get-DeadWorkerPrSnapshot {
     try {
-        $openPrs = ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'dead-worker-reconcile')
+        $openPrs = if ($env:AO_DEAD_WORKER_OPEN_PRS_FIXTURE) {
+            ConvertTo-GhOpenPrArray -OpenPrs (Get-Content -LiteralPath $env:AO_DEAD_WORKER_OPEN_PRS_FIXTURE -Raw | ConvertFrom-Json)
+        }
+        else {
+            ConvertTo-GhOpenPrArray -OpenPrs (Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'dead-worker-reconcile')
+        }
         $terminalPrs = @()
         Push-Location -LiteralPath $RepoRoot
         try {
-            $merged = @(ConvertFrom-GhJsonArrayOutput -RawOutput (gh pr list --state merged --json number,headRefName,state,mergedAt --limit 200 2>&1))
-            if ($LASTEXITCODE -ne 0) {
-                throw "gh pr list merged failed (exit $LASTEXITCODE)"
-            }
-            $closed = @(ConvertFrom-GhJsonArrayOutput -RawOutput (gh pr list --state closed --json number,headRefName,state,closedAt --limit 200 2>&1))
-            if ($LASTEXITCODE -ne 0) {
-                throw "gh pr list closed failed (exit $LASTEXITCODE)"
-            }
+            $merged = @(Invoke-DeadWorkerGhListJsonArray -Args @('pr', 'list', '--state', 'merged', '--json', 'number,headRefName,state,mergedAt', '--limit', '200') `
+                -FailureLabel 'gh pr list merged' -FixturePath $env:AO_DEAD_WORKER_GH_MERGED_RAW_FIXTURE)
+            $closed = @(Invoke-DeadWorkerGhListJsonArray -Args @('pr', 'list', '--state', 'closed', '--json', 'number,headRefName,state,closedAt', '--limit', '200') `
+                -FailureLabel 'gh pr list closed' -FixturePath $env:AO_DEAD_WORKER_GH_CLOSED_RAW_FIXTURE)
             $byNumber = @{}
             foreach ($pr in @($merged + $closed)) {
                 if ($null -eq $pr) { continue }
@@ -305,6 +642,67 @@ function Commit-DeadWorkerAction {
     return $commit.tracking
 }
 
+function Test-DeadWorkerPreKillRevalidation {
+    param([object]$Action)
+
+    $liveFixture = if ($env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE) {
+        Get-Content -LiteralPath $env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE -Raw | ConvertFrom-Json
+    }
+    else {
+        $null
+    }
+    $sessions = @()
+    $absentSessions = @()
+    $storeState = $null
+    $killSurface = $null
+    $osLiveness = $null
+    if ($liveFixture) {
+        $sessions = @($liveFixture.sessions)
+        $absentSessions = @($liveFixture.absentSessions)
+        $storeState = if ($liveFixture.workerStatusStore) { $liveFixture.workerStatusStore } else { $null }
+        $killSurface = if ($liveFixture.livenessContext.sanctionedKillSurface) { $liveFixture.livenessContext.sanctionedKillSurface } else { $null }
+        $osLiveness = if ($liveFixture.livenessContext.osLiveness) {
+            $map = @{}
+            foreach ($prop in $liveFixture.livenessContext.osLiveness.PSObject.Properties) {
+                $map[$prop.Name] = $prop.Value
+            }
+            $map
+        }
+        else {
+            $null
+        }
+    }
+    else {
+        $live = Get-DeadWorkerLivePayload
+        $prSnapshot = Get-DeadWorkerPrSnapshot
+        $sessions = @($live.sessions)
+        $absentSessions = @(Get-DeadWorkerAbsentSessions -Sessions $sessions -ProjectId $ProjectId `
+            -RepoRoot $RepoRoot -OpenPrs $prSnapshot.openPrs)
+        $storeState = $live.livenessContext.workerStatusStore
+        $killSurface = $live.livenessContext.sanctionedKillSurface
+        $osLiveness = $live.livenessContext.osLiveness
+    }
+    $livenessProbeSessions = @($sessions) + @($absentSessions)
+    $session = $livenessProbeSessions | Where-Object { [string]($_.sessionId ?? $_.id ?? $_.name) -eq [string]$Action.sessionId } | Select-Object -First 1
+    if (-not $session) {
+        return @{ ok = $false; reason = 'prekill_session_missing' }
+    }
+    $livenessContext = Get-DeadWorkerLivenessContext -Sessions $livenessProbeSessions -StoreState $storeState `
+        -SanctionedKillSurface $killSurface -OsLivenessOverride $osLiveness
+    $classification = Invoke-DeadWorkerPlannerCli -Subcommand 'classify-liveness' -Payload @{
+        session = $session
+        livenessContext = $livenessContext
+    }
+    if ([string]$classification.verdict -ne 'dead') {
+        return @{ ok = $false; reason = 'prekill_verdict_changed'; classification = $classification }
+    }
+    $token = [string]($classification.evidence.revalidationToken ?? '')
+    if (-not $token -or $token -ne [string]$Action.revalidationToken) {
+        return @{ ok = $false; reason = 'prekill_generation_changed'; classification = $classification }
+    }
+    return @{ ok = $true; classification = $classification; session = $session }
+}
+
 function Invoke-DeadWorkerTick {
     param(
         [string]$StatePath,
@@ -313,6 +711,19 @@ function Invoke-DeadWorkerTick {
     )
     $tracking = Get-DeadWorkerState -Path $StatePath
     Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'dead-worker side effects'
+    if ((Get-DeadWorkerActionMapCount -Map $tracking.quarantinedActions) -gt 0) {
+        Write-DeadWorkerLog "recovery quarantine active; planning paused quarantinedActions=$((Get-DeadWorkerActionMapCount -Map $tracking.quarantinedActions))"
+        return 0
+    }
+    if ((Get-DeadWorkerActionMapCount -Map $tracking.pendingActions) -gt 0) {
+        $tracking = Enter-DeadWorkerRecoveryQuarantine -State $tracking -Reason 'incomplete_recovery_after_side_effect' `
+            -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        if (-not $DryRunMode) {
+            Set-DeadWorkerState -Path $StatePath -State $tracking
+        }
+        Write-DeadWorkerLog "recovery quarantine activated for quarantinedActions=$((Get-DeadWorkerActionMapCount -Map $tracking.quarantinedActions))"
+        return 0
+    }
 
     if ($Fixture) {
         $payload = Get-DeadWorkerFixturePayload -Path $Fixture
@@ -325,14 +736,13 @@ function Invoke-DeadWorkerTick {
         $absentSessions = @(Get-DeadWorkerAbsentSessions -Sessions $live.sessions -ProjectId $ProjectId `
             -RepoRoot $RepoRoot -OpenPrs $prSnapshot.openPrs)
         $livenessProbeSessions = @($live.sessions) + @($absentSessions)
-        $livenessContext = @{
-            osLiveness = Get-WorkerOsLivenessMap -Sessions $livenessProbeSessions
-            sanctionedKillSurface = $live.livenessContext.sanctionedKillSurface
-        }
+        $livenessContext = Get-DeadWorkerLivenessContext -Sessions $livenessProbeSessions `
+            -StoreState $live.livenessContext.workerStatusStore `
+            -SanctionedKillSurface $live.livenessContext.sanctionedKillSurface `
+            -EvaluationNowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
         $payload = @{
             sessions = @($live.sessions)
             absentSessions = @($absentSessions)
-            aoEvents = @($live.aoEvents)
             livenessContext = $livenessContext
             respawnPolicy = $gates.respawnPolicy
             tracking = $tracking
@@ -363,8 +773,28 @@ function Invoke-DeadWorkerTick {
             Set-DeadWorkerState -Path $StatePath -State $tracking
         }
         if ($action.type -ne 'attempt_started') { continue }
+        $revalidation = Test-DeadWorkerPreKillRevalidation -Action $action
+        if (-not $revalidation.ok) {
+            $finalAction = [ordered]@{}
+            foreach ($prop in $action.PSObject.Properties) { $finalAction[$prop.Name] = $prop.Value }
+            $finalAction.type = 'audit_only'
+            $finalAction.outcome = 'audit-only'
+            $finalAction.reason = [string]$revalidation.reason
+            $tracking = Commit-DeadWorkerAction -State $tracking -Action $finalAction -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+            if (-not $DryRunMode) {
+                Set-DeadWorkerState -Path $StatePath -State $tracking
+            }
+            continue
+        }
         $attempted++
+        if (-not $DryRunMode) {
+            $tracking = Set-DeadWorkerPendingAction -State $tracking -Action $action -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+            Set-DeadWorkerState -Path $StatePath -State $tracking
+        }
         $result = Invoke-DeadWorkerRecovery -Action $action -DryRunMode:$DryRunMode
+        if (-not $DryRunMode) {
+            $tracking = Clear-DeadWorkerPendingAction -State $tracking -Key ([string]$action.key)
+        }
         $finalAction = [ordered]@{}
         foreach ($prop in $action.PSObject.Properties) { $finalAction[$prop.Name] = $prop.Value }
         $finalAction.type = [string]$result.deadWorkerOutcome

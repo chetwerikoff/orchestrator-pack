@@ -23,9 +23,8 @@ describe('event consumer rebind scenario matrix (Issue #688)', () => {
       );
       const expected = cell.kill === 'present'
         ? cell.row === 'active' && cell.pane === 'pane-alive' ? 'live_or_unknown' : 'suppressed'
-        : (cell.row === 'terminated' || cell.row === 'absent') && cell.pane === 'pane-gone' ? 'dead'
-          : cell.row === 'active' && cell.pane === 'pane-alive' ? 'live_or_unknown'
-            : 'audit_only';
+        : cell.row === 'active' && cell.pane === 'pane-alive' ? 'live_or_unknown'
+          : 'audit_only';
       expect(evidence.verdict, JSON.stringify(cell)).toBe(expected);
     }
   });

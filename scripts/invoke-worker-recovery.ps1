@@ -13,6 +13,7 @@ param(
     [ValidateSet('operator_request', 'operator_spawn', 'operator-recover', 'reconcile_dead_worker')]
     [string]$Trigger = 'operator_request',
     [string]$SessionId = '',
+    [string]$GenerationToken = '',
     [string]$WorktreePath = '',
     [string]$ProjectId = 'orchestrator-pack',
     [string]$RepoRoot = '',
@@ -95,6 +96,7 @@ if (-not $WorktreePath) {
 $recoveryParams = @{
     Trigger      = $Trigger
     SessionId    = $SessionId
+    GenerationToken = $GenerationToken
     CanonicalPath = $WorktreePath
     ProjectId    = $ProjectId
     PackRoot     = $PackRoot

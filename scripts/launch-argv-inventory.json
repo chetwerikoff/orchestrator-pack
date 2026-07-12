@@ -2931,10 +2931,10 @@
       }
     },
     {
-      "rowId": "site-scripts-dead-worker-reconcile-ps1-226",
+      "rowId": "site-scripts-dead-worker-reconcile-ps1-526",
       "caller": {
         "file": "scripts/dead-worker-reconcile.ps1",
-        "line": 226
+        "line": 526
       },
       "callee": {
         "kind": "ao",
@@ -2945,7 +2945,28 @@
       "validatorId": "ao-dead-argv-bypass",
       "discoveryMatch": {
         "file": "scripts/dead-worker-reconcile.ps1",
-        "line": 226,
+        "line": 526,
+        "patternIds": [
+          "ps-call-op"
+        ]
+      }
+    },
+    {
+      "rowId": "site-scripts-dead-worker-reconcile-ps1-562",
+      "caller": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 562
+      },
+      "callee": {
+        "kind": "ao",
+        "identity": "ao CLI session/status/send"
+      },
+      "calleeContractSourceClass": "captured-external-help",
+      "coverageKind": "validator-backed",
+      "validatorId": "ao-dead-argv-bypass",
+      "discoveryMatch": {
+        "file": "scripts/dead-worker-reconcile.ps1",
+        "line": 562,
         "patternIds": [
           "call-pwsh"
         ]
@@ -3609,10 +3630,10 @@
       }
     },
     {
-      "rowId": "site-scripts-invoke-worker-recovery-ps1-56",
+      "rowId": "site-scripts-invoke-worker-recovery-ps1-57",
       "caller": {
         "file": "scripts/invoke-worker-recovery.ps1",
-        "line": 56
+        "line": 57
       },
       "callee": {
         "kind": "other-external",
@@ -3627,7 +3648,7 @@
       "hashPinnedSourceHash": "sha256:765346acaf865740a2745ca8758ad160712f4bcff4c2f94f65575b3ca372f473",
       "discoveryMatch": {
         "file": "scripts/invoke-worker-recovery.ps1",
-        "line": 56,
+        "line": 57,
         "patternIds": [
           "pwsh-file",
           "pwsh-noprofile",
@@ -7007,10 +7028,10 @@
       }
     },
     {
-      "rowId": "site-scripts-lib-Worker-Recovery-ps1-596",
+      "rowId": "site-scripts-lib-Worker-Recovery-ps1-812",
       "caller": {
         "file": "scripts/lib/Worker-Recovery.ps1",
-        "line": 596
+        "line": 812
       },
       "callee": {
         "kind": "ao",
@@ -7021,7 +7042,7 @@
       "validatorId": "ao-spawn-shape",
       "discoveryMatch": {
         "file": "scripts/lib/Worker-Recovery.ps1",
-        "line": 596,
+        "line": 812,
         "patternIds": [
           "ps-call-op"
         ]

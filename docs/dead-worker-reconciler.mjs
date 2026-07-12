@@ -19,6 +19,15 @@ export const DEFAULT_DEAD_WORKER_BACKOFF_MS = 60_000;
 export const DEFAULT_DEAD_WORKER_CONCURRENCY = 1;
 export const OPERATOR_SHUTDOWN_SUPPRESSION_MS = 120_000;
 export const DEFAULT_SHUTDOWN_SUPPRESSION_WINDOW_MS = 120_000;
+export const SUPPORTED_DEAD_WORKER_STATUS_SCHEMA_VERSIONS = Object.freeze([1]);
+export const SUPPORTED_DEAD_WORKER_PRODUCER_CAPABILITIES = Object.freeze([
+  'pack-worker-status-store/v1',
+]);
+export const DEFAULT_DEAD_WORKER_LIFECYCLE_ALLOWLIST = Object.freeze([
+  'terminated',
+  'dead',
+  'exited',
+]);
 
 export function resolveShutdownSuppressionWindowMs(policy) {
   const configured = numberOrZero(policy?.shutdownSuppressionWindowMs);
@@ -87,6 +96,50 @@ export function loadAutonomousRespawnPolicy(packRoot) {
 
 function normalizeString(value) {
   return String(value ?? '').trim();
+}
+
+function normalizeGenerationEvidenceValue(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const normalized = normalizeString(value);
+    return normalized ? normalized : null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => normalizeGenerationEvidenceValue(entry))
+      .filter((entry) => entry !== null);
+    return normalized.length > 0 ? normalized : null;
+  }
+  if (typeof value === 'object') {
+    const normalizedEntries = Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, normalizeGenerationEvidenceValue(entry)])
+      .filter(([, entry]) => entry !== null);
+    if (normalizedEntries.length === 0) {
+      return null;
+    }
+    return Object.fromEntries(normalizedEntries);
+  }
+  return normalizeString(value);
+}
+
+function normalizeGenerationEvidenceToken(value) {
+  const normalized = normalizeGenerationEvidenceValue(value);
+  if (normalized === null) {
+    return '';
+  }
+  if (typeof normalized === 'string') {
+    return normalized;
+  }
+  return JSON.stringify(normalized);
 }
 
 function normalizeLower(value) {
@@ -173,6 +226,206 @@ function normalizeOsLiveness(value) {
   return 'unknown';
 }
 
+function normalizeLifecycleState(value) {
+  return normalizeLower(value);
+}
+
+function asArrayFromRecordMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return [];
+  }
+  return Object.values(value).filter(Boolean);
+}
+
+function normalizeWorkerStatusRowSessionId(row) {
+  return normalizeString(row?.sessionId ?? row?.id ?? row?.boundSessionId ?? row?.session?.sessionId);
+}
+
+function collectWorkerStatusRows(livenessContext = {}) {
+  if (Array.isArray(livenessContext.workerStatusRows)) {
+    return toArray(livenessContext.workerStatusRows);
+  }
+  if (Array.isArray(livenessContext.workerStatusStoreRows)) {
+    return toArray(livenessContext.workerStatusStoreRows);
+  }
+  const store = livenessContext.workerStatusStore;
+  if (store?.records && typeof store.records === 'object') {
+    return asArrayFromRecordMap(store.records);
+  }
+  if (store?.rows && typeof store.rows === 'object') {
+    return asArrayFromRecordMap(store.rows);
+  }
+  return [];
+}
+
+function normalizeWorkerStatusValidity(row) {
+  const explicit = normalizeLower(
+    row?.rowValidity
+    ?? row?.validity
+    ?? row?.workerStatusValidity
+    ?? row?.workerStatusRowValidity,
+  );
+  if (explicit) return explicit;
+  return '';
+}
+
+function resolveWorkerStatusFreshnessMs(row, livenessContext = {}) {
+  const rowFreshness = numberOrZero(row?.freshnessMs ?? row?.freshnessBoundMs);
+  if (rowFreshness > 0) return rowFreshness;
+  const ctxFreshness = numberOrZero(livenessContext.freshnessMs ?? livenessContext.workerStatusFreshnessMs);
+  if (ctxFreshness > 0) return ctxFreshness;
+  return DEFAULT_DEAD_WORKER_INTERVAL_MS * 15;
+}
+
+function resolveWorkerStatusHeartbeatMs(row) {
+  const numeric = numberOrZero(
+    row?.heartbeatTimestampMs
+    ?? row?.heartbeatAtMs
+    ?? row?.heartbeatObservedAtMs
+    ?? row?.heartbeatMs
+    ?? row?.lastHeartbeatAtMs,
+  );
+  if (numeric > 0) return numeric;
+  const text = normalizeString(
+    row?.heartbeatTimestamp
+    ?? row?.heartbeatAt
+    ?? row?.heartbeatObservedAt
+    ?? row?.lastHeartbeatAt,
+  );
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function resolveDeadWorkerGenerationToken(session, row) {
+  const candidates = [
+    row?.generationToken,
+    row?.sessionGeneration,
+    row?.generation,
+    row?.sourceGeneration,
+    row?.generationVector,
+    row?.reloadedMixedGeneration,
+    session?.generationToken,
+    session?.sessionGeneration,
+    session?.generation,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeGenerationEvidenceToken(candidate);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function buildDeadWorkerRevalidationToken(session, row, heartbeatMs) {
+  return [
+    getSessionId(session),
+    resolveDeadWorkerGenerationToken(session, row),
+    String(numberOrZero(heartbeatMs)),
+    normalizeLifecycleState(row?.lifecycleState ?? row?.lifecycle ?? row?.status),
+  ].join(':');
+}
+
+function lifecycleAllowlistOf(livenessContext = {}) {
+  const configured = toArray(livenessContext.lifecycleAllowlist).map(normalizeLifecycleState).filter(Boolean);
+  return configured.length > 0 ? configured : [...DEFAULT_DEAD_WORKER_LIFECYCLE_ALLOWLIST];
+}
+
+function supportedSchemaVersionsOf(livenessContext = {}) {
+  const configured = toArray(livenessContext.supportedSchemaVersions)
+    .map((value) => numberOrZero(value))
+    .filter((value) => value > 0);
+  return configured.length > 0 ? configured : [...SUPPORTED_DEAD_WORKER_STATUS_SCHEMA_VERSIONS];
+}
+
+function supportedProducerCapabilitiesOf(livenessContext = {}) {
+  const configured = toArray(livenessContext.supportedProducerCapabilities)
+    .map(normalizeString)
+    .filter(Boolean);
+  return configured.length > 0 ? configured : [...SUPPORTED_DEAD_WORKER_PRODUCER_CAPABILITIES];
+}
+
+function looksLikePackWorkerStatusRow(row) {
+  return numberOrZero(row?.schemaVersion) === 1
+    && (
+      row?.derivedStatus !== undefined
+      || row?.winningSource !== undefined
+      || row?.generationVector !== undefined
+      || row?.sourceGeneration !== undefined
+      || row?.reloadedMixedGeneration !== undefined
+    );
+}
+
+function resolveWorkerStatusProducerCapability(row, session) {
+  const explicit = normalizeString(
+    row?.producerCapability
+    ?? row?.workerStatusSource
+    ?? row?.source
+    ?? session?.workerStatusSource,
+  );
+  if (explicit) {
+    return explicit === 'pack-worker-status-store'
+      ? 'pack-worker-status-store/v1'
+      : explicit;
+  }
+  return looksLikePackWorkerStatusRow(row) ? 'pack-worker-status-store/v1' : '';
+}
+
+function summarizeWorkerStatusRow(row, session) {
+  const producerCapability = resolveWorkerStatusProducerCapability(row, session);
+  const heartbeatMs = resolveWorkerStatusHeartbeatMs(row);
+  const explicitWriterEpochObserved = row?.writerEpochObserved
+    ?? row?.liveWriterEpochObserved
+    ?? row?.producerEpochObserved
+    ?? row?.epochObserved;
+  return {
+    sessionId: normalizeWorkerStatusRowSessionId(row),
+    schemaVersion: numberOrZero(row?.schemaVersion),
+    producerCapability,
+    lifecycleState: normalizeLifecycleState(row?.lifecycleState ?? row?.lifecycle ?? row?.status),
+    heartbeatMs,
+    freshnessMs: resolveWorkerStatusFreshnessMs(row),
+    generationToken: resolveDeadWorkerGenerationToken(session, row),
+    writerEpochObserved: explicitWriterEpochObserved === undefined
+      ? producerCapability === 'pack-worker-status-store/v1'
+      : Boolean(explicitWriterEpochObserved),
+    abandonedProducerEpoch: Boolean(
+      row?.abandonedProducerEpoch
+      ?? row?.orphanEpoch
+      ?? row?.writerEpochAbandoned,
+    ),
+    validity: normalizeWorkerStatusValidity(row),
+    lastUpdatedMs: numberOrZero(row?.lastUpdatedMs),
+  };
+}
+
+function summarizeRowsEquivalent(left, right) {
+  return left.schemaVersion === right.schemaVersion
+    && left.producerCapability === right.producerCapability
+    && left.lifecycleState === right.lifecycleState
+    && left.heartbeatMs === right.heartbeatMs
+    && left.freshnessMs === right.freshnessMs
+    && left.generationToken === right.generationToken
+    && left.writerEpochObserved === right.writerEpochObserved
+    && left.abandonedProducerEpoch === right.abandonedProducerEpoch
+    && left.validity === right.validity;
+}
+
+function resolveWorkerStatusRowForSession(session, livenessContext = {}) {
+  const sessionId = getSessionId(session);
+  const rows = collectWorkerStatusRows(livenessContext)
+    .filter((row) => normalizeWorkerStatusRowSessionId(row) === sessionId);
+  if (rows.length === 0) {
+    return { ok: false, reason: 'missing_worker_status_row' };
+  }
+  const summarized = rows.map((row) => ({ row, summary: summarizeWorkerStatusRow(row, session) }));
+  summarized.sort((left, right) => right.summary.lastUpdatedMs - left.summary.lastUpdatedMs);
+  const [winner, ...rest] = summarized;
+  if (rest.some((entry) => !summarizeRowsEquivalent(entry.summary, winner.summary))) {
+    return { ok: false, reason: 'conflicting_duplicate_rows' };
+  }
+  return { ok: true, row: winner.row, summary: winner.summary };
+}
+
 export function hasMatchingSanctionedKill(session, records = []) {
   const sessionId = getSessionId(session);
   if (!sessionId) return false;
@@ -209,6 +462,7 @@ export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
   const osMap = livenessContext.osLiveness ?? {};
   const osLiveness = normalizeOsLiveness(osMap[sessionId] ?? session?.osLiveness ?? livenessContext.defaultOsLiveness);
   const sanctionedKillPresent = hasMatchingSanctionedKill(session, killSurface.records);
+  const evaluationNowMs = numberOrZero(livenessContext.evaluationNowMs) || Date.now();
   const evidence = {
     sessionRowState,
     osLiveness,
@@ -221,19 +475,72 @@ export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
   if (sanctionedKillPresent) {
     return { verdict: 'suppressed', reason: 'sanctioned_kill', event: null, matchedEvents: [], evidence };
   }
-  if ((sessionRowState === 'terminated' || sessionRowState === 'absent') && osLiveness === 'pane-gone') {
-    return {
-      verdict: 'dead',
-      reason: 'session_row_and_os_liveness_dead',
-      event: { id: `liveness:${sessionId || 'absent'}`, type: 'liveness.probed_dead', timestampMs: 0 },
-      matchedEvents: [],
-      evidence,
-    };
-  }
   if (sessionRowState === 'active' && osLiveness === 'pane-alive') {
     return { verdict: 'live_or_unknown', reason: 'worker_alive', event: null, matchedEvents: [], evidence };
   }
-  return { verdict: 'audit_only', reason: 'liveness_evidence_inconclusive', event: null, matchedEvents: [], evidence };
+
+  const resolvedRow = resolveWorkerStatusRowForSession(session, livenessContext);
+  if (!resolvedRow.ok) {
+    return { verdict: 'audit_only', reason: resolvedRow.reason, event: null, matchedEvents: [], evidence };
+  }
+
+  const { row, summary } = resolvedRow;
+  evidence.workerStatus = summary;
+
+  const validity = summary.validity;
+  if (validity === 'unknown') {
+    return { verdict: 'audit_only', reason: 'unknown_row_validity', event: null, matchedEvents: [], evidence };
+  }
+
+  if (!supportedSchemaVersionsOf(livenessContext).includes(summary.schemaVersion)) {
+    return { verdict: 'audit_only', reason: 'unsupported_worker_status_schema', event: null, matchedEvents: [], evidence };
+  }
+  if (!supportedProducerCapabilitiesOf(livenessContext).includes(summary.producerCapability)) {
+    return { verdict: 'audit_only', reason: 'unsupported_worker_status_producer', event: null, matchedEvents: [], evidence };
+  }
+  if (!summary.writerEpochObserved || summary.abandonedProducerEpoch) {
+    return { verdict: 'audit_only', reason: 'abandoned_producer_epoch', event: null, matchedEvents: [], evidence };
+  }
+
+  const lifecycle = summary.lifecycleState;
+  if (!lifecycleAllowlistOf(livenessContext).includes(lifecycle)) {
+    return { verdict: 'audit_only', reason: 'ineligible_lifecycle_state', event: null, matchedEvents: [], evidence };
+  }
+
+  const heartbeatMs = summary.heartbeatMs;
+  if (heartbeatMs <= 0) {
+    return { verdict: 'audit_only', reason: 'missing_heartbeat_timestamp', event: null, matchedEvents: [], evidence };
+  }
+
+  const heartbeatFresh = evaluationNowMs - heartbeatMs <= summary.freshnessMs;
+  evidence.heartbeatFresh = heartbeatFresh;
+  evidence.generationToken = summary.generationToken;
+  evidence.revalidationToken = buildDeadWorkerRevalidationToken(session, row, heartbeatMs);
+
+  if (osLiveness === 'unknown') {
+    return { verdict: 'audit_only', reason: 'os_liveness_unknown', event: null, matchedEvents: [], evidence };
+  }
+  if (osLiveness === 'pane-alive') {
+    return { verdict: 'live_or_unknown', reason: 'worker_alive', event: null, matchedEvents: [], evidence };
+  }
+  if (heartbeatFresh) {
+    return { verdict: 'live_or_unknown', reason: 'heartbeat_fresh', event: null, matchedEvents: [], evidence };
+  }
+  if (!summary.generationToken) {
+    return { verdict: 'audit_only', reason: 'missing_generation_token', event: null, matchedEvents: [], evidence };
+  }
+
+  return {
+    verdict: 'dead',
+    reason: 'pack_owned_liveness_dead',
+    event: {
+      id: `liveness:${sessionId || 'absent'}:${summary.generationToken}:${heartbeatMs}`,
+      type: 'liveness.probed_dead',
+      timestampMs: heartbeatMs,
+    },
+    matchedEvents: [],
+    evidence,
+  };
 }
 
 export function classifyWorkerDeathEvidence(session, aoEvents = [], nowMs = Date.now(), options = {}) {
@@ -317,12 +624,11 @@ export function buildDeadWorkerReconcileKey(candidate) {
   const parts = [
     DEAD_WORKER_RECONCILER_VERSION,
     normalizeString(candidate.sessionId),
+    normalizeString(candidate.generationToken),
     String(candidate.issueNumber || 0),
     String(candidate.prNumber || 0),
     normalizeString(candidate.branch),
     normalizeString(candidate.worktree),
-    normalizeString(candidate.deathEventId),
-    String(candidate.deathTimestampMs || 0),
   ];
   const digest = createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 20);
   return `dead-worker-${digest}`;
@@ -726,6 +1032,9 @@ export function planDeadWorkerReconcile(input = {}) {
     if (!sessionId || !hasAssignedTask(session)) {
       continue;
     }
+    if (input.livenessContext && normalizeString(session?.status) === 'absent') {
+      continue;
+    }
     const evidence = input.livenessContext
       ? classifyWorkerLivenessEvidence(session, input.livenessContext)
       : classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });
@@ -736,6 +1045,7 @@ export function planDeadWorkerReconcile(input = {}) {
     const deathEvent = evidence.event ?? {};
     const candidate = {
       sessionId,
+      generationToken: normalizeString(evidence?.evidence?.generationToken),
       issueNumber: getIssueNumber(session),
       prNumber: getPrNumber(session),
       branch: getBranch(session),
@@ -750,12 +1060,14 @@ export function planDeadWorkerReconcile(input = {}) {
       sessionId,
       issueNumber: candidate.issueNumber,
       prNumber: candidate.prNumber,
+      generationToken: candidate.generationToken,
       branch: candidate.branch,
       worktree: candidate.worktree,
       deathEventId: candidate.deathEventId,
       deathTimestampMs: candidate.deathTimestampMs,
       classifierVersion: DEAD_WORKER_RECONCILER_VERSION,
       evidence,
+      revalidationToken: normalizeString(evidence?.evidence?.revalidationToken),
     };
 
     if (evidence.verdict === 'suppressed') {
@@ -805,6 +1117,7 @@ export function planDeadWorkerReconcile(input = {}) {
         trigger: 'reconcile_dead_worker',
         probedDeadEvidence: true,
         sessionId,
+        generationToken: candidate.generationToken,
         worktreePath: candidate.worktree,
         spawnAction: route.spawnAction,
         issueNumber: route.issueNumber,
@@ -831,6 +1144,7 @@ export function commitDeadWorkerAction(tracking = {}, action, nowMs = Date.now()
     sessionId: action.sessionId,
     issueNumber: action.issueNumber,
     prNumber: action.prNumber,
+    generationToken: action.generationToken,
     branch: action.branch,
     worktree: action.worktree,
     deathEventId: action.deathEventId,
@@ -839,9 +1153,15 @@ export function commitDeadWorkerAction(tracking = {}, action, nowMs = Date.now()
     recordedAtMs: nowMs,
   };
   audit.push(record);
-  if (action.type === 'attempt_started') {
-    attempts[key] = { attempt: numberOrZero(action.attempt), lastAttemptMs: nowMs };
-    leases[key] = { outcome: 'attempt_started', startedAtMs: nowMs, sessionId: action.sessionId };
+    if (action.type === 'attempt_started') {
+      attempts[key] = { attempt: numberOrZero(action.attempt), lastAttemptMs: nowMs };
+    leases[key] = {
+      outcome: 'attempt_started',
+      startedAtMs: nowMs,
+      sessionId: action.sessionId,
+      generationToken: action.generationToken,
+      revalidationToken: action.revalidationToken,
+    };
   } else if (['recovered', 'suppressed', 'escalated', 'audit_only'].includes(action.type)) {
     delete leases[key];
   }
