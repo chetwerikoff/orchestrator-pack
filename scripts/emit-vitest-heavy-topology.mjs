@@ -3,6 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,15 +36,10 @@ function parseArgs(argv) {
 
 function writeGhaOutput(topology) {
   const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
-  }
+  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
   appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
   appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
-  );
+  appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -65,7 +61,6 @@ if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
     result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
   }
 }
-
 if (!result.ok) {
   console.error(result.errors.join('\n'));
   process.exit(1);
@@ -97,6 +92,17 @@ if (process.env.GITHUB_ACTIONS === 'true') {
       Buffer.from(readFileSync(join(repoRoot, relativePath), 'utf8'), 'utf8').toString('base64'),
     ]),
   );
+  const verify = spawnSync(
+    'pwsh',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/verify.ps1'],
+    { cwd: repoRoot, encoding: 'utf8', timeout: 900_000, maxBuffer: 30 * 1024 * 1024 },
+  );
+  const verifyText = `${verify.stdout ?? ''}\n${verify.stderr ?? ''}`.trim();
+  artifact.prBVerifierDiagnostic = {
+    status: verify.status,
+    signal: verify.signal,
+    tail: verifyText.split(/\r?\n/).slice(-160),
+  };
 }
 
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
@@ -117,13 +123,16 @@ if (failOnGuard && guardFailures.length > 0) {
   console.error(guardFailures.join('\n'));
   process.exit(1);
 }
-
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
+if (ghaOutput) writeGhaOutput(result.topology);
 
 const logArtifact = { ...artifact };
 if (logArtifact.prBSourceDocsBase64) {
   logArtifact.prBSourceDocsBase64 = Object.keys(logArtifact.prBSourceDocsBase64);
+}
+if (logArtifact.prBVerifierDiagnostic) {
+  logArtifact.prBVerifierDiagnostic = {
+    ...logArtifact.prBVerifierDiagnostic,
+    tail: [`${logArtifact.prBVerifierDiagnostic.tail.length} lines captured in artifact`],
+  };
 }
 console.log(JSON.stringify(logArtifact));

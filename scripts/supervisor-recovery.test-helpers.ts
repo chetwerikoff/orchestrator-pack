@@ -2,7 +2,41 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as core from './supervisor-recovery.test-helpers-core.js';
 
-export * from './supervisor-recovery.test-helpers-core.js';
+export {
+  repoRoot,
+  supervisorScript,
+  fixtureDir,
+  supervisorHookTimeoutMs,
+  supervisorAsyncTimeoutMs,
+  thawFrozenSupervisorPids,
+  freezeSupervisorPid,
+  SUPERVISOR_TEST_POLL_INTERVAL_MS,
+  sleepMs,
+  fixedObservationWindow,
+  waitForCondition,
+  waitForStdoutContains,
+  waitForMarkerPidChange,
+  waitForSupervisorLogMatchFromOffset,
+  makeStateDir,
+  cleanupSupervisorTests,
+  runSupervisor,
+  runSupervisorAsync,
+  startSupervisorBackground,
+  waitForSupervisorHealthyStatus,
+  waitForMarker,
+  readMarker,
+  isAlive,
+  waitForProcessesStopped,
+  countLogMatches,
+  readSupervisorLog,
+  readChildRecovery,
+  readChildPid,
+  waitForSupervisorLogMatch,
+  stopSupervisorChild,
+  runPwsh,
+  psString,
+  type WakeMarker,
+} from './supervisor-recovery.test-helpers-core.js';
 
 export const managedChildRoles = [
   'review-trigger-reconcile',
