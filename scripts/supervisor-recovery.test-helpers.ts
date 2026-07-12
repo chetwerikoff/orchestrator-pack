@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import * as core from './supervisor-recovery.test-helpers-core.js';
 
 export {
@@ -17,14 +15,10 @@ export {
   waitForStdoutContains,
   waitForMarkerPidChange,
   waitForSupervisorLogMatchFromOffset,
-  makeStateDir,
-  cleanupSupervisorTests,
   runSupervisor,
   runSupervisorAsync,
   startSupervisorBackground,
   waitForSupervisorHealthyStatus,
-  waitForMarker,
-  readMarker,
   isAlive,
   waitForProcessesStopped,
   countLogMatches,
@@ -52,18 +46,57 @@ export const managedChildRoles = [
 
 export type ManagedChildRole = (typeof managedChildRoles)[number];
 
+const trackedStateDirs = new Set<string>();
+
+export function makeStateDir(): string {
+  const stateDir = core.makeStateDir();
+  trackedStateDirs.add(stateDir);
+  return stateDir;
+}
+
+export function cleanupSupervisorTests(): void {
+  for (const stateDir of trackedStateDirs) {
+    try {
+      core.runSupervisor(
+        ['-Action', 'Stop', '-Force', '-StateDir', stateDir],
+        { AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' },
+      );
+    } catch {
+      // Core cleanup handles stale marker/pid fallbacks.
+    }
+  }
+  trackedStateDirs.clear();
+  core.cleanupSupervisorTests();
+}
+
+function normalizeLegacyTestRole(role: string): string {
+  return role === 'listener' ? 'review-trigger-reconcile' : role;
+}
+
 export async function waitForMarkers(
   stateDir: string,
   timeoutMs = 25_000,
-  roles: readonly ManagedChildRole[] = managedChildRoles,
+  roles: readonly string[] = managedChildRoles,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ready = roles.every((role) =>
-      fs.existsSync(path.join(stateDir, 'markers', `${role}.marker.json`)),
-    );
-    if (ready) return;
-    await core.sleepMs(core.SUPERVISOR_TEST_POLL_INTERVAL_MS);
-  }
-  throw new Error(`timed out waiting for supervisor child markers: ${roles.join(', ')}`);
+  await core.waitForMarkers(
+    stateDir,
+    timeoutMs,
+    roles.map(normalizeLegacyTestRole) as readonly core.ManagedChildRole[],
+  );
+}
+
+export async function waitForMarker(
+  stateDir: string,
+  role: string,
+  timeoutMs = 25_000,
+): Promise<void> {
+  await core.waitForMarker(stateDir, normalizeLegacyTestRole(role), timeoutMs);
+}
+
+export async function readMarker(
+  stateDir: string,
+  role: string,
+  timeoutMs = 5000,
+): Promise<core.WakeMarker> {
+  return core.readMarker(stateDir, normalizeLegacyTestRole(role), timeoutMs);
 }
