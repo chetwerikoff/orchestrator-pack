@@ -10,6 +10,7 @@ export interface SplitManifest {
   preMoveBaselineSha: string;
   preMoveEnumeratedFiles: string[];
   preMoveToPostMergeMap: Record<string, string[]>;
+  retiredPreMoveFiles?: string[];
 }
 
 export interface ApprovalValidationResult {

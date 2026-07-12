@@ -38,7 +38,6 @@ const repoRoot = join(import.meta.dirname, '..');
 
 const FIVE_CONSUMERS = [
   'scripts/review-trigger-reconcile.ps1',
-  'scripts/review-finding-delivery-confirm.ps1',
   'scripts/ci-green-wake-reconcile.ps1',
   'scripts/worker-message-submit-reconcile.ps1',
   'scripts/ci-failure-notification-reconcile.ps1',
@@ -51,7 +50,7 @@ function consumerSource(rel: string) {
 describe('events-optional consumer signal recovery (Issue #700)', () => {
   useIsolatedPrSessionBindingCache();
 
-  it('five consumers do not call Get-AoEventsSince on live paths', () => {
+  it('four consumers do not call Get-AoEventsSince on live paths', () => {
     for (const rel of FIVE_CONSUMERS) {
       const source = consumerSource(rel);
       expect(source, rel).not.toMatch(/^\s*\$aoEvents\s*=\s*@?\(?Get-AoEventsSince/m);
@@ -70,12 +69,6 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     expect(() => assertLiveSignalSourceBinding('openPrs+reviewRuns+ao report')).toThrow(
       /dead AO 0.10.2 signal surface/,
     );
-  });
-
-  it('AO 0.10.2 live delivery-confirm path uses pack worker-status decision sessions, not report-full reader', () => {
-    const source = consumerSource('scripts/review-finding-delivery-confirm.ps1');
-    expect(source).toContain('Get-WorkerStatusDecisionSessions -Project $Project');
-    expect(source).toContain('Write-ReconcileReportReceiptSurfaceRemoved');
   });
 
   it('descopes worker-ack confirmation when legacy report receipt surface is absent', () => {
@@ -407,7 +400,7 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
     );
   });
 
-  it('five consumers complete -Once -DryRun without throwing (four fixture-backed; ci-failure via planner unit test)', { timeout: 120_000 }, () => {
+  it('four consumers complete -Once -DryRun without throwing (three fixture-backed; ci-failure via planner unit test)', { timeout: 120_000 }, () => {
     const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -424,11 +417,6 @@ describe('events-optional consumer signal recovery (Issue #700)', () => {
         script: 'scripts/review-trigger-reconcile.ps1',
         fixture: 'tests/fixtures/review-trigger-reconcile/ready-head-triggers.json',
         surface: 'reviewTrigger',
-      },
-      {
-        script: 'scripts/review-finding-delivery-confirm.ps1',
-        fixture: 'scripts/fixtures/review-finding-delivery-confirm/confirmed-idempotent.json',
-        surface: 'deliveryConfirm',
       },
       {
         script: 'scripts/ci-green-wake-reconcile.ps1',

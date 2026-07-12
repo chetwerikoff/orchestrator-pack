@@ -209,6 +209,8 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
   const parked = [...(plan.parked ?? [])].sort();
   const discovered = [...plan.discovered].sort();
   const discoveredActive = discovered.filter((file) => !parked.includes(file));
+  const retiredPreMoveFiles = [...new Set(manifest.retiredPreMoveFiles ?? [])].sort();
+  const retiredPreMoveSet = new Set(retiredPreMoveFiles);
   const errors = [];
 
   if (!baselineValidation.ok) {
@@ -278,13 +280,26 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
   const preMoveUnion = [...baselineValidation.union].sort();
   const expectedPostMoveUnion = [...prRetained, ...postMergeExecution].sort();
   const expectedPostMoveSet = new Set(expectedPostMoveUnion);
-  const missingPreMoveCoverage = preMoveUnion.filter((file) => !expectedPostMoveSet.has(file));
+  const preMoveSet = new Set(preMoveUnion);
+  for (const file of retiredPreMoveFiles) {
+    if (!preMoveSet.has(file)) {
+      errors.push(`retired pre-move file is not present in pinned baseline union: ${file}`);
+    }
+    if (discovered.includes(file)) {
+      errors.push(`retired pre-move file still present in current discovery: ${file}`);
+    }
+    if (expectedPostMoveSet.has(file)) {
+      errors.push(`retired pre-move file still covered by active PR/post-merge execution: ${file}`);
+    }
+  }
+  const missingPreMoveCoverage = preMoveUnion.filter(
+    (file) => !expectedPostMoveSet.has(file) && !retiredPreMoveSet.has(file),
+  );
   if (missingPreMoveCoverage.length > 0) {
     errors.push(
       `post-move PR ∪ post-merge execution is missing pinned pre-move files: ${missingPreMoveCoverage.join(', ')}`,
     );
   }
-  const preMoveSet = new Set(preMoveUnion);
   const postBaselineAdditions = expectedPostMoveUnion.filter((file) => !preMoveSet.has(file));
 
   const mappedExecution = new Set(listPostMergeExecutionFiles(manifest));
@@ -306,6 +321,7 @@ export function buildCoverageDeltaReport(repoRoot = resolveRepoRoot()) {
       movedEnumerated,
       postMergeExecution,
       prRetained,
+      retiredPreMoveFiles,
       prRetainedCount: prRetained.length,
       postMergeExecutionCount: postMergeExecution.length,
       preMoveUnionCount: preMoveUnion.length,
