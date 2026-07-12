@@ -117,12 +117,11 @@ jobs:
             exit "$status"
           fi
 
-      - name: Commit implementation and remove bootstrap artifacts
+      - name: Commit verified implementation
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/issue-757-bootstrap.yml
-          git rm -f scripts/.issue-757-bootstrap.py.zlib.b64 scripts/.issue-757-bootstrap.part* scripts/issue-757-bootstrap-error.txt scripts/issue-757-verify-error.txt 2>/dev/null || true
+          git rm -f scripts/.issue-757-bootstrap.py.zlib.b64 scripts/.issue-757-bootstrap.part* scripts/issue-757-bootstrap-error.txt scripts/issue-757-verify-error.txt
           git add -- \
             .github/workflows/scope-guard.yml \
             docs/declarations/757.arch-direct.json \
