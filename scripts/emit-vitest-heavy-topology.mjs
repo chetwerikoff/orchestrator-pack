@@ -12,6 +12,11 @@ import {
 } from './lib/vitest-heavy-topology.mjs';
 import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
 import {
+  measurePreTopologyFiles,
+  resolvePreTopologyMeasurementTargets,
+  shouldMeasurePreTopology,
+} from './lib/vitest-pre-topology-measurement.mjs';
+import {
   normalizePrScopeMode,
   parseChangedPathManifestFromEnv,
 } from './lib/vitest-pr-scoped-selection.mjs';
@@ -46,11 +51,20 @@ const changedPathManifest = parseChangedPathManifestFromEnv();
 const changedFiles = (changedPathManifest?.entries ?? [])
   .map((entry) => entry.path)
   .filter((path) => path.endsWith('.test.ts'));
-const result = buildLanePlan(repoRoot, {
+const laneOptions = {
   changedFiles,
   changedPathManifest,
   prScopeMode: normalizePrScopeMode(),
-});
+};
+
+let result = buildLanePlan(repoRoot, laneOptions);
+if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
+  const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
+  if (targets.length > 0) {
+    const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
+    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
+  }
+}
 
 if (!result.ok) {
   console.error(result.errors.join('\n'));

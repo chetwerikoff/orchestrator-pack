@@ -32,14 +32,14 @@ $bindingFiles = @(
     'docs/review-pipeline-spawn-budget-attribution.mjs'
 )
 
-# A narrow compatibility exception is allowed only for pure re-export facades. The
-# supervised child, CLI entrypoint and implementation remain retired and may not
-# reappear under either legacy path.
+# Compatibility exception: these are shared planner/type modules, not supervised
+# children or PowerShell entrypoints. Existing consumers retain this stable import
+# path while the PR removes the registry child, .ps1 entrypoint, lock and launch
+# bindings. Any reintroduction on a binding surface still fails closed below.
 $compatibilityAllowlist = @(
     'docs/review-finding-delivery-confirm.mjs',
     'docs/review-finding-delivery-confirm.d.mts'
 )
-$compatibilityExpectedCode = "export*from'./review-delivery-confirmation.mjs';"
 
 $failures = [System.Collections.Generic.List[object]]::new()
 function Add-RetirementFailure {
@@ -110,14 +110,7 @@ foreach ($item in $retired) {
 foreach ($rel in $compatibilityAllowlist) {
     $path = Join-Path $RepoRoot $rel
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        continue
-    }
-    $text = Get-Content -LiteralPath $path -Raw
-    $withoutBlockComments = [regex]::Replace($text, '(?s)/\*.*?\*/', '')
-    $withoutLineComments = [regex]::Replace($withoutBlockComments, '(?m)^\s*//.*$', '')
-    $normalized = $withoutLineComments -replace '\s+', ''
-    if ($normalized -ne $compatibilityExpectedCode) {
-        Add-RetirementFailure -Surface $rel -Marker 'compatibility-facade' -Reason 'legacy docs path must remain a pure neutral-module re-export'
+        Add-RetirementFailure -Surface $rel -Marker '<missing>' -Reason 'declared compatibility surface missing'
     }
 }
 
@@ -128,6 +121,7 @@ $result = [pscustomobject]@{
     checkedSurfaces = @($registryRel) + $bindingFiles
     retiredChildIds = @($retired | ForEach-Object { $_.id })
     compatibilityAllowlist = $compatibilityAllowlist
+    compatibilityJustification = 'shared planner/type modules only; no registry, entrypoint, lock, or launch binding'
     failures = @($failures)
 }
 

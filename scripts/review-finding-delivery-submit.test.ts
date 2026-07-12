@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DELIVERY_STATE_ESCALATED,
   planDeliveryConfirmActions,
-} from '../docs/review-delivery-confirmation.mjs';
+} from '../docs/review-finding-delivery-confirm.mjs';
 import {
   assertSubmitArgvIsEnterOnly,
   buildSubmitDecisionKey,
