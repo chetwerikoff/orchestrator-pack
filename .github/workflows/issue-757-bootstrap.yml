@@ -32,8 +32,8 @@ jobs:
       - name: Decode and apply implementation
         shell: bash
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
+          set -uo pipefail
+          python3 - <<'PY' > /tmp/issue-757-bootstrap.log 2>&1
           import base64
           import zlib
           from pathlib import Path
@@ -42,6 +42,17 @@ jobs:
           compiled = compile(code, 'issue-757-bootstrap.py', 'exec')
           exec(compiled, {'__name__': '__main__'})
           PY
+          status=$?
+          cat /tmp/issue-757-bootstrap.log
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/issue-757-bootstrap.log scripts/issue-757-bootstrap-error.txt
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -- scripts/issue-757-bootstrap-error.txt
+            git commit -m 'Record issue 757 bootstrap diagnostic'
+            git push origin HEAD:agent/issue-757-runtime-history-self-heal
+            exit "$status"
+          fi
 
       - name: Verify implementation
         shell: bash
@@ -59,6 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           git rm .github/workflows/issue-757-bootstrap.yml scripts/.issue-757-bootstrap.py.zlib.b64
+          git rm -f scripts/issue-757-bootstrap-error.txt 2>/dev/null || true
           git add -- \
             .github/workflows/scope-guard.yml \
             docs/declarations/757.arch-direct.json \
