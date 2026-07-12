@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "0a5e6af26700b68e17b7b08e87842569a2c92cb5",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:9a0fde11e5993248a164400a4b1d696439dbe5cb14be9657a2ca8368626d1149"
+    "active_scope_hash": "sha256:5670319aee8e351b8a9b07e8060a29ddeb2c8aef670e70664a841662d93860be"
   },
   "declared_paths": [
     "AGENTS.md",
@@ -48,6 +48,7 @@
     "scripts/check-vestigial-fleet-children-retired.ps1",
     "scripts/check-worker-status-decision-reads.ps1",
     "scripts/ci-failure-notification-reaction.ps1",
+    "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/events-optional-consumer-signal-recovery.test.ts",
     "scripts/external-output-shape-guard.mjs",
     "scripts/external-output-shape-guard.test.ts",
@@ -96,5 +97,20 @@
     "scripts/vitest-wallclock-e2e-split.manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:9a0fde11e5993248a164400a4b1d696439dbe5cb14be9657a2ca8368626d1149",
+      "new_active_scope_hash": "sha256:5670319aee8e351b8a9b07e8060a29ddeb2c8aef670e70664a841662d93860be",
+      "changed": {
+        "added": [
+          "scripts/emit-vitest-heavy-topology.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Add the bounded same-run topology evidence producer required by the PR-A CI contract without modifying runtime history.",
+      "actor": "chatgpt-github-worker",
+      "timestamp": "2026-07-12T12:05:27.153Z",
+      "applied": true
+    }
+  ]
 }
