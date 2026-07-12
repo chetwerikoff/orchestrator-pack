@@ -800,7 +800,8 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     });
     expect(evidence.verdict).toBe('dead');
     expect(evidence.reason).toBe('pack_owned_liveness_dead');
-    expect(evidence.evidence.generationToken).toBe(
+    expect(evidence.evidence).toBeDefined();
+    expect(evidence.evidence?.generationToken).toBe(
       '{"bindingCacheGeneration":1,"journalCursor":1,"reportStoreGeneration":1,"repoTickGeneration":1}',
     );
   });

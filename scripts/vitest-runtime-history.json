@@ -387,7 +387,7 @@
   },
   "contentSha": {
     "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
-    "scripts/dead-worker-reconcile.test.ts": "7ce6b114ab29455b1a6cae9d8f9eadd365380f1fad9c132186d1ee3f85a8d0dd",
+    "scripts/dead-worker-reconcile.test.ts": "bdc3993d5f91e264b3826f11fd7d951d29acd8accb3b413e4f647a0e150b9eeb",
     "scripts/orchestrator-escalation-router.test.ts": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a",
     "scripts/orchestrator-escalation.test.ts": "e9e482c10d6dc7238802587208f61c59da7e54c9bd0d566921e59a8bfc921d45",
     "scripts/worker-recovery.test.ts": "c5f05d74052dce9a267c923bb737995b94cc6ea9fecba6c15633a34234937454"
