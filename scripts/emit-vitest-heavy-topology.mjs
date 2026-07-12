@@ -47,9 +47,15 @@ function writeGhaOutput(topology) {
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const changedPathManifest = parseChangedPathManifestFromEnv();
+const rawChangedPathManifest = parseChangedPathManifestFromEnv();
+const changedPathManifest = rawChangedPathManifest
+  ? {
+      ...rawChangedPathManifest,
+      entries: (rawChangedPathManifest.entries ?? []).filter((entry) => entry.status !== 'D'),
+      entryCount: (rawChangedPathManifest.entries ?? []).filter((entry) => entry.status !== 'D').length,
+    }
+  : null;
 const changedFiles = (changedPathManifest?.entries ?? [])
-  .filter((entry) => entry.status !== 'D')
   .map((entry) => entry.path)
   .filter((path) => path.endsWith('.test.ts'));
 const laneOptions = {
