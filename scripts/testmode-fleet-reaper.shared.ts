@@ -133,16 +133,14 @@ export function spawnOrphanTestModeChild(stateDir: string): number {
 export async function waitForLiveChildPids(
   stateDir: string,
   timeoutMs = 45_000,
-): Promise<{ listener: number; escalationRouter: number }> {
+): Promise<{ reviewTriggerReconcile: number; escalationRouter: number }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const reviewTriggerPath = path.join(stateDir, 'review-trigger-reconcile.pid');
     const escalationRouterPath = path.join(stateDir, 'escalation-router.pid');
     if (fs.existsSync(reviewTriggerPath) && fs.existsSync(escalationRouterPath)) {
       return {
-        // Compatibility field for the existing fleet-reaper assertions. The PID is
-        // the surviving review-trigger child; no listener process is launched.
-        listener: Number(fs.readFileSync(reviewTriggerPath, 'utf8').trim()),
+        reviewTriggerReconcile: Number(fs.readFileSync(reviewTriggerPath, 'utf8').trim()),
         escalationRouter: Number(fs.readFileSync(escalationRouterPath, 'utf8').trim()),
       };
     }
@@ -234,7 +232,7 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     const escalationRouterMarker = await readMarker(stateDir, 'escalation-router');
     return {
       supervisorPid,
-      listener: reviewTriggerReconcile,
+      reviewTriggerReconcile,
       escalationRouter: escalationRouterMarker,
     };
   } finally {
