@@ -119,12 +119,41 @@ as `pass-NN-<stage>.capture.txt`.
 silent drop — invalid. `NO_FINDINGS` passes owe no rows. Re-worded findings on
 later passes map to the carried-forward `id`, not a new row.
 
+**Stakes-weighted proportionality (non-protected findings).** Disposition is not
+a vote on whether the reviewer's observation is factually correct. A finding
+that proposes durable-state, CAS, attestation, crash-resume, or
+threat-model-class machinery may be `rejected` as **correct but disproportionate**
+when it fails both tests: the prevented failure materially matters at the
+artifact's stated stakes, and the proposed mechanism is the cheapest sufficient
+guard for that failure. Its `rejectReason` MUST connect the verdict to the stated
+blast radius, reversibility, and failure impact and name the cheaper sufficient
+design; bare reasons such as "out of scope" or "too complex" are not sufficient.
+
+The following table is **illustrative, non-binding guidance — not a rigid lookup**.
+It applies only after reading the artifact's own stakes statement; the stakes
+axis is qualitative and is **not** the T1/T2/T3 ceremony tier.
+
+| Finding category | Contained and reversible stakes | Bounded blast radius | Systemic or irreversible stakes |
+|---|---|---|---|
+| Durable-state / CAS / attestation / crash-resume machinery | Prefer rejection when a local invariant, explicit constraint, or no-build alternative is sufficient; name it in `rejectReason`. | Keep only the smallest mechanism that contains the stated failure; reject stronger machinery when a cheaper guard is sufficient. | Address when the systemic failure is credible; rejection requires an equally sufficient cheaper design, not optimism. |
+| Correctness / logic defect | Usually address with the narrowest correction; reject only when the observation does not apply or a cheaper alternative fully preserves correctness. | Address the affected contract and its bounded failure path. | Address; high-stakes correctness is not traded for authoring convenience. |
+| Missing test coverage | Prefer the focused example or existing proof that covers the contained failure. | Add coverage proportional to the affected classes and blast radius. | Require evidence broad enough to cover systemic, race, recovery, or irreversible failure modes. |
+| Phrasing / style | Reject when wording cannot alter the contract or worker interpretation. | Address ambiguity that could misroute implementation or verification. | Address wording that obscures guarantees, rollback, ownership, or failure handling. |
+
 ### Non-rejectable carve-out
 
 Findings with `type: security` or `type: scope-violation` (#51 vocabulary) have
 exactly one valid disposition: `addressed`. The guard fails when a protected
 finding is `rejected` **or omitted** while present in capture. Contested protected
 findings **escalate to the architect** — never self-waivable by the draft author.
+
+The carve-out protects the **outcome** (the risk is explicitly resolved or owned),
+not one prescribed mechanism. `addressed` may be reached by eliminating the
+attack surface the finding targets or by specifying an explicit, reasoned
+defensive mechanism around it. When that defense would be disproportionate to a
+near-zero-payoff threat, eliminate the surface or record an explicit, reasoned
+risk-acceptance note with its assumptions and residual risk. This mechanism
+choice never permits `rejected` and never permits silent omission.
 
 **Guard:** `scripts/check-finding-ledger-guard.ps1 -CapturesDir …` (or
 `check-draft-discipline.ps1 -Command finding-ledger`) validates **every**
@@ -141,13 +170,28 @@ On competitive and architectural stages the reviewer prompt
 (`prompts/codex_draft_review_prompt.md`) mandates the four-question lens: what can
 be simplified / must not be simplified / is excess / is missing. Lens findings
 flow through the normal ledger and remain subject to the carve-out. The architect
-applies the same lens on the T3 lens pass.
+applies the same lens on the T3 lens pass. Simplification and excess judgments
+weigh every major mechanism against the artifact's stated stakes, its cost and
+risk, and the cheapest sufficient alternative — not against ceremony tier alone.
 
 ### Architect T3 lens pass
 
 On T3 only, after architectural review converges: architect audits the ledger's
 **reject partition** (re-judges rejects; does **not** re-open accepts), may edit
 the draft, then one final architectural (Codex) pass verifies those edits.
+
+The lens capture (for example `presync-architect-lens.md`) MUST also record, for
+each major mechanism in the resulting draft, an explicit **keep** or **cut**
+verdict with the artifact's stated stakes × mechanism cost/risk × cheapest
+sufficient alternative. Repackaging or splitting an over-built mechanism across
+sibling drafts is not, by itself, an **излишне** cut: the lens must record a
+substantive reduction or explicitly keep the total mechanism.
+
+If a low/contained-stakes artifact exits adversarial review with approximately
+100% of findings `addressed`, record that as a **proportionality smell** in the
+same lens capture and run one re-examination pass. The smell is neither an
+automatic failure nor evidence of thoroughness; it prompts a fresh check for
+correct-but-disproportionate machinery.
 
 ### Drift escalation
 
