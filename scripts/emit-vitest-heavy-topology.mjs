@@ -42,25 +42,7 @@ function writeGhaOutput(topology) {
   appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
 }
 
-function runVerifyDiagnostic(repoRoot) {
-  if (process.env.CI !== 'true' || process.env.OPK_SKIP_VERIFY_DIAGNOSTIC === '1') {
-    return null;
-  }
-  const child = spawnSync(
-    'pwsh',
-    ['-NoProfile', '-File', join(repoRoot, 'scripts', 'verify.ps1')],
-    {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      timeout: 240_000,
-      maxBuffer: 16 * 1024 * 1024,
-      env: {
-        ...process.env,
-        OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1',
-        OPK_SKIP_VERIFY_DIAGNOSTIC: '1',
-      },
-    },
-  );
+function commandTail(child, limit = 180) {
   const combined = `${child.stdout ?? ''}\n${child.stderr ?? ''}`
     .split(/\r?\n/)
     .filter(Boolean);
@@ -68,8 +50,61 @@ function runVerifyDiagnostic(repoRoot) {
     status: child.status,
     signal: child.signal,
     error: child.error?.message ?? null,
-    tail: combined.slice(-140),
+    tail: combined.slice(-limit),
   };
+}
+
+function runVerifyDiagnostic(repoRoot) {
+  if (process.env.CI !== 'true' || process.env.OPK_SKIP_PR_A_DIAGNOSTIC === '1') return null;
+  const child = spawnSync('pwsh', ['-NoProfile', '-File', join(repoRoot, 'scripts', 'verify.ps1')], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 240_000,
+    maxBuffer: 16 * 1024 * 1024,
+    env: {
+      ...process.env,
+      OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1',
+      OPK_SKIP_PR_A_DIAGNOSTIC: '1',
+    },
+  });
+  return commandTail(child);
+}
+
+function quotePowerShell(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function runChangedLightDiagnostic(repoRoot) {
+  if (process.env.CI !== 'true' || process.env.OPK_SKIP_PR_A_DIAGNOSTIC === '1') return null;
+  const files = [
+    'scripts/ao-events-correlation-degraded.test.ts',
+    'scripts/events-optional-consumer-signal-recovery.test.ts',
+    'scripts/external-output-shape-guard.test.ts',
+    'scripts/reviewer-failure-evidence.test.ts',
+    'scripts/vestigial-fleet-retirement.test.ts',
+  ];
+  const helper = join(repoRoot, 'scripts', 'lib', 'Set-OpkVitestHarnessEnv.ps1');
+  const fileArgs = files.map(quotePowerShell).join(',');
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `. ${quotePowerShell(helper)}`,
+    '$harness = Set-OpkVitestHarnessEnv',
+    'try {',
+    `  $testFiles = @(${fileArgs})`,
+    '  & npm test -- @testFiles',
+    '  exit $LASTEXITCODE',
+    '} finally {',
+    '  Remove-Item -LiteralPath $harness.root -Recurse -Force -ErrorAction SilentlyContinue',
+    '}',
+  ].join('; ');
+  const child = spawnSync('pwsh', ['-NoProfile', '-Command', command], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 240_000,
+    maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, OPK_SKIP_PR_A_DIAGNOSTIC: '1' },
+  });
+  return { files, ...commandTail(child) };
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -108,6 +143,7 @@ const artifact = {
   parkedFiles: result.parked,
   heavyShards: result.heavyShards,
   verifyDiagnostic: runVerifyDiagnostic(repoRoot),
+  changedLightDiagnostic: runChangedLightDiagnostic(repoRoot),
 };
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
