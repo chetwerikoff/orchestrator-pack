@@ -3,8 +3,9 @@ import { afterEach } from 'vitest';
 import {
   cleanupSupervisorTests,
   fixtureDir,
-  runSupervisor,
+  managedChildRoles,
   waitForMarkers as waitForMarkersCore,
+  type ManagedChildRole,
 } from './supervisor-recovery.test-helpers.js';
 
 export { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -17,6 +18,7 @@ export {
   fixedObservationWindow,
   isAlive,
   makeStateDir,
+  managedChildRoles,
   readMarker,
   readSupervisorLog,
   repoRoot,
@@ -32,33 +34,16 @@ export {
   waitForSupervisorLogMatch,
   waitForSupervisorLogMatchFromOffset,
   waitForSupervisorHealthyStatus,
+  type ManagedChildRole,
   type WakeMarker,
 } from './supervisor-recovery.test-helpers.js';
-
-export const managedChildRoles = [
-  'review-trigger-reconcile',
-  'review-trigger-reeval',
-  'review-ready-report-state-seed',
-  'ci-green-wake-reconcile',
-  'worker-message-submit-reconcile',
-  'review-start-claim-reaper',
-  'ci-failure-notification-reconcile',
-  'dead-worker-reconcile',
-  'escalation-router',
-] as const;
-
-export type ManagedChildRole = (typeof managedChildRoles)[number];
 
 export async function waitForMarkers(
   stateDir: string,
   timeoutMs = 25_000,
   roles: readonly ManagedChildRole[] = managedChildRoles,
 ): Promise<void> {
-  await waitForMarkersCore(
-    stateDir,
-    timeoutMs,
-    roles as Parameters<typeof waitForMarkersCore>[2],
-  );
+  await waitForMarkersCore(stateDir, timeoutMs, roles);
 }
 
 export const aoStub = path.join(fixtureDir, 'ao-stub.sh');
