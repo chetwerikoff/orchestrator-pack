@@ -385,15 +385,6 @@
     "tests/agents-md-size-budget.test.ts": "measured",
     "scripts/worker-status-store.test.ts": "measured"
   },
-  "contentSha": {
-    "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
-    "scripts/orchestrator-escalation-router.test.ts": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a",
-    "scripts/orchestrator-escalation.test.ts": "e9e482c10d6dc7238802587208f61c59da7e54c9bd0d566921e59a8bfc921d45",
-    "scripts/run-vitest-heavy-shard.test.ts": "d3de2b049fb69d107f95d2e3f65e5b0cf9a98888e1b279d6f67415b0bb1813d1",
-    "scripts/supervisor-prompt-block-crash-backoff.test.ts": "2e011cebca197efac3c37560bd645a901ec4799dd2858118d6eae4c880cdcad1",
-    "scripts/worker-message-submit-reconcile.test.ts": "1ee617ca12b88f014708492b386ab324c38cb15b72b5c56c7f402d0c2ac389df",
-    "scripts/worker-report-store.test.ts": "cc33c7a9239c2ce11af46dd127bb5074bdb18fbe1172a59c16b3c6d2e5dc6a79"
-  },
   "recentSamples": {},
   "fileChangedAt": {}
 }
