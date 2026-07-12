@@ -387,6 +387,8 @@
   },
   "contentSha": {
     "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
+    "scripts/finding-ledger-guard.test.ts": "76be00420d3c29e3ca8d2b7acdac3a99a5d9004c75e63df897fa50730179fa99",
+    "scripts/tier-gate-guard.test.ts": "1b4e904be2d466e5b6dd0a69a95bc30bc8d59de181575a764e0e5e3242b65fdb",
     "scripts/dead-worker-reconcile.test.ts": "d9e22b35e782d676ac3b0037bcaad642ba86e09612f86c854d4f5e1b5faea33e",
     "scripts/event-consumer-rebind-scenario-matrix.test.ts": "142feea5f8496dabdfd35a44afdd0960cbb7a7a0a215f9bd091d5d0062ec420b",
     "scripts/orchestrator-escalation-router.test.ts": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a",

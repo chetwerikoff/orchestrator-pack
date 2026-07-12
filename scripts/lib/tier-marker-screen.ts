@@ -52,7 +52,6 @@ export const MARKER_HEURISTICS: Record<string, RegExp[]> = {
     /\baudit\s+log\b/i,
     /\bevidence\s+ledger\b/i,
     /\bcontract[- ]evidence\s+ledger\b/i,
-    /\bledgers?\b/i,
   ],
   'test-harness-correctness': [
     /\bfixture\s+isolation\b/i,
