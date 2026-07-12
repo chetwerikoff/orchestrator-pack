@@ -7,14 +7,30 @@
   "baseline": {
     "commit_sha": "b4be8df537757bd0f3314f91e8cfd792e36a4ae4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f23f7f86fe6787daed0ca25793e50f96e24fbf1b225745154fdce19c095fd1a5"
+    "active_scope_hash": "sha256:0eeb2591027fa7805a97e593eb0b9becbe7f91ba597c8381d603c7bee9ea6dac"
   },
   "declared_paths": [
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/tier-marker-screen.ts",
     "scripts/finding-ledger-guard.test.ts",
-    "scripts/tier-gate-guard.test.ts"
+    "scripts/tier-gate-guard.test.ts",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f23f7f86fe6787daed0ca25793e50f96e24fbf1b225745154fdce19c095fd1a5",
+      "new_active_scope_hash": "sha256:0eeb2591027fa7805a97e593eb0b9becbe7f91ba597c8381d603c7bee9ea6dac",
+      "changed": {
+        "added": [
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "add scripts/vitest-runtime-history.json (contentSha refresh for edited test files)",
+      "actor": "local",
+      "timestamp": "2026-07-12T08:39:41.787Z",
+      "applied": true
+    }
+  ]
 }
