@@ -665,7 +665,6 @@ function Publish-OrchestratorEscalation {
     $record.lastMessage = $Message
     $record.correlationKey = $CorrelationKey
     $record.failureKind = Get-OrchestratorEscalationFailureKind -Payload $Payload
-    $record.lastSourceEmitAtMs = $now
     $envelope = New-OrchestratorEscalationEnvelope -Class $class -EscalationClassId $EscalationClassId `
         -CorrelationKey $CorrelationKey -RecordKey $recordKey -AckToken ([string]$record.ackToken) -Payload $Payload -Message $Message
 
@@ -699,9 +698,12 @@ function Publish-OrchestratorEscalation {
             Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
             return @{ ok = $true; status = 'source_rate_limited'; escalationId = $recordKey; delivered = $false; reason = 'source_rate_limited' }
         }
+        $record.lastSourceEmitAtMs = $now
         Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
         return @{ ok = $true; status = 'open_existing'; escalationId = $recordKey; delivered = $false; reason = 'condition_open' }
     }
+
+    $record.lastSourceEmitAtMs = $now
 
     $wakeKey = "${EscalationClassId}|${CorrelationKey}"
     $lastWake = if ($state.wakeWindows.ContainsKey($wakeKey)) { [long]$state.wakeWindows[$wakeKey] } else { 0 }
@@ -743,6 +745,14 @@ function Publish-OrchestratorEscalation {
         $record.terminalState = 'open'
         $record.deliveryFailures = @($record.deliveryFailures) + @(@{ atMs = $now; reason = $reason })
         $record.lastDeliveryFailure = $reason
+        if ($route -eq 'operator') {
+            $record.attempts = 0
+            $record.firstAttemptAtMs = $null
+            $record.lastAttemptAtMs = $null
+            if ($state.wakeWindows.ContainsKey($wakeKey)) {
+                $state.wakeWindows.Remove($wakeKey) | Out-Null
+            }
+        }
         Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
         return @{ ok = $false; status = 'pending'; escalationId = $recordKey; reason = $reason; delivered = $false }
     }

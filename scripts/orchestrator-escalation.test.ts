@@ -249,6 +249,47 @@ describe('orchestrator escalation contract (#641)', () => {
     expect(parsed.healthCount).toBe(1);
   });
 
+  it('capacity-class open records re-arm after the 15-minute source rate-limit window', () => {
+    const parsed = runJson(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $first = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:capacity:claim-store' -Payload @{ failureKind = 'capacity_guard' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 1000 -DryRun
+      $withinWindow = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:capacity:claim-store' -Payload @{ failureKind = 'capacity_guard' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 2000 -DryRun
+      $afterWindow = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:capacity:claim-store' -Payload @{ failureKind = 'capacity_guard' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 902000 -DryRun
+      [pscustomobject]@{
+        firstStatus = [string]$first.status
+        withinWindowStatus = [string]$withinWindow.status
+        afterWindowStatus = [string]$afterWindow.status
+        afterWindowReason = [string]$afterWindow.reason
+      } | ConvertTo-Json -Compress
+    `);
+    expect(parsed.firstStatus).toBe('operator_inbox');
+    expect(parsed.withinWindowStatus).toBe('source_rate_limited');
+    expect(parsed.afterWindowStatus).toBe('open_existing');
+    expect(parsed.afterWindowReason).toBe('condition_open');
+  });
+
+  it('operator-route failures remain retryable by later source publishes', () => {
+    const parsed = runJson(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $failed = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:claim-store:retryable' -Payload @{ failureKind = 'ambiguous_claim' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 1000
+      Remove-Item Env:AO_ESCALATION_FORCE_INBOX_FAILURE
+      $retried = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:claim-store:retryable' -Payload @{ failureKind = 'ambiguous_claim' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 2000
+      $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $record = $stateFile.records[$retried.escalationId]
+      [pscustomobject]@{
+        failedStatus = [string]$failed.status
+        retriedStatus = [string]$retried.status
+        attempts = [int]$record.attempts
+        operatorOutbox = [string]$record.operatorOutbox
+      } | ConvertTo-Json -Compress
+    `);
+    expect(parsed.failedStatus).toBe('pending');
+    expect(parsed.retriedStatus).toBe('operator_inbox');
+    expect(parsed.attempts).toBe(1);
+    expect(parsed.operatorOutbox).toBe('published');
+  });
+
   it('escalation scenario matrix fixtures are present', () => {
     const fixtureDir = join(repoRoot, 'tests/fixtures/orchestrator-escalation');
     expect(existsSync(fixtureDir)).toBe(true);
