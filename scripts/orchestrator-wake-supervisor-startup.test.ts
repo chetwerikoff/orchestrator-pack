@@ -80,6 +80,7 @@ function startSupervisorWithFixture(
   env: Record<string, string> = {},
 ) {
   const aoCommand = path.join(fixtureDir, 'ao-stub.ps1');
+  const pwshArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', supervisorScript];
   const fixtureIndex = extraArgs.indexOf('-FixturePath');
   const fixtureEnv =
     fixtureIndex >= 0 && fixtureIndex + 1 < extraArgs.length
@@ -88,11 +89,7 @@ function startSupervisorWithFixture(
   return spawn(
     'pwsh',
     [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      supervisorScript,
+      ...pwshArgs,
       '-Action',
       'Start',
       '-Foreground',
