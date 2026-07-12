@@ -7,13 +7,14 @@
   "baseline": {
     "commit_sha": "580ae4440309d39a91af44bc87ea1d88966c3328",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:89ae3926771212777f47bc59dfd9b899d6b9ed3242888c28a834fbbce78029fb"
+    "active_scope_hash": "sha256:25aad17fac2af41bfe673e1e83962625f74862eef90028babb780cdee3a69058"
   },
   "declared_paths": [
     "AGENTS.md",
     "docs/autonomous-review-retry.mjs",
     "docs/generated-launch-argv-inventory.d.mts",
     "docs/generated-launch-argv-inventory.mjs",
+    "docs/launch-argv-registry.mjs",
     "docs/migration_notes.md",
     "docs/orchestrator-autoloop-go-live.md",
     "docs/orchestrator-message-map.md",
@@ -104,5 +105,20 @@
     "scripts/vitest-wallclock-e2e-split.manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:89ae3926771212777f47bc59dfd9b899d6b9ed3242888c28a834fbbce78029fb",
+      "new_active_scope_hash": "sha256:25aad17fac2af41bfe673e1e83962625f74862eef90028babb780cdee3a69058",
+      "changed": {
+        "added": [
+          "docs/launch-argv-registry.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Address PR #758 review feedback for direct launch-argv registry audit materialization.",
+      "actor": "codex",
+      "timestamp": "2026-07-12T14:31:14.000Z",
+      "applied": true
+    }
+  ]
 }

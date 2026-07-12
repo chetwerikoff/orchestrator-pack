@@ -20,6 +20,8 @@ import {
 
 const repoRoot = join(import.meta.dirname, '..');
 const guardScript = join(repoRoot, 'scripts/check-launch-argv-inventory.ps1');
+const registryCli = join(repoRoot, 'docs/launch-argv-registry.mjs');
+const generatedRegistryCli = join(repoRoot, 'docs/generated-launch-argv-inventory.mjs');
 const fixtureRoot = join(repoRoot, 'scripts/fixtures/launch-argv-inventory');
 const pwshTimeoutMs = 120_000;
 
@@ -57,6 +59,30 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
     const result = runGuard();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toMatch(/PASS.*launch-argv inventory guard/i);
+  });
+
+  it('direct registry audit materializes generated inventory rows from outside the repo root', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'launch-argv-direct-cwd-'));
+    tempDirs.push(tmp);
+    const result = spawnSync('node', [registryCli, 'audit', repoRoot], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: pwshTimeoutMs,
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toMatch(/PASS.*launch-argv inventory audit/i);
+  });
+
+  it('generated registry audit resolves generated rows from outside the repo root', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'launch-argv-generated-cwd-'));
+    tempDirs.push(tmp);
+    const result = spawnSync('node', [generatedRegistryCli, repoRoot], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: pwshTimeoutMs,
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toMatch(/PASS.*generated launch-argv inventory audit/i);
   });
 
   it('fails discovery when a production launch site is unregistered', () => {

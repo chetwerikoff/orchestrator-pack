@@ -568,6 +568,12 @@ export function findOrphanInventoryRows(rows, productionHits) {
 export function auditLaunchArgvInventory(repoRoot, options = {}) {
   const root = options.repoRoot ?? repoRoot;
   const bundle = loadLaunchArgvBundle(root);
+  if (bundle.inventory.generatedVersion === 'launch-argv-inventory/generated-v1') {
+    bundle.inventory = {
+      ...bundle.inventory,
+      rows: buildDefaultInventoryRows(root),
+    };
+  }
   const violations = [];
 
   violations.push(...validateInventoryRows(bundle, root));
@@ -612,7 +618,7 @@ export function loadTestExclusions(repoRoot) {
   return JSON.parse(readFileSync(manifestPath, 'utf8'));
 }
 
-function validatorBackedForHit(hit) {
+function validatorBackedForHit(hit, repoRoot) {
   if (hit.file === 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1' && hit.patternId === 'start-process') {
     return {
       validatorId: 'side-process-launch-contract',
@@ -636,7 +642,7 @@ function validatorBackedForHit(hit) {
     };
   }
   if (hit.file === 'docs/pr-session-binding-cache.mjs' && hit.patternId === 'spawnSync') {
-    const full = path.join(process.cwd(), hit.file);
+    const full = path.join(repoRoot, hit.file);
     const source = readFileSync(full, 'utf8');
     const span = source.split('\n').slice(Math.max(0, hit.line - 3), hit.line + 2).join('\n');
     if (span.includes('ghCommand')) {
@@ -724,7 +730,7 @@ export function buildDefaultInventoryRows(repoRoot) {
   }
 
   for (const { hit, patternIds } of grouped.values()) {
-    const backed = validatorBackedForHit(hit);
+    const backed = validatorBackedForHit(hit, repoRoot);
     const slug = `${hit.file.replace(/[^a-zA-Z0-9]+/g, '-')}-${hit.line}`.slice(0, 90);
     if (backed) {
       if (backed.validatorId) {
