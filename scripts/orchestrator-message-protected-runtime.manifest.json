@@ -15,7 +15,6 @@
     "scripts/journaled-worker-send.ps1"
   ],
   "supervisedEntrypoints": [
-    "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
@@ -45,7 +44,6 @@
     "docs/ci-failure-notification.mjs",
     "scripts/ci-failure-notification.ps1",
     "scripts/lib/Review-StartClaim.ps1",
-    "scripts/orchestrator-wake-listener.ps1",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
     "agent-orchestrator.yaml.example"
