@@ -198,19 +198,6 @@
       }
     },
     {
-      "code": "E6",
-      "escalation_class_id": "escalation-handoff-envelope",
-      "name": "handoff-envelope",
-      "owning_process": "listener",
-      "route": "llm-orchestrator",
-      "delivery_guarantee": "at-least-once-until-ack",
-      "dedupe_owner": "issue-641",
-      "trigger": {
-        "summary": "Worker blocked / handoff question admitted",
-        "event": "handoff_envelope_admission"
-      }
-    },
-    {
       "code": "E8",
       "escalation_class_id": "escalation-pipeline-failure",
       "name": "pipeline-failure",
