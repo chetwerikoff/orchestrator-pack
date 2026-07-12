@@ -85,6 +85,99 @@ function Set-DeadWorkerState {
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $Script:DeadWorkerDefaultState -JsonDepth 40
 }
 
+function Copy-DeadWorkerActionMap {
+    param([object]$Map)
+
+    $copy = @{}
+    if ($Map -is [System.Collections.IDictionary]) {
+        foreach ($entry in $Map.GetEnumerator()) {
+            $copy[[string]$entry.Key] = $entry.Value
+        }
+        return $copy
+    }
+    if ($Map) {
+        foreach ($prop in $Map.PSObject.Properties) {
+            $copy[[string]$prop.Name] = $prop.Value
+        }
+    }
+    return $copy
+}
+
+function Get-DeadWorkerActionMapCount {
+    param([object]$Map)
+
+    return @((Copy-DeadWorkerActionMap -Map $Map).Keys).Count
+}
+
+function Set-DeadWorkerPendingAction {
+    param(
+        [object]$State,
+        [object]$Action,
+        [long]$NowMs
+    )
+
+    $pending = Copy-DeadWorkerActionMap -Map $State.pendingActions
+    $key = [string]$Action.key
+    $pending[$key] = @{
+        key = $key
+        sessionId = [string]$Action.sessionId
+        issueNumber = [int]$Action.issueNumber
+        prNumber = [int]$Action.prNumber
+        generationToken = [string]$Action.generationToken
+        revalidationToken = [string]$Action.revalidationToken
+        recordedAtMs = $NowMs
+    }
+    $State.pendingActions = $pending
+    return $State
+}
+
+function Clear-DeadWorkerPendingAction {
+    param(
+        [object]$State,
+        [string]$Key
+    )
+
+    $pending = @{}
+    foreach ($entry in (Copy-DeadWorkerActionMap -Map $State.pendingActions).GetEnumerator()) {
+        $entryKey = [string]$entry.Key
+        if ($entryKey -eq $Key) { continue }
+        $pending[$entryKey] = $entry.Value
+    }
+    $State.pendingActions = $pending
+    return $State
+}
+
+function Enter-DeadWorkerRecoveryQuarantine {
+    param(
+        [object]$State,
+        [string]$Reason,
+        [long]$NowMs
+    )
+
+    $pending = Copy-DeadWorkerActionMap -Map $State.pendingActions
+    if (@($pending.Keys).Count -le 0) {
+        return $State
+    }
+    $State.pendingActions = @{}
+    $quarantined = Copy-DeadWorkerActionMap -Map $State.quarantinedActions
+    foreach ($entry in $pending.GetEnumerator()) {
+        $record = Copy-DeadWorkerActionMap -Map $entry.Value
+        $record['quarantineReason'] = [string]$Reason
+        $record['quarantinedAtMs'] = $NowMs
+        $quarantined[[string]$entry.Key] = $record
+    }
+    $State.quarantinedActions = $quarantined
+    $audit = @($State.audit)
+    $audit += @{
+        outcome = 'recovery_quarantined'
+        reason = [string]$Reason
+        pendingKeys = @($pending.Keys)
+        recordedAtMs = $NowMs
+    }
+    $State.audit = $audit
+    return $State
+}
+
 function Invoke-DeadWorkerPlannerCli {
     param(
         [string]$Subcommand,
@@ -618,6 +711,19 @@ function Invoke-DeadWorkerTick {
     )
     $tracking = Get-DeadWorkerState -Path $StatePath
     Assert-MechanicalJsonStateFencesTrusted -State $tracking -Context 'dead-worker side effects'
+    if ((Get-DeadWorkerActionMapCount -Map $tracking.quarantinedActions) -gt 0) {
+        Write-DeadWorkerLog "recovery quarantine active; planning paused quarantinedActions=$((Get-DeadWorkerActionMapCount -Map $tracking.quarantinedActions))"
+        return 0
+    }
+    if ((Get-DeadWorkerActionMapCount -Map $tracking.pendingActions) -gt 0) {
+        $tracking = Enter-DeadWorkerRecoveryQuarantine -State $tracking -Reason 'incomplete_recovery_after_side_effect' `
+            -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        if (-not $DryRunMode) {
+            Set-DeadWorkerState -Path $StatePath -State $tracking
+        }
+        Write-DeadWorkerLog "recovery quarantine activated for quarantinedActions=$((Get-DeadWorkerActionMapCount -Map $tracking.quarantinedActions))"
+        return 0
+    }
 
     if ($Fixture) {
         $payload = Get-DeadWorkerFixturePayload -Path $Fixture
@@ -681,7 +787,14 @@ function Invoke-DeadWorkerTick {
             continue
         }
         $attempted++
+        if (-not $DryRunMode) {
+            $tracking = Set-DeadWorkerPendingAction -State $tracking -Action $action -NowMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+            Set-DeadWorkerState -Path $StatePath -State $tracking
+        }
         $result = Invoke-DeadWorkerRecovery -Action $action -DryRunMode:$DryRunMode
+        if (-not $DryRunMode) {
+            $tracking = Clear-DeadWorkerPendingAction -State $tracking -Key ([string]$action.key)
+        }
         $finalAction = [ordered]@{}
         foreach ($prop in $action.PSObject.Properties) { $finalAction[$prop.Name] = $prop.Value }
         $finalAction.type = [string]$result.deadWorkerOutcome

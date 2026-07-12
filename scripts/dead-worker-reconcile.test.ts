@@ -643,9 +643,56 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         ['-NoProfile', '-File', bootstrapPath],
         { cwd: repoRoot, encoding: 'utf8' },
       );
-      const result = JSON.parse(output);
+      const jsonLine = output.trim().split('\n').filter(Boolean).at(-1) as string;
+      const result = JSON.parse(jsonLine);
       expect(result.rowCount).toBe(0);
       expect(result.disabled).toBe(true);
+    } finally {
+      rmSync(bootstrapPath, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('quarantines incomplete recovery after a crash between side effect start and final commit', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-live-'));
+    const statePath = join(tempDir, 'dead-worker-state.json');
+    const bootstrapPath = join(repoRoot, 'scripts', `.tmp-dead-worker-incomplete-${Date.now()}.ps1`);
+    const fixturePath = join(fixturesDir, 'recoverable-crash-tick.json');
+    const recoverable = readCapture('recoverable-crash.raw.json');
+    const plannedAction = planDeadWorkerReconcile(enabledPlanInput({
+      sessions: [recoverable.session],
+      aoEvents: recoverable.events,
+      nowMs: 1_780_000_105_500,
+    })).actions.find((action: { type: string }) => action.type === 'attempt_started');
+    expect(plannedAction).toBeTruthy();
+    const reconcileSource = readFileSync(join(repoRoot, 'scripts/dead-worker-reconcile.ps1'), 'utf8');
+    writeFileSync(
+      bootstrapPath,
+      [
+        reconcileSource.replace(/\$intervalMs =[\s\S]*$/, ''),
+        `function Invoke-DeadWorkerPlannerCli { param([string]$Subcommand, [hashtable]$Payload) if ($Subcommand -eq 'resolve-bounds') { return @{ ok = $true; bounds = @{ maxAttempts = 3; backoffMs = 60000; concurrency = 1 } } }; if ($Subcommand -ne 'plan') { throw \"unexpected planner subcommand: $Subcommand\" }; return '${JSON.stringify({ actions: [plannedAction], tracking: { attempts: {}, leases: {}, audit: [], pendingActions: {}, quarantinedActions: {} } }).replace(/'/g, "''")}' | ConvertFrom-Json }`,
+        "function Commit-DeadWorkerAction { param([object]$State, [object]$Action, [long]$NowMs) $audit = @($State.audit); $audit += @{ key = [string]$Action.key; outcome = [string]$Action.outcome; reason = [string]$Action.reason; recordedAtMs = $NowMs }; $State.audit = $audit; return $State }",
+        "function Test-DeadWorkerPreKillRevalidation { param([object]$Action) return @{ ok = $true; session = @{ sessionId = [string]$Action.sessionId } } }",
+        "function Invoke-DeadWorkerRecovery { param([object]$Action, [switch]$DryRunMode) throw 'simulated_recovery_crash' }",
+        `try { Invoke-DeadWorkerTick -StatePath '${statePath.replace(/'/g, "''")}' -Fixture '${fixturePath.replace(/'/g, "''")}' | Out-Null } catch { }`,
+        `Invoke-DeadWorkerTick -StatePath '${statePath.replace(/'/g, "''")}' -Fixture '${fixturePath.replace(/'/g, "''")}' | Out-Null`,
+      ].join('\n'),
+    );
+    try {
+      execFileSync(
+        'pwsh',
+        ['-NoProfile', '-File', bootstrapPath],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      const state = JSON.parse(readFileSync(statePath, 'utf8'));
+      expect(Object.keys(state.pendingActions ?? {})).toHaveLength(0);
+      expect(Object.keys(state.quarantinedActions ?? {})).toHaveLength(1);
+      expect(
+        Object.values(state.quarantinedActions ?? {}).every(
+          (row: { quarantineReason?: string }) => row.quarantineReason === 'incomplete_recovery_after_side_effect',
+        ),
+      ).toBe(true);
+      expect((state.audit ?? []).some((row: { outcome?: string }) => row.outcome === 'recovery_quarantined')).toBe(true);
     } finally {
       rmSync(bootstrapPath, { force: true });
       rmSync(tempDir, { recursive: true, force: true });
