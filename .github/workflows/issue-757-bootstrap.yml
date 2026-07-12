@@ -73,3 +73,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Fix runtime-history delivery self-heal (#757)'
           git push origin HEAD:agent/issue-757-runtime-history-self-heal
+
+# trigger after workflow registration
