@@ -738,6 +738,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       { row: compatibleWorkerStatusRow('opk-dead-stale'), os: 'pane-gone', expected: 'dead' },
       { row: compatibleWorkerStatusRow('opk-dead-no-generation', { generationToken: '' }), os: 'pane-gone', expected: 'audit_only', reason: 'missing_generation_token' },
       { row: compatibleWorkerStatusRow('opk-dead-missing-heartbeat', { heartbeatTimestampMs: 0 }), os: 'pane-gone', expected: 'audit_only', reason: 'missing_heartbeat_timestamp' },
+      { row: compatibleWorkerStatusRow('opk-dead-last-updated-only', { heartbeatTimestampMs: 0, lastUpdatedMs: 1_780_000_105_500 - (16 * 60 * 1000) }), os: 'pane-gone', expected: 'audit_only', reason: 'missing_heartbeat_timestamp' },
       { row: null, os: 'pane-gone', sessionId: 'opk-missing-row', expected: 'audit_only', reason: 'missing_worker_status_row' },
       { row: compatibleWorkerStatusRow('opk-os-unknown'), os: 'unknown', expected: 'audit_only', reason: 'os_liveness_unknown' },
       { row: compatibleWorkerStatusRow('opk-row-unknown', { rowValidity: 'unknown' }), os: 'pane-gone', expected: 'audit_only', reason: 'unknown_row_validity' },
@@ -793,7 +794,9 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       workerStatusStore: {
         schemaVersion: 1,
         records: {
-          [session.sessionId]: actualWorkerStatusStoreRow(session.sessionId),
+          [session.sessionId]: actualWorkerStatusStoreRow(session.sessionId, {
+            heartbeatTimestampMs: 1_780_000_105_500 - (16 * 60 * 1000),
+          }),
         },
       },
       evaluationNowMs: 1_780_000_105_500,

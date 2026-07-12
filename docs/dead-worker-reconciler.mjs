@@ -286,10 +286,6 @@ function resolveWorkerStatusHeartbeatMs(row) {
     ?? row?.lastHeartbeatAtMs,
   );
   if (numeric > 0) return numeric;
-  const packStoreTimestamp = looksLikePackWorkerStatusRow(row)
-    ? numberOrZero(row?.lastUpdatedMs)
-    : 0;
-  if (packStoreTimestamp > 0) return packStoreTimestamp;
   const text = normalizeString(
     row?.heartbeatTimestamp
     ?? row?.heartbeatAt
