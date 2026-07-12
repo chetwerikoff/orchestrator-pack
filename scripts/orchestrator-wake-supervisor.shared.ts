@@ -3,9 +3,6 @@ import { afterEach } from 'vitest';
 import {
   cleanupSupervisorTests,
   fixtureDir,
-  managedChildRoles,
-  waitForMarkers as waitForMarkersCore,
-  type ManagedChildRole,
 } from './supervisor-recovery.test-helpers.js';
 
 export { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -29,6 +26,7 @@ export {
   supervisorScript,
   waitForCondition,
   waitForMarkerPidChange,
+  waitForMarkers,
   waitForProcessesStopped,
   waitForStdoutContains,
   waitForSupervisorLogMatch,
@@ -37,14 +35,6 @@ export {
   type ManagedChildRole,
   type WakeMarker,
 } from './supervisor-recovery.test-helpers.js';
-
-export async function waitForMarkers(
-  stateDir: string,
-  timeoutMs = 25_000,
-  roles: readonly ManagedChildRole[] = managedChildRoles,
-): Promise<void> {
-  await waitForMarkersCore(stateDir, timeoutMs, roles);
-}
 
 export const aoStub = path.join(fixtureDir, 'ao-stub.sh');
 export const supervisorHookTimeoutMs = 120_000;
