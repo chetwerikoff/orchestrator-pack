@@ -11,7 +11,6 @@ import {
   readMarker,
   repoRoot,
   runSupervisor,
-  startSupervisorBackground,
   waitForMarkerPidChange,
   waitForMarkers,
   fixedObservationWindow,
@@ -25,13 +24,10 @@ describe('Issue #205 side-process registry', () => {
       requiredChildIds: string[];
       children: { id: string; sideEffecting?: boolean; sideEffectLockFile?: string }[];
     };
-    for (const id of managedChildRoles) {
-      expect(doc.requiredChildIds).toContain(id);
-      expect(doc.children.some((c) => c.id === id)).toBe(true);
-    }
-    const listener = doc.children.find((c) => c.id === 'listener');
-    expect(listener?.sideEffecting).toBe(true);
-    expect(listener?.sideEffectLockFile).toBe('listener-side-effect.lock');
+    expect(doc.requiredChildIds).toEqual(managedChildRoles);
+    expect(doc.children.map((child) => child.id)).toEqual(managedChildRoles);
+    expect(doc.requiredChildIds).not.toContain('listener');
+    expect(doc.children.some((child) => child.id === 'listener')).toBe(false);
   });
 
   it(

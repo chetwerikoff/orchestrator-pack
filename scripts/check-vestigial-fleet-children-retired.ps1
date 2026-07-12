@@ -15,11 +15,11 @@ else {
 }
 
 $retired = @(
-    @{ id = 'listener'; bindingIdMarker = '"listener"'; script = 'orchestrator-wake-listener.ps1'; lock = 'listener-side-effect.lock' },
-    @{ id = 'review-run-recovery'; bindingIdMarker = 'review-run-recovery'; script = 'review-run-recovery.ps1'; lock = 'review-run-recovery-side-effect.lock' },
-    @{ id = 'review-stuck-run-reaper'; bindingIdMarker = 'review-stuck-run-reaper'; script = 'review-stuck-run-reaper.ps1'; lock = 'review-stuck-run-reaper-side-effect.lock' },
-    @{ id = 'review-finding-delivery-confirm'; bindingIdMarker = 'review-finding-delivery-confirm'; script = 'review-finding-delivery-confirm.ps1'; lock = 'delivery-confirm-side-effect.lock' },
-    @{ id = 'ci-failure-notification-reaction'; bindingIdMarker = 'ci-failure-notification-reaction'; script = 'ci-failure-notification-reaction.ps1'; lock = $null }
+    @{ id = 'review-run-recovery'; script = 'review-run-recovery.ps1'; lock = 'review-run-recovery-side-effect.lock' },
+    @{ id = 'review-stuck-run-reaper'; script = 'review-stuck-run-reaper.ps1'; lock = 'review-stuck-run-reaper-side-effect.lock' },
+    @{ id = 'review-finding-delivery-confirm'; script = 'review-finding-delivery-confirm.ps1'; lock = 'delivery-confirm-side-effect.lock' },
+    @{ id = 'ci-failure-notification-reaction'; script = 'ci-failure-notification-reaction.ps1'; lock = $null },
+    @{ id = 'listener'; script = 'orchestrator-wake-listener.ps1'; lock = 'listener-side-effect.lock' }
 )
 
 $bindingFiles = @(
@@ -29,7 +29,9 @@ $bindingFiles = @(
     'scripts/orchestrator-message-audit-roots.manifest.json',
     'scripts/orchestrator-message-protected-runtime.manifest.json',
     'scripts/orchestrator-message-send-helpers.manifest.json',
+    'scripts/orchestrator-message-catalog.json',
     'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json',
+    'docs/orchestrator-message-map.md',
     'docs/review-pipeline-spawn-budget.mjs',
     'docs/review-pipeline-spawn-budget-attribution.mjs'
 )
@@ -38,6 +40,7 @@ $compatibilityAllowlist = @(
     'docs/review-finding-delivery-confirm.mjs',
     'docs/review-finding-delivery-confirm.d.mts'
 )
+$listenerEvidenceRel = 'tests/fixtures/listener-disposition/retire.json'
 
 function Invoke-RetirementEvaluation {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -92,14 +95,11 @@ function Invoke-RetirementEvaluation {
         }
         $text = Get-Content -LiteralPath $path -Raw
         foreach ($item in $retired) {
-            foreach ($marker in @($item.bindingIdMarker, $item.script, $item.lock)) {
+            foreach ($marker in @($item.id, $item.script, $item.lock)) {
                 if ($marker -and $text.Contains([string]$marker)) {
                     Add-Failure -Surface $rel -Marker ([string]$marker) -Reason 'retired marker reintroduced'
                 }
             }
-        }
-        if ($rel -eq 'scripts/orchestrator-wake-supervisor.ps1' -and $text -match '(?i)\blistener\b') {
-            Add-Failure -Surface $rel -Marker 'listener' -Reason 'retired listener remains in supervisor synopsis or code'
         }
     }
 
@@ -116,12 +116,48 @@ function Invoke-RetirementEvaluation {
         }
     }
 
+    $evidencePath = Join-Path $Root $listenerEvidenceRel
+    if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+        Add-Failure -Surface $listenerEvidenceRel -Marker '<missing>' -Reason 'listener disposition evidence missing'
+    }
+    else {
+        try {
+            $evidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+            if ([int]$evidence.issue -ne 745) {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'issue' -Reason 'listener disposition evidence must bind to issue 745'
+            }
+            if ([string]$evidence.baseCommitSha -ne '9728896230f8f66de09c485dff613dfdee5cfd9f') {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'baseCommitSha' -Reason 'listener probe must bind to the PR-A merge commit'
+            }
+            if ([string]$evidence.aoVersion -ne '0.10.2') {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'aoVersion' -Reason 'listener probe must record AO 0.10.2'
+            }
+            if ([string]$evidence.disposition -ne 'retire') {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'disposition' -Reason 'listener disposition is not retire'
+            }
+            if (-not [bool]$evidence.finalBaseProbe.bindingVerified) {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'bindingVerified' -Reason 'final-base listener bind was not verified'
+            }
+            if ([int]$evidence.productionAudit.inboundWebhookPosts -ne 0 -or [int]$evidence.finalBaseProbe.inboundWebhookPosts -ne 0) {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'inboundWebhookPosts' -Reason 'listener retirement requires zero observed POSTs'
+            }
+            if ([int]$evidence.finalBaseProbe.observationWindowSeconds -lt 60) {
+                Add-Failure -Surface $listenerEvidenceRel -Marker 'observationWindowSeconds' -Reason 'listener observation window is shorter than 60 seconds'
+            }
+        }
+        catch {
+            Add-Failure -Surface $listenerEvidenceRel -Marker '<invalid-json>' -Reason $_.Exception.Message
+        }
+    }
+
     return [pscustomobject]@{
         schemaVersion = 1
         issue = 745
         status = $(if ($failures.Count -eq 0) { 'pass' } else { 'fail' })
-        checkedSurfaces = @($registryRel) + $bindingFiles
+        checkedSurfaces = @($registryRel) + $bindingFiles + @($listenerEvidenceRel)
         retiredChildIds = @($retired | ForEach-Object { $_.id })
+        listenerDisposition = 'retire'
+        listenerEvidence = $listenerEvidenceRel
         compatibilityAllowlist = $compatibilityAllowlist
         compatibilityJustification = 'shared planner/type modules only; no registry, entrypoint, lock, or launch binding'
         failures = @($failures)
@@ -160,6 +196,16 @@ function New-SelfTestFixture {
     }
     Write-SelfTestFile -Root $root -RelativePath 'docs/review-finding-delivery-confirm.mjs' -Content 'export const compatibility = true;'
     Write-SelfTestFile -Root $root -RelativePath 'docs/review-finding-delivery-confirm.d.mts' -Content 'export declare const compatibility: boolean;'
+    $evidence = [ordered]@{
+        schemaVersion = 1
+        issue = 745
+        baseCommitSha = '9728896230f8f66de09c485dff613dfdee5cfd9f'
+        aoVersion = '0.10.2'
+        disposition = 'retire'
+        productionAudit = @{ inboundWebhookPosts = 0 }
+        finalBaseProbe = @{ observationWindowSeconds = 60; inboundWebhookPosts = 0; bindingVerified = $true }
+    }
+    Write-SelfTestFile -Root $root -RelativePath $listenerEvidenceRel -Content ($evidence | ConvertTo-Json -Depth 8)
     return $root
 }
 

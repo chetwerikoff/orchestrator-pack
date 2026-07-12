@@ -11,7 +11,6 @@ $matrixClasses = @(
     'escalation-claim-store-integrity',
     'escalation-review-trigger-degraded-ci',
     'escalation-submit-adoption',
-    'escalation-handoff-envelope',
     'escalation-pipeline-failure',
     'escalation-ci-failure-notify',
     'escalation-ci-green-claim-audit',

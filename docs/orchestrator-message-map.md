@@ -21,7 +21,6 @@
 | E2 | escalation-claim-store-integrity | Worker nudge claim-store integrity failure | worker-message-submit-reconcile | operator | at-least-once-operator-inbox | issue-641 |
 | E3 | escalation-review-trigger-degraded-ci | Review trigger degraded CI exhausted | review-trigger-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E5 | escalation-submit-adoption | Worker message submit reconcile escalated | worker-message-submit-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
-| E6 | escalation-handoff-envelope | Worker blocked / handoff question admitted | listener | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E8 | escalation-pipeline-failure | Escalation pipeline publish/delivery failure | escalation-router | operator | at-least-once-operator-inbox | issue-641 |
 | E10 | escalation-ci-failure-notify | CI failure notification reconcile escalate | ci-failure-notification-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E11 | escalation-ci-green-claim-audit | CI green wake claim escalate (audit) | ci-green-wake-reconcile | auto-retry-only (promotes after 5 ticks to escalation-ci-green-claim) | audit-until-promotion | issue-641 |
@@ -37,4 +36,3 @@
 - Unowned collisions: 0
 - Owner-covered pairs: 1
 - Evidenced overrides: 0
-

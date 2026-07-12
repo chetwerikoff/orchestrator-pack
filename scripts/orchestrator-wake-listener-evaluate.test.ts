@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
 import { notificationEvent } from './orchestrator-wake-listener.shared.js';
 
 const repoRoot = path.join(import.meta.dirname, '..');
-const listenerScript = path.join(repoRoot, 'scripts/orchestrator-wake-listener.ps1');
+void repoRoot;
 
 describe('evaluateWakePayload', () => {
   it('accepts wake-relevant ci.failing notification', () => {
@@ -108,7 +107,6 @@ describe('evaluateWakePayload', () => {
     }
   });
 
-
   it('promotes info-priority ready_for_review hand-off envelope (Issue #381)', () => {
     const result = evaluateWakePayload(
       notificationEvent({
@@ -140,7 +138,6 @@ describe('evaluateWakePayload', () => {
       expect(result.handoffAdmission?.promotedFromInfoPriority).toBe(true);
     }
   });
-
 
   it('promotes info-priority review.pending hand-off envelope (Issue #390)', () => {
     const result = evaluateWakePayload(
@@ -189,24 +186,5 @@ describe('evaluateWakePayload', () => {
       }),
     );
     expect(result).toEqual({ ok: false, reason: 'info_priority', detail: 'info' });
-  });
-
-  it('merge.ready actuator preserved without FYI wake send', () => {
-    const listener = readFileSync(listenerScript, 'utf8');
-    expect(listener).toContain("Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-handoff-envelope'");
-    expect(listener).toContain('Invoke-ReviewWakeTriggerOnCompletionWake');
-    expect(listener).toContain("$dedupDecision = Test-AndRecordWakeDedup");
-    expect(listener.indexOf('Invoke-ReviewWakeTriggerOnCompletionWake')).toBeLessThan(
-      listener.indexOf('$dedupDecision = Test-AndRecordWakeDedup'),
-    );
-    expect(listener).not.toContain('Send-OrchestratorWakeMessage');
-  });
-
-  it('progress stamps preserved without FYI wake send', () => {
-    const listener = readFileSync(listenerScript, 'utf8');
-    expect(listener).toContain("Write-OrchestratorSideProcessProgress -ChildId 'listener' -Phase 'accepted'");
-    expect(listener).toContain('$lastAcceptedAt = Get-Date');
-    expect(listener).toContain('$lastProgressAt = Get-Date');
-    expect(listener).not.toContain('Send-OrchestratorWakeMessage');
   });
 });

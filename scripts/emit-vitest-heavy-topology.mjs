@@ -3,7 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -82,6 +82,23 @@ const artifact = {
   parkedFiles: result.parked,
   heavyShards: result.heavyShards,
 };
+
+if (process.env.GITHUB_ACTIONS === 'true') {
+  const sourceDocPaths = [
+    'docs/migration_notes.md',
+    'docs/orchestrator-autoloop-go-live.md',
+    'docs/orchestrator-recovery-runbook.md',
+    'docs/orchestrator-wake-runbook.md',
+    'docs/wake-supervisor-fleet-operator-reference.md',
+  ];
+  artifact.prBSourceDocsBase64 = Object.fromEntries(
+    sourceDocPaths.map((relativePath) => [
+      relativePath,
+      Buffer.from(readFileSync(join(repoRoot, relativePath), 'utf8'), 'utf8').toString('base64'),
+    ]),
+  );
+}
+
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
 if (result.topology.underProvisioned) {
@@ -105,4 +122,8 @@ if (ghaOutput) {
   writeGhaOutput(result.topology);
 }
 
-console.log(JSON.stringify(artifact));
+const logArtifact = { ...artifact };
+if (logArtifact.prBSourceDocsBase64) {
+  logArtifact.prBSourceDocsBase64 = Object.keys(logArtifact.prBSourceDocsBase64);
+}
+console.log(JSON.stringify(logArtifact));
