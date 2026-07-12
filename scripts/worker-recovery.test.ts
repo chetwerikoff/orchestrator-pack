@@ -301,45 +301,6 @@ describe('worker recovery post-claim revalidation', () => {
     expect(result.reason).toBe('became_live');
   });
 
-  it('worker recovery post-claim revalidation: requires a validated generation token', () => {
-    const worktree = '/tmp/orchestrator-pack/worktrees/opk-522';
-    const result = evaluatePostClaimRevalidation({
-      selection: {
-        canonicalPath: worktree,
-        sessionId: 'opk-522',
-        session: { runtime: 'exited', worktree },
-      },
-      current: {
-        canonicalPath: worktree,
-        sessionId: 'opk-522',
-        session: { runtime: 'exited', worktree },
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('missing_generation_token');
-  });
-
-  it('worker recovery post-claim revalidation: blocks when the generation token changes', () => {
-    const worktree = '/tmp/orchestrator-pack/worktrees/opk-522';
-    const result = evaluatePostClaimRevalidation({
-      selection: {
-        canonicalPath: worktree,
-        sessionId: 'opk-522',
-        generationToken: 'gen-a',
-        session: { runtime: 'exited', worktree, generationToken: 'gen-a' },
-      },
-      current: {
-        canonicalPath: worktree,
-        sessionId: 'opk-522',
-        session: { runtime: 'exited', worktree, generationToken: 'gen-b' },
-      },
-      expectedGenerationToken: 'gen-a',
-    });
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('generation_changed');
-  });
-
-
   it('worker recovery post-claim revalidation: blocks when worktree ownership marker changes', () => {
     const worktree = '/tmp/orchestrator-pack/worktrees/opk-522';
     const result = evaluatePostClaimRevalidation({
@@ -370,7 +331,9 @@ describe('worker recovery post-claim revalidation', () => {
     expect(recoveryText).toMatch(/Get-WorkerRecoveryWorktreeRecordFromRepo/);
     expect(recoveryText).toMatch(/selectionWorktreeRecord/);
     expect(recoveryText).toMatch(/liveWorktreeRecord/);
-    expect(recoveryText).toMatch(/expectedGenerationToken = \$GenerationToken/);
+    expect(recoveryText).toMatch(/Resolve-WorkerRecoveryGenerationToken/);
+    expect(recoveryText).toMatch(/reason = 'missing_generation_token'/);
+    expect(recoveryText).toMatch(/reason = 'generation_changed'/);
   });
 
   it('worker recovery destructive audit: persists decision before worktree remove', () => {

@@ -70,6 +70,35 @@ function ConvertTo-WorkerRecoverySessionSnapshot {
     }
 }
 
+function Resolve-WorkerRecoveryGenerationToken {
+    param($Snapshot)
+
+    if (-not $Snapshot) { return '' }
+    $session = $null
+    if ($Snapshot.session) {
+        $session = $Snapshot.session
+    }
+    $candidates = @(
+        $Snapshot.generationToken,
+        $Snapshot.sessionGeneration,
+        $Snapshot.generation
+    )
+    if ($session) {
+        $candidates += @(
+            $session.generationToken,
+            $session.sessionGeneration,
+            $session.generation
+        )
+    }
+    foreach ($candidate in $candidates) {
+        $normalized = [string]$candidate
+        if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+            return $normalized.Trim()
+        }
+    }
+    return ''
+}
+
 
 function Get-WorkerRecoveryWorktreeRecordFromRepo {
     param(
@@ -544,10 +573,27 @@ function Invoke-WorkerRecovery {
         -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase -RepoRoot $RepoRoot `
         -WorktreeRecord $WorktreeRecord -FixtureSession $Session -FixtureMode:$FixtureMode
 
+    $expectedGenerationToken = [string]$GenerationToken
+    if (-not [string]::IsNullOrWhiteSpace($expectedGenerationToken)) {
+        $expectedGenerationToken = $expectedGenerationToken.Trim()
+    }
+    if (-not $expectedGenerationToken) {
+        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+        return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
+    }
+    $currentGenerationToken = Resolve-WorkerRecoveryGenerationToken -Snapshot $currentSnapshot
+    if (-not $currentGenerationToken) {
+        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+        return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
+    }
+    if ($currentGenerationToken -ne $expectedGenerationToken) {
+        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+        return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'generation_changed' }
+    }
+
     $revalidate = Invoke-WorkerRecoveryCli -Subcommand 'evaluatePostClaim' -Payload @{
         selection = $selectionSnapshot
         current   = $currentSnapshot
-        expectedGenerationToken = $GenerationToken
     }
     if (-not $revalidate.ok) {
         $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
