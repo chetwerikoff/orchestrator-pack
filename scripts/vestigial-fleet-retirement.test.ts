@@ -1,7 +1,6 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 const repoRoot = join(import.meta.dirname, '..');
@@ -26,55 +25,34 @@ const survivors = [
   'dead-worker-reconcile',
   'escalation-router',
 ];
-const bindingSurfaces = [
-  ['supervisor', 'scripts/orchestrator-wake-supervisor.ps1'],
-  ['launch inventory', 'scripts/launch-argv-inventory.json'],
-  ['escalation inventory', 'scripts/orchestrator-escalation-emitter-inventory.json'],
-  ['message audit manifest', 'scripts/orchestrator-message-audit-roots.manifest.json'],
-  ['protected runtime manifest', 'scripts/orchestrator-message-protected-runtime.manifest.json'],
-  ['send helpers manifest', 'scripts/orchestrator-message-send-helpers.manifest.json'],
-  ['state coverage manifest', 'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json'],
-  ['spawn budget facade', 'docs/review-pipeline-spawn-budget.mjs'],
-  ['spawn budget attribution', 'docs/review-pipeline-spawn-budget-attribution.mjs'],
-] as const;
+
+type GuardResult = {
+  status: 'pass' | 'fail';
+  retiredChildIds?: string[];
+  expectedNegativeCases?: number;
+  negativeCases?: number;
+  cleanCases?: number;
+  failures?: unknown[];
+};
 
 function readJson(path: string) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-function runGuard(root: string) {
-  return spawnSync('pwsh', ['-NoProfile', '-File', guardPath, '-RepoRoot', root, '-Json'], {
+function runGuard(...args: string[]) {
+  return spawnSync('pwsh', ['-NoProfile', '-File', guardPath, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
+    timeout: 120_000,
   });
 }
 
-function write(path: string, value: string) {
-  mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(path, value, 'utf8');
-}
-
-function cleanFixture() {
-  const root = mkdtempSync(join(tmpdir(), 'opk-745-retirement-'));
-  mkdirSync(join(root, 'scripts'), { recursive: true });
-  write(
-    join(root, 'scripts', 'orchestrator-side-process-registry.json'),
-    JSON.stringify({
-      schemaVersion: 1,
-      requiredChildIds: survivors,
-      children: survivors.map((id) => ({ id, script: `${id}.ps1` })),
-    }),
-  );
-  for (const [, rel] of bindingSurfaces) {
-    write(join(root, rel), rel.endsWith('.json') ? JSON.stringify({ schemaVersion: 1 }) : '# clean fixture\n');
-  }
-  write(join(root, 'docs/review-finding-delivery-confirm.mjs'), 'export const compatibility = true;\n');
-  write(join(root, 'docs/review-finding-delivery-confirm.d.mts'), 'export declare const compatibility: boolean;\n');
-  return root;
+function parseGuardJson(stdout: string): GuardResult {
+  return JSON.parse(stdout.trim()) as GuardResult;
 }
 
 describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
-  it('vestigial children absent', () => {
+  it('vestigial children are absent from the registry', () => {
     const registry = readJson(join(repoRoot, 'scripts', 'orchestrator-side-process-registry.json'));
     const required = new Set<string>(registry.requiredChildIds);
     const childIds = new Set<string>(registry.children.map((child: { id: string }) => child.id));
@@ -88,14 +66,14 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
     expect([...required]).toEqual(survivors);
   });
 
-  it('PR-A entrypoints and exclusive reaper helper are deleted', () => {
+  it('PR-A entrypoints and the exclusive reaper helper are deleted', () => {
     for (const [, script] of retired) {
       expect(existsSync(join(repoRoot, 'scripts', script)), script).toBe(false);
     }
     expect(existsSync(join(repoRoot, 'scripts/lib/Invoke-ReviewStuckRunReaper.ps1'))).toBe(false);
   });
 
-  it('survivors remain registered and satisfy the static supervised launch contract', () => {
+  it('survivors remain registered and satisfy the static launch contract', () => {
     const registry = readJson(join(repoRoot, 'scripts', 'orchestrator-side-process-registry.json'));
     const byId = new Map<string, { id: string; script: string }>(
       registry.children.map((child: { id: string; script: string }) => [child.id, child]),
@@ -108,6 +86,7 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
     const result = spawnSync('pwsh', ['-NoProfile', '-File', launchContractPath], {
       cwd: repoRoot,
       encoding: 'utf8',
+      timeout: 120_000,
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toMatch(/validated 10 registry children/i);
@@ -129,49 +108,30 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
       expect(existsSync(join(repoRoot, file)), file).toBe(true);
     }
     const emitter = readJson(join(repoRoot, 'scripts/orchestrator-escalation-emitter-inventory.json'));
-    expect(emitter.emitters.some((row: { file: string }) => row.file === 'scripts/worker-message-submit-reconcile.ps1')).toBe(true);
+    expect(
+      emitter.emitters.some(
+        (row: { file: string }) => row.file === 'scripts/worker-message-submit-reconcile.ps1',
+      ),
+    ).toBe(true);
   });
 
-  it('reintroduction guard passes on clean tree', () => {
-    const root = cleanFixture();
-    try {
-      const result = runGuard(root);
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+  it('reintroduction guard passes on the real clean tree', () => {
+    const result = runGuard('-RepoRoot', repoRoot, '-Json');
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const payload = parseGuardJson(result.stdout);
+    expect(payload.status).toBe('pass');
+    expect(payload.retiredChildIds).toEqual(retired.map(([id]) => id));
+    expect(payload.failures).toEqual([]);
   });
 
-  for (const [id, script] of retired) {
-    it(`reintroduction guard fails for ${id} in registry`, () => {
-      const root = cleanFixture();
-      try {
-        const path = join(root, 'scripts', 'orchestrator-side-process-registry.json');
-        const registry = readJson(path);
-        registry.requiredChildIds.push(id);
-        registry.children.push({ id, script });
-        write(path, JSON.stringify(registry));
-        const result = runGuard(root);
-        expect(result.status, result.stderr || result.stdout).toBe(1);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-
-    for (const [surface, rel] of bindingSurfaces) {
-      it(`reintroduction guard fails for ${id} in ${surface}`, () => {
-        const root = cleanFixture();
-        try {
-          write(
-            join(root, rel),
-            rel.endsWith('.json') ? JSON.stringify({ marker: script }) : `# launches ${script}\n`,
-          );
-          const result = runGuard(root);
-          expect(result.status, result.stderr || result.stdout).toBe(1);
-        } finally {
-          rmSync(root, { recursive: true, force: true });
-        }
-      });
-    }
-  }
+  it('negative matrix covers every retired child across registry and binding surfaces', () => {
+    const result = runGuard('-SelfTest', '-Json');
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const payload = parseGuardJson(result.stdout);
+    expect(payload.status).toBe('pass');
+    expect(payload.cleanCases).toBe(1);
+    expect(payload.expectedNegativeCases).toBe(40);
+    expect(payload.negativeCases).toBe(40);
+    expect(payload.failures).toEqual([]);
+  });
 });
