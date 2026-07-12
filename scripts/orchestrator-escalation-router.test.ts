@@ -231,4 +231,102 @@ describe('orchestrator escalation router', () => {
     expect(firstRecord?.status).toBe('backoff_waiting');
     expect(secondRecord?.attempts ?? 0).toBeGreaterThan(0);
   });
+
+  it('quarantines malformed or foreign records with visibility and recoverable release/delete paths', () => {
+    tempDir = join(tmpdir(), `router-quarantine-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const state = join(tempDir, 'escalation-state.json');
+    const inbox = join(tempDir, 'operator-inbox');
+    const health = join(tempDir, 'health');
+
+    const seeded = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $foreign = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'foreign:dead-worker:test' -Payload @{ reason = 'spawn_denied'; source_process = 'vitest-foreign' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $unknown = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:unknown-class:test' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 2000 -DryRun
+      $doc = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $doc.records[$unknown.escalationId].escalationClassId = 'escalation-unknown-class'
+      Set-MechanicalJsonStateFile -Path ${ps(state)} -State $doc -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+      [pscustomobject]@{ foreignId = [string]$foreign.escalationId; unknownId = [string]$unknown.escalationId } | ConvertTo-Json -Compress
+    `,
+    );
+    expect(seeded.status, `${seeded.stdout}\n${seeded.stderr}`).toBe(0);
+    const ids = JSON.parse(seeded.stdout.trim().split('\n').at(-1) ?? '{}') as { foreignId: string; unknownId: string };
+
+    const router = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/orchestrator-escalation-router.ps1',
+        '-OrchestratorSessionId',
+        'orch-test',
+        '-Once',
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_ORCHESTRATOR_ESCALATION_STATE: state,
+          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+        },
+      },
+    );
+    expect(router.status, `${router.stdout}\n${router.stderr}`).toBe(0);
+
+    const beforeRelease = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          status?: string;
+          terminalState?: string;
+          terminalReason?: string;
+          operatorOutbox?: string;
+          operatorInboxPath?: string;
+        }
+      >;
+    };
+    expect(beforeRelease.records[ids.foreignId]?.status).toBe('quarantined');
+    expect(beforeRelease.records[ids.foreignId]?.terminalReason).toBe('foreign_record');
+    expect(beforeRelease.records[ids.foreignId]?.operatorOutbox).toBe('published');
+    expect(beforeRelease.records[ids.foreignId]?.operatorInboxPath).toBeTruthy();
+    expect(beforeRelease.records[ids.unknownId]?.status).toBe('quarantined');
+    expect(beforeRelease.records[ids.unknownId]?.terminalReason).toBe('unknown_escalation_class');
+
+    const actions = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $release = Write-OrchestratorEscalationQuarantineAction -EscalationId ${ps(ids.foreignId)} -Action release -StatePath ${ps(state)} -NowMs 5000
+      $delete = Write-OrchestratorEscalationQuarantineAction -EscalationId ${ps(ids.unknownId)} -Action delete -StatePath ${ps(state)} -NowMs 6000
+      [pscustomobject]@{ release = $release; delete = $delete } | ConvertTo-Json -Compress -Depth 10
+    `,
+    );
+    expect(actions.status, `${actions.stdout}\n${actions.stderr}`).toBe(0);
+    const actionResult = JSON.parse(actions.stdout.trim().split('\n').at(-1) ?? '{}') as {
+      release: { ok: boolean; status: string };
+      delete: { ok: boolean; status: string };
+    };
+    expect(actionResult.release).toMatchObject({ ok: true, status: 'released' });
+    expect(actionResult.delete).toMatchObject({ ok: true, status: 'deleted' });
+
+    const finalState = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          status?: string;
+          terminalState?: string;
+          quarantineReleasedAtMs?: number;
+        }
+      >;
+    };
+    expect(finalState.records[ids.foreignId]?.status).toBe('pending');
+    expect(finalState.records[ids.foreignId]?.terminalState).toBe('open');
+    expect(finalState.records[ids.foreignId]?.quarantineReleasedAtMs).toBeTruthy();
+    expect(finalState.records[ids.unknownId]).toBeUndefined();
+  });
 });

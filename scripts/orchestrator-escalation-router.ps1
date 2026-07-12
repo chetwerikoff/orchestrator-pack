@@ -54,7 +54,7 @@ function Invoke-EscalationRouterTick {
             continue
         }
         if ([int]($record.schemaVersion ?? 1) -lt 1) {
-            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'quarantined' -Now $now -Reason 'invalid_schema_version' | Out-Null
+            Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'invalid_schema_version' | Out-Null
             continue
         }
         if (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$record.terminalState)) { continue }
@@ -63,11 +63,11 @@ function Invoke-EscalationRouterTick {
             if (-not $class) { throw 'unknown_escalation_class' }
         }
         catch {
-            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'quarantined' -Now $now -Reason 'unknown_escalation_class' | Out-Null
+            Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'unknown_escalation_class' | Out-Null
             continue
         }
         if (Test-EscalationRouterForeignRecord -Record $record) {
-            Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'quarantined' -Now $now -Reason 'foreign_record' | Out-Null
+            Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'foreign_record' | Out-Null
             continue
         }
         if (Test-OrchestratorEscalationAcked -Record $record) {

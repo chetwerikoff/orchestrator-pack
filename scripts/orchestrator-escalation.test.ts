@@ -224,6 +224,31 @@ describe('orchestrator escalation contract (#641)', () => {
     expect(parsed.goodStatus).toBe('operator_acked');
   });
 
+  it('operator-route failures preserve operatorFallback details', () => {
+    const parsed = runJson(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $pub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-claim-store-integrity' -CorrelationKey 'corr:claim-store:fail' -Payload @{ failureKind = 'ambiguous_claim' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -NowMs 1000
+      $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $record = $stateFile.records[$pub.escalationId]
+      $healthFiles = @(Get-ChildItem -LiteralPath ${ps(health)} -Filter '*.json' -ErrorAction SilentlyContinue)
+      [pscustomobject]@{
+        ok = [bool]$pub.ok
+        status = [string]$pub.status
+        operatorOutbox = [string]$record.operatorOutbox
+        fallbackOk = [bool]$record.operatorFallback.ok
+        healthSpoolPath = [string]$record.operatorFallback.healthSpoolPath
+        healthCount = $healthFiles.Count
+      } | ConvertTo-Json -Compress
+    `);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.status).toBe('pending');
+    expect(parsed.operatorOutbox).toBe('failed');
+    expect(parsed.fallbackOk).toBe(false);
+    expect(parsed.healthSpoolPath).toBeTruthy();
+    expect(parsed.healthCount).toBe(1);
+  });
+
   it('escalation scenario matrix fixtures are present', () => {
     const fixtureDir = join(repoRoot, 'tests/fixtures/orchestrator-escalation');
     expect(existsSync(fixtureDir)).toBe(true);

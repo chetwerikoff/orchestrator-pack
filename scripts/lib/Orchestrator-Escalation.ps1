@@ -529,6 +529,40 @@ function Complete-OrchestratorEscalationDeadLetter {
     return $Record
 }
 
+function Complete-OrchestratorEscalationQuarantine {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [string]$OperatorInboxDir = '',
+        [string]$HealthSpoolDir = '',
+        [long]$Now = 0,
+        [string]$Reason = ''
+    )
+    if ($Now -le 0) { $Now = Get-OrchestratorEscalationNowMs }
+    $payload = @{}
+    if ($Record.lastPayload) {
+        $payload = ConvertTo-OrchestratorEscalationHashtable -Value $Record.lastPayload
+    }
+    $message = if ($Reason) { "Escalation record quarantined: $Reason" } else { 'Escalation record quarantined' }
+    $envelope = @{
+        type                = 'orchestrator-escalation/v2'
+        escalation_class_id = [string]$Record.escalationClassId
+        code                = 'quarantined'
+        name                = 'quarantined-record'
+        route               = 'operator'
+        correlation_key     = [string]$Record.correlationKey
+        escalation_id       = [string]$Record.recordKey
+        ack_token           = [string]$Record.ackToken
+        message             = $message
+        payload             = $payload
+    }
+    $inbox = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir -Reason $Reason
+    $Record.operatorFallback = $inbox
+    $Record.operatorOutbox = if ($inbox.ok) { 'published' } else { 'failed' }
+    $Record.operatorInboxPath = if ($inbox.ok) { [string]$inbox.path } else { [string]$inbox.healthSpoolPath }
+    Resolve-OrchestratorEscalationTerminalState -Record $Record -TerminalState 'quarantined' -Now $Now -Reason $Reason | Out-Null
+    return $Record
+}
+
 function Resolve-OrchestratorEscalationCondition {
     [CmdletBinding()]
     param(
@@ -690,11 +724,12 @@ function Publish-OrchestratorEscalation {
         }
         elseif ($route -eq 'operator') {
             $inbox = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir
+            $record.operatorFallback = $inbox
+            $record.operatorOutbox = if ($inbox.ok) { 'published' } else { 'failed' }
+            $record.operatorInboxPath = if ($inbox.ok) { [string]$inbox.path } else { [string]$inbox.healthSpoolPath }
             if (-not $inbox.ok) { throw $inbox.reason }
             $record.status = 'operator_inbox'
             $record.terminalState = 'open'
-            $record.operatorOutbox = 'published'
-            $record.operatorInboxPath = [string]$inbox.path
         }
         else {
             throw "unsupported escalation route: $route"
@@ -733,6 +768,38 @@ function Write-OrchestratorEscalationAck {
     Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now (Get-OrchestratorEscalationNowMs -NowMs $NowMs) | Out-Null
     Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
     return @{ ok = $true; status = 'acked'; escalationId = $EscalationId }
+}
+
+function Write-OrchestratorEscalationQuarantineAction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$EscalationId,
+        [Parameter(Mandatory = $true)][ValidateSet('release', 'delete')][string]$Action,
+        [string]$StatePath = '',
+        [Nullable[long]]$NowMs = $null
+    )
+    $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
+    $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+    if (-not $state.records.ContainsKey($EscalationId)) {
+        return @{ ok = $false; reason = 'unknown_escalation_id' }
+    }
+    $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $EscalationId
+    Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+    if ([string]$record.terminalState -ne 'quarantined' -and [string]$record.status -ne 'quarantined') {
+        return @{ ok = $false; reason = 'not_quarantined'; escalationId = $EscalationId }
+    }
+    $now = Get-OrchestratorEscalationNowMs -NowMs $NowMs
+    if ($Action -eq 'delete') {
+        $state.records.Remove($EscalationId)
+        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        return @{ ok = $true; status = 'deleted'; escalationId = $EscalationId }
+    }
+    $record.terminalState = 'open'
+    $record.status = 'pending'
+    $record.updatedAtMs = $now
+    $record.quarantineReleasedAtMs = $now
+    Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    return @{ ok = $true; status = 'released'; escalationId = $EscalationId }
 }
 
 function Write-OperatorEscalationAck {
