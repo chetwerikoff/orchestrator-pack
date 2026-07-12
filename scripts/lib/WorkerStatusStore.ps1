@@ -400,13 +400,14 @@ function Get-WorkerStatusWriterGenerationVector {
 
 function Write-WorkerStatusRow {
     param(
-        [hashtable]$Input,
+        [Alias('Input')]
+        [hashtable]$WriteInput,
         [hashtable]$RecomputeInput = $null,
         [string]$StorePath = '',
         [long]$NowMs = 0
     )
 
-    $payload = if ($RecomputeInput) { $RecomputeInput } else { $Input }
+    $payload = if ($RecomputeInput) { $RecomputeInput } else { $WriteInput }
     if (-not $payload) {
         return @{ ok = $false; reason = 'missing_input' }
     }

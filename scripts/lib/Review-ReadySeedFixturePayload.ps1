@@ -67,12 +67,12 @@ function Get-ReviewReadySeedFixturePayload {
             'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
             'bindingByKey', 'seededKeys', 'deferredScanKeys', 'handoffRecords',
             'terminalClaimKeys', 'watchEntries', 'tickCapacity', 'nowMs', 'reviewCommand',
-            'supervisedRepoSlug', 'freshSnapshot', 'boundaryRace'
+            'supervisedRepoSlug', 'freshSnapshot', 'boundaryRace', 'workerStatusRefresh'
         )) {
         if ($null -ne $Fixture.$name) {
             if ($name -in @(
                     'ciChecksByPr', 'requiredCheckNamesByPr', 'requiredCheckLookupFailedByPr',
-                    'bindingByKey', 'handoffRecords', 'watchEntries', 'freshSnapshot'
+                    'bindingByKey', 'handoffRecords', 'watchEntries', 'freshSnapshot', 'workerStatusRefresh'
                 )) {
                 $payload[$name] = ConvertTo-MechanicalJsonMap -Value $Fixture.$name
             }

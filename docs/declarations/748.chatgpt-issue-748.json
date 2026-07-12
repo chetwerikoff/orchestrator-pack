@@ -1,0 +1,42 @@
+{
+  "issue_number": 748,
+  "iteration_id": "chatgpt-issue-748",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-12T12:25:00.000Z",
+  "baseline": {
+    "commit_sha": "a13818e6e6c64a7983d696b7d59f3b5768d8c0c9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2eabfa932357f0dab398a84cd6324abcf0285f2b559b26ce9fc8c9199110ea80"
+  },
+  "declared_paths": [
+    "scripts/lib/Get-WorkerStatusDecisionSessions.ps1",
+    "scripts/lib/Record-ReviewTriggerReevalWatch.ps1",
+    "scripts/lib/Review-ReadySeedFixturePayload.ps1",
+    "scripts/lib/Review-TriggerReeval-Common.ps1",
+    "scripts/lib/WorkerStatusStore.ps1",
+    "scripts/review-ready-report-state-seed.ps1",
+    "scripts/review-trigger-reeval.ps1",
+    "tests/fixtures/worker-status/diagnosis-artifact-gate.json",
+    "tests/powershell/Issue748.RefreshConcurrency.Tests.ps1",
+    "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1",
+    "tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:31c8f61b85a2e82571a10e83980e7c82f304b77fc0b57aadf1caa017c5849c13",
+      "new_active_scope_hash": "sha256:2eabfa932357f0dab398a84cd6324abcf0285f2b559b26ce9fc8c9199110ea80",
+      "changed": {
+        "added": [
+          "scripts/lib/WorkerStatusStore.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "CI diagnosis proved Write-WorkerStatusRow used PowerShell automatic $Input as a parameter; include the compatibility-preserving internal binding fix without changing the #720 store schema or concurrency contract",
+      "actor": "chatgpt-issue-748",
+      "timestamp": "2026-07-12T15:37:46.000Z",
+      "applied": true
+    }
+  ]
+}
