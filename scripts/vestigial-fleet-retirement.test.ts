@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(import.meta.dirname, '..');
 const guardPath = join(repoRoot, 'scripts', 'check-vestigial-fleet-children-retired.ps1');
+const launchContractPath = join(repoRoot, 'scripts', 'check-side-process-launch-contract.ps1');
 const retired = [
   ['review-run-recovery', 'review-run-recovery.ps1', 'review-run-recovery-side-effect.lock'],
   ['review-stuck-run-reaper', 'review-stuck-run-reaper.ps1', 'review-stuck-run-reaper-side-effect.lock'],
@@ -24,6 +33,15 @@ const survivors = [
   'dead-worker-reconcile',
   'escalation-router',
 ];
+const bindingSurfaces = [
+  ['supervisor', 'scripts/orchestrator-wake-supervisor.ps1'],
+  ['launch inventory', 'scripts/launch-argv-inventory.json'],
+  ['escalation inventory', 'scripts/orchestrator-escalation-emitter-inventory.json'],
+  ['message audit manifest', 'scripts/orchestrator-message-audit-roots.manifest.json'],
+  ['protected runtime manifest', 'scripts/orchestrator-message-protected-runtime.manifest.json'],
+  ['send helpers manifest', 'scripts/orchestrator-message-send-helpers.manifest.json'],
+  ['state coverage manifest', 'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json'],
+] as const;
 
 function readJson(path: string) {
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -51,10 +69,9 @@ function cleanFixture() {
     children: survivors.map((id) => ({ id, script: `${id}.ps1` })),
   };
   write(join(root, 'scripts', 'orchestrator-side-process-registry.json'), JSON.stringify(registry));
-  write(join(root, 'scripts', 'orchestrator-wake-supervisor.ps1'), '# clean supervisor fixture\n');
-  write(join(root, 'scripts', 'launch-argv-inventory.json'), JSON.stringify({ schemaVersion: 1, rows: [] }));
-  write(join(root, 'scripts', 'orchestrator-escalation-emitter-inventory.json'), JSON.stringify({ schemaVersion: 1, emitters: [] }));
-  write(join(root, 'scripts', 'orchestrator-message-audit-roots.manifest.json'), JSON.stringify({ schemaVersion: 1, supervisedProcessScripts: [] }));
+  for (const [, rel] of bindingSurfaces) {
+    write(join(root, rel), rel.endsWith('.json') ? JSON.stringify({ schemaVersion: 1 }) : '# clean fixture\n');
+  }
   return root;
 }
 
@@ -79,7 +96,7 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
     }
   });
 
-  it('survivors remain registered with real entrypoints', () => {
+  it('survivors remain registered and satisfy the supervised launch contract', () => {
     const registry = readJson(join(repoRoot, 'scripts', 'orchestrator-side-process-registry.json'));
     const byId = new Map<string, { id: string; script: string }>(
       registry.children.map((child: { id: string; script: string }) => [child.id, child]),
@@ -87,10 +104,14 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
     for (const id of survivors) {
       const child = byId.get(id);
       expect(child, `missing survivor row: ${id}`).toBeDefined();
-      const entrypoint = join(repoRoot, 'scripts', child!.script);
-      expect(existsSync(entrypoint), `missing survivor entrypoint: ${child!.script}`).toBe(true);
-      expect(readFileSync(entrypoint, 'utf8')).not.toContain('Invoke-ReviewStuckRunReaper.ps1');
+      expect(existsSync(join(repoRoot, 'scripts', child!.script)), child!.script).toBe(true);
     }
+    const result = spawnSync('pwsh', ['-NoProfile', '-File', launchContractPath], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toMatch(/validated 10 registry children/i);
   });
 
   it('preserves issue 744 escalation surfaces', () => {
@@ -115,36 +136,33 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
     }
   });
 
-  for (const surface of [
-    'registry',
-    'supervisor',
-    'launch inventory',
-    'escalation inventory',
-    'message audit manifest',
-  ]) {
-    it(`reintroduction guard fails for ${surface}`, () => {
+  for (const [id, script] of retired) {
+    it(`reintroduction guard fails for ${id} in registry`, () => {
       const root = cleanFixture();
       try {
-        const [id, script] = retired[0];
-        if (surface === 'registry') {
-          const path = join(root, 'scripts', 'orchestrator-side-process-registry.json');
-          const registry = readJson(path);
-          registry.requiredChildIds.push(id);
-          write(path, JSON.stringify(registry));
-        } else if (surface === 'supervisor') {
-          write(join(root, 'scripts', 'orchestrator-wake-supervisor.ps1'), `# launches ${script}\n`);
-        } else if (surface === 'launch inventory') {
-          write(join(root, 'scripts', 'launch-argv-inventory.json'), JSON.stringify({ rows: [{ caller: { file: script } }] }));
-        } else if (surface === 'escalation inventory') {
-          write(join(root, 'scripts', 'orchestrator-escalation-emitter-inventory.json'), JSON.stringify({ emitters: [{ file: `scripts/${script}` }] }));
-        } else {
-          write(join(root, 'scripts', 'orchestrator-message-audit-roots.manifest.json'), JSON.stringify({ supervisedProcessScripts: [`scripts/${script}`] }));
-        }
+        const path = join(root, 'scripts', 'orchestrator-side-process-registry.json');
+        const registry = readJson(path);
+        registry.requiredChildIds.push(id);
+        registry.children.push({ id, script });
+        write(path, JSON.stringify(registry));
         const result = runGuard(root);
         expect(result.status, result.stderr || result.stdout).toBe(1);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    for (const [surface, rel] of bindingSurfaces) {
+      it(`reintroduction guard fails for ${id} in ${surface}`, () => {
+        const root = cleanFixture();
+        try {
+          write(join(root, rel), rel.endsWith('.json') ? JSON.stringify({ marker: script }) : `# launches ${script}\n`);
+          const result = runGuard(root);
+          expect(result.status, result.stderr || result.stdout).toBe(1);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    }
   }
 });
