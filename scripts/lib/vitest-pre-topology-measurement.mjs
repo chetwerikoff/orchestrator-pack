@@ -63,7 +63,6 @@ export function measurePreTopologyFiles(repoRoot, files, options = {}) {
     'test',
     '--',
     ...files,
-    '--reporter=default',
     '--reporter=json',
     `--outputFile=${reportPath}`,
   ];
