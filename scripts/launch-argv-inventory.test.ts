@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  auditCommittedLaunchArgvInventory,
+  loadCommittedLaunchArgvBundle,
+} from '../docs/generated-launch-argv-inventory.mjs';
 import type { InventoryRow } from '../docs/launch-argv-registry.mjs';
 import {
-  auditLaunchArgvInventory,
   classifyDiscoveryHits,
   discoverLaunchSites,
   hashPinnedSpanForHit,
@@ -44,7 +47,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
   });
 
   it('passes audit on the real repository tree', () => {
-    const result = auditLaunchArgvInventory(repoRoot);
+    const result = auditCommittedLaunchArgvInventory(repoRoot);
     expect(result.verdict, result.violations.join('\n')).toBe('PASS');
     expect(result.stats.productionHits).toBeGreaterThan(0);
     expect(result.stats.inventoryRows).toBeGreaterThan(0);
@@ -122,7 +125,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
   });
 
   it('excludes test-only spawn sites explicitly', () => {
-    const bundle = loadLaunchArgvBundle(repoRoot);
+    const bundle = loadCommittedLaunchArgvBundle(repoRoot);
     expect(isTestExcludedFile('scripts/foo.test.ts', bundle.testExclusions)).toBe(true);
     expect(isTestExcludedFile('foo.test.ts', bundle.testExclusions)).toBe(true);
     expect(isTestExcludedFile('scripts/lib/Worker-Recovery.ps1', bundle.testExclusions)).toBe(false);
@@ -146,7 +149,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
   });
 
   it('rejects invalid validator ids in inventory rows', () => {
-    const bundle = loadLaunchArgvBundle(repoRoot);
+    const bundle = loadCommittedLaunchArgvBundle(repoRoot);
     const broken = {
       ...bundle,
       inventory: {
@@ -169,7 +172,7 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
   });
 
   it('references each shipped validator in inventory rows', () => {
-    const bundle = loadLaunchArgvBundle(repoRoot);
+    const bundle = loadCommittedLaunchArgvBundle(repoRoot);
     const required = [
       'side-process-launch-contract',
       'ao-spawn-shape',

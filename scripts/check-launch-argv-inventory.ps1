@@ -14,13 +14,13 @@ if (-not $Root) {
     $Root = Split-Path -Parent $PSScriptRoot
 }
 
-$registryCli = Join-Path $Root 'docs/launch-argv-registry.mjs'
+$registryCli = Join-Path $Root 'docs/generated-launch-argv-inventory.mjs'
 if (-not (Test-Path -LiteralPath $registryCli -PathType Leaf)) {
-    Write-Host "[FAIL] missing launch-argv registry cli: $registryCli"
+    Write-Host "[FAIL] missing generated launch-argv registry cli: $registryCli"
     exit 1
 }
 
-& node $registryCli audit $Root
+& node $registryCli $Root
 if ($LASTEXITCODE -ne 0) {
     Write-Host '[FAIL] launch-argv inventory guard (Issue #661)'
     exit 1
