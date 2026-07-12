@@ -230,10 +230,10 @@
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-954",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-925",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 954
+        "line": 925
       },
       "callee": {
         "kind": "other-external",
@@ -248,17 +248,17 @@
       "hashPinnedSourceHash": "sha256:1fb501a9193d36ef1bf6bf3c83a9da08e0ce547da443adfe952a6857e3da8b0a",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 954,
+        "line": 925,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-968",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-939",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 968
+        "line": 939
       },
       "callee": {
         "kind": "other-external",
@@ -273,17 +273,17 @@
       "hashPinnedSourceHash": "sha256:bb956e1d6ff8f4d60a643b727ea6bfda2b1491772663fa28f3f4e7da45e65d74",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 968,
+        "line": 939,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-987",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-958",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 987
+        "line": 958
       },
       "callee": {
         "kind": "other-external",
@@ -298,17 +298,17 @@
       "hashPinnedSourceHash": "sha256:53b2607b7660ab1c73c60f1c2a7d1dfa4094d01274edcd347742f897882b299b",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 987,
+        "line": 958,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1002",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-973",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1002
+        "line": 973
       },
       "callee": {
         "kind": "other-external",
@@ -323,17 +323,17 @@
       "hashPinnedSourceHash": "sha256:ae92c52bf33093726093841a20482e6adea77533bf95f0b911fa057c4fb5d666",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1002,
+        "line": 973,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1030",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1001",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1030
+        "line": 1001
       },
       "callee": {
         "kind": "other-external",
@@ -348,17 +348,17 @@
       "hashPinnedSourceHash": "sha256:45606d5dc195226cfc7354a0fe9fdb004b3508a7e4b6d39f275dc675a6533781",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1030,
+        "line": 1001,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1111",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1082",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1111
+        "line": 1082
       },
       "callee": {
         "kind": "other-external",
@@ -373,17 +373,17 @@
       "hashPinnedSourceHash": "sha256:f0152c61983d0c92791e5fefd5d6af77e1748b1b14216b01416b3732fe95833d",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1111,
+        "line": 1082,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1128",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1099",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1128
+        "line": 1099
       },
       "callee": {
         "kind": "other-external",
@@ -398,17 +398,17 @@
       "hashPinnedSourceHash": "sha256:d6c85fa92cba675d04da71d6b032909b9511d0b6a1361a1ce0c7a9419591831a",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1128,
+        "line": 1099,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1141",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1112",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1141
+        "line": 1112
       },
       "callee": {
         "kind": "other-external",
@@ -423,17 +423,17 @@
       "hashPinnedSourceHash": "sha256:eaceaf978d65b0cdc0d86a69cea01def17c6840df8441765e5720497d1355962",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1141,
+        "line": 1112,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1193",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1164",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1193
+        "line": 1164
       },
       "callee": {
         "kind": "other-external",
@@ -448,17 +448,17 @@
       "hashPinnedSourceHash": "sha256:76f863b2d3a7bedfba9b863dd3d3acd0f38f0bc677add727bbd1b9024ad650a7",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1193,
+        "line": 1164,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1206",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1177",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1206
+        "line": 1177
       },
       "callee": {
         "kind": "other-external",
@@ -473,17 +473,17 @@
       "hashPinnedSourceHash": "sha256:d48ed77ba2a57f5428e8b45d9aa1f789f751ffec2042b2030f7f4c649097e76f",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1206,
+        "line": 1177,
         "patternIds": [
           "execFileSync"
         ]
       }
     },
     {
-      "rowId": "site-docs-orchestrator-message-registry-mjs-1220",
+      "rowId": "site-docs-orchestrator-message-registry-mjs-1191",
       "caller": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1220
+        "line": 1191
       },
       "callee": {
         "kind": "other-external",
@@ -498,7 +498,7 @@
       "hashPinnedSourceHash": "sha256:1078bd27a68fcbe540389978a4c18ff2b85f5ef4194481e5425dce947c1d699d",
       "discoveryMatch": {
         "file": "docs/orchestrator-message-registry.mjs",
-        "line": 1220,
+        "line": 1191,
         "patternIds": [
           "execFileSync"
         ]

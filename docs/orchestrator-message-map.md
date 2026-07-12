@@ -1,7 +1,6 @@
 # Orchestrator message map
 
-> Generated from `scripts/orchestrator-message-catalog.json`.
-> Do not edit by hand.
+> Generated from `scripts/orchestrator-message-catalog.json`. Do not edit by hand.
 
 ## Per-class summary
 
