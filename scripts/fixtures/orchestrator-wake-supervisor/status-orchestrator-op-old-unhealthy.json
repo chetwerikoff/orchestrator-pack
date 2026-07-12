@@ -1,11 +1,11 @@
 {
-  "state": "ready",
-  "health": "ok",
-  "ready": "ready",
+  "state": "degraded",
+  "health": "error",
+  "ready": "not-ready",
   "data": [
     {
-      "id": "op-orchestrator-new",
-      "name": "op-orchestrator-new",
+      "id": "op-orchestrator-old",
+      "name": "op-orchestrator-old",
       "projectId": "orchestrator-pack",
       "role": "orchestrator",
       "status": "working",
