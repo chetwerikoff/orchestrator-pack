@@ -54,7 +54,11 @@ export async function waitForMarkers(
   timeoutMs = 25_000,
   roles: readonly ManagedChildRole[] = managedChildRoles,
 ): Promise<void> {
-  await waitForMarkersCore(stateDir, timeoutMs, roles);
+  await waitForMarkersCore(
+    stateDir,
+    timeoutMs,
+    roles as Parameters<typeof waitForMarkersCore>[2],
+  );
 }
 
 export const aoStub = path.join(fixtureDir, 'ao-stub.sh');
