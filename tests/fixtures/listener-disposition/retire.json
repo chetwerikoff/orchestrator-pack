@@ -9,7 +9,7 @@
     "source": "Issue #745 architect audit: production logs showed zero inbound webhook POSTs"
   },
   "finalBaseProbe": {
-    "command": "npm test -- scripts/listener-disposition-probe.test.ts",
+    "command": "node tests/listener-disposition-probe.mjs",
     "observationWindowSeconds": 60,
     "readinessRequest": "one loopback GET /ao-wake readiness request; zero POST requests",
     "inboundWebhookPosts": 0,
