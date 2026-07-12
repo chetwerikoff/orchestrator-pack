@@ -528,29 +528,43 @@ function Test-DeadWorkerPreKillRevalidation {
     else {
         $null
     }
-    $sessions = if ($liveFixture) {
-        @($liveFixture.sessions)
+    $sessions = @()
+    $absentSessions = @()
+    $storeState = $null
+    $killSurface = $null
+    $osLiveness = $null
+    if ($liveFixture) {
+        $sessions = @($liveFixture.sessions)
+        $absentSessions = @($liveFixture.absentSessions)
+        $storeState = if ($liveFixture.workerStatusStore) { $liveFixture.workerStatusStore } else { $null }
+        $killSurface = if ($liveFixture.livenessContext.sanctionedKillSurface) { $liveFixture.livenessContext.sanctionedKillSurface } else { $null }
+        $osLiveness = if ($liveFixture.livenessContext.osLiveness) {
+            $map = @{}
+            foreach ($prop in $liveFixture.livenessContext.osLiveness.PSObject.Properties) {
+                $map[$prop.Name] = $prop.Value
+            }
+            $map
+        }
+        else {
+            $null
+        }
     }
     else {
-        @(Get-WorkerStatusDecisionSessionsIncludingTerminated)
+        $live = Get-DeadWorkerLivePayload
+        $prSnapshot = Get-DeadWorkerPrSnapshot
+        $sessions = @($live.sessions)
+        $absentSessions = @(Get-DeadWorkerAbsentSessions -Sessions $sessions -ProjectId $ProjectId `
+            -RepoRoot $RepoRoot -OpenPrs $prSnapshot.openPrs)
+        $storeState = $live.livenessContext.workerStatusStore
+        $killSurface = $live.livenessContext.sanctionedKillSurface
+        $osLiveness = $live.livenessContext.osLiveness
     }
-    $session = $sessions | Where-Object { [string]($_.sessionId ?? $_.id ?? $_.name) -eq [string]$Action.sessionId } | Select-Object -First 1
+    $livenessProbeSessions = @($sessions) + @($absentSessions)
+    $session = $livenessProbeSessions | Where-Object { [string]($_.sessionId ?? $_.id ?? $_.name) -eq [string]$Action.sessionId } | Select-Object -First 1
     if (-not $session) {
         return @{ ok = $false; reason = 'prekill_session_missing' }
     }
-    $storeState = if ($liveFixture.workerStatusStore) { $liveFixture.workerStatusStore } else { $null }
-    $killSurface = if ($liveFixture.livenessContext.sanctionedKillSurface) { $liveFixture.livenessContext.sanctionedKillSurface } else { $null }
-    $osLiveness = if ($liveFixture.livenessContext.osLiveness) {
-        $map = @{}
-        foreach ($prop in $liveFixture.livenessContext.osLiveness.PSObject.Properties) {
-            $map[$prop.Name] = $prop.Value
-        }
-        $map
-    }
-    else {
-        $null
-    }
-    $livenessContext = Get-DeadWorkerLivenessContext -Sessions @($session) -StoreState $storeState `
+    $livenessContext = Get-DeadWorkerLivenessContext -Sessions $livenessProbeSessions -StoreState $storeState `
         -SanctionedKillSurface $killSurface -OsLivenessOverride $osLiveness
     $classification = Invoke-DeadWorkerPlannerCli -Subcommand 'classify-liveness' -Payload @{
         session = $session
