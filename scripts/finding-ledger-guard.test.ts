@@ -258,11 +258,11 @@ describe('finding-ledger guard scenario matrix (#679)', () => {
   });
 });
 
-describe('finding-ledger guard treats backtick-quoted vocabulary as a quote, not an emitted finding', () => {
-  it('does not read a backtick-quoted `type: security` reference as a protected signal', () => {
+describe('finding-ledger guard treats a backtick-quoted type tag as a quote but keeps other protected vocabulary', () => {
+  it('does not read a backtick-quoted `type: security` tag as an emitted protected finding', () => {
     const capture = [
       'type: spec; id: carveout-wording',
-      'The draft amends the `type: security` carve-out and the `denylist` fence rules.',
+      'The draft amends the `type: security` carve-out so the ledger contract is consistent.',
     ].join('\n');
     expect(detectProtectedSignalsInCapture(capture)).toEqual([]);
     expect(detectTypedFindingsInCapture(capture).map((f) => f.type)).toEqual(['spec']);
@@ -275,7 +275,12 @@ describe('finding-ledger guard treats backtick-quoted vocabulary as a quote, not
     expect(detectProtectedSignalsInCapture(capture)).toContain('security');
   });
 
-  it('passes a ledger whose only security mention in the capture is a backtick quote', () => {
+  it('still treats protected vocabulary a real finding cites (`denylist`) as a scope-violation signal', () => {
+    const capture = 'A finding: this change edits `denylist` paths outside the declared scope.';
+    expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
+  });
+
+  it('passes a ledger whose only security mention in the capture is a backtick-quoted type tag', () => {
     const capture = [
       'type: spec; id: carveout-wording',
       'Reword the `type: security` clause so the ledger contract is consistent.',
