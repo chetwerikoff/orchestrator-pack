@@ -3,8 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
-import { spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -36,26 +35,15 @@ function parseArgs(argv) {
 
 function writeGhaOutput(topology) {
   const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
+  if (!outputPath) {
+    throw new Error('GITHUB_OUTPUT is not set');
+  }
   appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
   appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
-}
-
-function runDiagnostic(command, args, repoRoot, env = process.env) {
-  const result = spawnSync(command, args, {
-    cwd: repoRoot,
-    env,
-    encoding: 'utf8',
-    timeout: 900_000,
-    maxBuffer: 30 * 1024 * 1024,
-  });
-  const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
-  return {
-    status: result.status,
-    signal: result.signal,
-    tail: text.split(/\r?\n/).slice(-200),
-  };
+  appendFileSync(
+    outputPath,
+    `fallback_classification=${topology.fallbackClassification}\n`,
+  );
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -77,6 +65,7 @@ if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
     result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
   }
 }
+
 if (!result.ok) {
   console.error(result.errors.join('\n'));
   process.exit(1);
@@ -93,51 +82,6 @@ const artifact = {
   parkedFiles: result.parked,
   heavyShards: result.heavyShards,
 };
-
-if (process.env.GITHUB_ACTIONS === 'true') {
-  const sourceDocPaths = [
-    'docs/migration_notes.md',
-    'docs/orchestrator-autoloop-go-live.md',
-    'docs/orchestrator-recovery-runbook.md',
-    'docs/orchestrator-wake-runbook.md',
-    'docs/wake-supervisor-fleet-operator-reference.md',
-  ];
-  artifact.prBSourceDocsBase64 = Object.fromEntries(
-    sourceDocPaths.map((relativePath) => [
-      relativePath,
-      Buffer.from(readFileSync(join(repoRoot, relativePath), 'utf8'), 'utf8').toString('base64'),
-    ]),
-  );
-  artifact.prBDiagnostics = {
-    verifier: runDiagnostic(
-      'pwsh',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/verify.ps1'],
-      repoRoot,
-    ),
-    typecheck: runDiagnostic(
-      'npx',
-      ['tsc', '--project', 'tsconfig.base.json', '--noEmit'],
-      repoRoot,
-    ),
-    selfArchitect: runDiagnostic(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        'scripts/lint-self-architect.ps1',
-        '-Strict',
-        '-BaseRef',
-        process.env.PR_BASE_SHA ?? '',
-        '-HeadRef',
-        process.env.PR_HEAD_SHA ?? '',
-      ],
-      repoRoot,
-    ),
-  };
-}
-
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
 if (result.topology.underProvisioned) {
@@ -156,18 +100,9 @@ if (failOnGuard && guardFailures.length > 0) {
   console.error(guardFailures.join('\n'));
   process.exit(1);
 }
-if (ghaOutput) writeGhaOutput(result.topology);
 
-const logArtifact = { ...artifact };
-if (logArtifact.prBSourceDocsBase64) {
-  logArtifact.prBSourceDocsBase64 = Object.keys(logArtifact.prBSourceDocsBase64);
+if (ghaOutput) {
+  writeGhaOutput(result.topology);
 }
-if (logArtifact.prBDiagnostics) {
-  logArtifact.prBDiagnostics = Object.fromEntries(
-    Object.entries(logArtifact.prBDiagnostics).map(([key, value]) => [
-      key,
-      { ...value, tail: [`${value.tail.length} lines captured in artifact`] },
-    ]),
-  );
-}
-console.log(JSON.stringify(logArtifact));
+
+console.log(JSON.stringify(artifact));
