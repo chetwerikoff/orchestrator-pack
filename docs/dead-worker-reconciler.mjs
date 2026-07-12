@@ -98,6 +98,50 @@ function normalizeString(value) {
   return String(value ?? '').trim();
 }
 
+function normalizeGenerationEvidenceValue(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const normalized = normalizeString(value);
+    return normalized ? normalized : null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => normalizeGenerationEvidenceValue(entry))
+      .filter((entry) => entry !== null);
+    return normalized.length > 0 ? normalized : null;
+  }
+  if (typeof value === 'object') {
+    const normalizedEntries = Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, normalizeGenerationEvidenceValue(entry)])
+      .filter(([, entry]) => entry !== null);
+    if (normalizedEntries.length === 0) {
+      return null;
+    }
+    return Object.fromEntries(normalizedEntries);
+  }
+  return normalizeString(value);
+}
+
+function normalizeGenerationEvidenceToken(value) {
+  const normalized = normalizeGenerationEvidenceValue(value);
+  if (normalized === null) {
+    return '';
+  }
+  if (typeof normalized === 'string') {
+    return normalized;
+  }
+  return JSON.stringify(normalized);
+}
+
 function normalizeLower(value) {
   return normalizeString(value).toLowerCase();
 }
@@ -262,12 +306,15 @@ function resolveDeadWorkerGenerationToken(session, row) {
     row?.generationToken,
     row?.sessionGeneration,
     row?.generation,
+    row?.sourceGeneration,
+    row?.generationVector,
+    row?.reloadedMixedGeneration,
     session?.generationToken,
     session?.sessionGeneration,
     session?.generation,
   ];
   for (const candidate of candidates) {
-    const normalized = normalizeString(candidate);
+    const normalized = normalizeGenerationEvidenceToken(candidate);
     if (normalized) return normalized;
   }
   return '';

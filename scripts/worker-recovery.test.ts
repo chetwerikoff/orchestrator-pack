@@ -710,10 +710,12 @@ describe('worker recovery repository identity / pack-root spawn path (#522 AC#12
     const packRoot = repoRoot;
     const ns = tempNs();
     const worktreePath = path.join(packRoot, 'worktrees', 'opk-dead-worker-store');
+    const generationToken =
+      '{"bindingCacheGeneration":1,"journalCursor":1,"reportStoreGeneration":1,"repoTickGeneration":1}';
     const script = `
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
       $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
-      $result = Invoke-WorkerRecovery -Trigger 'reconcile_dead_worker' -ProbedDeadEvidence -SessionId 'opk-dead-worker-store' -GenerationToken 'gen-a' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreeRecord @{ sessionId='opk-dead-worker-store'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -FixtureWorkerStatusStore @{ schemaVersion=1; records=@{ 'opk-dead-worker-store' = @{ sessionId='opk-dead-worker-store'; generationToken='gen-a'; schemaVersion=1 } } } -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
+      $result = Invoke-WorkerRecovery -Trigger 'reconcile_dead_worker' -ProbedDeadEvidence -SessionId 'opk-dead-worker-store' -GenerationToken ${psString(generationToken)} -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreeRecord @{ sessionId='opk-dead-worker-store'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -FixtureWorkerStatusStore @{ schemaVersion=1; records=@{ 'opk-dead-worker-store' = @{ sessionId='opk-dead-worker-store'; schemaVersion=1; sourceGeneration=@{ repoTickGeneration=1; reportStoreGeneration=1; journalCursor=1; bindingCacheGeneration=1 } } } } -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
       [pscustomobject]@{ outcome = [string]$result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
     const result = JSON.parse(runPwsh(script));

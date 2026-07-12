@@ -70,6 +70,81 @@ function ConvertTo-WorkerRecoverySessionSnapshot {
     }
 }
 
+function ConvertTo-WorkerRecoveryGenerationValue {
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+
+    if ($Value -is [string]) {
+        $normalized = $Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($normalized)) { return $null }
+        return $normalized
+    }
+
+    if ($Value -is [bool] -or
+        $Value -is [byte] -or
+        $Value -is [sbyte] -or
+        $Value -is [int16] -or
+        $Value -is [uint16] -or
+        $Value -is [int32] -or
+        $Value -is [uint32] -or
+        $Value -is [int64] -or
+        $Value -is [uint64] -or
+        $Value -is [single] -or
+        $Value -is [double] -or
+        $Value -is [decimal]) {
+        return $Value
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in @($Value.Keys | ForEach-Object { [string]$_ } | Sort-Object)) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationValue $Value[$key]
+            if ($null -ne $normalized) {
+                $ordered[$key] = $normalized
+            }
+        }
+        if ($ordered.Count -eq 0) { return $null }
+        return $ordered
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $items = @()
+        foreach ($entry in $Value) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationValue $entry
+            if ($null -ne $normalized) {
+                $items += ,$normalized
+            }
+        }
+        if ($items.Count -eq 0) { return $null }
+        return $items
+    }
+
+    $properties = $Value.PSObject.Properties
+    if ($properties.Count -gt 0) {
+        $ordered = [ordered]@{}
+        foreach ($property in @($properties.Name | Sort-Object)) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationValue $Value.$property
+            if ($null -ne $normalized) {
+                $ordered[$property] = $normalized
+            }
+        }
+        if ($ordered.Count -eq 0) { return $null }
+        return $ordered
+    }
+
+    return $Value
+}
+
+function ConvertTo-WorkerRecoveryGenerationToken {
+    param($Value)
+
+    $normalized = ConvertTo-WorkerRecoveryGenerationValue $Value
+    if ($null -eq $normalized) { return '' }
+    if ($normalized -is [string]) { return $normalized }
+    return [string](ConvertTo-Json $normalized -Compress -Depth 16)
+}
+
 function Resolve-WorkerRecoveryGenerationToken {
     param($Snapshot)
 
@@ -87,6 +162,9 @@ function Resolve-WorkerRecoveryGenerationToken {
         $workerStatusRow.generationToken,
         $workerStatusRow.sessionGeneration,
         $workerStatusRow.generation,
+        $workerStatusRow.sourceGeneration,
+        $workerStatusRow.generationVector,
+        $workerStatusRow.reloadedMixedGeneration,
         $Snapshot.sessionGeneration,
         $Snapshot.generation
     )
@@ -98,7 +176,7 @@ function Resolve-WorkerRecoveryGenerationToken {
         )
     }
     foreach ($candidate in $candidates) {
-        $normalized = [string]$candidate
+        $normalized = ConvertTo-WorkerRecoveryGenerationToken $candidate
         if (-not [string]::IsNullOrWhiteSpace($normalized)) {
             return $normalized.Trim()
         }
@@ -232,8 +310,21 @@ function Get-WorkerRecoveryPostClaimSnapshot {
     $workerStatusRow = Get-WorkerRecoveryWorkerStatusRow -SessionId $SessionId `
         -FixtureWorkerStatusStore $FixtureWorkerStatusStore -FixtureMode:$FixtureMode
     $generationToken = ''
-    if ($workerStatusRow -and $workerStatusRow.generationToken) {
-        $generationToken = [string]$workerStatusRow.generationToken
+    if ($workerStatusRow) {
+        foreach ($candidate in @(
+                $workerStatusRow.generationToken,
+                $workerStatusRow.sessionGeneration,
+                $workerStatusRow.generation,
+                $workerStatusRow.sourceGeneration,
+                $workerStatusRow.generationVector,
+                $workerStatusRow.reloadedMixedGeneration
+            )) {
+            $normalized = ConvertTo-WorkerRecoveryGenerationToken $candidate
+            if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+                $generationToken = $normalized
+                break
+            }
+        }
     }
 
     return @{

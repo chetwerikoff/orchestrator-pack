@@ -786,7 +786,6 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     const session = {
       sessionId: 'opk-store-shape',
       status: 'terminated',
-      generationToken: 'opk-store-shape-gen',
     };
     const evidence = classifyWorkerLivenessEvidence(session, {
       osLiveness: { [session.sessionId]: 'pane-gone' },
@@ -801,6 +800,9 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     });
     expect(evidence.verdict).toBe('dead');
     expect(evidence.reason).toBe('pack_owned_liveness_dead');
+    expect(evidence.evidence.generationToken).toBe(
+      '{"bindingCacheGeneration":1,"journalCursor":1,"reportStoreGeneration":1,"repoTickGeneration":1}',
+    );
   });
 
   it('uses livenessContext for absent sessions and escalates unreadable kill record surface as audit-only', () => {
