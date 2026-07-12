@@ -326,7 +326,7 @@ function Find-OrchestratorEscalationCurrentRecordKey {
         Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
         if ([string]$record.conditionKey -ne $ConditionKey) { continue }
         if ([string]$record.terminalState -eq 'resolved' -or [string]$record.status -eq 'resolved') { continue }
-        $epoch = [int]($record.epoch ?? 0)
+        $epoch = if ($null -ne $record.epoch) { [int]$record.epoch } else { 0 }
         if ($epoch -gt $selectedEpoch) {
             $selectedEpoch = $epoch
             $selectedKey = [string]$key
@@ -345,7 +345,7 @@ function Get-OrchestratorEscalationNextEpoch {
         $record = Sync-OrchestratorEscalationMutableRecord -State $State -RecordKey $key
         Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
         if ([string]$record.conditionKey -ne $ConditionKey) { continue }
-        $epoch = [int]($record.epoch ?? 0)
+        $epoch = if ($null -ne $record.epoch) { [int]$record.epoch } else { 0 }
         if ($epoch -gt $maxEpoch) { $maxEpoch = $epoch }
     }
     return $maxEpoch + 1
@@ -504,7 +504,7 @@ function Test-OrchestratorEscalationSourceRateLimited {
     if (-not (Test-OrchestratorEscalationCapacityFailureKind -FailureKind ([string]$Record.failureKind))) {
         return $false
     }
-    $lastSourceEmitAtMs = [long]($Record.lastSourceEmitAtMs ?? 0)
+    $lastSourceEmitAtMs = if ($null -ne $Record.lastSourceEmitAtMs) { [long]$Record.lastSourceEmitAtMs } else { 0 }
     return $lastSourceEmitAtMs -gt 0 -and ($Now - $lastSourceEmitAtMs) -lt $Script:OrchestratorEscalationCapacityWindowMs
 }
 

@@ -48,12 +48,13 @@ function Invoke-EscalationRouterTick {
         $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $key
         Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
         if ([string]$record.route -ne 'llm-orchestrator') { continue }
-        if ([int]($record.schemaVersion ?? 1) -gt $Script:OrchestratorEscalationSupportedSchemaVersion) {
+        $schemaVersion = if ($null -ne $record.schemaVersion) { [int]$record.schemaVersion } else { 1 }
+        if ($schemaVersion -gt $Script:OrchestratorEscalationSupportedSchemaVersion) {
             $record.status = 'deferred'
             $record.updatedAtMs = $now
             continue
         }
-        if ([int]($record.schemaVersion ?? 1) -lt 1) {
+        if ($schemaVersion -lt 1) {
             Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'invalid_schema_version' | Out-Null
             continue
         }
@@ -74,9 +75,9 @@ function Invoke-EscalationRouterTick {
             Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now $now | Out-Null
             continue
         }
-        $attempts = [int]($record.attempts ?? 0)
-        $firstAttemptAtMs = [long]($record.firstAttemptAtMs ?? 0)
-        $lastAttemptAtMs = [long]($record.lastAttemptAtMs ?? 0)
+        $attempts = if ($null -ne $record.attempts) { [int]$record.attempts } else { 0 }
+        $firstAttemptAtMs = if ($null -ne $record.firstAttemptAtMs) { [long]$record.firstAttemptAtMs } else { 0 }
+        $lastAttemptAtMs = if ($null -ne $record.lastAttemptAtMs) { [long]$record.lastAttemptAtMs } else { 0 }
         if ($attempts -ge $Script:OrchestratorEscalationMaxAttempts -or ($firstAttemptAtMs -gt 0 -and ($now - $firstAttemptAtMs) -ge $Script:OrchestratorEscalationMaxElapsedMs)) {
             Complete-OrchestratorEscalationDeadLetter -State $state -Record $record -Class $class -Now $now | Out-Null
             continue
