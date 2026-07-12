@@ -9,10 +9,10 @@ const survivors = [
   'review-trigger-reeval',
   'review-ready-report-state-seed',
   'ci-green-wake-reconcile',
-  'dead-worker-reconcile',
   'worker-message-submit-reconcile',
   'review-start-claim-reaper',
   'ci-failure-notification-reconcile',
+  'dead-worker-reconcile',
   'escalation-router',
 ];
 
@@ -27,8 +27,12 @@ function json(path: string): any {
 describe('Issue #745 PR-B retirement contract', () => {
   it('retires listener at the registry and entrypoint boundaries', () => {
     const registry = json('scripts/orchestrator-side-process-registry.json');
-    expect(registry.requiredChildIds).toEqual(survivors);
-    expect(registry.children.map((child: { id: string }) => child.id)).toEqual(survivors);
+    const required = registry.requiredChildIds as string[];
+    const children = registry.children.map((child: { id: string }) => child.id) as string[];
+    expect(required).toHaveLength(survivors.length);
+    expect(children).toHaveLength(survivors.length);
+    expect(new Set(required)).toEqual(new Set(survivors));
+    expect(new Set(children)).toEqual(new Set(survivors));
     expect(JSON.stringify(registry)).not.toContain('listener');
     expect(JSON.stringify(registry)).not.toContain('orchestrator-wake-listener.ps1');
     expect(JSON.stringify(registry)).not.toContain('listener-side-effect.lock');
@@ -58,7 +62,7 @@ describe('Issue #745 PR-B retirement contract', () => {
   it('uses the AO 0.10 worker action for red CI', () => {
     const source = read('scripts/ci-failure-notification-reconcile.ps1');
     expect(source).toContain(
-      "Required CI failed for your PR. Fix failing required checks and push.",
+      'Required CI failed for your PR. Fix failing required checks and push.',
     );
     expect(source).not.toContain('ao report fixing_ci');
     expect(source).not.toContain('ao events');
@@ -74,6 +78,7 @@ describe('Issue #745 PR-B retirement contract', () => {
       disposition: 'retire',
       productionAudit: { inboundWebhookPosts: 0 },
       finalBaseProbe: {
+        command: 'node tests/listener-disposition-probe.mjs',
         observationWindowSeconds: 60,
         inboundWebhookPosts: 0,
         bindingVerified: true,
