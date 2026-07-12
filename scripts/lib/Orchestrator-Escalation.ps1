@@ -199,7 +199,11 @@ function Get-OrchestratorEscalationConditionKey {
     )
     $scope = Get-OrchestratorEscalationConditionScope -Payload $Payload
     $failureKind = Get-OrchestratorEscalationFailureKind -Payload $Payload
-    return Get-OrchestratorEscalationHash -Text "${EscalationClassId}`n${scope}`n${failureKind}"
+    $keyText = "${EscalationClassId}`n${scope}`n${failureKind}"
+    if ($scope -eq 'project:global' -and $CorrelationKey) {
+        $keyText = "${keyText}`n${CorrelationKey}"
+    }
+    return Get-OrchestratorEscalationHash -Text $keyText
 }
 
 function Get-OrchestratorEscalationEpochRecordKey {
@@ -530,13 +534,33 @@ function Resolve-OrchestratorEscalationCondition {
     param(
         [Parameter(Mandatory = $true)][string]$EscalationClassId,
         [Parameter(Mandatory = $true)]$Payload,
+        [string]$CorrelationKey = '',
         [string]$StatePath = '',
         [Nullable[long]]$NowMs = $null
     )
     $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
-    $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey '' -Payload $Payload
+    $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload
     $recordKey = Find-OrchestratorEscalationCurrentRecordKey -State $state -ConditionKey $conditionKey
+    if (-not $recordKey -and -not $CorrelationKey) {
+        $scope = Get-OrchestratorEscalationConditionScope -Payload $Payload
+        $failureKind = Get-OrchestratorEscalationFailureKind -Payload $Payload
+        $matches = @()
+        foreach ($candidateKey in @($state.records.Keys)) {
+            $candidate = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $candidateKey
+            Sync-OrchestratorEscalationRecordDefaults -Record $candidate | Out-Null
+            if ([string]$candidate.escalationClassId -ne $EscalationClassId) { continue }
+            if ([string]$candidate.terminalState -eq 'resolved' -or [string]$candidate.status -eq 'resolved') { continue }
+            $candidateScope = Get-OrchestratorEscalationConditionScope -Payload $candidate.lastPayload
+            $candidateFailureKind = Get-OrchestratorEscalationFailureKind -Payload $candidate.lastPayload
+            if ($candidateScope -ne $scope -or $candidateFailureKind -ne $failureKind) { continue }
+            $matches += [string]$candidateKey
+        }
+        if ($matches.Count -eq 1) {
+            $recordKey = [string]$matches[0]
+            $conditionKey = [string](Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $recordKey).conditionKey
+        }
+    }
     if (-not $recordKey) {
         return @{ ok = $true; status = 'not_found'; conditionKey = $conditionKey }
     }

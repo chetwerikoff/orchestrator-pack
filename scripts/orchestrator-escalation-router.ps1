@@ -25,6 +25,19 @@ function Test-EscalationRouterForeignRecord {
     return $correlationKey -like 'foreign:*' -or $sourceProcess -eq 'vitest-foreign'
 }
 
+function Merge-EscalationRouterReplayState {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)]$DiskState,
+        [Parameter(Mandatory = $true)][string]$RecordKey
+    )
+    $State.schemaVersion = $DiskState.schemaVersion
+    $State.wakeWindows = if ($null -ne $DiskState.wakeWindows) { $DiskState.wakeWindows } else { @{} }
+    if ($DiskState.records.ContainsKey($RecordKey)) {
+        $State.records[$RecordKey] = $DiskState.records[$RecordKey]
+    }
+}
+
 function Invoke-EscalationRouterTick {
     $path = Get-OrchestratorEscalationStatePath
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
@@ -78,7 +91,8 @@ function Invoke-EscalationRouterTick {
             -CorrelationKey ([string]$record.correlationKey) -Payload $payload `
             -Message ([string]$record.lastMessage) -OrchestratorSessionId $orchId `
             -StatePath $path -ReplayEscalationId $key -SkipWakeSuppression -NowMs $now
-        $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+        $diskState = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+        Merge-EscalationRouterReplayState -State $state -DiskState $diskState -RecordKey $key
         if ($result.delivered) { $redelivered++ }
     }
     Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30

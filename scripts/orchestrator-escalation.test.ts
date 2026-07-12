@@ -109,6 +109,35 @@ describe('orchestrator escalation contract (#641)', () => {
     });
   });
 
+  it('global condition keys include correlation so unrelated degraded-ci escalations do not collide', () => {
+    const parsed = runJson(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $first = Publish-OrchestratorEscalation -EscalationClassId 'escalation-review-trigger-degraded-ci' -CorrelationKey 'corr:review-trigger:https://example.test/pr/1:head-a' -Payload @{ prNumber = 1; headSha = 'head-a'; message = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $second = Publish-OrchestratorEscalation -EscalationClassId 'escalation-review-trigger-degraded-ci' -CorrelationKey 'corr:review-trigger:https://example.test/pr/2:head-b' -Payload @{ prNumber = 2; headSha = 'head-b'; message = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 2000 -DryRun
+      $duplicate = Publish-OrchestratorEscalation -EscalationClassId 'escalation-review-trigger-degraded-ci' -CorrelationKey 'corr:review-trigger:https://example.test/pr/1:head-a' -Payload @{ prNumber = 1; headSha = 'head-a'; message = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 3000 -DryRun
+      $clearFirst = Resolve-OrchestratorEscalationCondition -EscalationClassId 'escalation-review-trigger-degraded-ci' -CorrelationKey 'corr:review-trigger:https://example.test/pr/1:head-a' -Payload @{ prNumber = 1; headSha = 'head-a'; message = 'required checks missing' } -StatePath ${ps(state)} -NowMs 4000
+      $afterClear = Publish-OrchestratorEscalation -EscalationClassId 'escalation-review-trigger-degraded-ci' -CorrelationKey 'corr:review-trigger:https://example.test/pr/1:head-a' -Payload @{ prNumber = 1; headSha = 'head-a'; message = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 40000 -DryRun
+      [pscustomobject]@{
+        firstStatus = [string]$first.status
+        secondStatus = [string]$second.status
+        duplicateStatus = [string]$duplicate.status
+        duplicateReason = [string]$duplicate.reason
+        clearFirstStatus = [string]$clearFirst.status
+        afterClearStatus = [string]$afterClear.status
+        distinctEscalationIds = ([string]$first.escalationId -ne [string]$second.escalationId)
+      } | ConvertTo-Json -Compress
+    `);
+    expect(parsed).toEqual({
+      firstStatus: 'delivered',
+      secondStatus: 'delivered',
+      duplicateStatus: 'open_existing',
+      duplicateReason: 'condition_open',
+      clearFirstStatus: 'resolved',
+      afterClearStatus: 'delivered',
+      distinctEscalationIds: true,
+    });
+  });
+
   it('escalation publish leaves llm delivery open for router retry', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1

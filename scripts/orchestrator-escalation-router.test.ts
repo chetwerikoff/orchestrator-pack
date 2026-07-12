@@ -153,4 +153,82 @@ describe('orchestrator escalation router', () => {
     expect(canonicalRecord?.status).toBe('pending');
     expect(canonicalRecord?.acknowledgedAtMs ?? null).toBeNull();
   });
+
+  it('preserves earlier in-memory router mutations when a later replay reloads state', () => {
+    tempDir = join(tmpdir(), `router-state-merge-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const state = join(tempDir, 'escalation-state.json');
+    const inbox = join(tempDir, 'operator-inbox');
+    const health = join(tempDir, 'health');
+
+    const seed = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $first = Publish-OrchestratorEscalation -EscalationClassId 'escalation-worker-degraded-ci-handoff' -CorrelationKey 'corr:worker-degraded-ci:51:head-a' -Payload @{ prNumber = 51; prHeadSha = 'head-a'; workerSessionId = 'worker-51'; reason = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $second = Publish-OrchestratorEscalation -EscalationClassId 'escalation-worker-degraded-ci-handoff' -CorrelationKey 'corr:worker-degraded-ci:52:head-b' -Payload @{ prNumber = 52; prHeadSha = 'head-b'; workerSessionId = 'worker-52'; reason = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 2000 -DryRun
+      $doc = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      $firstRecord = $doc.records[$first.escalationId]
+      $secondRecord = $doc.records[$second.escalationId]
+      $firstRecord.status = 'pending'
+      $firstRecord.attempts = 1
+      $firstRecord.firstAttemptAtMs = $now
+      $firstRecord.lastAttemptAtMs = $now
+      $secondRecord.status = 'pending'
+      $secondRecord.attempts = 0
+      $secondRecord.firstAttemptAtMs = 0
+      $secondRecord.lastAttemptAtMs = 0
+      $doc.wakeWindows = @{}
+      Set-MechanicalJsonStateFile -Path ${ps(state)} -State $doc -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    `,
+    );
+    expect(seed.status, `${seed.stdout}\n${seed.stderr}`).toBe(0);
+
+    const router = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/orchestrator-escalation-router.ps1',
+        '-OrchestratorSessionId',
+        'orch-test',
+        '-Once',
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_ESCALATION_FORCE_SEND_FAILURE: '1',
+          AO_ORCHESTRATOR_ESCALATION_STATE: state,
+          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+        },
+      },
+    );
+    expect(router.status, `${router.stdout}\n${router.stderr}`).toBe(0);
+
+    const after = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          correlationKey?: string;
+          status?: string;
+          attempts?: number;
+        }
+      >;
+    };
+    const firstRecord = Object.values(after.records).find(
+      (record) => record.correlationKey === 'corr:worker-degraded-ci:51:head-a',
+    );
+    const secondRecord = Object.values(after.records).find(
+      (record) => record.correlationKey === 'corr:worker-degraded-ci:52:head-b',
+    );
+
+    expect(firstRecord?.status).toBe('backoff_waiting');
+    expect(secondRecord?.attempts ?? 0).toBeGreaterThan(0);
+  });
 });
