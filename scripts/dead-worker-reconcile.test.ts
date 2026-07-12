@@ -605,6 +605,53 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(output).not.toMatch(/ConvertFrom-Json/);
   });
 
+  it('ignores persisted worker-status rows when PACK_WORKER_STATUS_STORE_DISABLED is set', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-live-'));
+    const livePayloadPath = join(tempDir, 'live-payload.json');
+    const bootstrapPath = join(repoRoot, 'scripts', `.tmp-dead-worker-store-disabled-${Date.now()}.ps1`);
+    writeFileSync(livePayloadPath, JSON.stringify({
+      sessions: [{
+        sessionId: 'opk-store-disabled',
+        issueNumber: 688,
+        status: 'terminated',
+      }],
+      workerStatusStore: {
+        schemaVersion: 1,
+        records: {
+          'opk-store-disabled': compatibleWorkerStatusRow('opk-store-disabled'),
+        },
+      },
+      livenessContext: {
+        osLiveness: { 'opk-store-disabled': 'pane-gone' },
+        sanctionedKillSurface: { healthy: true, records: [] },
+      },
+    }));
+    const reconcileSource = readFileSync(join(repoRoot, 'scripts/dead-worker-reconcile.ps1'), 'utf8');
+    writeFileSync(
+      bootstrapPath,
+      [
+        reconcileSource.replace(/\$intervalMs =[\s\S]*$/, ''),
+        `$env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE = '${livePayloadPath.replace(/'/g, "''")}'`,
+        "$env:PACK_WORKER_STATUS_STORE_DISABLED = '1'",
+        '$payload = Get-DeadWorkerLivePayload',
+        '@{ rowCount = @($payload.livenessContext.workerStatusRows).Count; disabled = $payload.livenessContext.workerStatusStore.disabled } | ConvertTo-Json -Compress',
+      ].join('\n'),
+    );
+    try {
+      const output = execFileSync(
+        'pwsh',
+        ['-NoProfile', '-File', bootstrapPath],
+        { cwd: repoRoot, encoding: 'utf8' },
+      );
+      const result = JSON.parse(output);
+      expect(result.rowCount).toBe(0);
+      expect(result.disabled).toBe(true);
+    } finally {
+      rmSync(bootstrapPath, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('clears quarantine only when no pending or quarantined actions remain', () => {
     const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-clear-'));
     const statePath = join(tempDir, 'dead-worker-state.json');

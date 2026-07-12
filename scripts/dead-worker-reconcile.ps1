@@ -143,6 +143,36 @@ function Get-DeadWorkerWorkerStatusRows {
     return @()
 }
 
+function Test-DeadWorkerWorkerStatusStoreDisabled {
+    $raw = [string]($env:PACK_WORKER_STATUS_STORE_DISABLED ?? '')
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+    switch ($raw.Trim().ToLowerInvariant()) {
+        '1' { return $true }
+        'true' { return $true }
+        'yes' { return $true }
+        'on' { return $true }
+        default { return $false }
+    }
+}
+
+function Resolve-DeadWorkerWorkerStatusStoreState {
+    param([object]$StoreState = $null)
+
+    if (Test-DeadWorkerWorkerStatusStoreDisabled) {
+        return @{
+            schemaVersion = 1
+            records = @{}
+            disabled = $true
+        }
+    }
+
+    if ($null -ne $StoreState) {
+        return $StoreState
+    }
+
+    return Get-WorkerStatusStoreState
+}
+
 function Get-DeadWorkerLivenessContext {
     param(
         [object[]]$Sessions,
@@ -153,7 +183,7 @@ function Get-DeadWorkerLivenessContext {
     )
 
     $nowMs = if ($EvaluationNowMs) { $EvaluationNowMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-    $resolvedStore = if ($null -ne $StoreState) { $StoreState } else { Get-WorkerStatusStoreState }
+    $resolvedStore = Resolve-DeadWorkerWorkerStatusStoreState -StoreState $StoreState
     $resolvedKillSurface = if ($null -ne $SanctionedKillSurface) { $SanctionedKillSurface } else { Read-SanctionedWorkerKillSurface }
     $osLiveness = if ($null -ne $OsLivenessOverride) { $OsLivenessOverride } else { Get-WorkerOsLivenessMap -Sessions $Sessions }
     return @{
@@ -219,7 +249,7 @@ function Get-DeadWorkerLivePayload {
     if ($env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE) {
         $fixture = Get-Content -LiteralPath $env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE -Raw | ConvertFrom-Json
         $sessions = @($fixture.sessions)
-        $storeState = if ($fixture.workerStatusStore) { $fixture.workerStatusStore } else { @{ records = @{} } }
+        $storeState = Resolve-DeadWorkerWorkerStatusStoreState -StoreState $(if ($fixture.workerStatusStore) { $fixture.workerStatusStore } else { @{ records = @{} } })
         $killSurface = if ($fixture.livenessContext.sanctionedKillSurface) {
             $fixture.livenessContext.sanctionedKillSurface
         }
@@ -240,7 +270,7 @@ function Get-DeadWorkerLivePayload {
         }
     }
     $sessions = @(Get-WorkerStatusDecisionSessionsIncludingTerminated)
-    $storeState = Get-WorkerStatusStoreState
+    $storeState = Resolve-DeadWorkerWorkerStatusStoreState
     return @{
         sessions = $sessions
         livenessContext = Get-DeadWorkerLivenessContext -Sessions $sessions -StoreState $storeState

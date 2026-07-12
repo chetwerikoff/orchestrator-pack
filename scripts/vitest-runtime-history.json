@@ -387,7 +387,7 @@
   },
   "contentSha": {
     "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
-    "scripts/dead-worker-reconcile.test.ts": "091476f48203e6edcae9a09a5c2d0e6f66de9f42af23e8222e0c6e5e5fa668d0",
+    "scripts/dead-worker-reconcile.test.ts": "283b5da900217980281eee2ecbf8f38795f4f7381527ec5c326eb94649dffb58",
     "scripts/event-consumer-rebind-scenario-matrix.test.ts": "142feea5f8496dabdfd35a44afdd0960cbb7a7a0a215f9bd091d5d0062ec420b",
     "scripts/orchestrator-escalation-router.test.ts": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a",
     "scripts/orchestrator-escalation.test.ts": "e9e482c10d6dc7238802587208f61c59da7e54c9bd0d566921e59a8bfc921d45",
