@@ -20,17 +20,6 @@ jobs:
           fetch-depth: 0
           token: ${{ github.token }}
 
-      - name: Export source checkout
-        run: tar --exclude=.git -czf /tmp/issue-757-source.tgz .
-
-      - name: Upload source checkout
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-757-source
-          path: /tmp/issue-757-source.tgz
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -48,7 +37,10 @@ jobs:
           import base64
           import zlib
           from pathlib import Path
-          payload = Path('scripts/.issue-757-bootstrap.py.zlib.b64').read_text(encoding='utf-8')
+          payload = ''.join(
+              Path(f'scripts/.issue-757-bootstrap.part{index}').read_text(encoding='utf-8')
+              for index in range(1, 5)
+          )
           code = zlib.decompress(base64.b64decode(payload)).decode('utf-8')
           compiled = compile(code, 'issue-757-bootstrap.py', 'exec')
           exec(compiled, {'__name__': '__main__'})
@@ -61,8 +53,10 @@ jobs:
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add -- scripts/issue-757-bootstrap-error.txt
-            git commit -m 'Record issue 757 bootstrap diagnostic'
-            git push origin HEAD:agent/issue-757-runtime-history-self-heal
+            if ! git diff --cached --quiet; then
+              git commit -m 'Record issue 757 bootstrap diagnostic'
+              git push origin HEAD:agent/issue-757-runtime-history-self-heal
+            fi
             exit "$status"
           fi
 
@@ -81,8 +75,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/issue-757-bootstrap.yml scripts/.issue-757-bootstrap.py.zlib.b64
-          git rm -f scripts/issue-757-bootstrap-error.txt 2>/dev/null || true
+          git rm .github/workflows/issue-757-bootstrap.yml
+          git rm -f scripts/.issue-757-bootstrap.py.zlib.b64 scripts/.issue-757-bootstrap.part* scripts/issue-757-bootstrap-error.txt 2>/dev/null || true
           git add -- \
             .github/workflows/scope-guard.yml \
             docs/declarations/757.arch-direct.json \
@@ -90,8 +84,7 @@ jobs:
             scripts/pr-scope-check.test.ts \
             scripts/pr-scope-check.ts \
             scripts/vitest-runtime-history-delivery.mjs \
-            scripts/vitest-runtime-history-delivery.test.mjs \
-            scripts/vitest-runtime-history.json
+            scripts/vitest-runtime-history-delivery.test.mjs
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Fix runtime-history delivery self-heal (#757)'
