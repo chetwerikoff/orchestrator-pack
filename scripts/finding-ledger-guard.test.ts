@@ -3,7 +3,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { checkFindingLedgerGuard, detectUntypedFindingsInCapture, runCli } from './finding-ledger-guard.mjs';
+import {
+  checkFindingLedgerGuard,
+  detectProtectedSignalsInCapture,
+  detectTypedFindingsInCapture,
+  detectUntypedFindingsInCapture,
+  runCli,
+} from './finding-ledger-guard.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -249,5 +255,36 @@ describe('finding-ledger guard scenario matrix (#679)', () => {
 
     const genuine = loadScenarioFixture('genuine-security');
     expect(checkFindingLedgerGuard(genuine.capture, genuine.ledger).ok).toBe(false);
+  });
+});
+
+describe('finding-ledger guard treats backtick-quoted vocabulary as a quote, not an emitted finding', () => {
+  it('does not read a backtick-quoted `type: security` reference as a protected signal', () => {
+    const capture = [
+      'type: spec; id: carveout-wording',
+      'The draft amends the `type: security` carve-out and the `denylist` fence rules.',
+    ].join('\n');
+    expect(detectProtectedSignalsInCapture(capture)).toEqual([]);
+    expect(detectTypedFindingsInCapture(capture).map((f) => f.type)).toEqual(['spec']);
+  });
+
+  it('still detects a genuine unquoted type: security finding', () => {
+    const capture = ['type: security; id: real-leak', 'A credential is exposed to PR-controlled code.'].join(
+      '\n',
+    );
+    expect(detectProtectedSignalsInCapture(capture)).toContain('security');
+  });
+
+  it('passes a ledger whose only security mention in the capture is a backtick quote', () => {
+    const capture = [
+      'type: spec; id: carveout-wording',
+      'Reword the `type: security` clause so the ledger contract is consistent.',
+    ].join('\n');
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'x',
+      findings: [{ id: 'carveout-wording', summary: 's', type: 'spec', disposition: 'addressed' }],
+    });
+    expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(true);
   });
 });

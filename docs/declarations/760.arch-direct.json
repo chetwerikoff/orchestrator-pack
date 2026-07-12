@@ -1,0 +1,20 @@
+{
+  "issue_number": 760,
+  "iteration_id": "arch-direct",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-12T08:27:02.675Z",
+  "baseline": {
+    "commit_sha": "b4be8df537757bd0f3314f91e8cfd792e36a4ae4",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f23f7f86fe6787daed0ca25793e50f96e24fbf1b225745154fdce19c095fd1a5"
+  },
+  "declared_paths": [
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/lib/tier-marker-screen.ts",
+    "scripts/finding-ledger-guard.test.ts",
+    "scripts/tier-gate-guard.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

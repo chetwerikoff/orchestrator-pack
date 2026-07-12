@@ -85,6 +85,15 @@ export function stripMarkdownFencedCodeBlocks(text) {
   return text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
 }
 
+/**
+ * Remove inline code spans so quoted vocabulary — e.g. a review that discusses
+ * the `type: security` carve-out rules — is not read as an emitted finding.
+ * A real reviewer tag is a plain `type: security` line, never backtick-wrapped.
+ */
+export function stripInlineCodeSpans(text) {
+  return text.replace(/`[^`\n]+`/g, ' ');
+}
+
 function hasEchoedReviewContext(text) {
   return ECHOED_ARTIFACT_MARKER.test(text) || ECHOED_DRAFT_REVIEW_PROMPT.test(text);
 }
@@ -142,7 +151,7 @@ function indexOfFirstFindingSignal(text, fromIndex = 0) {
 
 /** Scope parsing to reviewer findings — skip echoed rubric, draft body, and fenced blocks. */
 export function extractFindingsScanText(capture) {
-  const withoutFences = stripMarkdownFencedCodeBlocks(capture);
+  const withoutFences = stripInlineCodeSpans(stripMarkdownFencedCodeBlocks(capture));
   if (isCleanNoFindings(withoutFences)) {
     return withoutFences;
   }
