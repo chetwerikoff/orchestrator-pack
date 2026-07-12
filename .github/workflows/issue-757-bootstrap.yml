@@ -120,7 +120,9 @@ jobs:
       - name: Commit verified implementation
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
+          bash -euo pipefail <<'PUBLISH' > /tmp/issue-757-publish.log 2>&1
+          git status --short
           git rm -f scripts/.issue-757-bootstrap.py.zlib.b64 scripts/.issue-757-bootstrap.part* scripts/issue-757-bootstrap-error.txt scripts/issue-757-verify-error.txt
           git add -- \
             .github/workflows/scope-guard.yml \
@@ -134,3 +136,17 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Fix runtime-history delivery self-heal (#757)'
           git push origin HEAD:agent/issue-757-runtime-history-self-heal
+          PUBLISH
+          status=$?
+          set -e
+          cat /tmp/issue-757-publish.log
+          if [ "$status" -ne 0 ]; then
+            git reset --hard HEAD
+            cp /tmp/issue-757-publish.log scripts/issue-757-publish-error.txt
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -- scripts/issue-757-publish-error.txt
+            git commit -m 'Record issue 757 publish diagnostic'
+            git push origin HEAD:agent/issue-757-runtime-history-self-heal
+            exit "$status"
+          fi
