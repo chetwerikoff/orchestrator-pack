@@ -8,6 +8,7 @@ import {
   DELIVERY_PATH,
   evaluateDeliveryState,
   loadDeliverySnapshot,
+  selectReusableDeliveryPr,
 } from './vitest-runtime-history-delivery.mjs';
 
 const REQUIRED = ['PR scope guard'];
@@ -112,6 +113,27 @@ test('close-as-obsolete executes gh pr close and never update-branch or rebase',
   assert.deepEqual(options, { allowedExitCodes: [0] });
 });
 
+test('selectReusableDeliveryPr prefers open PRs and otherwise reuses closed unmerged PRs', () => {
+  assert.deepEqual(
+    selectReusableDeliveryPr([
+      { number: 761, state: 'closed', merged_at: null },
+      { number: 762, state: 'open', merged_at: null },
+    ]),
+    { number: 762, state: 'open', merged_at: null },
+  );
+  assert.deepEqual(
+    selectReusableDeliveryPr([
+      { number: 763, state: 'closed', merged_at: '2026-07-12T00:00:00Z' },
+      { number: 764, state: 'closed', merged_at: null },
+    ]),
+    { number: 764, state: 'closed', merged_at: null },
+  );
+  assert.equal(
+    selectReusableDeliveryPr([{ number: 765, state: 'closed', merged_at: '2026-07-12T00:00:00Z' }]),
+    null,
+  );
+});
+
 test('invalid trusted snapshot remains an actionable configuration failure', () => {
   const dir = mkdtempSync(join(tmpdir(), 'runtime-history-delivery-'));
   const path = join(dir, 'snapshot.json');
@@ -152,4 +174,10 @@ test('credential and trusted-actor gates remain fail-closed before monitor-pr', 
     workflow,
     /if \[ "\$\{EVENT_SENDER_LOGIN\}" != "\$\{trusted_actor\}" \]; then[\s\S]*?exit 1/,
   );
+});
+
+test('upsert-pr searches all states and reopens reusable closed delivery PRs', () => {
+  const source = readFileSync('./scripts/vitest-runtime-history-delivery.mjs', 'utf8');
+  assert.match(source, /pulls\?state=all&head=\$\{owner\}:\$\{encodeURIComponent\(options\.branch\)\}&base=\$\{options\.base\}/);
+  assert.match(source, /\['pr', 'reopen', String\(number\), '--repo', options\.repo\]/);
 });

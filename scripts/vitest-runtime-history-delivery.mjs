@@ -279,6 +279,18 @@ export function closeObsoleteDeliveryPr({
   );
 }
 
+export function selectReusableDeliveryPr(existingPulls) {
+  if (!Array.isArray(existingPulls) || existingPulls.length === 0) {
+    return null;
+  }
+
+  return (
+    existingPulls.find((pullRequest) => pullRequest?.state === 'open') ??
+    existingPulls.find((pullRequest) => pullRequest?.state === 'closed' && !pullRequest?.merged_at) ??
+    null
+  );
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -302,13 +314,21 @@ async function upsertPr(options) {
   const body = readFileSync(options.bodyFile, 'utf8');
   const listArgs = [
     'api',
-    `repos/${owner}/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(options.branch)}&base=${options.base}`,
+    `repos/${owner}/${repo}/pulls?state=all&head=${owner}:${encodeURIComponent(options.branch)}&base=${options.base}`,
   ];
-  const existing = runGhJson(options.repoRoot, listArgs) ?? [];
+  const reusablePr = selectReusableDeliveryPr(runGhJson(options.repoRoot, listArgs) ?? []);
 
   let pr;
-  if (existing.length > 0) {
-    const number = existing[0].number;
+  if (reusablePr) {
+    const number = reusablePr.number;
+    if (reusablePr.state === 'closed') {
+      runGh(
+        options.repoRoot,
+        ['pr', 'reopen', String(number), '--repo', options.repo],
+        { allowedExitCodes: [0] },
+      );
+      console.log(`[INFO] runtime-history delivery PR reopened: #${number}`);
+    }
     pr = runGhJson(options.repoRoot, [
       'api',
       '-X',
