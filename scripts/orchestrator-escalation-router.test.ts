@@ -150,7 +150,310 @@ describe('orchestrator escalation router', () => {
         (record.attempts ?? 0) > 0,
     );
     expect(canonicalRecord).toBeDefined();
-    expect(canonicalRecord?.status).toBe('fail_closed');
+    expect(canonicalRecord?.status).toBe('pending');
     expect(canonicalRecord?.acknowledgedAtMs ?? null).toBeNull();
+  });
+
+  it('preserves earlier in-memory router mutations when a later replay reloads state', () => {
+    tempDir = join(tmpdir(), `router-state-merge-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const state = join(tempDir, 'escalation-state.json');
+    const inbox = join(tempDir, 'operator-inbox');
+    const health = join(tempDir, 'health');
+
+    const seed = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $first = Publish-OrchestratorEscalation -EscalationClassId 'escalation-worker-degraded-ci-handoff' -CorrelationKey 'corr:worker-degraded-ci:51:head-a' -Payload @{ prNumber = 51; prHeadSha = 'head-a'; workerSessionId = 'worker-51'; reason = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $second = Publish-OrchestratorEscalation -EscalationClassId 'escalation-worker-degraded-ci-handoff' -CorrelationKey 'corr:worker-degraded-ci:52:head-b' -Payload @{ prNumber = 52; prHeadSha = 'head-b'; workerSessionId = 'worker-52'; reason = 'required checks missing' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 2000 -DryRun
+      $doc = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      $firstRecord = $doc.records[$first.escalationId]
+      $secondRecord = $doc.records[$second.escalationId]
+      $firstRecord.status = 'pending'
+      $firstRecord.attempts = 1
+      $firstRecord.firstAttemptAtMs = $now
+      $firstRecord.lastAttemptAtMs = $now
+      $secondRecord.status = 'pending'
+      $secondRecord.attempts = 0
+      $secondRecord.firstAttemptAtMs = 0
+      $secondRecord.lastAttemptAtMs = 0
+      $doc.wakeWindows = @{}
+      Set-MechanicalJsonStateFile -Path ${ps(state)} -State $doc -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    `,
+    );
+    expect(seed.status, `${seed.stdout}\n${seed.stderr}`).toBe(0);
+
+    const router = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/orchestrator-escalation-router.ps1',
+        '-OrchestratorSessionId',
+        'orch-test',
+        '-Once',
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_ESCALATION_FORCE_SEND_FAILURE: '1',
+          AO_ORCHESTRATOR_ESCALATION_STATE: state,
+          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+        },
+      },
+    );
+    expect(router.status, `${router.stdout}\n${router.stderr}`).toBe(0);
+
+    const after = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          correlationKey?: string;
+          status?: string;
+          attempts?: number;
+        }
+      >;
+    };
+    const firstRecord = Object.values(after.records).find(
+      (record) => record.correlationKey === 'corr:worker-degraded-ci:51:head-a',
+    );
+    const secondRecord = Object.values(after.records).find(
+      (record) => record.correlationKey === 'corr:worker-degraded-ci:52:head-b',
+    );
+
+    expect(firstRecord?.status).toBe('backoff_waiting');
+    expect(secondRecord?.attempts ?? 0).toBeGreaterThan(0);
+  });
+
+  it('preserves concurrent producer records during router writeback', () => {
+    tempDir = join(tmpdir(), `router-concurrent-writeback-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const result = runPwsh(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $state = @{
+        schemaVersion = 2
+        records = @{
+          alpha = @{
+            recordKey = 'alpha'
+            correlationKey = 'corr:alpha'
+            status = 'backoff_waiting'
+          }
+        }
+        wakeWindows = @{}
+        audit = @{}
+      }
+      $diskState = @{
+        schemaVersion = 2
+        records = @{
+          alpha = @{
+            recordKey = 'alpha'
+            correlationKey = 'corr:alpha'
+            status = 'pending'
+          }
+          bravo = @{
+            recordKey = 'bravo'
+            correlationKey = 'corr:bravo'
+            status = 'pending'
+          }
+        }
+        wakeWindows = @{}
+        audit = @{ source = 'disk' }
+      }
+      $merged = Merge-OrchestratorEscalationRouterWritebackState -State $state -DiskState $diskState -DirtyRecordKeys @('alpha')
+      [pscustomobject]@{
+        alphaStatus = [string]$merged.records['alpha'].status
+        bravoStatus = [string]$merged.records['bravo'].status
+        recordCount = @($merged.records.Keys).Count
+        auditSource = [string]$merged.audit.source
+      } | ConvertTo-Json -Compress
+    `);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+
+    const merged = JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '{}') as {
+      alphaStatus: string;
+      bravoStatus: string;
+      recordCount: number;
+      auditSource: string;
+    };
+
+    expect(merged.alphaStatus).toBe('backoff_waiting');
+    expect(merged.bravoStatus).toBe('pending');
+    expect(merged.recordCount).toBe(2);
+    expect(merged.auditSource).toBe('disk');
+  });
+
+  it('quarantines malformed or foreign records with visibility and recoverable release/delete paths', () => {
+    tempDir = join(tmpdir(), `router-quarantine-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const state = join(tempDir, 'escalation-state.json');
+    const inbox = join(tempDir, 'operator-inbox');
+    const health = join(tempDir, 'health');
+
+    const seeded = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $foreign = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'foreign:dead-worker:test' -Payload @{ reason = 'spawn_denied'; source_process = 'vitest-foreign' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $unknown = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:unknown-class:test' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 2000 -DryRun
+      $doc = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $doc.records[$unknown.escalationId].escalationClassId = 'escalation-unknown-class'
+      Set-MechanicalJsonStateFile -Path ${ps(state)} -State $doc -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+      [pscustomobject]@{ foreignId = [string]$foreign.escalationId; unknownId = [string]$unknown.escalationId } | ConvertTo-Json -Compress
+    `,
+    );
+    expect(seeded.status, `${seeded.stdout}\n${seeded.stderr}`).toBe(0);
+    const ids = JSON.parse(seeded.stdout.trim().split('\n').at(-1) ?? '{}') as { foreignId: string; unknownId: string };
+
+    const router = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/orchestrator-escalation-router.ps1',
+        '-OrchestratorSessionId',
+        'orch-test',
+        '-Once',
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_ORCHESTRATOR_ESCALATION_STATE: state,
+          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+        },
+      },
+    );
+    expect(router.status, `${router.stdout}\n${router.stderr}`).toBe(0);
+
+    const beforeRelease = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          status?: string;
+          terminalState?: string;
+          terminalReason?: string;
+          operatorOutbox?: string;
+          operatorInboxPath?: string;
+        }
+      >;
+    };
+    expect(beforeRelease.records[ids.foreignId]?.status).toBe('quarantined');
+    expect(beforeRelease.records[ids.foreignId]?.terminalReason).toBe('foreign_record');
+    expect(beforeRelease.records[ids.foreignId]?.operatorOutbox).toBe('published');
+    expect(beforeRelease.records[ids.foreignId]?.operatorInboxPath).toBeTruthy();
+    expect(beforeRelease.records[ids.unknownId]?.status).toBe('quarantined');
+    expect(beforeRelease.records[ids.unknownId]?.terminalReason).toBe('unknown_escalation_class');
+
+    const actions = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $release = Write-OrchestratorEscalationQuarantineAction -EscalationId ${ps(ids.foreignId)} -Action release -StatePath ${ps(state)} -NowMs 5000
+      $delete = Write-OrchestratorEscalationQuarantineAction -EscalationId ${ps(ids.unknownId)} -Action delete -StatePath ${ps(state)} -NowMs 6000
+      [pscustomobject]@{ release = $release; delete = $delete } | ConvertTo-Json -Compress -Depth 10
+    `,
+    );
+    expect(actions.status, `${actions.stdout}\n${actions.stderr}`).toBe(0);
+    const actionResult = JSON.parse(actions.stdout.trim().split('\n').at(-1) ?? '{}') as {
+      release: { ok: boolean; status: string };
+      delete: { ok: boolean; status: string };
+    };
+    expect(actionResult.release).toMatchObject({ ok: true, status: 'released' });
+    expect(actionResult.delete).toMatchObject({ ok: true, status: 'deleted' });
+
+    const finalState = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          status?: string;
+          terminalState?: string;
+          quarantineReleasedAtMs?: number;
+        }
+      >;
+    };
+    expect(finalState.records[ids.foreignId]?.status).toBe('pending');
+    expect(finalState.records[ids.foreignId]?.terminalState).toBe('open');
+    expect(finalState.records[ids.foreignId]?.quarantineReleasedAtMs).toBeTruthy();
+    expect(finalState.records[ids.unknownId]).toBeUndefined();
+  });
+
+  it('applies the elapsed cap to legacy records that lack firstAttemptAtMs', () => {
+    tempDir = join(tmpdir(), `router-legacy-elapsed-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const state = join(tempDir, 'escalation-state.json');
+    const inbox = join(tempDir, 'operator-inbox');
+    const health = join(tempDir, 'health');
+
+    const seed = runPwsh(
+      `
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $pub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:legacy:elapsed-cap' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $doc = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $record = $doc.records[$pub.escalationId]
+      $record.schemaVersion = 1
+      $record.firstAttemptAtMs = $null
+      $record.createdAtMs = 1000
+      $record.updatedAtMs = 2000
+      $record.lastAttemptAtMs = 2000
+      $record.attempts = 1
+      Set-MechanicalJsonStateFile -Path ${ps(state)} -State $doc -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    `,
+    );
+    expect(seed.status, `${seed.stdout}\n${seed.stderr}`).toBe(0);
+
+    const router = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/orchestrator-escalation-router.ps1',
+        '-OrchestratorSessionId',
+        'orch-test',
+        '-Once',
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AO_ORCHESTRATOR_ESCALATION_STATE: state,
+          AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX: inbox,
+          AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL: health,
+        },
+      },
+    );
+    expect(router.status, `${router.stdout}\n${router.stderr}`).toBe(0);
+
+    const after = JSON.parse(readFileSync(state, 'utf8')) as {
+      records: Record<
+        string,
+        {
+          correlationKey?: string;
+          status?: string;
+          terminalState?: string;
+          firstAttemptAtMs?: number | null;
+        }
+      >;
+    };
+    const record = Object.values(after.records).find(
+      (entry) => entry.correlationKey === 'corr:legacy:elapsed-cap',
+    );
+    expect(record?.status).toBe('dead_lettered');
+    expect(record?.terminalState).toBe('dead_lettered');
+    expect(record?.firstAttemptAtMs).toBe(1000);
   });
 });

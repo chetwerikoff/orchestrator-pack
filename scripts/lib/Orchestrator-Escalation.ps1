@@ -8,11 +8,18 @@ $Script:OrchestratorEscalationRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot 
 $Script:OrchestratorEscalationCatalogPath = Join-Path $Script:OrchestratorEscalationRepoRoot 'scripts/orchestrator-message-catalog.json'
 $Script:OrchestratorEscalationJournaledSend = Join-Path $Script:OrchestratorEscalationRepoRoot 'scripts/journaled-worker-send.ps1'
 $Script:OrchestratorEscalationDefaultState = @{
-    schemaVersion = 1
+    schemaVersion = 2
     records       = @{}
     wakeWindows   = @{}
     audit         = @{}
 }
+$Script:OrchestratorEscalationSchemaVersion = 2
+$Script:OrchestratorEscalationSupportedSchemaVersion = 2
+$Script:OrchestratorEscalationMinBackoffMs = 30000
+$Script:OrchestratorEscalationMaxAttempts = 8
+$Script:OrchestratorEscalationMaxElapsedMs = 30 * 60 * 1000
+$Script:OrchestratorEscalationCapacityWindowMs = 15 * 60 * 1000
+$Script:OrchestratorEscalationTerminalStates = @('acked', 'dead_lettered', 'resolved', 'quarantined')
 
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Set-OpkVitestHarnessEnv.ps1')
@@ -148,6 +155,202 @@ function Get-OrchestratorEscalationRecordKey {
     return Get-OrchestratorEscalationHash -Text "${EscalationClassId}`n${CorrelationKey}"
 }
 
+function Test-OrchestratorEscalationTerminalState {
+    param([string]$TerminalState)
+    return $Script:OrchestratorEscalationTerminalStates -contains [string]$TerminalState
+}
+
+function Get-OrchestratorEscalationPayloadValue {
+    param($Payload, [string[]]$Names)
+    foreach ($name in @($Names)) {
+        if ($Payload -is [System.Collections.IDictionary] -and $Payload.Contains($name)) {
+            $value = [string]$Payload[$name]
+            if ($value) { return $value }
+        }
+        elseif ($null -ne $Payload -and ($Payload.PSObject.Properties.Name -contains $name)) {
+            $value = [string]$Payload.$name
+            if ($value) { return $value }
+        }
+    }
+    return ''
+}
+
+function Get-OrchestratorEscalationConditionScope {
+    param($Payload)
+    $sessionId = Get-OrchestratorEscalationPayloadValue -Payload $Payload -Names @('session_id', 'sessionId', 'workerSessionId')
+    if ($sessionId) { return "session:$sessionId" }
+    $projectId = Get-OrchestratorEscalationPayloadValue -Payload $Payload -Names @('project_id', 'projectId')
+    if ($projectId) { return "project:$projectId" }
+    return 'project:global'
+}
+
+function Get-OrchestratorEscalationFailureKind {
+    param($Payload)
+    $failureKind = Get-OrchestratorEscalationPayloadValue -Payload $Payload -Names @('failure_kind', 'failureKind', 'reason')
+    if ($failureKind) { return $failureKind }
+    return 'generic'
+}
+
+function Get-OrchestratorEscalationConditionKey {
+    param(
+        [string]$EscalationClassId,
+        [string]$CorrelationKey,
+        $Payload
+    )
+    $scope = Get-OrchestratorEscalationConditionScope -Payload $Payload
+    $failureKind = Get-OrchestratorEscalationFailureKind -Payload $Payload
+    $keyText = "${EscalationClassId}`n${scope}`n${failureKind}"
+    if ($scope -eq 'project:global' -and $CorrelationKey) {
+        $keyText = "${keyText}`n${CorrelationKey}"
+    }
+    return Get-OrchestratorEscalationHash -Text $keyText
+}
+
+function Get-OrchestratorEscalationEpochRecordKey {
+    param([string]$ConditionKey, [int]$Epoch)
+    return Get-OrchestratorEscalationHash -Text "${ConditionKey}`n${Epoch}"
+}
+
+function Get-OrchestratorEscalationOwnerProcess {
+    param($Class, $Payload)
+    $owner = Get-OrchestratorEscalationPayloadValue -Payload $Payload -Names @('source_process', 'sourceProcess')
+    if ($owner) { return $owner }
+    if ($Class.PSObject.Properties.Name -contains 'owning_process') {
+        return [string]$Class.owning_process
+    }
+    return ''
+}
+
+function Initialize-OrchestratorEscalationRecord {
+    param(
+        [string]$EscalationClassId,
+        [string]$CorrelationKey,
+        [string]$RecordKey,
+        [string]$ConditionKey,
+        [int]$Epoch,
+        [string]$Route,
+        [string]$OwnerProcess,
+        [long]$Now
+    )
+    return @{
+        schemaVersion     = $Script:OrchestratorEscalationSchemaVersion
+        escalationClassId = $EscalationClassId
+        correlationKey    = $CorrelationKey
+        escalationId      = $RecordKey
+        recordKey         = $RecordKey
+        conditionKey      = $ConditionKey
+        epoch             = $Epoch
+        ownerProcess      = $OwnerProcess
+        ackToken          = ([guid]::NewGuid().ToString('n'))
+        route             = $Route
+        status            = 'pending'
+        terminalState     = 'open'
+        operatorStatus    = 'pending'
+        operatorOutbox    = 'pending'
+        attempts          = 0
+        createdAtMs       = $Now
+        updatedAtMs       = $Now
+        autoRetryTicks    = 0
+        deliveryFailures  = @()
+        firstAttemptAtMs  = $null
+    }
+}
+
+function Sync-OrchestratorEscalationRecordDefaults {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [string]$EscalationClassId = '',
+        [string]$CorrelationKey = '',
+        $Payload = $null,
+        [string]$Route = '',
+        [string]$OwnerProcess = ''
+    )
+    if (-not $Record.schemaVersion) { $Record.schemaVersion = 1 }
+    if (-not $Record.escalationId -and $Record.recordKey) { $Record.escalationId = [string]$Record.recordKey }
+    if (-not $Record.recordKey -and $Record.escalationId) { $Record.recordKey = [string]$Record.escalationId }
+    if (-not $Record.correlationKey -and $CorrelationKey) { $Record.correlationKey = $CorrelationKey }
+    if (-not $Record.escalationClassId -and $EscalationClassId) { $Record.escalationClassId = $EscalationClassId }
+    if (-not $Record.route -and $Route) { $Record.route = $Route }
+    if (-not $Record.ownerProcess -and $OwnerProcess) { $Record.ownerProcess = $OwnerProcess }
+    if (-not $Record.operatorOutbox) { $Record.operatorOutbox = 'pending' }
+    if (-not $Record.terminalState) {
+        $status = [string]$Record.status
+        if ([string]$Record.operatorStatus -eq 'acked' -or $status -eq 'acked') {
+            $Record.terminalState = 'acked'
+        }
+        elseif ($status -eq 'dead_lettered' -or $status -eq 'resolved' -or $status -eq 'quarantined') {
+            $Record.terminalState = $status
+        }
+        else {
+            $Record.terminalState = 'open'
+        }
+    }
+    if (-not $Record.conditionKey) {
+        $Record.conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId ([string]$Record.escalationClassId) -CorrelationKey ([string]$Record.correlationKey) -Payload $(if ($Payload) { $Payload } else { $Record.lastPayload })
+    }
+    if (-not $Record.epoch) { $Record.epoch = 1 }
+    if (-not $Record.recordKey) {
+        $Record.recordKey = Get-OrchestratorEscalationEpochRecordKey -ConditionKey ([string]$Record.conditionKey) -Epoch ([int]$Record.epoch)
+    }
+    if (-not $Record.escalationId) { $Record.escalationId = [string]$Record.recordKey }
+    if (-not $Record.failureKind) {
+        $Record.failureKind = Get-OrchestratorEscalationFailureKind -Payload $(if ($Payload) { $Payload } else { $Record.lastPayload })
+    }
+    return $Record
+}
+
+function Find-OrchestratorEscalationOpenRecordKey {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$ConditionKey
+    )
+    foreach ($key in @($State.records.Keys)) {
+        $record = Sync-OrchestratorEscalationMutableRecord -State $State -RecordKey $key
+        Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+        if ([string]$record.conditionKey -eq $ConditionKey -and -not (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$record.terminalState))) {
+            return [string]$key
+        }
+    }
+    return ''
+}
+
+function Find-OrchestratorEscalationCurrentRecordKey {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$ConditionKey
+    )
+    $selectedKey = ''
+    $selectedEpoch = -1
+    foreach ($key in @($State.records.Keys)) {
+        $record = Sync-OrchestratorEscalationMutableRecord -State $State -RecordKey $key
+        Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+        if ([string]$record.conditionKey -ne $ConditionKey) { continue }
+        if ([string]$record.terminalState -eq 'resolved' -or [string]$record.status -eq 'resolved') { continue }
+        $epoch = if ($null -ne $record.epoch) { [int]$record.epoch } else { 0 }
+        if ($epoch -gt $selectedEpoch) {
+            $selectedEpoch = $epoch
+            $selectedKey = [string]$key
+        }
+    }
+    return $selectedKey
+}
+
+function Get-OrchestratorEscalationNextEpoch {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$ConditionKey
+    )
+    $maxEpoch = 0
+    foreach ($key in @($State.records.Keys)) {
+        $record = Sync-OrchestratorEscalationMutableRecord -State $State -RecordKey $key
+        Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+        if ([string]$record.conditionKey -ne $ConditionKey) { continue }
+        $epoch = if ($null -ne $record.epoch) { [int]$record.epoch } else { 0 }
+        if ($epoch -gt $maxEpoch) { $maxEpoch = $epoch }
+    }
+    return $maxEpoch + 1
+}
+
 function New-OrchestratorEscalationEnvelope {
     param(
         [Parameter(Mandatory = $true)]$Class,
@@ -163,7 +366,7 @@ function New-OrchestratorEscalationEnvelope {
     elseif ($Class.trigger -and $Class.trigger.summary) { $classSummary = [string]$Class.trigger.summary }
     $body = if ($Message) { $Message } else { $classSummary }
     return @{
-        type                = 'orchestrator-escalation/v1'
+        type                = 'orchestrator-escalation/v2'
         escalation_class_id = $EscalationClassId
         code                = if ($Class.PSObject.Properties.Name -contains 'code') { [string]$Class.code } else { '' }
         name                = if ($Class.PSObject.Properties.Name -contains 'name') { [string]$Class.name } else { $EscalationClassId }
@@ -180,7 +383,8 @@ function Write-OrchestratorEscalationJsonFile {
     param(
         [Parameter(Mandatory = $true)][string]$Directory,
         [Parameter(Mandatory = $true)][string]$Prefix,
-        [Parameter(Mandatory = $true)]$Envelope
+        [Parameter(Mandatory = $true)]$Envelope,
+        [string]$StableId = ''
     )
     if ($env:AO_ESCALATION_FORCE_INBOX_FAILURE -eq '1' -and $Prefix -eq 'operator') {
         throw 'forced operator inbox failure'
@@ -189,9 +393,14 @@ function Write-OrchestratorEscalationJsonFile {
         throw 'forced health spool failure'
     }
     New-Item -ItemType Directory -Force -Path $Directory | Out-Null
-    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')
-    $id = [string]$Envelope.escalation_id
-    $path = Join-Path $Directory ("{0}-{1}-{2}.json" -f $Prefix, $stamp, $id)
+    $id = if ($StableId) { $StableId } else { [string]$Envelope.escalation_id }
+    $path = if ($StableId) {
+        Join-Path $Directory ("{0}-{1}.json" -f $Prefix, $id)
+    }
+    else {
+        $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')
+        Join-Path $Directory ("{0}-{1}-{2}.json" -f $Prefix, $stamp, $id)
+    }
     $Envelope | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $path -Encoding UTF8
     return $path
 }
@@ -227,7 +436,7 @@ function Write-OrchestratorEscalationOperatorInbox {
     try {
         return @{
             ok   = $true
-            path = Write-OrchestratorEscalationJsonFile -Directory $dir -Prefix 'operator' -Envelope $operatorEnvelope
+            path = Write-OrchestratorEscalationJsonFile -Directory $dir -Prefix 'operator' -Envelope $operatorEnvelope -StableId ([string]$Envelope.escalation_id)
         }
     }
     catch {
@@ -259,7 +468,190 @@ function Invoke-OrchestratorEscalationLlmDelivery {
 
 function Test-OrchestratorEscalationAcked {
     param($Record)
-    return ([string]$Record.status -eq 'acked' -or [string]$Record.operatorStatus -eq 'acked')
+    return ([string]$Record.terminalState -eq 'acked' -or [string]$Record.status -eq 'acked' -or [string]$Record.operatorStatus -eq 'acked')
+}
+
+function Resolve-OrchestratorEscalationTerminalState {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)][ValidateSet('acked', 'dead_lettered', 'resolved', 'quarantined')][string]$TerminalState,
+        [long]$Now = 0,
+        [string]$Reason = ''
+    )
+    if ($Now -le 0) { $Now = Get-OrchestratorEscalationNowMs }
+    $Record.terminalState = $TerminalState
+    $Record.status = $TerminalState
+    $Record.updatedAtMs = $Now
+    switch ($TerminalState) {
+        'acked' { $Record.ackedAtMs = $Now }
+        'dead_lettered' { $Record.deadLetteredAtMs = $Now }
+        'resolved' { $Record.resolvedAtMs = $Now }
+        'quarantined' { $Record.quarantinedAtMs = $Now }
+    }
+    if ($Reason) {
+        $Record.terminalReason = $Reason
+    }
+    return $Record
+}
+
+function Test-OrchestratorEscalationCapacityFailureKind {
+    param([string]$FailureKind)
+    return [string]$FailureKind -like '*capacity*'
+}
+
+function Test-OrchestratorEscalationSourceRateLimited {
+    param($Record, [long]$Now)
+    if (-not (Test-OrchestratorEscalationCapacityFailureKind -FailureKind ([string]$Record.failureKind))) {
+        return $false
+    }
+    $lastSourceEmitAtMs = if ($null -ne $Record.lastSourceEmitAtMs) { [long]$Record.lastSourceEmitAtMs } else { 0 }
+    return $lastSourceEmitAtMs -gt 0 -and ($Now - $lastSourceEmitAtMs) -lt $Script:OrchestratorEscalationCapacityWindowMs
+}
+
+function Complete-OrchestratorEscalationDeadLetter {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)]$Class,
+        [string]$OperatorInboxDir = '',
+        [string]$HealthSpoolDir = '',
+        [long]$Now = 0
+    )
+    if ($Now -le 0) { $Now = Get-OrchestratorEscalationNowMs }
+    $envelope = New-OrchestratorEscalationEnvelope -Class $Class -EscalationClassId ([string]$Record.escalationClassId) `
+        -CorrelationKey ([string]$Record.correlationKey) -RecordKey ([string]$Record.recordKey) -AckToken ([string]$Record.ackToken) `
+        -Payload (ConvertTo-OrchestratorEscalationHashtable -Value $Record.lastPayload) -Message ([string]$Record.lastMessage)
+    $inbox = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir -Reason ([string]$Record.lastDeliveryFailure)
+    $Record.operatorFallback = $inbox
+    $outboxPublished = [bool]$inbox.ok -or -not [string]::IsNullOrWhiteSpace([string]$inbox.healthSpoolPath)
+    $Record.operatorOutbox = if ($outboxPublished) { 'published' } else { 'failed' }
+    $Record.operatorInboxPath = if ($inbox.ok) { [string]$inbox.path } else { [string]$inbox.healthSpoolPath }
+    if (-not $outboxPublished) {
+        $Record.status = 'pending'
+        $Record.terminalState = 'open'
+        $Record.updatedAtMs = $Now
+        return $Record
+    }
+    Resolve-OrchestratorEscalationTerminalState -Record $Record -TerminalState 'dead_lettered' -Now $Now -Reason 'retry_cap_exhausted' | Out-Null
+    return $Record
+}
+
+function Merge-OrchestratorEscalationRouterWritebackState {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)]$DiskState,
+        [string[]]$DirtyRecordKeys = @()
+    )
+    if ($null -eq $DiskState.records) { $DiskState.records = @{} }
+    if ($null -eq $DiskState.wakeWindows) { $DiskState.wakeWindows = @{} }
+    if ($null -eq $State.records) { $State.records = @{} }
+    if ($null -eq $State.wakeWindows) { $State.wakeWindows = @{} }
+
+    $mergedRecords = @{}
+    foreach ($key in @($DiskState.records.Keys)) {
+        $mergedRecords[$key] = $DiskState.records[$key]
+    }
+    foreach ($key in @($DirtyRecordKeys)) {
+        if ($State.records.ContainsKey($key)) {
+            $mergedRecords[$key] = $State.records[$key]
+        }
+    }
+
+    $mergedWakeWindows = @{}
+    foreach ($key in @($DiskState.wakeWindows.Keys)) {
+        $mergedWakeWindows[$key] = $DiskState.wakeWindows[$key]
+    }
+    foreach ($key in @($State.wakeWindows.Keys)) {
+        $stateValue = [long]$State.wakeWindows[$key]
+        if (-not $mergedWakeWindows.ContainsKey($key)) {
+            $mergedWakeWindows[$key] = $stateValue
+            continue
+        }
+        $diskValue = [long]$mergedWakeWindows[$key]
+        $mergedWakeWindows[$key] = [Math]::Max($diskValue, $stateValue)
+    }
+
+    return @{
+        schemaVersion = if ($null -ne $DiskState.schemaVersion) { $DiskState.schemaVersion } else { $State.schemaVersion }
+        records       = $mergedRecords
+        wakeWindows   = $mergedWakeWindows
+        audit         = if ($null -ne $DiskState.audit) { $DiskState.audit } else { $State.audit }
+    }
+}
+
+function Complete-OrchestratorEscalationQuarantine {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [string]$OperatorInboxDir = '',
+        [string]$HealthSpoolDir = '',
+        [long]$Now = 0,
+        [string]$Reason = ''
+    )
+    if ($Now -le 0) { $Now = Get-OrchestratorEscalationNowMs }
+    $payload = @{}
+    if ($Record.lastPayload) {
+        $payload = ConvertTo-OrchestratorEscalationHashtable -Value $Record.lastPayload
+    }
+    $message = if ($Reason) { "Escalation record quarantined: $Reason" } else { 'Escalation record quarantined' }
+    $envelope = @{
+        type                = 'orchestrator-escalation/v2'
+        escalation_class_id = [string]$Record.escalationClassId
+        code                = 'quarantined'
+        name                = 'quarantined-record'
+        route               = 'operator'
+        correlation_key     = [string]$Record.correlationKey
+        escalation_id       = [string]$Record.recordKey
+        ack_token           = [string]$Record.ackToken
+        message             = $message
+        payload             = $payload
+    }
+    $inbox = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir -Reason $Reason
+    $Record.operatorFallback = $inbox
+    $Record.operatorOutbox = if ($inbox.ok) { 'published' } else { 'failed' }
+    $Record.operatorInboxPath = if ($inbox.ok) { [string]$inbox.path } else { [string]$inbox.healthSpoolPath }
+    Resolve-OrchestratorEscalationTerminalState -Record $Record -TerminalState 'quarantined' -Now $Now -Reason $Reason | Out-Null
+    return $Record
+}
+
+function Resolve-OrchestratorEscalationCondition {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$EscalationClassId,
+        [Parameter(Mandatory = $true)]$Payload,
+        [string]$CorrelationKey = '',
+        [string]$StatePath = '',
+        [Nullable[long]]$NowMs = $null
+    )
+    $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
+    $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+    $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload
+    $recordKey = Find-OrchestratorEscalationCurrentRecordKey -State $state -ConditionKey $conditionKey
+    if (-not $recordKey -and -not $CorrelationKey) {
+        $scope = Get-OrchestratorEscalationConditionScope -Payload $Payload
+        $failureKind = Get-OrchestratorEscalationFailureKind -Payload $Payload
+        $matches = @()
+        foreach ($candidateKey in @($state.records.Keys)) {
+            $candidate = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $candidateKey
+            Sync-OrchestratorEscalationRecordDefaults -Record $candidate | Out-Null
+            if ([string]$candidate.escalationClassId -ne $EscalationClassId) { continue }
+            if ([string]$candidate.terminalState -eq 'resolved' -or [string]$candidate.status -eq 'resolved') { continue }
+            $candidateScope = Get-OrchestratorEscalationConditionScope -Payload $candidate.lastPayload
+            $candidateFailureKind = Get-OrchestratorEscalationFailureKind -Payload $candidate.lastPayload
+            if ($candidateScope -ne $scope -or $candidateFailureKind -ne $failureKind) { continue }
+            $matches += [string]$candidateKey
+        }
+        if ($matches.Count -eq 1) {
+            $recordKey = [string]$matches[0]
+            $conditionKey = [string](Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $recordKey).conditionKey
+        }
+    }
+    if (-not $recordKey) {
+        return @{ ok = $true; status = 'not_found'; conditionKey = $conditionKey }
+    }
+    $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $recordKey
+    Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'resolved' -Now (Get-OrchestratorEscalationNowMs -NowMs $NowMs) -Reason 'condition_cleared' | Out-Null
+    Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    return @{ ok = $true; status = 'resolved'; escalationId = [string]$record.recordKey; conditionKey = $conditionKey }
 }
 
 function Publish-OrchestratorEscalation {
@@ -276,6 +668,8 @@ function Publish-OrchestratorEscalation {
         [string]$CatalogPath = '',
         [string]$AoPath = 'ao',
         [Nullable[long]]$NowMs = $null,
+        [string]$ReplayEscalationId = '',
+        [switch]$SkipWakeSuppression,
         [switch]$DryRun
     )
 
@@ -284,32 +678,43 @@ function Publish-OrchestratorEscalation {
     $now = Get-OrchestratorEscalationNowMs -NowMs $NowMs
     $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
-    $recordKey = Get-OrchestratorEscalationRecordKey -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey
-    if (-not $state.records.ContainsKey($recordKey)) {
-        $state.records[$recordKey] = @{
-            escalationClassId = $EscalationClassId
-            correlationKey    = $CorrelationKey
-            escalationId      = $recordKey
-            ackToken          = ([guid]::NewGuid().ToString('n'))
-            route             = $route
-            status            = 'pending'
-            operatorStatus    = 'pending'
-            attempts          = 0
-            createdAtMs       = $now
-            updatedAtMs       = $now
-            autoRetryTicks    = 0
-            deliveryFailures  = @()
+    $state.schemaVersion = $Script:OrchestratorEscalationSchemaVersion
+    $ownerProcess = Get-OrchestratorEscalationOwnerProcess -Class $class -Payload $Payload
+    $recordKey = ''
+    if ($ReplayEscalationId) {
+        $recordKey = $ReplayEscalationId
+        if (-not $state.records.ContainsKey($recordKey)) {
+            throw "unknown escalation replay id: $ReplayEscalationId"
+        }
+    }
+    else {
+        $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload
+        $recordKey = Find-OrchestratorEscalationCurrentRecordKey -State $state -ConditionKey $conditionKey
+        if (-not $recordKey) {
+            $epoch = Get-OrchestratorEscalationNextEpoch -State $state -ConditionKey $conditionKey
+            $recordKey = Get-OrchestratorEscalationEpochRecordKey -ConditionKey $conditionKey -Epoch $epoch
+            $state.records[$recordKey] = Initialize-OrchestratorEscalationRecord `
+                -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -RecordKey $recordKey `
+                -ConditionKey $conditionKey -Epoch $epoch -Route $route -OwnerProcess $ownerProcess -Now $now
         }
     }
     $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $recordKey
+    Sync-OrchestratorEscalationRecordDefaults -Record $record -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload -Route $route -OwnerProcess $ownerProcess | Out-Null
     if (Test-OrchestratorEscalationAcked -Record $record) {
+        Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now $now | Out-Null
         Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
         return @{ ok = $true; status = 'acked'; escalationId = $recordKey; delivered = $false; reason = 'already_acked' }
+    }
+    if (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$record.terminalState)) {
+        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        return @{ ok = $true; status = [string]$record.terminalState; escalationId = $recordKey; delivered = $false; reason = 'already_terminal' }
     }
 
     $record.updatedAtMs = $now
     $record.lastPayload = $Payload
     $record.lastMessage = $Message
+    $record.correlationKey = $CorrelationKey
+    $record.failureKind = Get-OrchestratorEscalationFailureKind -Payload $Payload
     $envelope = New-OrchestratorEscalationEnvelope -Class $class -EscalationClassId $EscalationClassId `
         -CorrelationKey $CorrelationKey -RecordKey $recordKey -AckToken ([string]$record.ackToken) -Payload $Payload -Message $Message
 
@@ -338,28 +743,45 @@ function Publish-OrchestratorEscalation {
         return @{ ok = $true; status = 'auto_retry_waiting'; escalationId = $recordKey; ticks = $record.autoRetryTicks; delivered = $false }
     }
 
+    if (-not $ReplayEscalationId -and $record.attempts -gt 0) {
+        if (Test-OrchestratorEscalationSourceRateLimited -Record $record -Now $now) {
+            Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+            return @{ ok = $true; status = 'source_rate_limited'; escalationId = $recordKey; delivered = $false; reason = 'source_rate_limited' }
+        }
+        $record.lastSourceEmitAtMs = $now
+        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        return @{ ok = $true; status = 'open_existing'; escalationId = $recordKey; delivered = $false; reason = 'condition_open' }
+    }
+
+    $record.lastSourceEmitAtMs = $now
+
     $wakeKey = "${EscalationClassId}|${CorrelationKey}"
     $lastWake = if ($state.wakeWindows.ContainsKey($wakeKey)) { [long]$state.wakeWindows[$wakeKey] } else { 0 }
-    if ($lastWake -gt 0 -and ($now - $lastWake) -lt 30000) {
+    if (-not $SkipWakeSuppression -and $lastWake -gt 0 -and ($now - $lastWake) -lt $Script:OrchestratorEscalationMinBackoffMs) {
         $record.lastSuppressedWakeAtMs = $now
         Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
         return @{ ok = $true; status = 'wake_suppressed'; escalationId = $recordKey; delivered = $false; reason = 'wake_storm_cap' }
     }
 
     $record.attempts = [int]$record.attempts + 1
+    if (-not $record.firstAttemptAtMs) { $record.firstAttemptAtMs = $now }
     $record.lastAttemptAtMs = $now
     $state.wakeWindows[$wakeKey] = $now
     try {
         if ($route -eq 'llm-orchestrator') {
             $delivery = Invoke-OrchestratorEscalationLlmDelivery -Envelope $envelope -OrchestratorSessionId $OrchestratorSessionId -AoPath $AoPath -DryRun:$DryRun
             $record.status = 'delivered'
+            $record.terminalState = 'open'
             $record.lastDelivery = $delivery
         }
         elseif ($route -eq 'operator') {
             $inbox = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir
+            $record.operatorFallback = $inbox
+            $record.operatorOutbox = if ($inbox.ok) { 'published' } else { 'failed' }
+            $record.operatorInboxPath = if ($inbox.ok) { [string]$inbox.path } else { [string]$inbox.healthSpoolPath }
             if (-not $inbox.ok) { throw $inbox.reason }
             $record.status = 'operator_inbox'
-            $record.operatorInboxPath = [string]$inbox.path
+            $record.terminalState = 'open'
         }
         else {
             throw "unsupported escalation route: $route"
@@ -369,13 +791,20 @@ function Publish-OrchestratorEscalation {
     }
     catch {
         $reason = [string]$_
-        $record.status = 'fail_closed'
+        $record.status = 'pending'
+        $record.terminalState = 'open'
         $record.deliveryFailures = @($record.deliveryFailures) + @(@{ atMs = $now; reason = $reason })
-        $fallback = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir -Reason $reason
-        $record.failClosedReason = $reason
-        $record.operatorFallback = $fallback
+        $record.lastDeliveryFailure = $reason
+        if ($route -eq 'operator') {
+            $record.attempts = 0
+            $record.firstAttemptAtMs = $null
+            $record.lastAttemptAtMs = $null
+            if ($state.wakeWindows.ContainsKey($wakeKey)) {
+                $state.wakeWindows.Remove($wakeKey) | Out-Null
+            }
+        }
         Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
-        return @{ ok = $false; status = 'fail_closed'; escalationId = $recordKey; reason = $reason; operatorFallback = $fallback }
+        return @{ ok = $false; status = 'pending'; escalationId = $recordKey; reason = $reason; delivered = $false }
     }
 }
 
@@ -396,10 +825,41 @@ function Write-OrchestratorEscalationAck {
     if ([string]$record.ackToken -ne $AckToken) {
         return @{ ok = $false; reason = 'invalid_ack_token' }
     }
-    $record.status = 'acked'
-    $record.ackedAtMs = Get-OrchestratorEscalationNowMs -NowMs $NowMs
+    Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now (Get-OrchestratorEscalationNowMs -NowMs $NowMs) | Out-Null
     Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
     return @{ ok = $true; status = 'acked'; escalationId = $EscalationId }
+}
+
+function Write-OrchestratorEscalationQuarantineAction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$EscalationId,
+        [Parameter(Mandatory = $true)][ValidateSet('release', 'delete')][string]$Action,
+        [string]$StatePath = '',
+        [Nullable[long]]$NowMs = $null
+    )
+    $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
+    $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+    if (-not $state.records.ContainsKey($EscalationId)) {
+        return @{ ok = $false; reason = 'unknown_escalation_id' }
+    }
+    $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $EscalationId
+    Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+    if ([string]$record.terminalState -ne 'quarantined' -and [string]$record.status -ne 'quarantined') {
+        return @{ ok = $false; reason = 'not_quarantined'; escalationId = $EscalationId }
+    }
+    $now = Get-OrchestratorEscalationNowMs -NowMs $NowMs
+    if ($Action -eq 'delete') {
+        $state.records.Remove($EscalationId)
+        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        return @{ ok = $true; status = 'deleted'; escalationId = $EscalationId }
+    }
+    $record.terminalState = 'open'
+    $record.status = 'pending'
+    $record.updatedAtMs = $now
+    $record.quarantineReleasedAtMs = $now
+    Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    return @{ ok = $true; status = 'released'; escalationId = $EscalationId }
 }
 
 function Write-OperatorEscalationAck {
@@ -419,6 +879,7 @@ function Write-OperatorEscalationAck {
     if ([string]$record.ackToken -ne $AckToken) {
         return @{ ok = $false; reason = 'invalid_ack_token' }
     }
+    Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
     $record.operatorStatus = 'acked'
     $record.operatorAckedAtMs = Get-OrchestratorEscalationNowMs -NowMs $NowMs
     Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30

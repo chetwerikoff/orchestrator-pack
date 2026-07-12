@@ -1156,10 +1156,11 @@ If a worker message is stuck unsubmitted:
    operator checkout. Probe generation invokes a synthetic `ao send` carrying adoption-probe markers for required branches such as `plain-ao-send:pending-draft` and
    `plain-ao-send:self-submitted`; the live routing rule must call the journaled wrapper,
    and the preflight does not directly edit the journal to fake those records. The resulting synthetic outbox-only probes are then validated for
-   matching epoch/config hashes. `wrapper_not_adopted` means the live AO routing rule is
-   missing, ineffective, stale, or the probe entries could not be generated/validated.
-   This check is legacy on AO 0.10.2 because live YAML routing and `ao send --file` are
-   unavailable; do not require it until the send-transport migration updates this section.
+   matching epoch/config hashes. `wrapper_not_adopted` still means the live AO routing rule is
+   missing, ineffective, stale, or the probe entries could not be generated/validated, but on
+   AO 0.10.2 that result is telemetry-only for submit reconcile. Live YAML routing and
+   `ao send --file` are unavailable there, so operators should not treat `wrapper_not_adopted`
+   as an Enter blocker until a future send-transport migration reinstates an authoritative check.
 2. Check the metadata-only dispatch journal (`AO_WORKER_MESSAGE_DISPATCH_JOURNAL` or the
    temp default). A `dispatch_in_flight` delivery is still being resolved until its finite budget expires; a `send_failed` or `dispatch_unknown` delivery is terminal/escalated and
    must not receive blind Enter; have the source resend if needed.

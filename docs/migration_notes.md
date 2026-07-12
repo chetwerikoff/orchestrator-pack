@@ -1943,9 +1943,9 @@ The wrapper exits fail-closed rather than binding to unsupported transport forms
 
 Issue #602 adoption check: after restart, run the adoption preflight and confirm the live
 dispatch journal contains both required probe branches (`plain-ao-send:pending-draft` and
-`plain-ao-send:self-submitted`) via the wrapper. Until that passes, submit reconcile reports
-`wrapper_not_adopted` once per AO epoch/config and blocks Enter rather than consuming or
-submitting uncertain deliveries.
+`plain-ao-send:self-submitted`) via the wrapper. On AO 0.10.2 the result is telemetry-only:
+submit reconcile may still report `wrapper_not_adopted` once per AO epoch/config, but it does
+not block Enter when the dispatch journal proves a pending consumable delivery.
 
 ## Review run recovery side-process (Issue #287)
 

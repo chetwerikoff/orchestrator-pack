@@ -21,7 +21,7 @@
 | E2 | escalation-claim-store-integrity | Worker nudge claim-store integrity failure | worker-message-submit-reconcile | operator | at-least-once-operator-inbox | issue-641 |
 | E3 | escalation-review-trigger-degraded-ci | Review trigger degraded CI exhausted | review-trigger-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E4 | escalation-review-run-recovery | Review-run recovery failed | review-run-recovery | llm-orchestrator | at-least-once-until-ack | issue-641 |
-| E5 | escalation-submit-adoption | Worker message submit adoption escalated | worker-message-submit-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
+| E5 | escalation-submit-adoption | Worker message submit reconcile escalated | worker-message-submit-reconcile | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E6 | escalation-handoff-envelope | Worker blocked / handoff question admitted | listener | llm-orchestrator | at-least-once-until-ack | issue-641 |
 | E7 | escalation-protected-finding | Contested protected finding (deferred sibling #625) | review-finding-delivery-confirm | operator | at-least-once-operator-inbox | issue-641 |
 | E8 | escalation-pipeline-failure | Escalation pipeline publish/delivery failure | escalation-router | operator | at-least-once-operator-inbox | issue-641 |
