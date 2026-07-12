@@ -89,17 +89,12 @@ const laneOptions = {
 };
 
 let result = buildLanePlan(repoRoot, laneOptions);
-let measurementError = null;
-if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
+let measurementError = prBDiagnosticMode ? 'skipped in diagnostic mode' : null;
+if (!prBDiagnosticMode && result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
   const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
   if (targets.length > 0) {
-    try {
-      const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
-      result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
-    } catch (error) {
-      measurementError = error instanceof Error ? error.stack ?? error.message : String(error);
-      if (!prBDiagnosticMode) throw error;
-    }
+    const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
+    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
   }
 }
 
