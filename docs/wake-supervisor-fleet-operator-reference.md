@@ -30,6 +30,42 @@ Default state root: `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` on Windo
 | `ci-failure-notification-reconcile` | `ci-failure-notification-reconcile.ps1` | 60 | Red-CI worker notification and escalation |
 | `escalation-router` | `orchestrator-escalation-router.ps1` | 30 | Orchestrator-facing escalation delivery |
 
+### review-trigger-reconcile
+
+Provides periodic open-PR review coverage and degraded-CI reconciliation.
+
+### review-trigger-reeval
+
+Re-evaluates deferred heads on a bounded cadence when readiness was not yet established.
+
+### review-ready-report-state-seed
+
+Seeds accepted ready-for-review reports into the deferred re-evaluation flow.
+
+### ci-green-wake-reconcile
+
+Delivers the CI-green worker hand-off using the existing claim and journal contracts.
+
+### dead-worker-reconcile
+
+Detects and recovers dead worker sessions without inheriting listener responsibilities.
+
+### worker-message-submit-reconcile
+
+Submits pending worker-input drafts recorded by the dispatch journal.
+
+### review-start-claim-reaper
+
+Maintains review-start claim-store hygiene and bounded stale-claim cleanup.
+
+### ci-failure-notification-reconcile
+
+Notifies the head-owning worker to fix failing required checks and push, then escalates when needed.
+
+### escalation-router
+
+Routes durable escalation records to the orchestrator or operator according to the catalog.
+
 ## Liveness model
 
 - Periodic reconcile children provide work discovery without webhook ingress.
@@ -60,18 +96,24 @@ review-send-reconcile, or the four PR-A retired child ids is configuration drift
 All nine children follow their own cadence; `escalation-router` owns orchestrator-facing
 redelivery until acknowledgement.
 
+### F1b — orchestrator session changes
+
+Only `escalation-router` is session-bound. A confirmed orchestrator session-id change re-targets
+that child; all other survivors remain session-independent.
+
 ### F2 — child crash or stall
 
 The supervisor restarts the affected registry child using the existing crash-backoff and
 side-effect-lock contracts. It must never revive a retired entrypoint.
-
-### Session-id changes
-
-Only `escalation-router` is session-bound. A confirmed orchestrator session-id change re-targets
-that child; all other survivors remain session-independent.
 
 ## Operator adoption
 
 After a registry-changing deployment, stop the supervisor, check for identity-matched orphan
 processes from the old generation, restart from the updated checkout, and verify the nine-child
 status roster. See [`migration_notes.md`](migration_notes.md) for the Issue #745 PR-B sequence.
+
+## When to update this document
+
+Update this reference whenever the registry adds, removes, renames, or changes the responsibility
+or cadence of a supervised child. The table, per-child headings, liveness model, and recovery
+scenarios must remain aligned with `scripts/orchestrator-side-process-registry.json`.
