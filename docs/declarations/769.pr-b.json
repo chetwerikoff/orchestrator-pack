@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "6ba0862f7a959326edf0bfa1d33c931fbe25880f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:8a57180085e1f090fa145359365627111f87cfa7fc014f8481603421a712aea0"
+    "active_scope_hash": "sha256:fd677c885f13fcb5c609021730f25bb47bb56cd5ca71db1741272f545487839b"
   },
   "declared_paths": [
     "AGENTS.md",
@@ -20,6 +20,7 @@
     "scripts/check-orchestrator-escalation-catalog.ps1",
     "scripts/check-vestigial-fleet-children-retired.ps1",
     "scripts/ci-failure-notification-reconcile.ps1",
+    "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/launch-argv-inventory.json",
     "scripts/orchestrator-escalation-emitter-inventory.json",
     "scripts/orchestrator-escalation.test.ts",
@@ -28,15 +29,36 @@
     "scripts/orchestrator-message-protected-runtime.manifest.json",
     "scripts/orchestrator-message-registry.test.ts",
     "scripts/orchestrator-side-process-registry.json",
+    "scripts/orchestrator-wake-listener-evaluate.test.ts",
     "scripts/orchestrator-wake-listener.ps1",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
     "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/supervisor-recovery.test-helpers-core.ts",
     "scripts/supervisor-recovery.test-helpers.ts",
     "scripts/vestigial-fleet-retirement.test.ts",
     "tests/fixtures/listener-disposition/retire.json",
+    "tests/fixtures/orchestrator-escalation/scenario-matrix.json",
     "tests/listener-disposition-probe.mjs",
     "tests/vestigial-fleet-retirement-pr-b.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:8a57180085e1f090fa145359365627111f87cfa7fc014f8481603421a712aea0",
+      "new_active_scope_hash": "sha256:fd677c885f13fcb5c609021730f25bb47bb56cd5ca71db1741272f545487839b",
+      "changed": {
+        "added": [
+          "scripts/emit-vitest-heavy-topology.mjs",
+          "scripts/orchestrator-wake-listener-evaluate.test.ts",
+          "scripts/supervisor-recovery.test-helpers-core.ts",
+          "tests/fixtures/orchestrator-escalation/scenario-matrix.json"
+        ],
+        "removed": []
+      },
+      "reason": "Declare the exact final PR-B listener-retirement bindings and the temporary read-only document snapshot adapter used to preserve large runbooks byte-for-byte.",
+      "actor": "chatgpt-github-worker",
+      "timestamp": "2026-07-12T16:08:00.000Z",
+      "applied": true
+    }
+  ]
 }
