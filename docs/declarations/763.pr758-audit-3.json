@@ -7,11 +7,12 @@
   "baseline": {
     "commit_sha": "92879eee20e806e495d7f9ca05ccac4977b870b9",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:bdd4368b1dda6b22afb0e1b52321da510a02c81bd710c4fabaf2b9ea97a5449e"
+    "active_scope_hash": "sha256:c3f26a98e153955802eda7167b7aac70be7eb063ae188e14df6015ec0d855ab2"
   },
   "declared_paths": [
     "AGENTS.md",
     "docs/autonomous-review-retry.mjs",
+    "docs/generated-launch-argv-inventory.d.mts",
     "docs/generated-launch-argv-inventory.mjs",
     "docs/migration_notes.md",
     "docs/orchestrator-autoloop-go-live.md",
@@ -100,5 +101,20 @@
     "scripts/vitest-wallclock-e2e-split.manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bdd4368b1dda6b22afb0e1b52321da510a02c81bd710c4fabaf2b9ea97a5449e",
+      "new_active_scope_hash": "sha256:c3f26a98e153955802eda7167b7aac70be7eb063ae188e14df6015ec0d855ab2",
+      "changed": {
+        "added": [
+          "docs/generated-launch-argv-inventory.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "Add the type declaration for the generated launch inventory adapter.",
+      "actor": "chatgpt-github-worker",
+      "timestamp": "2026-07-12T13:18:15.000Z",
+      "applied": true
+    }
+  ]
 }
