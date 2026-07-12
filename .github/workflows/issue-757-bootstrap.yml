@@ -1,16 +1,15 @@
 name: issue-757-bootstrap
 
 on:
-  push:
-    branches:
-      - agent/issue-757-runtime-history-self-heal
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply-and-test:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'agent/issue-757-runtime-history-self-heal' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -73,5 +72,3 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Fix runtime-history delivery self-heal (#757)'
           git push origin HEAD:agent/issue-757-runtime-history-self-heal
-
-# trigger after workflow registration
