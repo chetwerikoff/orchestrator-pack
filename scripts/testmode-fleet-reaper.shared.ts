@@ -107,7 +107,15 @@ export function spawnOrphanTestModeChild(stateDir: string): number {
   fs.mkdirSync(markerDir, { recursive: true });
   const child = spawn(
     'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', testChildScript, '-Role', 'listener'],
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      testChildScript,
+      '-Role',
+      'review-trigger-reconcile',
+    ],
     {
       detached: true,
       stdio: 'ignore',
@@ -128,11 +136,13 @@ export async function waitForLiveChildPids(
 ): Promise<{ listener: number; escalationRouter: number }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const listenerPath = path.join(stateDir, 'listener.pid');
+    const reviewTriggerPath = path.join(stateDir, 'review-trigger-reconcile.pid');
     const escalationRouterPath = path.join(stateDir, 'escalation-router.pid');
-    if (fs.existsSync(listenerPath) && fs.existsSync(escalationRouterPath)) {
+    if (fs.existsSync(reviewTriggerPath) && fs.existsSync(escalationRouterPath)) {
       return {
-        listener: Number(fs.readFileSync(listenerPath, 'utf8').trim()),
+        // Compatibility field for the existing fleet-reaper assertions. The PID is
+        // the surviving review-trigger child; no listener process is launched.
+        listener: Number(fs.readFileSync(reviewTriggerPath, 'utf8').trim()),
         escalationRouter: Number(fs.readFileSync(escalationRouterPath, 'utf8').trim()),
       };
     }
@@ -216,13 +226,17 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     }
     expect(fs.existsSync(supervisorPidPath)).toBe(true);
     const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
-    await waitForMarkers(stateDir, 60_000, ['listener', 'escalation-router']);
+    await waitForMarkers(stateDir, 60_000, ['review-trigger-reconcile', 'escalation-router']);
     if (leaseId && leaseRoot) {
       renewLaneLease(leaseRoot, leaseId);
     }
-    const listener = await readMarker(stateDir, 'listener');
+    const reviewTriggerReconcile = await readMarker(stateDir, 'review-trigger-reconcile');
     const escalationRouterMarker = await readMarker(stateDir, 'escalation-router');
-    return { supervisorPid, listener, escalationRouter: escalationRouterMarker };
+    return {
+      supervisorPid,
+      listener: reviewTriggerReconcile,
+      escalationRouter: escalationRouterMarker,
+    };
   } finally {
     if (heartbeat) {
       clearInterval(heartbeat);
@@ -246,7 +260,7 @@ export function registerFleetReaperAfterEach(): void {
           }
         }
       } catch {
-        // best-effort lane cleanup
+        // Best-effort lease cleanup before supervisor cleanup.
       }
     }
     cleanupSupervisorTests();
