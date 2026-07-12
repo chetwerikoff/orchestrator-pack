@@ -8,11 +8,10 @@ describe('AO events degraded correlation sidecars (Issue #688)', () => {
     'scripts/ci-green-wake-reconcile.ps1',
     'scripts/review-trigger-reconcile.ps1',
     'scripts/worker-message-submit-reconcile.ps1',
-    'scripts/review-finding-delivery-confirm.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
   ];
 
-  it('loads and calls the shared degraded-correlation helper from all five consumers', () => {
+  it('loads and calls the shared degraded-correlation helper from all four surviving consumers', () => {
     for (const rel of sidecars) {
       const source = readFileSync(join(repoRoot, rel), 'utf8');
       expect(source, rel).toContain('Write-AoEventsCorrelationDegraded.ps1');
