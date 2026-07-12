@@ -42,6 +42,22 @@ function writeGhaOutput(topology) {
   appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
 }
 
+function runDiagnostic(command, args, repoRoot, env = process.env) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    env,
+    encoding: 'utf8',
+    timeout: 900_000,
+    maxBuffer: 30 * 1024 * 1024,
+  });
+  const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
+  return {
+    status: result.status,
+    signal: result.signal,
+    tail: text.split(/\r?\n/).slice(-200),
+  };
+}
+
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
 const changedPathManifest = parseChangedPathManifestFromEnv();
 const changedFiles = (changedPathManifest?.entries ?? [])
@@ -92,16 +108,33 @@ if (process.env.GITHUB_ACTIONS === 'true') {
       Buffer.from(readFileSync(join(repoRoot, relativePath), 'utf8'), 'utf8').toString('base64'),
     ]),
   );
-  const verify = spawnSync(
-    'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/verify.ps1'],
-    { cwd: repoRoot, encoding: 'utf8', timeout: 900_000, maxBuffer: 30 * 1024 * 1024 },
-  );
-  const verifyText = `${verify.stdout ?? ''}\n${verify.stderr ?? ''}`.trim();
-  artifact.prBVerifierDiagnostic = {
-    status: verify.status,
-    signal: verify.signal,
-    tail: verifyText.split(/\r?\n/).slice(-160),
+  artifact.prBDiagnostics = {
+    verifier: runDiagnostic(
+      'pwsh',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/verify.ps1'],
+      repoRoot,
+    ),
+    typecheck: runDiagnostic(
+      'npx',
+      ['tsc', '--project', 'tsconfig.base.json', '--noEmit'],
+      repoRoot,
+    ),
+    selfArchitect: runDiagnostic(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/lint-self-architect.ps1',
+        '-Strict',
+        '-BaseRef',
+        process.env.PR_BASE_SHA ?? '',
+        '-HeadRef',
+        process.env.PR_HEAD_SHA ?? '',
+      ],
+      repoRoot,
+    ),
   };
 }
 
@@ -129,10 +162,12 @@ const logArtifact = { ...artifact };
 if (logArtifact.prBSourceDocsBase64) {
   logArtifact.prBSourceDocsBase64 = Object.keys(logArtifact.prBSourceDocsBase64);
 }
-if (logArtifact.prBVerifierDiagnostic) {
-  logArtifact.prBVerifierDiagnostic = {
-    ...logArtifact.prBVerifierDiagnostic,
-    tail: [`${logArtifact.prBVerifierDiagnostic.tail.length} lines captured in artifact`],
-  };
+if (logArtifact.prBDiagnostics) {
+  logArtifact.prBDiagnostics = Object.fromEntries(
+    Object.entries(logArtifact.prBDiagnostics).map(([key, value]) => [
+      key,
+      { ...value, tail: [`${value.tail.length} lines captured in artifact`] },
+    ]),
+  );
 }
 console.log(JSON.stringify(logArtifact));

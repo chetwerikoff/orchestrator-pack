@@ -6,18 +6,22 @@ $catalogPath = Join-Path $Root 'scripts/orchestrator-message-catalog.json'
 $helperManifestPath = Join-Path $Root 'scripts/orchestrator-message-send-helpers.manifest.json'
 $protectedRuntimePath = Join-Path $Root 'scripts/orchestrator-message-protected-runtime.manifest.json'
 $auditRootsPath = Join-Path $Root 'scripts/orchestrator-message-audit-roots.manifest.json'
+$listenerPath = Join-Path $Root 'scripts/orchestrator-wake-listener.ps1'
 $failures = [System.Collections.Generic.List[string]]::new()
 
-$sourceFiles = @(
-    Get-Item -LiteralPath (Join-Path $Root 'scripts/orchestrator-wake-listener.ps1')
-    Get-Item -LiteralPath (Join-Path $Root 'scripts/orchestrator-wake-common.ps1')
-    Get-Item -LiteralPath (Join-Path $Root 'scripts/orchestrator-wake-heartbeat.ps1')
-)
+if (Test-Path -LiteralPath $listenerPath -PathType Leaf) {
+    $failures.Add('retired orchestrator-wake-listener.ps1 entrypoint still exists')
+}
 
-foreach ($file in $sourceFiles) {
-    $text = Get-Content -LiteralPath $file.FullName -Raw
+$sourceFiles = @(
+    Join-Path $Root 'scripts/orchestrator-wake-common.ps1'
+    Join-Path $Root 'scripts/orchestrator-wake-heartbeat.ps1'
+)
+foreach ($path in $sourceFiles) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+    $text = Get-Content -LiteralPath $path -Raw
     if ($text -match '\bSend-OrchestratorWakeMessage\b') {
-        $rel = [IO.Path]::GetRelativePath($Root, $file.FullName).Replace('\', '/')
+        $rel = [IO.Path]::GetRelativePath($Root, $path).Replace('\', '/')
         $failures.Add("live FYI wake helper reference remains: $rel")
     }
 }
@@ -33,6 +37,9 @@ else {
             $failures.Add("retired FYI message class still present: $id")
         }
     }
+    if (@($catalog.escalationClasses | Where-Object { [string]$_.owning_process -eq 'listener' }).Count -gt 0) {
+        $failures.Add('retired listener still owns an escalation class')
+    }
 }
 
 if (Test-Path -LiteralPath $helperManifestPath -PathType Leaf) {
@@ -47,25 +54,30 @@ if (Test-Path -LiteralPath $protectedRuntimePath -PathType Leaf) {
     if (@($manifest.runtimeSendHelpers) -contains 'scripts/orchestrator-wake-common.ps1') {
         $failures.Add('orchestrator-wake-common.ps1 still listed as runtime send helper')
     }
-    if (@($manifest.supervisedEntrypoints) -contains 'scripts/orchestrator-wake-heartbeat.ps1') {
-        $failures.Add('orchestrator-wake-heartbeat.ps1 still listed as supervised entrypoint')
+    foreach ($retiredPath in @('scripts/orchestrator-wake-heartbeat.ps1', 'scripts/orchestrator-wake-listener.ps1')) {
+        if (@($manifest.supervisedEntrypoints) -contains $retiredPath) {
+            $failures.Add("$retiredPath still listed as supervised entrypoint")
+        }
+        if (@($manifest.prerequisiteDeclaredPaths) -contains $retiredPath) {
+            $failures.Add("$retiredPath still listed as protected prerequisite path")
+        }
     }
 }
 
 if (Test-Path -LiteralPath $auditRootsPath -PathType Leaf) {
     $manifest = Get-Content -LiteralPath $auditRootsPath -Raw | ConvertFrom-Json
-    if (@($manifest.supervisedProcessScripts) -contains 'scripts/orchestrator-wake-heartbeat.ps1') {
-        $failures.Add('orchestrator-wake-heartbeat.ps1 still listed in audit roots manifest')
+    foreach ($retiredPath in @('scripts/orchestrator-wake-heartbeat.ps1', 'scripts/orchestrator-wake-listener.ps1')) {
+        if (@($manifest.supervisedProcessScripts) -contains $retiredPath) {
+            $failures.Add("$retiredPath still listed in audit roots manifest")
+        }
     }
 }
 
 if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] orchestrator wake FYI retirement guard:'
-    foreach ($failure in $failures) {
-        Write-Host "  - $failure"
-    }
+    Write-Host '[FAIL] orchestrator wake FYI/listener retirement guard:'
+    foreach ($failure in $failures) { Write-Host "  - $failure" }
     exit 1
 }
 
-Write-Host '[PASS] orchestrator FYI wake/heartbeat channel retired.'
+Write-Host '[PASS] orchestrator FYI wake, heartbeat, and listener channels retired.'
 exit 0
