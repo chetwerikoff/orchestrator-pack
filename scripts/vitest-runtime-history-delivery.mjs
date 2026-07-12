@@ -200,7 +200,10 @@ export function evaluateDeliveryState({
   }
 
   if (pr.mergeable === false || pr.mergeable_state === 'dirty') {
-    return { action: 'fail', reason: 'delivery PR is conflicted or unmergeable' };
+    return {
+      action: 'close-as-obsolete',
+      reason: 'delivery PR is conflicted or unmergeable',
+    };
   }
 
   const checkStates = new Map();
@@ -252,6 +255,28 @@ function runGhJson(repoRoot, args, options = {}) {
     return null;
   }
   return JSON.parse(text);
+}
+
+export function closeObsoleteDeliveryPr({
+  repoRoot,
+  repo,
+  prNumber,
+  reason,
+  runCommand = runGh,
+}) {
+  runCommand(
+    repoRoot,
+    [
+      'pr',
+      'close',
+      String(prNumber),
+      '--repo',
+      repo,
+      '--comment',
+      `Closing obsolete runtime-history delivery PR: ${reason}. A later refresh trigger will regenerate it from current main.`,
+    ],
+    { allowedExitCodes: [0] },
+  );
 }
 
 function sleep(ms) {
@@ -357,6 +382,18 @@ async function monitorPr(options) {
 
     if (decision.action === 'superseded') {
       console.log(`[PASS] runtime-history delivery monitor superseded: ${decision.reason}`);
+      return;
+    }
+    if (decision.action === 'close-as-obsolete') {
+      closeObsoleteDeliveryPr({
+        repoRoot: options.repoRoot,
+        repo: options.repo,
+        prNumber: options.prNumber,
+        reason: decision.reason,
+      });
+      console.log(
+        `[PASS] runtime-history delivery closed obsolete PR #${options.prNumber}: ${decision.reason}`,
+      );
       return;
     }
     if (decision.action === 'fail') {

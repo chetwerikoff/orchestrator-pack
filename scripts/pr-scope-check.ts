@@ -38,6 +38,8 @@ export { resolveIssueNumberForFetch } from './pr-scope-contract.js';
 
 const SNAPSHOT_DIR = join('docs', 'declarations');
 const DECLARATION_SNAPSHOT_SAMPLE = join('docs', 'declarations', '0.sample.json');
+export const RUNTIME_HISTORY_DELIVERY_BRANCH = 'ci/vitest-runtime-history-refresh';
+export const RUNTIME_HISTORY_DELIVERY_PATH = 'scripts/vitest-runtime-history.json';
 
 function issueBlocksCommittedDeclarationSnapshots(constraints: IssueConstraints): boolean {
   return pathMatchesAnyPattern(DECLARATION_SNAPSHOT_SAMPLE, constraints.denylist);
@@ -103,12 +105,14 @@ export interface PrScopeCheckInput {
   prPaths: string[];
   degradedMode: boolean;
   forkPr: boolean;
+  prHeadRef?: string;
+  sameRepo?: boolean;
 }
 
 export type PrScopeCheckResult =
   | {
       ok: true;
-      mode: 'implementation' | 'spec-only' | 'no-ceremony';
+      mode: 'implementation' | 'spec-only' | 'no-ceremony' | 'runtime-history-delivery';
       snapshot?: DeclarationSnapshot;
       issueNumber?: number;
       checkedPaths: string[];
@@ -696,6 +700,74 @@ function checkImplementationPrScope(
   };
 }
 
+export function checkRuntimeHistoryDeliveryPrScope(
+  input: PrScopeCheckInput,
+): PrScopeCheckResult | null {
+  const eligible =
+    input.sameRepo === true &&
+    input.forkPr === false &&
+    input.prHeadRef === RUNTIME_HISTORY_DELIVERY_BRANCH;
+  if (!eligible) {
+    return null;
+  }
+
+  const normalizedPaths: string[] = [];
+  const invalidPaths: Array<{ path: string; reason: string }> = [];
+  for (const rawPath of input.prPaths) {
+    const normalized = normalizePath(rawPath);
+    if (!normalized.ok) {
+      invalidPaths.push({ path: rawPath, reason: normalized.reason });
+    } else {
+      normalizedPaths.push(normalized.path);
+    }
+  }
+
+  if (invalidPaths.length > 0) {
+    return {
+      ok: false,
+      reason: 'invalid_path',
+      message: 'one or more runtime-history delivery paths failed normalization',
+      violations: {
+        outOfScope: [],
+        denied: [],
+        declarationErrors: [],
+        invalidPaths,
+      },
+    };
+  }
+
+  const unexpectedPaths = normalizedPaths.filter(
+    (path) => path !== RUNTIME_HISTORY_DELIVERY_PATH,
+  );
+  if (
+    normalizedPaths.length !== 1 ||
+    normalizedPaths[0] !== RUNTIME_HISTORY_DELIVERY_PATH
+  ) {
+    return {
+      ok: false,
+      reason: 'scope_violation',
+      message: `runtime-history delivery PR must change only ${RUNTIME_HISTORY_DELIVERY_PATH}`,
+      violations: {
+        outOfScope: unexpectedPaths.length > 0 ? unexpectedPaths : normalizedPaths,
+        denied: [],
+        declarationErrors: [],
+        invalidPaths: [],
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    mode: 'runtime-history-delivery',
+    checkedPaths: normalizedPaths,
+    skippedControlArtifacts: [],
+    unverifiedIssueConstraints: false,
+    warnings: [
+      'closing issue reference exempted only for the same-repo fixed runtime-history delivery branch',
+    ],
+  };
+}
+
 export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   // Path-based no-ceremony wins over the spec-only signal: a markdown-only union diff
   // must reject issue links even when the body also carries <!-- pr-type: spec-only --> and Refs #N.
@@ -709,6 +781,10 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
 
   const issueNumber = extractClosingIssueNumber(input.prBody);
   if (issueNumber === null) {
+    const runtimeHistoryDeliveryResult = checkRuntimeHistoryDeliveryPrScope(input);
+    if (runtimeHistoryDeliveryResult !== null) {
+      return runtimeHistoryDeliveryResult;
+    }
     return {
       ok: false,
       reason: 'missing_issue_link',
@@ -728,6 +804,19 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
         '',
         'No issue link, spec-only signal, or declaration snapshot required.',
         `Checked paths: ${result.checkedPaths.length} (spec-docs and/or skill instruction markdown only)`,
+      ];
+      for (const warning of result.warnings) {
+        lines.push('', `> ${warning}`);
+      }
+      return lines.join('\n');
+    }
+
+    if (result.mode === 'runtime-history-delivery') {
+      const lines = [
+        '## Scope guard — passed (runtime-history delivery)',
+        '',
+        'Closing issue reference exempted for the same-repo fixed delivery branch.',
+        `Checked paths: ${result.checkedPaths.length} (runtime-history artifact only)`,
       ];
       for (const warning of result.warnings) {
         lines.push('', `> ${warning}`);
@@ -887,6 +976,8 @@ function readJsonInput(): PrScopeCheckInput {
     prPaths: parsed.prPaths,
     degradedMode: Boolean(parsed.degradedMode),
     forkPr: Boolean(parsed.forkPr),
+    prHeadRef: typeof parsed.prHeadRef === 'string' ? parsed.prHeadRef : '',
+    sameRepo: Boolean(parsed.sameRepo),
   };
 }
 

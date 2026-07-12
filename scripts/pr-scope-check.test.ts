@@ -747,3 +747,78 @@ describe('resolveLatestCommittedSnapshot', () => {
   });
 });
 
+describe('checkPrScope — runtime-history delivery closing-ref exemption (#757)', () => {
+  const deliveryPath = 'scripts/vitest-runtime-history.json';
+  const fixedBranch = 'ci/vitest-runtime-history-refresh';
+
+  function input(overrides: Partial<Parameters<typeof checkPrScope>[0]> = {}) {
+    return {
+      repoRoot: join(tmpdir(), `scope-guard-runtime-history-${randomUUID()}`),
+      prBody: '## Summary\n\nGenerated runtime-history refresh.',
+      issueBody: null,
+      prPaths: [deliveryPath],
+      degradedMode: false,
+      forkPr: false,
+      sameRepo: true,
+      prHeadRef: fixedBranch,
+      ...overrides,
+    };
+  }
+
+  it('exempts only the exact same-repo fixed-branch single-file delivery PR', () => {
+    expect(checkPrScope(input())).toMatchObject({
+      ok: true,
+      mode: 'runtime-history-delivery',
+      checkedPaths: [deliveryPath],
+    });
+  });
+
+  it('does not exempt when the same-repo signal is absent', () => {
+    expect(checkPrScope(input({ sameRepo: false }))).toMatchObject({
+      ok: false,
+      reason: 'missing_issue_link',
+    });
+  });
+
+  it('does not exempt a different head branch', () => {
+    expect(checkPrScope(input({ prHeadRef: 'feature/not-the-delivery-branch' }))).toMatchObject({
+      ok: false,
+      reason: 'missing_issue_link',
+    });
+  });
+
+  it('does not exempt a fork PR even if other signals are true', () => {
+    expect(checkPrScope(input({ forkPr: true }))).toMatchObject({
+      ok: false,
+      reason: 'missing_issue_link',
+    });
+  });
+
+  it('enforces the exact path constraint independently of the closing-ref exemption', () => {
+    const result = checkPrScope(
+      input({ prPaths: [deliveryPath, 'scripts/pr-scope-check.ts'] }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'scope_violation' });
+    if (!result.ok) {
+      expect(result.violations?.outOfScope).toContain('scripts/pr-scope-check.ts');
+    }
+  });
+
+  it('does not bypass normal implementation scope when a closing reference is present', () => {
+    expect(checkPrScope(input({ prBody: 'Closes #757' }))).toMatchObject({
+      ok: false,
+      reason: 'missing_snapshot',
+    });
+  });
+
+  it('wires branch and same-repo signals from trusted workflow context through PowerShell', () => {
+    const workflow = readFileSync(join('.github', 'workflows', 'scope-guard.yml'), 'utf8');
+    expect(workflow).toContain('PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}');
+    expect(workflow).toContain(
+      'PR_HEAD_REPO_SAME: ${{ github.event.pull_request.head.repo.full_name == github.repository }}',
+    );
+    const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');
+    expect(ps1).toContain('prHeadRef    = $prHeadRef');
+    expect(ps1).toContain('sameRepo     = $sameRepo');
+  });
+});
