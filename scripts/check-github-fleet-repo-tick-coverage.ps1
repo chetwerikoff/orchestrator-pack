@@ -12,7 +12,6 @@ $ExpectedCoverage = @(
     @{ id = 'review-trigger-reconcile'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReconcileChecksByPr') }
     @{ id = 'review-trigger-reeval'; classification = 'repo-tick snapshot'; helpers = @('Invoke-GhOpenPrList', 'Get-ReviewTriggerReevalChecksByPr') }
     @{ id = 'review-ready-report-state-seed'; classification = 'repo-tick snapshot'; helpers = @('Get-GhFleetRepoTickSnapshotIfConsumable', 'Resolve-ReviewReadyReportStateSeedOpenPrs', 'Get-GhChecksBundleByPr', 'Invoke-ReviewStartScopedGhPrView') }
-    @{ id = 'listener'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'heartbeat'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'worker-message-submit-reconcile'; classification = 'out of coverage'; helpers = @() }
     @{ id = 'review-start-claim-reaper'; classification = 'out of coverage'; helpers = @() }
@@ -24,7 +23,6 @@ $ChildScriptMap = @{
     'review-trigger-reconcile'          = 'review-trigger-reconcile.ps1'
     'review-trigger-reeval'             = 'review-trigger-reeval.ps1'
     'review-ready-report-state-seed'    = 'review-ready-report-state-seed.ps1'
-    'listener'                          = 'orchestrator-wake-listener.ps1'
     'heartbeat'                         = 'orchestrator-wake-heartbeat.ps1'
     'worker-message-submit-reconcile'   = 'worker-message-submit-reconcile.ps1'
     'review-start-claim-reaper'         = 'review-start-claim-reaper.ps1'
