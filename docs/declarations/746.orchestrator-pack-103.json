@@ -13,6 +13,7 @@
     "scripts/dead-worker-reconcile.ps1",
     "docs/dead-worker-reconciler.mjs",
     "scripts/dead-worker-reconcile.test.ts",
+    "scripts/event-consumer-rebind-scenario-matrix.test.ts",
     "scripts/worker-recovery.test.ts",
     "scripts/check-dead-worker-reconcile.ps1",
     "scripts/clear-dead-worker-reconcile-quarantine.ps1",
