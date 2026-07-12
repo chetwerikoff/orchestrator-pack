@@ -536,6 +536,49 @@ function Complete-OrchestratorEscalationDeadLetter {
     return $Record
 }
 
+function Merge-OrchestratorEscalationRouterWritebackState {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)]$DiskState,
+        [string[]]$DirtyRecordKeys = @()
+    )
+    if ($null -eq $DiskState.records) { $DiskState.records = @{} }
+    if ($null -eq $DiskState.wakeWindows) { $DiskState.wakeWindows = @{} }
+    if ($null -eq $State.records) { $State.records = @{} }
+    if ($null -eq $State.wakeWindows) { $State.wakeWindows = @{} }
+
+    $mergedRecords = @{}
+    foreach ($key in @($DiskState.records.Keys)) {
+        $mergedRecords[$key] = $DiskState.records[$key]
+    }
+    foreach ($key in @($DirtyRecordKeys)) {
+        if ($State.records.ContainsKey($key)) {
+            $mergedRecords[$key] = $State.records[$key]
+        }
+    }
+
+    $mergedWakeWindows = @{}
+    foreach ($key in @($DiskState.wakeWindows.Keys)) {
+        $mergedWakeWindows[$key] = $DiskState.wakeWindows[$key]
+    }
+    foreach ($key in @($State.wakeWindows.Keys)) {
+        $stateValue = [long]$State.wakeWindows[$key]
+        if (-not $mergedWakeWindows.ContainsKey($key)) {
+            $mergedWakeWindows[$key] = $stateValue
+            continue
+        }
+        $diskValue = [long]$mergedWakeWindows[$key]
+        $mergedWakeWindows[$key] = [Math]::Max($diskValue, $stateValue)
+    }
+
+    return @{
+        schemaVersion = if ($null -ne $DiskState.schemaVersion) { $DiskState.schemaVersion } else { $State.schemaVersion }
+        records       = $mergedRecords
+        wakeWindows   = $mergedWakeWindows
+        audit         = if ($null -ne $DiskState.audit) { $DiskState.audit } else { $State.audit }
+    }
+}
+
 function Complete-OrchestratorEscalationQuarantine {
     param(
         [Parameter(Mandatory = $true)]$Record,

@@ -38,12 +38,23 @@ function Merge-EscalationRouterReplayState {
     }
 }
 
+function Add-EscalationRouterDirtyRecordKey {
+    param(
+        [Parameter(Mandatory = $true)]$DirtyRecordKeys,
+        [Parameter(Mandatory = $true)][string]$RecordKey
+    )
+    if (-not $DirtyRecordKeys.ContainsKey($RecordKey)) {
+        $DirtyRecordKeys[$RecordKey] = $true
+    }
+}
+
 function Invoke-EscalationRouterTick {
     $path = Get-OrchestratorEscalationStatePath
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
     $catalog = Get-OrchestratorEscalationCatalog
     $redelivered = 0
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $dirtyRecordKeys = @{}
     foreach ($key in @($state.records.Keys)) {
         $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $key
         Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
@@ -52,10 +63,12 @@ function Invoke-EscalationRouterTick {
         if ($schemaVersion -gt $Script:OrchestratorEscalationSupportedSchemaVersion) {
             $record.status = 'deferred'
             $record.updatedAtMs = $now
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         if ($schemaVersion -lt 1) {
             Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'invalid_schema_version' | Out-Null
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         if (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$record.terminalState)) { continue }
@@ -65,14 +78,17 @@ function Invoke-EscalationRouterTick {
         }
         catch {
             Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'unknown_escalation_class' | Out-Null
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         if (Test-EscalationRouterForeignRecord -Record $record) {
             Complete-OrchestratorEscalationQuarantine -Record $record -Now $now -Reason 'foreign_record' | Out-Null
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         if (Test-OrchestratorEscalationAcked -Record $record) {
             Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now $now | Out-Null
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         $attempts = if ($null -ne $record.attempts) { [int]$record.attempts } else { 0 }
@@ -85,16 +101,19 @@ function Invoke-EscalationRouterTick {
                 if ($candidate -gt 0) {
                     $firstAttemptAtMs = $candidate
                     $record.firstAttemptAtMs = $candidate
+                    Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
                     break
                 }
             }
         }
         if ($attempts -ge $Script:OrchestratorEscalationMaxAttempts -or ($firstAttemptAtMs -gt 0 -and ($now - $firstAttemptAtMs) -ge $Script:OrchestratorEscalationMaxElapsedMs)) {
             Complete-OrchestratorEscalationDeadLetter -State $state -Record $record -Class $class -Now $now | Out-Null
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         if ($attempts -gt 0 -and $lastAttemptAtMs -gt 0 -and ($now - $lastAttemptAtMs) -lt $Script:OrchestratorEscalationMinBackoffMs) {
             $record.status = 'backoff_waiting'
+            Add-EscalationRouterDirtyRecordKey -DirtyRecordKeys $dirtyRecordKeys -RecordKey $key
             continue
         }
         $payload = @{}
@@ -107,7 +126,9 @@ function Invoke-EscalationRouterTick {
         Merge-EscalationRouterReplayState -State $state -DiskState $diskState -RecordKey $key
         if ($result.delivered) { $redelivered++ }
     }
-    Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    $latestState = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+    $writebackState = Merge-OrchestratorEscalationRouterWritebackState -State $state -DiskState $latestState -DirtyRecordKeys @($dirtyRecordKeys.Keys)
+    Set-MechanicalJsonStateFile -Path $path -State $writebackState -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
     return $redelivered
 }
 

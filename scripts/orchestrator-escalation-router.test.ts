@@ -232,6 +232,64 @@ describe('orchestrator escalation router', () => {
     expect(secondRecord?.attempts ?? 0).toBeGreaterThan(0);
   });
 
+  it('preserves concurrent producer records during router writeback', () => {
+    tempDir = join(tmpdir(), `router-concurrent-writeback-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+
+    const result = runPwsh(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $state = @{
+        schemaVersion = 2
+        records = @{
+          alpha = @{
+            recordKey = 'alpha'
+            correlationKey = 'corr:alpha'
+            status = 'backoff_waiting'
+          }
+        }
+        wakeWindows = @{}
+        audit = @{}
+      }
+      $diskState = @{
+        schemaVersion = 2
+        records = @{
+          alpha = @{
+            recordKey = 'alpha'
+            correlationKey = 'corr:alpha'
+            status = 'pending'
+          }
+          bravo = @{
+            recordKey = 'bravo'
+            correlationKey = 'corr:bravo'
+            status = 'pending'
+          }
+        }
+        wakeWindows = @{}
+        audit = @{ source = 'disk' }
+      }
+      $merged = Merge-OrchestratorEscalationRouterWritebackState -State $state -DiskState $diskState -DirtyRecordKeys @('alpha')
+      [pscustomobject]@{
+        alphaStatus = [string]$merged.records['alpha'].status
+        bravoStatus = [string]$merged.records['bravo'].status
+        recordCount = @($merged.records.Keys).Count
+        auditSource = [string]$merged.audit.source
+      } | ConvertTo-Json -Compress
+    `);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+
+    const merged = JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '{}') as {
+      alphaStatus: string;
+      bravoStatus: string;
+      recordCount: number;
+      auditSource: string;
+    };
+
+    expect(merged.alphaStatus).toBe('backoff_waiting');
+    expect(merged.bravoStatus).toBe('pending');
+    expect(merged.recordCount).toBe(2);
+    expect(merged.auditSource).toBe('disk');
+  });
+
   it('quarantines malformed or foreign records with visibility and recoverable release/delete paths', () => {
     tempDir = join(tmpdir(), `router-quarantine-${process.pid}-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
