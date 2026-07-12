@@ -4,6 +4,7 @@
  * (Issue #695).
  */
 import { appendFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -35,15 +36,40 @@ function parseArgs(argv) {
 
 function writeGhaOutput(topology) {
   const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
-  }
+  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
   appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
   appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
+  appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
+}
+
+function runVerifyDiagnostic(repoRoot) {
+  if (process.env.CI !== 'true' || process.env.OPK_SKIP_VERIFY_DIAGNOSTIC === '1') {
+    return null;
+  }
+  const child = spawnSync(
+    'pwsh',
+    ['-NoProfile', '-File', join(repoRoot, 'scripts', 'verify.ps1')],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 240_000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: {
+        ...process.env,
+        OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1',
+        OPK_SKIP_VERIFY_DIAGNOSTIC: '1',
+      },
+    },
   );
+  const combined = `${child.stdout ?? ''}\n${child.stderr ?? ''}`
+    .split(/\r?\n/)
+    .filter(Boolean);
+  return {
+    status: child.status,
+    signal: child.signal,
+    error: child.error?.message ?? null,
+    tail: combined.slice(-140),
+  };
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -81,6 +107,7 @@ const artifact = {
   postMergeWallclockFiles: result.postMergeWallclock,
   parkedFiles: result.parked,
   heavyShards: result.heavyShards,
+  verifyDiagnostic: runVerifyDiagnostic(repoRoot),
 };
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
@@ -100,9 +127,5 @@ if (failOnGuard && guardFailures.length > 0) {
   console.error(guardFailures.join('\n'));
   process.exit(1);
 }
-
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
-
+if (ghaOutput) writeGhaOutput(result.topology);
 console.log(JSON.stringify(artifact));
