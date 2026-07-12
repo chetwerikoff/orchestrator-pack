@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "a13818e6e6c64a7983d696b7d59f3b5768d8c0c9",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f2f5c56101520669c4f481c78350df0cf6c5e8656234530a9510ae4190633df1"
+    "active_scope_hash": "sha256:a8b2c5fee7fe4de472c4d8bcc9fdd55a6cabbdf6f209dec9d2555f3767a988b3"
   },
   "declared_paths": [
     ".github/workflows/scope-guard.yml",
