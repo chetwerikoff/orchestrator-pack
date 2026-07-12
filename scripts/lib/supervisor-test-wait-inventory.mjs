@@ -123,6 +123,19 @@ function loadMergeBaseRuntimeWeights(mergeBaseSha) {
   }
 }
 
+function runtimeHistoryChangedSinceMergeBase(mergeBaseSha) {
+  try {
+    const changed = execFileSync(
+      'git',
+      ['diff', '--name-only', mergeBaseSha, 'HEAD', '--', 'scripts/vitest-runtime-history.json'],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim();
+    return changed.length > 0;
+  } catch {
+    return true;
+  }
+}
+
 function isMisclassifiedQuiescenceSite(site) {
   return (
     site.classification === 'positive-convertible' &&
@@ -131,7 +144,7 @@ function isMisclassifiedQuiescenceSite(site) {
   );
 }
 
-function validateInventory(inventoryPath) {
+function validateInventory(inventoryPath, options = {}) {
   const inventory = loadJson(inventoryPath);
   const failures = [];
 
@@ -223,37 +236,48 @@ function validateInventory(inventoryPath) {
     }
   }
 
-  const runtime = inventory.runtimeEvidence ?? {};
-  const trackedFiles = runtime.trackedFiles ?? [];
-  if (!Array.isArray(trackedFiles) || trackedFiles.length === 0) {
-    failures.push('runtimeEvidence.trackedFiles must list files checked against vitest-runtime-history.json');
-  } else if (shouldEnforceRuntimeImprovement()) {
-    const mergeBaseSha = resolveMergeBaseSha();
-    if (!mergeBaseSha) {
-      failures.push('could not resolve merge-base SHA for runtime weight binding');
-    } else {
-      const mergeBaseWeights = loadMergeBaseRuntimeWeights(mergeBaseSha);
-      const currentWeights = loadCurrentRuntimeWeights();
-      if (!mergeBaseWeights) {
-        failures.push(`could not load vitest-runtime-history.json at merge-base ${mergeBaseSha}`);
-      } else if (!currentWeights) {
-        failures.push('missing current scripts/vitest-runtime-history.json');
+  if (!options.skipRuntimeEvidence) {
+    const runtime = inventory.runtimeEvidence ?? {};
+    const trackedFiles = runtime.trackedFiles ?? [];
+    if (!Array.isArray(trackedFiles) || trackedFiles.length === 0) {
+      failures.push('runtimeEvidence.trackedFiles must list files checked against vitest-runtime-history.json');
+    } else if (shouldEnforceRuntimeImprovement()) {
+      const mergeBaseSha = resolveMergeBaseSha();
+      if (!mergeBaseSha) {
+        failures.push('could not resolve merge-base SHA for runtime weight binding');
+      } else if (runtime.enforceImprovementInThisChange === false) {
+        if (!String(runtime.externalOwner ?? '').trim()) {
+          failures.push('runtimeEvidence.externalOwner is required when improvement is externally owned');
+        }
+        if (runtimeHistoryChangedSinceMergeBase(mergeBaseSha)) {
+          failures.push(
+            'scripts/vitest-runtime-history.json changed despite external runtime-history ownership',
+          );
+        }
       } else {
-        for (const file of trackedFiles) {
-          const current = currentWeights[file];
-          const baseline = mergeBaseWeights[file];
-          if (typeof current !== 'number') {
-            failures.push(`missing current vitest-runtime-history weight for ${file}`);
-            continue;
-          }
-          if (typeof baseline !== 'number') {
-            failures.push(`missing merge-base vitest-runtime-history weight for ${file}`);
-            continue;
-          }
-          if (!(current < baseline)) {
-            failures.push(
-              `vitest-runtime-history weight for ${file} (${current}) must be lower than merge-base (${baseline})`,
-            );
+        const mergeBaseWeights = loadMergeBaseRuntimeWeights(mergeBaseSha);
+        const currentWeights = loadCurrentRuntimeWeights();
+        if (!mergeBaseWeights) {
+          failures.push(`could not load vitest-runtime-history.json at merge-base ${mergeBaseSha}`);
+        } else if (!currentWeights) {
+          failures.push('missing current scripts/vitest-runtime-history.json');
+        } else {
+          for (const file of trackedFiles) {
+            const current = currentWeights[file];
+            const baseline = mergeBaseWeights[file];
+            if (typeof current !== 'number') {
+              failures.push(`missing current vitest-runtime-history weight for ${file}`);
+              continue;
+            }
+            if (typeof baseline !== 'number') {
+              failures.push(`missing merge-base vitest-runtime-history weight for ${file}`);
+              continue;
+            }
+            if (!(current < baseline)) {
+              failures.push(
+                `vitest-runtime-history weight for ${file} (${current}) must be lower than merge-base (${baseline})`,
+              );
+            }
           }
         }
       }
@@ -276,14 +300,14 @@ function validateInventory(inventoryPath) {
 }
 
 function validateNegativeRegression(negativePath) {
-  const { failures } = validateInventory(negativePath);
+  const { failures } = validateInventory(negativePath, { skipRuntimeEvidence: true });
   if (failures.length === 0) {
     cliFail('negative regression corpus must be rejected but passed validation');
   }
   const misclassificationFailures = failures.filter((item) =>
     item.includes('quiescence window cannot be classified positive-convertible'),
   );
-  if (misclassificationFailures.length !== 1) {
+  if (misclassificationFailures.length !== 1 || failures.length !== 1) {
     cliFail(
       `negative regression corpus must fail only for misclassification; got ${failures.length} failure(s): ${failures.join('; ')}`,
     );
@@ -314,7 +338,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log('[PASS] supervisor test wait inventory (classification, positive-poll, negative-preserved, assertion-strength, runtime p75)');
+  console.log('[PASS] supervisor test wait inventory (classification, positive-poll, negative-preserved, assertion-strength, runtime ownership)');
 }
 
 main();
