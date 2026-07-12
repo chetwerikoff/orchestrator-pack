@@ -331,6 +331,7 @@ describe('worker recovery post-claim revalidation', () => {
     expect(recoveryText).toMatch(/Get-WorkerRecoveryWorktreeRecordFromRepo/);
     expect(recoveryText).toMatch(/selectionWorktreeRecord/);
     expect(recoveryText).toMatch(/liveWorktreeRecord/);
+    expect(recoveryText).toMatch(/workerStatusRow/);
     expect(recoveryText).toMatch(/Resolve-WorkerRecoveryGenerationToken/);
     expect(recoveryText).toMatch(/\$requireGenerationFence = \(\$Trigger -eq 'reconcile_dead_worker'\) -or \[bool\]\$expectedGenerationToken/);
     expect(recoveryText).toMatch(/reason = 'missing_generation_token'/);
@@ -698,6 +699,21 @@ describe('worker recovery repository identity / pack-root spawn path (#522 AC#12
       . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
       $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
       $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-operator-recover' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')}; generationToken='gen-a' } -WorktreeRecord @{ sessionId='opk-operator-recover'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
+      [pscustomobject]@{ outcome = [string]$result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
+    `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
+    const result = JSON.parse(runPwsh(script));
+    expect(result.outcome).not.toBe('skipped_ambiguous');
+    expect(result.spawn).toBe('spawn_started');
+  });
+
+  it('worker recovery dead-worker fence: revalidates generation against fixture worker-status store', () => {
+    const packRoot = repoRoot;
+    const ns = tempNs();
+    const worktreePath = path.join(packRoot, 'worktrees', 'opk-dead-worker-store');
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $result = Invoke-WorkerRecovery -Trigger 'reconcile_dead_worker' -ProbedDeadEvidence -SessionId 'opk-dead-worker-store' -GenerationToken 'gen-a' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')} } -WorktreeRecord @{ sessionId='opk-dead-worker-store'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -FixtureWorkerStatusStore @{ schemaVersion=1; records=@{ 'opk-dead-worker-store' = @{ sessionId='opk-dead-worker-store'; generationToken='gen-a'; schemaVersion=1 } } } -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
       [pscustomobject]@{ outcome = [string]$result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
     const result = JSON.parse(runPwsh(script));

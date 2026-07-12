@@ -72,6 +72,23 @@ function compatibleWorkerStatusRow(sessionId: string, overrides: Record<string, 
   };
 }
 
+function actualWorkerStatusStoreRow(sessionId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId,
+    schemaVersion: 1,
+    status: 'dead',
+    derivedStatus: 'dead',
+    winningSource: 'os_liveness',
+    diagnostics: [],
+    lastUpdatedMs: 1_780_000_105_500 - (16 * 60 * 1000),
+    freshnessMs: 15 * 60 * 1000,
+    freshnessBoundMs: 15 * 60 * 1000,
+    generationVector: { repoTickGeneration: 1, reportStoreGeneration: 1, journalCursor: 1, bindingCacheGeneration: 1 },
+    sourceGeneration: { repoTickGeneration: 1, reportStoreGeneration: 1, journalCursor: 1, bindingCacheGeneration: 1 },
+    ...overrides,
+  };
+}
+
 describe('dead-worker-reconciler (Issue #593)', () => {
   it('validates default-OFF autonomous respawn policy', () => {
     const loaded = loadAutonomousRespawnPolicy(repoRoot);
@@ -763,6 +780,27 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     );
     expect(conflicting.verdict).toBe('audit_only');
     expect(conflicting.reason).toBe('conflicting_duplicate_rows');
+  });
+
+  it('accepts the canonical worker-status store row shape without explicit producerCapability', () => {
+    const session = {
+      sessionId: 'opk-store-shape',
+      status: 'terminated',
+      generationToken: 'opk-store-shape-gen',
+    };
+    const evidence = classifyWorkerLivenessEvidence(session, {
+      osLiveness: { [session.sessionId]: 'pane-gone' },
+      sanctionedKillSurface: { healthy: true, records: [] },
+      workerStatusStore: {
+        schemaVersion: 1,
+        records: {
+          [session.sessionId]: actualWorkerStatusStoreRow(session.sessionId),
+        },
+      },
+      evaluationNowMs: 1_780_000_105_500,
+    });
+    expect(evidence.verdict).toBe('dead');
+    expect(evidence.reason).toBe('pack_owned_liveness_dead');
   });
 
   it('uses livenessContext for absent sessions and escalates unreadable kill record surface as audit-only', () => {

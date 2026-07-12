@@ -242,6 +242,10 @@ function resolveWorkerStatusHeartbeatMs(row) {
     ?? row?.lastHeartbeatAtMs,
   );
   if (numeric > 0) return numeric;
+  const packStoreTimestamp = looksLikePackWorkerStatusRow(row)
+    ? numberOrZero(row?.lastUpdatedMs)
+    : 0;
+  if (packStoreTimestamp > 0) return packStoreTimestamp;
   const text = normalizeString(
     row?.heartbeatTimestamp
     ?? row?.heartbeatAt
@@ -297,22 +301,50 @@ function supportedProducerCapabilitiesOf(livenessContext = {}) {
   return configured.length > 0 ? configured : [...SUPPORTED_DEAD_WORKER_PRODUCER_CAPABILITIES];
 }
 
+function looksLikePackWorkerStatusRow(row) {
+  return numberOrZero(row?.schemaVersion) === 1
+    && (
+      row?.derivedStatus !== undefined
+      || row?.winningSource !== undefined
+      || row?.generationVector !== undefined
+      || row?.sourceGeneration !== undefined
+      || row?.reloadedMixedGeneration !== undefined
+    );
+}
+
+function resolveWorkerStatusProducerCapability(row, session) {
+  const explicit = normalizeString(
+    row?.producerCapability
+    ?? row?.workerStatusSource
+    ?? row?.source
+    ?? session?.workerStatusSource,
+  );
+  if (explicit) {
+    return explicit === 'pack-worker-status-store'
+      ? 'pack-worker-status-store/v1'
+      : explicit;
+  }
+  return looksLikePackWorkerStatusRow(row) ? 'pack-worker-status-store/v1' : '';
+}
+
 function summarizeWorkerStatusRow(row, session) {
+  const producerCapability = resolveWorkerStatusProducerCapability(row, session);
   const heartbeatMs = resolveWorkerStatusHeartbeatMs(row);
+  const explicitWriterEpochObserved = row?.writerEpochObserved
+    ?? row?.liveWriterEpochObserved
+    ?? row?.producerEpochObserved
+    ?? row?.epochObserved;
   return {
     sessionId: normalizeWorkerStatusRowSessionId(row),
     schemaVersion: numberOrZero(row?.schemaVersion),
-    producerCapability: normalizeString(row?.producerCapability),
+    producerCapability,
     lifecycleState: normalizeLifecycleState(row?.lifecycleState ?? row?.lifecycle ?? row?.status),
     heartbeatMs,
     freshnessMs: resolveWorkerStatusFreshnessMs(row),
     generationToken: resolveDeadWorkerGenerationToken(session, row),
-    writerEpochObserved: Boolean(
-      row?.writerEpochObserved
-      ?? row?.liveWriterEpochObserved
-      ?? row?.producerEpochObserved
-      ?? row?.epochObserved,
-    ),
+    writerEpochObserved: explicitWriterEpochObserved === undefined
+      ? producerCapability === 'pack-worker-status-store/v1'
+      : Boolean(explicitWriterEpochObserved),
     abandonedProducerEpoch: Boolean(
       row?.abandonedProducerEpoch
       ?? row?.orphanEpoch
