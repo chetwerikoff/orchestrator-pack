@@ -200,7 +200,10 @@ export function evaluateDeliveryState({
   }
 
   if (pr.mergeable === false || pr.mergeable_state === 'dirty') {
-    return { action: 'fail', reason: 'delivery PR is conflicted or unmergeable' };
+    return {
+      action: 'close-as-obsolete',
+      reason: 'delivery PR is conflicted or unmergeable',
+    };
   }
 
   const checkStates = new Map();
@@ -254,6 +257,40 @@ function runGhJson(repoRoot, args, options = {}) {
   return JSON.parse(text);
 }
 
+export function closeObsoleteDeliveryPr({
+  repoRoot,
+  repo,
+  prNumber,
+  reason,
+  runCommand = runGh,
+}) {
+  runCommand(
+    repoRoot,
+    [
+      'pr',
+      'close',
+      String(prNumber),
+      '--repo',
+      repo,
+      '--comment',
+      `Closing obsolete runtime-history delivery PR: ${reason}. A later refresh trigger will regenerate it from current main.`,
+    ],
+    { allowedExitCodes: [0] },
+  );
+}
+
+export function selectReusableDeliveryPr(existingPulls) {
+  if (!Array.isArray(existingPulls) || existingPulls.length === 0) {
+    return null;
+  }
+
+  return (
+    existingPulls.find((pullRequest) => pullRequest?.state === 'open') ??
+    existingPulls.find((pullRequest) => pullRequest?.state === 'closed' && !pullRequest?.merged_at) ??
+    null
+  );
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -277,13 +314,21 @@ async function upsertPr(options) {
   const body = readFileSync(options.bodyFile, 'utf8');
   const listArgs = [
     'api',
-    `repos/${owner}/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(options.branch)}&base=${options.base}`,
+    `repos/${owner}/${repo}/pulls?state=all&head=${owner}:${encodeURIComponent(options.branch)}&base=${options.base}`,
   ];
-  const existing = runGhJson(options.repoRoot, listArgs) ?? [];
+  const reusablePr = selectReusableDeliveryPr(runGhJson(options.repoRoot, listArgs) ?? []);
 
   let pr;
-  if (existing.length > 0) {
-    const number = existing[0].number;
+  if (reusablePr) {
+    const number = reusablePr.number;
+    if (reusablePr.state === 'closed') {
+      runGh(
+        options.repoRoot,
+        ['pr', 'reopen', String(number), '--repo', options.repo],
+        { allowedExitCodes: [0] },
+      );
+      console.log(`[INFO] runtime-history delivery PR reopened: #${number}`);
+    }
     pr = runGhJson(options.repoRoot, [
       'api',
       '-X',
@@ -357,6 +402,18 @@ async function monitorPr(options) {
 
     if (decision.action === 'superseded') {
       console.log(`[PASS] runtime-history delivery monitor superseded: ${decision.reason}`);
+      return;
+    }
+    if (decision.action === 'close-as-obsolete') {
+      closeObsoleteDeliveryPr({
+        repoRoot: options.repoRoot,
+        repo: options.repo,
+        prNumber: options.prNumber,
+        reason: decision.reason,
+      });
+      console.log(
+        `[PASS] runtime-history delivery closed obsolete PR #${options.prNumber}: ${decision.reason}`,
+      );
       return;
     }
     if (decision.action === 'fail') {

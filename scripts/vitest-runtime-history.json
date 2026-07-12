@@ -399,7 +399,8 @@
     "scripts/worker-message-submit-reconcile.test.ts": "1ee617ca12b88f014708492b386ab324c38cb15b72b5c56c7f402d0c2ac389df",
     "scripts/worker-report-store.test.ts": "cc33c7a9239c2ce11af46dd127bb5074bdb18fbe1172a59c16b3c6d2e5dc6a79",
     "tests/agents-md-relocation.test.ts": "b87abdbf7f34383103b97c21cbc7fefa3ea51e27eae76165401ddcf57861d0b9",
-    "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3"
+    "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3",
+    "scripts/pr-scope-check.test.ts": "abf7c06c04c748ffe27b4662c2147b4da066e86c48b79437030c4a51a000d4c7"
   },
   "recentSamples": {},
   "fileChangedAt": {}

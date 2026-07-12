@@ -125,6 +125,8 @@ function Invoke-PrScopeCheckCore {
 $prNumber = [int]($env:PR_NUMBER ?? '0')
 $repository = $env:GITHUB_REPOSITORY
 $isFork = ($env:PR_HEAD_REPO_FORK ?? 'false').ToLowerInvariant() -eq 'true'
+$prHeadRef = [string]($env:PR_HEAD_REF ?? '')
+$sameRepo = ($env:PR_HEAD_REPO_SAME ?? 'false').ToLowerInvariant() -eq 'true'
 $degradedRequested = ($env:SCOPE_GUARD_DEGRADED_LABEL ?? 'false').ToLowerInvariant() -eq 'true'
 
 if (-not $prNumber -or -not $repository) {
@@ -217,6 +219,8 @@ $input = @{
     prPaths      = $prPaths
     degradedMode = $degradedMode
     forkPr       = $isFork
+    prHeadRef    = $prHeadRef
+    sameRepo     = $sameRepo
 }
 
 $result = Invoke-PrScopeCheckCore -InputJson $input
