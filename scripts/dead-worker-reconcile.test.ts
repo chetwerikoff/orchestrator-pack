@@ -719,6 +719,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       { row: compatibleWorkerStatusRow('opk-live-stale'), os: 'pane-alive', expected: 'live_or_unknown' },
       { row: compatibleWorkerStatusRow('opk-dead-fresh', { heartbeatTimestampMs: 1_780_000_105_500 }), os: 'pane-gone', expected: 'live_or_unknown' },
       { row: compatibleWorkerStatusRow('opk-dead-stale'), os: 'pane-gone', expected: 'dead' },
+      { row: compatibleWorkerStatusRow('opk-dead-no-generation', { generationToken: '' }), os: 'pane-gone', expected: 'audit_only', reason: 'missing_generation_token' },
       { row: compatibleWorkerStatusRow('opk-dead-missing-heartbeat', { heartbeatTimestampMs: 0 }), os: 'pane-gone', expected: 'audit_only', reason: 'missing_heartbeat_timestamp' },
       { row: null, os: 'pane-gone', sessionId: 'opk-missing-row', expected: 'audit_only', reason: 'missing_worker_status_row' },
       { row: compatibleWorkerStatusRow('opk-os-unknown'), os: 'unknown', expected: 'audit_only', reason: 'os_liveness_unknown' },
@@ -808,6 +809,20 @@ describe('dead-worker-reconciler (Issue #593)', () => {
 
   it('classifier version is exported', () => {
     expect(DEAD_WORKER_RECONCILER_VERSION).toMatch(/dead-worker-reconciler/);
+  });
+
+  it('passes the validated generation token into the recovery invoke', () => {
+    const reconcileText = readFileSync(
+      join(repoRoot, 'scripts/dead-worker-reconcile.ps1'),
+      'utf8',
+    );
+    const invokeText = readFileSync(
+      join(repoRoot, 'scripts/invoke-worker-recovery.ps1'),
+      'utf8',
+    );
+    expect(reconcileText).toMatch(/'-GenerationToken', \[string\]\$Action\.generationToken/);
+    expect(invokeText).toMatch(/\[string\]\$GenerationToken = ''/);
+    expect(invokeText).toMatch(/GenerationToken = \$GenerationToken/);
   });
 
   it('discovers assigned workers absent from ao session ls via worktree and audit candidates', () => {

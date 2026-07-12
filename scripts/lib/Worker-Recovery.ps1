@@ -61,9 +61,12 @@ function ConvertTo-WorkerRecoverySessionSnapshot {
         }
     }
     return @{
-        runtime  = $AoRow.runtime
-        status   = $AoRow.status
-        worktree = $worktree
+        runtime           = $AoRow.runtime
+        status            = $AoRow.status
+        worktree          = $worktree
+        generationToken   = [string]$AoRow.generationToken
+        sessionGeneration = [string]$AoRow.sessionGeneration
+        generation        = [string]$AoRow.generation
     }
 }
 
@@ -387,6 +390,7 @@ function Invoke-WorkerRecovery {
     param(
         [string]$Trigger = 'operator_request',
         [string]$SessionId = '',
+        [string]$GenerationToken = '',
         [string]$CanonicalPath = '',
         [string]$ProjectId = 'orchestrator-pack',
         [string]$PackRoot = '',
@@ -530,6 +534,7 @@ function Invoke-WorkerRecovery {
     $selectionSnapshot = @{
         canonicalPath  = $pathCanon.canonical
         sessionId      = $SessionId
+        generationToken = $GenerationToken
         session        = $Session
         projectId      = $ProjectId
         worktreeRecord = $selectionWorktreeRecord
@@ -542,6 +547,7 @@ function Invoke-WorkerRecovery {
     $revalidate = Invoke-WorkerRecoveryCli -Subcommand 'evaluatePostClaim' -Payload @{
         selection = $selectionSnapshot
         current   = $currentSnapshot
+        expectedGenerationToken = $GenerationToken
     }
     if (-not $revalidate.ok) {
         $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'

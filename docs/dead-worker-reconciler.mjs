@@ -258,13 +258,9 @@ function resolveDeadWorkerGenerationToken(session, row) {
     row?.generationToken,
     row?.sessionGeneration,
     row?.generation,
-    row?.lineageId,
-    row?.generationVector?.writerSessionId,
-    row?.sourceGeneration?.writerSessionId,
     session?.generationToken,
     session?.sessionGeneration,
     session?.generation,
-    getSessionId(session),
   ];
   for (const candidate of candidates) {
     const normalized = normalizeString(candidate);
@@ -454,6 +450,9 @@ export function classifyWorkerLivenessEvidence(session, livenessContext = {}) {
   }
   if (heartbeatFresh) {
     return { verdict: 'live_or_unknown', reason: 'heartbeat_fresh', event: null, matchedEvents: [], evidence };
+  }
+  if (!summary.generationToken) {
+    return { verdict: 'audit_only', reason: 'missing_generation_token', event: null, matchedEvents: [], evidence };
   }
 
   return {

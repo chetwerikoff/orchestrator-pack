@@ -423,6 +423,7 @@ function Invoke-DeadWorkerRecovery {
         '-Trigger', 'reconcile_dead_worker',
         '-ProbedDeadEvidence',
         '-SessionId', [string]$Action.sessionId,
+        '-GenerationToken', [string]$Action.generationToken,
         '-WorktreePath', [string]$Action.worktree,
         '-ProjectId', $ProjectId,
         '-RepoRoot', $RepoRoot,

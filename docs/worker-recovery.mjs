@@ -260,6 +260,26 @@ export function evaluateCleanupEligibility(input) {
   return { eligible: false, outcome: 'skipped_ambiguous', reason: 'no_cleanup_cell', liveness, ownership };
 }
 
+function resolveRecoveryGenerationToken(snapshot) {
+  const row = asRecord(snapshot);
+  const session = asRecord(row?.session);
+  const candidates = [
+    row?.generationToken,
+    session?.generationToken,
+    row?.sessionGeneration,
+    session?.sessionGeneration,
+    row?.generation,
+    session?.generation,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate ?? '').trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return '';
+}
+
 /**
  * @param {object} input
  */
@@ -274,6 +294,20 @@ export function evaluatePostClaimRevalidation(input) {
   }
   if (String(selection.sessionId ?? '') !== String(current.sessionId ?? '')) {
     return { ok: false, reason: 'session_identity_changed' };
+  }
+  const expectedGenerationToken = String(
+    input.expectedGenerationToken
+    ?? resolveRecoveryGenerationToken(selection),
+  ).trim();
+  if (!expectedGenerationToken) {
+    return { ok: false, reason: 'missing_generation_token' };
+  }
+  const currentGenerationToken = resolveRecoveryGenerationToken(current);
+  if (!currentGenerationToken) {
+    return { ok: false, reason: 'missing_generation_token' };
+  }
+  if (currentGenerationToken !== expectedGenerationToken) {
+    return { ok: false, reason: 'generation_changed' };
   }
   const selectionLiveness = classifyWorkerSessionLiveness(selection.session);
   const currentLiveness = classifyWorkerSessionLiveness(current.session);
