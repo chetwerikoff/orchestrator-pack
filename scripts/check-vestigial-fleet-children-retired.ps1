@@ -32,6 +32,15 @@ $bindingFiles = @(
     'docs/review-pipeline-spawn-budget-attribution.mjs'
 )
 
+# A narrow compatibility exception is allowed only for pure re-export facades. The
+# supervised child, CLI entrypoint and implementation remain retired and may not
+# reappear under either legacy path.
+$compatibilityAllowlist = @(
+    'docs/review-finding-delivery-confirm.mjs',
+    'docs/review-finding-delivery-confirm.d.mts'
+)
+$compatibilityExpectedCode = "export*from'./review-delivery-confirmation.mjs';"
+
 $failures = [System.Collections.Generic.List[object]]::new()
 function Add-RetirementFailure {
     param([string]$Surface, [string]$Marker, [string]$Reason)
@@ -98,12 +107,27 @@ foreach ($item in $retired) {
     }
 }
 
+foreach ($rel in $compatibilityAllowlist) {
+    $path = Join-Path $RepoRoot $rel
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        continue
+    }
+    $text = Get-Content -LiteralPath $path -Raw
+    $withoutBlockComments = [regex]::Replace($text, '(?s)/\*.*?\*/', '')
+    $withoutLineComments = [regex]::Replace($withoutBlockComments, '(?m)^\s*//.*$', '')
+    $normalized = $withoutLineComments -replace '\s+', ''
+    if ($normalized -ne $compatibilityExpectedCode) {
+        Add-RetirementFailure -Surface $rel -Marker 'compatibility-facade' -Reason 'legacy docs path must remain a pure neutral-module re-export'
+    }
+}
+
 $result = [pscustomobject]@{
     schemaVersion = 1
     issue = 745
     status = $(if ($failures.Count -eq 0) { 'pass' } else { 'fail' })
     checkedSurfaces = @($registryRel) + $bindingFiles
     retiredChildIds = @($retired | ForEach-Object { $_.id })
+    compatibilityAllowlist = $compatibilityAllowlist
     failures = @($failures)
 }
 
