@@ -268,6 +268,29 @@ describe('orchestrator escalation contract (#641)', () => {
     expect(parsed.afterWindowReason).toBe('condition_open');
   });
 
+  it('dead-letter remains retryable when both operator inbox and health spool writes fail', () => {
+    const parsed = runJson(`
+      . ./scripts/lib/Orchestrator-Escalation.ps1
+      $pub = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'corr:dead-letter:outbox-fail' -Payload @{ reason = 'spawn_denied' } -StatePath ${ps(state)} -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -OrchestratorSessionId 'orch-test' -NowMs 1000 -DryRun
+      $stateFile = Get-MechanicalJsonStateFile -Path ${ps(state)} -DefaultState $Script:OrchestratorEscalationDefaultState
+      $record = $stateFile.records[$pub.escalationId]
+      $record.lastDeliveryFailure = 'forced llm delivery failure'
+      $env:AO_ESCALATION_FORCE_INBOX_FAILURE = '1'
+      $env:AO_ESCALATION_FORCE_HEALTH_FAILURE = '1'
+      Complete-OrchestratorEscalationDeadLetter -State $stateFile -Record $record -Class (Resolve-OrchestratorEscalationClass -EscalationClassId 'escalation-dead-worker-recovery') -OperatorInboxDir ${ps(inbox)} -HealthSpoolDir ${ps(health)} -Now 2000 | Out-Null
+      [pscustomobject]@{
+        status = [string]$record.status
+        terminalState = [string]$record.terminalState
+        operatorOutbox = [string]$record.operatorOutbox
+        operatorInboxPath = [string]$record.operatorInboxPath
+      } | ConvertTo-Json -Compress
+    `);
+    expect(parsed.status).toBe('pending');
+    expect(parsed.terminalState).toBe('open');
+    expect(parsed.operatorOutbox).toBe('failed');
+    expect(parsed.operatorInboxPath || '').toBe('');
+  });
+
   it('operator-route failures remain retryable by later source publishes', () => {
     const parsed = runJson(`
       . ./scripts/lib/Orchestrator-Escalation.ps1

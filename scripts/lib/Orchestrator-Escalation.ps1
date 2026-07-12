@@ -523,8 +523,15 @@ function Complete-OrchestratorEscalationDeadLetter {
         -Payload (ConvertTo-OrchestratorEscalationHashtable -Value $Record.lastPayload) -Message ([string]$Record.lastMessage)
     $inbox = Write-OrchestratorEscalationOperatorInbox -Envelope $envelope -OperatorInboxDir $OperatorInboxDir -HealthSpoolDir $HealthSpoolDir -Reason ([string]$Record.lastDeliveryFailure)
     $Record.operatorFallback = $inbox
-    $Record.operatorOutbox = if ($inbox.ok) { 'published' } else { 'failed' }
+    $outboxPublished = [bool]$inbox.ok -or -not [string]::IsNullOrWhiteSpace([string]$inbox.healthSpoolPath)
+    $Record.operatorOutbox = if ($outboxPublished) { 'published' } else { 'failed' }
     $Record.operatorInboxPath = if ($inbox.ok) { [string]$inbox.path } else { [string]$inbox.healthSpoolPath }
+    if (-not $outboxPublished) {
+        $Record.status = 'pending'
+        $Record.terminalState = 'open'
+        $Record.updatedAtMs = $Now
+        return $Record
+    }
     Resolve-OrchestratorEscalationTerminalState -Record $Record -TerminalState 'dead_lettered' -Now $Now -Reason 'retry_cap_exhausted' | Out-Null
     return $Record
 }

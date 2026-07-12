@@ -78,6 +78,17 @@ function Invoke-EscalationRouterTick {
         $attempts = if ($null -ne $record.attempts) { [int]$record.attempts } else { 0 }
         $firstAttemptAtMs = if ($null -ne $record.firstAttemptAtMs) { [long]$record.firstAttemptAtMs } else { 0 }
         $lastAttemptAtMs = if ($null -ne $record.lastAttemptAtMs) { [long]$record.lastAttemptAtMs } else { 0 }
+        if ($firstAttemptAtMs -le 0 -and $attempts -gt 0) {
+            $createdAtMs = if ($null -ne $record.createdAtMs) { [long]$record.createdAtMs } else { 0 }
+            $updatedAtMs = if ($null -ne $record.updatedAtMs) { [long]$record.updatedAtMs } else { 0 }
+            foreach ($candidate in @($createdAtMs, $lastAttemptAtMs, $updatedAtMs)) {
+                if ($candidate -gt 0) {
+                    $firstAttemptAtMs = $candidate
+                    $record.firstAttemptAtMs = $candidate
+                    break
+                }
+            }
+        }
         if ($attempts -ge $Script:OrchestratorEscalationMaxAttempts -or ($firstAttemptAtMs -gt 0 -and ($now - $firstAttemptAtMs) -ge $Script:OrchestratorEscalationMaxElapsedMs)) {
             Complete-OrchestratorEscalationDeadLetter -State $state -Record $record -Class $class -Now $now | Out-Null
             continue
