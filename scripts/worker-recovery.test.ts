@@ -332,6 +332,7 @@ describe('worker recovery post-claim revalidation', () => {
     expect(recoveryText).toMatch(/selectionWorktreeRecord/);
     expect(recoveryText).toMatch(/liveWorktreeRecord/);
     expect(recoveryText).toMatch(/Resolve-WorkerRecoveryGenerationToken/);
+    expect(recoveryText).toMatch(/\$requireGenerationFence = \(\$Trigger -eq 'reconcile_dead_worker'\) -or \[bool\]\$expectedGenerationToken/);
     expect(recoveryText).toMatch(/reason = 'missing_generation_token'/);
     expect(recoveryText).toMatch(/reason = 'generation_changed'/);
   });
@@ -686,6 +687,21 @@ describe('worker recovery repository identity / pack-root spawn path (#522 AC#12
     `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
     const result = JSON.parse(runPwsh(script));
     expect(result.packRootMatch).toBe(true);
+    expect(result.spawn).toBe('spawn_started');
+  });
+
+  it('worker recovery operator path: does not require a supplied generation token', () => {
+    const packRoot = repoRoot;
+    const ns = tempNs();
+    const worktreePath = path.join(packRoot, 'worktrees', 'opk-operator-recover');
+    const script = `
+      . '${path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1').replace(/'/g, "''")}'
+      $env:AO_WORKER_RECOVERY_DIR = ${psString(ns)}
+      $result = Invoke-WorkerRecovery -Trigger 'operator_request' -SessionId 'opk-operator-recover' -CanonicalPath ${psString('__WT__')} -PackRoot ${psString(packRoot)} -RepoRoot ${psString(packRoot)} -Session @{ runtime='exited'; status='terminated'; worktree=${psString('__WT__')}; generationToken='gen-a' } -WorktreeRecord @{ sessionId='opk-operator-recover'; projectId='orchestrator-pack' } -WorktreePresent -DryRun -SpawnAction 'spawn-new' -IssueNumber 522 -FixtureMode -SpawnPolicy @{ allowSpawnNew=$true; allowClaimPrResume=$true } -FixtureBranchState @{ ok=$true; exists=$false } -FixtureWorktreeRecords @()
+      [pscustomobject]@{ outcome = [string]$result.outcome; spawn = [string]$result.spawn } | ConvertTo-Json -Compress
+    `.replace(/__WT__/g, worktreePath.replace(/\\/g, '/'));
+    const result = JSON.parse(runPwsh(script));
+    expect(result.outcome).not.toBe('skipped_ambiguous');
     expect(result.spawn).toBe('spawn_started');
   });
 

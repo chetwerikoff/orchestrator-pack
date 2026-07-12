@@ -577,18 +577,21 @@ function Invoke-WorkerRecovery {
     if (-not [string]::IsNullOrWhiteSpace($expectedGenerationToken)) {
         $expectedGenerationToken = $expectedGenerationToken.Trim()
     }
-    if (-not $expectedGenerationToken) {
-        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
-        return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
-    }
-    $currentGenerationToken = Resolve-WorkerRecoveryGenerationToken -Snapshot $currentSnapshot
-    if (-not $currentGenerationToken) {
-        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
-        return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
-    }
-    if ($currentGenerationToken -ne $expectedGenerationToken) {
-        $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
-        return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'generation_changed' }
+    $requireGenerationFence = ($Trigger -eq 'reconcile_dead_worker') -or [bool]$expectedGenerationToken
+    if ($requireGenerationFence) {
+        if (-not $expectedGenerationToken) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+            return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
+        }
+        $currentGenerationToken = Resolve-WorkerRecoveryGenerationToken -Snapshot $currentSnapshot
+        if (-not $currentGenerationToken) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+            return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'missing_generation_token' }
+        }
+        if ($currentGenerationToken -ne $expectedGenerationToken) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'skipped_ambiguous'
+            return @{ ok = $true; outcome = 'skipped_ambiguous'; reason = 'generation_changed' }
+        }
     }
 
     $revalidate = Invoke-WorkerRecoveryCli -Subcommand 'evaluatePostClaim' -Payload @{
