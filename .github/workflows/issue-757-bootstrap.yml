@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+concurrency:
+  group: issue-757-bootstrap-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -65,8 +69,26 @@ jobs:
         run: |
           set -euo pipefail
           node --test scripts/vitest-runtime-history-delivery.test.mjs
-          npx vitest run scripts/pr-scope-check.test.ts
-          npx vitest run scripts/check-ci-pipeline-split.test.ts
+          cat > vitest.issue757.config.ts <<'EOF'
+          import { defineConfig } from 'vitest/config';
+          export default defineConfig({
+            test: {
+              include: [
+                'scripts/pr-scope-check.test.ts',
+                'scripts/check-ci-pipeline-split.test.ts',
+              ],
+              environment: 'node',
+              pool: 'forks',
+              fileParallelism: false,
+              maxWorkers: 1,
+              testTimeout: 30000,
+            },
+          });
+          EOF
+          npx vitest run --config vitest.issue757.config.ts \
+            scripts/pr-scope-check.test.ts \
+            scripts/check-ci-pipeline-split.test.ts
+          rm vitest.issue757.config.ts
           npx tsc --project tsconfig.base.json --noEmit
           pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
           git diff --check
