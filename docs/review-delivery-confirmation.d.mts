@@ -24,7 +24,6 @@ export interface ReviewRun {
 }
 
 import type { AoSession, OpenPr } from './review-trigger-reconcile.d.mts';
-
 export type { AoSession, OpenPr };
 
 export interface RunDeliveryRecord {
@@ -48,7 +47,6 @@ export interface MarkConfirmedAction {
   runId: string;
   prNumber?: number;
 }
-
 export interface EscalateAction {
   type: 'escalate';
   runId: string;
@@ -57,7 +55,6 @@ export interface EscalateAction {
   reason: string;
   message: string;
 }
-
 export interface WaitAction {
   type: 'wait';
   runId: string;
@@ -65,7 +62,6 @@ export interface WaitAction {
   reason: string;
   remainingMs: number;
 }
-
 export interface DeferAction {
   type: 'defer';
   runId: string;
@@ -73,7 +69,6 @@ export interface DeferAction {
   prNumber: number;
   reason: string;
 }
-
 export type DeliveryConfirmAction =
   | MarkConfirmedAction
   | EscalateAction
@@ -133,7 +128,6 @@ export declare function getConfirmationAnchorMs(
   record: RunDeliveryRecord,
   sendObservedAtMs: number,
 ): number;
-
 export declare function resolveDeliveryConfig(config?: {
   confirmationWindowMs?: number;
   maxRedeliveries?: number;

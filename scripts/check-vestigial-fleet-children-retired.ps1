@@ -27,7 +27,9 @@ $bindingFiles = @(
     'scripts/orchestrator-message-audit-roots.manifest.json',
     'scripts/orchestrator-message-protected-runtime.manifest.json',
     'scripts/orchestrator-message-send-helpers.manifest.json',
-    'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json'
+    'scripts/fixtures/mechanical-json-state/state-coverage-manifest.json',
+    'docs/review-pipeline-spawn-budget.mjs',
+    'docs/review-pipeline-spawn-budget-attribution.mjs'
 )
 
 $failures = [System.Collections.Generic.List[object]]::new()
