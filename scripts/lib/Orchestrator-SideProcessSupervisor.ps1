@@ -2397,8 +2397,8 @@ function Invoke-OrchestratorWakeSupervisorLoop {
                             Reset-OrchestratorWakeSupervisorChildCrashRecoveryState `
                                 -Paths $Paths -ChildId $child.Id -ClearTerminalMetadata
                             Start-OrchestratorWakeSupervisorChild -ChildId $child.Id -OrchestratorSessionId $currentSessionId `
-                                -Paths $Paths -ProjectId $ProjectId -MaxLoopSeconds $child.MaxLoopSeconds `
-                                -TestMode:$TestMode -LogPath $Paths.SupervisorLog
+                                -Paths $Paths -ProjectId $ProjectId -TestMode:$TestMode `
+                                -TestChildScript $TestChildScript
                             continue
                         }
                         if ($status.Alive) {
