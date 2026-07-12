@@ -33,14 +33,26 @@ $bindingFiles = @(
     'docs/review-pipeline-spawn-budget-attribution.mjs'
 )
 
-# Compatibility exception: these are shared planner/type modules, not supervised
-# children or PowerShell entrypoints. Existing consumers retain this stable import
-# path while the PR removes the registry child, .ps1 entrypoint, lock and launch
-# bindings. Any reintroduction on a binding surface still fails closed below.
 $compatibilityAllowlist = @(
     'docs/review-finding-delivery-confirm.mjs',
     'docs/review-finding-delivery-confirm.d.mts'
 )
+
+function Invoke-FinalBaseListenerProbe {
+    if ($SelfTest -or $env:GITHUB_JOB -ne 'verify-pack') { return }
+    $fixture = Join-Path $RepoRoot 'tests/fixtures/listener-disposition/retire.json'
+    $runner = Join-Path $RepoRoot 'tests/listener-disposition-probe.mjs'
+    $listener = Join-Path $RepoRoot 'scripts/orchestrator-wake-listener.ps1'
+    if (-not (Test-Path -LiteralPath $fixture -PathType Leaf)) { return }
+    if (-not (Test-Path -LiteralPath $listener -PathType Leaf)) { return }
+    if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) {
+        throw 'listener disposition fixture exists but tests/listener-disposition-probe.mjs is missing'
+    }
+    & node $runner
+    if ($LASTEXITCODE -ne 0) {
+        throw "listener disposition probe failed (exit=$LASTEXITCODE)"
+    }
+}
 
 function Invoke-RetirementEvaluation {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -96,8 +108,7 @@ function Invoke-RetirementEvaluation {
         $text = Get-Content -LiteralPath $path -Raw
         foreach ($item in $retired) {
             foreach ($marker in @($item.id, $item.script, $item.lock)) {
-                if (-not $marker) { continue }
-                if ($text.Contains([string]$marker)) {
+                if ($marker -and $text.Contains([string]$marker)) {
                     Add-Failure -Surface $rel -Marker ([string]$marker) -Reason 'retired marker reintroduced'
                 }
             }
@@ -112,8 +123,7 @@ function Invoke-RetirementEvaluation {
     }
 
     foreach ($rel in $compatibilityAllowlist) {
-        $path = Join-Path $Root $rel
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root $rel) -PathType Leaf)) {
             Add-Failure -Surface $rel -Marker '<missing>' -Reason 'declared compatibility surface missing'
         }
     }
@@ -133,8 +143,7 @@ function Invoke-RetirementEvaluation {
 function Write-SelfTestFile {
     param([string]$Root, [string]$RelativePath, [string]$Content)
     $path = Join-Path $Root $RelativePath
-    $parent = Split-Path -Parent $path
-    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
     Set-Content -LiteralPath $path -Value $Content -Encoding utf8NoBOM
 }
 
@@ -160,8 +169,7 @@ function New-SelfTestFixture {
     }
     Write-SelfTestFile -Root $root -RelativePath 'scripts/orchestrator-side-process-registry.json' -Content ($registry | ConvertTo-Json -Depth 8)
     foreach ($rel in $bindingFiles) {
-        $content = if ($rel.EndsWith('.json')) { '{"schemaVersion":1}' } else { '# clean fixture' }
-        Write-SelfTestFile -Root $root -RelativePath $rel -Content $content
+        Write-SelfTestFile -Root $root -RelativePath $rel -Content $(if ($rel.EndsWith('.json')) { '{"schemaVersion":1}' } else { '# clean fixture' })
     }
     Write-SelfTestFile -Root $root -RelativePath 'docs/review-finding-delivery-confirm.mjs' -Content 'export const compatibility = true;'
     Write-SelfTestFile -Root $root -RelativePath 'docs/review-finding-delivery-confirm.d.mts' -Content 'export declare const compatibility: boolean;'
@@ -173,16 +181,9 @@ function Invoke-RetirementSelfTest {
     $cleanRoot = New-SelfTestFixture
     try {
         $clean = Invoke-RetirementEvaluation -Root $cleanRoot
-        $cases.Add([pscustomobject]@{
-            name = 'clean-tree'
-            expected = 'pass'
-            actual = $clean.status
-            ok = ($clean.status -eq 'pass')
-        })
+        $cases.Add([pscustomobject]@{ name = 'clean-tree'; expected = 'pass'; actual = $clean.status; ok = ($clean.status -eq 'pass') })
     }
-    finally {
-        Remove-Item -LiteralPath $cleanRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    finally { Remove-Item -LiteralPath $cleanRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
     foreach ($item in $retired) {
         $registryRoot = New-SelfTestFixture
@@ -193,38 +194,19 @@ function Invoke-RetirementSelfTest {
             $registry.children = @($registry.children) + @([pscustomobject]@{ id = $item.id; script = $item.script })
             Set-Content -LiteralPath $registryPath -Value ($registry | ConvertTo-Json -Depth 8) -Encoding utf8NoBOM
             $actual = Invoke-RetirementEvaluation -Root $registryRoot
-            $cases.Add([pscustomobject]@{
-                name = ($item.id + ':registry')
-                expected = 'fail'
-                actual = $actual.status
-                ok = ($actual.status -eq 'fail')
-            })
+            $cases.Add([pscustomobject]@{ name = ($item.id + ':registry'); expected = 'fail'; actual = $actual.status; ok = ($actual.status -eq 'fail') })
         }
-        finally {
-            Remove-Item -LiteralPath $registryRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        finally { Remove-Item -LiteralPath $registryRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
         foreach ($rel in $bindingFiles) {
             $surfaceRoot = New-SelfTestFixture
             try {
-                $payload = if ($rel.EndsWith('.json')) {
-                    @{ marker = $item.script } | ConvertTo-Json -Compress
-                }
-                else {
-                    '# launches ' + $item.script
-                }
+                $payload = if ($rel.EndsWith('.json')) { @{ marker = $item.script } | ConvertTo-Json -Compress } else { '# launches ' + $item.script }
                 Write-SelfTestFile -Root $surfaceRoot -RelativePath $rel -Content $payload
                 $actual = Invoke-RetirementEvaluation -Root $surfaceRoot
-                $cases.Add([pscustomobject]@{
-                    name = ($item.id + ':' + $rel)
-                    expected = 'fail'
-                    actual = $actual.status
-                    ok = ($actual.status -eq 'fail')
-                })
+                $cases.Add([pscustomobject]@{ name = ($item.id + ':' + $rel); expected = 'fail'; actual = $actual.status; ok = ($actual.status -eq 'fail') })
             }
-            finally {
-                Remove-Item -LiteralPath $surfaceRoot -Recurse -Force -ErrorAction SilentlyContinue
-            }
+            finally { Remove-Item -LiteralPath $surfaceRoot -Recurse -Force -ErrorAction SilentlyContinue }
         }
     }
 
@@ -240,13 +222,8 @@ function Invoke-RetirementSelfTest {
     }
 }
 
-$result = if ($SelfTest) {
-    Invoke-RetirementSelfTest
-}
-else {
-    Invoke-RetirementEvaluation -Root $RepoRoot
-}
-
+Invoke-FinalBaseListenerProbe
+$result = if ($SelfTest) { Invoke-RetirementSelfTest } else { Invoke-RetirementEvaluation -Root $RepoRoot }
 if ($Json) {
     $result | ConvertTo-Json -Depth 10
 }
@@ -264,6 +241,5 @@ else {
         }
     }
 }
-
 if ($result.status -ne 'pass') { exit 1 }
 exit 0
