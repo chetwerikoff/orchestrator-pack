@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "1e8cbb89968a417de98ea5a63788fa22c936d04a",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ea07c5a7f4a08581955978dfbe880322e2bdcb7e0ae3dbf56ab9285f4c8bf812"
+    "active_scope_hash": "sha256:3b33137c4df9fbfac6bf594aa46d45b06d8ed564748eab8fa854a496cd6b40b1"
   },
   "declared_paths": [
     "AGENTS.md",
@@ -25,6 +25,7 @@
     "docs/reviewer-failure-evidence.mjs",
     "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/_test-interposer-pack-fixture.ts",
+    "scripts/ao-events-correlation-degraded.test.ts",
     "scripts/autonomous-review-retry.test.ts",
     "scripts/check-ao-dead-argv-bypass.ps1",
     "scripts/check-ci-failure-notification-adoption.ps1",
@@ -74,6 +75,7 @@
     "scripts/review-stuck-run-reaper.test.ts",
     "scripts/reviewer-failure-evidence.test.ts",
     "scripts/side-process-launch-contract.test.ts",
+    "scripts/supervisor-child-openprs-null.test.ts",
     "scripts/supervisor-recovery.test-helpers.ts",
     "scripts/verify.ps1",
     "scripts/vestigial-fleet-retirement.test.ts",
@@ -81,5 +83,21 @@
     "scripts/vitest-wallclock-e2e-split.manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ea07c5a7f4a08581955978dfbe880322e2bdcb7e0ae3dbf56ab9285f4c8bf812",
+      "new_active_scope_hash": "sha256:3b33137c4df9fbfac6bf594aa46d45b06d8ed564748eab8fa854a496cd6b40b1",
+      "changed": {
+        "added": [
+          "scripts/ao-events-correlation-degraded.test.ts",
+          "scripts/supervisor-child-openprs-null.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Cover surviving consumers and complete retired-child regression inventory after CI audit",
+      "actor": "chatgpt-github-worker",
+      "timestamp": "2026-07-12T10:50:00.000Z",
+      "applied": true
+    }
+  ]
 }
