@@ -77,6 +77,7 @@ function runPrBDiagnostic(repoRoot) {
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
 const changedPathManifest = parseChangedPathManifestFromEnv();
 const changedFiles = (changedPathManifest?.entries ?? [])
+  .filter((entry) => entry.status !== 'D')
   .map((entry) => entry.path)
   .filter((path) => path.endsWith('.test.ts'));
 const laneOptions = {
