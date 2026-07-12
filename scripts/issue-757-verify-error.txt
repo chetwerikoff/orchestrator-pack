@@ -1,0 +1,137 @@
+[verify] delivery tests
+TAP version 13
+# Subtest: mergeability-computing still waits
+ok 1 - mergeability-computing still waits
+  ---
+  duration_ms: 2.491657
+  ...
+# Subtest: clean delivery with passing required checks still merges
+ok 2 - clean delivery with passing required checks still merges
+  ---
+  duration_ms: 0.253589
+  ...
+# Subtest: mergeable=false closes the delivery PR as obsolete
+ok 3 - mergeable=false closes the delivery PR as obsolete
+  ---
+  duration_ms: 0.128047
+  ...
+# Subtest: dirty mergeable_state closes even when mergeable is not false
+ok 4 - dirty mergeable_state closes even when mergeable is not false
+  ---
+  duration_ms: 0.106789
+  ...
+# Subtest: required-check failures remain failed and actionable
+ok 5 - required-check failures remain failed and actionable
+  ---
+  duration_ms: 0.12672
+  ...
+# Subtest: superseded head still wins before conflict handling
+ok 6 - superseded head still wins before conflict handling
+  ---
+  duration_ms: 0.103832
+  ...
+# Subtest: delivery path violations still fail before conflict handling
+ok 7 - delivery path violations still fail before conflict handling
+  ---
+  duration_ms: 0.202791
+  ...
+# Subtest: missing and pending checks retain wait behavior
+ok 8 - missing and pending checks retain wait behavior
+  ---
+  duration_ms: 0.131058
+  ...
+# Subtest: close-as-obsolete executes gh pr close and never update-branch or rebase
+ok 9 - close-as-obsolete executes gh pr close and never update-branch or rebase
+  ---
+  duration_ms: 0.328897
+  ...
+# Subtest: invalid trusted snapshot remains an actionable configuration failure
+ok 10 - invalid trusted snapshot remains an actionable configuration failure
+  ---
+  duration_ms: 1.907402
+  ...
+# Subtest: credential and trusted-actor gates remain fail-closed before monitor-pr
+ok 11 - credential and trusted-actor gates remain fail-closed before monitor-pr
+  ---
+  duration_ms: 0.406009
+  ...
+1..11
+# tests 11
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 64.456382
+[verify] isolated vitest tests
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/orchestrator-pack/orchestrator-pack[39m
+
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+ [32m✓[39m scripts/check-ci-pipeline-split.test.ts [2m([22m[2m77 tests[22m[2m)[22m[33m 12197[2mms[22m[39m
+     [33m[2m✓[22m[39m passes when all lanes succeed with head/run binding [33m 5207[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on typecheck failure [33m 736[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on vitest light failure [33m 715[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on vitest heavy cancelled [33m 700[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on vitest light skipped [33m 735[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on vitest topology plan failure [33m 698[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on vitest topology plan cancelled [33m 718[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on missing head [33m 728[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed on missing run [33m 714[2mms[22m[39m
+     [33m[2m✓[22m[39m validates pre-move manifest against pinned git baseline (#694 AC#2) [33m 528[2mms[22m[39m
+ [32m✓[39m scripts/pr-scope-check.test.ts [2m([22m[2m64 tests[22m[2m)[22m[33m 1831[2mms[22m[39m
+     [33m[2m✓[22m[39m fails drift check when a pointer does not match canonical [33m 1163[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m141 passed[39m[22m[90m (141)[39m
+[2m   Start at [22m 12:42:45
+[2m   Duration [22m 14.61s[2m (transform 293ms, setup 0ms, import 326ms, tests 14.03s, environment 0ms)[22m
+
+[verify] TypeScript
+[verify] pipeline split PowerShell
+== CI pipeline split guard (Issues #487/#556/#695) ==
+  derived heavyShardCount: 8 (fallbackClassification=derived)
+  discovered: 190 files; light: 75; heavy: 96; postMergeWallclock: 17; parked: 2
+[FAIL] full-regression aggregate:
+ - typecheck failed
+[FAIL] full-regression aggregate:
+ - vitest-light failed
+[FAIL] full-regression aggregate:
+ - vitest-heavy-shards cancelled
+[FAIL] full-regression aggregate:
+ - vitest-light unexpectedly skipped
+[FAIL] full-regression aggregate:
+ - GITHUB_SHA missing (current-head binding)
+[PASS] full-regression aggregate sha=abc run=1
+== CI runtime-history refresh guard (Issue #691) ==
+[PASS] runtime-history refresh fixtures OK
+
+[PASS] runtime-history delivery fixtures OK
+
+[FAIL] RPC captureCommitSha f4eb835dd08c43e8143a5ee981e1dc2159825698 does not match binding-scope tree at HEAD e485bcb6cca66faa39dd88703933cb501fbf3bd9; refresh heavy-lane RPC artifacts
+== CI wall-clock e2e split guard (Issue #694) ==
+  coverage-delta: prRetained=171 postMerge=17
+[FAIL] wall-clock acceptance stage result=failure (fail-closed)
+[FAIL] wall-clock aggregate missing GITHUB_SHA head binding
+[PASS] wall-clock acceptance aggregate head=abc run=1
+{"triageHint":"Inspect vitest-wallclock-e2e workflow run for failing postMergeWallclock file; do not treat PR aggregate as wall-clock pass.","schema":"wallclock-e2e-failure.v1","deliveryTarget":"ci-failure-notification-reconcile","dryRun":true,"workflowUrl":"https://github.com/chetwerikoff/orchestrator-pack/actions/runs/29193095407","enumeratedMove":["scripts/supervisor-fault-boundary.test.ts","scripts/orchestrator-wake-supervisor.test.ts","scripts/orchestrator-wake-listener.test.ts","scripts/orchestrator-wake-supervisor-orphan-integration.test.ts","scripts/supervisor-auto-recovery.test.ts","scripts/supervisor-degraded-backoff.test.ts"],"episodeKey":"wallclock-e2e-main:deadbeef","runId":"29193095407","dedupeKey":"wallclock-e2e-failure:deadbeef","headSha":"deadbeef","owner":"orchestrator-pack-operator","issue":694}
+[PASS] wall-clock alert dry-run delivery payload emitted
+{"triageHint":"Inspect vitest-wallclock-e2e workflow run for failing postMergeWallclock file; do not treat PR aggregate as wall-clock pass.","schema":"wallclock-e2e-failure.v1","deliveryTarget":"ci-failure-notification-reconcile","dryRun":true,"workflowUrl":"https://github.com/chetwerikoff/orchestrator-pack/actions/runs/29193095407","enumeratedMove":["scripts/supervisor-fault-boundary.test.ts","scripts/orchestrator-wake-supervisor.test.ts","scripts/orchestrator-wake-listener.test.ts","scripts/orchestrator-wake-supervisor-orphan-integration.test.ts","scripts/supervisor-auto-recovery.test.ts","scripts/supervisor-degraded-backoff.test.ts"],"episodeKey":"wallclock-e2e-main:deadbeef","runId":"29193095407","dedupeKey":"wallclock-e2e-failure:deadbeef","headSha":"deadbeef","owner":"orchestrator-pack-operator","issue":694}
+[FAIL] wall-clock alert delivery simulated failure (fail-closed)
+[FAIL] CI pipeline split guard:
+ - supervisor heavy-lane RPC repeat-run artifact validation failed (Issue #693)
+ - wall-clock split missing immutable GitHub approval (#487 AC#8): github-context-unavailable
+ - wall-clock latest-main evidence (#694 AC#3): github-context-unavailable head=
