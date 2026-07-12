@@ -15,11 +15,11 @@ else {
 }
 
 $retired = @(
-    @{ id = 'listener'; script = 'orchestrator-wake-listener.ps1'; lock = 'listener-side-effect.lock' },
-    @{ id = 'review-run-recovery'; script = 'review-run-recovery.ps1'; lock = 'review-run-recovery-side-effect.lock' },
-    @{ id = 'review-stuck-run-reaper'; script = 'review-stuck-run-reaper.ps1'; lock = 'review-stuck-run-reaper-side-effect.lock' },
-    @{ id = 'review-finding-delivery-confirm'; script = 'review-finding-delivery-confirm.ps1'; lock = 'delivery-confirm-side-effect.lock' },
-    @{ id = 'ci-failure-notification-reaction'; script = 'ci-failure-notification-reaction.ps1'; lock = $null }
+    @{ id = 'listener'; bindingIdMarker = '"listener"'; script = 'orchestrator-wake-listener.ps1'; lock = 'listener-side-effect.lock' },
+    @{ id = 'review-run-recovery'; bindingIdMarker = 'review-run-recovery'; script = 'review-run-recovery.ps1'; lock = 'review-run-recovery-side-effect.lock' },
+    @{ id = 'review-stuck-run-reaper'; bindingIdMarker = 'review-stuck-run-reaper'; script = 'review-stuck-run-reaper.ps1'; lock = 'review-stuck-run-reaper-side-effect.lock' },
+    @{ id = 'review-finding-delivery-confirm'; bindingIdMarker = 'review-finding-delivery-confirm'; script = 'review-finding-delivery-confirm.ps1'; lock = 'delivery-confirm-side-effect.lock' },
+    @{ id = 'ci-failure-notification-reaction'; bindingIdMarker = 'ci-failure-notification-reaction'; script = 'ci-failure-notification-reaction.ps1'; lock = $null }
 )
 
 $bindingFiles = @(
@@ -92,11 +92,14 @@ function Invoke-RetirementEvaluation {
         }
         $text = Get-Content -LiteralPath $path -Raw
         foreach ($item in $retired) {
-            foreach ($marker in @($item.id, $item.script, $item.lock)) {
+            foreach ($marker in @($item.bindingIdMarker, $item.script, $item.lock)) {
                 if ($marker -and $text.Contains([string]$marker)) {
                     Add-Failure -Surface $rel -Marker ([string]$marker) -Reason 'retired marker reintroduced'
                 }
             }
+        }
+        if ($rel -eq 'scripts/orchestrator-wake-supervisor.ps1' -and $text -match '(?i)\blistener\b') {
+            Add-Failure -Surface $rel -Marker 'listener' -Reason 'retired listener remains in supervisor synopsis or code'
         }
     }
 
