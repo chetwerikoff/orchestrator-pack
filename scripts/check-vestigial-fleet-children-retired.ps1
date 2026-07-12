@@ -15,6 +15,7 @@ else {
 }
 
 $retired = @(
+    @{ id = 'listener'; script = 'orchestrator-wake-listener.ps1'; lock = 'listener-side-effect.lock' },
     @{ id = 'review-run-recovery'; script = 'review-run-recovery.ps1'; lock = 'review-run-recovery-side-effect.lock' },
     @{ id = 'review-stuck-run-reaper'; script = 'review-stuck-run-reaper.ps1'; lock = 'review-stuck-run-reaper-side-effect.lock' },
     @{ id = 'review-finding-delivery-confirm'; script = 'review-finding-delivery-confirm.ps1'; lock = 'delivery-confirm-side-effect.lock' },
@@ -37,22 +38,6 @@ $compatibilityAllowlist = @(
     'docs/review-finding-delivery-confirm.mjs',
     'docs/review-finding-delivery-confirm.d.mts'
 )
-
-function Invoke-FinalBaseListenerProbe {
-    if ($SelfTest -or $env:GITHUB_JOB -ne 'verify-pack') { return }
-    $fixture = Join-Path $RepoRoot 'tests/fixtures/listener-disposition/retire.json'
-    $runner = Join-Path $RepoRoot 'tests/listener-disposition-probe.mjs'
-    $listener = Join-Path $RepoRoot 'scripts/orchestrator-wake-listener.ps1'
-    if (-not (Test-Path -LiteralPath $fixture -PathType Leaf)) { return }
-    if (-not (Test-Path -LiteralPath $listener -PathType Leaf)) { return }
-    if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) {
-        throw 'listener disposition fixture exists but tests/listener-disposition-probe.mjs is missing'
-    }
-    & node $runner
-    if ($LASTEXITCODE -ne 0) {
-        throw "listener disposition probe failed (exit=$LASTEXITCODE)"
-    }
-}
 
 function Invoke-RetirementEvaluation {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -151,7 +136,6 @@ function New-SelfTestFixture {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ('opk-745-retirement-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $survivors = @(
-        'listener',
         'review-trigger-reconcile',
         'review-trigger-reeval',
         'review-ready-report-state-seed',
@@ -222,7 +206,6 @@ function Invoke-RetirementSelfTest {
     }
 }
 
-Invoke-FinalBaseListenerProbe
 $result = if ($SelfTest) { Invoke-RetirementSelfTest } else { Invoke-RetirementEvaluation -Root $RepoRoot }
 if ($Json) {
     $result | ConvertTo-Json -Depth 10
