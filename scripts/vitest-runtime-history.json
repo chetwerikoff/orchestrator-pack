@@ -387,10 +387,10 @@
   },
   "contentSha": {
     "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
-    "scripts/dead-worker-reconcile.test.ts": "2898d313e7f4c7605fded29ef70b920da6b82cc0635a111827217a65e89a0565",
+    "scripts/dead-worker-reconcile.test.ts": "78138212d7f461977af1c5beef173fd33fc1848542eedd42d384c99db85a5704",
     "scripts/orchestrator-escalation-router.test.ts": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a",
     "scripts/orchestrator-escalation.test.ts": "e9e482c10d6dc7238802587208f61c59da7e54c9bd0d566921e59a8bfc921d45",
-    "scripts/worker-recovery.test.ts": "cbee72f53ce4d8a5f6255012c24c44e5462cd8b725c1ff2fe4a246d07d8f9a6c"
+    "scripts/worker-recovery.test.ts": "63d131bb2a3762fbc6c9a01d3a73e945f26decbca324c30f905cff16b10d45f2"
     "scripts/run-vitest-heavy-shard.test.ts": "d3de2b049fb69d107f95d2e3f65e5b0cf9a98888e1b279d6f67415b0bb1813d1",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts": "2e011cebca197efac3c37560bd645a901ec4799dd2858118d6eae4c880cdcad1",
     "scripts/worker-message-submit-reconcile.test.ts": "1ee617ca12b88f014708492b386ab324c38cb15b72b5c56c7f402d0c2ac389df",
