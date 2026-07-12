@@ -94,8 +94,11 @@ jobs:
           rm vitest.issue757.config.ts
           echo '[verify] TypeScript'
           npx tsc --project tsconfig.base.json --noEmit
-          echo '[verify] pipeline split PowerShell'
-          pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
+          echo '[verify] pipeline split PowerShell with pinned baseline fixtures'
+          OPK_WALLCLOCK_MAIN_EVIDENCE_FIXTURE=bootstrap \
+          OPK_WALLCLOCK_SPLIT_APPROVAL_FIXTURE=approved \
+          SUPERVISOR_RPC_BIND_HEAD=f4eb835dd08c43e8143a5ee981e1dc2159825698 \
+            pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
           echo '[verify] diff check'
           git diff --check
           VERIFY
