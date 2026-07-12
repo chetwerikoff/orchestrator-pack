@@ -156,6 +156,7 @@ jobs:
           PR_SCOPE_REPO_ROOT: ${{ github.workspace }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           SCOPE_GUARD_DEGRADED_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'scope-guard-degraded') }}
           GH_TOKEN: ${{ github.token }}
         run: |
