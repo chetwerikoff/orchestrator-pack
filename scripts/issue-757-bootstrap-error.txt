@@ -7,4 +7,4 @@ Traceback (most recent call last):
   File "/usr/lib/python3.12/pathlib.py", line 1015, in open
     return io.open(self, mode, buffering, encoding, errors, newline)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: 'scripts/.issue-757-bootstrap.part3'
+FileNotFoundError: [Errno 2] No such file or directory: 'scripts/.issue-757-bootstrap.part4'
