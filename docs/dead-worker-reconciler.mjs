@@ -1032,6 +1032,9 @@ export function planDeadWorkerReconcile(input = {}) {
     if (!sessionId || !hasAssignedTask(session)) {
       continue;
     }
+    if (input.livenessContext && normalizeString(session?.status) === 'absent') {
+      continue;
+    }
     const evidence = input.livenessContext
       ? classifyWorkerLivenessEvidence(session, input.livenessContext)
       : classifyWorkerDeathEvidence(session, input.aoEvents, nowMs, { respawnPolicy: input.respawnPolicy });

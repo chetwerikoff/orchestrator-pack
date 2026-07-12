@@ -809,7 +809,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     );
   });
 
-  it('uses livenessContext for absent sessions and escalates unreadable kill record surface as audit-only', () => {
+  it('does not let absent sessions authorize liveness-based recovery and still escalates unreadable kill record surface as audit-only', () => {
     const plan = planDeadWorkerReconcile(enabledPlanInput({
       sessions: [],
       absentSessions: [{ sessionId: 'opk-688-absent', issueNumber: 688, status: 'absent' }],
@@ -820,7 +820,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         evaluationNowMs: 1_780_000_105_500,
       },
     }));
-    expect(plan.actions.some((a) => a.type === 'attempt_started' && a.sessionId === 'opk-688-absent')).toBe(true);
+    expect(plan.actions.some((a) => a.sessionId === 'opk-688-absent')).toBe(false);
 
     const unreadable = planDeadWorkerReconcile(enabledPlanInput({
       sessions: [{ sessionId: 'opk-688-unreadable', issueNumber: 688, status: 'terminated' }],
@@ -902,11 +902,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(src).not.toMatch(/aoEvents =/);
   });
 
-  it('pre-kill revalidation accepts attempt_started actions for absent sessions', () => {
-    const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-live-'));
-    const livePayloadPath = join(tempDir, 'live-payload.json');
-    const actionPath = join(tempDir, 'action.json');
-    const bootstrapPath = join(repoRoot, 'scripts', `.tmp-dead-worker-prekill-${Date.now()}.ps1`);
+  it('absent sessions no-op even when stale liveness rows exist', () => {
     const absentSession = { sessionId: 'opk-688-absent-prekill', issueNumber: 688, status: 'absent' };
     const plan = planDeadWorkerReconcile(enabledPlanInput({
       sessions: [],
@@ -918,45 +914,6 @@ describe('dead-worker-reconciler (Issue #593)', () => {
         evaluationNowMs: 1_780_000_105_500,
       },
     }));
-    const action = plan.actions.find((candidate) => candidate.type === 'attempt_started' && candidate.sessionId === absentSession.sessionId);
-    expect(action).toBeTruthy();
-    writeFileSync(actionPath, JSON.stringify(action));
-    const reconcileSource = readFileSync(join(repoRoot, 'scripts/dead-worker-reconcile.ps1'), 'utf8');
-    writeFileSync(
-      bootstrapPath,
-      [
-        reconcileSource.replace(/\$intervalMs =[\s\S]*$/, ''),
-        `$env:AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE = '${livePayloadPath.replace(/'/g, "''")}'`,
-        `$action = Get-Content -LiteralPath '${actionPath.replace(/'/g, "''")}' -Raw | ConvertFrom-Json`,
-        '$result = Test-DeadWorkerPreKillRevalidation -Action $action',
-        '$result | ConvertTo-Json -Depth 10 -Compress',
-      ].join('\n'),
-    );
-    writeFileSync(livePayloadPath, JSON.stringify({
-      sessions: [],
-      absentSessions: [absentSession],
-      workerStatusStore: {
-        schemaVersion: 1,
-        records: {
-          [absentSession.sessionId]: compatibleWorkerStatusRow(absentSession.sessionId),
-        },
-      },
-      livenessContext: {
-        osLiveness: { [absentSession.sessionId]: 'pane-gone' },
-        sanctionedKillSurface: { healthy: true, records: [] },
-      },
-    }));
-    try {
-      const output = execFileSync(
-        'pwsh',
-        ['-NoProfile', '-File', bootstrapPath],
-        { cwd: repoRoot, encoding: 'utf8' },
-      );
-      const result = JSON.parse(output);
-      expect(result.ok).toBe(true);
-      expect(result.session.sessionId).toBe(absentSession.sessionId);
-    } finally {
-      rmSync(bootstrapPath, { force: true });
-    }
+    expect(plan.actions.some((candidate) => candidate.sessionId === absentSession.sessionId)).toBe(false);
   });
 });
