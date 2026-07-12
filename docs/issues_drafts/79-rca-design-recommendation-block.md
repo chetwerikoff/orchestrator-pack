@@ -66,7 +66,9 @@ invariants:
      task/problem;
   3. a **services/components architecture sketch** of the proposed solution;
   4. **at least three implementation options, each with an explicit trade-off
-     assessment** (not three restatements of one approach);
+     assessment** (not three restatements of one approach).
+     **State the artifact's stakes once, up front: its blast radius, reversibility,
+     and what breaks on failure.**
   5. for a **decision / state-machine / event-ordering / concurrency / idempotency** cause,
      a **full-class scenario enumeration** — the decision's input dimensions × their
      values, the **sibling cells that share the root cause** or are at risk, and the
