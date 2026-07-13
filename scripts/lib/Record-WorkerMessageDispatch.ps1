@@ -15,12 +15,30 @@ $DispatchCli = Join-Path $PackRoot 'docs/worker-message-dispatch-observe.mjs'
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 
+function Get-WorkerMessageDispatchStateRoot {
+    if ($env:AO_WAKE_SUPERVISOR_STATE_DIR) {
+        return $env:AO_WAKE_SUPERVISOR_STATE_DIR.Trim()
+    }
+
+    $userHome = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
+    $stateBase = if (-not [string]::IsNullOrWhiteSpace($env:XDG_STATE_HOME)) {
+        $env:XDG_STATE_HOME
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $env:LOCALAPPDATA
+    }
+    else {
+        Join-Path $userHome '.local' 'state'
+    }
+
+    return Join-Path $stateBase 'orchestrator-pack-wake-supervisor'
+}
+
 function Get-WorkerMessageDispatchJournalPath {
     if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
         return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
     }
-    . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
-    $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
+    $stateRoot = Get-WorkerMessageDispatchStateRoot
     if (-not (Test-Path -LiteralPath $stateRoot)) {
         New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
     }
