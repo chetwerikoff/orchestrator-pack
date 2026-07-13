@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
+import { CHILD_PROCESS_MODULES, isChildProcessImport } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
-const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
 const RAW_APIS = new Set([
   'spawn',
   'spawnSync',
@@ -41,33 +41,6 @@ interface ImportBindings {
 
 function moduleText(node: ts.Expression | undefined): string | undefined {
   return node && ts.isStringLiteralLike(node) ? node.text : undefined;
-}
-
-function unwrapExpression(node: ts.Expression | undefined): ts.Expression | undefined {
-  let current = node;
-  while (current && (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current))) {
-    current = current.expression;
-  }
-  return current;
-}
-
-function isRequireCall(node: ts.Expression | undefined): node is ts.CallExpression {
-  return !!node
-    && ts.isCallExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === 'require';
-}
-
-function isImportCall(node: ts.Expression | undefined): node is ts.CallExpression {
-  return !!node
-    && ts.isCallExpression(node)
-    && node.expression.kind === ts.SyntaxKind.ImportKeyword;
-}
-
-function isChildProcessImport(node: ts.Expression | undefined): boolean {
-  const expression = unwrapExpression(node);
-  return (isRequireCall(expression) || isImportCall(expression))
-    && CHILD_PROCESS_MODULES.has(moduleText(expression.arguments[0]) ?? '');
 }
 
 function importBindings(sourceFile: ts.SourceFile): ImportBindings {
@@ -108,13 +81,6 @@ function importBindings(sourceFile: ts.SourceFile): ImportBindings {
     visit(statement);
   }
   return { named, namespaces };
-}
-
-function isChildProcessRequire(node: ts.Expression): boolean {
-  return ts.isCallExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === 'require'
-    && CHILD_PROCESS_MODULES.has(moduleText(node.arguments[0]) ?? '');
 }
 
 function rawApi(call: ts.CallExpression, bindings: ImportBindings): string | undefined {

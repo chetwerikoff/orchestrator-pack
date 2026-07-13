@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
+import { CHILD_PROCESS_MODULES, isChildProcessImport } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const TEST_SUFFIXES = ['.test.ts', '.test.mts', '.test.cts', '.test.js', '.test.mjs', '.test.cjs'];
-const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
 const CHILD_APIS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']);
 const PWSH_EXECUTABLE = /^(?:pwsh|powershell)(?:\.exe)?$/i;
 
@@ -34,33 +34,6 @@ function literalText(node: ts.Expression | undefined): string | undefined {
   if (!node) return undefined;
   if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
   return undefined;
-}
-
-function unwrapExpression(node: ts.Expression | undefined): ts.Expression | undefined {
-  let current = node;
-  while (current && (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current))) {
-    current = current.expression;
-  }
-  return current;
-}
-
-function isRequireCall(node: ts.Expression | undefined): node is ts.CallExpression {
-  return !!node
-    && ts.isCallExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === 'require';
-}
-
-function isImportCall(node: ts.Expression | undefined): node is ts.CallExpression {
-  return !!node
-    && ts.isCallExpression(node)
-    && node.expression.kind === ts.SyntaxKind.ImportKeyword;
-}
-
-function isChildProcessImport(node: ts.Expression | undefined): boolean {
-  const expression = unwrapExpression(node);
-  return (isRequireCall(expression) || isImportCall(expression))
-    && CHILD_PROCESS_MODULES.has(literalText(expression.arguments[0]) ?? '');
 }
 
 function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
@@ -114,13 +87,6 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
   }
 
   return { named, namespaces, importsSharedPwshHelper, stringConstants };
-}
-
-function isChildProcessRequire(node: ts.Expression): boolean {
-  return ts.isCallExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === 'require'
-    && CHILD_PROCESS_MODULES.has(literalText(node.arguments[0]) ?? '');
 }
 
 function childApi(call: ts.CallExpression, bindings: ChildBindings): string | undefined {
