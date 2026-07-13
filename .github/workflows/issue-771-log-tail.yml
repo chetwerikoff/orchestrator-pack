@@ -3,19 +3,19 @@ name: issue-771-focused-diagnostic
 on:
   push:
     branches:
-      - agent/issue-771-powershell-scope
+      - agent/issue-771-probe-loader
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   diagnose:
-    if: ${{ !contains(github.event.head_commit.message, '[issue771-focused-result]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: agent/issue-771-powershell-scope
+          fetch-depth: 1
       - name: Install Pester
         shell: pwsh
         run: ./scripts/install-pester-ci.ps1
@@ -26,22 +26,16 @@ jobs:
           $config.Run.Path = './tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
           $config.Run.PassThru = $true
           $config.Output.Verbosity = 'Detailed'
-          $result = Invoke-Pester -Configuration $config 2>&1 | Tee-Object -FilePath scripts/issue-771-pester-result.log
-          if ($result -is [array]) {
-            $summary = @($result | Where-Object { $_.PSObject.Properties.Name -contains 'FailedCount' })[-1]
-          }
-          else {
-            $summary = $result
-          }
+          $output = @(Invoke-Pester -Configuration $config 2>&1)
+          $output | Out-File -LiteralPath issue-771-pester-result.log -Encoding utf8
+          $summary = @($output | Where-Object { $_.PSObject.Properties.Name -contains 'FailedCount' })[-1]
           if ($summary) {
-            "SUMMARY total=$($summary.TotalCount) passed=$($summary.PassedCount) failed=$($summary.FailedCount) skipped=$($summary.SkippedCount)" | Add-Content scripts/issue-771-pester-result.log
+            "SUMMARY total=$($summary.TotalCount) passed=$($summary.PassedCount) failed=$($summary.FailedCount) skipped=$($summary.SkippedCount)" | Add-Content issue-771-pester-result.log
           }
-      - name: Publish focused result
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts/issue-771-pester-result.log
-          git commit -m '[issue771-focused-result] Capture focused Pester result'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          exit 0
+      - name: Upload focused result
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-771-pester-result
+          path: issue-771-pester-result.log
+          if-no-files-found: error
