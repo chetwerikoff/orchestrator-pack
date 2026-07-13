@@ -1,141 +1,102 @@
 #!/usr/bin/env node
-/**
- * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
- * (Issue #695).
- */
 import { appendFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import {
-  formatOversizedGuardFailures,
-  topologyArtifactPath,
-} from './lib/vitest-heavy-topology.mjs';
-import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
-import {
-  measurePreTopologyFiles,
-  resolvePreTopologyMeasurementTargets,
-  shouldMeasurePreTopology,
-} from './lib/vitest-pre-topology-measurement.mjs';
-import {
-  normalizePrScopeMode,
-  parseChangedPathManifestFromEnv,
-} from './lib/vitest-pr-scoped-selection.mjs';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const defaultRepoRoot = join(scriptDir, '..');
+const repoRoot = process.cwd();
+const runner = join(repoRoot, 'scripts', 'run-vitest-with-harness.mjs');
+const files = [
+  'plugins/ao-task-declaration/tests/declare.test.ts',
+  'scripts/audit-jsonl-retention.test.ts',
+  'scripts/autonomous-worker-nudge-boundary.test.ts',
+  'scripts/command-runtime-bootstrap.test.ts',
+  'scripts/github-fleet-cache-coalesce.test.ts',
+  'scripts/orchestrator-wake-supervisor-orphan-identity.test.ts',
+  'scripts/pr-scope-check.test.ts',
+  'scripts/review-head-ready.test.ts',
+  'scripts/review-start-preflight-shield.integration.test.ts',
+  'scripts/review-start-scoped-gh-json-capture.test.ts',
+  'scripts/spawn-worktree-branch-operand-binding.test.ts',
+  'scripts/worker-iteration-cycle.test.ts',
+];
+const MAX_CAPTURE = 160_000;
+const TIMEOUT_MS = 120_000;
 
-function parseArgs(argv) {
-  const flags = new Set(argv.slice(2));
-  return {
-    ghaOutput: flags.has('--gha-output'),
-    failOnGuard: !flags.has('--skip-oversized-guard'),
-    repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
-  };
+function bounded(current, chunk) {
+  const next = current + String(chunk);
+  return next.length > MAX_CAPTURE ? next.slice(-MAX_CAPTURE) : next;
 }
 
-function writeGhaOutput(topology) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
-  }
-  appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
-  appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
-  );
+function runFile(file) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [runner, 'run', file, '--reporter=verbose', '--maxWorkers=1'], {
+      cwd: repoRoot,
+      env: { ...process.env, CI: 'true', OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    const startedAt = Date.now();
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout = bounded(stdout, chunk); });
+    child.stderr.on('data', (chunk) => { stderr = bounded(stderr, chunk); });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (process.platform === 'win32') child.kill('SIGKILL');
+        else process.kill(-child.pid, 'SIGKILL');
+      } catch {}
+    }, TIMEOUT_MS);
+    const finish = (status, signal, error = null) => {
+      clearTimeout(timer);
+      resolve({
+        file,
+        status,
+        signal,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+        error,
+        stdout,
+        stderr,
+      });
+    };
+    child.once('error', (error) => finish(null, null, error.message));
+    child.once('close', (status, signal) => finish(status, signal));
+  });
 }
 
-const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const rawManifest = parseChangedPathManifestFromEnv();
-const changedPathManifest = rawManifest
-  ? {
-      ...rawManifest,
-      entries: (rawManifest.entries ?? []).filter((entry) => entry.status !== 'D'),
-      entryCount: (rawManifest.entries ?? []).filter((entry) => entry.status !== 'D').length,
+async function runPool(items, concurrency) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await runFile(items[index]);
     }
-  : null;
-const changedFiles = (changedPathManifest?.entries ?? [])
-  .map((entry) => entry.path)
-  .filter((path) => path.endsWith('.test.ts'));
-const laneOptions = {
-  changedFiles,
-  changedPathManifest,
-  prScopeMode: normalizePrScopeMode(),
-};
-
-let result = buildLanePlan(repoRoot, laneOptions);
-let diagnostic = null;
-if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
-  const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
-  if (targets.length > 0) {
-    try {
-      const measurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
-      result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements: measurements });
-    } catch (error) {
-      diagnostic = {
-        targets,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : null,
-      };
-    }
   }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
 }
 
-if (diagnostic) {
-  const artifact = {
-    heavyShardCount: 1,
-    heavyShardMatrix: [1],
-    fallbackClassification: 'pre-topology-measurement-failed',
-    discovered: [],
-    fullDiscovered: [],
-    heavyFiles: [],
-    lightFiles: [],
-    postMergeWallclockFiles: [],
-    parkedFiles: [],
-    heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
-    measurementDiagnostic: diagnostic,
-  };
-  writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
-  console.error(JSON.stringify(artifact));
-  process.exit(1);
-}
-
-if (!result.ok) {
-  console.error(result.errors.join('\n'));
-  process.exit(1);
-}
-
-const guardFailures = formatOversizedGuardFailures(result);
-if (failOnGuard && guardFailures.length > 0) {
-  console.error(guardFailures.join('\n'));
-  process.exit(1);
-}
-
+const results = await runPool(files, 6);
 const artifact = {
-  ...result.topology,
-  discovered: result.discovered,
-  fullDiscovered: result.fullDiscovered ?? result.discovered,
-  heavyFiles: result.heavy,
-  lightFiles: result.light,
-  postMergeWallclockFiles: result.postMergeWallclock,
-  parkedFiles: result.parked,
-  heavyShards: result.heavyShards,
+  schemaVersion: 1,
+  diagnostic: 'issue-752-shard6-after-optimization',
+  head: process.env.GITHUB_SHA ?? null,
+  heavyShardCount: 0,
+  heavyShardMatrix: [],
+  fallbackClassification: 'diagnostic',
+  results,
 };
-writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
-
-if (result.topology.underProvisioned) {
-  console.warn(
-    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
-  );
+writeFileSync(join(repoRoot, 'scripts', 'vitest-heavy-topology.plan.json'), `${JSON.stringify(artifact, null, 2)}\n`);
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, 'heavy_shard_count=0\nheavy_shard_matrix=[]\nfallback_classification=diagnostic\n');
 }
-if (result.topology.fallbackClassification === 'fixed-fallback') {
-  console.warn(
-    `[WARN] heavy shard topology using fixed fallback count ${result.topology.heavyShardCount} (${result.topology.weightInputReason})`,
-  );
-}
-
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
-console.log(JSON.stringify(artifact));
+console.log(JSON.stringify({
+  diagnostic: artifact.diagnostic,
+  results: results.map(({ file, status, timedOut, durationMs }) => ({ file, status, timedOut, durationMs })),
+}));
