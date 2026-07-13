@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { appendFileSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const repoRoot = process.cwd();
@@ -35,50 +35,41 @@ const shard6 = [
 ];
 
 function run(name, command, args, extraEnv = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd: repoRoot,
-      env: { ...process.env, ...extraEnv },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    const timer = setTimeout(() => child.kill('SIGKILL'), 8 * 60 * 1000);
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      resolve({ name, status: null, signal: null, error: error.message, stdout, stderr });
-    });
-    child.on('close', (status, signal) => {
-      clearTimeout(timer);
-      resolve({ name, status, signal, error: null, stdout, stderr });
-    });
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    env: { ...process.env, ...extraEnv },
+    encoding: 'utf8',
+    timeout: 90_000,
+    killSignal: 'SIGKILL',
+    maxBuffer: 32 * 1024 * 1024,
   });
+  return {
+    name,
+    status: result.status,
+    signal: result.signal,
+    timedOut: result.error?.code === 'ETIMEDOUT',
+    error: result.error?.message ?? null,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
 }
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const [lint, one, six] = await Promise.all([
-  run('self-architect', 'pwsh', [
-    '-NoProfile', '-File', join(repoRoot, 'scripts', 'lint-self-architect.ps1'),
-    '-Strict', '-BaseRef', base, '-HeadRef', head,
-  ]),
-  run('heavy-shard-1', npm, ['test', '--', ...shard1, '--reporter=verbose'], {
-    CI: 'true', VITEST_HEAVY_SHARD: '1', OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
-  }),
-  run('heavy-shard-6', npm, ['test', '--', ...shard6, '--reporter=verbose'], {
-    CI: 'true', VITEST_HEAVY_SHARD: '6', OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
-  }),
+const lint = run('self-architect', 'pwsh', [
+  '-NoProfile', '-File', join(repoRoot, 'scripts', 'lint-self-architect.ps1'),
+  '-Strict', '-BaseRef', base, '-HeadRef', head,
 ]);
+const one = run('heavy-shard-1', npm, ['test', '--', ...shard1, '--reporter=verbose'], {
+  CI: 'true', VITEST_HEAVY_SHARD: '1', OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+});
+const six = run('heavy-shard-6', npm, ['test', '--', ...shard6, '--reporter=verbose'], {
+  CI: 'true', VITEST_HEAVY_SHARD: '6', OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+});
 
-const payload = {
-  schemaVersion: 1,
-  diagnostic: 'issue-752-lint-and-heavy-shards',
-  runs: [lint, one, six],
-};
-writeFileSync(join(repoRoot, 'scripts', 'vitest-heavy-topology.plan.json'), `${JSON.stringify(payload, null, 2)}\n`);
+writeFileSync(
+  join(repoRoot, 'scripts', 'vitest-heavy-topology.plan.json'),
+  `${JSON.stringify({ schemaVersion: 1, diagnostic: 'issue-752-lint-and-heavy-shards', runs: [lint, one, six] }, null, 2)}\n`,
+);
 if (process.env.GITHUB_OUTPUT) {
   appendFileSync(process.env.GITHUB_OUTPUT, 'heavy_shard_count=0\nheavy_shard_matrix=[]\nfallback_classification=false\n');
 }
