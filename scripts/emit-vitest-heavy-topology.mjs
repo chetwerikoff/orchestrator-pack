@@ -28,7 +28,7 @@ function runProbe([name, file]) {
     const timeoutCommand = process.platform === 'win32' ? npm : 'timeout';
     const timeoutArgs = process.platform === 'win32'
       ? ['test', '--', file, '--reporter=verbose']
-      : ['--signal=TERM', '--kill-after=10s', '150s', npm, 'test', '--', file, '--reporter=verbose'];
+      : ['--signal=TERM', '--kill-after=8s', '60s', npm, 'test', '--', file, '--reporter=verbose'];
     const child = spawn(timeoutCommand, timeoutArgs, {
       cwd: repoRoot,
       env: {
@@ -44,12 +44,13 @@ function runProbe([name, file]) {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = appendBounded(stderr, chunk); });
-    child.on('error', (error) => {
-      resolve({ name, file, status: null, signal: null, error: error.message, stdout, stderr });
-    });
-    child.on('close', (status, signal) => {
-      resolve({ name, file, status, signal, error: null, stdout, stderr });
-    });
+    const finish = (status, signal, error = null) => {
+      const result = { name, file, status, signal, error, stdout, stderr };
+      console.log(JSON.stringify({ probe: name, status, signal, error }));
+      resolve(result);
+    };
+    child.once('error', (error) => finish(null, null, error.message));
+    child.once('close', (status, signal) => finish(status, signal));
   });
 }
 
@@ -67,7 +68,7 @@ async function runPool(items, concurrency) {
   return results;
 }
 
-const results = await runPool(probes, 3);
+const results = await runPool(probes, 5);
 const artifact = {
   schemaVersion: 1,
   diagnostic: 'issue-752-common-ci-failure-isolation',
