@@ -6,8 +6,8 @@ import {
   parseDaemonStatusCapture,
   type CaptureManifest,
   type DaemonStatusCapture,
-} from './artifact-contracts.ts';
-import { JsonContractError } from './json-contract.ts';
+} from '#opk-kernel/artifact-contracts';
+import { JsonContractError } from '#opk-kernel/json-contract';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 const manifestPath = resolve(repoRoot, 'tests/external-output-references/capture-manifest.json');
