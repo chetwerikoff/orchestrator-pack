@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/issue-800-typescript-foundation
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
