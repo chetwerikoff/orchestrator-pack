@@ -1,4 +1,4 @@
-[vitest-lane-timing] heavy shard 5/9 elapsed=136.31s weight_ms=860000
+[vitest-lane-timing] supervisor RPC evidence pass 3/3 elapsed=381.12s binding_sha=b30af5b7e716c5d93ab8db81cb8a8ae65f7688b2
  Test Files  4 passed (4)
       Tests  26 passed (26)
 [vitest-heavy] clean run — no worker RPC anomalies
