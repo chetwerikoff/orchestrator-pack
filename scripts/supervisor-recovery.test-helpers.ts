@@ -428,13 +428,41 @@ export async function readMarker(
       continue;
     }
     try {
-      return JSON.parse(fs.readFileSync(markerPath, 'utf8')) as WakeMarker;
+      const raw = fs.readFileSync(markerPath, 'utf8').trim();
+      if (!raw) {
+        await sleepMs(50);
+        continue;
+      }
+      return JSON.parse(raw) as WakeMarker;
     } catch (error) {
       lastError = error;
       await sleepMs(50);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(`timed out reading marker ${role}`);
+  throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
+}
+
+export function countLogMatches(log: string, pattern: RegExp): number {
+  return (log.match(pattern) ?? []).length;
+}
+
+export function readChildRecovery(
+  stateDir: string,
+  childId: string,
+): Record<string, unknown> {
+  const statePath = path.join(stateDir, 'state.json');
+  if (!fs.existsSync(statePath)) {
+    return {};
+  }
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
+    childRecovery?: Record<string, Record<string, unknown>>;
+  };
+  return state.childRecovery?.[childId] ?? {};
+}
+
+export function readChildPid(stateDir: string, childId: string): number {
+  const pidPath = path.join(stateDir, `${childId}.pid`);
+  return Number(fs.readFileSync(pidPath, 'utf8').trim());
 }
 
 export function readSupervisorLog(stateDir: string): string {
@@ -472,15 +500,16 @@ export function isAlive(pid: number): boolean {
 
 export async function waitForProcessesStopped(
   pids: number[],
-  timeoutMs: number,
+  timeoutMs = 25_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (pids.every((pid) => !isAlive(pid))) {
       return;
     }
-    await sleepMs(50);
+    await sleepMs(SUPERVISOR_TEST_POLL_INTERVAL_MS);
   }
+  throw new Error(`timed out waiting for processes to stop: ${pids.join(', ')}`);
 }
 
 export async function stopSupervisorChild(
@@ -507,4 +536,21 @@ export async function stopSupervisorChild(
   runSupervisor(['-Action', 'Stop', '-StateDir', stateDir], {
     AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
   });
+}
+
+export function runPwsh(script: string): { stdout: string; stderr: string; status: number | null } {
+  const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  return {
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    status: result.status,
+  };
+}
+
+export function psString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
