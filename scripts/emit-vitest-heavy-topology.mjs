@@ -14,22 +14,37 @@ const files = [
   'scripts/orchestrator-wake-supervisor-empty-pid.test.ts',
 ];
 
-const child = spawnSync('npm', ['test', '--', ...files, '--reporter=default'], {
-  cwd: repoRoot,
-  encoding: 'utf8',
-  timeout: 180_000,
-  maxBuffer: 32 * 1024 * 1024,
-  env: {
-    ...process.env,
-    CI: 'true',
-    OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
-  },
-});
-const output = `${child.stdout ?? ''}\n${child.stderr ?? ''}`.trim();
+function runFile(file) {
+  const child = spawnSync(
+    'timeout',
+    ['--kill-after=5s', '75s', 'npm', 'test', '--', file, '--reporter=default'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 90_000,
+      maxBuffer: 32 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CI: 'true',
+        OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+      },
+    },
+  );
+  const output = `${child.stdout ?? ''}\n${child.stderr ?? ''}`.trim();
+  return {
+    file,
+    status: child.status,
+    signal: child.signal,
+    error: child.error?.message ?? null,
+    output,
+  };
+}
+
+const results = files.map(runFile);
 const artifact = {
   heavyShardCount: 1,
   heavyShardMatrix: [1],
-  fallbackClassification: 'rpc-suite-diagnostic',
+  fallbackClassification: 'supervisor-suite-isolated-diagnostic',
   discovered: files,
   fullDiscovered: files,
   heavyFiles: [],
@@ -37,13 +52,7 @@ const artifact = {
   postMergeWallclockFiles: files,
   parkedFiles: [],
   heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
-  supervisorSuiteDiagnostic: {
-    status: child.status,
-    signal: child.signal,
-    error: child.error?.message ?? null,
-    command: `CI=true npm test -- ${files.join(' ')} --reporter=default`,
-    output,
-  },
+  supervisorSuiteDiagnostics: results,
 };
 writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
 if (process.argv.includes('--gha-output')) {
@@ -51,6 +60,6 @@ if (process.argv.includes('--gha-output')) {
   if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
   appendFileSync(outputPath, 'heavy_shard_count=1\n');
   appendFileSync(outputPath, 'heavy_shard_matrix=[1]\n');
-  appendFileSync(outputPath, 'fallback_classification=rpc-suite-diagnostic\n');
+  appendFileSync(outputPath, 'fallback_classification=supervisor-suite-isolated-diagnostic\n');
 }
-console.log(JSON.stringify(artifact));
+console.log(JSON.stringify({ ...artifact, supervisorSuiteDiagnostics: results.map(({ file, status, signal, error, output }) => ({ file, status, signal, error, output: `${output.split(/\r?\n/).length} lines captured in artifact` })) }));
