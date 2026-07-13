@@ -26,23 +26,40 @@ jobs:
           set -euo pipefail
           gh issue view 800 --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/issue-800.md
           python - <<'PY'
+          import re
           from pathlib import Path
 
           path = Path('/tmp/issue-800.md')
           body = path.read_text(encoding='utf-8')
-          old = '''```allowed-roots
-          scripts/
-          tests/
-          .github/workflows/
-          '''
-          new = '''```allowed-roots
-          scripts/**
-          tests/**
-          .github/workflows/**
-          '''
-          count = body.count(old)
-          if count != 1:
-              raise SystemExit(f'expected exactly one allowed-roots directory block, found {count}')
-          path.write_text(body.replace(old, new, 1), encoding='utf-8')
+          pattern = re.compile(r'(```allowed-roots\s*\n)(.*?)(\n```)', re.DOTALL)
+          matches = list(pattern.finditer(body))
+          if len(matches) != 1:
+              raise SystemExit(f'expected exactly one allowed-roots block, found {len(matches)}')
+
+          block = matches[0].group(2)
+          pairs = {
+              'scripts/': 'scripts/**',
+              'tests/': 'tests/**',
+              '.github/workflows/': '.github/workflows/**',
+          }
+          lines = block.splitlines()
+          changed = 0
+          seen = set()
+          for index, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped in pairs:
+                  prefix = line[:len(line) - len(line.lstrip())]
+                  lines[index] = prefix + pairs[stripped]
+                  changed += 1
+                  seen.add(stripped)
+              elif stripped in pairs.values():
+                  seen.add(next(key for key, value in pairs.items() if value == stripped))
+
+          if seen != set(pairs):
+              raise SystemExit(f'allowed-roots directory entries missing or ambiguous: seen={sorted(seen)}')
+          replacement = matches[0].group(1) + '\n'.join(lines) + matches[0].group(3)
+          updated = body[:matches[0].start()] + replacement + body[matches[0].end():]
+          path.write_text(updated, encoding='utf-8')
+          print(f'updated {changed} allowed-roots directory entries')
           PY
           gh issue edit 800 --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue-800.md
