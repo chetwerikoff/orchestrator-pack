@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, watch } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
   assertHarnessWritePathSafe,
   canonicalizeStorePath,
@@ -118,7 +118,7 @@ export function preflightPowerShellInvocation(argv, env = process.env) {
         assertPowerShellCandidateSafe(candidate, 'pwsh-command-write', env);
       }
       for (const store of resolvedLiveStores(env)) {
-        if (command.includes(store.defaultPath) || command.includes(basename(store.defaultPath))) {
+        if (command.includes(store.defaultPath)) {
           assertHarnessWritePathSafe(store.defaultPath, 'pwsh-command-write', env);
         }
       }
