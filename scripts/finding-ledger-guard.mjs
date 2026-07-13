@@ -93,17 +93,14 @@ export function stripMarkdownFencedCodeBlocks(text) {
  * exemption.
  */
 export function maskDelimitedMarkdownQuotes(text) {
-  let masked = text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, (match) =>
-    match.replace(/[^\n]/g, ' '),
-  );
-  masked = masked.replace(/`[^`\n]+`/g, (match) => ' '.repeat(match.length));
-  masked = masked.replace(/^>[^\n]*(?:\n|$)/gm, (match) =>
-    match.replace(/[^\n]/g, ' '),
-  );
-  masked = masked.replace(/(["'])(?:\\.|(?!\1)[^\\\n])+\1/g, (match) =>
-    ' '.repeat(match.length),
-  );
-  return masked;
+  const preserveLines = (match) => match.replace(/[^\n]/g, ' ');
+  const blankSpan = (match) => ' '.repeat(match.length);
+  return [
+    [ /^```[^\n]*\n[\s\S]*?^```\s*$/gm, preserveLines ],
+    [ /`[^`\n]+`/g, blankSpan ],
+    [ /^>[^\n]*(?:\n|$)/gm, preserveLines ],
+    [ /(["'])(?:\\.|(?!\1)[^\\\n])+\1/g, blankSpan ],
+  ].reduce((current, [pattern, replacer]) => current.replace(pattern, replacer), text);
 }
 
 function hasEchoedReviewContext(text) {
