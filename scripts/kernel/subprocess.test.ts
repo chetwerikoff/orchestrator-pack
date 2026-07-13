@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runProcess } from './subprocess.ts';
+import { runProcess } from '#opk-kernel/subprocess';
 
 const cleanupPids = new Set<number>();
 
