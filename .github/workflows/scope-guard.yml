@@ -262,7 +262,7 @@ jobs:
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     outputs:
       heavy_shard_count: ${{ steps.plan.outputs.heavy_shard_count }}
       heavy_shard_matrix: ${{ steps.plan.outputs.heavy_shard_matrix }}
