@@ -1,76 +1,18 @@
 #requires -Version 5.1
-<#
-.SYNOPSIS
-  Stale-wording and manifest scan for Cursor read-delegation policy pointers (Issue #309).
-#>
-param(
-    [string]$RepoRoot
-)
-
-. (Join-Path $PSScriptRoot 'lib/Read-DelegationCheck-Common.ps1')
 $ErrorActionPreference = 'Stop'
-$RepoRoot = Resolve-ReadDelegationCheckRepoRoot -RepoRoot $RepoRoot -ScriptRoot $PSScriptRoot
-
-$manifestPath = Join-Path $RepoRoot '.cursor/rules/read-delegation-policy-manifest.json'
-if (-not (Test-Path -LiteralPath $manifestPath)) {
-    Write-Host '[FAIL] missing committed Cursor read-delegation policy manifest'
-    exit 1
-}
-
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$failures = [System.Collections.Generic.List[string]]::new()
-
-$stalePatterns = @($manifest.stalePatterns)
-$manifestedRules = @($manifest.policyBearingCursorRules)
-
-foreach ($rel in $manifestedRules) {
-    $path = Join-Path $RepoRoot $rel
-    if (-not (Test-Path -LiteralPath $path)) {
-        $failures.Add("manifested Cursor rule missing: $rel")
-        continue
-    }
-    $text = Get-Content -LiteralPath $path -Raw
-    foreach ($pattern in $stalePatterns) {
-        if ($text -match [regex]::Escape($pattern)) {
-            $failures.Add("$rel contains stale read-delegation wording: $pattern")
-        }
-    }
-}
-
-$rulesDir = Join-Path $RepoRoot '.cursor/rules'
-$policyMarkers = @(
-    'Coworker CLI delegation',
-    'coworker ask',
-    'delegate I/O, keep reasoning'
+$Root = Split-Path -Parent $PSScriptRoot
+& (Join-Path $PSScriptRoot 'install-pester-ci.ps1')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
+$config = New-PesterConfiguration
+$config.Run.Path = Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
+$config.Run.PassThru = $true
+$config.Filter.FullName = @(
+    '*keeps worker-status GitHub commands visible after lazy import returns*',
+    '*never latches an incomplete load as success or replays partial top-level effects*'
 )
-
-Get-ChildItem -LiteralPath $rulesDir -Filter '*.mdc' -File | ForEach-Object {
-    $rel = '.cursor/rules/' + $_.Name
-    if ($manifestedRules -contains $rel) {
-        return
-    }
-    $text = Get-Content -LiteralPath $_.FullName -Raw
-    foreach ($marker in $policyMarkers) {
-        if ($text -match [regex]::Escape($marker)) {
-            $failures.Add("unmanifested policy-bearing Cursor rule: $rel (marker: $marker)")
-            break
-        }
-    }
-}
-
-$canonical = Join-Path $RepoRoot 'AGENTS.md'
-$canonicalText = Get-Content -LiteralPath $canonical -Raw
-if ($canonicalText -notmatch 'index-coverage carve-out') {
-    $failures.Add('AGENTS.md missing index-coverage carve-out prose')
-}
-
-if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] read-delegation policy consistency:'
-    foreach ($item in $failures) {
-        Write-Host " - $item"
-    }
-    exit 1
-}
-
-Write-Host '[PASS] read-delegation Cursor policy pointers and manifest are consistent.'
+$config.Output.Verbosity = 'Detailed'
+$result = Invoke-Pester -Configuration $config
+Write-Host ("ISSUE771_LOADER_RESULT total={0} passed={1} failed={2} skipped={3}" -f $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
+if ($result.FailedCount -gt 0) { exit 1 }
 exit 0
