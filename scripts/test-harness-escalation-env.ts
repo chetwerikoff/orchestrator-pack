@@ -29,6 +29,7 @@ export function applyOpkVitestHarnessEscalationEnv(rootDir?: string): {
     ?? process.env.OPK_VITEST_HARNESS_ROOT
     ?? createHarnessRoot();
   const paths = applyOpkVitestHarnessEnv(root, process.env);
+  process.env.OPK_TESTMODE_LEASE_ROOT = join(paths.state, 'testmode-fleet-leases');
   return {
     root: paths.root,
     statePath: process.env.AO_ORCHESTRATOR_ESCALATION_STATE as string,
