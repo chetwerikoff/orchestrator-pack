@@ -28,6 +28,46 @@ jobs:
           path: target
           fetch-depth: 1
 
+      - name: Fix exact-line wake import anchor
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/publish-issue-771-fix.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def patch_wake(path: Path) -> None:
+              text = path.read_text(encoding="utf-8")
+              top_level = ". (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
+              cycle = ". (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')\\n"
+              local = "    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
+              if top_level not in text:
+                  text = replace_once(text, cycle, cycle + top_level, "wake top-level import")
+              if local in text:
+                  text = replace_once(text, local, "", "wake function-local import")
+              if text.count(top_level) != 1 or local in text:
+                  raise RuntimeError("wake import normalization failed")
+              path.write_text(text, encoding="utf-8")
+          '''
+          new = '''def patch_wake(path: Path) -> None:
+              text = path.read_text(encoding="utf-8")
+              top_level = ". (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')"
+              cycle = ". (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')\\n"
+              local = "    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
+              lines = text.splitlines()
+              if top_level not in lines:
+                  text = replace_once(text, cycle, cycle + top_level + "\\n", "wake top-level import")
+              if local in text:
+                  text = replace_once(text, local, "", "wake function-local import")
+              lines = text.splitlines()
+              if lines.count(top_level) != 1 or local in text:
+                  raise RuntimeError("wake import normalization failed")
+              path.write_text(text, encoding="utf-8")
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('publisher wake anchor block not found exactly once')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Capture atomic publisher result
         env:
           GH_TOKEN: ${{ github.token }}
