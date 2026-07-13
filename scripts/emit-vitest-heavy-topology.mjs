@@ -7,7 +7,7 @@ import { topologyArtifactPath } from './lib/vitest-heavy-topology.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || join(scriptDir, '..');
-const captureBindingSha = 'b82efaa61560d351b45b666205d44f42d3f0a108';
+const captureBindingSha = 'b30af5b7e716c5d93ab8db81cb8a8ae65f7688b2';
 const files = [
   'scripts/orchestrator-wake-supervisor-startup.test.ts',
   'scripts/orchestrator-wake-supervisor-lifecycle.test.ts',
