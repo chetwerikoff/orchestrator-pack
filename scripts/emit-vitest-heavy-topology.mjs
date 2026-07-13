@@ -68,7 +68,7 @@ let result = buildLanePlan(repoRoot, laneOptions);
 if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
   const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
   if (targets.length > 0) {
-    const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
+    const preTopologyMeasurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
     result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
   }
 }
