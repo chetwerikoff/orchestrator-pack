@@ -51,7 +51,7 @@ if (fileIndex >= 0 && bypassFile && argv[fileIndex + 1] && resolve(argv[fileInde
 }
 let childArgs = [...argv];
 const quote = (value) => \`'\${String(value).replaceAll("'", "''")}'\`;
-const prelude = \`. \${quote(helper)}; Enable-OpkVitestStoreIsolation;\`;
+const prelude = \`. \${quote(helper)}; $global:OpkVitestOriginalAssert = (Get-Command Assert-OpkVitestStorePathSafe -CommandType Function).ScriptBlock; function global:Assert-OpkVitestStorePathSafe { param([Parameter(Mandatory=$true)][string]$Path, [string]$Operation = 'write') if ($env:OPK_VITEST_HARNESS_ROOT) { $candidate = Resolve-OpkVitestCanonicalPath -Path $Path; $harnessRoot = Resolve-OpkVitestCanonicalPath -Path $env:OPK_VITEST_HARNESS_ROOT; if (Test-OpkVitestPathWithin -Candidate $candidate -Root $harnessRoot) { return } }; & $global:OpkVitestOriginalAssert -Path $Path -Operation $Operation }; Enable-OpkVitestStoreIsolation;\`;
 if (commandIndex >= 0) {
   const command = argv.slice(commandIndex + 1).join(' ');
   childArgs = [...argv.slice(0, commandIndex), '-Command', \`\${prelude} \${command}\`];
