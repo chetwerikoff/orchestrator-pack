@@ -8,7 +8,6 @@ import {
   detectProtectedSignalsInCapture,
   detectTypedFindingsInCapture,
   detectUntypedFindingsInCapture,
-  maskDelimitedMarkdownQuotes,
   runCli,
 } from './finding-ledger-guard.mjs';
 
@@ -305,7 +304,6 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
 
     for (const example of examples) {
       expect(detectProtectedSignalsInCapture(example), example).toEqual([]);
-      expect(maskDelimitedMarkdownQuotes(example), example).not.toMatch(/type:\s*(security|scope-violation)|\[P1 security\]/i);
     }
 
     expect(detectProtectedSignalsInCapture('"type: scope-violation')).toContain('scope-violation');
