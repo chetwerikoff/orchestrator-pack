@@ -1,12 +1,12 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   comparePowerShellBootBaseline,
   discoverPowerShellBootTests,
   makePowerShellBootBaseline,
   type PowerShellBootBaseline,
 } from '#opk-toolchain/powershell-child-policy';
+import { isDirectExecution, writeVersionOneBaseline } from '#opk-toolchain/baseline-io';
 
 export function checkPowerShellTestGrowth(repoRoot: string): string[] {
   const baselinePath = resolve(repoRoot, 'scripts/toolchain/powershell-child-tests.json');
@@ -21,18 +21,10 @@ export function checkPowerShellTestGrowth(repoRoot: string): string[] {
 export function writePowerShellTestBaseline(repoRoot: string): void {
   const path = resolve(repoRoot, 'scripts/toolchain/powershell-child-tests.json');
   const baseline = makePowerShellBootBaseline(discoverPowerShellBootTests(repoRoot));
-  const entries = baseline.entries.map((entry, index) =>
-    `    ${JSON.stringify(entry)}${index === baseline.entries.length - 1 ? '' : ','}`,
-  );
-  writeFileSync(path, ['{', '  "version": 1,', '  "entries": [', ...entries, '  ]', '}', ''].join('\n'));
+  writeVersionOneBaseline(path, baseline.entries);
 }
 
-function isMain(): boolean {
-  const entry = process.argv[1];
-  return entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href;
-}
-
-if (isMain()) {
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   const repoRoot = process.cwd();
   if (process.argv.includes('--write-baseline')) {
     writePowerShellTestBaseline(repoRoot);
