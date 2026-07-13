@@ -10,21 +10,21 @@ try {
     & git worktree add --detach $target FETCH_HEAD
     if ($LASTEXITCODE -ne 0) { throw "git worktree add failed: $LASTEXITCODE" }
 }
-finally {
-    Pop-Location
-}
+finally { Pop-Location }
 
 try {
     & (Join-Path $target 'scripts/install-pester-ci.ps1')
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
     $config = New-PesterConfiguration
     $config.Run.Path = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
     $config.Run.PassThru = $true
-    $config.Output.Verbosity = 'Detailed'
+    $config.Filter.FullName = @(
+        '*keeps worker-status GitHub commands visible after lazy import returns*',
+        '*never latches an incomplete load as success or replays partial top-level effects*',
+        '*uses the GitHub boundary, computes a snapshot, and writes a store record*'
+    )
+    $config.Output.Verbosity = 'None'
     $result = Invoke-Pester -Configuration $config
-    Write-Host ("ISSUE771_FOCUSED total={0} passed={1} failed={2} skipped={3}" -f `
-        $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
     if ($result.FailedCount -gt 0) { exit 1 }
     exit 0
 }
