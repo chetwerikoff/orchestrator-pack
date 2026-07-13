@@ -134,5 +134,60 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -- .nvmrc tsconfig.json package.json package-lock.json docs/migration_notes.md scripts/kernel scripts/toolchain scripts/typescript-smoke.ts
           git diff --cached --check
-          git commit -m "Establish TypeScript kernel and toolchain foundation"
-          git push origin HEAD:agent/issue-800-typescript-foundation
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          from urllib.request import Request, urlopen
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+
+          def post(endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+              request = Request(
+                  f'https://api.github.com/repos/{repo}{endpoint}',
+                  data=json.dumps(payload).encode('utf-8'),
+                  method='POST',
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              with urlopen(request) as response:
+                  return json.load(response)
+
+          parent = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          base_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          changed = subprocess.check_output(
+              ['git', 'diff', '--cached', '--name-only', '-z'],
+          ).decode('utf-8').split('\0')
+          entries: list[dict[str, str]] = []
+          for path in filter(None, changed):
+              index_line = subprocess.check_output(
+                  ['git', 'ls-files', '-s', '--', path], text=True,
+              ).strip()
+              mode = index_line.split(' ', 1)[0]
+              content = base64.b64encode(Path(path).read_bytes()).decode('ascii')
+              blob = post('/git/blobs', {'content': content, 'encoding': 'base64'})
+              entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': str(blob['sha'])})
+
+          tree = post('/git/trees', {'base_tree': base_tree, 'tree': entries})
+          commit = post('/git/commits', {
+              'message': 'Establish TypeScript kernel and toolchain foundation',
+              'tree': tree['sha'],
+              'parents': [parent],
+          })
+          Path('/tmp/issue800-commit-sha.txt').write_text(str(commit['sha']) + '\n')
+          print(f"Created server commit {commit['sha']} with {len(entries)} changed files")
+          PY
+      - name: Upload server commit reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-800-server-commit
+          path: /tmp/issue800-commit-sha.txt
+          if-no-files-found: error
+          retention-days: 1
