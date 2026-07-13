@@ -32,7 +32,7 @@ function installPwshShim(root, env) {
   const shimModule = join(binDir, 'pwsh-shim.mjs');
   const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
   writeFileSync(shimModule, `#!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 const real = process.env.OPK_REAL_PWSH;
 const helper = process.env.OPK_VITEST_PWSH_HELPER;
@@ -73,19 +73,47 @@ else {
     }
 
     if (childArgs) {
-      const child = spawnSync(real, childArgs, {
+      const child = spawn(real, childArgs, {
         env: process.env,
-        encoding: 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
+        stdio: 'inherit',
       });
-      if (child.stdout) process.stdout.write(child.stdout);
-      if (child.stderr) process.stderr.write(child.stderr);
-      if (child.error) {
-        console.error(child.error.message);
-        process.exitCode = 70;
-      } else {
-        process.exitCode = child.status ?? 1;
+      const signalCodes = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+      const handlers = new Map();
+      let forwardedSignal = null;
+      let forceTimer = null;
+      const childRunning = () => child.exitCode === null && child.signalCode === null;
+      const cleanupSignals = () => {
+        if (forceTimer) clearTimeout(forceTimer);
+        for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+      };
+      for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
+        const handler = () => {
+          if (!childRunning()) return;
+          if (forwardedSignal) {
+            child.kill('SIGKILL');
+            return;
+          }
+          forwardedSignal = signal;
+          child.kill(signal);
+          forceTimer = setTimeout(() => {
+            if (childRunning()) child.kill('SIGKILL');
+          }, 2_000);
+        };
+        handlers.set(signal, handler);
+        process.once(signal, handler);
       }
+      const status = await new Promise((resolveChild) => {
+        child.once('error', (error) => {
+          cleanupSignals();
+          console.error(error.message);
+          resolveChild(70);
+        });
+        child.once('close', (code, signal) => {
+          cleanupSignals();
+          resolveChild(code ?? signalCodes[forwardedSignal ?? signal] ?? 1);
+        });
+      });
+      process.exitCode = status;
     }
   }
 }
