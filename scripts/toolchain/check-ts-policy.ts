@@ -7,7 +7,7 @@ import {
   discoverRawChildProcessCalls,
   makeRawChildProcessBaseline,
   type RawChildProcessBaseline,
-} from './child-process-policy.ts';
+} from '#opk-toolchain/child-process-policy';
 
 export interface PolicyViolation {
   readonly path: string;
