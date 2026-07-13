@@ -94,7 +94,10 @@ export function checkFindingLedgerFloor(
   }
   const ledgerText = readFileSync(ledgerPath, 'utf8');
   const captures = captureFiles.map((capturePath) => readFileSync(capturePath, 'utf8'));
-  const result = checkFindingLedgerGuard(captures, ledgerText);
+  const result = checkFindingLedgerGuard(captures, ledgerText, {
+    repoRoot,
+    draftPath: options.draftPath,
+  });
   if (!result.ok) {
     return {
       ok: false,

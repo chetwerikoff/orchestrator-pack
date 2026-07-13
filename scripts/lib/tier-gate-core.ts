@@ -156,7 +156,10 @@ export function checkTierGateGuard(
 ): TierGateGuardResult {
   const errors: string[] = [];
   const fence = parseComplexityTierFence(text);
-  const screen = screenRedFlagMarkers(text, { repoRoot: opts.repoRoot });
+  const screen = screenRedFlagMarkers(text, {
+    repoRoot: opts.repoRoot,
+    draftPath: opts.draftPath,
+  });
 
   if (screen.unparseable) {
     errors.push('marker screen: vocabulary/heuristic map incomplete — fail closed to T3');

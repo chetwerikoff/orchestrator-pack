@@ -8,7 +8,9 @@ param(
     [string]$CapturePath,
     [string]$CapturesDir,
     [Parameter(Mandatory = $true)]
-    [string]$LedgerPath
+    [string]$LedgerPath,
+    [string]$DraftPath,
+    [string]$RepoRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +28,12 @@ if ($CapturesDir) {
 }
 if ($CapturePath) {
     $guardArgs += '--capture', (Resolve-Path $CapturePath).Path
+}
+if ($DraftPath) {
+    $guardArgs += '--draft-path', (Resolve-Path $DraftPath).Path
+}
+if ($RepoRoot) {
+    $guardArgs += '--repo-root', (Resolve-Path $RepoRoot).Path
 }
 
 Push-Location $Root

@@ -38,6 +38,12 @@ if ($Command -eq 'finding-ledger') {
         if ($CapturePath) {
             $guardArgs += '--capture', (Resolve-Path $CapturePath).Path
         }
+        if ($DraftPath) {
+            $guardArgs += '--draft-path', (Resolve-Path $DraftPath).Path
+        }
+        if ($RepoRoot) {
+            $guardArgs += '--repo-root', $Root
+        }
         & node $FindingLedgerGuardScript @guardArgs
         exit $LASTEXITCODE
     }

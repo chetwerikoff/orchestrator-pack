@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,10 @@ import {
   detectUntypedFindingsInCapture,
   runCli,
 } from './finding-ledger-guard.mjs';
+import {
+  fingerprintProtectedSignalSpan,
+  PROTECTED_SIGNAL_RECEIPT_FILENAME,
+} from './lib/protected-signal-receipt.mjs';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -149,6 +153,21 @@ function runFindingLedgerGuardPs1(args: string[]) {
   );
 }
 
+function runDraftDisciplineFindingLedgerPs1(args: string[]) {
+  return spawnSync(
+    'pwsh',
+    [
+      '-NoProfile',
+      '-File',
+      path.join(repoRoot, 'scripts/check-draft-discipline.ps1'),
+      '-Command',
+      'finding-ledger',
+      ...args,
+    ],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+}
+
 function writeTempFindingLedgerPair(name: string, capture: string, ledger: string) {
   const dir = mkdtempSync(path.join(tmpdir(), `finding-ledger-${name}-`));
   const capturePath = path.join(dir, `${name}.capture.txt`);
@@ -156,6 +175,39 @@ function writeTempFindingLedgerPair(name: string, capture: string, ledger: strin
   writeFileSync(capturePath, capture);
   writeFileSync(ledgerPath, ledger);
   return { capturePath, ledgerPath };
+}
+
+function writeTempFindingLedgerReceiptFixture(name: string, capture: string, ledger: string) {
+  const root = mkdtempSync(path.join(tmpdir(), `finding-ledger-receipt-${name}-`));
+  const draftDir = path.join(root, 'docs/issues_drafts');
+  const draftPath = path.join(draftDir, `${name}.md`);
+  const reviewDir = path.join(draftDir, '.review', name);
+  const capturePath = path.join(root, `${name}.capture.txt`);
+  const ledgerPath = path.join(root, `${name}.ledger.json`);
+
+  mkdirSync(reviewDir, { recursive: true });
+  writeFileSync(draftPath, '# fixture draft\n');
+  writeFileSync(capturePath, capture);
+  writeFileSync(ledgerPath, ledger);
+  writeFileSync(path.join(reviewDir, 'decision-log.md'), 'architect adjudicated the false positive\n');
+  writeFileSync(
+    path.join(reviewDir, PROTECTED_SIGNAL_RECEIPT_FILENAME),
+    JSON.stringify({
+      'recorded-at': '2026-07-13T12:00:00.000Z',
+      'decision-log': 'decision-log.md',
+      entries: [
+        {
+          guard: 'finding-ledger',
+          signal: 'scope-violation',
+          fingerprint: fingerprintProtectedSignalSpan('scope-violation'),
+          reason: 'architect-false-positive',
+          rationale: 'The capture quotes a protected signal that was adjudicated locally.',
+        },
+      ],
+    }),
+  );
+
+  return { root, draftPath, capturePath, ledgerPath };
 }
 
 describe('finding-ledger guard scenario matrix (#679)', () => {
@@ -425,6 +477,56 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
       expect(
         runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
       ).toBe(1);
+    }
+  });
+
+  it('forwards draft context through check-draft-discipline finding-ledger mode', () => {
+    const ledger = JSON.stringify({ version: 1, draft: 'receipt-fixture', findings: [] });
+    const fixture = writeTempFindingLedgerReceiptFixture(
+      'receipt-fixture',
+      'Reviewer prose says this draft has a scope-violation false positive.',
+      ledger,
+    );
+
+    try {
+      const result = runDraftDisciplineFindingLedgerPs1([
+        '-DraftPath',
+        fixture.draftPath,
+        '-CapturePath',
+        fixture.capturePath,
+        '-LedgerPath',
+        fixture.ledgerPath,
+        '-RepoRoot',
+        fixture.root,
+      ]);
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reuse one finding-ledger receipt entry across multiple capture files', () => {
+    const ledger = JSON.stringify({ version: 1, draft: 'receipt-fixture', findings: [] });
+    const fixture = writeTempFindingLedgerReceiptFixture(
+      'receipt-fixture-multi',
+      'Reviewer prose says this draft has a scope-violation false positive.',
+      ledger,
+    );
+
+    try {
+      const secondCapture = 'Another reviewer pass repeats the same scope-violation false positive.';
+      const result = checkFindingLedgerGuard(
+        [readFileSync(fixture.capturePath, 'utf8'), secondCapture],
+        ledger,
+        {
+          draftPath: fixture.draftPath,
+          repoRoot: fixture.root,
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join(' ')).toContain('scope-violation');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 });

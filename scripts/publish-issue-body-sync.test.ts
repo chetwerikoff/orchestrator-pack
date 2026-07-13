@@ -44,6 +44,7 @@ function makeDeps(overrides: {
   onRunGh?: (argv: string[]) => GhInvocationResult;
   validateTierGateGuard?: (draftContent: string) => { ok: boolean; message: string };
   validateStageCompletenessGuard?: (draftContent: string) => { ok: boolean; message: string };
+  validateFindingLedgerGuard?: (draftContent: string) => { ok: boolean; message: string };
 } = {}) {
   const audits: MutationAuditRecord[] = [];
   const mutationCalls: string[][] = [];
@@ -82,6 +83,10 @@ function makeDeps(overrides: {
     validateStageCompletenessGuard: overrides.validateStageCompletenessGuard ?? (() => ({
       ok: true,
       message: 'stage-completeness guard: PASS (test stub)',
+    })),
+    validateFindingLedgerGuard: overrides.validateFindingLedgerGuard ?? (() => ({
+      ok: true,
+      message: 'finding-ledger guard: PASS (test stub)',
     })),
   };
 
@@ -369,6 +374,10 @@ describe('publish issue-body sync (#542)', () => {
       message: 'tier-gate guard: PASS (test stub)',
     });
     passingDeps.deps.validateStageCompletenessGuard = validateStageCompletenessGuardReceipt;
+    passingDeps.deps.validateFindingLedgerGuard = () => ({
+      ok: true,
+      message: 'finding-ledger guard: PASS (test stub)',
+    });
     const allowed = syncPublishIssueBody(passingDeps.deps, {
       mode: 'edit',
       draftPath,
