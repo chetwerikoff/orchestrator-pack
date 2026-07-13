@@ -8,11 +8,10 @@ $config = New-PesterConfiguration
 $config.Run.Path = Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
 $config.Run.PassThru = $true
 $config.Filter.FullName = @(
-    '*keeps worker-status GitHub commands visible after lazy import returns*',
-    '*never latches an incomplete load as success or replays partial top-level effects*'
+    '*uses the GitHub boundary, computes a snapshot, and writes a store record*'
 )
 $config.Output.Verbosity = 'Detailed'
 $result = Invoke-Pester -Configuration $config
-Write-Host ("ISSUE771_LOADER_RESULT total={0} passed={1} failed={2} skipped={3}" -f $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
+Write-Host ("ISSUE771_FIXTURE_FREE_RESULT total={0} passed={1} failed={2} skipped={3}" -f $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
 if ($result.FailedCount -gt 0) { exit 1 }
 exit 0
