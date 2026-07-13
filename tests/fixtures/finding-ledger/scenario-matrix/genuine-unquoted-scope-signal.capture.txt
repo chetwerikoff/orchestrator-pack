@@ -1,5 +1,0 @@
-type: spec; id: evidence-quote
-The reviewer cites the draft boundary.
-
-type: scope-violation; id: scope-boundary
-This change edits denylist paths outside allowed_roots.

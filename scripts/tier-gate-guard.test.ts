@@ -31,6 +31,56 @@ function fixturePath(name: string) {
   return path.join(fixturesDir, `${name}.md`);
 }
 
+function markerVocabularyDraft(goal: string, examples = '') {
+  return `# Quotation marker vocabulary T1 brief
+
+GitHub Issue: TBD
+
+\`\`\`complexity-tier
+tier: T1
+advisory-prior: T1
+\`\`\`
+
+\`\`\`behavior-kind
+action-producing
+\`\`\`
+
+\`\`\`contract-evidence
+none
+\`\`\`
+
+\`\`\`positive-outcome
+asserts: marker screening keeps quoted examples separate from operative prose
+input: realistic
+\`\`\`
+
+## Goal
+
+${goal}
+
+${examples}
+
+## Denylist
+
+\`\`\`denylist
+vendor/**
+packages/core/**
+\`\`\`
+
+\`\`\`allowed-roots
+scripts/lib/tier-marker-screen.ts
+\`\`\`
+
+## Acceptance criteria
+
+1. Marker behavior is stable.
+
+## Verification
+
+1. Run the tier-gate guard.
+`;
+}
+
 describe('tier-gate guard fails a red-flag-marked task assigned below T3 and passes a marker-free task on its lower tier', () => {
   it('fails when a red-flag marker phrase coincides with a T1 fence', () => {
     const text = loadFixture('marker-hit-sub-t3-brief');
@@ -122,29 +172,57 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
   });
 
   it('accepts draft-275-shaped quoted marker vocabulary through core, wrapper, and sync validation', () => {
-    const text = loadFixture('quoted-marker-vocabulary-t1-brief');
-    const fixtureFile = fixturePath('quoted-marker-vocabulary-t1-brief');
+    const text = markerVocabularyDraft(
+      "Document the marker screen's quotation handling without editing marker classes.",
+      [
+        '## Examples',
+        'Inline code span: `required checks`',
+        '',
+        'Fenced code block:',
+        '',
+        '```text',
+        'branch protection',
+        '```',
+        '',
+        'Rubric row:',
+        '',
+        '> T3 | ci-review-gating | merge authorization',
+        '',
+        'Quoted regex pattern: "\\\\brequired\\\\s+checks?\\\\b"',
+        '',
+        "Quoted test-fixture string: 'Change external API timeout semantics for the REST wrapper.'",
+      ].join('\n'),
+    );
 
-    const core = checkTierGateGuard(text, { repoRoot, draftPath: fixtureFile });
+    const core = checkTierGateGuard(text, { repoRoot });
     expect(core.ok).toBe(true);
     expect(core.screen.hits).toEqual([]);
-    expect(runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile])).toBe(0);
-    expect(validateTierGateGuardReceipt(text, fixtureFile).ok).toBe(true);
+    expect(runCli(['node', 'tier-gate-guard.ts', '--text', text, '--repo-root', repoRoot])).toBe(0);
+    expect(validateTierGateGuardReceipt(text).ok).toBe(true);
   });
 
   it('rejects unquoted and mixed marker vocabulary below T3 through the same tier-gate paths', () => {
-    for (const name of [
-      'unquoted-marker-vocabulary-t1-brief',
-      'mixed-quoted-unquoted-marker-vocabulary-t1-brief',
-      'malformed-quoted-marker-vocabulary-t1-brief',
-    ]) {
-      const text = loadFixture(name);
-      const fixtureFile = fixturePath(name);
-      const core = checkTierGateGuard(text, { repoRoot, draftPath: fixtureFile });
+    const cases = new Map([
+      [
+        'unquoted',
+        markerVocabularyDraft('Operate on required checks and branch protection for merge authorization.'),
+      ],
+      [
+        'mixed',
+        markerVocabularyDraft('Document `required checks`, then operate on branch protection for merge.'),
+      ],
+      [
+        'malformed',
+        markerVocabularyDraft('Discuss the unterminated example "required checks without closing it.'),
+      ],
+    ]);
+
+    for (const [name, text] of cases) {
+      const core = checkTierGateGuard(text, { repoRoot });
       expect(core.ok, name).toBe(false);
       expect(core.screen.hits.length, name).toBeGreaterThan(0);
-      expect(runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile])).toBe(1);
-      expect(validateTierGateGuardReceipt(text, fixtureFile).ok).toBe(false);
+      expect(runCli(['node', 'tier-gate-guard.ts', '--text', text, '--repo-root', repoRoot])).toBe(1);
+      expect(validateTierGateGuardReceipt(text).ok).toBe(false);
     }
   });
 

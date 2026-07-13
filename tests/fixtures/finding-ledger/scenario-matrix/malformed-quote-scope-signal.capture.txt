@@ -1,2 +1,0 @@
-type: spec; id: evidence-quote
-The reviewer starts a quote but never closes it: "type: scope-violation; id: scope-boundary; denylist and allowed_roots text.

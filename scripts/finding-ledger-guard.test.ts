@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -146,6 +147,15 @@ function runFindingLedgerGuardPs1(args: string[]) {
     ['-NoProfile', '-File', path.join(repoRoot, 'scripts/check-finding-ledger-guard.ps1'), ...args],
     { cwd: repoRoot, encoding: 'utf8' },
   );
+}
+
+function writeTempFindingLedgerPair(name: string, capture: string, ledger: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), `finding-ledger-${name}-`));
+  const capturePath = path.join(dir, `${name}.capture.txt`);
+  const ledgerPath = path.join(dir, `${name}.ledger.json`);
+  writeFileSync(capturePath, capture);
+  writeFileSync(ledgerPath, ledger);
+  return { capturePath, ledgerPath };
 }
 
 describe('finding-ledger guard scenario matrix (#679)', () => {
@@ -310,19 +320,27 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
   });
 
   it('passes draft-273-shaped quoted evidence without fabricated protected coverage', () => {
-    const { capture, ledger } = loadScenarioFixture('quote-evidence-protected-signal');
+    const capture = [
+      'type: spec; id: evidence-quote',
+      'The reviewer cites the draft boundary: "type: scope-violation; id: scope-boundary; denylist and allowed_roots text is copied evidence."',
+    ].join('\n');
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'quote-evidence-protected-signal',
+      findings: [
+        {
+          id: 'evidence-quote',
+          summary: 'Reviewer cited draft evidence.',
+          type: 'spec',
+          disposition: 'addressed',
+        },
+      ],
+    });
     expect(detectTypedFindingsInCapture(capture).map((finding) => finding.type)).toEqual(['spec']);
     expect(detectProtectedSignalsInCapture(capture)).toEqual([]);
     expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(true);
 
-    const capturePath = path.join(
-      scenarioMatrixDir,
-      'quote-evidence-protected-signal.capture.txt',
-    );
-    const ledgerPath = path.join(
-      scenarioMatrixDir,
-      'quote-evidence-protected-signal.ledger.json',
-    );
+    const { capturePath, ledgerPath } = writeTempFindingLedgerPair('quote-evidence', capture, ledger);
     expect(runCli(['node', 'finding-ledger-guard.mjs', '--capture', capturePath, '--ledger', ledgerPath])).toBe(0);
     expect(
       runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
@@ -330,17 +348,53 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
   });
 
   it('rejects genuine unquoted, mixed, and malformed protected finding-ledger signals', () => {
-    for (const name of [
-      'genuine-unquoted-scope-signal',
-      'mixed-quoted-unquoted-scope-signal',
-      'malformed-quote-scope-signal',
-    ]) {
-      const { capture, ledger } = loadScenarioFixture(name);
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'scope-signal',
+      findings: [
+        {
+          id: 'evidence-quote',
+          summary: 'Reviewer cited draft evidence.',
+          type: 'spec',
+          disposition: 'addressed',
+        },
+      ],
+    });
+    const cases = new Map([
+      [
+        'genuine-unquoted',
+        [
+          'type: spec; id: evidence-quote',
+          'The reviewer cites the draft boundary.',
+          '',
+          'type: scope-violation; id: scope-boundary',
+          'This change edits denylist paths outside allowed_roots.',
+        ].join('\n'),
+      ],
+      [
+        'mixed',
+        [
+          'type: spec; id: evidence-quote',
+          'The reviewer cites the draft boundary: "type: scope-violation; id: quoted-scope; denylist text is copied evidence."',
+          '',
+          'type: scope-violation; id: real-scope',
+          'The change still edits denylist paths outside allowed_roots.',
+        ].join('\n'),
+      ],
+      [
+        'malformed',
+        [
+          'type: spec; id: evidence-quote',
+          'The reviewer starts a quote but never closes it: "type: scope-violation; id: scope-boundary; denylist and allowed_roots text.',
+        ].join('\n'),
+      ],
+    ]);
+
+    for (const [name, capture] of cases) {
       expect(detectProtectedSignalsInCapture(capture), name).toContain('scope-violation');
       expect(checkFindingLedgerGuard(capture, ledger).ok, name).toBe(false);
 
-      const capturePath = path.join(scenarioMatrixDir, `${name}.capture.txt`);
-      const ledgerPath = path.join(scenarioMatrixDir, `${name}.ledger.json`);
+      const { capturePath, ledgerPath } = writeTempFindingLedgerPair(name, capture, ledger);
       expect(runCli(['node', 'finding-ledger-guard.mjs', '--capture', capturePath, '--ledger', ledgerPath])).toBe(1);
       expect(
         runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
