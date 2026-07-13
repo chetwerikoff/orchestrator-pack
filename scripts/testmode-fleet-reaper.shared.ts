@@ -222,7 +222,24 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     while (!fs.existsSync(supervisorPidPath) && Date.now() < pidDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    expect(fs.existsSync(supervisorPidPath)).toBe(true);
+    if (!fs.existsSync(supervisorPidPath)) {
+      const state = fs.existsSync(stateDir)
+        ? fs.readdirSync(stateDir, { recursive: true }).map((entry) => String(entry)).sort()
+        : [];
+      const stateEvidence = state.map((entry) => {
+        const fullPath = path.join(stateDir, entry);
+        return fs.statSync(fullPath).isFile()
+          ? { entry, content: fs.readFileSync(fullPath, 'utf8').slice(-4000) }
+          : { entry };
+      });
+      throw new Error(
+        `detached supervisor did not publish supervisor.pid: ${JSON.stringify({
+          startStdout: start.stdout,
+          startStderr: start.stderr,
+          state: stateEvidence,
+        })}`,
+      );
+    }
     const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
     await waitForMarkers(stateDir, 60_000, ['review-trigger-reconcile', 'escalation-router']);
     if (leaseId && leaseRoot) {
