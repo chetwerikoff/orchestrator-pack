@@ -11,6 +11,8 @@ import {
   startLiveStoreGuard,
 } from './lib/vitest-live-store-harness.mjs';
 
+const SIGNAL_GRACE_MS = 2_000;
+
 function findExecutable(name, pathValue = process.env.PATH ?? '') {
   const suffixes = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
@@ -106,14 +108,28 @@ function runVitestChild(entrypoint, args, env) {
       stdio: 'inherit',
     });
     const handlers = new Map();
+    let terminatingSignal = null;
+    let forceTimer = null;
+
+    const childRunning = () => child.exitCode === null && child.signalCode === null;
     for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
       const handler = () => {
-        if (!child.killed) child.kill(signal);
+        if (!childRunning()) return;
+        if (terminatingSignal) {
+          child.kill('SIGKILL');
+          return;
+        }
+        terminatingSignal = signal;
+        child.kill(signal);
+        forceTimer = setTimeout(() => {
+          if (childRunning()) child.kill('SIGKILL');
+        }, SIGNAL_GRACE_MS);
       };
       handlers.set(signal, handler);
       process.once(signal, handler);
     }
     const cleanupSignals = () => {
+      if (forceTimer) clearTimeout(forceTimer);
       for (const [signal, handler] of handlers) process.removeListener(signal, handler);
     };
     child.once('error', (error) => {
@@ -122,7 +138,7 @@ function runVitestChild(entrypoint, args, env) {
     });
     child.once('close', (code, signal) => {
       cleanupSignals();
-      resolveChild(code ?? signalExitCode(signal));
+      resolveChild(code ?? signalExitCode(terminatingSignal ?? signal));
     });
   });
 }
