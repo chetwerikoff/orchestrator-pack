@@ -28,7 +28,20 @@ jobs:
           path: target
           fetch-depth: 1
 
-      - name: Publish issue 771 fix atomically
+      - name: Capture atomic publisher result
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/publish-issue-771-fix.py target
+        shell: bash
+        run: |
+          set +e
+          python scripts/publish-issue-771-fix.py target > scripts/issue-771-publisher-result.log 2>&1
+          status=$?
+          echo "EXIT_CODE=$status" >> scripts/issue-771-publisher-result.log
+          exit 0
+
+      - name: Upload atomic publisher result
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-771-publisher-result
+          path: scripts/issue-771-publisher-result.log
+          if-no-files-found: error
