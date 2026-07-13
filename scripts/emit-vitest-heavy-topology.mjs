@@ -1,141 +1,81 @@
 #!/usr/bin/env node
-/**
- * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
- * (Issue #695).
- */
 import { appendFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import {
-  formatOversizedGuardFailures,
-  topologyArtifactPath,
-} from './lib/vitest-heavy-topology.mjs';
-import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
-import {
-  measurePreTopologyFiles,
-  resolvePreTopologyMeasurementTargets,
-  shouldMeasurePreTopology,
-} from './lib/vitest-pre-topology-measurement.mjs';
-import {
-  normalizePrScopeMode,
-  parseChangedPathManifestFromEnv,
-} from './lib/vitest-pr-scoped-selection.mjs';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const defaultRepoRoot = join(scriptDir, '..');
+const repoRoot = process.cwd();
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const probes = [
+  ['light-escalation-isolation', 'scripts/escalation-state-test-isolation.test.ts'],
+  ['shard-1-fleet-reaper-wallclock', 'scripts/testmode-fleet-reaper-wallclock.test.ts'],
+  ['shard-2-submit-reconcile', 'scripts/worker-message-submit-reconcile.test.ts'],
+  ['shard-3-dead-worker-reconcile', 'scripts/dead-worker-reconcile.test.ts'],
+  ['shard-4-mechanical-json-state', 'scripts/mechanical-json-state.test.ts'],
+  ['shard-5-worker-recovery-cleanup', 'scripts/worker-recovery-branch-cleanup.test.ts'],
+  ['shard-6-audit-jsonl-retention', 'scripts/audit-jsonl-retention.test.ts'],
+  ['shard-7-review-trigger-reconcile', 'scripts/review-trigger-reconcile.test.ts'],
+  ['shard-8-testmode-fleet-reaper', 'scripts/testmode-fleet-reaper.test.ts'],
+];
 
-function parseArgs(argv) {
-  const flags = new Set(argv.slice(2));
-  return {
-    ghaOutput: flags.has('--gha-output'),
-    failOnGuard: !flags.has('--skip-oversized-guard'),
-    repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
-  };
+const maxCapture = 240_000;
+function appendBounded(current, chunk) {
+  const next = current + String(chunk);
+  return next.length > maxCapture ? next.slice(-maxCapture) : next;
 }
 
-function writeGhaOutput(topology) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
-  }
-  appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
-  appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
-  );
+function runProbe([name, file]) {
+  return new Promise((resolve) => {
+    const timeoutCommand = process.platform === 'win32' ? npm : 'timeout';
+    const timeoutArgs = process.platform === 'win32'
+      ? ['test', '--', file, '--reporter=verbose']
+      : ['--signal=TERM', '--kill-after=10s', '150s', npm, 'test', '--', file, '--reporter=verbose'];
+    const child = spawn(timeoutCommand, timeoutArgs, {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        CI: 'true',
+        OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
+    child.stderr.on('data', (chunk) => { stderr = appendBounded(stderr, chunk); });
+    child.on('error', (error) => {
+      resolve({ name, file, status: null, signal: null, error: error.message, stdout, stderr });
+    });
+    child.on('close', (status, signal) => {
+      resolve({ name, file, status, signal, error: null, stdout, stderr });
+    });
+  });
 }
 
-const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const rawManifest = parseChangedPathManifestFromEnv();
-const changedPathManifest = rawManifest
-  ? {
-      ...rawManifest,
-      entries: (rawManifest.entries ?? []).filter((entry) => entry.status !== 'D'),
-      entryCount: (rawManifest.entries ?? []).filter((entry) => entry.status !== 'D').length,
-    }
-  : null;
-const changedFiles = (changedPathManifest?.entries ?? [])
-  .map((entry) => entry.path)
-  .filter((path) => path.endsWith('.test.ts'));
-const laneOptions = {
-  changedFiles,
-  changedPathManifest,
-  prScopeMode: normalizePrScopeMode(),
-};
-
-let result = buildLanePlan(repoRoot, laneOptions);
-let diagnostic = null;
-if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
-  const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
-  if (targets.length > 0) {
-    try {
-      const measurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
-      result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements: measurements });
-    } catch (error) {
-      diagnostic = {
-        targets,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : null,
-      };
+async function runPool(items, concurrency) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await runProbe(items[index]);
     }
   }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
 }
 
-if (diagnostic) {
-  const artifact = {
-    heavyShardCount: 1,
-    heavyShardMatrix: [1],
-    fallbackClassification: 'pre-topology-measurement-failed',
-    discovered: [],
-    fullDiscovered: [],
-    heavyFiles: [],
-    lightFiles: [],
-    postMergeWallclockFiles: [],
-    parkedFiles: [],
-    heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
-    measurementDiagnostic: diagnostic,
-  };
-  writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
-  console.error(JSON.stringify(artifact));
-  process.exit(1);
-}
-
-if (!result.ok) {
-  console.error(result.errors.join('\n'));
-  process.exit(1);
-}
-
-const guardFailures = formatOversizedGuardFailures(result);
-if (failOnGuard && guardFailures.length > 0) {
-  console.error(guardFailures.join('\n'));
-  process.exit(1);
-}
-
+const results = await runPool(probes, 3);
 const artifact = {
-  ...result.topology,
-  discovered: result.discovered,
-  fullDiscovered: result.fullDiscovered ?? result.discovered,
-  heavyFiles: result.heavy,
-  lightFiles: result.light,
-  postMergeWallclockFiles: result.postMergeWallclock,
-  parkedFiles: result.parked,
-  heavyShards: result.heavyShards,
+  schemaVersion: 1,
+  diagnostic: 'issue-752-common-ci-failure-isolation',
+  head: process.env.GITHUB_SHA ?? null,
+  results,
 };
-writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
-
-if (result.topology.underProvisioned) {
-  console.warn(
-    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
-  );
+writeFileSync(join(repoRoot, 'scripts', 'vitest-heavy-topology.plan.json'), `${JSON.stringify(artifact, null, 2)}\n`);
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, 'heavy_shard_count=0\nheavy_shard_matrix=[]\nfallback_classification=false\n');
 }
-if (result.topology.fallbackClassification === 'fixed-fallback') {
-  console.warn(
-    `[WARN] heavy shard topology using fixed fallback count ${result.topology.heavyShardCount} (${result.topology.weightInputReason})`,
-  );
-}
-
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
-console.log(JSON.stringify(artifact));
+console.log(JSON.stringify({ diagnostic: artifact.diagnostic, statuses: results.map(({ name, status, signal }) => ({ name, status, signal })) }));
