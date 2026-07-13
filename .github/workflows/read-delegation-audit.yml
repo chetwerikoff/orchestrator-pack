@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   audit-policy:
@@ -25,12 +25,9 @@ jobs:
         shell: pwsh
         run: ./scripts/check-read-delegation-policy-consistency.ps1
 
-      - name: Publish structural findings
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts/issue-771-structural-result.log
-          git commit -m '[issue771-structural-result] Capture structural findings'
-          git push origin "HEAD:${GITHUB_HEAD_REF}"
+      - name: Upload structural findings
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-771-structural-result
+          path: scripts/issue-771-structural-result.log
+          if-no-files-found: error
