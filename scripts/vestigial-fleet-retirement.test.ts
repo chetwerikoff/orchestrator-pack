@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { survivingFleetChildIds as survivors } from './vestigial-fleet-retirement.shared.js';
 
 const repoRoot = join(import.meta.dirname, '..');
 const guardPath = join(repoRoot, 'scripts', 'check-vestigial-fleet-children-retired.ps1');
@@ -21,18 +22,6 @@ const retired = [
   ['ci-failure-notification-reaction', 'ci-failure-notification-reaction.ps1', ''],
   ['listener', 'orchestrator-wake-listener.ps1', 'listener-side-effect.lock'],
 ] as const;
-const survivors = [
-  'review-trigger-reconcile',
-  'review-trigger-reeval',
-  'review-ready-report-state-seed',
-  'ci-green-wake-reconcile',
-  'worker-message-submit-reconcile',
-  'review-start-claim-reaper',
-  'ci-failure-notification-reconcile',
-  'dead-worker-reconcile',
-  'escalation-router',
-];
-
 type GuardResult = {
   status: 'pass' | 'fail';
   retiredChildIds?: string[];

@@ -1,20 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { survivingFleetChildIds as survivors } from './vestigial-fleet-retirement.shared.js';
 
 const repoRoot = join(import.meta.dirname, '..');
 const scripts = join(repoRoot, 'scripts');
-const survivors = [
-  'review-trigger-reconcile',
-  'review-trigger-reeval',
-  'review-ready-report-state-seed',
-  'ci-green-wake-reconcile',
-  'worker-message-submit-reconcile',
-  'review-start-claim-reaper',
-  'ci-failure-notification-reconcile',
-  'dead-worker-reconcile',
-  'escalation-router',
-];
 
 function read(path: string): string {
   return readFileSync(join(repoRoot, path), 'utf8');
