@@ -94,7 +94,6 @@
     "scripts/orchestrator-message-registry.test.ts": "heavy",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "light",
     "scripts/orchestrator-wake-heartbeat.test.ts": "light",
-    "scripts/orchestrator-wake-listener-evaluate.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-listener-helpers.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "postMergeWallclock",
