@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, watch } from 'node:fs';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   assertHarnessWritePathSafe,
   canonicalizeStorePath,
@@ -197,6 +197,15 @@ function inventoryPowerShellCommands() {
 }
 
 const POWERSHELL_INVENTORY_COMMANDS = inventoryPowerShellCommands();
+const POWERSHELL_ENV_OVERRIDES = [...new Set(
+  (liveStoreInventory.stores ?? [])
+    .filter((store) => !store.excluded)
+    .flatMap((store) => store.envOverrides ?? [])
+    .map((name) => String(name))
+    .filter(Boolean),
+)].sort();
+const VALIDATED_POWERSHELL_ENVIRONMENTS = new Set();
+const MAX_VALIDATED_POWERSHELL_ENVIRONMENTS = 64;
 
 function statementHasCommand(statement, commands) {
   for (const command of commands) {
@@ -217,7 +226,8 @@ function firstPositionalCandidate(statement, commandName) {
   if (!match) return '';
   const tail = statement.slice(match.index + match[0].length).trim();
   if (!tail || tail.startsWith('-')) return '';
-  return new RegExp(`^(${POWERSHELL_VALUE_TOKEN})`, 'i').exec(tail)?.[1] ?? '';
+  const value = new RegExp(`^(${POWERSHELL_VALUE_TOKEN})`, 'i').exec(tail)?.[1] ?? '';
+  return value;
 }
 
 function dotNetWriteCandidates(statement) {
@@ -250,16 +260,44 @@ function commandWriteCandidates(command) {
   return candidates;
 }
 
-export function preflightPowerShellInvocation(argv, env = process.env) {
+export function validatePowerShellHarnessEnvironment(env = process.env) {
   if (env.OPK_VITEST_HARNESS !== '1') return;
 
-  for (const store of liveStoreInventory.stores ?? []) {
-    if (store.excluded) continue;
-    for (const envName of store.envOverrides ?? []) {
-      const value = env[envName];
-      if (String(value ?? '').trim()) assertHarnessWritePathSafe(value, `pwsh-env:${envName}`, env);
-    }
+  const harnessRootValue = String(env.OPK_VITEST_HARNESS_ROOT ?? '').trim();
+  const fingerprint = JSON.stringify([
+    harnessRootValue,
+    String(env.OPK_VITEST_PRODUCTION_HOME ?? ''),
+    String(env.OPK_VITEST_PRODUCTION_TMP ?? ''),
+    String(env.OPK_VITEST_PRODUCTION_AO_BASE ?? ''),
+    String(env.OPK_VITEST_PRODUCTION_WAKE_ROOT ?? ''),
+    ...POWERSHELL_ENV_OVERRIDES.map((name) => [name, String(env[name] ?? '')]),
+  ]);
+  if (VALIDATED_POWERSHELL_ENVIRONMENTS.has(fingerprint)) return;
+
+  const harnessRoot = harnessRootValue ? resolve(harnessRootValue) : '';
+  const checkedValues = new Set();
+  for (const envName of POWERSHELL_ENV_OVERRIDES) {
+    const value = String(env[envName] ?? '').trim();
+    if (!value || checkedValues.has(value)) continue;
+    checkedValues.add(value);
+
+    // Harness-owned overrides are constructed below the invocation root. Avoid
+    // resolving the complete production catalog for every child PowerShell
+    // process; the parent guard and bootstrap have already frozen that root.
+    const candidate = resolve(value);
+    if (harnessRoot && pathIsSameOrWithin(candidate, harnessRoot)) continue;
+    assertHarnessWritePathSafe(value, `pwsh-env:${envName}`, env);
   }
+
+  if (VALIDATED_POWERSHELL_ENVIRONMENTS.size >= MAX_VALIDATED_POWERSHELL_ENVIRONMENTS) {
+    VALIDATED_POWERSHELL_ENVIRONMENTS.clear();
+  }
+  VALIDATED_POWERSHELL_ENVIRONMENTS.add(fingerprint);
+}
+
+export function preflightPowerShellInvocation(argv, env = process.env) {
+  if (env.OPK_VITEST_HARNESS !== '1') return;
+  validatePowerShellHarnessEnvironment(env);
 
   const args = Array.from(argv ?? [], (value) => String(value));
   const lower = args.map((value) => value.toLowerCase());
