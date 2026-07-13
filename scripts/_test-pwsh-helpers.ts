@@ -26,11 +26,17 @@ export function functionBody(source: string, name: string): string {
 }
 
 export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
-  const inheritedAoBaseDir = process.env.AO_BASE_DIR;
+  if (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.OPK_VITEST_HARNESS_ROOT) {
+    applyOpkVitestHarnessEscalationEnv();
+  }
+  const hasExplicitAoBaseDir = Object.prototype.hasOwnProperty.call(extraEnv, 'AO_BASE_DIR');
   const explicitAoBaseDir = extraEnv.AO_BASE_DIR;
-  const managedAoBaseDir = inheritedAoBaseDir || explicitAoBaseDir
+  const managedAoBaseDir = hasExplicitAoBaseDir
     ? null
-    : mkdtempSync(path.join(tmpdir(), 'opk-vitest-ao-base-'));
+    : mkdtempSync(path.join(
+      process.env.OPK_VITEST_HARNESS_ROOT || tmpdir(),
+      'ao-base-run-',
+    ));
   const scopedGhHarnessEnv = {
     AO_REVIEW_START_SCOPED_GH_COMMAND: '',
     AO_REVIEW_START_SCOPED_GH_SCENARIO: '',
@@ -39,14 +45,11 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
     AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A: '',
     AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B: '',
   };
-  if (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.OPK_VITEST_HARNESS_ROOT) {
-    applyOpkVitestHarnessEscalationEnv();
-  }
   const commandArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script];
   const pwsh = process.env.OPK_REAL_PWSH || 'pwsh';
   const childEnv = {
     ...process.env,
-    AO_BASE_DIR: managedAoBaseDir ?? inheritedAoBaseDir ?? '',
+    AO_BASE_DIR: hasExplicitAoBaseDir ? explicitAoBaseDir ?? '' : managedAoBaseDir ?? '',
     OPK_VITEST_HARNESS: '1',
     OPK_VITEST_HARNESS_ROOT: process.env.OPK_VITEST_HARNESS_ROOT ?? '',
     AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
