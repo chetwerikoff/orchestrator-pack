@@ -4,7 +4,7 @@ on:
   pull_request:
 
 concurrency:
-  group: issue-771-focused-pr-${{ github.event.pull_request.number }}
+  group: issue-771-relevant-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   audit-policy:
-    name: Issue 771 focused Pester probe
+    name: Issue 771 relevant Pester regression
     runs-on: ubuntu-latest
     steps:
       - name: Checkout diagnostic branch
@@ -32,14 +32,19 @@ jobs:
         shell: pwsh
         run: ./target/scripts/install-pester-ci.ps1
 
-      - name: Run issue 771 focused suite
+      - name: Run issue 771 relevant suites
         shell: pwsh
         run: |
           $config = New-PesterConfiguration
-          $config.Run.Path = './target/tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
+          $config.Run.Path = @(
+            './target/tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1',
+            './target/tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1',
+            './target/tests/powershell/Issue748.RefreshConcurrency.Tests.ps1',
+            './target/tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1'
+          )
           $config.Run.PassThru = $true
           $config.Output.Verbosity = 'Detailed'
-          $result = Invoke-Pester -Configuration $config 2>&1 | Tee-Object -FilePath issue-771-focused-result.log
+          $result = Invoke-Pester -Configuration $config 2>&1 | Tee-Object -FilePath issue-771-relevant-result.log
           if ($result -is [array]) {
             $summary = @($result | Where-Object { $_.PSObject.Properties.Name -contains 'FailedCount' })[-1]
           }
@@ -47,19 +52,19 @@ jobs:
             $summary = $result
           }
           if ($summary) {
-            "SUMMARY total=$($summary.TotalCount) passed=$($summary.PassedCount) failed=$($summary.FailedCount) skipped=$($summary.SkippedCount)" | Add-Content issue-771-focused-result.log
+            "SUMMARY total=$($summary.TotalCount) passed=$($summary.PassedCount) failed=$($summary.FailedCount) skipped=$($summary.SkippedCount)" | Add-Content issue-771-relevant-result.log
           }
           if ($summary -and $summary.FailedCount -gt 0) {
-            "EXIT_CODE=1" | Add-Content issue-771-focused-result.log
+            "EXIT_CODE=1" | Add-Content issue-771-relevant-result.log
           }
           else {
-            "EXIT_CODE=0" | Add-Content issue-771-focused-result.log
+            "EXIT_CODE=0" | Add-Content issue-771-relevant-result.log
           }
           exit 0
 
-      - name: Upload focused result
+      - name: Upload relevant result
         uses: actions/upload-artifact@v4
         with:
-          name: issue-771-focused-result
-          path: issue-771-focused-result.log
+          name: issue-771-relevant-result
+          path: issue-771-relevant-result.log
           if-no-files-found: error
