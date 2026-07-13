@@ -3,20 +3,20 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkNodeMajor } from './check-node-major.ts';
+import { checkNodeMajor } from '#opk-toolchain/check-node-major';
 import {
   compareRawChildProcessBaseline,
   discoverRawChildProcessCalls,
   makeRawChildProcessBaseline,
   type RawChildProcessBaseline,
-} from './child-process-policy.ts';
-import { lintTypeScriptFoundation } from './check-ts-policy.ts';
+} from '#opk-toolchain/child-process-policy';
+import { lintTypeScriptFoundation } from '#opk-toolchain/check-ts-policy';
 import {
   comparePowerShellBootBaseline,
   discoverPowerShellBootTests,
   makePowerShellBootBaseline,
   type PowerShellBootBaseline,
-} from './powershell-child-policy.ts';
+} from '#opk-toolchain/powershell-child-policy';
 
 const temporaryRoots = new Set<string>();
 
