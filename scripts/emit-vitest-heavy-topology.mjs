@@ -8,7 +8,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, '..');
 const artifactPath = join(scriptDir, 'vitest-heavy-topology.plan.json');
 const originalPath = join(scriptDir, '.issue-752-original-emit.mjs');
-function run(command, args, timeout = 7 * 60 * 1000) {
+function run(command, args, timeout = 8 * 60 * 1000) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -26,11 +26,9 @@ function run(command, args, timeout = 7 * 60 * 1000) {
   };
 }
 const diagnostics = {
-  staticCheck: run(process.execPath, ['scripts/check-vitest-live-store-isolation.mjs']),
-  verifier: run('pwsh', ['-NoProfile', '-File', 'scripts/verify.ps1']),
-  light: run('pwsh', ['-NoProfile', '-File', 'scripts/run-vitest-light-lane.ps1']),
+  staticCheck: run(process.execPath, ['scripts/check-vitest-live-store-isolation.mjs'], 120_000),
 };
-const show = run('git', ['show', 'HEAD^1:scripts/emit-vitest-heavy-topology.mjs']);
+const show = run('git', ['show', 'HEAD~2:scripts/emit-vitest-heavy-topology.mjs'], 30_000);
 if (show.status === 0 && show.stdout) {
   writeFileSync(originalPath, show.stdout, 'utf8');
   try { diagnostics.topology = run(process.execPath, [originalPath]); }
