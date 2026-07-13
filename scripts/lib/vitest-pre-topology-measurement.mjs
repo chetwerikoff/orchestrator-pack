@@ -39,18 +39,21 @@ export function resolvePreTopologyMeasurementTargets(result, options = {}) {
   return targets;
 }
 
-function buildHarnessEnvironment(repoRoot, harnessRoot) {
+function buildHarnessEnvironment(harnessRoot) {
   const env = { ...process.env };
   delete env.VITEST_CI_LIGHT_LANE;
   const inboxDir = join(harnessRoot, 'operator-inbox');
   const healthDir = join(harnessRoot, 'health-spool');
+  const leaseDir = join(harnessRoot, 'fleet-leases');
   mkdirSync(inboxDir, { recursive: true });
   mkdirSync(healthDir, { recursive: true });
+  mkdirSync(leaseDir, { recursive: true });
   return {
     ...env,
     CI: 'true',
     OPK_VITEST_HARNESS: '1',
-    OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+    OPK_TESTMODE_FLEET_WORKSPACE_ROOT: harnessRoot,
+    OPK_TESTMODE_LEASE_ROOT: leaseDir,
     AO_ORCHESTRATOR_ESCALATION_STATE: join(harnessRoot, 'escalation-state.json'),
     AO_OPERATOR_ESCALATION_INBOX: inboxDir,
     AO_ESCALATION_HEALTH_SPOOL: healthDir,
@@ -97,7 +100,7 @@ function runPreTopologyFile(repoRoot, file, root, index, timeoutMs) {
 
     const child = spawn(npm, args, {
       cwd: repoRoot,
-      env: buildHarnessEnvironment(repoRoot, runRoot),
+      env: buildHarnessEnvironment(runRoot),
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -196,7 +199,11 @@ export async function measurePreTopologyFiles(repoRoot, files, options = {}) {
         results[index] = await runPreTopologyFile(repoRoot, files[index], root, index, timeoutMs);
       }
     });
-    await Promise.all(workers);
+    const settlements = await Promise.allSettled(workers);
+    const failure = settlements.find((entry) => entry.status === 'rejected');
+    if (failure) {
+      throw failure.reason;
+    }
 
     const measurements = Object.fromEntries(results);
     process.stderr.write(
