@@ -13,6 +13,7 @@ import {
 
 describe('supervisor-auto-recovery (Issue #450 C3)', () => {
   it('auto-resumes a degraded child after dependency failure clears without operator intervention', async () => {
+    const independentChildRole = 'review-trigger-reconcile' as const;
     const stateDir = makeStateDir();
     const errorUntilMs = String(Date.now() + 6000);
     const child = startSupervisorBackground(
@@ -28,10 +29,10 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
     );
 
     await waitForMarker(stateDir, 'escalation-router', 25_000);
-    await waitForMarker(stateDir, 'listener', 25_000);
+    await waitForMarker(stateDir, independentChildRole, 25_000);
 
-    const listener = await readMarker(stateDir, 'listener');
-    expect(isAlive(listener.pid)).toBe(true);
+    const independentChild = await readMarker(stateDir, independentChildRole);
+    expect(isAlive(independentChild.pid)).toBe(true);
 
     const deadline = Date.now() + 20_000;
     let recoveringAfterHeal = 0;
@@ -46,7 +47,7 @@ describe('supervisor-auto-recovery (Issue #450 C3)', () => {
 
     const router = await readMarker(stateDir, 'escalation-router');
     expect(isAlive(router.pid)).toBe(true);
-    expect(isAlive(listener.pid)).toBe(true);
+    expect(isAlive(independentChild.pid)).toBe(true);
     expect(recoveringAfterHeal).toBeLessThanOrEqual(4);
 
     const status = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);

@@ -22,11 +22,12 @@ afterEach(() => {
 describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
   it('prompt-block child without progress reaches crash backoff or circuit breaker', async () => {
     const stateDir = makeStateDir();
+    const childRole = 'review-trigger-reconcile' as const;
     const child = startSupervisorBackground(
       stateDir,
       ['-OrchestratorSessionId', 'op-prompt-block-backoff'],
       {
-        AO_WAKE_SUPERVISOR_TEST_MODE_listener: 'prompt-block',
+        AO_WAKE_SUPERVISOR_TEST_MODE_review_trigger_reconcile: 'prompt-block',
         AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS: '5500',
         AO_WAKE_SUPERVISOR_CRASH_MAX_RAPID_EXITS: '2',
         AO_WAKE_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS: '5',
@@ -36,9 +37,9 @@ describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
     );
 
     try {
-      await readMarker(stateDir, 'listener', 20_000);
+      await readMarker(stateDir, childRole, 20_000);
     } catch {
-      // listener may restart quickly between attempts
+      // The child may restart quickly between attempts.
     }
 
     const observedPids = new Set<number>();
@@ -46,29 +47,29 @@ describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
     let supervisorLog = '';
     while (Date.now() < deadline) {
       try {
-        const marker = await readMarker(stateDir, 'listener', 500);
+        const marker = await readMarker(stateDir, childRole, 500);
         observedPids.add(marker.pid);
       } catch {
         // child may be between restarts
       }
       supervisorLog = readSupervisorLog(stateDir);
       if (
-        /crash backoff: listener/.test(supervisorLog) ||
-        /crash-loop circuit breaker: listener/.test(supervisorLog)
+        /crash backoff: review-trigger-reconcile/.test(supervisorLog) ||
+        /crash-loop circuit breaker: review-trigger-reconcile/.test(supervisorLog)
       ) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    expect(supervisorLog).toMatch(/crash backoff: listener|crash-loop circuit breaker: listener/);
+    expect(supervisorLog).toMatch(/crash backoff: review-trigger-reconcile|crash-loop circuit breaker: review-trigger-reconcile/);
     expect(observedPids.size).toBeLessThanOrEqual(6);
 
-    const recovery = readChildRecovery(stateDir, 'listener');
+    const recovery = readChildRecovery(stateDir, childRole);
     const terminal =
       recovery.terminal === true ||
       Number(recovery.rapidExits ?? 0) >= 2 ||
-      countLogMatches(supervisorLog, /crash backoff: listener/) > 0;
+      countLogMatches(supervisorLog, /crash backoff: review-trigger-reconcile/) > 0;
     expect(terminal).toBe(true);
 
     child.kill('SIGTERM');
@@ -99,16 +100,16 @@ describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
     const ps = `
       . '${supervisorLib.replace(/'/g, "''")}';
       $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}';
-      Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'listener' -RecoveryEntry @{
+      Set-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'review-trigger-reconcile' -RecoveryEntry @{
         terminal = $false
-        terminalEpisodeId = 'listener-outage-episode-1'
+        terminalEpisodeId = 'reconcile-outage-episode-1'
         terminalRearmAttempts = 1
         lastDaemonHealthClass = 'healthy'
       };
       $log = { param([string]$Message) };
-      $null = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId 'listener' -ChildStartedMs 0 -ChildPid 0 -AoCommand '${aoStub.replace(/'/g, "''")}' -LogWriter $log;
-      $decision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId 'listener' -ChildStartedMs 0 -ChildPid 0 -AoCommand '${aoStub.replace(/'/g, "''")}' -LogWriter $log;
-      $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'listener';
+      $null = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId 'review-trigger-reconcile' -ChildStartedMs 0 -ChildPid 0 -AoCommand '${aoStub.replace(/'/g, "''")}' -LogWriter $log;
+      $decision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId 'review-trigger-reconcile' -ChildStartedMs 0 -ChildPid 0 -AoCommand '${aoStub.replace(/'/g, "''")}' -LogWriter $log;
+      $recovery = Get-OrchestratorWakeSupervisorChildRecoveryState -Paths $paths -ChildId 'review-trigger-reconcile';
       [pscustomobject]@{
         allowed = [bool]$decision.allowed
         reason = [string]$decision.reason
@@ -143,7 +144,7 @@ describe('supervisor prompt-block crash backoff (#701 cell B)', () => {
     expect(payload.reason).toBe('circuit_breaker');
     expect(payload.terminal).toBe(true);
     expect(payload.terminalDaemonHealthClass).toBe('unhealthy-confirmed');
-    expect(payload.terminalEpisodeId).toBe('listener-outage-episode-1');
+    expect(payload.terminalEpisodeId).toBe('reconcile-outage-episode-1');
     expect(payload.terminalRearmAttempts).toBe(1);
   }, timeoutMs);
 });
