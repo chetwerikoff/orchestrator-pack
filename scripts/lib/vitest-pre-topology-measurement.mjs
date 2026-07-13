@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -84,8 +84,16 @@ export function measurePreTopologyFiles(repoRoot, files, options = {}) {
     }
     if (result.status !== 0) {
       const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim().slice(-4000);
+      let report = '';
+      if (existsSync(reportPath)) {
+        try {
+          report = readFileSync(reportPath, 'utf8').slice(-20000);
+        } catch {
+          report = '<report unreadable>';
+        }
+      }
       throw new Error(
-        `pre-topology measurement tests failed (exit ${result.status}) for: ${files.join(', ')}\n${output}`,
+        `pre-topology measurement tests failed (exit ${result.status}) for: ${files.join(', ')}\n${output}\nREPORT:\n${report}`,
       );
     }
     if (!existsSync(reportPath)) {
