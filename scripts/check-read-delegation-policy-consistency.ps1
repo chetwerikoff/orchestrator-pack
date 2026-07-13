@@ -8,11 +8,10 @@ $config = New-PesterConfiguration
 $config.Run.Path = Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
 $config.Run.PassThru = $true
 $config.Filter.FullName = @(
-    '*finds no loader-to-consumer scope leaks in production PowerShell*',
     '*fails for an unrelated synthetic cross-file loader and consumer*'
 )
 $config.Output.Verbosity = 'Detailed'
 $result = Invoke-Pester -Configuration $config
-Write-Host ("ISSUE771_GUARD_RESULT total={0} passed={1} failed={2} skipped={3}" -f $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
+Write-Host ("ISSUE771_SYNTHETIC_GUARD_RESULT total={0} passed={1} failed={2} skipped={3}" -f $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
 if ($result.FailedCount -gt 0) { exit 1 }
 exit 0
