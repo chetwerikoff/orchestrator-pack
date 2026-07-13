@@ -178,6 +178,7 @@
     "scripts/testmode-fleet-reaper.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/trust-ao-worktree.test.ts": "light",
+    "scripts/vestigial-fleet-retirement-pr-b.test.ts": "light",
     "scripts/vestigial-fleet-retirement.test.ts": "light",
     "scripts/worker-iteration-cycle.test.ts": "heavy",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
