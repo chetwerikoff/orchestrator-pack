@@ -28,14 +28,14 @@ jobs:
           path: target
           fetch-depth: 1
 
-      - name: Fix exact-line wake import anchor
+      - name: Fix publisher runtime anchors
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('scripts/publish-issue-771-fix.py')
           text = path.read_text(encoding='utf-8')
-          old = '''def patch_wake(path: Path) -> None:
+          old_wake = '''def patch_wake(path: Path) -> None:
               text = path.read_text(encoding="utf-8")
               top_level = ". (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
               cycle = ". (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')\\n"
@@ -48,7 +48,7 @@ jobs:
                   raise RuntimeError("wake import normalization failed")
               path.write_text(text, encoding="utf-8")
           '''
-          new = '''def patch_wake(path: Path) -> None:
+          new_wake = '''def patch_wake(path: Path) -> None:
               text = path.read_text(encoding="utf-8")
               top_level = ". (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')"
               cycle = ". (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')\\n"
@@ -63,9 +63,24 @@ jobs:
                   raise RuntimeError("wake import normalization failed")
               path.write_text(text, encoding="utf-8")
           '''
-          if text.count(old) != 1:
+          if text.count(old_wake) != 1:
               raise SystemExit('publisher wake anchor block not found exactly once')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          text = text.replace(old_wake, new_wake, 1)
+          old_patch = '''    api(
+                  "PATCH",
+                  ref_path,
+                  {"sha": commit["sha"], "force": False},
+              )
+          '''
+          new_patch = '''    api(
+                  "PATCH",
+                  ref_path.replace("/git/ref/", "/git/refs/"),
+                  {"sha": commit["sha"], "force": False},
+              )
+          '''
+          if text.count(old_patch) != 1:
+              raise SystemExit('publisher ref update block not found exactly once')
+          path.write_text(text.replace(old_patch, new_patch, 1), encoding='utf-8')
           PY
 
       - name: Capture atomic publisher result
