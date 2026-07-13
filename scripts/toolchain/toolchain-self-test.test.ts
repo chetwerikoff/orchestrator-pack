@@ -113,6 +113,27 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('rejects dynamic import raw child-process calls for namespace and destructured bindings', () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/dynamic-import.ts', `
+      async function run(): Promise<void> {
+        const cp = await import('node:child_process');
+        cp.spawn('git', ['status']);
+        const { spawnSync } = await import('node:child_process');
+        spawnSync('git', ['diff']);
+      }
+      void run();
+    `);
+    const comparison = compareRawChildProcessBaseline(
+      discoverRawChildProcessCalls(root, () => false),
+      { version: 1, entries: [] },
+    );
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/dynamic-import.ts', api: 'spawn' },
+      { path: 'scripts/dynamic-import.ts', api: 'spawnSync' },
+    ]);
+  });
+
   it('turns the PowerShell growth guard red for direct and shared-helper additions', () => {
     const root = temporaryRoot();
     const empty: PowerShellBootBaseline = { version: 1, entries: [] };
@@ -142,6 +163,24 @@ describe('TypeScript foundation check self-tests', () => {
     const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
     expect(comparison.added).toMatchObject([
       { path: 'scripts/inline-require.test.ts', mechanisms: ['direct:spawnSync'] },
+    ]);
+  });
+
+  it('turns the PowerShell growth guard red for dynamic import additions', () => {
+    const root = temporaryRoot();
+    const empty: PowerShellBootBaseline = { version: 1, entries: [] };
+    write(root, 'scripts/dynamic-import.test.ts', `
+      async function run(): Promise<void> {
+        const cp = await import('node:child_process');
+        cp.spawnSync('pwsh', ['-NoProfile']);
+        const { spawn } = await import('node:child_process');
+        spawn('pwsh', ['-NoProfile']);
+      }
+      void run();
+    `);
+    const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/dynamic-import.test.ts', mechanisms: ['direct:spawn', 'direct:spawnSync'] },
     ]);
   });
 

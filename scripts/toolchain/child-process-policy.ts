@@ -43,9 +43,55 @@ function moduleText(node: ts.Expression | undefined): string | undefined {
   return node && ts.isStringLiteralLike(node) ? node.text : undefined;
 }
 
+function unwrapExpression(node: ts.Expression | undefined): ts.Expression | undefined {
+  let current = node;
+  while (current && (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current))) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isRequireCall(node: ts.Expression | undefined): node is ts.CallExpression {
+  return !!node
+    && ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === 'require';
+}
+
+function isImportCall(node: ts.Expression | undefined): node is ts.CallExpression {
+  return !!node
+    && ts.isCallExpression(node)
+    && node.expression.kind === ts.SyntaxKind.ImportKeyword;
+}
+
+function isChildProcessImport(node: ts.Expression | undefined): boolean {
+  const expression = unwrapExpression(node);
+  return (isRequireCall(expression) || isImportCall(expression))
+    && CHILD_PROCESS_MODULES.has(moduleText(expression.arguments[0]) ?? '');
+}
+
 function importBindings(sourceFile: ts.SourceFile): ImportBindings {
   const named = new Map<string, string>();
   const namespaces = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)) {
+      const declaration = node;
+      const initializer = declaration.initializer;
+      if (isChildProcessImport(initializer)) {
+        if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
+        if (ts.isObjectBindingPattern(declaration.name)) {
+          for (const element of declaration.name.elements) {
+            const imported = element.propertyName && ts.isIdentifier(element.propertyName)
+              ? element.propertyName.text
+              : element.name.getText(sourceFile);
+            const local = element.name.getText(sourceFile);
+            if (RAW_APIS.has(imported)) named.set(local, imported);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && CHILD_PROCESS_MODULES.has(moduleText(statement.moduleSpecifier) ?? '')) {
       const bindings = statement.importClause?.namedBindings;
@@ -57,25 +103,9 @@ function importBindings(sourceFile: ts.SourceFile): ImportBindings {
       } else if (bindings && ts.isNamespaceImport(bindings)) {
         namespaces.add(bindings.name.text);
       }
+      continue;
     }
-
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      const initializer = declaration.initializer;
-      if (!initializer || !ts.isCallExpression(initializer)) continue;
-      if (!ts.isIdentifier(initializer.expression) || initializer.expression.text !== 'require') continue;
-      if (!CHILD_PROCESS_MODULES.has(moduleText(initializer.arguments[0]) ?? '')) continue;
-      if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
-      if (ts.isObjectBindingPattern(declaration.name)) {
-        for (const element of declaration.name.elements) {
-          const imported = element.propertyName && ts.isIdentifier(element.propertyName)
-            ? element.propertyName.text
-            : element.name.getText(sourceFile);
-          const local = element.name.getText(sourceFile);
-          if (RAW_APIS.has(imported)) named.set(local, imported);
-        }
-      }
-    }
+    visit(statement);
   }
   return { named, namespaces };
 }
@@ -92,7 +122,7 @@ function rawApi(call: ts.CallExpression, bindings: ImportBindings): string | und
   if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
   const receiver = call.expression.expression;
   if (ts.isIdentifier(receiver) && !bindings.namespaces.has(receiver.text)) return undefined;
-  if (!ts.isIdentifier(receiver) && !isChildProcessRequire(receiver)) return undefined;
+  if (!ts.isIdentifier(receiver) && !isChildProcessImport(receiver)) return undefined;
   return RAW_APIS.has(call.expression.name.text) ? call.expression.name.text : undefined;
 }
 

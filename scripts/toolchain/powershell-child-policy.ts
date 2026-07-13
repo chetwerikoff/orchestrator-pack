@@ -36,6 +36,33 @@ function literalText(node: ts.Expression | undefined): string | undefined {
   return undefined;
 }
 
+function unwrapExpression(node: ts.Expression | undefined): ts.Expression | undefined {
+  let current = node;
+  while (current && (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current))) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isRequireCall(node: ts.Expression | undefined): node is ts.CallExpression {
+  return !!node
+    && ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === 'require';
+}
+
+function isImportCall(node: ts.Expression | undefined): node is ts.CallExpression {
+  return !!node
+    && ts.isCallExpression(node)
+    && node.expression.kind === ts.SyntaxKind.ImportKeyword;
+}
+
+function isChildProcessImport(node: ts.Expression | undefined): boolean {
+  const expression = unwrapExpression(node);
+  return (isRequireCall(expression) || isImportCall(expression))
+    && CHILD_PROCESS_MODULES.has(literalText(expression.arguments[0]) ?? '');
+}
+
 function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
   const named = new Map<string, string>();
   const namespaces = new Set<string>();
@@ -58,29 +85,32 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
       }
     }
 
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
+    const visit = (node: ts.Node): void => {
+      if (!ts.isVariableDeclaration(node)) {
+        ts.forEachChild(node, visit);
+        return;
+      }
+      const declaration = node;
       const initializer = declaration.initializer;
       if (ts.isIdentifier(declaration.name)) {
         const constantValue = literalText(initializer);
         if (constantValue !== undefined) stringConstants.set(declaration.name.text, constantValue);
       }
-      if (!initializer || !ts.isCallExpression(initializer)) continue;
-      if (!ts.isIdentifier(initializer.expression) || initializer.expression.text !== 'require') continue;
-      const module = literalText(initializer.arguments[0]) ?? '';
-      if (module.includes('_test-pwsh-helpers')) importsSharedPwshHelper = true;
-      if (!CHILD_PROCESS_MODULES.has(module)) continue;
-      if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
-      if (ts.isObjectBindingPattern(declaration.name)) {
-        for (const element of declaration.name.elements) {
-          const imported = element.propertyName && ts.isIdentifier(element.propertyName)
-            ? element.propertyName.text
-            : element.name.getText(sourceFile);
-          const local = element.name.getText(sourceFile);
-          if (CHILD_APIS.has(imported)) named.set(local, imported);
+      if (isChildProcessImport(initializer)) {
+        if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
+        if (ts.isObjectBindingPattern(declaration.name)) {
+          for (const element of declaration.name.elements) {
+            const imported = element.propertyName && ts.isIdentifier(element.propertyName)
+              ? element.propertyName.text
+              : element.name.getText(sourceFile);
+            const local = element.name.getText(sourceFile);
+            if (CHILD_APIS.has(imported)) named.set(local, imported);
+          }
         }
       }
-    }
+      ts.forEachChild(node, visit);
+    };
+    visit(statement);
   }
 
   return { named, namespaces, importsSharedPwshHelper, stringConstants };
@@ -98,7 +128,7 @@ function childApi(call: ts.CallExpression, bindings: ChildBindings): string | un
   if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
   const receiver = call.expression.expression;
   if (ts.isIdentifier(receiver) && !bindings.namespaces.has(receiver.text)) return undefined;
-  if (!ts.isIdentifier(receiver) && !isChildProcessRequire(receiver)) return undefined;
+  if (!ts.isIdentifier(receiver) && !isChildProcessImport(receiver)) return undefined;
   return CHILD_APIS.has(call.expression.name.text) ? call.expression.name.text : undefined;
 }
 
