@@ -251,47 +251,92 @@ function Resolve-OpkVitestBreakpointCandidates {
     return @($candidates | Select-Object -Unique)
 }
 
+function Invoke-OpkVitestProxyGuard {
+    param(
+        [string]$CommandName,
+        [object]$BoundParameters
+    )
+
+    foreach ($candidate in @(Resolve-OpkVitestBreakpointCandidates -CommandName $CommandName -BoundParameters $BoundParameters)) {
+        if ($candidate) {
+            Assert-OpkVitestStorePathSafe -Path ([string]$candidate) -Operation $CommandName
+        }
+    }
+}
+
+function Install-OpkVitestCmdletProxy {
+    param([Parameter(Mandatory = $true)][string]$CommandName)
+
+    $cmdlet = Get-Command $CommandName -CommandType Cmdlet -ErrorAction Stop
+    $metadata = [System.Management.Automation.CommandMetadata]::new($cmdlet)
+    $proxyText = [System.Management.Automation.ProxyCommand]::Create($metadata)
+    $escapedName = $CommandName.Replace("'", "''")
+    $guard = "`n    Invoke-OpkVitestProxyGuard -CommandName '$escapedName' -BoundParameters `$PSBoundParameters`n"
+    $proxyText = [regex]::Replace($proxyText, '(?m)^begin\s*\{', "begin`n{$guard", 1)
+    $proxyText = [regex]::Replace($proxyText, '(?m)^process\s*\{', "process`n{$guard", 1)
+    Set-Item -Path "Function:\global:$CommandName" -Value ([scriptblock]::Create($proxyText)) -Force
+}
+
+function Install-OpkVitestExistingFunctionProxy {
+    param([Parameter(Mandatory = $true)][string]$CommandName)
+
+    $existing = Get-Command $CommandName -CommandType Function -ErrorAction SilentlyContinue
+    if (-not $existing) { return $false }
+
+    $safeName = $CommandName -replace '[^A-Za-z0-9_]', '_'
+    $originalName = "__OpkVitestOriginal_$safeName"
+    Set-Item -Path "Function:\global:$originalName" -Value $existing.ScriptBlock -Force
+
+    $metadata = [System.Management.Automation.CommandMetadata]::new($existing)
+    $proxyText = [System.Management.Automation.ProxyCommand]::Create($metadata)
+    $escapedName = $CommandName.Replace("'", "''")
+    $guard = "`n    Invoke-OpkVitestProxyGuard -CommandName '$escapedName' -BoundParameters `$PSBoundParameters`n"
+    $proxyText = [regex]::Replace($proxyText, '(?m)^begin\s*\{', "begin`n{$guard", 1)
+    $proxyText = [regex]::Replace($proxyText, '(?m)^process\s*\{', "process`n{$guard", 1)
+    $quotedCommand = [regex]::Escape("'$CommandName'")
+    $proxyText = [regex]::Replace($proxyText, $quotedCommand, "'$originalName'", 1)
+    Set-Item -Path "Function:\global:$CommandName" -Value ([scriptblock]::Create($proxyText)) -Force
+    return $true
+}
+
 function Enable-OpkVitestStoreIsolation {
     if (-not (Test-OpkVitestHarnessMarkerActive)) { return }
-    if ($Script:OpkVitestStoreBreakpoints.Count -gt 0) { return }
 
-    $writeCommands = @(
-        'Set-Content', 'Add-Content', 'Out-File', 'Clear-Content', 'New-Item',
-        'Remove-Item', 'Move-Item', 'Copy-Item', 'Rename-Item', 'Set-Acl',
-        'Set-MechanicalJsonStateFile', 'Set-WorkerMessageDispatchJournal',
-        'Set-SubmitReconcileState', 'Set-SubmitReconcileHeartbeat',
-        'Write-SubmitReconcileStateRootAnchor', 'Set-WorkerStatusStoreState',
-        'Set-ReviewDeliveryLifecycleEntry', 'Set-ReviewHandoffWakeAdmissionState',
-        'Set-ReviewReadyReportStateSeedState', 'Set-ReviewTriggerReevalWatchState',
-        'Set-CiGreenWakeState', 'Save-PartialCiGreenWakeTracking',
-        'Set-DeadWorkerState', 'Set-ReconcileState',
-        'New-OrchestratorSideEffectLockFile', 'Enter-OrchestratorSideEffectFence',
-        'Write-OrchestratorReviewStartDenialAudit',
-        'Write-OrchestratorReviewStartPreflightRefusal',
-        'Write-ReviewStartPreflightShieldAudit', 'Write-WorkerNudgeGateAudit',
-        'Initialize-MechanicalTransportTempRoot', 'Write-MechanicalTransportPrivateFile',
-        'Write-MechanicalWorkerMessagePayloadFile', 'Remove-StaleMechanicalTransportFiles'
-    )
+    if (-not $Script:OpkVitestStoreProxiesInstalled) {
+        foreach ($cmdlet in @(
+                'Set-Content', 'Add-Content', 'Out-File', 'Clear-Content', 'New-Item',
+                'Remove-Item', 'Move-Item', 'Copy-Item', 'Rename-Item', 'Set-Acl'
+            )) {
+            Install-OpkVitestCmdletProxy -CommandName $cmdlet
+        }
+        $Script:OpkVitestStoreProxiesInstalled = $true
+    }
+
     $resolverCommands = @()
     foreach ($store in @((Get-OpkVitestStoreInventory).stores)) {
         $resolverCommands += [string]$store.resolver
         $resolverCommands += @($store.resolverAliases | ForEach-Object { [string]$_ })
     }
-    $commands = @($writeCommands + $resolverCommands | Where-Object { $_ } | Select-Object -Unique)
+    foreach ($resolver in @($resolverCommands | Where-Object { $_ } | Select-Object -Unique)) {
+        [void](Install-OpkVitestExistingFunctionProxy -CommandName $resolver)
+    }
 
-    foreach ($command in $commands) {
-        $name = $command
-        $action = {
-            $bound = $PSDebugContext.InvocationInfo.BoundParameters
-            foreach ($candidate in @(Resolve-OpkVitestBreakpointCandidates -CommandName $name -BoundParameters $bound)) {
-                if ($candidate) { Assert-OpkVitestStorePathSafe -Path ([string]$candidate) -Operation $name }
+    # Command breakpoints are defense in depth for functions defined after the harness
+    # prelude. Filesystem cmdlet enforcement does not depend on debugger support.
+    if ($Script:OpkVitestStoreBreakpoints.Count -eq 0) {
+        foreach ($command in @($resolverCommands | Where-Object { $_ } | Select-Object -Unique)) {
+            $name = $command
+            $action = {
+                $bound = $PSDebugContext.InvocationInfo.BoundParameters
+                Invoke-OpkVitestProxyGuard -CommandName $name -BoundParameters $bound
+            }.GetNewClosure()
+            try {
+                $Script:OpkVitestStoreBreakpoints += Set-PSBreakpoint -Command $command -Action $action
             }
-        }.GetNewClosure()
-        try {
-            $Script:OpkVitestStoreBreakpoints += Set-PSBreakpoint -Command $command -Action $action
-        }
-        catch {
-            throw "failed to install vitest live-store breakpoint for $command`: $_"
+            catch {
+                # Resolver breakpoints are optional defense in depth. Proxy cmdlets and
+                # parent snapshots remain mandatory and fail closed at write boundaries.
+            }
         }
     }
 }
