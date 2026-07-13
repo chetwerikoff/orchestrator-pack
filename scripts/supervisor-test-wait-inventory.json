@@ -270,7 +270,7 @@
   ],
   "assertionFingerprints": {
     "scripts/orchestrator-wake-supervisor-startup.test.ts": "6ee70e64c3d3a9b69c8cf4ddb098016a35305fa153958bb57ef42289cb68b0fb",
-    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "a8e44c283964d9dd0a1bdbc37f7addadf1c511e4522bb3d430eebe1d8c4685b7",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts": "092d6e900da04f01af499eb412aba4a7c5391b1060e0ee2ef3da46274ab26cca",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "ac0a7e6459645bc5dee9d735d85e56842018f2cfafb6b4a54a511918fd7650c7",
     "scripts/orchestrator-wake-supervisor-empty-pid.test.ts": "31d76172aa340f4ea11276bb2d883c3ed073d8630ed30e261ee56744a4aaff8b",
     "scripts/supervisor-fault-boundary.shared.ts": "bec3bf01da26071db14471c6a966f6744e2709a416e66395bdf3bd42481a4278",
