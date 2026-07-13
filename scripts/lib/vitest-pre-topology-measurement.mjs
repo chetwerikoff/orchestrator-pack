@@ -12,6 +12,10 @@ export const PRE_TOPOLOGY_MAX_CONCURRENCY = 3;
 export const PRE_TOPOLOGY_TIMEOUT_MS = 8 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
+export function requiresExclusiveFleetMeasurement(file) {
+  return /(?:^|\/)(?:testmode-fleet|supervisor-|orchestrator-wake-supervisor)/.test(file);
+}
+
 export function shouldMeasurePreTopology(repoRoot, options = {}) {
   if (options.preTopologyMeasurements || process.env.OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT === '1') return false;
   if (process.env.VITEST === 'true' || process.env.VITEST_WORKER_ID) return false;
@@ -138,13 +142,21 @@ export async function measurePreTopologyFiles(repoRoot, files, options = {}) {
   const root = mkdtempSync(join(tmpdir(), 'opk-pre-topology-'));
   try {
     const results = new Array(files.length);
-    let nextIndex = 0;
-    const workers = Array.from({ length: concurrency }, async () => {
-      while (nextIndex < files.length) {
-        const index = nextIndex++;
+    const runQueue = async (indexes) => {
+      while (indexes.length > 0) {
+        const index = indexes.shift();
         results[index] = await measureFile(repoRoot, files[index], root, index, timeoutMs);
       }
-    });
+    };
+    const allIndexes = files.map((_, index) => index);
+    const exclusiveIndexes = allIndexes.filter((index) => requiresExclusiveFleetMeasurement(files[index]));
+    const regularIndexes = allIndexes.filter((index) => !requiresExclusiveFleetMeasurement(files[index]));
+    const workers = concurrency === 1 || exclusiveIndexes.length === 0
+      ? Array.from({ length: concurrency }, () => runQueue(allIndexes))
+      : [
+          runQueue(exclusiveIndexes),
+          ...Array.from({ length: concurrency - 1 }, () => runQueue(regularIndexes)),
+        ];
     const settlements = await Promise.allSettled(workers);
     const failure = settlements.find((entry) => entry.status === 'rejected');
     if (failure) throw failure.reason;

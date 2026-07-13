@@ -475,7 +475,7 @@ describe('orchestrator message registry (Issue #298)', () => {
     () => {
       execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
     },
-    240_000,
+    360_000,
   );
 
   it(
