@@ -41,7 +41,7 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
     applyOpkVitestHarnessEscalationEnv();
   }
   const guardHelper = path.join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
-  const guardedScript = `. ${psString(guardHelper)}; Enable-OpkVitestStoreIsolation; ${script}`;
+  const guardedScript = `. ${psString(guardHelper)}; foreach ($cmdlet in @('Set-Content','Add-Content','Out-File','Clear-Content','New-Item','Remove-Item','Move-Item','Copy-Item','Rename-Item','Set-Acl')) { [void](Install-OpkVitestCmdletProxy -CommandName $cmdlet) }; ${script}`;
   const pwsh = process.env.OPK_REAL_PWSH || 'pwsh';
   try {
     const result = spawnSync(pwsh, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', guardedScript], {
