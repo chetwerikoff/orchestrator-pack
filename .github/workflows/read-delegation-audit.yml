@@ -4,22 +4,22 @@ on:
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  group: issue-771-focused-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   audit-policy:
-    name: Read-delegation audit policy checks
+    name: Issue 771 focused Pester probe
     runs-on: ubuntu-latest
     steps:
       - name: Checkout diagnostic branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Checkout PR 773 head
         uses: actions/checkout@v4
@@ -28,75 +28,38 @@ jobs:
           path: target
           fetch-depth: 1
 
-      - name: Fix publisher runtime anchors
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/publish-issue-771-fix.py')
-          text = path.read_text(encoding='utf-8')
-          old_wake = '''def patch_wake(path: Path) -> None:
-              text = path.read_text(encoding="utf-8")
-              top_level = ". (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
-              cycle = ". (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')\\n"
-              local = "    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
-              if top_level not in text:
-                  text = replace_once(text, cycle, cycle + top_level, "wake top-level import")
-              if local in text:
-                  text = replace_once(text, local, "", "wake function-local import")
-              if text.count(top_level) != 1 or local in text:
-                  raise RuntimeError("wake import normalization failed")
-              path.write_text(text, encoding="utf-8")
-          '''
-          new_wake = '''def patch_wake(path: Path) -> None:
-              text = path.read_text(encoding="utf-8")
-              top_level = ". (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')"
-              cycle = ". (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')\\n"
-              local = "    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')\\n"
-              lines = text.splitlines()
-              if top_level not in lines:
-                  text = replace_once(text, cycle, cycle + top_level + "\\n", "wake top-level import")
-              if local in text:
-                  text = replace_once(text, local, "", "wake function-local import")
-              lines = text.splitlines()
-              if lines.count(top_level) != 1 or local in text:
-                  raise RuntimeError("wake import normalization failed")
-              path.write_text(text, encoding="utf-8")
-          '''
-          if text.count(old_wake) != 1:
-              raise SystemExit('publisher wake anchor block not found exactly once')
-          text = text.replace(old_wake, new_wake, 1)
-          old_patch = '''    api(
-                  "PATCH",
-                  ref_path,
-                  {"sha": commit["sha"], "force": False},
-              )
-          '''
-          new_patch = '''    api(
-                  "PATCH",
-                  ref_path.replace("/git/ref/", "/git/refs/"),
-                  {"sha": commit["sha"], "force": False},
-              )
-          '''
-          if text.count(old_patch) != 1:
-              raise SystemExit('publisher ref update block not found exactly once')
-          path.write_text(text.replace(old_patch, new_patch, 1), encoding='utf-8')
-          PY
+      - name: Install Pester
+        shell: pwsh
+        run: ./target/scripts/install-pester-ci.ps1
 
-      - name: Capture atomic publisher result
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+      - name: Run issue 771 focused suite
+        shell: pwsh
         run: |
-          set +e
-          python scripts/publish-issue-771-fix.py target > scripts/issue-771-publisher-result.log 2>&1
-          status=$?
-          echo "EXIT_CODE=$status" >> scripts/issue-771-publisher-result.log
+          $config = New-PesterConfiguration
+          $config.Run.Path = './target/tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
+          $config.Run.PassThru = $true
+          $config.Output.Verbosity = 'Detailed'
+          $result = Invoke-Pester -Configuration $config 2>&1 | Tee-Object -FilePath issue-771-focused-result.log
+          if ($result -is [array]) {
+            $summary = @($result | Where-Object { $_.PSObject.Properties.Name -contains 'FailedCount' })[-1]
+          }
+          else {
+            $summary = $result
+          }
+          if ($summary) {
+            "SUMMARY total=$($summary.TotalCount) passed=$($summary.PassedCount) failed=$($summary.FailedCount) skipped=$($summary.SkippedCount)" | Add-Content issue-771-focused-result.log
+          }
+          if ($summary -and $summary.FailedCount -gt 0) {
+            "EXIT_CODE=1" | Add-Content issue-771-focused-result.log
+          }
+          else {
+            "EXIT_CODE=0" | Add-Content issue-771-focused-result.log
+          }
           exit 0
 
-      - name: Upload atomic publisher result
+      - name: Upload focused result
         uses: actions/upload-artifact@v4
         with:
-          name: issue-771-publisher-result
-          path: scripts/issue-771-publisher-result.log
+          name: issue-771-focused-result
+          path: issue-771-focused-result.log
           if-no-files-found: error
