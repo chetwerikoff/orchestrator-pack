@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   audit-policy:
@@ -21,13 +21,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Export issue 771 target files
-        shell: pwsh
-        run: ./scripts/check-read-delegation-policy-consistency.ps1
-
-      - name: Upload issue 771 target files
-        uses: actions/upload-artifact@v4
+      - name: Checkout PR 773 head
+        uses: actions/checkout@v4
         with:
-          name: issue-771-target-files
-          path: scripts/issue-771-target-files
-          if-no-files-found: error
+          ref: agent/issue-771-powershell-scope
+          path: target
+          fetch-depth: 1
+
+      - name: Publish issue 771 fix atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/publish-issue-771-fix.py target
