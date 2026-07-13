@@ -305,7 +305,7 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
 
   it('documents the finding-ledger quotation delimiter forms and fail-closed malformed behavior', () => {
     const examples = [
-      '`type: scope-violation`',
+      'Inline code span: `type: scope-violation`',
       ['```text', 'type: security', '```'].join('\n'),
       '> [P1 security] quoted rubric row\n',
       '"/\\btype:\\s*security\\b/i"',
@@ -322,6 +322,27 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
   it('does not treat apostrophe contractions as quoted protected-signal spans', () => {
     const capture = "Don't mark this out of scope because it's risky.";
     expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
+  });
+
+  it('does not hide operative inline-code policy terms in findings', () => {
+    const capture = [
+      'type: spec; id: policy-inline',
+      'This finding says the change is out of `allowed_roots` and touches `denylist`.',
+    ].join('\n');
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'inline-policy-terms',
+      findings: [
+        {
+          id: 'policy-inline',
+          summary: 'Policy name formatting should still be operative.',
+          type: 'spec',
+          disposition: 'addressed',
+        },
+      ],
+    });
+    expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
+    expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(false);
   });
 
   it('passes draft-273-shaped quoted evidence without fabricated protected coverage', () => {

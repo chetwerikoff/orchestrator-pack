@@ -228,7 +228,7 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
 
   it('documents the tier marker quotation delimiter forms and fail-closed malformed behavior', () => {
     const examples = [
-      '`required checks`',
+      'Inline code span: `required checks`',
       ['```text', 'branch protection', '```'].join('\n'),
       '> T3 | ci-review-gating | merge authorization\n',
       '"\\brequired\\s+checks?\\b"',
@@ -245,6 +245,12 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
 
   it('does not treat apostrophe contractions as quoted marker spans', () => {
     const text = "Don't change required checks because it's risky.";
+    expect(maskDelimitedMarkdownQuotes(text)).toContain('required checks');
+    expect(screenRedFlagMarkers(text, { repoRoot }).hits).toContain('ci-review-gating');
+  });
+
+  it('does not hide operative inline-code marker phrases', () => {
+    const text = 'Update the `required checks` configuration before merge.';
     expect(maskDelimitedMarkdownQuotes(text)).toContain('required checks');
     expect(screenRedFlagMarkers(text, { repoRoot }).hits).toContain('ci-review-gating');
   });
