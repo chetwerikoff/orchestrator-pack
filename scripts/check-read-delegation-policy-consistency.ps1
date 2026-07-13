@@ -18,11 +18,7 @@ try {
     $config = New-PesterConfiguration
     $config.Run.Path = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
     $config.Run.PassThru = $true
-    $config.Filter.FullName = @(
-        '*keeps worker-status GitHub commands visible after lazy import returns*',
-        '*never latches an incomplete load as success or replays partial top-level effects*',
-        '*uses the GitHub boundary, computes a snapshot, and writes a store record*'
-    )
+    $config.Filter.FullName = @('*finds no loader-to-consumer scope leaks in production PowerShell*')
     $config.Output.Verbosity = 'None'
     $result = Invoke-Pester -Configuration $config
     if ($result.FailedCount -gt 0) { exit 1 }
