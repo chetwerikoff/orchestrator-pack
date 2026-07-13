@@ -14,18 +14,32 @@ permissions:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Create source snapshot
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install frozen dependencies
+        run: npm ci --include=dev
+      - name: Create source and dependency snapshots
         run: |
-          tar --exclude=.git -czf /tmp/orchestrator-pack-issue-800.tar.gz .
+          tar --exclude=.git --exclude=node_modules -czf /tmp/orchestrator-pack-issue-800.tar.gz .
+          tar -czf /tmp/orchestrator-pack-node-modules.tar.gz node_modules
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: issue-800-repo-snapshot
           path: /tmp/orchestrator-pack-issue-800.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload dependency snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-800-node-modules
+          path: /tmp/orchestrator-pack-node-modules.tar.gz
           if-no-files-found: error
           retention-days: 1
