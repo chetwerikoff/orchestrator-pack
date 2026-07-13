@@ -11,15 +11,96 @@ $Script:WorkerStatusKillSwitchEnv = 'PACK_WORKER_STATUS_STORE_DISABLED'
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Get-WorkerOsLiveness.ps1')
 
+function Test-WorkerStatusGithubDependencyModule {
+    param($Module)
+
+    if (-not $Module) {
+        return $false
+    }
+    if (-not (Get-Module -Name $Module.Name)) {
+        return $false
+    }
+
+    $requiredCommands = @(
+        'Resolve-PackGateRepoRoot',
+        'Invoke-GhOpenPrList',
+        'Invoke-GhOpenPrListForNumbers',
+        'Get-ReconcileChecksByPr',
+        'Get-EnrichedAoReviewRuns'
+    )
+    foreach ($commandName in $requiredCommands) {
+        if (-not $Module.ExportedFunctions.ContainsKey($commandName)) {
+            return $false
+        }
+        if (-not (Get-Command $commandName -CommandType Function -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Import-WorkerStatusGithubDependencies {
-    if ($script:WorkerStatusGithubDependenciesLoaded) {
+    if ($script:WorkerStatusGithubDependenciesFailure) {
+        throw "worker-status GitHub dependency load previously failed: $($script:WorkerStatusGithubDependenciesFailure)"
+    }
+    if ($script:WorkerStatusGithubDependenciesLoaded -and
+        (Test-WorkerStatusGithubDependencyModule -Module $script:WorkerStatusGithubDependenciesModule)) {
         return
     }
-    . (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
-    . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
-    . (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1')
-    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
-    $script:WorkerStatusGithubDependenciesLoaded = $true
+
+    $script:WorkerStatusGithubDependenciesLoaded = $false
+    if ($script:WorkerStatusGithubDependenciesModule) {
+        Remove-Module -ModuleInfo $script:WorkerStatusGithubDependenciesModule -Force -ErrorAction SilentlyContinue
+        $script:WorkerStatusGithubDependenciesModule = $null
+    }
+
+    $dependencyPaths = @(
+        (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1'),
+        (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1'),
+        (Join-Path $PSScriptRoot 'Get-ReconcileChecksByPr.ps1'),
+        (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
+    )
+    $missingPaths = @($dependencyPaths | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
+    if ($missingPaths.Count -gt 0) {
+        throw "worker-status GitHub dependency preflight failed: missing $($missingPaths -join ', ')"
+    }
+
+    $module = $null
+    try {
+        $moduleName = 'WorkerStatusGithubDependencies_{0}' -f ([Guid]::NewGuid().ToString('N'))
+        $module = New-Module -Name $moduleName -ArgumentList (,$dependencyPaths) -ScriptBlock {
+            param([string[]]$Paths)
+            foreach ($path in $Paths) {
+                . $path
+            }
+        }
+        $importedModule = @(Import-Module -ModuleInfo $module -Global -Force -DisableNameChecking -PassThru)[0]
+        if (-not (Test-WorkerStatusGithubDependencyModule -Module $importedModule)) {
+            $requiredCommands = @(
+                'Resolve-PackGateRepoRoot',
+                'Invoke-GhOpenPrList',
+                'Invoke-GhOpenPrListForNumbers',
+                'Get-ReconcileChecksByPr',
+                'Get-EnrichedAoReviewRuns'
+            )
+            $missingCommands = @($requiredCommands | Where-Object {
+                    -not $importedModule.ExportedFunctions.ContainsKey($_)
+                })
+            throw "worker-status GitHub dependency module is missing required commands: $($missingCommands -join ', ')"
+        }
+
+        $script:WorkerStatusGithubDependenciesModule = $importedModule
+        $script:WorkerStatusGithubDependenciesLoaded = $true
+    }
+    catch {
+        $script:WorkerStatusGithubDependenciesLoaded = $false
+        $script:WorkerStatusGithubDependenciesModule = $null
+        $script:WorkerStatusGithubDependenciesFailure = $_.Exception.Message
+        if ($module) {
+            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue
+        }
+        throw "worker-status GitHub dependency load failed: $($script:WorkerStatusGithubDependenciesFailure)"
+    }
 }
 
 function New-WorkerStatusEmptyGithubSnapshot {
@@ -205,7 +286,7 @@ function Resolve-WorkerStatusSessionGithubBlock {
         ciChecks                  = if ($prKey) { @($Snapshot.ciChecksByPr[$prKey]) } else { @() }
         requiredCheckNames        = if ($prKey) { @($Snapshot.requiredCheckNamesByPr[$prKey]) } else { @() }
         requiredCheckLookupFailed = if ($snapshotDegraded) { $true } elseif ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
-        unavailable               = $snapshotDegraded
+        unavailable                  = $snapshotDegraded
         degraded                  = $snapshotDegraded
     }
 }
