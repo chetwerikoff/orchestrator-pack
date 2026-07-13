@@ -606,7 +606,7 @@ describe('wall-clock e2e stage split (#694)', () => {
     expect(manifest.preMoveEnumeratedFiles).toHaveLength(6);
     const successors = Object.values(manifest.preMoveToPostMergeMap).flat();
     expect(new Set(successors).size).toBe(successors.length);
-    expect(successors).toHaveLength(17);
+    expect(successors).toHaveLength(16);
   });
 
   it('validates pre-move manifest against pinned git baseline (#694 AC#2)', async () => {

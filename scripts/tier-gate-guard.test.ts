@@ -12,8 +12,10 @@ import { runCli } from './tier-gate-guard.js';
 import {
   loadMarkerClasses,
   MARKER_HEURISTICS,
+  maskDelimitedMarkdownQuotes,
   screenRedFlagMarkers,
 } from './lib/tier-marker-screen.js';
+import { validateTierGateGuardReceipt } from './lib/publish-issue-body-sync.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -27,6 +29,56 @@ function loadFixture(name: string) {
 
 function fixturePath(name: string) {
   return path.join(fixturesDir, `${name}.md`);
+}
+
+function markerVocabularyDraft(goal: string, examples = '') {
+  return `# Quotation marker vocabulary T1 brief
+
+GitHub Issue: TBD
+
+\`\`\`complexity-tier
+tier: T1
+advisory-prior: T1
+\`\`\`
+
+\`\`\`behavior-kind
+action-producing
+\`\`\`
+
+\`\`\`contract-evidence
+none
+\`\`\`
+
+\`\`\`positive-outcome
+asserts: marker screening keeps quoted examples separate from operative prose
+input: realistic
+\`\`\`
+
+## Goal
+
+${goal}
+
+${examples}
+
+## Denylist
+
+\`\`\`denylist
+vendor/**
+packages/core/**
+\`\`\`
+
+\`\`\`allowed-roots
+scripts/lib/tier-marker-screen.ts
+\`\`\`
+
+## Acceptance criteria
+
+1. Marker behavior is stable.
+
+## Verification
+
+1. Run the tier-gate guard.
+`;
 }
 
 describe('tier-gate guard fails a red-flag-marked task assigned below T3 and passes a marker-free task on its lower tier', () => {
@@ -117,6 +169,90 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/unparseable complexity-tier fence/);
     expect(result.receipt).toBeNull();
+  });
+
+  it('accepts draft-275-shaped quoted marker vocabulary through core, wrapper, and sync validation', () => {
+    const text = markerVocabularyDraft(
+      "Document the marker screen's quotation handling without editing marker classes.",
+      [
+        '## Examples',
+        'Inline code span: `required checks`',
+        '',
+        'Fenced code block:',
+        '',
+        '```text',
+        'branch protection',
+        '```',
+        '',
+        'Rubric row:',
+        '',
+        '> T3 | ci-review-gating | merge authorization',
+        '',
+        'Quoted regex pattern: "\\\\brequired\\\\s+checks?\\\\b"',
+        '',
+        "Quoted test-fixture string: 'Change external API timeout semantics for the REST wrapper.'",
+      ].join('\n'),
+    );
+
+    const core = checkTierGateGuard(text, { repoRoot });
+    expect(core.ok).toBe(true);
+    expect(core.screen.hits).toEqual([]);
+    expect(runCli(['node', 'tier-gate-guard.ts', '--text', text, '--repo-root', repoRoot])).toBe(0);
+    expect(validateTierGateGuardReceipt(text).ok).toBe(true);
+  });
+
+  it('rejects unquoted and mixed marker vocabulary below T3 through the same tier-gate paths', () => {
+    const cases = new Map([
+      [
+        'unquoted',
+        markerVocabularyDraft('Operate on required checks and branch protection for merge authorization.'),
+      ],
+      [
+        'mixed',
+        markerVocabularyDraft('Document `required checks`, then operate on branch protection for merge.'),
+      ],
+      [
+        'malformed',
+        markerVocabularyDraft('Discuss the unterminated example "required checks without closing it.'),
+      ],
+    ]);
+
+    for (const [name, text] of cases) {
+      const core = checkTierGateGuard(text, { repoRoot });
+      expect(core.ok, name).toBe(false);
+      expect(core.screen.hits.length, name).toBeGreaterThan(0);
+      expect(runCli(['node', 'tier-gate-guard.ts', '--text', text, '--repo-root', repoRoot])).toBe(1);
+      expect(validateTierGateGuardReceipt(text).ok).toBe(false);
+    }
+  });
+
+  it('documents the tier marker quotation delimiter forms and fail-closed malformed behavior', () => {
+    const examples = [
+      'Inline code span: `required checks`',
+      ['```text', 'branch protection', '```'].join('\n'),
+      '> T3 | ci-review-gating | merge authorization\n',
+      '"\\brequired\\s+checks?\\b"',
+      "'Change external API timeout semantics for the REST wrapper.'",
+    ];
+
+    for (const example of examples) {
+      expect(screenRedFlagMarkers(example, { repoRoot }).hits, example).toEqual([]);
+      expect(maskDelimitedMarkdownQuotes(example), example).not.toMatch(/required checks|branch protection|merge authorization|external API timeout semantics/i);
+    }
+
+    expect(screenRedFlagMarkers('"required checks', { repoRoot }).hits).toContain('ci-review-gating');
+  });
+
+  it('does not treat apostrophe contractions as quoted marker spans', () => {
+    const text = "Don't change required checks because it's risky.";
+    expect(maskDelimitedMarkdownQuotes(text)).toContain('required checks');
+    expect(screenRedFlagMarkers(text, { repoRoot }).hits).toContain('ci-review-gating');
+  });
+
+  it('does not hide operative inline-code marker phrases', () => {
+    const text = 'Update the `required checks` configuration before merge.';
+    expect(maskDelimitedMarkdownQuotes(text)).toContain('required checks');
+    expect(screenRedFlagMarkers(text, { repoRoot }).hits).toContain('ci-review-gating');
   });
 });
 

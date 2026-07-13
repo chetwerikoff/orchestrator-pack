@@ -14,12 +14,12 @@ $DispatchCli = Join-Path $PackRoot 'docs/worker-message-dispatch-observe.mjs'
 
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorStateRoot.ps1')
 
 function Get-WorkerMessageDispatchJournalPath {
     if ($env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL) {
         return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
     }
-    . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
     $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
     if (-not (Test-Path -LiteralPath $stateRoot)) {
         New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null

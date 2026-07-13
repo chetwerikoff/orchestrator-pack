@@ -28,7 +28,6 @@
       "scripts/orchestrator-wake-supervisor-empty-pid.test.ts"
     ],
     "scripts/orchestrator-wake-listener.test.ts": [
-      "scripts/orchestrator-wake-listener-evaluate.test.ts",
       "scripts/orchestrator-wake-listener-helpers.test.ts"
     ],
     "scripts/orchestrator-wake-supervisor-orphan-integration.test.ts": [
@@ -44,6 +43,7 @@
     ]
   },
   "retiredPreMoveFiles": [
+    "scripts/orchestrator-wake-listener-evaluate.test.ts",
     "scripts/review-finding-delivery-confirm.test.ts",
     "scripts/review-run-recovery.test.ts",
     "scripts/review-stuck-run-reaper.test.ts"

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "issue": 745,
+  "baseCommitSha": "9728896230f8f66de09c485dff613dfdee5cfd9f",
+  "aoVersion": "0.10.2",
+  "disposition": "retire",
+  "productionAudit": {
+    "inboundWebhookPosts": 0,
+    "source": "Issue #745 architect audit: production logs showed zero inbound webhook POSTs"
+  },
+  "finalBaseProbe": {
+    "command": "node tests/listener-disposition-probe.mjs",
+    "observationWindowSeconds": 60,
+    "readinessRequest": "one loopback GET /ao-wake readiness request; zero POST requests",
+    "inboundWebhookPosts": 0,
+    "bindingVerified": true,
+    "observedAtUtc": "2026-07-12T15:30:45.000Z"
+  },
+  "decision": "Retire listener after the final-base bound-listener probe passes; keep+fix is reserved for documented live POST traffic."
+}

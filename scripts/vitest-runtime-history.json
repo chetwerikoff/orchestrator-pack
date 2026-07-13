@@ -385,23 +385,6 @@
     "tests/agents-md-size-budget.test.ts": "measured",
     "scripts/worker-status-store.test.ts": "measured"
   },
-  "contentSha": {
-    "scripts/check-ci-pipeline-split.test.ts": "948fccead0114e93b80e9296268e590a8ba7c911a885043b95fc52edae92d367",
-    "scripts/finding-ledger-guard.test.ts": "76be00420d3c29e3ca8d2b7acdac3a99a5d9004c75e63df897fa50730179fa99",
-    "scripts/tier-gate-guard.test.ts": "1b4e904be2d466e5b6dd0a69a95bc30bc8d59de181575a764e0e5e3242b65fdb",
-    "scripts/dead-worker-reconcile.test.ts": "d9e22b35e782d676ac3b0037bcaad642ba86e09612f86c854d4f5e1b5faea33e",
-    "scripts/event-consumer-rebind-scenario-matrix.test.ts": "142feea5f8496dabdfd35a44afdd0960cbb7a7a0a215f9bd091d5d0062ec420b",
-    "scripts/orchestrator-escalation-router.test.ts": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a",
-    "scripts/orchestrator-escalation.test.ts": "e9e482c10d6dc7238802587208f61c59da7e54c9bd0d566921e59a8bfc921d45",
-    "scripts/worker-recovery.test.ts": "c5f05d74052dce9a267c923bb737995b94cc6ea9fecba6c15633a34234937454",
-    "scripts/run-vitest-heavy-shard.test.ts": "d3de2b049fb69d107f95d2e3f65e5b0cf9a98888e1b279d6f67415b0bb1813d1",
-    "scripts/supervisor-prompt-block-crash-backoff.test.ts": "2e011cebca197efac3c37560bd645a901ec4799dd2858118d6eae4c880cdcad1",
-    "scripts/worker-message-submit-reconcile.test.ts": "1ee617ca12b88f014708492b386ab324c38cb15b72b5c56c7f402d0c2ac389df",
-    "scripts/worker-report-store.test.ts": "cc33c7a9239c2ce11af46dd127bb5074bdb18fbe1172a59c16b3c6d2e5dc6a79",
-    "tests/agents-md-relocation.test.ts": "b87abdbf7f34383103b97c21cbc7fefa3ea51e27eae76165401ddcf57861d0b9",
-    "tests/agents-md-size-budget.test.ts": "adcb60fb1bc5093792845401ca22e6032f7462bc128dda214c0035b7819cdaa3",
-    "scripts/pr-scope-check.test.ts": "abf7c06c04c748ffe27b4662c2147b4da066e86c48b79437030c4a51a000d4c7"
-  },
   "recentSamples": {},
   "fileChangedAt": {}
 }

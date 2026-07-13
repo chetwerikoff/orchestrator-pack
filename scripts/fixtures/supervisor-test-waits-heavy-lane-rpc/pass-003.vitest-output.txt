@@ -1,4 +1,40 @@
-[vitest-lane-timing] heavy shard 5/9 elapsed=136.31s weight_ms=860000
+> test
+> vitest run scripts/orchestrator-wake-supervisor-startup.test.ts scripts/orchestrator-wake-supervisor-lifecycle.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts scripts/orchestrator-wake-supervisor-empty-pid.test.ts --reporter=default
+
+ RUN  v4.1.10 /home/runner/work/orchestrator-pack/orchestrator-pack
+
+ ✓ scripts/orchestrator-wake-supervisor-lifecycle.test.ts (7 tests) 171124ms
+     ✓ stops the session-bound child when orchestrator session disappears at runtime  26008ms
+     ✓ reports status and stops surviving children cleanly  18192ms
+     ✓ stops supervisor before children so no orphan wake processes remain  19045ms
+     ✓ status exits non-zero when supervisor is stopped but a child remains  16059ms
+     ✓ captures per-child logs and survives launching shell exit when detached  21461ms
+     ✓ quotes all launcher arguments on Unix when detached  51169ms
+     ✓ throttles crash-loop restarts for a surviving child that exits immediately  19189ms
+ ✓ scripts/orchestrator-wake-supervisor-startup.test.ts (9 tests) 116546ms
+     ✓ starts every registry-defined managed child as a separate process  12685ms
+     ✓ prepends pack scripts in wake-supervisor child environment  1162ms
+     ✓ resolves the orchestrator session id for the session-bound router  12056ms
+     ✓ passes supervisor ProjectId to surviving children  12586ms
+     ✓ restarts a surviving child after it exits  16566ms
+     ✓ does not share fate between surviving children  13240ms
+     ✓ waits when no orchestrator session exists, then starts the fleet  13315ms
+     ✓ exits with an actionable message when no orchestrator session appears within bound  5674ms
+     ✓ restarts the session-bound router when orchestrator session id changes  29259ms
+ ✓ scripts/orchestrator-wake-supervisor-empty-pid.test.ts (7 tests) 42805ms
+     ✓ Read-OrchestratorWakeSupervisorPidFile treats zero-byte files as pid 0  2780ms
+     ✓ Read-OrchestratorWakeSupervisorPidFile treats whitespace-only files as pid 0  2661ms
+     ✓ Read-OrchestratorWakeSupervisorPidFile still parses valid positive integers  2731ms
+     ✓ Status tolerates zero-byte child pid files and removes them  2961ms
+     ✓ Start tolerates zero-byte child pid files and prints status output  13936ms
+     ✓ Status tolerates zero-byte supervisor.pid  2908ms
+     ✓ Start tolerates zero-byte supervisor.pid  14825ms
+ ✓ scripts/orchestrator-wake-supervisor-side-process-registry.test.ts (3 tests) 41348ms
+     ✓ registry JSON lists exactly the current required managed children  420ms
+     ✓ recovers a hung test child without restarting idle siblings  20422ms
+     ✓ does not restart a child that is merely slow on a side effect  20504ms
+
  Test Files  4 passed (4)
       Tests  26 passed (26)
-[vitest-heavy] clean run — no worker RPC anomalies
+   Start at  01:38:54
+   Duration  380.61s (transform 98ms, setup 119ms, import 73ms, tests 371.82s, environment 2ms)

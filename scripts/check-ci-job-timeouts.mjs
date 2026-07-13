@@ -11,6 +11,7 @@ const WORKFLOW_TIMEOUT_POLICY = {
       heavyShard: { minutes: 21.5, margin: 2.0 },
       verifyPack: { minutes: 13.65, margin: 2.0 },
       aggregate: { minutes: 13.65, margin: 2.0 },
+      topologyPlan: { minutes: 10, margin: 2.0 },
     },
     jobs: {
       'classify-pr-changes': { timeout: 10, reference: 'quick' },
@@ -18,7 +19,7 @@ const WORKFLOW_TIMEOUT_POLICY = {
       'pr-scope-guard': { timeout: 15, reference: 'medium' },
       'test-typecheck': { timeout: 15, reference: 'medium' },
       'test-vitest-light': { timeout: 20, reference: 'lightLane' },
-      'plan-vitest-ci-topology': { timeout: 10, reference: 'quick' },
+      'plan-vitest-ci-topology': { timeout: 20, reference: 'topologyPlan' },
       'test-vitest-heavy': { timeout: 45, reference: 'heavyShard' },
       'test-pester': { timeout: 20, reference: 'pester' },
       'test-aggregate': { timeout: 30, reference: 'aggregate' },

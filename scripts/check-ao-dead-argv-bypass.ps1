@@ -12,7 +12,6 @@ $SessionStatusInScopeRelativePaths = @(
     'scripts/orchestrator-wake-supervisor.ps1',
     'scripts/wait-orchestrator-launch.ps1',
     'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
-    'scripts/orchestrator-wake-listener.ps1',
     'scripts/lib/Worker-Recovery.ps1',
     'scripts/dead-worker-reconcile.ps1',
     'scripts/lib/Worker-NudgeClaim.ps1',

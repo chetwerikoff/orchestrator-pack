@@ -190,22 +190,22 @@ describe('Issue #613 orphan supervisor discovery (unit)', () => {
   it('managed child identity preserves argv tokens for -File script paths', () => {
     const stateDir = makeStateDir();
     const fixturePath = path.join(stateDir, 'cmdline-fixture.json');
-    const listenerScript = path.join(repoRoot, 'scripts/orchestrator-wake-listener.ps1');
+    const reconcileScript = path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1');
     const livePid = process.pid;
-    const brokenJoined = `pwsh -NoProfile -File ${path.join(stateDir, 'wake')} listener.ps1`;
+    const brokenJoined = `pwsh -NoProfile -File ${path.join(stateDir, 'review')} trigger-reconcile.ps1`;
 
     fs.writeFileSync(fixturePath, JSON.stringify({ [String(livePid)]: brokenJoined }));
-    expect(testManagedChildIdentity(fixturePath, livePid, 'listener')).toBe(false);
+    expect(testManagedChildIdentity(fixturePath, livePid, 'review-trigger-reconcile')).toBe(false);
 
     fs.writeFileSync(
       fixturePath,
       JSON.stringify({
         [String(livePid)]: {
-          tokens: ['pwsh', '-NoProfile', '-File', listenerScript],
+          tokens: ['pwsh', '-NoProfile', '-File', reconcileScript],
         },
       }),
     );
-    expect(testManagedChildIdentity(fixturePath, livePid, 'listener')).toBe(true);
+    expect(testManagedChildIdentity(fixturePath, livePid, 'review-trigger-reconcile')).toBe(true);
   });
 
   it('managed child identity matches test child role via argv -Role token', () => {

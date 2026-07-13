@@ -4,6 +4,11 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  collectProtectedSignalMatches,
+  loadProtectedSignalReceipt,
+  suppressProtectedSignalHits,
+} from './protected-signal-receipt.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -130,22 +135,67 @@ export function resetMarkerClassCache(): void {
 export interface MarkerScreenResult {
   hits: string[];
   unparseable: boolean;
+  suppressed?: Array<{ signal: string; fingerprint: string; occurrence: number }>;
+}
+
+/**
+ * Mask well-formed quoted/example spans before protected-signal regex scans.
+ * Recognized delimiters are fenced code blocks, inline code spans introduced
+ * as examples, Markdown blockquote lines, balanced double-quoted strings, and balanced single-quoted
+ * strings whose apostrophes are not embedded in words. Unterminated delimiters
+ * are left intact so malformed input cannot create a broad exemption.
+ */
+export function maskDelimitedMarkdownQuotes(text: string): string {
+  let masked = text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  masked = masked.replace(/`[^`\n]+`/g, (match, offset, fullText) => {
+    const lineStart = fullText.lastIndexOf('\n', offset - 1) + 1;
+    const prefix = fullText.slice(lineStart, offset).trimEnd();
+    if (
+      /\b(?:inline code span|quoted(?:\s+(?:example|term|text))?|quote|example|regex pattern|test[- ]fixture string)\s*:\s*$/i.test(
+        prefix,
+      )
+    ) {
+      return ' '.repeat(match.length);
+    }
+    return match;
+  });
+  masked = masked.replace(/^>[^\n]*(?:\n|$)/gm, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  masked = masked.replace(/"(?:\\.|[^"\\\n])+"/g, (match) =>
+    ' '.repeat(match.length),
+  );
+  masked = masked.replace(/(?<![A-Za-z0-9])'(?:\\.|[^'\\\n])+'(?![A-Za-z0-9])/g, (match) =>
+    ' '.repeat(match.length),
+  );
+  return masked;
 }
 
 export function screenRedFlagMarkers(
   text: string,
-  opts: { repoRoot?: string } = {},
+  opts: { repoRoot?: string; draftPath?: string } = {},
 ): MarkerScreenResult {
   const markerClasses = loadMarkerClasses(opts.repoRoot);
+  const scanText = maskDelimitedMarkdownQuotes(text);
   const hits: string[] = [];
+  const patternSpecs: Array<{ signal: string; pattern: RegExp }> = [];
   for (const markerClass of markerClasses) {
     const patterns = MARKER_HEURISTICS[markerClass];
     if (!patterns) {
       return { hits: [], unparseable: true };
     }
-    if (patterns.some((pattern) => pattern.test(text))) {
+    patternSpecs.push(...patterns.map((pattern) => ({ signal: markerClass, pattern })));
+    if (patterns.some((pattern) => pattern.test(scanText))) {
       hits.push(markerClass);
     }
   }
-  return { hits, unparseable: false };
+  const receipt = loadProtectedSignalReceipt({
+    repoRoot: opts.repoRoot,
+    draftPath: opts.draftPath,
+  });
+  const matches = collectProtectedSignalMatches(scanText, patternSpecs);
+  const suppressed = suppressProtectedSignalHits(hits, matches, receipt, 'tier-marker');
+  return { hits: suppressed.hits, unparseable: false, suppressed: suppressed.suppressed };
 }

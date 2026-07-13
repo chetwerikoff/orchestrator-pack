@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   issue613TimeoutMs,
   startDetachedSupervisor,
-  waitForListenerMarker,
 } from './orchestrator-wake-supervisor-orphan-integration.shared.js';
 import {
   cleanupSupervisorTests,
@@ -12,8 +11,11 @@ import {
   makeStateDir,
   readMarker,
   runSupervisor,
+  waitForMarker,
   waitForProcessesStopped,
 } from './supervisor-recovery.test-helpers.js';
+
+const survivingChildRole = 'review-trigger-reconcile' as const;
 
 afterEach(() => {
   cleanupSupervisorTests();
@@ -25,7 +27,7 @@ describe('Issue #613 orphan supervisor discovery (integration stop)', () => {
     async () => {
       const stateDir = makeStateDir();
       const { supervisorPid } = startDetachedSupervisor(stateDir, 'op-613-status-missing');
-      await waitForListenerMarker(stateDir);
+      await waitForMarker(stateDir, survivingChildRole);
 
       fs.unlinkSync(path.join(stateDir, 'supervisor.pid'));
 
@@ -45,19 +47,19 @@ describe('Issue #613 orphan supervisor discovery (integration stop)', () => {
     async () => {
       const stateDir = makeStateDir();
       const { supervisorPid } = startDetachedSupervisor(stateDir, 'op-613-stop-missing');
-      await waitForListenerMarker(stateDir);
-      const listenerBefore = await readMarker(stateDir, 'listener');
-      expect(isAlive(listenerBefore.pid)).toBe(true);
+      await waitForMarker(stateDir, survivingChildRole);
+      const childBefore = await readMarker(stateDir, survivingChildRole);
+      expect(isAlive(childBefore.pid)).toBe(true);
 
       fs.unlinkSync(path.join(stateDir, 'supervisor.pid'));
 
       const stop = runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
       expect(stop.status).toBe(0);
-      await waitForProcessesStopped([supervisorPid, listenerBefore.pid], 25_000);
+      await waitForProcessesStopped([supervisorPid, childBefore.pid], 25_000);
 
       const statusAfter = runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
       expect(statusAfter.stdout).toContain('supervisor: stopped');
-      expect(statusAfter.stdout).toMatch(/listener:\s+stopped/);
+      expect(statusAfter.stdout).toMatch(/review-trigger-reconcile\s+stopped/);
     },
     issue613TimeoutMs,
   );

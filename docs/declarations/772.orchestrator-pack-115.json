@@ -1,0 +1,25 @@
+{
+  "issue_number": 772,
+  "iteration_id": "orchestrator-pack-115",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-13T08:59:52.960Z",
+  "baseline": {
+    "commit_sha": "b40047ae9e4c2f562f8df33afb7f5fe9df1e62bc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:559799ae5925f5318d037bdfca29167d3d4c9730f01b64693239c65911c9d527"
+  },
+  "declared_paths": [
+    "scripts/lib/tier-marker-screen.ts",
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/check-tier-gate-guard.ps1",
+    "scripts/check-finding-ledger-guard.ps1",
+    "scripts/tier-gate-guard.test.ts",
+    "scripts/finding-ledger-guard.test.ts",
+    "tests/fixtures/tier-gate/",
+    "tests/fixtures/finding-ledger/"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
