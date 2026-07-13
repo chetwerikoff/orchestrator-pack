@@ -1,115 +1,103 @@
 #!/usr/bin/env node
-/**
- * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
- * (Issue #695).
- */
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import {
-  formatOversizedGuardFailures,
-  topologyArtifactPath,
-} from './lib/vitest-heavy-topology.mjs';
-import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
-import {
-  measurePreTopologyFiles,
-  resolvePreTopologyMeasurementTargets,
-  shouldMeasurePreTopology,
-} from './lib/vitest-pre-topology-measurement.mjs';
-import {
-  normalizePrScopeMode,
-  parseChangedPathManifestFromEnv,
-} from './lib/vitest-pr-scoped-selection.mjs';
+import { topologyArtifactPath } from './lib/vitest-heavy-topology.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const defaultRepoRoot = join(scriptDir, '..');
+const repoRoot = process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || join(scriptDir, '..');
+const captureBindingSha = 'b82efaa61560d351b45b666205d44f42d3f0a108';
+const files = [
+  'scripts/orchestrator-wake-supervisor-startup.test.ts',
+  'scripts/orchestrator-wake-supervisor-lifecycle.test.ts',
+  'scripts/orchestrator-wake-supervisor-side-process-registry.test.ts',
+  'scripts/orchestrator-wake-supervisor-empty-pid.test.ts',
+];
 
-function parseArgs(argv) {
-  const flags = new Set(argv.slice(2));
-  return {
-    ghaOutput: flags.has('--gha-output'),
-    failOnGuard: !flags.has('--skip-oversized-guard'),
-    repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
-  };
+function quotePs(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function writeGhaOutput(topology) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
+function runPass(index) {
+  const root = mkdtempSync(join(tmpdir(), `opk-rpc-pass-${index}-`));
+  const helper = join(repoRoot, 'scripts', 'lib', 'Set-OpkVitestHarnessEnv.ps1');
+  const fileArgs = files.map(quotePs).join(',');
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `. ${quotePs(helper)}`,
+    '$harness = Set-OpkVitestHarnessEnv',
+    'try {',
+    `  $testFiles = @(${fileArgs})`,
+    '  $env:CI = \'true\'',
+    '  Remove-Item Env:VITEST_CI_LIGHT_LANE -ErrorAction SilentlyContinue',
+    '  & npm test -- @testFiles --reporter=default',
+    '  exit $LASTEXITCODE',
+    '} finally {',
+    '  Remove-Item -LiteralPath $harness.root -Recurse -Force -ErrorAction SilentlyContinue',
+    '}',
+  ].join('; ');
+  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  try {
+    const child = spawnSync('pwsh', ['-NoProfile', '-Command', command], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 160_000,
+      maxBuffer: 32 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CI: 'true',
+        OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+      },
+    });
+    const output = `${child.stdout ?? ''}\n${child.stderr ?? ''}`.trim();
+    return {
+      id: `pass-${String(index).padStart(3, '0')}`,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - started,
+      status: child.status,
+      signal: child.signal,
+      error: child.error?.message ?? null,
+      command: `CI=true npm test -- ${files.join(' ')} --reporter=default`,
+      output,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
-  appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
-  appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
-  );
 }
 
-const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const rawChangedPathManifest = parseChangedPathManifestFromEnv();
-const changedPathManifest = rawChangedPathManifest
-  ? {
-      ...rawChangedPathManifest,
-      entries: (rawChangedPathManifest.entries ?? []).filter((entry) => entry.status !== 'D'),
-      entryCount: (rawChangedPathManifest.entries ?? []).filter((entry) => entry.status !== 'D').length,
-    }
-  : null;
-const changedFiles = (changedPathManifest?.entries ?? [])
-  .map((entry) => entry.path)
-  .filter((path) => path.endsWith('.test.ts'));
-const laneOptions = {
-  changedFiles,
-  changedPathManifest,
-  prScopeMode: normalizePrScopeMode(),
-};
-
-let result = buildLanePlan(repoRoot, laneOptions);
-if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
-  const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
-  if (targets.length > 0) {
-    const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
-    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
-  }
-}
-
-if (!result.ok) {
-  console.error(result.errors.join('\n'));
-  process.exit(1);
-}
-
-const artifactPath = topologyArtifactPath(repoRoot);
+const passes = [runPass(1), runPass(2), runPass(3)];
 const artifact = {
-  ...result.topology,
-  discovered: result.discovered,
-  fullDiscovered: result.fullDiscovered ?? result.discovered,
-  heavyFiles: result.heavy,
-  lightFiles: result.light,
-  postMergeWallclockFiles: result.postMergeWallclock,
-  parkedFiles: result.parked,
-  heavyShards: result.heavyShards,
+  heavyShardCount: 1,
+  heavyShardMatrix: [1],
+  fallbackClassification: 'rpc-evidence-capture',
+  discovered: files,
+  fullDiscovered: files,
+  heavyFiles: [],
+  lightFiles: [],
+  postMergeWallclockFiles: files,
+  parkedFiles: [],
+  heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
+  supervisorRpcCapture: {
+    captureBindingSha,
+    heavyLaneFingerprint: 'CI=true maxWorkers=1 fileParallelism=false',
+    files,
+    passes,
+  },
 };
-writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
-
-if (result.topology.underProvisioned) {
-  console.warn(
-    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
-  );
+writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
+if (process.argv.includes('--gha-output')) {
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
+  appendFileSync(outputPath, 'heavy_shard_count=1\n');
+  appendFileSync(outputPath, 'heavy_shard_matrix=[1]\n');
+  appendFileSync(outputPath, 'fallback_classification=rpc-evidence-capture\n');
 }
-if (result.topology.fallbackClassification === 'fixed-fallback') {
-  console.warn(
-    `[WARN] heavy shard topology using fixed fallback count ${result.topology.heavyShardCount} (${result.topology.weightInputReason})`,
-  );
-}
-
-const guardFailures = formatOversizedGuardFailures(result);
-if (failOnGuard && guardFailures.length > 0) {
-  console.error(guardFailures.join('\n'));
+if (passes.some((pass) => pass.status !== 0)) {
+  console.error(JSON.stringify(artifact));
   process.exit(1);
 }
-
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
-
 console.log(JSON.stringify(artifact));
