@@ -265,5 +265,9 @@ else {
     }
 }
 
-if ($result.status -ne 'pass') { exit 1 }
-exit 0
+$exitCode = if ($result.status -eq 'pass') { 0 } else { 1 }
+if ($env:OPK_VITEST_HARNESS -eq '1') {
+    $global:LASTEXITCODE = $exitCode
+    return
+}
+exit $exitCode
