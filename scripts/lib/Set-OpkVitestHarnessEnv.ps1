@@ -125,6 +125,7 @@ function Set-OpkVitestHarnessEnv {
     $env:OPK_VITEST_HARNESS = '1'
     $env:OPK_VITEST_HARNESS_ROOT = $RootDir
     $env:OPK_VITEST_HARNESS_INVENTORY = Join-Path (Split-Path -Parent $PSScriptRoot) 'vitest-live-store-inventory.json'
+    $env:OPK_TESTMODE_LEASE_ROOT = Join-Path $stateDir 'testmode-fleet-leases'
     $env:TMPDIR = $tmpDir
     $env:TEMP = $tmpDir
     $env:TMP = $tmpDir
