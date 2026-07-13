@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $target = Join-Path ([IO.Path]::GetTempPath()) ('opk-771-probe-' + [guid]::NewGuid().ToString('N'))
-$resultPath = Join-Path $Root 'scripts/issue-771-structural-result.log'
+$exportDir = Join-Path $Root 'scripts/issue-771-target-files'
 
 Push-Location $Root
 try {
@@ -14,29 +14,15 @@ try {
 finally { Pop-Location }
 
 try {
-    & (Join-Path $target 'scripts/install-pester-ci.ps1')
-    Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
-    $config = New-PesterConfiguration
-    $config.Run.Path = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
-    $config.Run.PassThru = $true
-    $config.Filter.FullName = @('*finds no loader-to-consumer scope leaks in production PowerShell*')
-    $config.Output.Verbosity = 'None'
-    $result = Invoke-Pester -Configuration $config
-
-    @(
-        "SUMMARY total=$($result.TotalCount) passed=$($result.PassedCount) failed=$($result.FailedCount) skipped=$($result.SkippedCount)"
-        foreach ($failed in @($result.Failed)) {
-            "FAILED_NAME=$($failed.ExpandedName)"
-            "FAILED_PATH=$($failed.Path)"
-            "FAILED_LINE=$($failed.StartLine)"
-            "FAILED_MESSAGE_BEGIN"
-            [string]$failed.ErrorRecord.Exception.Message
-            "FAILED_MESSAGE_END"
-            "FAILED_STACK_BEGIN"
-            [string]$failed.ErrorRecord.ScriptStackTrace
-            "FAILED_STACK_END"
-        }
-    ) | Set-Content -LiteralPath $resultPath -Encoding utf8
+    if (Test-Path -LiteralPath $exportDir) {
+        Remove-Item -LiteralPath $exportDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $target 'scripts/lib/Invoke-ReviewWakeTrigger.ps1') `
+        -Destination (Join-Path $exportDir 'Invoke-ReviewWakeTrigger.ps1')
+    Copy-Item -LiteralPath (Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1') `
+        -Destination (Join-Path $exportDir 'Issue771.PowerShellDependencyScope.Tests.ps1')
+    Set-Content -LiteralPath (Join-Path $exportDir 'head-sha.txt') -Value ((git -C $target rev-parse HEAD).Trim()) -Encoding utf8
     exit 0
 }
 finally {
