@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "d41480430ab46483df1a0a0e06ee0affd8081f7e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:5e4a76c86c33dc97daec01b8304a6fd5a121de0113bb2f15bb3a07a00c3cd611"
+    "active_scope_hash": "sha256:48e5eb5cb743ba72a845473be3636f986d2adcc4e3af0e92ca59384cd8d0237d"
   },
   "declared_paths": [
     "docs/orchestrator-autoloop-go-live.md",
@@ -62,8 +62,24 @@
     "scripts/orchestrator-wake-supervisor.test.ts",
     "scripts/supervisor-auto-recovery.test.ts",
     "scripts/supervisor-prompt-block-crash-backoff.test.ts",
-    "scripts/supervisor-test-wait-race.fixture.test.ts"
+    "scripts/supervisor-test-wait-race.fixture.test.ts",
+    "scripts/supervisor-fault-boundary-escalate.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:5e4a76c86c33dc97daec01b8304a6fd5a121de0113bb2f15bb3a07a00c3cd611",
+      "new_active_scope_hash": "sha256:48e5eb5cb743ba72a845473be3636f986d2adcc4e3af0e92ca59384cd8d0237d",
+      "changed": {
+        "added": [
+          "scripts/supervisor-fault-boundary-escalate.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Include the final supervisor fault-boundary test whose sibling-survival assertion still waited for the retired listener marker.",
+      "actor": "orchestrator-pack-112",
+      "timestamp": "2026-07-13T06:40:58.907Z",
+      "applied": true
+    }
+  ]
 }

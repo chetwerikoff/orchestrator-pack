@@ -30,7 +30,7 @@ describe.sequential('supervisor-fault-boundary escalate (Issue #450 C5)', () => 
     );
 
     await waitForMarker(stateDir, 'escalation-router', 25_000);
-    await waitForMarker(stateDir, 'listener', 25_000);
+    await waitForMarker(stateDir, 'review-trigger-reconcile', 25_000);
     await waitForSupervisorLogMatch(
       stateDir,
       /escalation-router terminal degraded: deterministic defect/,
