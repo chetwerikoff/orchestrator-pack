@@ -88,9 +88,9 @@ export function stripMarkdownFencedCodeBlocks(text) {
 /**
  * Mask well-formed quoted/example spans before protected-signal regex scans.
  * Recognized delimiters are fenced code blocks, inline code spans, Markdown
- * blockquote lines, and balanced single/double quoted strings. Unterminated
- * delimiters are left intact so malformed input cannot create a broad
- * exemption.
+ * blockquote lines, balanced double-quoted strings, and balanced single-quoted
+ * strings whose apostrophes are not embedded in words. Unterminated delimiters
+ * are left intact so malformed input cannot create a broad exemption.
  */
 export function maskDelimitedMarkdownQuotes(text) {
   const preserveLines = (match) => match.replace(/[^\n]/g, ' ');
@@ -99,7 +99,8 @@ export function maskDelimitedMarkdownQuotes(text) {
     [ /^```[^\n]*\n[\s\S]*?^```\s*$/gm, preserveLines ],
     [ /`[^`\n]+`/g, blankSpan ],
     [ /^>[^\n]*(?:\n|$)/gm, preserveLines ],
-    [ /(["'])(?:\\.|(?!\1)[^\\\n])+\1/g, blankSpan ],
+    [ /"(?:\\.|[^"\\\n])+"/g, blankSpan ],
+    [ /(?<![A-Za-z0-9])'(?:\\.|[^'\\\n])+'(?![A-Za-z0-9])/g, blankSpan ],
   ].reduce((current, [pattern, replacer]) => current.replace(pattern, replacer), text);
 }
 

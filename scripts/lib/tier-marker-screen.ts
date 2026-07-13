@@ -135,9 +135,9 @@ export interface MarkerScreenResult {
 /**
  * Mask well-formed quoted/example spans before protected-signal regex scans.
  * Recognized delimiters are fenced code blocks, inline code spans, Markdown
- * blockquote lines, and balanced single/double quoted strings. Unterminated
- * delimiters are left intact so malformed input cannot create a broad
- * exemption.
+ * blockquote lines, balanced double-quoted strings, and balanced single-quoted
+ * strings whose apostrophes are not embedded in words. Unterminated delimiters
+ * are left intact so malformed input cannot create a broad exemption.
  */
 export function maskDelimitedMarkdownQuotes(text: string): string {
   let masked = text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, (match) =>
@@ -147,7 +147,10 @@ export function maskDelimitedMarkdownQuotes(text: string): string {
   masked = masked.replace(/^>[^\n]*(?:\n|$)/gm, (match) =>
     match.replace(/[^\n]/g, ' '),
   );
-  masked = masked.replace(/(["'])(?:\\.|(?!\1)[^\\\n])+\1/g, (match) =>
+  masked = masked.replace(/"(?:\\.|[^"\\\n])+"/g, (match) =>
+    ' '.repeat(match.length),
+  );
+  masked = masked.replace(/(?<![A-Za-z0-9])'(?:\\.|[^'\\\n])+'(?![A-Za-z0-9])/g, (match) =>
     ' '.repeat(match.length),
   );
   return masked;

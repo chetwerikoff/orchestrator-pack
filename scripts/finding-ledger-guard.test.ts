@@ -319,6 +319,11 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
     expect(detectProtectedSignalsInCapture('"type: scope-violation')).toContain('scope-violation');
   });
 
+  it('does not treat apostrophe contractions as quoted protected-signal spans', () => {
+    const capture = "Don't mark this out of scope because it's risky.";
+    expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
+  });
+
   it('passes draft-273-shaped quoted evidence without fabricated protected coverage', () => {
     const capture = [
       'type: spec; id: evidence-quote',

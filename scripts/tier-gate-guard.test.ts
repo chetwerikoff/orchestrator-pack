@@ -242,6 +242,12 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
 
     expect(screenRedFlagMarkers('"required checks', { repoRoot }).hits).toContain('ci-review-gating');
   });
+
+  it('does not treat apostrophe contractions as quoted marker spans', () => {
+    const text = "Don't change required checks because it's risky.";
+    expect(maskDelimitedMarkdownQuotes(text)).toContain('required checks');
+    expect(screenRedFlagMarkers(text, { repoRoot }).hits).toContain('ci-review-gating');
+  });
 });
 
 describe('floor on every tier', () => {
