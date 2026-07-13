@@ -1,0 +1,50 @@
+{
+  "issue_number": 752,
+  "iteration_id": "chatgpt-issue-752",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-13T08:16:27.000Z",
+  "baseline": {
+    "commit_sha": "fa737deaf14c04ccc0c4e8c096e1ba6d3c666e6e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:8d202eb7ab0c1c17f37fa99410ef6024f53b03a3facdaec04f513778c065462e"
+  },
+  "declared_paths": [
+    "docs/vitest-live-store-audit.md",
+    "package.json",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
+    "scripts/lib/OpkVitestStoreIsolation.ps1",
+    "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+    "scripts/lib/vitest-live-store-harness.d.mts",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/run-vitest-with-harness.mjs",
+    "scripts/test-harness-escalation-env.ts",
+    "scripts/vestigial-fleet-retirement.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/vitest-live-store-preload.mjs",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:be3978baf2568889c285e3304a7b068ccf997f3354e9232ee86d45338158e0e8",
+      "new_active_scope_hash": "sha256:8d202eb7ab0c1c17f37fa99410ef6024f53b03a3facdaec04f513778c065462e",
+      "changed": {
+        "added": [
+          "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
+          "scripts/vestigial-fleet-retirement.test.ts",
+          "scripts/lib/vitest-live-store-parent-guard.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "CI verification exposed three harness-integration seams: the shared reviewer-policy helper bypassed the supported npm test launcher; a mechanically read-only vestigial-fleet verifier needed the preserved real PowerShell binary for captured stdout; and the parent live-store watcher plus PowerShell transport needed extraction and named-parameter preservation so transient monitoring remains basename-scoped without duplicating guard logic or corrupting -File arguments. These are minimal test-path and harness-boundary corrections with no production store schema or default-path changes.",
+      "actor": "chatgpt-issue-752",
+      "timestamp": "2026-07-13T14:10:00.000Z",
+      "applied": true
+    }
+  ]
+}

@@ -1,10 +1,4 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
-import {
-  applyOpkVitestHarnessEscalationEnv,
-  sharedDefaultEscalationStatePath,
-} from './test-harness-escalation-env.js';
+import { applyOpkVitestHarnessEscalationEnv } from './test-harness-escalation-env.js';
 import {
   registerLaneLease,
   runReaperCli,
@@ -13,61 +7,7 @@ import {
   repoRoot,
 } from './testmode-fleet-harness.js';
 
-type SharedDefaultSnapshot = {
-  exists: boolean;
-  mtimeMs?: number;
-  contentHash?: string;
-};
-
-let sharedDefaultSnapshot: SharedDefaultSnapshot;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-
-function snapshotSharedDefaultStore(): SharedDefaultSnapshot {
-  const storePath = sharedDefaultEscalationStatePath();
-  if (!existsSync(storePath)) {
-    return { exists: false };
-  }
-  const stat = statSync(storePath);
-  const content = readFileSync(storePath);
-  return {
-    exists: true,
-    mtimeMs: stat.mtimeMs,
-    contentHash: createHash('sha256').update(content).digest('hex'),
-  };
-}
-
-function assertSharedDefaultUnmutated(): void {
-  const after = snapshotSharedDefaultStore();
-  if (!sharedDefaultSnapshot.exists && !after.exists) {
-    return;
-  }
-  if (sharedDefaultSnapshot.exists !== after.exists) {
-    throw new Error(
-      `shared escalation store existence changed during test run: before=${sharedDefaultSnapshot.exists} after=${after.exists}`,
-    );
-  }
-  if (
-    sharedDefaultSnapshot.mtimeMs !== after.mtimeMs
-    || sharedDefaultSnapshot.contentHash !== after.contentHash
-  ) {
-    const storePath = sharedDefaultEscalationStatePath();
-    let detail = `path=${storePath}`;
-    try {
-      const parsed = JSON.parse(readFileSync(storePath, 'utf8')) as {
-        records?: Record<string, { correlationKey?: string }>;
-      };
-      const testOriginated = Object.values(parsed.records ?? {}).filter((record) =>
-        /opk-vitest/i.test(String(record.correlationKey ?? '')),
-      );
-      if (testOriginated.length > 0) {
-        detail += ` test_originated_records=${testOriginated.length}`;
-      }
-    } catch {
-      // keep hash-only detail when parse fails
-    }
-    throw new Error(`shared escalation store mutated during test run (${detail})`);
-  }
-}
 
 function startLeaseHeartbeat(): void {
   const intervalSeconds = Number(process.env.AO_TESTMODE_FLEET_HEARTBEAT_INTERVAL_SECONDS ?? '5');
@@ -89,7 +29,10 @@ function stopLeaseHeartbeat(): void {
 }
 
 export default function setup() {
-  sharedDefaultSnapshot = snapshotSharedDefaultStore();
+  // The supported package/lane wrapper owns the parent live-store snapshot and
+  // transient watcher before Vitest loads. Global setup propagates the isolated
+  // environment and child-process lease root; duplicating an ancestor watcher
+  // here would turn unrelated sibling state into false store mutations.
   applyOpkVitestHarnessEscalationEnv();
   process.env.OPK_TESTMODE_FLEET_WORKSPACE_ROOT = repoRoot;
 
@@ -116,33 +59,30 @@ export default function setup() {
   startLeaseHeartbeat();
 }
 
-export async function teardown() {
+export function teardown() {
   stopLeaseHeartbeat();
-  try {
-    writeVitestLaneLeaseContextFromEnv();
-    if (process.env.VITEST_HEAVY_SHARD?.trim()) {
-      // Per-invocation observe before the next file bootstrap can mask survivors (AC#6).
-      const observe = runReaperCli('observe');
-      if (observe.status !== 0) {
-        throw new Error(
-          `TestMode fleet heavy invocation left survivors: status=${observe.status} ${observe.stderr || observe.stdout}`,
-        );
-      }
-    } else {
-      const teardown = runReaperCli('teardown');
-      if (teardown.status !== 0) {
-        throw new Error(
-          `TestMode fleet teardown post-sweep failed: status=${teardown.status} ${teardown.stderr || teardown.stdout}`,
-        );
-      }
-      const observe = runReaperCli('observe');
-      if (observe.status !== 0) {
-        throw new Error(
-          `TestMode fleet teardown left survivors: status=${observe.status} ${observe.stderr || observe.stdout}`,
-        );
-      }
+  writeVitestLaneLeaseContextFromEnv();
+  if (process.env.VITEST_HEAVY_SHARD?.trim()) {
+    // Per-invocation observe before the next file bootstrap can mask survivors (AC#6).
+    const observe = runReaperCli('observe');
+    if (observe.status !== 0) {
+      throw new Error(
+        `TestMode fleet heavy invocation left survivors: status=${observe.status} ${observe.stderr || observe.stdout}`,
+      );
     }
-  } finally {
-    assertSharedDefaultUnmutated();
+    return;
+  }
+
+  const teardownResult = runReaperCli('teardown');
+  if (teardownResult.status !== 0) {
+    throw new Error(
+      `TestMode fleet teardown post-sweep failed: status=${teardownResult.status} ${teardownResult.stderr || teardownResult.stdout}`,
+    );
+  }
+  const observe = runReaperCli('observe');
+  if (observe.status !== 0) {
+    throw new Error(
+      `TestMode fleet teardown left survivors: status=${observe.status} ${observe.stderr || observe.stdout}`,
+    );
   }
 }
