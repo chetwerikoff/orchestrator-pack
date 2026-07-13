@@ -84,17 +84,17 @@ if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
 
 if (diagnostic) {
   const artifact = {
-      heavyShardCount: 1,
-      heavyShardMatrix: [1],
-      fallbackClassification: 'pr768-measurement-diagnostic',
-      discovered: [],
-      fullDiscovered: [],
-      heavyFiles: [],
-      lightFiles: [],
-      postMergeWallclockFiles: [],
-      parkedFiles: [],
-      heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
-      measurementDiagnostic: diagnostic,
+    heavyShardCount: 1,
+    heavyShardMatrix: [1],
+    fallbackClassification: 'pre-topology-measurement-failed',
+    discovered: [],
+    fullDiscovered: [],
+    heavyFiles: [],
+    lightFiles: [],
+    postMergeWallclockFiles: [],
+    parkedFiles: [],
+    heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
+    measurementDiagnostic: diagnostic,
   };
   writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
   console.error(JSON.stringify(artifact));
