@@ -6,38 +6,52 @@ BeforeAll {
     $InvokeAo = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
 
     function Quote-Issue771([string]$Value) { "'" + $Value.Replace("'", "''") + "'" }
+
     function New-Issue771Temp {
         $path = Join-Path ([IO.Path]::GetTempPath()) ('opk-771-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $path -Force | Out-Null
         return $path
     }
+
     function Invoke-Issue771Pwsh([string]$Command) {
         $output = @(& pwsh -NoProfile -NonInteractive -Command $Command 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "pwsh failed ($LASTEXITCODE)`n$($output -join "`n")" }
+        if ($LASTEXITCODE -ne 0) {
+            throw "pwsh failed ($LASTEXITCODE)`n$($output -join "`n")"
+        }
         $json = @(($output -join "`n") -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') })
-        if (-not $json) { throw "no JSON in output`n$($output -join "`n")" }
+        if (-not $json) {
+            throw "no JSON in output`n$($output -join "`n")"
+        }
         return ($json[-1] | ConvertFrom-Json)
     }
+
     function Test-Issue771Within($Child, $Parent) {
         return ($Child.Extent.StartOffset -ge $Parent.Extent.StartOffset -and
             $Child.Extent.EndOffset -le $Parent.Extent.EndOffset)
     }
+
     function Test-Issue771NestedScriptBlock($CommandAst, $FunctionAst) {
         $node = $CommandAst.Parent
         while ($node -and $node -ne $FunctionAst.Body) {
-            if ($node -is [Management.Automation.Language.ScriptBlockExpressionAst]) { return $true }
+            if ($node -is [Management.Automation.Language.ScriptBlockExpressionAst]) {
+                return $true
+            }
             $node = $node.Parent
         }
         return $false
     }
+
     function Get-Issue771OwningFunction($Node) {
         $current = $Node.Parent
         while ($current) {
-            if ($current -is [Management.Automation.Language.FunctionDefinitionAst]) { return $current }
+            if ($current -is [Management.Automation.Language.FunctionDefinitionAst]) {
+                return $current
+            }
             $current = $current.Parent
         }
         return $null
     }
+
     function Test-Issue771SameCallerScope($Left, $Right) {
         $leftOwner = Get-Issue771OwningFunction $Left
         $rightOwner = Get-Issue771OwningFunction $Right
@@ -47,16 +61,17 @@ BeforeAll {
         return ($leftOwner.Extent.StartOffset -eq $rightOwner.Extent.StartOffset -and
             $leftOwner.Extent.EndOffset -eq $rightOwner.Extent.EndOffset)
     }
+
     function Resolve-Issue771DotSourceTarget {
         param([string]$Text, [string]$SourcePath, [string]$RepositoryRoot)
 
         $relative = $null
         $rootExpression = $null
-        if ($Text -match '(?is)^\s*\.\s*\(\s*Join-Path\s+\$([A-Za-z_][A-Za-z0-9_:]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+[''"]([^''"]+\.(?:ps1|psm1))[''"]') {
+        if ($Text -match '(?is)^\s*\.\s*\(\s*Join-Path\s+\$([A-Za-z_][A-Za-z0-9_:]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+[''\"]([^''\"]+\.(?:ps1|psm1))[''\"]') {
             $rootExpression = $Matches[1]
             $relative = $Matches[2]
         }
-        elseif ($Text -match '(?is)^\s*\.\s+[''"]([^''"]+\.(?:ps1|psm1))[''"]') {
+        elseif ($Text -match '(?is)^\s*\.\s+[''\"]([^''\"]+\.(?:ps1|psm1))[''\"]') {
             $relative = $Matches[1]
         }
         if (-not $relative) { return $null }
@@ -75,15 +90,19 @@ BeforeAll {
             [void]$candidates.Add((Join-Path $RepositoryRoot $relative))
             [void]$candidates.Add((Join-Path (Join-Path $RepositoryRoot 'scripts/lib') ([IO.Path]::GetFileName($relative))))
         }
+
         foreach ($candidate in $candidates) {
             try {
                 $full = [IO.Path]::GetFullPath($candidate)
-                if (Test-Path -LiteralPath $full -PathType Leaf) { return $full }
+                if (Test-Path -LiteralPath $full -PathType Leaf) {
+                    return $full
+                }
             }
             catch { }
         }
         return $null
     }
+
     function Get-Issue771ParsedPowerShellRecords([string]$ScanRoot) {
         $records = @()
         foreach ($file in @(Get-ChildItem -LiteralPath $ScanRoot -Recurse -File |
@@ -91,7 +110,9 @@ BeforeAll {
             $tokens = $null
             $errors = $null
             $ast = [Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
-            if (@($errors).Count) { throw "PowerShell parse failure in $($file.FullName): $($errors[0].Message)" }
+            if (@($errors).Count) {
+                throw "PowerShell parse failure in $($file.FullName): $($errors[0].Message)"
+            }
             $records += [pscustomobject]@{
                 Path = $file.FullName
                 Ast = $ast
@@ -101,6 +122,56 @@ BeforeAll {
         }
         return @($records)
     }
+
+    function Get-Issue771TargetFunctionMap($TargetAst) {
+        $map = @{}
+        foreach ($functionAst in @($TargetAst.FindAll({
+                        param($n)
+                        $n -is [Management.Automation.Language.FunctionDefinitionAst]
+                    }, $true))) {
+            if (-not $map.ContainsKey($functionAst.Name)) {
+                $map[$functionAst.Name] = $functionAst
+            }
+        }
+        return $map
+    }
+
+    function Get-Issue771LocallyConsumedTargetFunctions {
+        param($LoaderAst, $DotSourceAst, [hashtable]$TargetFunctions)
+
+        $queue = [Collections.Generic.Queue[string]]::new()
+        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+        foreach ($commandAst in @($LoaderAst.Body.FindAll({
+                        param($n)
+                        $n -is [Management.Automation.Language.CommandAst]
+                    }, $true))) {
+            if ($commandAst.Extent.StartOffset -le $DotSourceAst.Extent.EndOffset) { continue }
+            if (Test-Issue771NestedScriptBlock $commandAst $LoaderAst) { continue }
+            $name = $commandAst.GetCommandName()
+            if ($name -and $TargetFunctions.ContainsKey($name)) {
+                $queue.Enqueue($name)
+            }
+        }
+
+        while ($queue.Count -gt 0) {
+            $name = $queue.Dequeue()
+            if (-not $seen.Add($name)) { continue }
+            $functionAst = $TargetFunctions[$name]
+            foreach ($commandAst in @($functionAst.Body.FindAll({
+                            param($n)
+                            $n -is [Management.Automation.Language.CommandAst]
+                        }, $true))) {
+                $callee = $commandAst.GetCommandName()
+                if ($callee -and $TargetFunctions.ContainsKey($callee) -and -not $seen.Contains($callee)) {
+                    $queue.Enqueue($callee)
+                }
+            }
+        }
+
+        return @($seen)
+    }
+
     function Get-Issue771DependencyScopeLeaks {
         param([string]$RepositoryRoot, [string]$ScanRoot)
 
@@ -113,16 +184,24 @@ BeforeAll {
                             $n -is [Management.Automation.Language.CommandAst] -and
                                 $n.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Dot
                         }, $true) | Where-Object { -not (Test-Issue771NestedScriptBlock $_ $loader) })
+
                 foreach ($dotSource in $localDotSources) {
                     $target = Resolve-Issue771DotSourceTarget $dotSource.Extent.Text $source.Path $RepositoryRoot
                     if (-not $target) { continue }
+
                     $targetTokens = $null
                     $targetErrors = $null
                     $targetAst = [Management.Automation.Language.Parser]::ParseFile($target, [ref]$targetTokens, [ref]$targetErrors)
-                    if (@($targetErrors).Count) { throw "PowerShell parse failure in ${target}: $($targetErrors[0].Message)" }
-                    $importedNames = @($targetAst.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true) |
-                        ForEach-Object { $_.Name } | Sort-Object -Unique)
-                    if (-not $importedNames) { continue }
+                    if (@($targetErrors).Count) {
+                        throw "PowerShell parse failure in ${target}: $($targetErrors[0].Message)"
+                    }
+
+                    $targetFunctions = Get-Issue771TargetFunctionMap $targetAst
+                    if ($targetFunctions.Count -eq 0) { continue }
+                    $locallyConsumed = @(Get-Issue771LocallyConsumedTargetFunctions -LoaderAst $loader `
+                            -DotSourceAst $dotSource -TargetFunctions $targetFunctions)
+                    $externalCandidates = @($targetFunctions.Keys | Where-Object { $locallyConsumed -notcontains $_ })
+                    if ($externalCandidates.Count -eq 0) { continue }
 
                     foreach ($candidate in $records) {
                         $loaderCalls = @($candidate.Commands | Where-Object {
@@ -132,7 +211,7 @@ BeforeAll {
                         foreach ($loaderCall in $loaderCalls) {
                             $consumers = @($candidate.Commands | Where-Object {
                                     $name = $_.GetCommandName()
-                                    $name -and $importedNames -contains $name -and
+                                    $name -and $externalCandidates -contains $name -and
                                     $_.Extent.StartOffset -gt $loaderCall.Extent.EndOffset -and
                                     (Test-Issue771SameCallerScope $_ $loaderCall)
                                 })
@@ -211,7 +290,9 @@ Set-Content $(Quote-Issue771 (Join-Path $dir 'Autonomous-GateCommon.ps1')) "func
             $result.second | Should -Match 'previously failed'
             $result.loads | Should -Be 1
         }
-        finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
+        finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -244,7 +325,9 @@ function Get-WorkerStatusWriterGenerationVector { param([string]`$SessionId,[lon
             $result.record | Should -BeTrue
             $result.status | Should -Be 'ready_for_review'
         }
-        finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
+        finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -252,6 +335,19 @@ Describe 'Issue #771 durable dependency-scope guard' {
     It 'finds no loader-to-consumer scope leaks in production PowerShell' {
         $leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $RepoRoot -ScanRoot (Join-Path $RepoRoot 'scripts'))
         $leaks | Should -BeNullOrEmpty -Because ($leaks | ConvertTo-Json -Compress -Depth 8)
+    }
+
+    It 'treats a dependency entrypoint and its internal helper closure as same-scope consumption' {
+        $dir = New-Issue771Temp
+        try {
+            Set-Content (Join-Path $dir 'Dependency.ps1') "function Get-SafeShieldValue { 'ok' }`nfunction Invoke-SafeShield { Get-SafeShieldValue }"
+            Set-Content (Join-Path $dir 'Loader.ps1') "function Invoke-SafeLoader { . (Join-Path `$PSScriptRoot 'Dependency.ps1'); Invoke-SafeShield }`nInvoke-SafeLoader"
+            $leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $dir -ScanRoot $dir)
+            $leaks | Should -BeNullOrEmpty -Because ($leaks | ConvertTo-Json -Compress -Depth 8)
+        }
+        finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 
     It 'fails for an unrelated synthetic cross-file loader and consumer' {
@@ -265,6 +361,8 @@ Describe 'Issue #771 durable dependency-scope guard' {
             $leaks[0].LoaderFunction | Should -Be 'Initialize-UnrelatedDependency'
             $leaks[0].ConsumerFunction | Should -Be 'Invoke-SyntheticDependency'
         }
-        finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
+        finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
