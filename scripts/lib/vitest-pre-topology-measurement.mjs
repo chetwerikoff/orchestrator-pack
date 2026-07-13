@@ -7,8 +7,8 @@ import { parseVitestReportFile } from './vitest-json-report.mjs';
 export const PRE_TOPOLOGY_MAX_FILES = 12;
 export const PRE_TOPOLOGY_MAX_CONCURRENCY = 3;
 // The longest known changed wallclock suite is about 430 seconds. Keep the
-// producer bounded at eight minutes so a ten-minute topology job still has
-// time to build and upload the plan after fresh measurements complete.
+// producer bounded at eight minutes per file so the topology job remains
+// bounded while serialized fleet-sensitive measurements cannot interfere.
 export const PRE_TOPOLOGY_TIMEOUT_MS = 8 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
@@ -151,15 +151,20 @@ export async function measurePreTopologyFiles(repoRoot, files, options = {}) {
     const allIndexes = files.map((_, index) => index);
     const exclusiveIndexes = allIndexes.filter((index) => requiresExclusiveFleetMeasurement(files[index]));
     const regularIndexes = allIndexes.filter((index) => !requiresExclusiveFleetMeasurement(files[index]));
-    const workers = concurrency === 1 || exclusiveIndexes.length === 0
-      ? Array.from({ length: concurrency }, () => runQueue(allIndexes))
-      : [
-          runQueue(exclusiveIndexes),
-          ...Array.from({ length: concurrency - 1 }, () => runQueue(regularIndexes)),
-        ];
-    const settlements = await Promise.allSettled(workers);
-    const failure = settlements.find((entry) => entry.status === 'rejected');
-    if (failure) throw failure.reason;
+    if (concurrency === 1 || exclusiveIndexes.length === 0) {
+      const settlements = await Promise.allSettled(
+        Array.from({ length: concurrency }, () => runQueue(allIndexes)),
+      );
+      const failure = settlements.find((entry) => entry.status === 'rejected');
+      if (failure) throw failure.reason;
+    } else {
+      const regularSettlements = await Promise.allSettled(
+        Array.from({ length: concurrency }, () => runQueue(regularIndexes)),
+      );
+      const regularFailure = regularSettlements.find((entry) => entry.status === 'rejected');
+      if (regularFailure) throw regularFailure.reason;
+      await runQueue(exclusiveIndexes);
+    }
     process.stderr.write(`[pre-topology] measured ${files.length} changed/stale Vitest file(s) with ${concurrency} isolated worker(s)\n`);
     return Object.fromEntries(results);
   } finally {
