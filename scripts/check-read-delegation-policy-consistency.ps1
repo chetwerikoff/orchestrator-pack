@@ -16,7 +16,7 @@ try {
     $testPath = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
     $text = Get-Content -LiteralPath $testPath -Raw
     $old = '$leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $RepoRoot -ScanRoot (Join-Path $RepoRoot ''scripts''))'
-    $new = '$leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $RepoRoot -ScanRoot (Join-Path $RepoRoot ''scripts'') | Where-Object { $_.LoaderFunction -match ''^(?i)Get-ReviewWakeTarget'' })'
+    $new = '$leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $RepoRoot -ScanRoot (Join-Path $RepoRoot ''scripts'') | Where-Object { $_.LoaderFunction -match ''^(?i)Get-ReviewWakeT[A-M]'' })'
     if (-not $text.Contains($old)) { throw 'production scan probe anchor not found' }
     $text = $text.Replace($old, $new)
     $text = $text.Replace('$leaks | Should -BeNullOrEmpty -Because', '$leaks | Should -Not -BeNullOrEmpty -Because')
