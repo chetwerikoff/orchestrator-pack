@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "9702e44ccd41ff6dbba5b7b7997e4d816c93e78d",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:cdc798010a845f240e8649a2726ac792715ba5b310f1a9c16a4a53780d413de5"
+    "active_scope_hash": "sha256:96d5fc7475289b82173c124faafe03e5b58749c552f98a2a3a86fdc9ee4f9c87"
   },
   "declared_paths": [
     "docs/migration_notes.md",
@@ -67,8 +67,24 @@
     "scripts/vitest-wallclock-e2e-split.manifest.json",
     "tests/fixtures/listener-disposition/retire.json",
     "tests/fixtures/orchestrator-escalation/scenario-matrix.json",
-    "tests/vestigial-fleet-retirement-pr-b.test.ts"
+    "tests/vestigial-fleet-retirement-pr-b.test.ts",
+    "scripts/vestigial-fleet-retirement-pr-b.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:cdc798010a845f240e8649a2726ac792715ba5b310f1a9c16a4a53780d413de5",
+      "new_active_scope_hash": "sha256:96d5fc7475289b82173c124faafe03e5b58749c552f98a2a3a86fdc9ee4f9c87",
+      "changed": {
+        "added": [
+          "scripts/vestigial-fleet-retirement-pr-b.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Move the PR-B retirement contract test into the existing Vitest scripts include path so default and CI runs discover it.",
+      "actor": "orchestrator-pack-112",
+      "timestamp": "2026-07-13T11:04:21.429Z",
+      "applied": true
+    }
+  ]
 }
