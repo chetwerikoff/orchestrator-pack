@@ -20,13 +20,23 @@ try {
     $config.Run.Path = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
     $config.Run.PassThru = $true
     $config.Filter.FullName = @('*finds no loader-to-consumer scope leaks in production PowerShell*')
-    $config.Output.Verbosity = 'Detailed'
-    $output = @(Invoke-Pester -Configuration $config 2>&1)
-    $output | Out-File -LiteralPath $resultPath -Encoding utf8
-    $summary = @($output | Where-Object { $_.PSObject.Properties.Name -contains 'FailedCount' })[-1]
-    if ($summary) {
-        "SUMMARY total=$($summary.TotalCount) passed=$($summary.PassedCount) failed=$($summary.FailedCount)" | Add-Content -LiteralPath $resultPath
-    }
+    $config.Output.Verbosity = 'None'
+    $result = Invoke-Pester -Configuration $config
+
+    @(
+        "SUMMARY total=$($result.TotalCount) passed=$($result.PassedCount) failed=$($result.FailedCount) skipped=$($result.SkippedCount)"
+        foreach ($failed in @($result.Failed)) {
+            "FAILED_NAME=$($failed.ExpandedName)"
+            "FAILED_PATH=$($failed.Path)"
+            "FAILED_LINE=$($failed.StartLine)"
+            "FAILED_MESSAGE_BEGIN"
+            [string]$failed.ErrorRecord.Exception.Message
+            "FAILED_MESSAGE_END"
+            "FAILED_STACK_BEGIN"
+            [string]$failed.ErrorRecord.ScriptStackTrace
+            "FAILED_STACK_END"
+        }
+    ) | Set-Content -LiteralPath $resultPath -Encoding utf8
     exit 0
 }
 finally {
