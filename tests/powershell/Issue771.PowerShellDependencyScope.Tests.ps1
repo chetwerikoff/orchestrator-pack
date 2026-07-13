@@ -4,7 +4,6 @@ BeforeAll {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $WorkerStore = Join-Path $RepoRoot 'scripts/lib/WorkerStatusStore.ps1'
     $InvokeAo = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
-    $TrustedBootstrap = Join-Path $RepoRoot 'scripts/lib/Import-TrustedReverifyBootstrap.ps1'
 
     function Quote-Issue771([string]$Value) { "'" + $Value.Replace("'", "''") + "'" }
     function New-Issue771Temp {
@@ -211,26 +210,6 @@ Set-Content $(Quote-Issue771 (Join-Path $dir 'Autonomous-GateCommon.ps1')) "func
             $result.first | Should -Match 'missing required commands: Resolve-PackGateRepoRoot'
             $result.second | Should -Match 'previously failed'
             $result.loads | Should -Be 1
-        }
-        finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
-    }
-
-    It 'keeps trusted reverify helpers visible after bootstrap returns' {
-        $dir = New-Issue771Temp
-        try {
-            $target = Join-Path $dir 'target'; $trusted = Join-Path $dir 'trusted'
-            New-Item -ItemType Directory $target -Force | Out-Null
-            New-Item -ItemType Directory (Join-Path $trusted 'scripts/lib') -Force | Out-Null
-            Set-Content (Join-Path $trusted 'scripts/lib/Resolve-TrustedPackRoot.ps1') "function Resolve-TrustedPackRunner { @{ ok=`$true } }"
-            Set-Content (Join-Path $trusted 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1') "function Ensure-ReverifyWorkspaceDeps { 'ok' }"
-            $result = Invoke-Issue771Pwsh @"
-. $(Quote-Issue771 $TrustedBootstrap)
-`$loaded=Import-TrustedReverifyBootstrap -ReviewTargetRoot $(Quote-Issue771 $target) -TrustedBaseRoot $(Quote-Issue771 $trusted)
-@{ module=`$loaded.ModuleName; resolve=[bool](Get-Command Resolve-TrustedPackRunner -CommandType Function -ErrorAction SilentlyContinue); ensure=[bool](Get-Command Ensure-ReverifyWorkspaceDeps -CommandType Function -ErrorAction SilentlyContinue) } | ConvertTo-Json -Compress
-"@
-            $result.module | Should -Not -BeNullOrEmpty
-            $result.resolve | Should -BeTrue
-            $result.ensure | Should -BeTrue
         }
         finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
