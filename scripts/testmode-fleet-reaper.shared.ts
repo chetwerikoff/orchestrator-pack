@@ -9,6 +9,7 @@ import {
   readMarker,
   repoRoot,
   runSupervisor,
+  runSupervisorAsync,
   waitForMarkers,
 } from './supervisor-recovery.test-helpers.js';
 import {
@@ -197,7 +198,7 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     if (leaseId && leaseRoot) {
       renewLaneLease(leaseRoot, leaseId);
     }
-    const start = runSupervisor(
+    const start = await runSupervisorAsync(
       [
         '-Action',
         'Start',
