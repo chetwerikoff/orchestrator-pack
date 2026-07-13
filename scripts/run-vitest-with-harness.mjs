@@ -151,6 +151,7 @@ let childFailure = null;
 let guardFailure = null;
 try {
   applyOpkVitestHarnessEnv(invocationRoot, childEnv);
+  childEnv.OPK_TESTMODE_LEASE_ROOT = join(invocationRoot, 'state', 'testmode-fleet-leases');
   installPwshShim(invocationRoot, childEnv);
   childEnv.NODE_OPTIONS = appendNodeImport(
     childEnv.NODE_OPTIONS,
