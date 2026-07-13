@@ -42,8 +42,9 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
   }
   const guardHelper = path.join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
   const guardedScript = `. ${psString(guardHelper)}; Enable-OpkVitestStoreIsolation; ${script}`;
+  const pwsh = process.env.OPK_REAL_PWSH || 'pwsh';
   try {
-    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', guardedScript], {
+    const result = spawnSync(pwsh, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', guardedScript], {
       cwd: repoRoot,
       encoding: 'utf8',
       env: {
