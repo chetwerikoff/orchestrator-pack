@@ -70,6 +70,23 @@ function Protect-OpkVitestHarnessDirectory {
     }
 }
 
+function Get-OpkVitestProductionWakeRoot {
+    if ($env:AO_WAKE_SUPERVISOR_STATE_DIR) {
+        return $env:AO_WAKE_SUPERVISOR_STATE_DIR.Trim()
+    }
+    if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
+        return $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR.Trim()
+    }
+    if ($env:XDG_STATE_HOME) {
+        return Join-Path $env:XDG_STATE_HOME 'orchestrator-pack-wake-supervisor'
+    }
+    if ($env:LOCALAPPDATA) {
+        return Join-Path $env:LOCALAPPDATA 'orchestrator-pack-wake-supervisor'
+    }
+    $homeRoot = if ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
+    return Join-Path (Join-Path (Join-Path $homeRoot '.local') 'state') 'orchestrator-pack-wake-supervisor'
+}
+
 function Set-OpkVitestHarnessEnv {
     param([string]$RootDir = '')
 
@@ -84,14 +101,21 @@ function Set-OpkVitestHarnessEnv {
     if (-not $env:OPK_VITEST_PRODUCTION_TMP) {
         $env:OPK_VITEST_PRODUCTION_TMP = if ($env:TMPDIR) { $env:TMPDIR } elseif ($env:TEMP) { $env:TEMP } elseif ($env:TMP) { $env:TMP } else { [System.IO.Path]::GetTempPath() }
     }
+    if (-not $env:OPK_VITEST_PRODUCTION_AO_BASE) {
+        $env:OPK_VITEST_PRODUCTION_AO_BASE = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $env:OPK_VITEST_PRODUCTION_HOME '.agent-orchestrator' }
+    }
+    if (-not $env:OPK_VITEST_PRODUCTION_WAKE_ROOT) {
+        $env:OPK_VITEST_PRODUCTION_WAKE_ROOT = Get-OpkVitestProductionWakeRoot
+    }
 
     $wakeDir = Join-Path $RootDir 'wake'
     $stateDir = Join-Path $RootDir 'state'
+    $tmpDir = Join-Path $RootDir 'tmp'
     $inboxDir = Join-Path $RootDir 'operator-inbox'
     $healthDir = Join-Path $RootDir 'health-spool'
     $aoBaseDir = Join-Path $RootDir 'ao-base'
     $transportDir = Join-Path $RootDir 'transport'
-    foreach ($dir in @($RootDir, $wakeDir, $stateDir, $inboxDir, $healthDir, $aoBaseDir, $transportDir)) {
+    foreach ($dir in @($RootDir, $wakeDir, $stateDir, $tmpDir, $inboxDir, $healthDir, $aoBaseDir, $transportDir)) {
         if (-not (Test-Path -LiteralPath $dir)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
@@ -101,6 +125,10 @@ function Set-OpkVitestHarnessEnv {
     $env:OPK_VITEST_HARNESS = '1'
     $env:OPK_VITEST_HARNESS_ROOT = $RootDir
     $env:OPK_VITEST_HARNESS_INVENTORY = Join-Path (Split-Path -Parent $PSScriptRoot) 'vitest-live-store-inventory.json'
+    $env:TMPDIR = $tmpDir
+    $env:TEMP = $tmpDir
+    $env:TMP = $tmpDir
+    $env:AO_WAKE_SUPERVISOR_STATE_DIR = $wakeDir
     $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $wakeDir
     $env:AO_SIDE_PROCESS_STATE_DIR = $wakeDir
     $env:AO_BASE_DIR = $aoBaseDir
@@ -116,20 +144,27 @@ function Set-OpkVitestHarnessEnv {
     $env:AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE = Join-Path $stateDir 'orchestrator-review-trigger-reeval-watch.json'
     $env:AO_WORKER_REPORT_STORE = Join-Path $wakeDir 'worker-report-store.json'
     $env:AO_PR_SESSION_BINDING_CACHE = Join-Path $wakeDir 'pr-session-binding-cache.json'
-    $env:AO_REVIEW_CLAIM_DIR = Join-Path $aoBaseDir 'projects/orchestrator-pack/review-start-claims'
-    $env:AO_WORKER_NUDGE_CLAIM_DIR = Join-Path $aoBaseDir 'projects/orchestrator-pack/worker-nudge-claims'
+    $env:AO_CI_GREEN_WAKE_RECONCILE_STATE = Join-Path $stateDir 'orchestrator-ci-green-wake-state.json'
+    $env:AO_DEAD_WORKER_RECONCILE_STATE = Join-Path $wakeDir 'orchestrator-dead-worker-reconcile-state.json'
+    $env:AO_REVIEW_TRIGGER_RECONCILE_STATE = Join-Path $stateDir 'orchestrator-review-reconcile-state.json'
+    $env:AO_WAKE_DEDUP_STATE = Join-Path $stateDir 'orchestrator-wake-dedup.json'
+    $env:AO_WAKE_LISTENER_SIDE_EFFECT_LOCK = Join-Path $stateDir 'orchestrator-wake-listener-side-effect.lock'
+    $env:AO_WORKER_MESSAGE_ADOPTION_STATE = Join-Path $stateDir 'orchestrator-worker-message-send-adoption.json'
+    $env:AO_REVIEW_CLAIM_DIR = Join-Path (Join-Path (Join-Path $aoBaseDir 'projects') 'orchestrator-pack') 'review-start-claims'
+    $env:AO_WORKER_NUDGE_CLAIM_DIR = Join-Path (Join-Path (Join-Path $aoBaseDir 'projects') 'orchestrator-pack') 'worker-nudge-claims'
 
     . (Join-Path $PSScriptRoot 'OpkVitestStoreIsolation.ps1')
     Enable-OpkVitestStoreIsolation
 
     return @{
-        root        = $RootDir
-        wakeDir     = $wakeDir
-        statePath   = $env:AO_ORCHESTRATOR_ESCALATION_STATE
-        inboxDir    = $inboxDir
-        healthDir   = $healthDir
-        stateDir    = $stateDir
-        aoBaseDir   = $aoBaseDir
+        root         = $RootDir
+        wakeDir      = $wakeDir
+        statePath    = $env:AO_ORCHESTRATOR_ESCALATION_STATE
+        inboxDir     = $inboxDir
+        healthDir    = $healthDir
+        stateDir     = $stateDir
+        tmpDir       = $tmpDir
+        aoBaseDir    = $aoBaseDir
         transportDir = $transportDir
     }
 }

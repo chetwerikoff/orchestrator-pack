@@ -4,82 +4,105 @@ Issue: #752
 
 ## Contract
 
-Every writable pack store that can resolve outside the current checkout is listed in
+Every writable pack store that can resolve outside the current checkout is declared in
 `scripts/vitest-live-store-inventory.json`. The inventory is executable input for:
 
-- the Node write-boundary preload (`scripts/vitest-live-store-preload.mjs`);
-- the PowerShell resolver/write command guard (`scripts/lib/OpkVitestStoreIsolation.ps1`);
-- the parent-process pre/post hash and transient-write watcher;
-- the mechanical inventory regression check run before `npm test`.
+- the Node write-boundary preload;
+- the PowerShell resolver/write guard;
+- the parent-process hash and transient-write guard;
+- the mechanical completeness check executed before `npm test`.
 
-An entry records its store identifier, resolver, write seam, environment override,
-canonical production default, live root, basename-scoped sidecars, isolated harness
-path, source files, and exclusion state. A new live-default resolver is incomplete
-until its inventory row and harness mapping land in the same change.
+Each store row records its identifier, resolver, real filesystem write boundary,
+environment overrides, canonical production default, containing live root,
+basename-scoped sidecars, isolated harness path, source seams, and exclusion state.
+No writable store is excluded.
 
-## Canonical comparison policy
+## Canonical comparison and class backstops
 
-Comparisons freeze the production home and temporary-directory roots at harness entry,
-then expand those roots, normalize separators and
-`..`, resolve the nearest existing ancestor (therefore resolving symlink/junction
-aliases even when the leaf does not exist yet), and use case-insensitive comparison
-only on Windows. A directory store protects its full subtree. File stores protect the
-primary basename plus only the sidecar patterns declared in their row.
+The harness freezes production HOME, temporary directory, AO base, and wake-supervisor
+state roots before changing test environment variables. Path comparison then expands
+those frozen roots, normalizes separators and relative segments, resolves the nearest
+existing ancestor to catch symlink/junction aliases, and applies case-insensitive
+comparison only on Windows.
 
-With `OPK_VITEST_HARNESS=1`, a match fails closed before a Node filesystem write or
-before a guarded PowerShell resolver/write command proceeds. Diagnostics contain the
-store identifier and operation only; they do not print file contents or resolved live
-paths.
+Two class-level backstops protect `${TMP}/orchestrator-*.json` (including mechanical
+sidecars) and `${TMP}/orchestrator-*.lock`. The complete wake-supervisor state root and
+AO base root are also write-fenced, so a newly introduced basename cannot silently reach
+live state. Class fences do not satisfy inventory ownership: the source scan still fails
+when a new resolver/writer seam is not assigned to a concrete inventory row.
 
-## Invocation ownership
+## Harness ordering and isolation
 
-`npm test` and `npm run test:watch` launch Vitest through
-`scripts/run-vitest-with-harness.mjs`. Each invocation receives a unique owner-only
-root. The wrapper establishes every override before importing Vitest, installs the
-Node preload and PowerShell child shim, starts the live-store guard, and always runs
-post-check and cleanup in `finally` semantics. When both the child and the guard fail,
-both failures remain visible and the invocation is non-zero.
+`npm test` and `npm run test:watch` execute `scripts/run-vitest-with-harness.mjs`.
+Existing PowerShell lane wrappers call `Set-OpkVitestHarnessEnv.ps1` before invoking npm.
+Both entry paths:
 
-The existing PowerShell light/heavy/shard wrappers already call
-`Set-OpkVitestHarnessEnv.ps1` before `npm test`; that helper now supplies the complete
-inventory mapping. Direct `vitest`/`npx vitest` without the marker is rejected by
-`vitest.config.ts`. The marker is pack-owned and manually setting it is unsupported. As defense in depth,
-global setup still starts the inventory guard and each Vitest worker imports the Node
-write-boundary preload before test modules.
+1. freeze the production roots;
+2. create a collision-free owner-only `opk-vitest-*` root;
+3. redirect `TMPDIR`, `TEMP`, `TMP`, AO base, wake-supervisor state, and every named
+   store override into that root;
+4. install Node and PowerShell write-boundary guards before Vitest or pack modules load;
+5. start the parent live-store guard before spawning Vitest;
+6. run the guard in finally semantics and preserve both child and guard failures;
+7. clean the invocation root best-effort and scavenge only a bounded number of stale
+   roots older than 24 hours.
 
-Stale `opk-vitest-*` roots older than 24 hours are scavenged best-effort with a hard
-limit of 16 removals per invocation. The current run root is deleted after the guard
-finishes.
+Raw `vitest` / `npx vitest` invocation without `OPK_VITEST_HARNESS=1` is rejected by
+`vitest.config.ts`. Repository verifier helpers use `npm test -- <file>` rather than
+bypassing the wrapper.
 
-## Audit result
+## Audited writable classes
 
-Inventoried non-excluded classes:
+The committed inventory currently covers 30 concrete store classes:
 
-1. escalation state, operator inbox, and escalation health spool (the #664 lineage);
-2. worker-message dispatch journal, submit tracking state, and submit root anchor;
-3. worker-status store;
-4. review delivery lifecycle, handoff admission, report-state seed, and re-evaluation watch;
-5. pack worker-report store and PR↔session binding cache;
-6. review-start and worker-nudge claim namespaces under the AO base directory;
-7. mechanical Node transport files.
+- escalation state, operator inbox, and health spool;
+- the entire wake-supervisor runtime state root;
+- dispatch journal, submit tracking, submit root anchor, worker status, worker reports,
+  and PR↔session binding cache;
+- review delivery lifecycle, handoff admission, report seed, reevaluation watch,
+  review-trigger reconcile state, CI-green state, wake dedupe state, and wake-side-effect
+  lock;
+- dead-worker reconcile state and operator-clearance writer;
+- worker-message adoption state and both dry-run roots;
+- review-start, worker-nudge, and claim-pr-resume namespaces;
+- orchestrator review-start audit and worker-nudge audit roots;
+- AO code-review run/liveness state, audit, and sidecars;
+- mechanical transport and generic orchestrator side-effect lock files.
 
-The wake-supervisor state root and default AO base root are also protected as root
-classes, so an unlisted basename beneath either production root cannot silently write
-just because its leaf is new.
+Additional source files that read or write an already catalogued store are attached to
+that store row rather than represented as duplicate stores.
 
-## Exclusion result
+## Inventory completeness and exclusion safety
 
-No writable store is excluded: every inventory row has `excluded: false`. The mechanical
-source scan ignores repository fixtures, golden inputs, declarations, investigations,
-and test modules because those are not runtime path-producing seams. Repository-local
-Vitest reports are also outside this inventory because their output is checkout-scoped,
-not operator live state. Environment variables, CI presence, and a currently missing
-file are never treated as exclusion evidence.
+The source audit searches the allowed roots for PowerShell, TypeScript, JavaScript,
+workflow, and inline production-default path seams. A candidate passes only when it is:
+
+- owned by at least one concrete store row, or
+- listed as an explicit discovery exclusion with a mechanical no-write proof.
+
+The only discovery exclusion is `scripts/check-reusable.ps1`: it is a read-only tracked
+file policy validator. The guard rejects that exclusion if a filesystem write API is
+introduced. Fixtures, tests, declarations, and investigation captures are immutable
+inputs and are excluded by location, not by discretionary per-store waivers.
+
+## Regression evidence
+
+`scripts/check-vitest-live-store-isolation.mjs` exercises:
+
+- fallback, environment, and explicit live-path blocking;
+- frozen-root and symlink-alias canonicalization;
+- unique concurrent invocation roots;
+- complete environment propagation;
+- Node sync, callback, and promise write interception before open;
+- PowerShell resolver and direct-write interception;
+- write-then-delete detection for concrete stores, class fences, and the wake root;
+- raw Vitest refusal and supported npm-wrapper wiring.
+
+Snapshots contain hashes and metadata only. Live records are never copied into logs or
+CI artifacts.
 
 ## Operator adoption
 
-No production store path or schema changes. No live state migration is required.
-Test and CI callers must use `npm test`, `npm run test:watch`, or one of the existing
-`run-vitest-*-lane.ps1` wrappers. Any bespoke command that invokes the Vitest binary
-directly must switch to the package wrapper rather than setting the harness marker by
-hand.
+No production path or schema changes. No live-state migration or cleanup is performed.
+Custom test commands must invoke `npm test`, `npm run test:watch`, or an existing
+`run-vitest-*-lane.ps1` wrapper; setting the harness marker manually is unsupported.

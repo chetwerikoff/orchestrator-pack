@@ -7,13 +7,14 @@
   "baseline": {
     "commit_sha": "b40047ae9e4c2f562f8df33afb7f5fe9df1e62bc",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:be3978baf2568889c285e3304a7b068ccf997f3354e9232ee86d45338158e0e8"
+    "active_scope_hash": "sha256:fb8ceac952a1e42428cd391320773c0f164a0a17675fddb77c579793566d7ed7"
   },
   "declared_paths": [
     "docs/vitest-live-store-audit.md",
     "package.json",
     "scripts/_test-pwsh-helpers.ts",
     "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
     "scripts/lib/OpkVitestStoreIsolation.ps1",
     "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
     "scripts/lib/vitest-live-store-harness.d.mts",
@@ -26,5 +27,20 @@
     "vitest.config.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:be3978baf2568889c285e3304a7b068ccf997f3354e9232ee86d45338158e0e8",
+      "new_active_scope_hash": "sha256:fb8ceac952a1e42428cd391320773c0f164a0a17675fddb77c579793566d7ed7",
+      "changed": {
+        "added": [
+          "scripts/lib/Initialize-ReviewerPolicyCheck.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "CI verification showed the shared reviewer-policy helper bypassed the supported npm test harness by invoking npx vitest directly; include the minimal entrypoint correction without changing reviewer policy semantics",
+      "actor": "chatgpt-issue-752",
+      "timestamp": "2026-07-13T10:30:00.000Z",
+      "applied": true
+    }
+  ]
 }

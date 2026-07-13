@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,13 +9,16 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, extname, join, relative, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, extname, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import {
+  applyOpkVitestHarnessEnv,
   assertHarnessWritePathSafe,
   classifyLiveStorePath,
+  cleanupHarnessRoot,
+  createHarnessRoot,
   inventoryPath,
   liveStoreInventory,
   repoRoot,
@@ -47,11 +49,23 @@ for (const store of liveStoreInventory.stores ?? []) {
   }
   if (ids.has(store.id)) fail(`duplicate inventory store id ${store.id}`);
   ids.add(store.id);
+  if (!['file', 'directory', 'pattern'].includes(String(store.kind))) {
+    fail(`${store.id} has unsupported kind ${store.kind}`);
+  }
+  if (store.kind === 'pattern' && !String(store.basenamePattern ?? '').trim()) {
+    fail(`${store.id} pattern entry requires basenamePattern`);
+  }
   if (!Array.isArray(store.envOverrides)) fail(`${store.id} envOverrides must be an array`);
   if (!Array.isArray(store.sidecars)) fail(`${store.id} sidecars must be an array`);
-  if (!Array.isArray(store.sourceFiles) || store.sourceFiles.length === 0) fail(`${store.id} sourceFiles must be non-empty`);
-  if (store.excluded && !String(store.exclusionReason ?? '').trim()) fail(`${store.id} exclusion requires a reason`);
-  if (!store.excluded && store.exclusionReason !== null) fail(`${store.id} non-excluded entry must use null exclusionReason`);
+  if (!Array.isArray(store.sourceFiles) || store.sourceFiles.length === 0) {
+    fail(`${store.id} sourceFiles must be non-empty`);
+  }
+  if (store.excluded && !String(store.exclusionReason ?? '').trim()) {
+    fail(`${store.id} exclusion requires a reason`);
+  }
+  if (!store.excluded && store.exclusionReason !== null) {
+    fail(`${store.id} non-excluded entry must use null exclusionReason`);
+  }
 
   let resolverFound = false;
   for (const sourceFile of store.sourceFiles ?? []) {
@@ -63,7 +77,20 @@ for (const store of liveStoreInventory.stores ?? []) {
     const source = readFileSync(full, 'utf8');
     if (source.includes(store.resolver)) resolverFound = true;
   }
-  if (!resolverFound) fail(`${store.id} resolver not found in declared source files: ${store.resolver}`);
+  if (!resolverFound) {
+    fail(`${store.id} resolver not found in declared source files: ${store.resolver}`);
+  }
+}
+
+const classFenceIds = new Set();
+for (const fence of liveStoreInventory.classFences ?? []) {
+  if (!String(fence.id ?? '').trim()) fail('class fence missing id');
+  if (ids.has(fence.id) || classFenceIds.has(fence.id)) fail(`duplicate class fence id ${fence.id}`);
+  classFenceIds.add(fence.id);
+  if (!String(fence.rootTemplate ?? '').trim()) fail(`${fence.id} missing rootTemplate`);
+  if (!Array.isArray(fence.basenamePatterns) || fence.basenamePatterns.length === 0) {
+    fail(`${fence.id} must declare basenamePatterns`);
+  }
 }
 
 const runtimeExtensions = new Set(['.ps1', '.mjs', '.js', '.ts', '.json', '.yml', '.yaml', '.sh', '.cmd']);
@@ -77,7 +104,9 @@ const ignoredSegments = [
   '_test-',
   '_test_',
 ];
-const sourceOwners = new Set(liveStoreInventory.stores.flatMap((store) => store.sourceFiles ?? []));
+const sourceOwners = new Set(
+  liveStoreInventory.stores.flatMap((store) => store.sourceFiles ?? []),
+);
 const enforcementFiles = new Set([
   'scripts/check-vitest-live-store-isolation.mjs',
   'scripts/run-vitest-with-harness.mjs',
@@ -89,11 +118,27 @@ const enforcementFiles = new Set([
   'scripts/lib/vitest-live-store-harness.mjs',
   'scripts/vitest-live-store-inventory.json',
 ]);
+const exclusionByPath = new Map(
+  (liveStoreInventory.discoveryExclusions ?? []).map((entry) => [entry.path, entry]),
+);
+const writeApiPattern = /(?:\bSet-Content\b|\bAdd-Content\b|\bOut-File\b|\bMove-Item\b|\bCopy-Item\b|\bRemove-Item\b|\bNew-Item\b|\[System\.IO\.(?:File|FileStream)\]|\b(?:writeFile|writeFileSync|appendFile|appendFileSync|rename|renameSync|mkdir|mkdirSync|rm|rmSync|unlink|unlinkSync)\s*\()/;
+for (const [path, entry] of exclusionByPath) {
+  const full = join(repoRoot, path);
+  if (!existsSync(full)) {
+    fail(`discovery exclusion source missing: ${path}`);
+    continue;
+  }
+  if (entry.proof !== 'no-write-api') fail(`${path} exclusion lacks mechanical no-write-api proof`);
+  if (writeApiPattern.test(readFileSync(full, 'utf8'))) {
+    fail(`${path} exclusion is not read-only: a filesystem write API is present`);
+  }
+}
+
 const defaultSignals = [
-  /GetTempPath\s*\(\s*\)[\s\S]{0,220}orchestrator-[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
-  /tmpdir\s*\(\s*\)[\s\S]{0,220}orchestrator-[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
-  /(?:\.local[\\/]state[\\/]orchestrator-pack-wake-supervisor|orchestrator-pack-wake-supervisor)[\s\S]{0,400}[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
-  /(?:\.agent-orchestrator|AO_BASE_DIR)[\s\S]{0,400}[A-Za-z0-9._-]+(?:claims|store|state|cache|audit|ledger)/g,
+  /GetTempPath\s*\(\s*\)[\s\S]{0,260}orchestrator-[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
+  /tmpdir\s*\(\s*\)[\s\S]{0,260}orchestrator-[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
+  /(?:\.local[\\/]state[\\/]orchestrator-pack-wake-supervisor|orchestrator-pack-wake-supervisor)[\s\S]{0,500}[A-Za-z0-9._-]+(?:\.json|\.jsonl|\.lock)/g,
+  /(?:\.agent-orchestrator|AO_BASE_DIR)[\s\S]{0,500}[A-Za-z0-9._-]+(?:claims|store|state|cache|audit|ledger|code-reviews)/g,
   /(?:\/tmp|[A-Za-z]:[\\/]Temp)[\\/]orchestrator-[A-Za-z0-9._-]+/g,
 ];
 
@@ -112,24 +157,32 @@ function walkRuntime(root) {
 }
 
 const auditInputs = [
-  ...['scripts', 'plugins', 'docs', '.github/workflows'].flatMap((root) => walkRuntime(join(repoRoot, root))),
+  ...['scripts', 'plugins', 'docs', '.github/workflows'].flatMap((root) =>
+    walkRuntime(join(repoRoot, root))),
   ...['vitest.config.ts', 'package.json'].map((file) => join(repoRoot, file)).filter(existsSync),
 ];
 for (const full of auditInputs) {
-    const rel = relative(repoRoot, full).replaceAll('\\', '/');
-    if (ignoredSegments.some((segment) => `/${rel}`.includes(segment)) || enforcementFiles.has(rel)) continue;
-    const source = readFileSync(full, 'utf8');
-    const hasDefault = defaultSignals.some((pattern) => {
-      pattern.lastIndex = 0;
-      return pattern.test(source);
-    });
-  if (hasDefault && !sourceOwners.has(rel)) fail(`un-inventoried live-default candidate: ${rel}`);
+  const rel = relative(repoRoot, full).replaceAll('\\', '/');
+  if (ignoredSegments.some((segment) => `/${rel}`.includes(segment)) || enforcementFiles.has(rel)) {
+    continue;
+  }
+  const source = readFileSync(full, 'utf8');
+  const hasDefault = defaultSignals.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(source);
+  });
+  if (!hasDefault) continue;
+  if (sourceOwners.has(rel)) continue;
+  if (exclusionByPath.has(rel)) continue;
+  fail(`un-inventoried live-default candidate: ${rel}`);
 }
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'opk-vitest-isolation-check-'));
+const cleanupRoots = [];
 try {
   const fakeHome = join(fixtureRoot, 'home');
   const fakeTmp = join(fixtureRoot, 'tmp');
+  const fakeAoBase = join(fakeHome, '.agent-orchestrator');
   const wake = join(fakeHome, '.local', 'state', 'orchestrator-pack-wake-supervisor');
   mkdirSync(wake, { recursive: true });
   mkdirSync(fakeTmp, { recursive: true });
@@ -141,10 +194,17 @@ try {
     TMP: fakeTmp,
     OPK_VITEST_PRODUCTION_HOME: fakeHome,
     OPK_VITEST_PRODUCTION_TMP: fakeTmp,
+    OPK_VITEST_PRODUCTION_AO_BASE: fakeAoBase,
+    OPK_VITEST_PRODUCTION_WAKE_ROOT: wake,
     OPK_VITEST_HARNESS: '1',
   };
-  delete env.AO_WORKER_STATUS_STORE;
-  delete env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR;
+  for (const name of [
+    'AO_WORKER_STATUS_STORE',
+    'AO_WAKE_SUPERVISOR_STATE_DIR',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+    'AO_SIDE_PROCESS_STATE_DIR',
+    'AO_BASE_DIR',
+  ]) delete env[name];
 
   const liveWorkerStatus = join(wake, 'worker-status-store.json');
   const match = classifyLiveStorePath(liveWorkerStatus, env);
@@ -154,21 +214,25 @@ try {
     fail('computed worker-status default was not blocked');
   } catch (error) {
     if (error?.code !== 'OPK_VITEST_LIVE_STORE_BLOCKED') fail(`unexpected block error: ${error}`);
-    if (String(error?.message ?? '').includes(liveWorkerStatus)) fail('blocked-path diagnostic leaked a live path');
+    if (String(error?.message ?? '').includes(liveWorkerStatus)) {
+      fail('blocked-path diagnostic leaked a live path');
+    }
   }
 
   const mutatedEnv = {
     ...env,
-    OPK_VITEST_PRODUCTION_HOME: fakeHome,
-    OPK_VITEST_PRODUCTION_TMP: fakeTmp,
     HOME: join(fixtureRoot, 'mutated-home'),
     TMPDIR: join(fixtureRoot, 'mutated-tmp'),
+    TEMP: join(fixtureRoot, 'mutated-tmp'),
+    TMP: join(fixtureRoot, 'mutated-tmp'),
   };
   try {
     assertHarnessWritePathSafe(liveWorkerStatus, 'mutated-env-self-check', mutatedEnv);
-    fail('mutating HOME/TMP after harness bootstrap bypassed the frozen production default');
+    fail('mutating HOME/TMP after bootstrap bypassed the frozen production default');
   } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_BLOCKED') fail(`unexpected frozen-root error: ${error}`);
+    if (error?.code !== 'OPK_VITEST_LIVE_STORE_BLOCKED') {
+      fail(`unexpected frozen-root error: ${error}`);
+    }
   }
 
   const safePath = join(fixtureRoot, 'safe', 'worker-status-store.json');
@@ -182,7 +246,9 @@ try {
   try {
     symlinkSync(wake, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
     const aliasMatch = classifyLiveStorePath(join(aliasRoot, 'worker-status-store.json'), env);
-    if (aliasMatch?.storeId !== 'worker-status-store') fail('symlink alias of live default was not classified');
+    if (aliasMatch?.storeId !== 'worker-status-store') {
+      fail('symlink alias of live default was not classified');
+    }
   } catch (error) {
     if (process.platform !== 'win32') fail(`symlink canonicalization fixture failed: ${error}`);
   }
@@ -191,41 +257,137 @@ try {
   const transient = join(fakeTmp, 'orchestrator-worker-message-submit-state.json');
   writeFileSync(transient, '{"transient":true}\n', 'utf8');
   rmSync(transient, { force: true });
-  await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 60));
   try {
     guard.stop();
     fail('write-then-delete transient mutation escaped the parent guard');
   } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') fail(`unexpected parent guard error: ${error}`);
+    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
+      fail(`unexpected parent guard error: ${error}`);
+    }
   }
 
   const rootGuard = startLiveStoreGuard(env);
   const unlistedLiveRootFile = join(wake, 'new-uninventoried-store.json');
   writeFileSync(unlistedLiveRootFile, '{"transient":true}\n', 'utf8');
   rmSync(unlistedLiveRootFile, { force: true });
-  await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 60));
   try {
     rootGuard.stop();
     fail('transient write under a protected live root escaped the parent guard');
   } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') fail(`unexpected live-root guard error: ${error}`);
+    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
+      fail(`unexpected live-root guard error: ${error}`);
+    }
+  }
+
+  const classGuard = startLiveStoreGuard(env);
+  const unknownTmpStore = join(fakeTmp, 'orchestrator-new-live-store.json');
+  writeFileSync(unknownTmpStore, '{}\n', 'utf8');
+  rmSync(unknownTmpStore, { force: true });
+  await new Promise((resolveWait) => setTimeout(resolveWait, 60));
+  try {
+    classGuard.stop();
+    fail('transient write through the /tmp orchestrator class fence escaped the guard');
+  } catch (error) {
+    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
+      fail(`unexpected class-fence guard error: ${error}`);
+    }
+  }
+
+  const harnessRootA = createHarnessRoot(fakeTmp);
+  const harnessRootB = createHarnessRoot(fakeTmp);
+  cleanupRoots.push(harnessRootA, harnessRootB);
+  if (harnessRootA === harnessRootB) fail('concurrent harness roots collided');
+  const harnessEnv = {
+    ...env,
+    HOME: fakeHome,
+    TMPDIR: fakeTmp,
+    TEMP: fakeTmp,
+    TMP: fakeTmp,
+  };
+  applyOpkVitestHarnessEnv(harnessRootA, harnessEnv);
+  if (harnessEnv.OPK_VITEST_HARNESS !== '1') fail('harness marker was not established');
+  if (!String(harnessEnv.TMPDIR).startsWith(harnessRootA)) fail('TMPDIR was not redirected into the harness root');
+  if (!String(harnessEnv.AO_BASE_DIR).startsWith(harnessRootA)) fail('AO_BASE_DIR was not isolated');
+  if (!String(harnessEnv.AO_WAKE_SUPERVISOR_STATE_DIR).startsWith(harnessRootA)) {
+    fail('wake-supervisor state root was not isolated');
+  }
+  const requiredOverrides = new Set(
+    liveStoreInventory.stores.flatMap((store) => store.envOverrides ?? []),
+  );
+  for (const name of requiredOverrides) {
+    if (!String(harnessEnv[name] ?? '').trim()) fail(`harness did not establish ${name}`);
   }
 
   const preload = join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs');
-  const childScript = `import { writeFileSync } from 'node:fs'; import { homedir } from 'node:os'; import { join } from 'node:path'; writeFileSync(join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-status-store.json'), 'red');`;
-  const child = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', childScript], {
+  const nodeCases = [
+    {
+      label: 'sync',
+      target: liveWorkerStatus,
+      script: `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(liveWorkerStatus)}, 'red');`,
+    },
+    {
+      label: 'callback',
+      target: join(wake, 'callback-state.json'),
+      script: `import { writeFile } from 'node:fs'; writeFile(${JSON.stringify(join(wake, 'callback-state.json'))}, 'red', () => {});`,
+    },
+    {
+      label: 'promise',
+      target: join(wake, 'promise-state.json'),
+      script: `import { promises as fs } from 'node:fs'; await fs.writeFile(${JSON.stringify(join(wake, 'promise-state.json'))}, 'red');`,
+    },
+  ];
+  for (const entry of nodeCases) {
+    const child = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', entry.script],
+      { cwd: repoRoot, encoding: 'utf8', env },
+    );
+    if (child.status === 0) fail(`Node ${entry.label} write boundary did not fail closed`);
+    if (existsSync(entry.target)) fail(`Node ${entry.label} write opened a live-default path before blocking`);
+  }
+
+  const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
+  const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
+  const psEnv = {
+    ...env,
+    AO_WORKER_STATUS_STORE: liveWorkerStatus,
+  };
+  const psResolver = `function Get-WorkerStatusStorePath { if ($env:AO_WORKER_STATUS_STORE) { return $env:AO_WORKER_STATUS_STORE }; return 'missing' }; . ${JSON.stringify(helper)}; Enable-OpkVitestStoreIsolation; Get-WorkerStatusStorePath | Out-Null`;
+  const resolverResult = spawnSync(pwsh, ['-NoProfile', '-Command', psResolver], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: psEnv,
+  });
+  if (!resolverResult.error && resolverResult.status === 0) {
+    fail('PowerShell resolver breakpoint did not fail closed');
+  }
+
+  const psWriteTarget = join(wake, 'pwsh-direct-state.json');
+  const psWrite = `. ${JSON.stringify(helper)}; Enable-OpkVitestStoreIsolation; Set-Content -LiteralPath ${JSON.stringify(psWriteTarget)} -Value 'red'`;
+  const writeResult = spawnSync(pwsh, ['-NoProfile', '-Command', psWrite], {
     cwd: repoRoot,
     encoding: 'utf8',
     env,
   });
-  if (child.status === 0) fail('Node write boundary did not fail closed');
-  if (existsSync(liveWorkerStatus)) fail('Node write boundary opened the live-default store before blocking');
+  if (!writeResult.error && writeResult.status === 0) {
+    fail('PowerShell direct write boundary did not fail closed');
+  }
+  if (existsSync(psWriteTarget)) fail('PowerShell write opened a live-default path before blocking');
 
-  const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
-  const psScript = `. ${JSON.stringify(join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1'))}; Enable-OpkVitestStoreIsolation; function Get-WorkerStatusStorePath { if ($env:AO_WORKER_STATUS_STORE) { return $env:AO_WORKER_STATUS_STORE }; $root=Join-Path $HOME '.local/state/orchestrator-pack-wake-supervisor'; return Join-Path $root 'worker-status-store.json' }; Get-WorkerStatusStorePath | Out-Null`;
-  const ps = spawnSync(pwsh, ['-NoProfile', '-Command', psScript], { cwd: repoRoot, encoding: 'utf8', env });
-  if (!ps.error && ps.status === 0) fail('PowerShell resolver breakpoint did not fail closed');
+  const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  if (!String(packageJson.scripts?.test ?? '').includes('run-vitest-with-harness.mjs')) {
+    fail('npm test does not use the pack harness wrapper');
+  }
+  const vitestConfig = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
+  if (!vitestConfig.includes('OPK_VITEST_HARNESS is required')) {
+    fail('raw Vitest invocation is not fail-closed');
+  }
 } finally {
+  for (const root of cleanupRoots) {
+    try { cleanupHarnessRoot(root); } catch { /* fixture cleanup remains best effort */ }
+  }
   rmSync(fixtureRoot, { recursive: true, force: true });
 }
 
@@ -234,4 +396,6 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
-console.log(`vitest live-store isolation check passed (${liveStoreInventory.stores.length} stores; inventory=${relative(repoRoot, inventoryPath)})`);
+console.log(
+  `vitest live-store isolation check passed (${liveStoreInventory.stores.length} stores; inventory=${relative(repoRoot, inventoryPath)})`,
+);

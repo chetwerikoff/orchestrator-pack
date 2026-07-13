@@ -23,14 +23,14 @@ function findExecutable(name, pathValue = process.env.PATH ?? '') {
 }
 
 function installPwshShim(root, env) {
-  const realPwsh = findExecutable('pwsh', env.PATH ?? '');
+  const realPwsh = env.OPK_REAL_PWSH || findExecutable('pwsh', env.PATH ?? '');
   if (!realPwsh) return;
   const binDir = join(root, 'bin');
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
   const shimModule = join(binDir, 'pwsh-shim.mjs');
   const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
   writeFileSync(shimModule, `#!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 const real = process.env.OPK_REAL_PWSH;
 const helper = process.env.OPK_VITEST_PWSH_HELPER;
 if (!real || !helper) { console.error('OPK pwsh shim is missing configuration'); process.exit(70); }
@@ -62,10 +62,18 @@ process.exit(child.status ?? 1);
   chmodSync(shimModule, 0o700);
 
   if (process.platform === 'win32') {
-    writeFileSync(join(binDir, 'pwsh.cmd'), `@echo off\r\n"${process.execPath}" "${shimModule}" %*\r\n`, 'utf8');
+    writeFileSync(
+      join(binDir, 'pwsh.cmd'),
+      `@echo off\r\n"${process.execPath}" "${shimModule}" %*\r\n`,
+      'utf8',
+    );
   } else {
     const shim = join(binDir, 'pwsh');
-    writeFileSync(shim, `#!/usr/bin/env sh\nexec "${process.execPath}" "${shimModule}" "$@"\n`, 'utf8');
+    writeFileSync(
+      shim,
+      `#!/usr/bin/env sh\nexec "${process.execPath}" "${shimModule}" "$@"\n`,
+      'utf8',
+    );
     chmodSync(shim, 0o700);
   }
   env.OPK_REAL_PWSH = realPwsh;
@@ -120,10 +128,15 @@ let guardFailure = null;
 try {
   applyOpkVitestHarnessEnv(invocationRoot, childEnv);
   installPwshShim(invocationRoot, childEnv);
-  childEnv.NODE_OPTIONS = appendNodeImport(childEnv.NODE_OPTIONS, join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs'));
+  childEnv.NODE_OPTIONS = appendNodeImport(
+    childEnv.NODE_OPTIONS,
+    join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs'),
+  );
 
   const vitestEntrypoint = join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs');
-  if (!existsSync(vitestEntrypoint)) throw new Error(`vitest entrypoint missing: ${vitestEntrypoint}`);
+  if (!existsSync(vitestEntrypoint)) {
+    throw new Error(`vitest entrypoint missing: ${vitestEntrypoint}`);
+  }
   const args = process.argv.slice(2);
   childStatus = await runVitestChild(vitestEntrypoint, args, childEnv);
 } catch (error) {
@@ -131,8 +144,6 @@ try {
   console.error(`OPK vitest child failed: ${error instanceof Error ? error.message : String(error)}`);
   childStatus = 1;
 } finally {
-  // Let queued filesystem notifications run before closing watchers. This is
-  // required to detect write-then-restore and create-then-delete mutations.
   await new Promise((resolveFlush) => setTimeout(resolveFlush, 50));
   try {
     guard.stop();

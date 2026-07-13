@@ -6,6 +6,8 @@ export const liveStoreInventory: {
   schemaVersion: number;
   stores: Array<Record<string, unknown>>;
   liveRoots?: Array<Record<string, unknown>>;
+  classFences?: Array<Record<string, unknown>>;
+  discoveryExclusions?: Array<Record<string, unknown>>;
 };
 export function expandInventoryTemplate(value: unknown, env?: NodeJS.ProcessEnv): string;
 export function canonicalizeStorePath(candidate: unknown): string;
@@ -16,10 +18,14 @@ export function applyOpkVitestHarnessEnv(rootDir?: string, env?: NodeJS.ProcessE
   root: string;
   wake: string;
   state: string;
+  tmp: string;
   operatorInbox: string;
   healthSpool: string;
   aoBase: string;
   transport: string;
 };
+export function resolvedLiveStores(env?: NodeJS.ProcessEnv): Array<Record<string, unknown>>;
+export function resolvedClassFences(env?: NodeJS.ProcessEnv): Array<Record<string, unknown>>;
 export function startLiveStoreGuard(env?: NodeJS.ProcessEnv): { stop(): void };
 export function cleanupHarnessRoot(root: string): void;
+export function makeInvocationToken(): string;
