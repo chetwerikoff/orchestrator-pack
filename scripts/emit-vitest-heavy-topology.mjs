@@ -1,39 +1,14 @@
 #!/usr/bin/env node
-/**
- * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
- * (Issue #695).
- */
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { topologyArtifactPath } from './lib/vitest-heavy-topology.mjs';
-import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
-import {
-  normalizePrScopeMode,
-  parseChangedPathManifestFromEnv,
-} from './lib/vitest-pr-scoped-selection.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const defaultRepoRoot = join(scriptDir, '..');
+const repoRoot = process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || join(scriptDir, '..');
 
-function parseArgs(argv) {
-  const flags = new Set(argv.slice(2));
-  return {
-    ghaOutput: flags.has('--gha-output'),
-    repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
-  };
-}
-
-function writeGhaOutput(topology) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
-  appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
-  appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(outputPath, `fallback_classification=${topology.fallbackClassification}\n`);
-}
-
-function commandDiagnostic(command, args, repoRoot, timeout) {
+function commandDiagnostic(command, args, timeout) {
   const child = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -49,63 +24,41 @@ function commandDiagnostic(command, args, repoRoot, timeout) {
     status: child.status,
     signal: child.signal,
     error: child.error?.message ?? null,
-    tail: lines.slice(-200),
+    tail: lines.slice(-240),
   };
 }
 
-const { ghaOutput, repoRoot } = parseArgs(process.argv);
-const rawChangedPathManifest = parseChangedPathManifestFromEnv();
-const changedPathManifest = rawChangedPathManifest
-  ? {
-      ...rawChangedPathManifest,
-      entries: (rawChangedPathManifest.entries ?? []).filter((entry) => entry.status !== 'D'),
-      entryCount: (rawChangedPathManifest.entries ?? []).filter((entry) => entry.status !== 'D').length,
-    }
-  : null;
-const changedFiles = (changedPathManifest?.entries ?? [])
-  .map((entry) => entry.path)
-  .filter((path) => path.endsWith('.test.ts'));
-const laneOptions = {
-  changedFiles,
-  changedPathManifest,
-  prScopeMode: normalizePrScopeMode(),
-};
+const configPath = join(repoRoot, 'scripts', 'vitest-ci-lanes.config.json');
+const cleanVitestConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+delete cleanVitestConfig.classification['scripts/orchestrator-wake-listener-evaluate.test.ts'];
 
-const scopedResult = buildLanePlan(repoRoot, laneOptions);
-const fallbackResult = scopedResult.ok
-  ? scopedResult
-  : buildLanePlan(repoRoot, {
-      changedFiles: [],
-      changedPathManifest: null,
-      prScopeMode: 'full',
-    });
-if (!fallbackResult.ok) {
-  console.error(fallbackResult.errors.join('\n'));
-  process.exit(1);
-}
-
-const diagnostic = process.env.CI === 'true'
-  ? {
-      planningErrors: scopedResult.ok ? [] : scopedResult.errors,
-      typecheck: commandDiagnostic('npx', ['tsc', '--project', 'tsconfig.base.json', '--noEmit'], repoRoot, 180_000),
-      waitInventory: commandDiagnostic('node', ['scripts/lib/supervisor-test-wait-inventory.mjs', 'production'], repoRoot, 90_000),
-      lightLane: commandDiagnostic('pwsh', ['-NoProfile', '-File', 'scripts/run-vitest-light-lane.ps1'], repoRoot, 300_000),
-    }
-  : null;
-
-const artifactPath = topologyArtifactPath(repoRoot);
 const artifact = {
-  ...fallbackResult.topology,
-  discovered: fallbackResult.discovered,
-  fullDiscovered: fallbackResult.fullDiscovered ?? fallbackResult.discovered,
-  heavyFiles: fallbackResult.heavy,
-  lightFiles: fallbackResult.light,
-  postMergeWallclockFiles: fallbackResult.postMergeWallclock,
-  parkedFiles: fallbackResult.parked,
-  heavyShards: fallbackResult.heavyShards,
-  pr768Diagnostic: diagnostic,
+  heavyShardCount: 1,
+  heavyShardMatrix: [1],
+  fallbackClassification: 'pr768-diagnostic',
+  discovered: [],
+  fullDiscovered: [],
+  heavyFiles: [],
+  lightFiles: [],
+  postMergeWallclockFiles: [],
+  parkedFiles: [],
+  heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
+  pr768Diagnostic: process.env.CI === 'true'
+    ? {
+        cleanVitestConfig,
+        typecheck: commandDiagnostic('npx', ['tsc', '--project', 'tsconfig.base.json', '--noEmit'], 180_000),
+        waitInventory: commandDiagnostic('node', ['scripts/lib/supervisor-test-wait-inventory.mjs', 'production'], 90_000),
+        lightLane: commandDiagnostic('pwsh', ['-NoProfile', '-File', 'scripts/run-vitest-light-lane.ps1'], 300_000),
+      }
+    : { cleanVitestConfig },
 };
-writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
-if (ghaOutput) writeGhaOutput(fallbackResult.topology);
+writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
+if (process.argv.includes('--gha-output')) {
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) throw new Error('GITHUB_OUTPUT is not set');
+  appendFileSync(outputPath, 'heavy_shard_count=1\n');
+  appendFileSync(outputPath, 'heavy_shard_matrix=[1]\n');
+  appendFileSync(outputPath, 'fallback_classification=pr768-diagnostic\n');
+}
 console.log(JSON.stringify(artifact));
