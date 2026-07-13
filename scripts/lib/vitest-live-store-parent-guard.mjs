@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, watch } from 'node:fs';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
+  assertHarnessWritePathSafe,
   canonicalizeStorePath,
   classifyLiveStorePath,
   expandInventoryTemplate,
@@ -11,6 +12,13 @@ import {
 } from './vitest-live-store-harness.mjs';
 
 const MAX_PARENT_WATCHERS = 512;
+const POWERSHELL_PATH_PARAMETERS = new Set([
+  'literalpath', 'path', 'filepath', 'statepath', 'storepath', 'journalpath',
+  'watchpath', 'lockpath', 'statefile', 'clipath', 'auditroot', 'namespace',
+  'stateroot', 'rootdir', 'storedir', 'directory', 'operatorinboxdir',
+  'healthspooldir', 'clioverride', 'destination', 'reporoot', 'outputpath',
+]);
+const POWERSHELL_WRITE_PATTERN = /\b(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Acl|WriteAllText|WriteAllBytes|AppendAllText|OpenWrite|Create|Replace)\b/i;
 
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
@@ -30,6 +38,92 @@ function nearestExistingDirectory(candidate) {
 function transientFailureId(failure) {
   const suffix = ':transient_write_observed';
   return failure.endsWith(suffix) ? failure.slice(0, -suffix.length) : '';
+}
+
+function normalizePowerShellValue(value) {
+  const text = String(value ?? '').trim();
+  if (text.length >= 2 && text.startsWith("'") && text.endsWith("'")) {
+    return text.slice(1, -1).replaceAll("''", "'");
+  }
+  if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
+    return text.slice(1, -1).replaceAll('`"', '"');
+  }
+  return text.replace(/[;,)}\]]+$/g, '');
+}
+
+function looksPathLike(value) {
+  const text = normalizePowerShellValue(value);
+  if (!text || text === '-' || text.startsWith('$')) return false;
+  return text.startsWith('/')
+    || text.startsWith('\\')
+    || text.startsWith('~/')
+    || text.startsWith('~\\')
+    || /^[A-Za-z]:[\\/]/.test(text)
+    || text.includes('/')
+    || text.includes('\\');
+}
+
+function assertPowerShellCandidateSafe(value, operation, env) {
+  const candidate = normalizePowerShellValue(value);
+  if (!candidate || !looksPathLike(candidate)) return;
+  assertHarnessWritePathSafe(candidate, operation, env);
+}
+
+function commandLiteralCandidates(command) {
+  const values = [];
+  for (const match of command.matchAll(/'((?:''|[^'])*)'/g)) values.push(match[1].replaceAll("''", "'"));
+  for (const match of command.matchAll(/"((?:`"|[^"])*)"/g)) values.push(match[1].replaceAll('`"', '"'));
+  for (const match of command.matchAll(/(?:^|[\s=(,;])((?:[A-Za-z]:[\\/]|~?[\\/])[^\s;|,)\]}]+)/g)) values.push(match[1]);
+  return values;
+}
+
+export function preflightPowerShellInvocation(argv, env = process.env) {
+  if (env.OPK_VITEST_HARNESS !== '1') return;
+
+  for (const store of liveStoreInventory.stores ?? []) {
+    if (store.excluded) continue;
+    for (const envName of store.envOverrides ?? []) {
+      const value = env[envName];
+      if (String(value ?? '').trim()) assertHarnessWritePathSafe(value, `pwsh-env:${envName}`, env);
+    }
+  }
+
+  const args = Array.from(argv ?? [], (value) => String(value));
+  const lower = args.map((value) => value.toLowerCase());
+  if (lower.some((value) => value === '-encodedcommand' || value === '-enc' || value === '-e')) {
+    const error = new Error('OPK_VITEST_LIVE_STORE_BLOCKED encoded PowerShell commands are unsupported by the harness');
+    error.code = 'OPK_VITEST_LIVE_STORE_BLOCKED';
+    throw error;
+  }
+
+  const commandIndex = lower.findIndex((value) => value === '-command' || value === '-c');
+  const fileIndex = lower.findIndex((value) => value === '-file' || value === '-f');
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    const flag = token.match(/^--?([A-Za-z][A-Za-z0-9-]*)(?::(.*))?$/);
+    if (!flag) {
+      if (fileIndex >= 0 && index > fileIndex + 1) assertPowerShellCandidateSafe(token, 'pwsh-positional', env);
+      continue;
+    }
+    const name = flag[1].toLowerCase();
+    if (!POWERSHELL_PATH_PARAMETERS.has(name)) continue;
+    const value = flag[2] !== undefined ? flag[2] : args[index + 1];
+    if (value !== undefined) assertPowerShellCandidateSafe(value, `pwsh-arg:${name}`, env);
+  }
+
+  if (commandIndex >= 0) {
+    const command = args.slice(commandIndex + 1).join(' ');
+    if (POWERSHELL_WRITE_PATTERN.test(command)) {
+      for (const candidate of commandLiteralCandidates(command)) {
+        assertPowerShellCandidateSafe(candidate, 'pwsh-command-write', env);
+      }
+      for (const store of resolvedLiveStores(env)) {
+        if (command.includes(store.defaultPath) || command.includes(basename(store.defaultPath))) {
+          assertHarnessWritePathSafe(store.defaultPath, 'pwsh-command-write', env);
+        }
+      }
+    }
+  }
 }
 
 export function startParentLiveStoreGuard(env = process.env) {
