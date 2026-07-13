@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Diagnostic run marker: fast-v2.
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
