@@ -7,10 +7,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  formatOversizedGuardFailures,
-  topologyArtifactPath,
-} from './lib/vitest-heavy-topology.mjs';
+import { topologyArtifactPath } from './lib/vitest-heavy-topology.mjs';
 import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
 import {
   normalizePrScopeMode,
@@ -24,7 +21,6 @@ function parseArgs(argv) {
   const flags = new Set(argv.slice(2));
   return {
     ghaOutput: flags.has('--gha-output'),
-    failOnGuard: !flags.has('--skip-oversized-guard'),
     repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
   };
 }
@@ -53,11 +49,11 @@ function commandDiagnostic(command, args, repoRoot, timeout) {
     status: child.status,
     signal: child.signal,
     error: child.error?.message ?? null,
-    tail: lines.slice(-160),
+    tail: lines.slice(-200),
   };
 }
 
-const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
+const { ghaOutput, repoRoot } = parseArgs(process.argv);
 const rawChangedPathManifest = parseChangedPathManifestFromEnv();
 const changedPathManifest = rawChangedPathManifest
   ? {
@@ -75,14 +71,22 @@ const laneOptions = {
   prScopeMode: normalizePrScopeMode(),
 };
 
-const result = buildLanePlan(repoRoot, laneOptions);
-if (!result.ok) {
-  console.error(result.errors.join('\n'));
+const scopedResult = buildLanePlan(repoRoot, laneOptions);
+const fallbackResult = scopedResult.ok
+  ? scopedResult
+  : buildLanePlan(repoRoot, {
+      changedFiles: [],
+      changedPathManifest: null,
+      prScopeMode: 'full',
+    });
+if (!fallbackResult.ok) {
+  console.error(fallbackResult.errors.join('\n'));
   process.exit(1);
 }
 
 const diagnostic = process.env.CI === 'true'
   ? {
+      planningErrors: scopedResult.ok ? [] : scopedResult.errors,
       typecheck: commandDiagnostic('npx', ['tsc', '--project', 'tsconfig.base.json', '--noEmit'], repoRoot, 180_000),
       waitInventory: commandDiagnostic('node', ['scripts/lib/supervisor-test-wait-inventory.mjs', 'production'], repoRoot, 90_000),
       lightLane: commandDiagnostic('pwsh', ['-NoProfile', '-File', 'scripts/run-vitest-light-lane.ps1'], repoRoot, 300_000),
@@ -91,33 +95,17 @@ const diagnostic = process.env.CI === 'true'
 
 const artifactPath = topologyArtifactPath(repoRoot);
 const artifact = {
-  ...result.topology,
-  discovered: result.discovered,
-  fullDiscovered: result.fullDiscovered ?? result.discovered,
-  heavyFiles: result.heavy,
-  lightFiles: result.light,
-  postMergeWallclockFiles: result.postMergeWallclock,
-  parkedFiles: result.parked,
-  heavyShards: result.heavyShards,
+  ...fallbackResult.topology,
+  discovered: fallbackResult.discovered,
+  fullDiscovered: fallbackResult.fullDiscovered ?? fallbackResult.discovered,
+  heavyFiles: fallbackResult.heavy,
+  lightFiles: fallbackResult.light,
+  postMergeWallclockFiles: fallbackResult.postMergeWallclock,
+  parkedFiles: fallbackResult.parked,
+  heavyShards: fallbackResult.heavyShards,
   pr768Diagnostic: diagnostic,
 };
 writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
 
-if (result.topology.underProvisioned) {
-  console.warn(
-    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
-  );
-}
-if (result.topology.fallbackClassification === 'fixed-fallback') {
-  console.warn(
-    `[WARN] heavy shard topology using fixed fallback count ${result.topology.heavyShardCount} (${result.topology.weightInputReason})`,
-  );
-}
-
-const guardFailures = formatOversizedGuardFailures(result);
-if (failOnGuard && guardFailures.length > 0) {
-  console.warn(`[diagnostic] oversized guard deferred: ${guardFailures.join('; ')}`);
-}
-
-if (ghaOutput) writeGhaOutput(result.topology);
+if (ghaOutput) writeGhaOutput(fallbackResult.topology);
 console.log(JSON.stringify(artifact));
