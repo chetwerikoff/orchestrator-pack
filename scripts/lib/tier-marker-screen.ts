@@ -132,18 +132,40 @@ export interface MarkerScreenResult {
   unparseable: boolean;
 }
 
+/**
+ * Mask well-formed quoted/example spans before protected-signal regex scans.
+ * Recognized delimiters are fenced code blocks, inline code spans, Markdown
+ * blockquote lines, and balanced single/double quoted strings. Unterminated
+ * delimiters are left intact so malformed input cannot create a broad
+ * exemption.
+ */
+export function maskDelimitedMarkdownQuotes(text: string): string {
+  let masked = text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  masked = masked.replace(/`[^`\n]+`/g, (match) => ' '.repeat(match.length));
+  masked = masked.replace(/^>[^\n]*(?:\n|$)/gm, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  masked = masked.replace(/(["'])(?:\\.|(?!\1)[^\\\n])+\1/g, (match) =>
+    ' '.repeat(match.length),
+  );
+  return masked;
+}
+
 export function screenRedFlagMarkers(
   text: string,
   opts: { repoRoot?: string } = {},
 ): MarkerScreenResult {
   const markerClasses = loadMarkerClasses(opts.repoRoot);
+  const scanText = maskDelimitedMarkdownQuotes(text);
   const hits: string[] = [];
   for (const markerClass of markerClasses) {
     const patterns = MARKER_HEURISTICS[markerClass];
     if (!patterns) {
       return { hits: [], unparseable: true };
     }
-    if (patterns.some((pattern) => pattern.test(text))) {
+    if (patterns.some((pattern) => pattern.test(scanText))) {
       hits.push(markerClass);
     }
   }

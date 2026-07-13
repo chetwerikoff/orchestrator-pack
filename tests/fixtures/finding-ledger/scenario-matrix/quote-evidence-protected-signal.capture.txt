@@ -1,0 +1,2 @@
+type: spec; id: evidence-quote
+The reviewer cites the draft's own boundary: "type: scope-violation; id: scope-boundary; denylist and allowed_roots text is copied evidence."

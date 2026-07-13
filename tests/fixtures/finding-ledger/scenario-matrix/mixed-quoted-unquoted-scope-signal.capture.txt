@@ -1,0 +1,5 @@
+type: spec; id: evidence-quote
+The reviewer cites the draft's own boundary: "type: scope-violation; id: quoted-scope; denylist text is copied evidence."
+
+type: scope-violation; id: real-scope
+The change still edits denylist paths outside allowed_roots.

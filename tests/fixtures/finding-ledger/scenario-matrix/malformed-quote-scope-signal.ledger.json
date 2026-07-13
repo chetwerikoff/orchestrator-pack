@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "draft": "malformed-quote-scope-signal",
+  "findings": [
+    {
+      "id": "evidence-quote",
+      "summary": "Reviewer cited draft evidence.",
+      "type": "spec",
+      "disposition": "addressed"
+    }
+  ]
+}

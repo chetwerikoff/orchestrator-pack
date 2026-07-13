@@ -86,15 +86,24 @@ export function stripMarkdownFencedCodeBlocks(text) {
 }
 
 /**
- * Remove backtick-quoted finding-type tags so a review that *discusses* the
- * carve-out rules — e.g. `` `type: security` `` inside prose — is not read as an
- * emitted finding. A real reviewer tag is a plain `type: security` line, never
- * backtick-wrapped. Narrowly scoped to quoted `type:` tags only, so protected
- * vocabulary a real finding cites (`` `denylist` ``, `` `allowed_roots` ``) still
- * counts as a signal and the fail-closed contract is preserved.
+ * Mask well-formed quoted/example spans before protected-signal regex scans.
+ * Recognized delimiters are fenced code blocks, inline code spans, Markdown
+ * blockquote lines, and balanced single/double quoted strings. Unterminated
+ * delimiters are left intact so malformed input cannot create a broad
+ * exemption.
  */
-export function stripQuotedTypeTags(text) {
-  return text.replace(/`\s*type:\s*[a-z][a-z0-9-]*\s*`/gi, ' ');
+export function maskDelimitedMarkdownQuotes(text) {
+  let masked = text.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  masked = masked.replace(/`[^`\n]+`/g, (match) => ' '.repeat(match.length));
+  masked = masked.replace(/^>[^\n]*(?:\n|$)/gm, (match) =>
+    match.replace(/[^\n]/g, ' '),
+  );
+  masked = masked.replace(/(["'])(?:\\.|(?!\1)[^\\\n])+\1/g, (match) =>
+    ' '.repeat(match.length),
+  );
+  return masked;
 }
 
 function hasEchoedReviewContext(text) {
@@ -154,7 +163,7 @@ function indexOfFirstFindingSignal(text, fromIndex = 0) {
 
 /** Scope parsing to reviewer findings — skip echoed rubric, draft body, and fenced blocks. */
 export function extractFindingsScanText(capture) {
-  const withoutFences = stripQuotedTypeTags(stripMarkdownFencedCodeBlocks(capture));
+  const withoutFences = maskDelimitedMarkdownQuotes(capture);
   if (isCleanNoFindings(withoutFences)) {
     return withoutFences;
   }

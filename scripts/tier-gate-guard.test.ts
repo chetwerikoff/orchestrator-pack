@@ -12,8 +12,10 @@ import { runCli } from './tier-gate-guard.js';
 import {
   loadMarkerClasses,
   MARKER_HEURISTICS,
+  maskDelimitedMarkdownQuotes,
   screenRedFlagMarkers,
 } from './lib/tier-marker-screen.js';
+import { validateTierGateGuardReceipt } from './lib/publish-issue-body-sync.js';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -117,6 +119,50 @@ describe('tier-gate guard fails a red-flag-marked task assigned below T3 and pas
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/unparseable complexity-tier fence/);
     expect(result.receipt).toBeNull();
+  });
+
+  it('accepts draft-275-shaped quoted marker vocabulary through core, wrapper, and sync validation', () => {
+    const text = loadFixture('quoted-marker-vocabulary-t1-brief');
+    const fixtureFile = fixturePath('quoted-marker-vocabulary-t1-brief');
+
+    const core = checkTierGateGuard(text, { repoRoot, draftPath: fixtureFile });
+    expect(core.ok).toBe(true);
+    expect(core.screen.hits).toEqual([]);
+    expect(runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile])).toBe(0);
+    expect(validateTierGateGuardReceipt(text, fixtureFile).ok).toBe(true);
+  });
+
+  it('rejects unquoted and mixed marker vocabulary below T3 through the same tier-gate paths', () => {
+    for (const name of [
+      'unquoted-marker-vocabulary-t1-brief',
+      'mixed-quoted-unquoted-marker-vocabulary-t1-brief',
+      'malformed-quoted-marker-vocabulary-t1-brief',
+    ]) {
+      const text = loadFixture(name);
+      const fixtureFile = fixturePath(name);
+      const core = checkTierGateGuard(text, { repoRoot, draftPath: fixtureFile });
+      expect(core.ok, name).toBe(false);
+      expect(core.screen.hits.length, name).toBeGreaterThan(0);
+      expect(runCli(['node', 'tier-gate-guard.ts', '--text-file', fixtureFile, '--repo-root', repoRoot, '--draft-path', fixtureFile])).toBe(1);
+      expect(validateTierGateGuardReceipt(text, fixtureFile).ok).toBe(false);
+    }
+  });
+
+  it('documents the tier marker quotation delimiter forms and fail-closed malformed behavior', () => {
+    const examples = [
+      '`required checks`',
+      ['```text', 'branch protection', '```'].join('\n'),
+      '> T3 | ci-review-gating | merge authorization\n',
+      '"\\brequired\\s+checks?\\b"',
+      "'Change external API timeout semantics for the REST wrapper.'",
+    ];
+
+    for (const example of examples) {
+      expect(screenRedFlagMarkers(example, { repoRoot }).hits, example).toEqual([]);
+      expect(maskDelimitedMarkdownQuotes(example), example).not.toMatch(/required checks|branch protection|merge authorization|external API timeout semantics/i);
+    }
+
+    expect(screenRedFlagMarkers('"required checks', { repoRoot }).hits).toContain('ci-review-gating');
   });
 });
 

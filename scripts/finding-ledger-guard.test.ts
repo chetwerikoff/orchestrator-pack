@@ -8,6 +8,7 @@ import {
   detectProtectedSignalsInCapture,
   detectTypedFindingsInCapture,
   detectUntypedFindingsInCapture,
+  maskDelimitedMarkdownQuotes,
   runCli,
 } from './finding-ledger-guard.mjs';
 
@@ -275,8 +276,8 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
     expect(detectProtectedSignalsInCapture(capture)).toContain('security');
   });
 
-  it('still treats protected vocabulary a real finding cites (`denylist`) as a scope-violation signal', () => {
-    const capture = 'A finding: this change edits `denylist` paths outside the declared scope.';
+  it('still treats unquoted protected vocabulary a real finding cites as a scope-violation signal', () => {
+    const capture = 'A finding: this change edits denylist paths outside the declared scope.';
     expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
   });
 
@@ -291,5 +292,61 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
       findings: [{ id: 'carveout-wording', summary: 's', type: 'spec', disposition: 'addressed' }],
     });
     expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(true);
+  });
+
+  it('documents the finding-ledger quotation delimiter forms and fail-closed malformed behavior', () => {
+    const examples = [
+      '`type: scope-violation`',
+      ['```text', 'type: security', '```'].join('\n'),
+      '> [P1 security] quoted rubric row\n',
+      '"/\\btype:\\s*security\\b/i"',
+      "'type: scope-violation; id: fixture-scope'",
+    ];
+
+    for (const example of examples) {
+      expect(detectProtectedSignalsInCapture(example), example).toEqual([]);
+      expect(maskDelimitedMarkdownQuotes(example), example).not.toMatch(/type:\s*(security|scope-violation)|\[P1 security\]/i);
+    }
+
+    expect(detectProtectedSignalsInCapture('"type: scope-violation')).toContain('scope-violation');
+  });
+
+  it('passes draft-273-shaped quoted evidence without fabricated protected coverage', () => {
+    const { capture, ledger } = loadScenarioFixture('quote-evidence-protected-signal');
+    expect(detectTypedFindingsInCapture(capture).map((finding) => finding.type)).toEqual(['spec']);
+    expect(detectProtectedSignalsInCapture(capture)).toEqual([]);
+    expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(true);
+
+    const capturePath = path.join(
+      scenarioMatrixDir,
+      'quote-evidence-protected-signal.capture.txt',
+    );
+    const ledgerPath = path.join(
+      scenarioMatrixDir,
+      'quote-evidence-protected-signal.ledger.json',
+    );
+    expect(runCli(['node', 'finding-ledger-guard.mjs', '--capture', capturePath, '--ledger', ledgerPath])).toBe(0);
+    expect(
+      runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
+    ).toBe(0);
+  });
+
+  it('rejects genuine unquoted, mixed, and malformed protected finding-ledger signals', () => {
+    for (const name of [
+      'genuine-unquoted-scope-signal',
+      'mixed-quoted-unquoted-scope-signal',
+      'malformed-quote-scope-signal',
+    ]) {
+      const { capture, ledger } = loadScenarioFixture(name);
+      expect(detectProtectedSignalsInCapture(capture), name).toContain('scope-violation');
+      expect(checkFindingLedgerGuard(capture, ledger).ok, name).toBe(false);
+
+      const capturePath = path.join(scenarioMatrixDir, `${name}.capture.txt`);
+      const ledgerPath = path.join(scenarioMatrixDir, `${name}.ledger.json`);
+      expect(runCli(['node', 'finding-ledger-guard.mjs', '--capture', capturePath, '--ledger', ledgerPath])).toBe(1);
+      expect(
+        runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
+      ).toBe(1);
+    }
   });
 });
