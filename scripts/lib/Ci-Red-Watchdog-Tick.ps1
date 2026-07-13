@@ -164,23 +164,37 @@ function Invoke-CiRedWatchdogTick {
             continue
         }
 
+        # Persist the post-claim delivery intent before the transport side effect. A crash
+        # after this point remains an awaiting-submit attempt and re-arms only after the
+        # bounded proof timeout; it must never be released as a definitive unsent failure.
+        $issued = Invoke-CiRedWatchdogCli -Command 'transport-issued' -Payload @{
+            storeDir = $storeDir; episode = $candidate.episode; attemptId = $attemptId
+            nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); actor = $Script:CiRedWatchdogSource; config = $config
+        }
+        if (-not $issued.accepted) {
+            try { Update-WorkerMessageDispatchOutcome -DeliveryId $attemptId -DispatchOutcome 'send_failed' -DraftState 'unknown' | Out-Null } catch { }
+            $null = Invoke-CiRedWatchdogCli -Command 'release' -Payload @{
+                storeDir = $storeDir; episode = $candidate.episode; attemptId = $attemptId
+                reason = 'transport_intent_failed'; nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                actor = $Script:CiRedWatchdogSource; config = $config
+            }
+            Write-CiRedWatchdogLog "defer pr=$($candidate.episode.prNumber) check=$($candidate.episode.requiredCheckContext) reason=transport_intent_failed"
+            $deferred++
+            continue
+        }
+
         $outboundEpisode = @{
-            prNumber        = [int]$candidate.episode.prNumber
-            headSha         = [string]$candidate.episode.headSha
-            targetId        = $sessionId
-            targetGeneration = [string]$candidate.worker.sessionGeneration
-            redPeriod       = "watchdog:$($candidate.episode.checkRunId):$($candidate.episode.attempt):$attemptId"
+            prNumber          = [int]$candidate.episode.prNumber
+            headSha           = [string]$candidate.episode.headSha
+            targetId          = $sessionId
+            targetGeneration  = [string]$candidate.worker.sessionGeneration
+            redPeriod         = "watchdog:$($candidate.episode.checkRunId):$($candidate.episode.attempt):$attemptId"
         }
         try {
             $sendResult = Invoke-PlannedCiFailureReconcileSend -Episode $outboundEpisode `
                 -Message ([string]$candidate.message) -IdempotencyKey $sourceKey -ProjectId $ProjectId `
                 -SendSnapshot @{ openPrs = @($WorkerState.openPrs) } -DeliveryId $attemptId
             if (-not $sendResult.ok) { throw "send rejected: $($sendResult.reason)" }
-            $issued = Invoke-CiRedWatchdogCli -Command 'transport-issued' -Payload @{
-                storeDir = $storeDir; episode = $candidate.episode; attemptId = $attemptId
-                nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); actor = $Script:CiRedWatchdogSource; config = $config
-            }
-            if (-not $issued.accepted) { throw "transport state rejected: $($issued.reason)" }
             $perWorker[$sessionId]++
             $sent++
             Write-CiRedWatchdogLog "sent fallback pr=$($candidate.episode.prNumber) check=$($candidate.episode.requiredCheckContext) attempt=$($candidate.episode.attempt)"
