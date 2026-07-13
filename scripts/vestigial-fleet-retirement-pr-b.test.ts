@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { survivingFleetChildIds as survivors } from './vestigial-fleet-retirement.shared.js';
+import { managedChildRoles as survivors } from './supervisor-recovery.test-helpers.js';
 
 const repoRoot = join(import.meta.dirname, '..');
 const scripts = join(repoRoot, 'scripts');
