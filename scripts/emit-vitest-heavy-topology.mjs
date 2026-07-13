@@ -32,7 +32,7 @@ const files = [
   'scripts/worker-iteration-cycle.test.ts',
 ];
 const MAX_CAPTURE = 96_000;
-const TIMEOUT_MS = 240_000;
+const TIMEOUT_MS = 90_000;
 
 function bounded(current, chunk) {
   const next = current + String(chunk);
@@ -96,7 +96,7 @@ async function runPool(items, concurrency) {
   return results;
 }
 
-const results = await runPool(files, 6);
+const results = await runPool(files, 12);
 const artifact = {
   schemaVersion: 1,
   diagnostic: 'issue-752-heavy-file-isolation',
