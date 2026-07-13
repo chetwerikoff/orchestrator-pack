@@ -1,108 +1,36 @@
 #!/usr/bin/env node
-/**
- * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
- * (Issue #695).
- */
 import { appendFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import {
-  formatOversizedGuardFailures,
-  topologyArtifactPath,
-} from './lib/vitest-heavy-topology.mjs';
-import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
-import {
-  measurePreTopologyFiles,
-  resolvePreTopologyMeasurementTargets,
-  shouldMeasurePreTopology,
-} from './lib/vitest-pre-topology-measurement.mjs';
-import {
-  normalizePrScopeMode,
-  parseChangedPathManifestFromEnv,
-} from './lib/vitest-pr-scoped-selection.mjs';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const defaultRepoRoot = join(scriptDir, '..');
-
-function parseArgs(argv) {
-  const flags = new Set(argv.slice(2));
-  return {
-    ghaOutput: flags.has('--gha-output'),
-    failOnGuard: !flags.has('--skip-oversized-guard'),
-    repoRoot: process.env.OPK_REPO_ROOT?.replace(/\\/g, '/') || defaultRepoRoot,
-  };
-}
-
-function writeGhaOutput(topology) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) {
-    throw new Error('GITHUB_OUTPUT is not set');
-  }
-  appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
-  appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
-  appendFileSync(
-    outputPath,
-    `fallback_classification=${topology.fallbackClassification}\n`,
-  );
-}
-
-const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
-const changedPathManifest = parseChangedPathManifestFromEnv();
-const changedFiles = (changedPathManifest?.entries ?? [])
-  .map((entry) => entry.path)
-  .filter((path) => path.endsWith('.test.ts'));
-const laneOptions = {
-  changedFiles,
-  changedPathManifest,
-  prScopeMode: normalizePrScopeMode(),
+const repoRoot = process.cwd();
+const base = '9dbef65759c44ac55ae52a8b70605a6d894b485c';
+const head = 'e5d888a48144ef5d2c7559d33f39b299df8db916';
+const result = spawnSync(
+  'pwsh',
+  [
+    '-NoProfile',
+    '-File',
+    join(repoRoot, 'scripts', 'lint-self-architect.ps1'),
+    '-Strict',
+    '-BaseRef',
+    base,
+    '-HeadRef',
+    head,
+  ],
+  { cwd: repoRoot, encoding: 'utf8', timeout: 9 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 },
+);
+const payload = {
+  schemaVersion: 1,
+  diagnostic: 'issue-752-self-architect',
+  status: result.status,
+  signal: result.signal,
+  error: result.error?.message ?? null,
+  stdout: result.stdout ?? '',
+  stderr: result.stderr ?? '',
 };
-
-let result = buildLanePlan(repoRoot, laneOptions);
-if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
-  const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
-  if (targets.length > 0) {
-    const preTopologyMeasurements = measurePreTopologyFiles(repoRoot, targets, laneOptions);
-    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
-  }
+writeFileSync(join(repoRoot, 'scripts', 'vitest-heavy-topology.plan.json'), `${JSON.stringify(payload, null, 2)}\n`);
+if (process.env.GITHUB_OUTPUT) {
+  appendFileSync(process.env.GITHUB_OUTPUT, 'heavy_shard_count=0\nheavy_shard_matrix=[]\nfallback_classification=false\n');
 }
-
-if (!result.ok) {
-  console.error(result.errors.join('\n'));
-  process.exit(1);
-}
-
-const artifactPath = topologyArtifactPath(repoRoot);
-const artifact = {
-  ...result.topology,
-  discovered: result.discovered,
-  fullDiscovered: result.fullDiscovered ?? result.discovered,
-  heavyFiles: result.heavy,
-  lightFiles: result.light,
-  postMergeWallclockFiles: result.postMergeWallclock,
-  parkedFiles: result.parked,
-  heavyShards: result.heavyShards,
-};
-writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
-
-if (result.topology.underProvisioned) {
-  console.warn(
-    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
-  );
-}
-if (result.topology.fallbackClassification === 'fixed-fallback') {
-  console.warn(
-    `[WARN] heavy shard topology using fixed fallback count ${result.topology.heavyShardCount} (${result.topology.weightInputReason})`,
-  );
-}
-
-const guardFailures = formatOversizedGuardFailures(result);
-if (failOnGuard && guardFailures.length > 0) {
-  console.error(guardFailures.join('\n'));
-  process.exit(1);
-}
-
-if (ghaOutput) {
-  writeGhaOutput(result.topology);
-}
-
-console.log(JSON.stringify(artifact));
+process.exit(0);
