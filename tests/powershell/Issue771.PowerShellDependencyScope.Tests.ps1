@@ -4,6 +4,7 @@ BeforeAll {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $WorkerStore = Join-Path $RepoRoot 'scripts/lib/WorkerStatusStore.ps1'
     $InvokeAo = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
+    $WakeTrigger = Join-Path $RepoRoot 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'
 
     function Quote-Issue771([string]$Value) { "'" + $Value.Replace("'", "''") + "'" }
 
@@ -225,6 +226,59 @@ BeforeAll {
         return $false
     }
 
+    function Test-Issue771ConsumerHasSafeScriptImporters {
+        param(
+            $CandidateRecord,
+            $Consumer,
+            [string]$ConsumerName,
+            [object[]]$Records,
+            [string]$RepositoryRoot,
+            [hashtable]$ClosureCache
+        )
+
+        $consumerOwner = Get-Issue771OwningFunction $Consumer
+        if (-not $consumerOwner) {
+            return $false
+        }
+
+        $relevantImporters = @()
+        foreach ($record in $Records) {
+            $importsConsumerLibrary = $false
+            foreach ($dotSource in @($record.Commands | Where-Object {
+                        $_.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Dot -and
+                        $null -eq (Get-Issue771OwningFunction $_)
+                    })) {
+                $target = Resolve-Issue771DotSourceTarget $dotSource.Extent.Text $record.Path $RepositoryRoot
+                if ($target -and [IO.Path]::GetFullPath($target) -eq [IO.Path]::GetFullPath($CandidateRecord.Path)) {
+                    $importsConsumerLibrary = $true
+                    break
+                }
+            }
+            if (-not $importsConsumerLibrary) { continue }
+
+            $callsConsumer = @($record.Commands | Where-Object {
+                    $_.GetCommandName() -eq $consumerOwner.Name -and
+                    -not ($record.Path -eq $CandidateRecord.Path -and (Test-Issue771Within $_ $consumerOwner))
+                })
+            if ($callsConsumer.Count -gt 0) {
+                $relevantImporters += $record
+            }
+        }
+
+        if ($relevantImporters.Count -eq 0) {
+            return $false
+        }
+        foreach ($importer in $relevantImporters) {
+            $visiting = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $available = @(Get-Issue771ScriptImportFunctionClosure -Path $importer.Path `
+                    -RepositoryRoot $RepositoryRoot -Cache $ClosureCache -Visiting $visiting)
+            if ($available -notcontains $ConsumerName) {
+                return $false
+            }
+        }
+        return $true
+    }
+
     function Get-Issue771DependencyScopeLeaks {
         param([string]$RepositoryRoot, [string]$ScanRoot)
 
@@ -264,6 +318,11 @@ BeforeAll {
                                     -CandidateRecord $candidate -Consumer $consumer -ConsumerName $consumerName `
                                     -RepositoryRoot $RepositoryRoot -ClosureCache $closureCache
                                 if (-not $independentLoad) {
+                                    $independentLoad = Test-Issue771ConsumerHasSafeScriptImporters `
+                                        -CandidateRecord $candidate -Consumer $consumer -ConsumerName $consumerName `
+                                        -Records $records -RepositoryRoot $RepositoryRoot -ClosureCache $closureCache
+                                }
+                                if (-not $independentLoad) {
                                     $leaks += [pscustomobject]@{
                                         LoaderPath = $source.Path
                                         LoaderFunction = $loader.Name
@@ -301,6 +360,18 @@ Import-WorkerStatusGithubDependencies
         $result.gh | Should -BeTrue
         $result.checks | Should -BeTrue
         $result.reviews | Should -BeTrue
+    }
+
+    It 'keeps review-wake retry commands visible after snapshot loading returns' {
+        $result = Invoke-Issue771Pwsh @"
+. $(Quote-Issue771 $WakeTrigger)
+@{
+ retry=[bool](Get-Command Register-PostRunAutonomousRetryAttemptFromClaim -CommandType Function -ErrorAction SilentlyContinue)
+ snapshot=[bool](Get-Command Get-ReviewWakeTriggerSnapshot -CommandType Function -ErrorAction SilentlyContinue)
+} | ConvertTo-Json -Compress
+"@
+        $result.retry | Should -BeTrue
+        $result.snapshot | Should -BeTrue
     }
 
     It 'never latches an incomplete load as success or replays partial top-level effects' {
@@ -379,6 +450,21 @@ Describe 'Issue #771 durable dependency-scope guard' {
             Set-Content (Join-Path $dir 'Independent.ps1') ". (Join-Path `$PSScriptRoot 'Dependency.ps1')"
             Set-Content (Join-Path $dir 'Loader.ps1') "function Initialize-SafeDependency { . (Join-Path `$PSScriptRoot 'Dependency.ps1') }"
             Set-Content (Join-Path $dir 'Consumer.ps1') ". (Join-Path `$PSScriptRoot 'Loader.ps1')`n. (Join-Path `$PSScriptRoot 'Independent.ps1')`nfunction Invoke-SafeConsumer { Initialize-SafeDependency; Invoke-SafeDependency }`nInvoke-SafeConsumer"
+            $leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $dir -ScanRoot $dir)
+            $leaks | Should -BeNullOrEmpty -Because ($leaks | ConvertTo-Json -Compress -Depth 8)
+        }
+        finally {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'accepts a consumer library whose production importer owns the dependency scope' {
+        $dir = New-Issue771Temp
+        try {
+            Set-Content (Join-Path $dir 'Dependency.ps1') "function Invoke-ParentManagedDependency { 'ok' }"
+            Set-Content (Join-Path $dir 'Loader.ps1') "function Initialize-ParentManagedDependency { . (Join-Path `$PSScriptRoot 'Dependency.ps1') }"
+            Set-Content (Join-Path $dir 'ConsumerLib.ps1') "function Invoke-ParentManagedConsumer { Initialize-ParentManagedDependency; Invoke-ParentManagedDependency }"
+            Set-Content (Join-Path $dir 'Entrypoint.ps1') ". (Join-Path `$PSScriptRoot 'Loader.ps1')`n. (Join-Path `$PSScriptRoot 'Dependency.ps1')`n. (Join-Path `$PSScriptRoot 'ConsumerLib.ps1')`nInvoke-ParentManagedConsumer"
             $leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $dir -ScanRoot $dir)
             $leaks | Should -BeNullOrEmpty -Because ($leaks | ConvertTo-Json -Compress -Depth 8)
         }

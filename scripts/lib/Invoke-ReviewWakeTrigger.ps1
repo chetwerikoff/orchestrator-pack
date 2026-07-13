@@ -13,6 +13,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')
+. (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
 
 function Test-ReviewWakeTriggerForbiddenCommand {
     param([string]$CommandLine)
@@ -118,7 +119,6 @@ function Get-ReviewWakeTriggerSnapshot {
     }
 
     $openPrs = Invoke-GhOpenPrList -RepoRoot $RepoRoot
-    . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
     $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $RepoRoot)
     $sessions = Get-WorkerStatusDecisionSessions
     $checksBundle = Get-GhChecksBundleByPr -RepoRoot $RepoRoot -OpenPrs @(
