@@ -1,0 +1,36 @@
+name: issue-771-log-tail
+
+on:
+  push:
+    branches:
+      - agent/issue-771-powershell-scope
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  capture:
+    if: ${{ !contains(github.event.head_commit.message, '[issue771-log-tail]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture Pester failure tail
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/jobs/86779618990/logs" > /tmp/pester.log
+          tail -n 175 /tmp/pester.log > scripts/issue-771-pester-tail.log
+      - name: Publish tail
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/issue-771-pester-tail.log
+          git commit -m '[issue771-log-tail] Capture Pester failure tail'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
