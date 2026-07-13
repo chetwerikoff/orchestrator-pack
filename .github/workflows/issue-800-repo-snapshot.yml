@@ -1,0 +1,28 @@
+name: Issue 800 repository snapshot
+
+on:
+  push:
+    branches:
+      - agent/issue-800-typescript-foundation
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create source snapshot
+        run: |
+          tar --exclude=.git -czf /tmp/orchestrator-pack-issue-800.tar.gz .
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-800-repo-snapshot
+          path: /tmp/orchestrator-pack-issue-800.tar.gz
+          if-no-files-found: error
+          retention-days: 1
