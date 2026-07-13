@@ -51,9 +51,9 @@ BeforeAll {
         param([string]$Text, [string]$SourcePath, [string]$RepositoryRoot)
 
         $relative = $null
-        $rootVariable = $null
-        if ($Text -match '(?is)^\s*\.\s*\(\s*Join-Path\s+\$([A-Za-z_][A-Za-z0-9_:]*)\s+[''"]([^''"]+\.(?:ps1|psm1))[''"]') {
-            $rootVariable = $Matches[1]
+        $rootExpression = $null
+        if ($Text -match '(?is)^\s*\.\s*\(\s*Join-Path\s+\$([A-Za-z_][A-Za-z0-9_:]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+[''"]([^''"]+\.(?:ps1|psm1))[''"]') {
+            $rootExpression = $Matches[1]
             $relative = $Matches[2]
         }
         elseif ($Text -match '(?is)^\s*\.\s+[''"]([^''"]+\.(?:ps1|psm1))[''"]') {
@@ -69,7 +69,7 @@ BeforeAll {
             if (($relative -replace '\\', '/') -match '^(scripts|tests)/') {
                 [void]$candidates.Add((Join-Path $RepositoryRoot $relative))
             }
-            if (-not $rootVariable -or $rootVariable -eq 'PSScriptRoot') {
+            if (-not $rootExpression -or $rootExpression -eq 'PSScriptRoot') {
                 [void]$candidates.Add((Join-Path (Split-Path -Parent $SourcePath) $relative))
             }
             [void]$candidates.Add((Join-Path $RepositoryRoot $relative))
