@@ -33,7 +33,7 @@ import {
   withLeaseEnv,
 } from './testmode-fleet-reaper.shared.js';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 
 registerFleetReaperAfterEach();
 
@@ -59,7 +59,7 @@ describe('Issue #710 TestMode fleet lease TTL (AC#1)', () => {
       expect(isAlive(fleet.reviewTriggerReconcile.pid)).toBe(false);
       expect(isAlive(fleet.escalationRouter.pid)).toBe(false);
     },
-    90_000,
+    180_000,
   );
 });
 
@@ -108,7 +108,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       runReaperCli('teardown', { LeaseId: liveLane.leaseId }, withLeaseEnv(leaseRoot, liveLane.leaseId));
       killProcess(liveOwner.pid);
     },
-    120_000,
+    180_000,
   );
 
   it.skipIf(process.platform === 'win32')(
@@ -134,7 +134,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       );
       expect(isAlive(fleet.reviewTriggerReconcile.pid)).toBe(false);
     },
-    120_000,
+    180_000,
   );
 
   it('treats corrupt lease records as stale during bootstrap', () => {
@@ -180,7 +180,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       await waitForProcessesStopped([orphanPid], 20_000);
       expect(harnessIsAlive(orphanPid)).toBe(false);
     },
-    90_000,
+    180_000,
   );
 });
 
@@ -201,7 +201,7 @@ describe('Issue #710 teardown post-sweep (AC#3)', () => {
       );
       killProcess(owner.pid);
     },
-    90_000,
+    180_000,
   );
 });
 

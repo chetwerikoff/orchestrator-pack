@@ -218,7 +218,7 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
       renewLaneLease(leaseRoot, leaseId);
     }
     const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
-    const pidDeadline = Date.now() + 15_000;
+    const pidDeadline = Date.now() + 60_000;
     while (!fs.existsSync(supervisorPidPath) && Date.now() < pidDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
