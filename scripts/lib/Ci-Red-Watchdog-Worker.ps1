@@ -62,6 +62,7 @@ function Resolve-CiRedWatchdogWorker {
     if (-not $sessionId -or -not $generation) { return @{ ok = $false; reason = 'worker_generation_missing' } }
 
     $status = ([string](Get-CiRedWatchdogProperty -Object $session -Names @('status'))).ToLowerInvariant()
+    $activity = ([string](Get-CiRedWatchdogProperty -Object $session -Names @('activity', 'activityState'))).ToLowerInvariant()
     $explicitAlive = Get-CiRedWatchdogProperty -Object $session -Names @('alive', 'live', 'paneAlive', 'pane_alive')
     if ($null -ne $explicitAlive) {
         $alive = [bool]$explicitAlive
@@ -76,10 +77,21 @@ function Resolve-CiRedWatchdogWorker {
     $quiescentSignals = @()
     $quiescentExplicit = Get-CiRedWatchdogProperty -Object $session -Names @('quiescent', 'idle')
     if ($null -ne $quiescentExplicit) { $quiescentSignals += [bool]$quiescentExplicit }
-    if ($status -in @('idle', 'waiting', 'ready', 'blocked', 'awaiting_input', 'awaiting-input')) {
+    if ($activity -in @('idle', 'ready', 'waiting', 'blocked', 'awaiting_input', 'awaiting-input')) {
         $quiescentSignals += $true
     }
-    elseif ($status -in @('working', 'fixing_ci', 'reviewing', 'running', 'streaming', 'busy')) {
+    elseif ($activity -in @('working', 'reviewing', 'running', 'streaming', 'busy')) {
+        $quiescentSignals += $false
+    }
+    if (-not $activity -and $status -in @('idle', 'waiting', 'ready', 'blocked', 'awaiting_input', 'awaiting-input')) {
+        $quiescentSignals += $true
+    }
+    elseif (
+        -not $activity -and (
+            $status -in @('working', 'reviewing', 'running', 'streaming', 'busy') -or
+        ($status -eq 'fixing_ci' -and -not $activity)
+        )
+    ) {
         $quiescentSignals += $false
     }
 
@@ -277,4 +289,3 @@ function Test-CiRedWatchdogEpisodeIdentityEqual {
         [int]$Left.attempt -eq [int]$Right.attempt
     )
 }
-
