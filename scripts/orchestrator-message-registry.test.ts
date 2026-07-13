@@ -352,12 +352,12 @@ describe('orchestrator message registry (Issue #298)', () => {
         commandEntrypoints: [],
         orchestratorRulesBindings: [],
       });
-      const wakeListener = fs.readFileSync(path.join(repoRoot, 'scripts/orchestrator-wake-listener.ps1'), 'utf8');
+      const survivingChild = fs.readFileSync(path.join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'), 'utf8');
       fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
-      fs.writeFileSync(path.join(tmp, 'scripts/orchestrator-wake-listener.ps1'), `${wakeListener}\n& ao send worker-1 "rogue"\n`);
+      fs.writeFileSync(path.join(tmp, 'scripts/ci-failure-notification-reconcile.ps1'), `${survivingChild}\n& ao send worker-1 "rogue"\n`);
       const result = auditRegistration(tmp);
       expect(result.verdict).toBe('FAIL');
-      expect(result.violations.some((v: string) => v.includes('scripts/orchestrator-wake-listener.ps1'))).toBe(true);
+      expect(result.violations.some((v: string) => v.includes('scripts/ci-failure-notification-reconcile.ps1'))).toBe(true);
     } finally {
       removeTempDir(tmp);
     }
@@ -475,7 +475,7 @@ describe('orchestrator message registry (Issue #298)', () => {
     () => {
       execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
     },
-    240_000,
+    360_000,
   );
 
   it(
@@ -548,7 +548,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       if (scrubbedEventPath && fs.existsSync(scrubbedEventPath)) fs.unlinkSync(scrubbedEventPath);
     }
   },
-    240_000,
+    360_000,
   );
 
   it('preserves newlines when regenerating the map via pwsh helper', () => {

@@ -9,8 +9,8 @@ State-derived review reconciliation ([#163](https://github.com/chetwerikoff/orch
 [#195](https://github.com/chetwerikoff/orchestrator-pack/issues/195)) runs via
 `scripts/review-trigger-reconcile.ps1` (low-frequency, review-run only when the head is
 **ready for review**).
-Heartbeat backstop [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) is
-documented below alongside the event listener.
+The retired heartbeat and loopback listener are no longer part of the live loop. Periodic
+registry children provide review and CI coverage; see the Issue #745 fleet reference below.
 
 **AO 0.10 adoption (#623 / #625):** use `scripts/orchestrator-wake-supervisor.ps1` to supervise
 all reconcile children; restart the supervisor (or `ao stop` / `ao start` when registry changes)
@@ -32,7 +32,7 @@ and the matching steps in
 | AO 0.10 review shim | `scripts/ao-review.ps1` (`run` / `list`; `send`/`execute` REMOVED) |
 | Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
 | Side-process supervisor (all autoloop children) | `scripts/orchestrator-wake-supervisor.ps1`, `scripts/orchestrator-side-process-registry.json` (Issues #168, #202, #205) |
-| Wake listener / heartbeat (manual fallback) | `scripts/orchestrator-wake-listener.ps1`, `scripts/orchestrator-wake-heartbeat.ps1`, `docs/orchestrator-wake-filter.mjs` |
+| Wake ingress | **REMOVED by Issues #721 / #745** — no listener, heartbeat, port, or webhook contract |
 | Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs`, `docs/review-head-ready.mjs` (Issues #163, #195) |
 | CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
 | First-send review delivery reconcile | **REMOVED on AO 0.10** — `scripts/review-send-reconcile.ps1` stub only (Issue #202 / #625) |
@@ -53,14 +53,13 @@ ao start orchestrator-pack
 
 **Terminal B — side-process supervisor** (preferred — Issues #168, #202, #205)
 
-Starts **all** orchestrator side-processes from
-`scripts/orchestrator-side-process-registry.json` as **separate managed children**:
-wake listener, heartbeat, review-trigger reconcile, CI-green wake reconcile,
-review-finding delivery-confirm, and worker-message submit reconcile. **Does not**
-start `review-send-reconcile` (REMOVED on AO 0.10). Resolves the orchestrator
-session id from `ao status` when unset, restarts children on exit or stall (idle-safe
-threshold per child cadence), debounces session-id flaps, and re-targets session-bound
-children on a confirmed id change. Logs:
+Starts the nine side-processes in
+`scripts/orchestrator-side-process-registry.json` as separate managed children:
+review-trigger reconcile/reeval, ready-report seed, CI-green and CI-failure reconcile,
+worker-message submit, review-start claim reaper, dead-worker reconcile, and escalation-router.
+The retired listener, heartbeat, review-send reconcile, and four PR-A vestigial children are not
+started. The supervisor resolves the orchestrator session id for session-bound children, restarts
+registered children on exit or stall, and debounces confirmed session-id changes. Logs:
 `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
 `$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`).
 
@@ -85,8 +84,8 @@ Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (defa
 
 **Manual fallback — per-process launches** (when debugging one path in isolation):
 
-- Wake listener + heartbeat: `scripts/orchestrator-wake-listener.ps1`,
-  `scripts/orchestrator-wake-heartbeat.ps1` with `AO_ORCHESTRATOR_SESSION_ID` set.
+- Escalation router: `scripts/orchestrator-escalation-router.ps1 -Once` with
+  `AO_ORCHESTRATOR_SESSION_ID` set when testing orchestrator-facing delivery.
 - Review-trigger reconcile: `scripts/review-trigger-reconcile.ps1` (default 10 min).
 - CI-green wake: `scripts/ci-green-wake-reconcile.ps1` (default 1 min).
 - Worker message submit: `scripts/worker-message-submit-reconcile.ps1` (default 30 s).
@@ -110,73 +109,43 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/trust-ao-worktre
 Verify:
 
 ```powershell
-Test-NetConnection -ComputerName 127.0.0.1 -Port 17487
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
 ```
 
-Expect listener log: `listening`. On wake events expect `accepted: <kind>` — not
-only `dropped: not_wake_relevant`. Trust watcher should log `trusted: ...\worktrees\op-*`
-when a worker spawns.
+Expect the nine-child registry roster and no listener/heartbeat process. Trust watcher should log
+`trusted: ...\worktrees\op-*` when a worker spawns.
 
 ## Live config (`agent-orchestrator.yaml`, gitignored)
 
-1. Diff your live file against `agent-orchestrator.yaml.example` for:
-   - `projects.<id>.orchestratorRules` (legacy-import reference — live procedure is prompts + scripts)
-   - top-level `reactions` (especially `report-stale`)
-   - `notifiers.webhook` and `notificationRouting` (`urgent` / `action` → `webhook`)
-2. **Cursor worker permissions** — under `projects.<id>.orchestrator` and `.worker`,
-   set `agentConfig.permissions: permissionless` so AO passes `--force --sandbox disabled`
-   to the Cursor CLI (see example YAML). Set `~/.cursor/cli-config.json`
-   `approvalMode` to `unrestricted` (not `allowlist`). Run the worktree trust watcher
-   above — AO worktrees are new paths each spawn and still need headless `--trust` once.
-   Do not add a broken `.cursor/cli.json` in this repo; project-level overrides must
-   match the Cursor CLI schema or `agent` refuses to start.
+AO 0.10.2 ProjectConfig and native `AGENTS.md` pickup remain authoritative. The retired loopback
+listener does not require `notifiers.webhook`, `notificationRouting`, port 17487, or a repository
+YAML edit. During operator cleanup, remove local webhook routing that existed only for that
+listener.
 
-3. **Required reaction fix** — without this, CI-green / mergeable does not reach the webhook:
+Keep worker permissions, reviewer command configuration, pack `scripts/` PATH adoption, and
+worktree trust setup aligned with the current ProjectConfig. Restart the side-process supervisor
+after registry or harness changes:
 
-   ```yaml
-   approved-and-green:
-     auto: false
-     action: notify
-     priority: action
-   ```
-
-   A partial override without `priority` sends notifications desktop-only; the wake
-   listener never sees `merge.ready`.
-
-4. **Review command** — configured in project review settings / operator shell (**REVIEW_COMMAND**
-   or **PACK_REVIEW_SHELL**), e.g.:
-
-   ```powershell
-   pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
-   ```
-
-   Trigger from reconcile scripts via `ao-review run <worker-session-id>` (`scripts/ao-review.ps1`).
-   Forbidden: bare `plugins/ao-codex-pr-reviewer/bin/review.ps1`, `cmd /c npm ci && …`.
-
-5. Reload prompts and rules; restart supervisor when registry/harness changes:
-
-   ```powershell
-   ao stop
-   ao start orchestrator-pack
-   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
-   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
-   ```
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
+```
 
 ## How the loop is supposed to run
 
 ```text
-worker: pr_created / ready_for_review (+ CI green)
-    → AO notification (action) → webhook → listener → ao send orchestrator
-    → script-side reconcile (review-trigger-reconcile.ps1): Get-AoReviewRuns, ao status --reports full
-    → ao-review run <worker>  (POST .../reviews/trigger)
+worker PR/report/CI state
+    → periodic registry children reconcile current GitHub + AO state
+    → review-trigger-reconcile / review-trigger-reeval / ready-report seed
+    → ao-review run <worker> when the exact head is eligible and uncovered
     → changes_requested + auto-delivery → worker addressing_reviews → …
 ```
 
 **Gaps operators hit:**
 
-- `ao report ready_for_review` updates metadata only — it does **not** POST a
-  wake webhook by itself. You need mergeable/merge.ready routing (above) or an
-  script-side starters from wake / reconcile / heartbeat backstop — not LLM turns.
+- Ready-for-review metadata alone does not create a webhook turn. Coverage now comes from the
+  surviving script-side reconcile/seed/reeval children, not listener or heartbeat paths.
 - Orchestrator `stuck` / `probe_failure` — no shell actions run; use
   [recovery runbook](orchestrator-recovery-runbook.md) step 1 before kill/restart.
 
@@ -184,8 +153,8 @@ worker: pr_created / ready_for_review (+ CI green)
 
 | Check | Command / signal | Pass |
 |-------|------------------|------|
-| Listener up | `Test-NetConnection 127.0.0.1 -Port 17487` | `TcpTestSucceeded : True` |
-| Synthetic wake | POST from [wake runbook](orchestrator-wake-runbook.md) | Log: `accepted: …` |
+| Fleet status | `orchestrator-wake-supervisor.ps1 -Action Status` | Nine registry children healthy |
+| Listener retired | `check-vestigial-fleet-children-retired.ps1 -Json` | `status: pass` |
 | Orchestrator alive | `ao status` | Not `stuck` / `probe_failure` on orchestrator row |
 | Review started | `Get-AoReviewRuns` / `ao-review list <session> --json` | New run after worker `ready_for_review` |
 | Command correct | `latestRun.body` (failure detail) on failed runs | Names wrapper matching `PACK_REVIEWER` (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
@@ -197,7 +166,7 @@ worker: pr_created / ready_for_review (+ CI green)
 
 | Symptom | Open |
 |---------|------|
-| Listener only `dropped: not_wake_relevant` | This doc § live config (`approved-and-green.priority`); [wake runbook](orchestrator-wake-runbook.md) |
+| Retired child appears in status | Stop the supervisor, remove identity-matched old-generation processes, and restart from the updated checkout |
 | Orchestrator `stuck`, zero review runs | [Recovery runbook](orchestrator-recovery-runbook.md) step 1 ping |
 | Review runs `failed`, `findingCount: 0` (empty failed review) | `.\scripts\orchestrator-diagnose.ps1 -Strict`; [migration_notes.md](migration_notes.md) § Issue #60 empty-review trap; [reviewer-switch-runbook.md](reviewer-switch-runbook.md) if Codex quota |
 | Change reviewer (Codex / Sonnet) | [reviewer-switch-runbook.md](reviewer-switch-runbook.md) |

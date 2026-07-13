@@ -1,6 +1,9 @@
 import path from 'node:path';
 import { afterEach } from 'vitest';
-import { cleanupSupervisorTests, fixtureDir, runSupervisor } from './supervisor-recovery.test-helpers.js';
+import {
+  cleanupSupervisorTests,
+  fixtureDir,
+} from './supervisor-recovery.test-helpers.js';
 
 export { execFileSync, spawn, spawnSync } from 'node:child_process';
 export { default as fs } from 'node:fs';

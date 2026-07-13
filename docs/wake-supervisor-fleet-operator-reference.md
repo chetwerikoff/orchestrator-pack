@@ -1,11 +1,8 @@
 # Wake-supervisor fleet operator reference
 
-Living operator reference for the registry-backed wake-supervisor fleet after Issue #721.
-The active orchestrator-facing model is escalation-only: the listener no longer pastes FYI
-wake text, and the heartbeat child is retired from the registry.
-
-**Related:** start/stop mechanics and webhook defaults live in
-[`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
+Living operator reference for the registry-backed fleet after Issue #745. The loopback listener,
+heartbeat, and four vestigial PR-A children are retired. The supervisor roster is defined only by
+`scripts/orchestrator-side-process-registry.json`.
 
 ## Supervisor entry point
 
@@ -16,137 +13,107 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervis
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
 ```
 
-Default state root: `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
-`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/` or `~/.local/state/...`).
+Default state root: `%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` on Windows and
+`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/` (or `~/.local/state/...`) on Linux.
 
 ## Registry roster
 
-Roster derived from `scripts/orchestrator-side-process-registry.json` after heartbeat
-retirement (**10** children):
-
-| `children[].id` | Script | Cadence (s) | Side-effecting |
+| `children[].id` | Script | Cadence (s) | Responsibility |
 | --- | --- | ---: | --- |
-| `listener` | `orchestrator-wake-listener.ps1` | 300 | yes |
-| `review-trigger-reconcile` | `review-trigger-reconcile.ps1` | 600 | yes |
-| `review-trigger-reeval` | `review-trigger-reeval.ps1` | 5 | yes |
-| `review-ready-report-state-seed` | `review-ready-report-state-seed.ps1` | 5 | yes |
-| `ci-green-wake-reconcile` | `ci-green-wake-reconcile.ps1` | 60 | yes |
-| `dead-worker-reconcile` | `dead-worker-reconcile.ps1` | 60 | yes |
-| `worker-message-submit-reconcile` | `worker-message-submit-reconcile.ps1` | 30 | yes |
-| `review-start-claim-reaper` | `review-start-claim-reaper.ps1` | 30 | yes |
-| `ci-failure-notification-reconcile` | `ci-failure-notification-reconcile.ps1` | 60 | yes |
-| `escalation-router` | `orchestrator-escalation-router.ps1` | 30 | yes |
-
-## Operator summary
-
-| Id | Verify pattern | Operator note |
-| --- | --- | --- |
-| `listener` | `-DryRun` (long-running HTTP) | Accepts webhook wakes, may actuate review start, stamps progress, never pastes FYI wake text. |
-| `escalation-router` | `-Once` | Only active orchestrator-facing delivery child; poll tick owns `llm-orchestrator` redelivery. |
-| `review-trigger-reconcile` | `-Once -DryRun` | Periodic open-PR coverage and degraded-CI reconcile. |
-| `review-trigger-reeval` | `-Once -DryRun` | Bounded scoped re-check for early wakes. |
-| `review-ready-report-state-seed` | `-Once -DryRun` | Seeds ready reports into re-eval/watch flow. |
-| Other children | `-Once -DryRun` | Unchanged by Issue #721 except for registry count and supervisor health expectations. |
-
-## Liveness model
-
-- Event-driven webhook traffic reaches the listener when AO emits wake-relevant notifications.
-- During webhook silence, orchestrator-facing liveness is the escalation-router poll cadence.
-- Supervisor stall detection now ignores the removed heartbeat child because it is no longer
-  registered or expected to write progress.
-
-## Key child details
-
-### listener
-
-| Field | Operator detail |
-| --- | --- |
-| **Trigger** | AO `webhook` notifier POST to loopback `http://127.0.0.1:17487/ao-wake`. |
-| **Expected action** | Filter wake-relevant semantic types, preserve `merge.ready` / `ready_for_review` actuation, emit `escalation-handoff-envelope`, stamp progress, and log accepted wakes. |
-| **Bound surfaces** | `gh`, review-trigger helpers, listener side-effect lock, shared dedup state. |
-| **Verify (read-only)** | `pwsh -NoProfile -File scripts/orchestrator-wake-listener.ps1 -DryRun` and a synthetic POST. |
-
-### escalation-router
-
-| Field | Operator detail |
-| --- | --- |
-| **Trigger** | Periodic tick (registry 30 s). |
-| **Expected action** | Deliver or redeliver outstanding `llm-orchestrator` escalation records until validated ack; this is the remaining orchestrator-pane delivery surface. |
-| **Bound surfaces** | `scripts/lib/Orchestrator-Escalation.ps1`, escalation state store, `journaled-worker-send.ps1`, orchestrator ack helper. |
-| **Verify (read-only)** | `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-escalation-router.ps1 -OrchestratorSessionId op-orchestrator -Once` |
+| `review-trigger-reconcile` | `review-trigger-reconcile.ps1` | 600 | Periodic open-PR review coverage and degraded-CI reconcile |
+| `review-trigger-reeval` | `review-trigger-reeval.ps1` | 5 | Bounded deferred-head re-evaluation |
+| `review-ready-report-state-seed` | `review-ready-report-state-seed.ps1` | 5 | Seed accepted ready reports into re-evaluation |
+| `ci-green-wake-reconcile` | `ci-green-wake-reconcile.ps1` | 60 | CI-green worker hand-off |
+| `dead-worker-reconcile` | `dead-worker-reconcile.ps1` | 60 | Dead-worker recovery |
+| `worker-message-submit-reconcile` | `worker-message-submit-reconcile.ps1` | 30 | Pending worker-input draft submission |
+| `review-start-claim-reaper` | `review-start-claim-reaper.ps1` | 30 | Review-start claim-store hygiene |
+| `ci-failure-notification-reconcile` | `ci-failure-notification-reconcile.ps1` | 60 | Red-CI worker notification and escalation |
+| `escalation-router` | `orchestrator-escalation-router.ps1` | 30 | Orchestrator-facing escalation delivery |
 
 ### review-trigger-reconcile
 
-Periodic open-PR coverage and degraded-CI reconciliation. Issue #721 does not change its
-business logic; it now relies on the escalation-only delivery model rather than any FYI wake
-paste path.
+Provides periodic open-PR review coverage and degraded-CI reconciliation.
 
 ### review-trigger-reeval
 
-Bounded deferred-head follow-up for early wakes. Remains registered and side-effecting after
-#721.
+Re-evaluates deferred heads on a bounded cadence when readiness was not yet established.
 
 ### review-ready-report-state-seed
 
-Seeds accepted `ready_for_review` worker reports into the deferred-head watch flow. This child
-remains part of the fleet and is still referenced by
-[`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
+Seeds accepted ready-for-review reports into the deferred re-evaluation flow.
 
 ### ci-green-wake-reconcile
 
-Handles CI-green worker wake decisions. No heartbeat dependency remains after #721.
+Delivers the CI-green worker hand-off using the existing claim and journal contracts.
 
 ### dead-worker-reconcile
 
-Performs dead-worker recovery checks and emits recovery escalations when needed.
+Detects and recovers dead worker sessions without inheriting listener responsibilities.
 
 ### worker-message-submit-reconcile
 
-Maintains worker submit-adoption reconciliation. Unchanged by #721.
+Submits pending worker-input drafts recorded by the dispatch journal.
 
 ### review-start-claim-reaper
 
-Reaps stale review-start claims and preserves claim-store hygiene.
+Maintains review-start claim-store hygiene and bounded stale-claim cleanup.
 
 ### ci-failure-notification-reconcile
 
-Produces CI-failure notifications and degraded-CI escalation records.
+Notifies the head-owning worker to fix failing required checks and push, then escalates when needed.
 
-## Fleet scenarios
+### escalation-router
 
-### F1
+Routes durable escalation records to the orchestrator or operator according to the catalog.
 
-Normal supervised fleet operation: listener accepts webhook traffic, other registry children
-advance their own polls, and escalation-router owns orchestrator-facing liveness.
+## Liveness model
 
-### F1b
+- Periodic reconcile children provide work discovery without webhook ingress.
+- `escalation-router` is the only child requiring the orchestrator session id.
+- Supervisor stall detection and restart behavior apply only to registry children.
+- No child binds port 17487 or owns `listener-side-effect.lock`.
+- No survivor inherits the retired listener's webhook admission or
+  `escalation-handoff-envelope` responsibility.
 
-Event silence: the listener may log quiet periods while escalation-router continues its poll
-cadence. This is the intended post-#721 liveness model.
+## Verification
 
-### F2
+Most reconcile children support `-Once -DryRun`. The escalation router supports `-Once`.
+The authoritative fleet checks are:
 
-Recovery posture: if a session-bound child stalls or crashes, the supervisor restarts it from
-the current registry roster without reviving the retired heartbeat child.
+```powershell
+pwsh -NoProfile -File scripts/check-side-process-launch-contract.ps1
+pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+```
 
-### Child crash / crash-loop backoff
+A healthy status reports nine registry children. Any appearance of listener, heartbeat,
+review-send-reconcile, or the four PR-A retired child ids is configuration drift.
 
-Supervisor crash backoff remains unchanged. A retired heartbeat process should never appear in
-Status output after #721; if it does, recycle the supervisor from a current checkout.
+## Recovery scenarios
 
-### Stall detection
+### F1 — normal operation
 
-Supervisor liveness is keyed to the registered children only. If `listener` or
-`escalation-router` stop updating their progress files without a side-effect lock in flight,
-the supervisor may restart them.
+All nine children follow their own cadence; `escalation-router` owns orchestrator-facing
+redelivery until acknowledgement.
 
-### Session-id changes
+### F1b — orchestrator session changes
 
-The supervisor still re-targets session-bound children when the orchestrator session id
-changes. After #721, those children are `listener` and `escalation-router`.
+Only `escalation-router` is session-bound. A confirmed orchestrator session-id change re-targets
+that child; all other survivors remain session-independent.
+
+### F2 — child crash or stall
+
+The supervisor restarts the affected registry child using the existing crash-backoff and
+side-effect-lock contracts. It must never revive a retired entrypoint.
+
+## Operator adoption
+
+After a registry-changing deployment, stop the supervisor, check for identity-matched orphan
+processes from the old generation, restart from the updated checkout, and verify the nine-child
+status roster. See [`migration_notes.md`](migration_notes.md) for the Issue #745 PR-B sequence.
 
 ## When to update this document
 
-Update this reference whenever `scripts/orchestrator-side-process-registry.json` changes,
-when a child’s operator-facing verify path changes, or when orchestrator-facing liveness moves
-between children.
+Update this reference whenever the registry adds, removes, renames, or changes the responsibility
+or cadence of a supervised child. The table, per-child headings, liveness model, and recovery
+scenarios must remain aligned with `scripts/orchestrator-side-process-registry.json`.

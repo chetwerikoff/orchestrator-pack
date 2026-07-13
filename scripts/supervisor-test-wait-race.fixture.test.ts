@@ -39,29 +39,30 @@ describe('supervisor test wait race/stale-state fixtures (Issue #693)', () => {
   it('marker-generation-boundary ignores prior pid file content', async () => {
     const stateDir = makeStateDir();
     const markersDir = `${stateDir}/markers`;
+    const role = 'review-trigger-reconcile';
     await import('node:fs').then((fs) => {
       fs.mkdirSync(markersDir, { recursive: true });
       fs.writeFileSync(
-        `${markersDir}/listener.marker.json`,
-        JSON.stringify({ role: 'listener', pid: 999001, orchestratorSessionId: 'stale' }),
+        `${markersDir}/${role}.marker.json`,
+        JSON.stringify({ role, pid: 999001, orchestratorSessionId: 'stale' }),
         'utf8',
       );
     });
-    const priorPid = (await readMarker(stateDir, 'listener')).pid;
+    const priorPid = (await readMarker(stateDir, role)).pid;
     await import('node:fs').then((fs) =>
       fs.writeFileSync(
-        `${markersDir}/listener.marker.json`,
-        JSON.stringify({ role: 'listener', pid: 999002, orchestratorSessionId: 'fresh' }),
+        `${markersDir}/${role}.marker.json`,
+        JSON.stringify({ role, pid: 999002, orchestratorSessionId: 'fresh' }),
         'utf8',
       ),
     );
     await waitForCondition(
-      async () => (await readMarker(stateDir, 'listener', 500)).pid === 999002,
+      async () => (await readMarker(stateDir, role, 500)).pid === 999002,
       2000,
       undefined,
-      'fresh listener marker pid',
+      'fresh surviving-child marker pid',
     );
-    const current = await readMarker(stateDir, 'listener');
+    const current = await readMarker(stateDir, role);
     expect(current.pid).toBe(999002);
     expect(current.pid).not.toBe(priorPid);
   });

@@ -9,9 +9,8 @@ export const REQUIRED_SOURCE_CLASSES = Object.freeze([
   'unknown',
 ]);
 
-// Survivor-only patterns. Retired PR-A children must never regain source attribution.
+// Survivor-only patterns. Retired PR-A/PR-B children must never regain source attribution.
 const SUPERVISOR_CHILD_PATTERNS = [
-  /orchestrator-wake-listener\.ps1/i,
   /orchestrator-wake-heartbeat\.ps1/i,
   /review-trigger-reconcile\.ps1/i,
   /review-trigger-reeval\.ps1/i,

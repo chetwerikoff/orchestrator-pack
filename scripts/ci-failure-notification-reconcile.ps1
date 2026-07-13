@@ -389,7 +389,7 @@ function Invoke-CiFailureEpisodeDelivery {
     }
 
     $targetId = [string]$Episode.targetId
-    $message = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.'
+    $message = 'Required CI failed for your PR. Fix failing required checks and push.'
     $recordState = [string]$intent.record.state
     $idempotencyKey = [string]$intent.idempotencyKey
     $sendSnapshot = $null

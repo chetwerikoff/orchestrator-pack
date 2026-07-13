@@ -20,6 +20,8 @@ import {
 
 const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
 const aoStub = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor/ao-stub.sh');
+const genericChildRole = 'review-trigger-reconcile' as const;
+const sessionBoundRole = 'escalation-router' as const;
 const fleetTimeoutMs = 360_000;
 const fleetLeaseEnv: Record<string, string> = {
   AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS: '600000',
@@ -471,7 +473,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     runSupervisor(['-Action', 'Stop', '-Force', '-StateDir', stateDir], fleetLeaseEnv);
   }, fleetTimeoutMs);
 
-  it('C9: session flap restarts children without duplicate listener role', async () => {
+  it('C9: session flap restarts the session-bound child without duplicates', async () => {
     const stateDir = makeStateDir();
     const fixturePath = path.join(stateDir, 'session-fixture.json');
     fs.copyFileSync(
@@ -483,8 +485,8 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
       ['-FixturePath', fixturePath, '-AoCommand', aoStub],
       fleetLeaseEnv,
     );
-    await waitForMarker(stateDir, 'listener', 150_000);
-    const firstPid = readChildPid(stateDir, 'listener');
+    await waitForMarker(stateDir, sessionBoundRole, 150_000);
+    const firstPid = readChildPid(stateDir, sessionBoundRole);
     expect(firstPid).toBeGreaterThan(0);
 
     fs.copyFileSync(
@@ -494,7 +496,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     const deadline = Date.now() + 120_000;
     let secondPid = 0;
     while (Date.now() < deadline) {
-      const markerPath = path.join(stateDir, 'markers', 'listener.marker.json');
+      const markerPath = path.join(stateDir, 'markers', `${sessionBoundRole}.marker.json`);
       if (fs.existsSync(markerPath)) {
         const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')) as {
           pid?: number;
@@ -522,7 +524,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
   }, fleetTimeoutMs);
 
 
-  it('C11: enumerate-all reap leaves at most one duplicate listener', async () => {
+  it('C11: enumerate-all reap leaves at most one duplicate managed child', async () => {
     const stateDir = makeStateDir();
     const markerDir = path.join(stateDir, 'markers');
     fs.mkdirSync(markerDir, { recursive: true });
@@ -553,7 +555,6 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
             ...fleetLeaseEnv,
             AO_WAKE_SUPERVISOR_TEST_MARKER_DIR: markerDir,
             AO_SIDE_PROCESS_STATE_DIR: stateDir,
-            AO_WAKE_LISTENER_PROJECT_ID: 'orchestrator-pack',
           },
         },
       );
@@ -563,16 +564,16 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     const start = await startDetachedLeaseHolder(stateDir, sessionId);
     expect(start.status).toBe(0);
     await waitForSupervisorPid(stateDir);
-    const dup1 = spawnTestChild('listener');
-    const dup2 = spawnTestChild('listener');
-    const dup3 = spawnTestChild('listener');
+    const dup1 = spawnTestChild(genericChildRole);
+    const dup2 = spawnTestChild(genericChildRole);
+    const dup3 = spawnTestChild(genericChildRole);
     expect(dup1).toBeGreaterThan(0);
     expect(dup2).toBeGreaterThan(0);
     expect(dup3).toBeGreaterThan(0);
-    fs.writeFileSync(path.join(stateDir, 'listener.pid'), String(dup1));
+    fs.writeFileSync(path.join(stateDir, `${genericChildRole}.pid`), String(dup1));
     await sleep(2000);
     const lib = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1').replace(/'/g, "''");
-    const countCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId listener; Write-Output (($pids | Sort-Object -Unique).Count)`;
+    const countCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateDir.replace(/'/g, "''")}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId '${genericChildRole}'; Write-Output (($pids | Sort-Object -Unique).Count)`;
     const deadline = Date.now() + 120_000;
     let liveCount = 3;
     while (Date.now() < deadline) {
@@ -807,7 +808,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
           '-File',
           path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1'),
           '-Role',
-          'listener',
+          genericChildRole,
           '-OrchestratorSessionId',
           'fleet-force-project',
           '-ProjectId',
@@ -822,7 +823,6 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
             ...process.env,
             AO_WAKE_SUPERVISOR_TEST_MARKER_DIR: markerDir,
             AO_SIDE_PROCESS_STATE_DIR: stateDir,
-            AO_WAKE_LISTENER_PROJECT_ID: projectId,
           },
         },
       );
@@ -837,7 +837,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     const lib = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1').replace(/'/g, "''");
     const stateEsc = stateDir.replace(/'/g, "''");
     const identityCommand = (pid: number, projectId: string) =>
-      `. '${lib}'; Write-Output ([bool](Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId ${pid} -Role listener -ProjectId '${projectId}'))`;
+      `. '${lib}'; Write-Output ([bool](Test-OrchestratorWakeSupervisorManagedChildProjectIdentity -ProcessId ${pid} -Role '${genericChildRole}' -ProjectId '${projectId}'))`;
     const packIdentity = spawnSync(
       'pwsh',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', identityCommand(packPid, 'orchestrator-pack')],
@@ -850,7 +850,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     );
     expect((packIdentity.stdout ?? '').trim()).toBe('True');
     expect((foreignIdentity.stdout ?? '').trim()).toBe('False');
-    const findCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId listener; Write-Output (($pids | Sort-Object -Unique) -join ',')`;
+    const findCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $pids = Find-OrchestratorWakeSupervisorManagedChildCandidatesForState -Paths $paths -ProjectId orchestrator-pack -ChildId '${genericChildRole}'; Write-Output (($pids | Sort-Object -Unique) -join ',')`;
     const findResult = spawnSync(
       'pwsh',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', findCommand],
@@ -864,7 +864,7 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     expect(matched).toContain(packPid);
     expect(matched).not.toContain(foreignPid);
 
-    const adoptCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $map = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $paths -ProjectId orchestrator-pack; if ($map.ContainsKey('listener')) { Write-Output $map['listener'] } else { Write-Output '0' }`;
+    const adoptCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $map = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $paths -ProjectId orchestrator-pack; if ($map.ContainsKey('${genericChildRole}')) { Write-Output $map['${genericChildRole}'] } else { Write-Output '0' }`;
     const adoptResult = spawnSync(
       'pwsh',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', adoptCommand],
@@ -872,16 +872,16 @@ describe.sequential.skip('orchestrator-wake-supervisor fleet cardinality (#709) 
     );
     expect(Number((adoptResult.stdout ?? '').trim())).toBe(packPid);
 
-    const listenerPidPath = path.join(stateDir, 'listener.pid');
-    fs.writeFileSync(listenerPidPath, String(foreignPid));
-    const foreignStatusCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $s = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $paths -ChildId listener -ProjectId orchestrator-pack; Write-Output $s.Alive`;
+    const childPidPath = path.join(stateDir, `${genericChildRole}.pid`);
+    fs.writeFileSync(childPidPath, String(foreignPid));
+    const foreignStatusCommand = `. '${lib}'; $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot '${stateEsc}'; $s = Get-OrchestratorWakeSupervisorChildStatusEntry -Paths $paths -ChildId '${genericChildRole}' -ProjectId orchestrator-pack; Write-Output $s.Alive`;
     const foreignStatus = spawnSync(
       'pwsh',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', foreignStatusCommand],
       { encoding: 'utf8', env: { ...process.env, ...fleetLeaseEnv } },
     );
     expect((foreignStatus.stdout ?? '').trim()).toBe('False');
-    fs.writeFileSync(listenerPidPath, String(packPid));
+    fs.writeFileSync(childPidPath, String(packPid));
     const packStatus = spawnSync(
       'pwsh',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', foreignStatusCommand],
