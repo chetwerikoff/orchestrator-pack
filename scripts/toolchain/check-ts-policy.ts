@@ -1,6 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import {
   compareRawChildProcessBaseline,
@@ -8,6 +7,7 @@ import {
   makeRawChildProcessBaseline,
   type RawChildProcessBaseline,
 } from '#opk-toolchain/child-process-policy';
+import { isDirectExecution, writeVersionOneBaseline } from '#opk-toolchain/baseline-io';
 
 export interface PolicyViolation {
   readonly path: string;
@@ -149,18 +149,10 @@ export function lintTypeScriptFoundation(repoRoot: string): PolicyViolation[] {
 export function writeRawChildProcessBaseline(repoRoot: string): void {
   const path = resolve(repoRoot, 'scripts/toolchain/raw-child-process-baseline.json');
   const baseline = makeRawChildProcessBaseline(discoverRawChildProcessCalls(repoRoot));
-  const entries = baseline.entries.map((entry, index) =>
-    `    ${JSON.stringify(entry)}${index === baseline.entries.length - 1 ? '' : ','}`,
-  );
-  writeFileSync(path, ['{', '  "version": 1,', '  "entries": [', ...entries, '  ]', '}', ''].join('\n'));
+  writeVersionOneBaseline(path, baseline.entries);
 }
 
-function isMain(): boolean {
-  const entry = process.argv[1];
-  return entry !== undefined && import.meta.url === pathToFileURL(resolve(entry)).href;
-}
-
-if (isMain()) {
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   const repoRoot = process.cwd();
   if (process.argv.includes('--write-baseline')) {
     writeRawChildProcessBaseline(repoRoot);
