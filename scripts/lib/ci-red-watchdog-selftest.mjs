@@ -496,6 +496,12 @@ test('watchdog owns fallback and revalidates before Enter', () => {
   assert.ok(reconcile.includes('ci-red watchdog owns new fallback delivery'));
   assert.ok(reconcile.includes('Invoke-CiFailureEpisodeDelivery'));
 
+  const tick = readFileSync(path.join(libDir, 'Ci-Red-Watchdog-Tick.ps1'), 'utf8');
+  const transportIntent = tick.indexOf("-Command 'transport-issued'");
+  const transportSideEffect = tick.indexOf('Invoke-PlannedCiFailureReconcileSend');
+  assert.ok(transportIntent > 0);
+  assert.ok(transportSideEffect > transportIntent);
+
   const submit = readFileSync(path.join(scriptsDir, 'worker-message-submit-reconcile.ps1'), 'utf8');
   const guard = submit.indexOf('Test-CiRedWatchdogSubmitBoundary');
   const enter = submit.indexOf('Invoke-WorkerInputDraftSubmit');
