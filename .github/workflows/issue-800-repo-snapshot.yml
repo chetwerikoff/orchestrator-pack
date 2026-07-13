@@ -141,6 +141,7 @@ jobs:
           import os
           from pathlib import Path
           import subprocess
+          from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
           repo = os.environ['GITHUB_REPOSITORY']
@@ -158,8 +159,12 @@ jobs:
                       'Content-Type': 'application/json',
                   },
               )
-              with urlopen(request) as response:
-                  return json.load(response)
+              try:
+                  with urlopen(request) as response:
+                      return json.load(response)
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  raise RuntimeError(f'{endpoint} failed with HTTP {error.code}: {body}') from error
 
           parent = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           base_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
@@ -176,7 +181,11 @@ jobs:
               blob = post('/git/blobs', {'content': content, 'encoding': 'base64'})
               entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': str(blob['sha'])})
 
-          tree = post('/git/trees', {'base_tree': base_tree, 'tree': entries})
+          tree_payload = {'base_tree': base_tree, 'tree': entries}
+          Path('/tmp/issue800-tree-payload.json').write_text(
+              json.dumps(tree_payload, indent=2) + '\n', encoding='utf-8',
+          )
+          tree = post('/git/trees', tree_payload)
           commit = post('/git/commits', {
               'message': 'Establish TypeScript kernel and toolchain foundation',
               'tree': tree['sha'],
@@ -197,5 +206,6 @@ jobs:
           path: |
             /tmp/issue800-commit-sha.txt
             /tmp/issue800-commit.log
+            /tmp/issue800-tree-payload.json
           if-no-files-found: warn
           retention-days: 1
