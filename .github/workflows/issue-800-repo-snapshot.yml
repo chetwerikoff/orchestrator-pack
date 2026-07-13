@@ -134,7 +134,8 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -- .nvmrc tsconfig.json package.json package-lock.json docs/migration_notes.md scripts/kernel scripts/toolchain scripts/typescript-smoke.ts
           git diff --cached --check
-          python - <<'PY'
+          set +e
+          python - <<'PY' > /tmp/issue800-commit.log 2>&1
           import base64
           import json
           import os
@@ -184,10 +185,17 @@ jobs:
           Path('/tmp/issue800-commit-sha.txt').write_text(str(commit['sha']) + '\n')
           print(f"Created server commit {commit['sha']} with {len(entries)} changed files")
           PY
-      - name: Upload server commit reference
+          status=$?
+          set -e
+          cat /tmp/issue800-commit.log
+          exit "${status}"
+      - name: Upload server commit diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: issue-800-server-commit
-          path: /tmp/issue800-commit-sha.txt
-          if-no-files-found: error
+          path: |
+            /tmp/issue800-commit-sha.txt
+            /tmp/issue800-commit.log
+          if-no-files-found: warn
           retention-days: 1
