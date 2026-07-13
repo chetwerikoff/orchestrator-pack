@@ -17,23 +17,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Extract exact failing gate diagnostics
+      - name: Extract self-architect failure tail
         shell: bash
         run: |
           set -euo pipefail
           gh api \
             -H 'Accept: application/vnd.github+json' \
-            "/repos/${GITHUB_REPOSITORY}/actions/jobs/86887621723/logs" > /tmp/verify.log
-          gh api \
-            -H 'Accept: application/vnd.github+json' \
             "/repos/${GITHUB_REPOSITORY}/actions/jobs/86887662457/logs" > /tmp/self-architect.log
-
-          echo '===== verify: non-reusable failure window ====='
-          grep -n -A40 -B5 'Non-reusable files' /tmp/verify.log || true
-          echo '===== verify: final summary ====='
-          grep -n -A30 -B5 'Verification failed' /tmp/verify.log || tail -n 40 /tmp/verify.log
-
-          echo '===== self-architect: findings ====='
-          grep -n -A80 -B10 -E '\[FAIL\]|introduced|violation|Finding|ERROR|Error' /tmp/self-architect.log | tail -n 160 || true
-          echo '===== self-architect: final summary ====='
-          tail -n 60 /tmp/self-architect.log
+          echo '===== self-architect final 45 lines ====='
+          tail -n 45 /tmp/self-architect.log
