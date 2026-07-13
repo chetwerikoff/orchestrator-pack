@@ -1,0 +1,38 @@
+name: Issue 800 CI diagnostics
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Extract failing verifier diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in \
+            'verify:86887621723' \
+            'self-architect:86887662457'
+          do
+            name="${spec%%:*}"
+            job_id="${spec##*:}"
+            log="/tmp/${name}.log"
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "${log}"
+            echo "===== ${name}: filtered diagnostics ====="
+            grep -Eai '\[FAIL\]|##\[error\]|(^|[^a-z])(error|failure|failed)([^a-z]|$)|introduced|violation' "${log}" | tail -n 120 || true
+            echo "===== ${name}: log tail ====="
+            tail -n 80 "${log}"
+          done
