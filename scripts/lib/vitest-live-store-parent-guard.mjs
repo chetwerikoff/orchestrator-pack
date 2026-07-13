@@ -16,9 +16,27 @@ const POWERSHELL_PATH_PARAMETERS = new Set([
   'literalpath', 'path', 'filepath', 'statepath', 'storepath', 'journalpath',
   'watchpath', 'lockpath', 'statefile', 'clipath', 'auditroot', 'namespace',
   'stateroot', 'rootdir', 'storedir', 'directory', 'operatorinboxdir',
-  'healthspooldir', 'clioverride', 'destination', 'reporoot', 'outputpath',
+  'healthspooldir', 'clioverride', 'destination', 'newname', 'reporoot', 'outputpath',
 ]);
-const POWERSHELL_WRITE_PATTERN = /\b(?:Set-Content|Add-Content|Out-File|Clear-Content|New-Item|Remove-Item|Move-Item|Copy-Item|Rename-Item|Set-Acl|WriteAllText|WriteAllBytes|AppendAllText|OpenWrite|Create|Replace)\b/i;
+const POWERSHELL_WRITE_CMDLETS = [
+  'Set-Content', 'Add-Content', 'Out-File', 'Clear-Content', 'New-Item',
+  'Remove-Item', 'Move-Item', 'Copy-Item', 'Rename-Item', 'Set-Acl',
+];
+const POWERSHELL_DOTNET_WRITE_METHODS = new Map([
+  ['WriteAllText', 1],
+  ['WriteAllBytes', 1],
+  ['AppendAllText', 1],
+  ['OpenWrite', 1],
+  ['Create', 1],
+  ['CreateText', 1],
+  ['AppendText', 1],
+  ['CreateDirectory', 1],
+  ['Delete', 1],
+  ['Copy', 2],
+  ['Move', 2],
+  ['Replace', 3],
+]);
+const POWERSHELL_VALUE_TOKEN = String.raw`(?:'(?:''|[^'])*'|"(?:\`"|[^"])*"|[^\s;|,)]+)`;
 
 function pathIsSameOrWithin(candidate, root) {
   const rel = relative(root, candidate);
@@ -69,12 +87,167 @@ function assertPowerShellCandidateSafe(value, operation, env) {
   assertHarnessWritePathSafe(candidate, operation, env);
 }
 
-function commandLiteralCandidates(command) {
-  const values = [];
-  for (const match of command.matchAll(/'((?:''|[^'])*)'/g)) values.push(match[1].replaceAll("''", "'"));
-  for (const match of command.matchAll(/"((?:`"|[^"])*)"/g)) values.push(match[1].replaceAll('`"', '"'));
-  for (const match of command.matchAll(/(?:^|[\s=(,;])((?:[A-Za-z]:[\\/]|~?[\\/])[^\s;|,)\]}]+)/g)) values.push(match[1]);
-  return values;
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function splitPowerShellStatements(command) {
+  const statements = [];
+  let current = '';
+  let quote = '';
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1];
+    if (quote === "'") {
+      current += char;
+      if (char === "'" && next === "'") {
+        current += next;
+        index += 1;
+      } else if (char === "'") {
+        quote = '';
+      }
+      continue;
+    }
+    if (quote === '"') {
+      current += char;
+      if (char === '`' && next !== undefined) {
+        current += next;
+        index += 1;
+      } else if (char === '"') {
+        quote = '';
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === ';' || char === '\n' || char === '\r') {
+      if (current.trim()) statements.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) statements.push(current.trim());
+  return statements;
+}
+
+function splitPowerShellArguments(value) {
+  const args = [];
+  let current = '';
+  let quote = '';
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    const next = value[index + 1];
+    if (quote === "'") {
+      current += char;
+      if (char === "'" && next === "'") {
+        current += next;
+        index += 1;
+      } else if (char === "'") {
+        quote = '';
+      }
+      continue;
+    }
+    if (quote === '"') {
+      current += char;
+      if (char === '`' && next !== undefined) {
+        current += next;
+        index += 1;
+      } else if (char === '"') {
+        quote = '';
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '(' || char === '[' || char === '{') depth += 1;
+    else if (char === ')' || char === ']' || char === '}') depth = Math.max(0, depth - 1);
+    if (char === ',' && depth === 0) {
+      args.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) args.push(current.trim());
+  return args;
+}
+
+function inventoryPowerShellCommands() {
+  const resolvers = new Set();
+  const writers = new Set(POWERSHELL_WRITE_CMDLETS);
+  for (const store of liveStoreInventory.stores ?? []) {
+    for (const name of [store.resolver, ...(store.resolverAliases ?? [])]) {
+      if (/^[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/.test(String(name ?? ''))) {
+        resolvers.add(String(name));
+      }
+    }
+    for (const match of String(store.writeBoundary ?? '').matchAll(/\b[A-Z][A-Za-z0-9]*(?:-[A-Z][A-Za-z0-9]*)+\b/g)) {
+      writers.add(match[0]);
+    }
+  }
+  return { resolvers, writers };
+}
+
+const POWERSHELL_INVENTORY_COMMANDS = inventoryPowerShellCommands();
+
+function statementHasCommand(statement, commands) {
+  for (const command of commands) {
+    if (new RegExp(`\\b${escapeRegExp(command)}\\b`, 'i').test(statement)) return true;
+  }
+  return false;
+}
+
+function namedPathCandidates(statement) {
+  const names = [...POWERSHELL_PATH_PARAMETERS].map(escapeRegExp).join('|');
+  const pattern = new RegExp(`-(?:${names})(?:\\s+|:)(${POWERSHELL_VALUE_TOKEN})`, 'gi');
+  return [...statement.matchAll(pattern)].map((match) => match[1]);
+}
+
+function firstPositionalCandidate(statement, commandName) {
+  const commandPattern = new RegExp(`\\b${escapeRegExp(commandName)}\\b`, 'i');
+  const match = commandPattern.exec(statement);
+  if (!match) return '';
+  const tail = statement.slice(match.index + match[0].length).trim();
+  if (!tail || tail.startsWith('-')) return '';
+  return new RegExp(`^(${POWERSHELL_VALUE_TOKEN})`, 'i').exec(tail)?.[1] ?? '';
+}
+
+function dotNetWriteCandidates(statement) {
+  const candidates = [];
+  const methods = [...POWERSHELL_DOTNET_WRITE_METHODS.keys()].map(escapeRegExp).join('|');
+  const methodPattern = new RegExp(`::(${methods})\\s*\\(([^)]*)\\)`, 'gi');
+  for (const match of statement.matchAll(methodPattern)) {
+    const count = POWERSHELL_DOTNET_WRITE_METHODS.get(match[1]) ?? 0;
+    candidates.push(...splitPowerShellArguments(match[2]).slice(0, count));
+  }
+  return candidates;
+}
+
+function commandWriteCandidates(command) {
+  const candidates = [];
+  for (const statement of splitPowerShellStatements(command)) {
+    const isResolver = statementHasCommand(statement, POWERSHELL_INVENTORY_COMMANDS.resolvers);
+    const isWriter = statementHasCommand(statement, POWERSHELL_INVENTORY_COMMANDS.writers);
+    const dotNetCandidates = dotNetWriteCandidates(statement);
+    if (!isResolver && !isWriter && dotNetCandidates.length === 0) continue;
+    const namedCandidates = namedPathCandidates(statement);
+    candidates.push(...namedCandidates, ...dotNetCandidates);
+    if (isWriter && namedCandidates.length === 0) {
+      for (const commandName of POWERSHELL_WRITE_CMDLETS) {
+        const positional = firstPositionalCandidate(statement, commandName);
+        if (positional) candidates.push(positional);
+      }
+    }
+  }
+  return candidates;
 }
 
 export function preflightPowerShellInvocation(argv, env = process.env) {
@@ -97,14 +270,10 @@ export function preflightPowerShellInvocation(argv, env = process.env) {
   }
 
   const commandIndex = lower.findIndex((value) => value === '-command' || value === '-c');
-  const fileIndex = lower.findIndex((value) => value === '-file' || value === '-f');
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     const flag = token.match(/^--?([A-Za-z][A-Za-z0-9-]*)(?::(.*))?$/);
-    if (!flag) {
-      if (fileIndex >= 0 && index > fileIndex + 1) assertPowerShellCandidateSafe(token, 'pwsh-positional', env);
-      continue;
-    }
+    if (!flag) continue;
     const name = flag[1].toLowerCase();
     if (!POWERSHELL_PATH_PARAMETERS.has(name)) continue;
     const value = flag[2] !== undefined ? flag[2] : args[index + 1];
@@ -113,15 +282,8 @@ export function preflightPowerShellInvocation(argv, env = process.env) {
 
   if (commandIndex >= 0) {
     const command = args.slice(commandIndex + 1).join(' ');
-    if (POWERSHELL_WRITE_PATTERN.test(command)) {
-      for (const candidate of commandLiteralCandidates(command)) {
-        assertPowerShellCandidateSafe(candidate, 'pwsh-command-write', env);
-      }
-      for (const store of resolvedLiveStores(env)) {
-        if (command.includes(store.defaultPath)) {
-          assertHarnessWritePathSafe(store.defaultPath, 'pwsh-command-write', env);
-        }
-      }
+    for (const candidate of commandWriteCandidates(command)) {
+      assertPowerShellCandidateSafe(candidate, 'pwsh-command-write', env);
     }
   }
 }
