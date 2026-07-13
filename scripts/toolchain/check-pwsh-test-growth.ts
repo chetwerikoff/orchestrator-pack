@@ -6,7 +6,7 @@ import {
   discoverPowerShellBootTests,
   makePowerShellBootBaseline,
   type PowerShellBootBaseline,
-} from './powershell-child-policy.ts';
+} from '#opk-toolchain/powershell-child-policy';
 
 export function checkPowerShellTestGrowth(repoRoot: string): string[] {
   const baselinePath = resolve(repoRoot, 'scripts/toolchain/powershell-child-tests.json');
