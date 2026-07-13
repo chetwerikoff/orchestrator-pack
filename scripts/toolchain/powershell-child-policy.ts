@@ -86,11 +86,19 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
   return { named, namespaces, importsSharedPwshHelper, stringConstants };
 }
 
+function isChildProcessRequire(node: ts.Expression): boolean {
+  return ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === 'require'
+    && CHILD_PROCESS_MODULES.has(literalText(node.arguments[0]) ?? '');
+}
+
 function childApi(call: ts.CallExpression, bindings: ChildBindings): string | undefined {
   if (ts.isIdentifier(call.expression)) return bindings.named.get(call.expression.text);
   if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
-  if (!ts.isIdentifier(call.expression.expression)) return undefined;
-  if (!bindings.namespaces.has(call.expression.expression.text)) return undefined;
+  const receiver = call.expression.expression;
+  if (ts.isIdentifier(receiver) && !bindings.namespaces.has(receiver.text)) return undefined;
+  if (!ts.isIdentifier(receiver) && !isChildProcessRequire(receiver)) return undefined;
   return CHILD_APIS.has(call.expression.name.text) ? call.expression.name.text : undefined;
 }
 
