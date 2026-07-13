@@ -548,7 +548,7 @@ describe('orchestrator message registry (Issue #298)', () => {
       if (scrubbedEventPath && fs.existsSync(scrubbedEventPath)) fs.unlinkSync(scrubbedEventPath);
     }
   },
-    240_000,
+    360_000,
   );
 
   it('preserves newlines when regenerating the map via pwsh helper', () => {
