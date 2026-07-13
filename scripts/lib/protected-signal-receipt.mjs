@@ -162,32 +162,45 @@ export function suppressProtectedSignalHits(hitSignals, matches, receipt, guard)
     return { hits: [...hitSignals], suppressed: [] };
   }
 
-  const suppressedSignals = new Set();
+  const consumedEntries = new Set();
+  const remainingSignals = [];
   const suppressed = [];
   for (const signal of hitSignals) {
     const signalMatches = matches.filter((match) => match.signal === signal);
+    let hasUnmatchedSignal = signalMatches.length === 0;
     for (const match of signalMatches) {
       const sameFingerprintCount = signalMatches.filter(
         (candidate) => candidate.fingerprint === match.fingerprint,
       ).length;
-      const entry = receipt.entries.find((candidate) =>
-        candidate.guard === guard &&
-        candidate.signal === signal &&
-        candidate.fingerprint === match.fingerprint &&
-        (sameFingerprintCount === 1
-          ? candidate.occurrence === undefined || candidate.occurrence === match.occurrence
-          : candidate.occurrence === match.occurrence),
-      );
+      const entry = receipt.entries.find((candidate) => {
+        const entryKey =
+          `${candidate.guard}\0${candidate.signal}\0${candidate.fingerprint}\0${candidate.occurrence ?? ''}`;
+        return (
+          !consumedEntries.has(entryKey) &&
+          candidate.guard === guard &&
+          candidate.signal === signal &&
+          candidate.fingerprint === match.fingerprint &&
+          (sameFingerprintCount === 1
+            ? candidate.occurrence === undefined || candidate.occurrence === match.occurrence
+            : candidate.occurrence === match.occurrence)
+        );
+      });
       if (entry) {
-        suppressedSignals.add(signal);
+        consumedEntries.add(
+          `${entry.guard}\0${entry.signal}\0${entry.fingerprint}\0${entry.occurrence ?? ''}`,
+        );
         suppressed.push({ signal, fingerprint: match.fingerprint, occurrence: match.occurrence });
-        break;
+        continue;
       }
+      hasUnmatchedSignal = true;
+    }
+    if (hasUnmatchedSignal) {
+      remainingSignals.push(signal);
     }
   }
 
   return {
-    hits: hitSignals.filter((signal) => !suppressedSignals.has(signal)),
+    hits: remainingSignals,
     suppressed,
   };
 }

@@ -355,7 +355,12 @@ export function validateFindingLedgerGuardReceipt(
 
   const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
   if (!existsSync(ledgerPath)) {
-    return { ok: true, message: 'finding-ledger guard: PASS (no ledger)' };
+    return {
+      ok: false,
+      message:
+        `finding-ledger guard: missing finding-disposition-ledger.json for ` +
+        `${captureFiles.length} capture file(s)`,
+    };
   }
   const captures = captureFiles.map((capturePath) => readFileSync(capturePath, 'utf8'));
   const ledgerText = readFileSync(ledgerPath, 'utf8');

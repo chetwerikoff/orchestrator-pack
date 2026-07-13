@@ -7,8 +7,10 @@ import {
 } from './lib/tier-gate-core.js';
 import { resetMarkerClassCache } from './lib/tier-marker-screen.js';
 import {
+  collectProtectedSignalMatches,
   fingerprintProtectedSignalSpan,
   PROTECTED_SIGNAL_RECEIPT_FILENAME,
+  suppressProtectedSignalHits,
 } from './lib/protected-signal-receipt.mjs';
 import {
   checkFindingLedgerGuard,
@@ -103,6 +105,34 @@ function receiptEntry(guard: string, signal: string, span: string, extra: Record
   };
 }
 
+describe('protected-signal-receipt helper', () => {
+  it('preserves unmatched hits when only one span for a signal is receipted', () => {
+    const signal = 'concurrency-state-retry';
+    const matches = collectProtectedSignalMatches('concurrency retry semantics', [
+      { signal, pattern: /\bconcurrency\b/i },
+      { signal, pattern: /\bretry\s+semantics\b/i },
+    ]);
+    const result = suppressProtectedSignalHits(
+      [signal],
+      matches,
+      {
+        invalid: false,
+        entries: [receiptEntry('tier-marker', signal, 'concurrency')],
+      },
+      'tier-marker',
+    );
+
+    expect(result.hits).toEqual([signal]);
+    expect(result.suppressed).toEqual([
+      {
+        signal,
+        fingerprint: fingerprintProtectedSignalSpan('concurrency'),
+        occurrence: 0,
+      },
+    ]);
+  });
+});
+
 describe('protected-signal-receipt tier-gate', () => {
   it('suppresses a fingerprint-matched tier marker and fails when absent or stale', () => {
     const root = makeRepo();
@@ -145,6 +175,12 @@ describe('protected-signal-receipt tier-gate', () => {
     expect(checkTierGateGuard(text, { repoRoot: process.cwd(), draftPath }).ok).toBe(false);
 
     writeReceipt(root, 'receipt-draft', [
+      receiptEntry('tier-marker', 'concurrency-state-retry', 'concurrency', { occurrence: 1 }),
+    ]);
+    expect(checkTierGateGuard(text, { repoRoot: process.cwd(), draftPath }).ok).toBe(false);
+
+    writeReceipt(root, 'receipt-draft', [
+      receiptEntry('tier-marker', 'concurrency-state-retry', 'concurrency', { occurrence: 0 }),
       receiptEntry('tier-marker', 'concurrency-state-retry', 'concurrency', { occurrence: 1 }),
     ]);
     expect(checkTierGateGuard(text, { repoRoot: process.cwd(), draftPath }).ok).toBe(true);
@@ -220,5 +256,45 @@ describe('protected-signal-receipt sync', () => {
       },
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('fails closed when captures exist but the finding ledger is missing', () => {
+    const root = makeRepo();
+    const stem = 'sync-draft-missing-ledger';
+    const draftPath = writeDraft(root, stem);
+    const reviewDir = writeReceipt(root, stem, [
+      receiptEntry('tier-marker', 'concurrency-state-retry', 'concurrency'),
+    ]);
+    writeFileSync(
+      join(reviewDir, 'pass-01-architectural.capture.txt'),
+      'Reviewer prose says this draft has a scope-violation false positive.',
+    );
+
+    const ledger = validateFindingLedgerGuardReceipt(draftText(), draftPath);
+    expect(ledger.ok).toBe(false);
+    expect(ledger.message).toContain('missing finding-disposition-ledger.json');
+
+    const result = syncPublishIssueBody(
+      {
+        runGh() {
+          throw new Error('sync should stop before calling gh');
+        },
+        writeBodyFile() {
+          return join(root, 'body.md');
+        },
+        emitAudit() {},
+      },
+      {
+        mode: 'create',
+        draftPath,
+        draftContent: draftText(),
+        repo: 'owner/repo',
+        title: 'Receipt fixture',
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain('missing finding-disposition-ledger.json');
+    }
   });
 });
