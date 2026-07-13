@@ -73,7 +73,6 @@ $allowedRootPatterns = @(
     '.gitignore',
     '.gitattributes',
     '.editorconfig',
-    '.nvmrc',
     'agent-orchestrator.yaml.example',
     'package.json',
     'package-lock.json',
