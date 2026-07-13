@@ -62,6 +62,25 @@ BeforeAll {
             $leftOwner.Extent.EndOffset -eq $rightOwner.Extent.EndOffset)
     }
 
+    function Test-Issue771DotSourceVisibleToConsumer($DotSource, $Consumer) {
+        $dotOwner = Get-Issue771OwningFunction $DotSource
+        $consumerOwner = Get-Issue771OwningFunction $Consumer
+
+        if ($null -eq $dotOwner) {
+            if ($null -eq $consumerOwner) {
+                return ($DotSource.Extent.StartOffset -lt $Consumer.Extent.StartOffset)
+            }
+            # Script-scope imports are visible when a function is invoked after script initialization.
+            return $true
+        }
+        if ($null -eq $consumerOwner) {
+            return $false
+        }
+        return ($dotOwner.Extent.StartOffset -eq $consumerOwner.Extent.StartOffset -and
+            $dotOwner.Extent.EndOffset -eq $consumerOwner.Extent.EndOffset -and
+            $DotSource.Extent.StartOffset -lt $Consumer.Extent.StartOffset)
+    }
+
     function Resolve-Issue771DotSourceTarget {
         param([string]$Text, [string]$SourcePath, [string]$RepositoryRoot)
 
@@ -103,79 +122,114 @@ BeforeAll {
         return $null
     }
 
+    function Get-Issue771ParsedPowerShellRecord([string]$Path) {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+        if (@($errors).Count) {
+            throw "PowerShell parse failure in ${Path}: $($errors[0].Message)"
+        }
+        return [pscustomobject]@{
+            Path = $Path
+            Ast = $ast
+            Commands = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true))
+            Functions = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true))
+        }
+    }
+
     function Get-Issue771ParsedPowerShellRecords([string]$ScanRoot) {
-        $records = @()
-        foreach ($file in @(Get-ChildItem -LiteralPath $ScanRoot -Recurse -File |
-                Where-Object { $_.Extension -in @('.ps1', '.psm1') })) {
-            $tokens = $null
-            $errors = $null
-            $ast = [Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
-            if (@($errors).Count) {
-                throw "PowerShell parse failure in $($file.FullName): $($errors[0].Message)"
+        return @(
+            foreach ($file in @(Get-ChildItem -LiteralPath $ScanRoot -Recurse -File |
+                    Where-Object { $_.Extension -in @('.ps1', '.psm1') })) {
+                Get-Issue771ParsedPowerShellRecord -Path $file.FullName
             }
-            $records += [pscustomobject]@{
-                Path = $file.FullName
-                Ast = $ast
-                Commands = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] }, $true))
-                Functions = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $true))
-            }
-        }
-        return @($records)
+        )
     }
 
-    function Get-Issue771TargetFunctionMap($TargetAst) {
-        $map = @{}
-        foreach ($functionAst in @($TargetAst.FindAll({
-                        param($n)
-                        $n -is [Management.Automation.Language.FunctionDefinitionAst]
-                    }, $true))) {
-            if (-not $map.ContainsKey($functionAst.Name)) {
-                $map[$functionAst.Name] = $functionAst
-            }
-        }
-        return $map
+    function Get-Issue771TopLevelFunctionNames($Record) {
+        return @(
+            $Record.Functions |
+                Where-Object { $null -eq (Get-Issue771OwningFunction $_) } |
+                ForEach-Object { $_.Name } |
+                Sort-Object -Unique
+        )
     }
 
-    function Get-Issue771LocallyConsumedTargetFunctions {
-        param($LoaderAst, $DotSourceAst, [hashtable]$TargetFunctions)
+    function Get-Issue771ScriptImportFunctionClosure {
+        param(
+            [string]$Path,
+            [string]$RepositoryRoot,
+            [hashtable]$Cache,
+            [Collections.Generic.HashSet[string]]$Visiting
+        )
 
-        $queue = [Collections.Generic.Queue[string]]::new()
-        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-
-        foreach ($commandAst in @($LoaderAst.Body.FindAll({
-                        param($n)
-                        $n -is [Management.Automation.Language.CommandAst]
-                    }, $true))) {
-            if ($commandAst.Extent.StartOffset -le $DotSourceAst.Extent.EndOffset) { continue }
-            if (Test-Issue771NestedScriptBlock $commandAst $LoaderAst) { continue }
-            $name = $commandAst.GetCommandName()
-            if ($name -and $TargetFunctions.ContainsKey($name)) {
-                $queue.Enqueue($name)
-            }
+        $fullPath = [IO.Path]::GetFullPath($Path)
+        if ($Cache.ContainsKey($fullPath)) {
+            return @($Cache[$fullPath])
+        }
+        if (-not $Visiting.Add($fullPath)) {
+            return @()
         }
 
-        while ($queue.Count -gt 0) {
-            $name = $queue.Dequeue()
-            if (-not $seen.Add($name)) { continue }
-            $functionAst = $TargetFunctions[$name]
-            foreach ($commandAst in @($functionAst.Body.FindAll({
-                            param($n)
-                            $n -is [Management.Automation.Language.CommandAst]
-                        }, $true))) {
-                $callee = $commandAst.GetCommandName()
-                if ($callee -and $TargetFunctions.ContainsKey($callee) -and -not $seen.Contains($callee)) {
-                    $queue.Enqueue($callee)
+        try {
+            $record = Get-Issue771ParsedPowerShellRecord -Path $fullPath
+            $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($name in @(Get-Issue771TopLevelFunctionNames -Record $record)) {
+                [void]$names.Add($name)
+            }
+
+            foreach ($dotSource in @($record.Commands | Where-Object {
+                        $_.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Dot -and
+                        $null -eq (Get-Issue771OwningFunction $_)
+                    })) {
+                $target = Resolve-Issue771DotSourceTarget $dotSource.Extent.Text $fullPath $RepositoryRoot
+                if (-not $target) { continue }
+                foreach ($name in @(Get-Issue771ScriptImportFunctionClosure -Path $target `
+                            -RepositoryRoot $RepositoryRoot -Cache $Cache -Visiting $Visiting)) {
+                    [void]$names.Add($name)
                 }
             }
-        }
 
-        return @($seen)
+            $result = @($names | Sort-Object)
+            $Cache[$fullPath] = $result
+            return $result
+        }
+        finally {
+            [void]$Visiting.Remove($fullPath)
+        }
+    }
+
+    function Test-Issue771ConsumerHasIndependentLoad {
+        param(
+            $CandidateRecord,
+            $Consumer,
+            [string]$ConsumerName,
+            [string]$RepositoryRoot,
+            [hashtable]$ClosureCache
+        )
+
+        foreach ($candidateDotSource in @($CandidateRecord.Commands | Where-Object {
+                    $_.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Dot -and
+                    (Test-Issue771DotSourceVisibleToConsumer $_ $Consumer)
+                })) {
+            $candidateTarget = Resolve-Issue771DotSourceTarget $candidateDotSource.Extent.Text `
+                $CandidateRecord.Path $RepositoryRoot
+            if (-not $candidateTarget) { continue }
+            $visiting = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $available = @(Get-Issue771ScriptImportFunctionClosure -Path $candidateTarget `
+                    -RepositoryRoot $RepositoryRoot -Cache $ClosureCache -Visiting $visiting)
+            if ($available -contains $ConsumerName) {
+                return $true
+            }
+        }
+        return $false
     }
 
     function Get-Issue771DependencyScopeLeaks {
         param([string]$RepositoryRoot, [string]$ScanRoot)
 
         $records = @(Get-Issue771ParsedPowerShellRecords $ScanRoot)
+        $closureCache = @{}
         $leaks = @()
         foreach ($source in $records) {
             foreach ($loader in $source.Functions) {
@@ -188,20 +242,9 @@ BeforeAll {
                 foreach ($dotSource in $localDotSources) {
                     $target = Resolve-Issue771DotSourceTarget $dotSource.Extent.Text $source.Path $RepositoryRoot
                     if (-not $target) { continue }
-
-                    $targetTokens = $null
-                    $targetErrors = $null
-                    $targetAst = [Management.Automation.Language.Parser]::ParseFile($target, [ref]$targetTokens, [ref]$targetErrors)
-                    if (@($targetErrors).Count) {
-                        throw "PowerShell parse failure in ${target}: $($targetErrors[0].Message)"
-                    }
-
-                    $targetFunctions = Get-Issue771TargetFunctionMap $targetAst
-                    if ($targetFunctions.Count -eq 0) { continue }
-                    $locallyConsumed = @(Get-Issue771LocallyConsumedTargetFunctions -LoaderAst $loader `
-                            -DotSourceAst $dotSource -TargetFunctions $targetFunctions)
-                    $externalCandidates = @($targetFunctions.Keys | Where-Object { $locallyConsumed -notcontains $_ })
-                    if ($externalCandidates.Count -eq 0) { continue }
+                    $targetRecord = Get-Issue771ParsedPowerShellRecord -Path $target
+                    $importedNames = @(Get-Issue771TopLevelFunctionNames -Record $targetRecord)
+                    if (-not $importedNames) { continue }
 
                     foreach ($candidate in $records) {
                         $loaderCalls = @($candidate.Commands | Where-Object {
@@ -211,30 +254,22 @@ BeforeAll {
                         foreach ($loaderCall in $loaderCalls) {
                             $consumers = @($candidate.Commands | Where-Object {
                                     $name = $_.GetCommandName()
-                                    $name -and $externalCandidates -contains $name -and
+                                    $name -and $importedNames -contains $name -and
                                     $_.Extent.StartOffset -gt $loaderCall.Extent.EndOffset -and
                                     (Test-Issue771SameCallerScope $_ $loaderCall)
                                 })
                             foreach ($consumer in $consumers) {
-                                $independentLoad = $false
-                                foreach ($candidateDotSource in @($candidate.Commands | Where-Object {
-                                            $_.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Dot -and
-                                            $_.Extent.StartOffset -lt $consumer.Extent.StartOffset -and
-                                            (Test-Issue771SameCallerScope $_ $consumer)
-                                        })) {
-                                    $candidateTarget = Resolve-Issue771DotSourceTarget $candidateDotSource.Extent.Text $candidate.Path $RepositoryRoot
-                                    if ($candidateTarget -and $candidateTarget -eq $target) {
-                                        $independentLoad = $true
-                                        break
-                                    }
-                                }
+                                $consumerName = $consumer.GetCommandName()
+                                $independentLoad = Test-Issue771ConsumerHasIndependentLoad `
+                                    -CandidateRecord $candidate -Consumer $consumer -ConsumerName $consumerName `
+                                    -RepositoryRoot $RepositoryRoot -ClosureCache $closureCache
                                 if (-not $independentLoad) {
                                     $leaks += [pscustomobject]@{
                                         LoaderPath = $source.Path
                                         LoaderFunction = $loader.Name
                                         ImportedPath = $target
                                         ConsumerPath = $candidate.Path
-                                        ConsumerFunction = $consumer.GetCommandName()
+                                        ConsumerFunction = $consumerName
                                         ConsumerLine = $consumer.Extent.StartLineNumber
                                     }
                                 }
@@ -337,11 +372,13 @@ Describe 'Issue #771 durable dependency-scope guard' {
         $leaks | Should -BeNullOrEmpty -Because ($leaks | ConvertTo-Json -Compress -Depth 8)
     }
 
-    It 'treats a dependency entrypoint and its internal helper closure as same-scope consumption' {
+    It 'accepts an independently script-imported dependency closure' {
         $dir = New-Issue771Temp
         try {
-            Set-Content (Join-Path $dir 'Dependency.ps1') "function Get-SafeShieldValue { 'ok' }`nfunction Invoke-SafeShield { Get-SafeShieldValue }"
-            Set-Content (Join-Path $dir 'Loader.ps1') "function Invoke-SafeLoader { . (Join-Path `$PSScriptRoot 'Dependency.ps1'); Invoke-SafeShield }`nInvoke-SafeLoader"
+            Set-Content (Join-Path $dir 'Dependency.ps1') "function Invoke-SafeDependency { 'ok' }"
+            Set-Content (Join-Path $dir 'Independent.ps1') ". (Join-Path `$PSScriptRoot 'Dependency.ps1')"
+            Set-Content (Join-Path $dir 'Loader.ps1') "function Initialize-SafeDependency { . (Join-Path `$PSScriptRoot 'Dependency.ps1') }"
+            Set-Content (Join-Path $dir 'Consumer.ps1') ". (Join-Path `$PSScriptRoot 'Loader.ps1')`n. (Join-Path `$PSScriptRoot 'Independent.ps1')`nfunction Invoke-SafeConsumer { Initialize-SafeDependency; Invoke-SafeDependency }`nInvoke-SafeConsumer"
             $leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $dir -ScanRoot $dir)
             $leaks | Should -BeNullOrEmpty -Because ($leaks | ConvertTo-Json -Compress -Depth 8)
         }
