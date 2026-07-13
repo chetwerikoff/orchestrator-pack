@@ -1,0 +1,45 @@
+name: Fix issue 800 scope globs
+
+on:
+  push:
+    branches:
+      - agent/issue-800-typescript-foundation
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  amend:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Amend only directory allowed-roots syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue view 800 --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/issue-800.md
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('/tmp/issue-800.md')
+          body = path.read_text(encoding='utf-8')
+          old = '''```allowed-roots
+          scripts/
+          tests/
+          .github/workflows/
+          '''
+          new = '''```allowed-roots
+          scripts/**
+          tests/**
+          .github/workflows/**
+          '''
+          count = body.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one allowed-roots directory block, found {count}')
+          path.write_text(body.replace(old, new, 1), encoding='utf-8')
+          PY
+          gh issue edit 800 --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue-800.md
