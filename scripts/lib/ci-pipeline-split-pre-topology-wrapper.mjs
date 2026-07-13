@@ -45,7 +45,7 @@ function parseArgs(argv) {
   };
 }
 
-function materializeOverlay(repoRoot, originalText) {
+async function materializeOverlay(repoRoot, originalText) {
   const initial = buildHeavyTopology(repoRoot);
   if (!initial.ok) {
     throw new Error(`initial topology build failed: ${(initial.errors ?? []).join('; ')}`);
@@ -57,7 +57,7 @@ function materializeOverlay(repoRoot, originalText) {
   if (targets.length === 0) {
     return null;
   }
-  const measurements = measurePreTopologyFiles(repoRoot, targets);
+  const measurements = await measurePreTopologyFiles(repoRoot, targets);
   const artifact = JSON.parse(originalText);
   artifact.files = artifact.files && typeof artifact.files === 'object' ? artifact.files : {};
   artifact.provenance = artifact.provenance && typeof artifact.provenance === 'object'
@@ -104,7 +104,7 @@ let overlayApplied = false;
 let exitCode = 1;
 
 try {
-  const overlay = materializeOverlay(options.repoRoot, originalText);
+  const overlay = await materializeOverlay(options.repoRoot, originalText);
   if (overlay) {
     writeFileSync(historyPath, overlay.text, 'utf8');
     overlayApplied = true;
