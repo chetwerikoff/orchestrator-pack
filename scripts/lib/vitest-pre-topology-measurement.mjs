@@ -8,16 +8,12 @@ export const PRE_TOPOLOGY_MAX_FILES = 12;
 export const PRE_TOPOLOGY_MAX_CONCURRENCY = 3;
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
-// bounded while the global fleet reaper measurement cannot interfere.
+// bounded while fleet-sensitive measurements stay on one serialized lane.
 export const PRE_TOPOLOGY_TIMEOUT_MS = 8 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 export function requiresExclusiveFleetMeasurement(file) {
   return /(?:^|\/)(?:testmode-fleet|supervisor-|orchestrator-wake-supervisor)/.test(file);
-}
-
-function requiresGlobalFleetIsolation(file) {
-  return /(?:^|\/)testmode-fleet-reaper\.test\.ts$/.test(file);
 }
 
 export function shouldMeasurePreTopology(repoRoot, options = {}) {
@@ -172,35 +168,17 @@ export async function measurePreTopologyFiles(repoRoot, files, options = {}) {
       }
     };
     const allIndexes = files.map((_, index) => index);
-    const globallyIsolatedIndexes = allIndexes.filter((index) => requiresGlobalFleetIsolation(files[index]));
-    const exclusiveIndexes = allIndexes.filter((index) => (
-      !requiresGlobalFleetIsolation(files[index]) && requiresExclusiveFleetMeasurement(files[index])
-    ));
+    const exclusiveIndexes = allIndexes.filter((index) => requiresExclusiveFleetMeasurement(files[index]));
     const regularIndexes = allIndexes.filter((index) => !requiresExclusiveFleetMeasurement(files[index]));
-    if (concurrency === 1) {
-      const settlements = await Promise.allSettled(
-        Array.from({ length: concurrency }, () => runQueue(allIndexes)),
-      );
-      const failure = settlements.find((entry) => entry.status === 'rejected');
-      if (failure) throw failure.reason;
-    } else {
-      const remainingIndexes = [...exclusiveIndexes, ...regularIndexes];
-      if (exclusiveIndexes.length === 0) {
-        const settlements = await Promise.allSettled(
-          Array.from({ length: concurrency }, () => runQueue(remainingIndexes)),
-        );
-        const failure = settlements.find((entry) => entry.status === 'rejected');
-        if (failure) throw failure.reason;
-      } else {
-        const settlements = await Promise.allSettled([
+    const workers = concurrency === 1 || exclusiveIndexes.length === 0
+      ? Array.from({ length: concurrency }, () => runQueue(allIndexes))
+      : [
           runQueue(exclusiveIndexes),
           ...Array.from({ length: concurrency - 1 }, () => runQueue(regularIndexes)),
-        ]);
-        const failure = settlements.find((entry) => entry.status === 'rejected');
-        if (failure) throw failure.reason;
-      }
-      await runQueue(globallyIsolatedIndexes);
-    }
+        ];
+    const settlements = await Promise.allSettled(workers);
+    const failure = settlements.find((entry) => entry.status === 'rejected');
+    if (failure) throw failure.reason;
     process.stderr.write(`[pre-topology] measured ${files.length} changed/stale Vitest file(s) with ${concurrency} isolated worker(s)\n`);
     return Object.fromEntries(results);
   } finally {
