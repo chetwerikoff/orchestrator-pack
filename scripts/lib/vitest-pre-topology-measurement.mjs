@@ -6,7 +6,10 @@ import { parseVitestReportFile } from './vitest-json-report.mjs';
 
 export const PRE_TOPOLOGY_MAX_FILES = 12;
 export const PRE_TOPOLOGY_MAX_CONCURRENCY = 3;
-export const PRE_TOPOLOGY_TIMEOUT_MS = 7 * 60 * 1000;
+// The longest known changed wallclock suite is about 430 seconds. Keep the
+// producer bounded at eight minutes so a ten-minute topology job still has
+// time to build and upload the plan after fresh measurements complete.
+export const PRE_TOPOLOGY_TIMEOUT_MS = 8 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 export function shouldMeasurePreTopology(repoRoot, options = {}) {
