@@ -117,6 +117,22 @@ function Get-TrustedBootstrapScriptRoot {
     }
 }
 
+function Test-TrustedReverifyBootstrapModule {
+    param($Module)
+
+    if (-not $Module -or -not (Get-Module -Name $Module.Name)) {
+        return $false
+    }
+    foreach ($commandName in @('Resolve-TrustedPackRunner', 'Ensure-ReverifyWorkspaceDeps')) {
+        $exported = $Module.ExportedFunctions.ContainsKey($commandName)
+        $visible = [bool](Get-Command $commandName -CommandType Function -ErrorAction SilentlyContinue)
+        if (-not $exported -or -not $visible) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Import-TrustedReverifyBootstrap {
     [CmdletBinding()]
     param(
@@ -128,11 +144,47 @@ function Import-TrustedReverifyBootstrap {
     $resolved = Get-TrustedBootstrapScriptRoot -ReviewTargetRoot $ReviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
     $bootstrapRoot = $resolved.Path
 
-    . (Join-Path $bootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
-    . (Join-Path $bootstrapRoot 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1')
+    $helperPaths = @(
+        (Join-Path $bootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1'),
+        (Join-Path $bootstrapRoot 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1')
+    )
+    $module = $null
+    try {
+        if ($script:TrustedReverifyBootstrapModule) {
+            Remove-Module -ModuleInfo $script:TrustedReverifyBootstrapModule -Force -ErrorAction SilentlyContinue
+            $script:TrustedReverifyBootstrapModule = $null
+        }
+
+        $moduleName = 'TrustedReverifyBootstrap_{0}' -f ([Guid]::NewGuid().ToString('N'))
+        $module = New-Module -Name $moduleName -ArgumentList (,$helperPaths) -ScriptBlock {
+            param([string[]]$Paths)
+            foreach ($path in $Paths) {
+                . $path
+            }
+        }
+        $importedModule = @(Import-Module -ModuleInfo $module -Global -Force -PassThru)[0]
+        if (-not (Test-TrustedReverifyBootstrapModule -Module $importedModule)) {
+            $missingCommands = @('Resolve-TrustedPackRunner', 'Ensure-ReverifyWorkspaceDeps') | Where-Object {
+                -not $importedModule.ExportedFunctions.ContainsKey($_)
+            }
+            throw "trusted bootstrap module is missing required commands: $($missingCommands -join ', ')"
+        }
+        $script:TrustedReverifyBootstrapModule = $importedModule
+    }
+    catch {
+        if ($module) {
+            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue
+        }
+        $script:TrustedReverifyBootstrapModule = $null
+        if ([bool]$resolved.DisposableBootstrapRoot) {
+            Remove-Item -LiteralPath $bootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        throw "trusted bootstrap dependency load failed: $($_.Exception.Message)"
+    }
 
     return @{
         BootstrapRoot           = $bootstrapRoot
         DisposableBootstrapRoot = [bool]$resolved.DisposableBootstrapRoot
+        ModuleName              = $script:TrustedReverifyBootstrapModule.Name
     }
 }
