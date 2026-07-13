@@ -6,6 +6,18 @@ import { join } from 'node:path';
 const repoRoot = process.cwd();
 const runner = join(repoRoot, 'scripts', 'run-vitest-with-harness.mjs');
 const files = [
+  'plugins/ao-scope-guard/tests/denylist.test.ts',
+  'scripts/autonomous-spawn-policy.test.ts',
+  'scripts/ci-green-wake-reconcile.test.ts',
+  'scripts/dead-worker-reconcile.test.ts',
+  'scripts/github-fleet-cache-bypass-guard.test.ts',
+  'scripts/mechanical-reconcile-bounds.test.ts',
+  'scripts/review-finding-delivery-submit.test.ts',
+  'scripts/review-start-envelope-external-io.test.ts',
+  'scripts/session-runtime-liveness.test.ts',
+  'scripts/terminal-flood-detect.test.ts',
+  'scripts/worker-nudge-gate.test.ts',
+  'scripts/worker-recovery.test.ts',
   'plugins/ao-task-declaration/tests/declare.test.ts',
   'scripts/audit-jsonl-retention.test.ts',
   'scripts/autonomous-worker-nudge-boundary.test.ts',
@@ -19,8 +31,8 @@ const files = [
   'scripts/spawn-worktree-branch-operand-binding.test.ts',
   'scripts/worker-iteration-cycle.test.ts',
 ];
-const MAX_CAPTURE = 160_000;
-const TIMEOUT_MS = 120_000;
+const MAX_CAPTURE = 120_000;
+const TIMEOUT_MS = 150_000;
 
 function bounded(current, chunk) {
   const next = current + String(chunk);
@@ -52,16 +64,7 @@ function runFile(file) {
     }, TIMEOUT_MS);
     const finish = (status, signal, error = null) => {
       clearTimeout(timer);
-      resolve({
-        file,
-        status,
-        signal,
-        timedOut,
-        durationMs: Date.now() - startedAt,
-        error,
-        stdout,
-        stderr,
-      });
+      resolve({ file, status, signal, timedOut, durationMs: Date.now() - startedAt, error, stdout, stderr });
     };
     child.once('error', (error) => finish(null, null, error.message));
     child.once('close', (status, signal) => finish(status, signal));
@@ -82,10 +85,10 @@ async function runPool(items, concurrency) {
   return results;
 }
 
-const results = await runPool(files, 6);
+const results = await runPool(files, 12);
 const artifact = {
   schemaVersion: 1,
-  diagnostic: 'issue-752-shard6-after-optimization',
+  diagnostic: 'issue-752-shards-3-and-6-current-head',
   head: process.env.GITHUB_SHA ?? null,
   heavyShardCount: 0,
   heavyShardMatrix: [],
@@ -98,5 +101,10 @@ if (process.env.GITHUB_OUTPUT) {
 }
 console.log(JSON.stringify({
   diagnostic: artifact.diagnostic,
-  results: results.map(({ file, status, timedOut, durationMs }) => ({ file, status, timedOut, durationMs })),
+  failures: results.filter((result) => result.status !== 0).map((result) => ({
+    file: result.file,
+    status: result.status,
+    timedOut: result.timedOut,
+    durationMs: result.durationMs,
+  })),
 }));
