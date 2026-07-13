@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, extname, join, relative } from 'node:path';
+import { extname, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import {
@@ -28,18 +28,8 @@ import {
 const failures = [];
 const fail = (message) => failures.push(message);
 const requiredFields = [
-  'id',
-  'kind',
-  'resolver',
-  'writeBoundary',
-  'envOverrides',
-  'canonicalDefault',
-  'liveRoot',
-  'sidecars',
-  'harnessPath',
-  'sourceFiles',
-  'excluded',
-  'exclusionReason',
+  'id', 'kind', 'resolver', 'writeBoundary', 'envOverrides', 'canonicalDefault',
+  'liveRoot', 'sidecars', 'harnessPath', 'sourceFiles', 'excluded', 'exclusionReason',
 ];
 
 const ids = new Set();
@@ -66,7 +56,6 @@ for (const store of liveStoreInventory.stores ?? []) {
   if (!store.excluded && store.exclusionReason !== null) {
     fail(`${store.id} non-excluded entry must use null exclusionReason`);
   }
-
   let resolverFound = false;
   for (const sourceFile of store.sourceFiles ?? []) {
     const full = join(repoRoot, sourceFile);
@@ -74,19 +63,16 @@ for (const store of liveStoreInventory.stores ?? []) {
       fail(`${store.id} source missing: ${sourceFile}`);
       continue;
     }
-    const source = readFileSync(full, 'utf8');
-    if (source.includes(store.resolver)) resolverFound = true;
+    if (readFileSync(full, 'utf8').includes(store.resolver)) resolverFound = true;
   }
-  if (!resolverFound) {
-    fail(`${store.id} resolver not found in declared source files: ${store.resolver}`);
-  }
+  if (!resolverFound) fail(`${store.id} resolver not found in declared source files: ${store.resolver}`);
 }
 
-const classFenceIds = new Set();
+const fenceIds = new Set();
 for (const fence of liveStoreInventory.classFences ?? []) {
   if (!String(fence.id ?? '').trim()) fail('class fence missing id');
-  if (ids.has(fence.id) || classFenceIds.has(fence.id)) fail(`duplicate class fence id ${fence.id}`);
-  classFenceIds.add(fence.id);
+  if (ids.has(fence.id) || fenceIds.has(fence.id)) fail(`duplicate class fence id ${fence.id}`);
+  fenceIds.add(fence.id);
   if (!String(fence.rootTemplate ?? '').trim()) fail(`${fence.id} missing rootTemplate`);
   if (!Array.isArray(fence.basenamePatterns) || fence.basenamePatterns.length === 0) {
     fail(`${fence.id} must declare basenamePatterns`);
@@ -95,18 +81,10 @@ for (const fence of liveStoreInventory.classFences ?? []) {
 
 const runtimeExtensions = new Set(['.ps1', '.mjs', '.js', '.ts', '.json', '.yml', '.yaml', '.sh', '.cmd']);
 const ignoredSegments = [
-  '/issues_drafts/',
-  '/declarations/',
-  '/investigations/',
-  '/fixtures/',
-  '/tests/',
-  '.test.',
-  '_test-',
-  '_test_',
+  '/issues_drafts/', '/declarations/', '/investigations/', '/fixtures/', '/tests/',
+  '.test.', '_test-', '_test_',
 ];
-const sourceOwners = new Set(
-  liveStoreInventory.stores.flatMap((store) => store.sourceFiles ?? []),
-);
+const sourceOwners = new Set(liveStoreInventory.stores.flatMap((store) => store.sourceFiles ?? []));
 const enforcementFiles = new Set([
   'scripts/check-vitest-live-store-isolation.mjs',
   'scripts/run-vitest-with-harness.mjs',
@@ -141,7 +119,6 @@ const defaultSignals = [
   /(?:\.agent-orchestrator|AO_BASE_DIR)[\s\S]{0,500}[A-Za-z0-9._-]+(?:claims|store|state|cache|audit|ledger|code-reviews)/g,
   /(?:\/tmp|[A-Za-z]:[\\/]Temp)[\\/]orchestrator-[A-Za-z0-9._-]+/g,
 ];
-
 function walkRuntime(root) {
   if (!existsSync(root)) return [];
   const results = [];
@@ -155,26 +132,21 @@ function walkRuntime(root) {
   visit(root);
   return results;
 }
-
 const auditInputs = [
-  ...['scripts', 'plugins', 'docs', '.github/workflows'].flatMap((root) =>
-    walkRuntime(join(repoRoot, root))),
+  ...['scripts', 'plugins', 'docs', '.github/workflows'].flatMap((root) => walkRuntime(join(repoRoot, root))),
   ...['vitest.config.ts', 'package.json'].map((file) => join(repoRoot, file)).filter(existsSync),
 ];
 for (const full of auditInputs) {
   const rel = relative(repoRoot, full).replaceAll('\\', '/');
-  if (ignoredSegments.some((segment) => `/${rel}`.includes(segment)) || enforcementFiles.has(rel)) {
-    continue;
-  }
+  if (ignoredSegments.some((segment) => `/${rel}`.includes(segment)) || enforcementFiles.has(rel)) continue;
   const source = readFileSync(full, 'utf8');
   const hasDefault = defaultSignals.some((pattern) => {
     pattern.lastIndex = 0;
     return pattern.test(source);
   });
-  if (!hasDefault) continue;
-  if (sourceOwners.has(rel)) continue;
-  if (exclusionByPath.has(rel)) continue;
-  fail(`un-inventoried live-default candidate: ${rel}`);
+  if (hasDefault && !sourceOwners.has(rel) && !exclusionByPath.has(rel)) {
+    fail(`un-inventoried live-default candidate: ${rel}`);
+  }
 }
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'opk-vitest-isolation-check-'));
@@ -199,169 +171,115 @@ try {
     OPK_VITEST_HARNESS: '1',
   };
   for (const name of [
-    'AO_WORKER_STATUS_STORE',
-    'AO_WAKE_SUPERVISOR_STATE_DIR',
-    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
-    'AO_SIDE_PROCESS_STATE_DIR',
-    'AO_BASE_DIR',
+    'AO_WORKER_STATUS_STORE', 'AO_WAKE_SUPERVISOR_STATE_DIR',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR', 'AO_SIDE_PROCESS_STATE_DIR', 'AO_BASE_DIR',
   ]) delete env[name];
 
   const liveWorkerStatus = join(wake, 'worker-status-store.json');
-  const match = classifyLiveStorePath(liveWorkerStatus, env);
-  if (match?.storeId !== 'worker-status-store') fail('computed worker-status default is not classified');
+  if (classifyLiveStorePath(liveWorkerStatus, env)?.storeId !== 'worker-status-store') {
+    fail('computed worker-status default is not classified');
+  }
   try {
     assertHarnessWritePathSafe(liveWorkerStatus, 'self-check', env);
     fail('computed worker-status default was not blocked');
   } catch (error) {
     if (error?.code !== 'OPK_VITEST_LIVE_STORE_BLOCKED') fail(`unexpected block error: ${error}`);
-    if (String(error?.message ?? '').includes(liveWorkerStatus)) {
-      fail('blocked-path diagnostic leaked a live path');
-    }
+    if (String(error?.message ?? '').includes(liveWorkerStatus)) fail('blocked-path diagnostic leaked a live path');
   }
-
-  const mutatedEnv = {
-    ...env,
-    HOME: join(fixtureRoot, 'mutated-home'),
-    TMPDIR: join(fixtureRoot, 'mutated-tmp'),
-    TEMP: join(fixtureRoot, 'mutated-tmp'),
-    TMP: join(fixtureRoot, 'mutated-tmp'),
-  };
   try {
-    assertHarnessWritePathSafe(liveWorkerStatus, 'mutated-env-self-check', mutatedEnv);
+    assertHarnessWritePathSafe(liveWorkerStatus, 'mutated-env-self-check', {
+      ...env,
+      HOME: join(fixtureRoot, 'mutated-home'),
+      TMPDIR: join(fixtureRoot, 'mutated-tmp'),
+      TEMP: join(fixtureRoot, 'mutated-tmp'),
+      TMP: join(fixtureRoot, 'mutated-tmp'),
+    });
     fail('mutating HOME/TMP after bootstrap bypassed the frozen production default');
   } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_BLOCKED') {
-      fail(`unexpected frozen-root error: ${error}`);
-    }
+    if (error?.code !== 'OPK_VITEST_LIVE_STORE_BLOCKED') fail(`unexpected frozen-root error: ${error}`);
   }
-
-  const safePath = join(fixtureRoot, 'safe', 'worker-status-store.json');
   try {
-    assertHarnessWritePathSafe(safePath, 'self-check', env);
+    assertHarnessWritePathSafe(join(fixtureRoot, 'safe', 'worker-status-store.json'), 'self-check', env);
   } catch (error) {
     fail(`isolated path was incorrectly blocked: ${error}`);
   }
-
-  const aliasRoot = join(fixtureRoot, 'wake-alias');
   try {
+    const aliasRoot = join(fixtureRoot, 'wake-alias');
     symlinkSync(wake, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
-    const aliasMatch = classifyLiveStorePath(join(aliasRoot, 'worker-status-store.json'), env);
-    if (aliasMatch?.storeId !== 'worker-status-store') {
+    if (classifyLiveStorePath(join(aliasRoot, 'worker-status-store.json'), env)?.storeId !== 'worker-status-store') {
       fail('symlink alias of live default was not classified');
     }
   } catch (error) {
     if (process.platform !== 'win32') fail(`symlink canonicalization fixture failed: ${error}`);
   }
 
-  const guard = startLiveStoreGuard(env);
-  const transient = join(fakeTmp, 'orchestrator-worker-message-submit-state.json');
-  writeFileSync(transient, '{"transient":true}\n', 'utf8');
-  rmSync(transient, { force: true });
-  await new Promise((resolveWait) => setTimeout(resolveWait, 60));
-  try {
-    guard.stop();
-    fail('write-then-delete transient mutation escaped the parent guard');
-  } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
-      fail(`unexpected parent guard error: ${error}`);
+  async function expectTransientGuardFailure(target, label) {
+    const guard = startLiveStoreGuard(env);
+    writeFileSync(target, '{"transient":true}\n', 'utf8');
+    rmSync(target, { force: true });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 60));
+    try {
+      guard.stop();
+      fail(`${label} escaped the parent guard`);
+    } catch (error) {
+      if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
+        fail(`unexpected ${label} guard error: ${error}`);
+      }
     }
   }
-
-  const rootGuard = startLiveStoreGuard(env);
-  const unlistedLiveRootFile = join(wake, 'new-uninventoried-store.json');
-  writeFileSync(unlistedLiveRootFile, '{"transient":true}\n', 'utf8');
-  rmSync(unlistedLiveRootFile, { force: true });
-  await new Promise((resolveWait) => setTimeout(resolveWait, 60));
-  try {
-    rootGuard.stop();
-    fail('transient write under a protected live root escaped the parent guard');
-  } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
-      fail(`unexpected live-root guard error: ${error}`);
-    }
-  }
-
-  const classGuard = startLiveStoreGuard(env);
-  const unknownTmpStore = join(fakeTmp, 'orchestrator-new-live-store.json');
-  writeFileSync(unknownTmpStore, '{}\n', 'utf8');
-  rmSync(unknownTmpStore, { force: true });
-  await new Promise((resolveWait) => setTimeout(resolveWait, 60));
-  try {
-    classGuard.stop();
-    fail('transient write through the /tmp orchestrator class fence escaped the guard');
-  } catch (error) {
-    if (error?.code !== 'OPK_VITEST_LIVE_STORE_GUARD_FAILED') {
-      fail(`unexpected class-fence guard error: ${error}`);
-    }
-  }
+  await expectTransientGuardFailure(
+    join(fakeTmp, 'orchestrator-worker-message-submit-state.json'),
+    'write-then-delete transient mutation',
+  );
+  await expectTransientGuardFailure(join(wake, 'new-uninventoried-store.json'), 'live-root transient write');
+  await expectTransientGuardFailure(join(fakeTmp, 'orchestrator-new-live-store.json'), 'class-fence transient write');
 
   const harnessRootA = createHarnessRoot(fakeTmp);
   const harnessRootB = createHarnessRoot(fakeTmp);
   cleanupRoots.push(harnessRootA, harnessRootB);
   if (harnessRootA === harnessRootB) fail('concurrent harness roots collided');
-  const harnessEnv = {
-    ...env,
-    HOME: fakeHome,
-    TMPDIR: fakeTmp,
-    TEMP: fakeTmp,
-    TMP: fakeTmp,
-  };
+  const harnessEnv = { ...env, HOME: fakeHome, TMPDIR: fakeTmp, TEMP: fakeTmp, TMP: fakeTmp };
   applyOpkVitestHarnessEnv(harnessRootA, harnessEnv);
   if (harnessEnv.OPK_VITEST_HARNESS !== '1') fail('harness marker was not established');
-  if (!String(harnessEnv.TMPDIR).startsWith(harnessRootA)) fail('TMPDIR was not redirected into the harness root');
-  if (!String(harnessEnv.AO_BASE_DIR).startsWith(harnessRootA)) fail('AO_BASE_DIR was not isolated');
-  if (!String(harnessEnv.AO_WAKE_SUPERVISOR_STATE_DIR).startsWith(harnessRootA)) {
-    fail('wake-supervisor state root was not isolated');
+  for (const [name, value] of [
+    ['TMPDIR', harnessEnv.TMPDIR],
+    ['AO_BASE_DIR', harnessEnv.AO_BASE_DIR],
+    ['AO_WAKE_SUPERVISOR_STATE_DIR', harnessEnv.AO_WAKE_SUPERVISOR_STATE_DIR],
+  ]) {
+    if (!String(value ?? '').startsWith(harnessRootA)) fail(`${name} was not redirected into the harness root`);
   }
-  const requiredOverrides = new Set(
-    liveStoreInventory.stores.flatMap((store) => store.envOverrides ?? []),
-  );
+  const requiredOverrides = new Set(liveStoreInventory.stores.flatMap((store) => store.envOverrides ?? []));
   for (const name of requiredOverrides) {
     if (!String(harnessEnv[name] ?? '').trim()) fail(`harness did not establish ${name}`);
   }
 
   const preload = join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs');
   const nodeCases = [
-    {
-      label: 'sync',
-      target: liveWorkerStatus,
-      script: `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(liveWorkerStatus)}, 'red');`,
-    },
-    {
-      label: 'callback',
-      target: join(wake, 'callback-state.json'),
-      script: `import { writeFile } from 'node:fs'; writeFile(${JSON.stringify(join(wake, 'callback-state.json'))}, 'red', () => {});`,
-    },
-    {
-      label: 'promise',
-      target: join(wake, 'promise-state.json'),
-      script: `import { promises as fs } from 'node:fs'; await fs.writeFile(${JSON.stringify(join(wake, 'promise-state.json'))}, 'red');`,
-    },
+    ['sync', liveWorkerStatus, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(liveWorkerStatus)}, 'red');`],
+    ['callback', join(wake, 'callback-state.json'), `import { writeFile } from 'node:fs'; writeFile(${JSON.stringify(join(wake, 'callback-state.json'))}, 'red', () => {});`],
+    ['promise', join(wake, 'promise-state.json'), `import { promises as fs } from 'node:fs'; await fs.writeFile(${JSON.stringify(join(wake, 'promise-state.json'))}, 'red');`],
   ];
-  for (const entry of nodeCases) {
+  for (const [label, target, script] of nodeCases) {
     const child = spawnSync(
       process.execPath,
-      ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', entry.script],
+      ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', script],
       { cwd: repoRoot, encoding: 'utf8', env },
     );
-    if (child.status === 0) fail(`Node ${entry.label} write boundary did not fail closed`);
-    if (existsSync(entry.target)) fail(`Node ${entry.label} write opened a live-default path before blocking`);
+    if (child.status === 0) fail(`Node ${label} write boundary did not fail closed`);
+    if (existsSync(target)) fail(`Node ${label} write opened a live-default path before blocking`);
   }
 
   const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
   const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
-  const psEnv = {
-    ...env,
-    AO_WORKER_STATUS_STORE: liveWorkerStatus,
-  };
-  const psResolver = `function Get-WorkerStatusStorePath { if ($env:AO_WORKER_STATUS_STORE) { return $env:AO_WORKER_STATUS_STORE }; return 'missing' }; . ${JSON.stringify(helper)}; Enable-OpkVitestStoreIsolation; Get-WorkerStatusStorePath | Out-Null`;
-  const resolverResult = spawnSync(pwsh, ['-NoProfile', '-Command', psResolver], {
+  const psEnv = { ...env, AO_WORKER_STATUS_STORE: liveWorkerStatus };
+  const psAssert = `. ${JSON.stringify(helper)}; try { Assert-OpkVitestStorePathSafe -Path ${JSON.stringify(liveWorkerStatus)} -Operation 'self-check'; exit 0 } catch { if ($_.Exception.Message -match 'OPK_VITEST_LIVE_STORE_BLOCKED.*worker-status-store') { exit 42 }; Write-Error $_; exit 1 }`;
+  const assertResult = spawnSync(pwsh, ['-NoProfile', '-Command', psAssert], {
     cwd: repoRoot,
     encoding: 'utf8',
     env: psEnv,
   });
-  if (!resolverResult.error && resolverResult.status === 0) {
-    fail('PowerShell resolver breakpoint did not fail closed');
+  if (!assertResult.error && assertResult.status !== 42) {
+    fail('PowerShell canonical live-store assertion did not fail closed');
   }
 
   const psWriteTarget = join(wake, 'pwsh-direct-state.json');
@@ -371,17 +289,14 @@ try {
     encoding: 'utf8',
     env,
   });
-  if (!writeResult.error && writeResult.status === 0) {
-    fail('PowerShell direct write boundary did not fail closed');
-  }
+  if (!writeResult.error && writeResult.status === 0) fail('PowerShell direct write boundary did not fail closed');
   if (existsSync(psWriteTarget)) fail('PowerShell write opened a live-default path before blocking');
 
   const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
   if (!String(packageJson.scripts?.test ?? '').includes('run-vitest-with-harness.mjs')) {
     fail('npm test does not use the pack harness wrapper');
   }
-  const vitestConfig = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
-  if (!vitestConfig.includes('OPK_VITEST_HARNESS is required')) {
+  if (!readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8').includes('OPK_VITEST_HARNESS is required')) {
     fail('raw Vitest invocation is not fail-closed');
   }
 } finally {
