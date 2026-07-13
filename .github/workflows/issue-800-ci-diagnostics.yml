@@ -17,22 +17,23 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Extract failing verifier diagnostics
+      - name: Extract exact failing gate diagnostics
         shell: bash
         run: |
           set -euo pipefail
-          for spec in \
-            'verify:86887621723' \
-            'self-architect:86887662457'
-          do
-            name="${spec%%:*}"
-            job_id="${spec##*:}"
-            log="/tmp/${name}.log"
-            gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "${log}"
-            echo "===== ${name}: filtered diagnostics ====="
-            grep -Eai '\[FAIL\]|##\[error\]|(^|[^a-z])(error|failure|failed)([^a-z]|$)|introduced|violation' "${log}" | tail -n 120 || true
-            echo "===== ${name}: log tail ====="
-            tail -n 80 "${log}"
-          done
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/jobs/86887621723/logs" > /tmp/verify.log
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/jobs/86887662457/logs" > /tmp/self-architect.log
+
+          echo '===== verify: non-reusable failure window ====='
+          grep -n -A40 -B5 'Non-reusable files' /tmp/verify.log || true
+          echo '===== verify: final summary ====='
+          grep -n -A30 -B5 'Verification failed' /tmp/verify.log || tail -n 40 /tmp/verify.log
+
+          echo '===== self-architect: findings ====='
+          grep -n -A80 -B10 -E '\[FAIL\]|introduced|violation|Finding|ERROR|Error' /tmp/self-architect.log | tail -n 160 || true
+          echo '===== self-architect: final summary ====='
+          tail -n 60 /tmp/self-architect.log
