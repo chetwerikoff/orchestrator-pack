@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   checkTierGateGuard,
   formatTierGatePassMessage,
@@ -8,6 +9,7 @@ import {
   formatStageCompletenessPassMessage,
   resolveRepoRootFromDraftPath,
 } from './stage-completeness-core.js';
+import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 
 export type IssueMutationSubcommand = 'issue create' | 'issue edit';
 
@@ -48,6 +50,7 @@ export interface TierGateGuardValidationResult {
 }
 
 export type StageCompletenessGuardValidationResult = TierGateGuardValidationResult;
+export type FindingLedgerGuardValidationResult = TierGateGuardValidationResult;
 
 export interface PublishIssueBodySyncDeps {
   runGh(argv: string[]): GhInvocationResult;
@@ -58,6 +61,10 @@ export interface PublishIssueBodySyncDeps {
     draftContent: string,
     draftPath?: string,
   ) => StageCompletenessGuardValidationResult;
+  validateFindingLedgerGuard?: (
+    draftContent: string,
+    draftPath?: string,
+  ) => FindingLedgerGuardValidationResult;
 }
 
 export interface CreateIssueBodySyncInput {
@@ -320,6 +327,54 @@ export function validateStageCompletenessGuardReceipt(
   };
 }
 
+function resolveReviewDirFromDraftPath(draftPath?: string): string | null {
+  if (!draftPath) {
+    return null;
+  }
+  const fileName = draftPath.replace(/\\/g, '/').split('/').pop() ?? '';
+  const stem = fileName.replace(/\.md$/i, '');
+  return join(dirname(draftPath), '.review', stem);
+}
+
+export function validateFindingLedgerGuardReceipt(
+  _draftContent: string,
+  draftPath?: string,
+): FindingLedgerGuardValidationResult {
+  const reviewDir = resolveReviewDirFromDraftPath(draftPath);
+  if (!reviewDir || !existsSync(reviewDir)) {
+    return { ok: true, message: 'finding-ledger guard: PASS (no captures)' };
+  }
+
+  const captureFiles = readdirSync(reviewDir)
+    .filter((name) => name.endsWith('.capture.txt'))
+    .sort()
+    .map((name) => join(reviewDir, name));
+  if (captureFiles.length === 0) {
+    return { ok: true, message: 'finding-ledger guard: PASS (no captures)' };
+  }
+
+  const ledgerPath = join(reviewDir, 'finding-disposition-ledger.json');
+  if (!existsSync(ledgerPath)) {
+    return { ok: true, message: 'finding-ledger guard: PASS (no ledger)' };
+  }
+  const captures = captureFiles.map((capturePath) => readFileSync(capturePath, 'utf8'));
+  const ledgerText = readFileSync(ledgerPath, 'utf8');
+  const result = checkFindingLedgerGuard(captures, ledgerText, {
+    draftPath,
+    repoRoot: resolveRepoRootFromDraftPath(draftPath),
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      message: result.errors.map((error: string) => `finding-ledger guard: ${error}`).join('\n'),
+    };
+  }
+  return {
+    ok: true,
+    message: `finding-ledger guard: PASS (${captureFiles.length} capture file(s))`,
+  };
+}
+
 export function syncPublishIssueBody(
   deps: PublishIssueBodySyncDeps,
   input: PublishIssueBodySyncInput,
@@ -347,6 +402,17 @@ export function syncPublishIssueBody(
         ok: false,
         issueNumber: issueNumber ?? null,
         message: stageCompleteness.message,
+      };
+    }
+
+    const validateFindingLedger =
+      deps.validateFindingLedgerGuard ?? validateFindingLedgerGuardReceipt;
+    const findingLedger = validateFindingLedger(input.draftContent, input.draftPath);
+    if (!findingLedger.ok) {
+      return {
+        ok: false,
+        issueNumber: issueNumber ?? null,
+        message: findingLedger.message,
       };
     }
 

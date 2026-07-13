@@ -5,6 +5,11 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import {
+  collectProtectedSignalMatches,
+  loadProtectedSignalReceipt,
+  suppressProtectedSignalHits,
+} from './lib/protected-signal-receipt.mjs';
 
 export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 
@@ -296,7 +301,7 @@ export function detectTypedFindingsInCapture(capture) {
   return findings;
 }
 
-export function detectProtectedSignalsInCapture(capture) {
+export function detectProtectedSignalsInCapture(capture, options = {}) {
   const scanText = extractFindingsScanText(capture);
   if (isCleanNoFindings(scanText) || scanText.length === 0) {
     return [];
@@ -309,7 +314,13 @@ export function detectProtectedSignalsInCapture(capture) {
     }
     pattern.lastIndex = 0;
   }
-  return [...new Set(signals)];
+  const hitSignals = [...new Set(signals)];
+  const receipt = loadProtectedSignalReceipt(options);
+  const matches = collectProtectedSignalMatches(
+    scanText,
+    PROTECTED_SIGNAL_PATTERNS.map(({ type, pattern }) => ({ signal: type, pattern })),
+  );
+  return suppressProtectedSignalHits(hitSignals, matches, receipt, 'finding-ledger').hits;
 }
 
 function ledgerHasProtectedCoverage(ledger, protectedType) {
@@ -400,7 +411,7 @@ export function mergeCaptureFindings(captures) {
   return { findings: [...merged.values()], errors };
 }
 
-export function checkFindingLedgerGuard(captureOrCaptures, ledgerText) {
+export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
   const captures = Array.isArray(captureOrCaptures) ? captureOrCaptures : [captureOrCaptures];
   const errors = [];
   const ledger = parseLedger(ledgerText);
@@ -421,7 +432,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText) {
 
   const protectedSignals = new Set();
   for (const capture of captures) {
-    for (const signal of detectProtectedSignalsInCapture(capture)) {
+    for (const signal of detectProtectedSignalsInCapture(capture, options)) {
       protectedSignals.add(signal);
     }
   }
@@ -500,12 +511,18 @@ export function runCli(argv) {
   }
 
   const ledgerPath = argv[ledgerFlag + 1];
+  const draftPathFlag = argv.indexOf('--draft-path');
+  const repoRootFlag = argv.indexOf('--repo-root');
   const captures = capturePaths.map((capturePath) => readFileSync(capturePath, 'utf8'));
   const ledgerText = readFileSync(ledgerPath, 'utf8');
+  const options = {
+    draftPath: draftPathFlag >= 0 ? argv[draftPathFlag + 1] : undefined,
+    repoRoot: repoRootFlag >= 0 ? argv[repoRootFlag + 1] : process.cwd(),
+  };
 
   let result;
   try {
-    result = checkFindingLedgerGuard(captures, ledgerText);
+    result = checkFindingLedgerGuard(captures, ledgerText, options);
   } catch (error) {
     process.stderr.write(`finding-ledger guard: ${error.message}\n`);
     return 1;

@@ -4,6 +4,11 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  collectProtectedSignalMatches,
+  loadProtectedSignalReceipt,
+  suppressProtectedSignalHits,
+} from './protected-signal-receipt.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -130,6 +135,7 @@ export function resetMarkerClassCache(): void {
 export interface MarkerScreenResult {
   hits: string[];
   unparseable: boolean;
+  suppressed?: Array<{ signal: string; fingerprint: string; occurrence: number }>;
 }
 
 /**
@@ -169,19 +175,27 @@ export function maskDelimitedMarkdownQuotes(text: string): string {
 
 export function screenRedFlagMarkers(
   text: string,
-  opts: { repoRoot?: string } = {},
+  opts: { repoRoot?: string; draftPath?: string } = {},
 ): MarkerScreenResult {
   const markerClasses = loadMarkerClasses(opts.repoRoot);
   const scanText = maskDelimitedMarkdownQuotes(text);
   const hits: string[] = [];
+  const patternSpecs: Array<{ signal: string; pattern: RegExp }> = [];
   for (const markerClass of markerClasses) {
     const patterns = MARKER_HEURISTICS[markerClass];
     if (!patterns) {
       return { hits: [], unparseable: true };
     }
+    patternSpecs.push(...patterns.map((pattern) => ({ signal: markerClass, pattern })));
     if (patterns.some((pattern) => pattern.test(scanText))) {
       hits.push(markerClass);
     }
   }
-  return { hits, unparseable: false };
+  const receipt = loadProtectedSignalReceipt({
+    repoRoot: opts.repoRoot,
+    draftPath: opts.draftPath,
+  });
+  const matches = collectProtectedSignalMatches(scanText, patternSpecs);
+  const suppressed = suppressProtectedSignalHits(hits, matches, receipt, 'tier-marker');
+  return { hits: suppressed.hits, unparseable: false, suppressed: suppressed.suppressed };
 }

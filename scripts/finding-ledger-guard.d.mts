@@ -18,7 +18,17 @@ export function detectTypedFindingsInCapture(capture: string): Array<{
   summary: string;
 }>;
 
-export function detectProtectedSignalsInCapture(capture: string): string[];
+export interface FindingLedgerGuardOptions {
+  draftPath?: string;
+  repoRoot?: string;
+  receiptDir?: string;
+  receiptPath?: string;
+}
+
+export function detectProtectedSignalsInCapture(
+  capture: string,
+  options?: FindingLedgerGuardOptions,
+): string[];
 
 export function detectUntypedFindingsInCapture(capture: string): Array<{
   id: string;
@@ -40,6 +50,7 @@ export function mergeCaptureFindings(captures: string[]): {
 export function checkFindingLedgerGuard(
   captureOrCaptures: string | string[],
   ledgerText: string,
+  options?: FindingLedgerGuardOptions,
 ): {
   ok: boolean;
   errors: string[];
