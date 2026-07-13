@@ -13,10 +13,19 @@ try {
 finally { Pop-Location }
 
 try {
+    $testPath = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
+    $text = Get-Content -LiteralPath $testPath -Raw
+    $old = '$leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $RepoRoot -ScanRoot (Join-Path $RepoRoot ''scripts''))'
+    $new = '$leaks = @(Get-Issue771DependencyScopeLeaks -RepositoryRoot $RepoRoot -ScanRoot (Join-Path $RepoRoot ''scripts'') | Where-Object { $_.LoaderFunction -eq ''Get-ClaimedReviewStartSnapshot'' -and $_.ConsumerFunction -match ''^(?i)Get-.*Shield'' })'
+    if (-not $text.Contains($old)) { throw 'production scan probe anchor not found' }
+    $text = $text.Replace($old, $new)
+    $text = $text.Replace('$leaks | Should -BeNullOrEmpty -Because', '$leaks | Should -Not -BeNullOrEmpty -Because')
+    Set-Content -LiteralPath $testPath -Value $text -Encoding utf8
+
     & (Join-Path $target 'scripts/install-pester-ci.ps1')
     Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
     $config = New-PesterConfiguration
-    $config.Run.Path = Join-Path $target 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'
+    $config.Run.Path = $testPath
     $config.Run.PassThru = $true
     $config.Filter.FullName = @('*finds no loader-to-consumer scope leaks in production PowerShell*')
     $config.Output.Verbosity = 'None'
