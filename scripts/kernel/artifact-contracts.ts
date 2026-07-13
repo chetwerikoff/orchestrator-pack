@@ -8,7 +8,7 @@ import {
   parseJsonDocument,
   propertyPath,
   type ValidatedJsonDocument,
-} from './json-contract.ts';
+} from '#opk-kernel/json-contract';
 
 export type CaptureKind = 'structured' | 'unstructured';
 
