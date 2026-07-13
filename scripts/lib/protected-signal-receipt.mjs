@@ -39,6 +39,12 @@ function isInsideDirectory(parent, child) {
   return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
+function hasTraversalPathSegment(value) {
+  return String(value)
+    .split(/[\\/]+/)
+    .some((segment) => segment === '..');
+}
+
 export function loadProtectedSignalReceipt(options = {}) {
   const receiptDir = options.receiptDir ?? resolveReceiptDir(options.draftPath, options.repoRoot);
   if (!receiptDir) {
@@ -72,6 +78,7 @@ export function loadProtectedSignalReceipt(options = {}) {
   if (
     path.isAbsolute(decisionLog) ||
     decisionLog.includes('\0') ||
+    hasTraversalPathSegment(decisionLog) ||
     !isInsideDirectory(resolvedReceiptDir, decisionLogPath) ||
     !existsSync(decisionLogPath)
   ) {

@@ -164,6 +164,20 @@ describe('protected-signal-receipt tier-gate', () => {
     expect(checkTierGateGuard(draftText(), { repoRoot: process.cwd(), draftPath }).ok).toBe(false);
   });
 
+  it('fails closed when decision-log uses traversal segments even if it resolves inside the review dir', () => {
+    const root = makeRepo();
+    const draftPath = writeDraft(root);
+    const reviewDir = writeReceipt(
+      root,
+      'receipt-draft',
+      [receiptEntry('tier-marker', 'concurrency-state-retry', 'concurrency')],
+      { 'decision-log': 'subdir/../decision-log.md' },
+    );
+    mkdirSync(join(reviewDir, 'subdir'), { recursive: true });
+
+    expect(checkTierGateGuard(draftText(), { repoRoot: process.cwd(), draftPath }).ok).toBe(false);
+  });
+
   it('requires occurrence when duplicate spans share the same fingerprint', () => {
     const root = makeRepo();
     const text = draftText('concurrency concurrency');
