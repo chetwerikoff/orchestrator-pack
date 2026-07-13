@@ -133,7 +133,16 @@ try {
   const wake = join(fakeHome, '.local', 'state', 'orchestrator-pack-wake-supervisor');
   mkdirSync(wake, { recursive: true });
   mkdirSync(fakeTmp, { recursive: true });
-  const env = { ...process.env, HOME: fakeHome, TMPDIR: fakeTmp, TEMP: fakeTmp, TMP: fakeTmp, OPK_VITEST_HARNESS: '1' };
+  const env = {
+    ...process.env,
+    HOME: fakeHome,
+    TMPDIR: fakeTmp,
+    TEMP: fakeTmp,
+    TMP: fakeTmp,
+    OPK_VITEST_PRODUCTION_HOME: fakeHome,
+    OPK_VITEST_PRODUCTION_TMP: fakeTmp,
+    OPK_VITEST_HARNESS: '1',
+  };
   delete env.AO_WORKER_STATUS_STORE;
   delete env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR;
 
