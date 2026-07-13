@@ -379,6 +379,34 @@ describe('red-flag marker vocabulary (#574 / #187 verbatim)', () => {
     expect(screenRedFlagMarkers(text).hits).toContain('external-api-transport');
   });
 
+  it('does not treat a local child-process timeout as external-api transport', () => {
+    const screen = screenRedFlagMarkers(
+      'Tighten the local child-process timeout contract for the kernel wrapper.',
+      { repoRoot },
+    );
+    expect(screen.unparseable).toBe(false);
+    expect(screen.hits).not.toContain('external-api-transport');
+  });
+
+  it('keeps retry semantics in concurrency-state-retry without cross-firing external-api transport', () => {
+    const screen = screenRedFlagMarkers(
+      'Clarify retry semantics for the shared-machine claim flow.',
+      { repoRoot },
+    );
+    expect(screen.unparseable).toBe(false);
+    expect(screen.hits).toContain('concurrency-state-retry');
+    expect(screen.hits).not.toContain('external-api-transport');
+  });
+
+  it('keeps genuine transport wording firing external-api-transport', () => {
+    const screen = screenRedFlagMarkers(
+      'Adjust endpoint timeout semantics and response-shape assumptions for the external API client.',
+      { repoRoot },
+    );
+    expect(screen.unparseable).toBe(false);
+    expect(screen.hits).toContain('external-api-transport');
+  });
+
   it('detects markersPresent on every calibration boundary row', () => {
     for (const row of calibration.samples.filter((sample) => sample.markersPresent.length > 0)) {
       const screen = screenRedFlagMarkers(row.task, { repoRoot });
