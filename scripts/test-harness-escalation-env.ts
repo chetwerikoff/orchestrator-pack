@@ -1,6 +1,9 @@
-import { mkdirSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  applyOpkVitestHarnessEnv,
+  createHarnessRoot,
+} from './lib/vitest-live-store-harness.mjs';
 
 export const OPK_VITEST_HARNESS_ENV = 'OPK_VITEST_HARNESS';
 
@@ -22,18 +25,15 @@ export function applyOpkVitestHarnessEscalationEnv(rootDir?: string): {
   inboxDir: string;
   healthDir: string;
 } {
-  const root = rootDir ?? mkdtempSync(join(tmpdir(), 'opk-vitest-escalation-'));
-  const statePath = join(root, 'escalation-state.json');
-  const inboxDir = join(root, 'operator-inbox');
-  const healthDir = join(root, 'health-spool');
-
-  mkdirSync(inboxDir, { recursive: true });
-  mkdirSync(healthDir, { recursive: true });
-
-  process.env[OPK_VITEST_HARNESS_ENV] = '1';
-  process.env.AO_ORCHESTRATOR_ESCALATION_STATE = statePath;
-  process.env.AO_OPERATOR_ESCALATION_INBOX = inboxDir;
-  process.env.AO_ESCALATION_HEALTH_SPOOL = healthDir;
-
-  return { root, statePath, inboxDir, healthDir };
+  const root = rootDir
+    ?? process.env.OPK_VITEST_HARNESS_ROOT
+    ?? createHarnessRoot();
+  const paths = applyOpkVitestHarnessEnv(root, process.env);
+  process.env.OPK_TESTMODE_LEASE_ROOT = join(paths.state, 'testmode-fleet-leases');
+  return {
+    root: paths.root,
+    statePath: process.env.AO_ORCHESTRATOR_ESCALATION_STATE as string,
+    inboxDir: paths.operatorInbox,
+    healthDir: paths.healthSpool,
+  };
 }

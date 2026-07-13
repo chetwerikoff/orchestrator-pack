@@ -75,7 +75,7 @@ function Invoke-ReviewerPolicyVitestSuite {
         }
     }
 
-    & npx vitest run $TestFile
+    & npm test -- $TestFile
     if ($LASTEXITCODE -ne 0) {
         $Failures.Add("$TestFile failed")
     }
