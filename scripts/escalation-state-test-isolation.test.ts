@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
+import { startLiveStoreGuard } from './lib/vitest-live-store-harness.mjs';
 import {
   OPK_VITEST_HARNESS_ENV,
   sharedDefaultEscalationStatePath,
@@ -182,26 +183,49 @@ describe('escalation state store test isolation (#664)', () => {
     }
   });
 
-  it('AC#4: snapshot-preserving guard tolerates preexisting unchanged shared store', () => {
-    const sharedDefault = sharedDefaultEscalationStatePath();
-    const hadPreexisting = existsSync(sharedDefault);
-    const preexisting = hadPreexisting
-      ? readFileSync(sharedDefault, 'utf8')
-      : JSON.stringify({ schemaVersion: 1, records: {}, wakeWindows: {}, audit: {} });
-    if (!hadPreexisting) {
-      writeFileSync(sharedDefault, preexisting, 'utf8');
-      cleanupDirs.push(sharedDefault);
+  it('AC#4: snapshot-preserving guard tolerates an unchanged mock production store', () => {
+    const mockProductionRoot = mkdtempSync(join(tmpdir(), 'opk-vitest-mock-production-'));
+    cleanupDirs.push(mockProductionRoot);
+    const mockTmp = join(mockProductionRoot, 'tmp');
+    const mockHome = join(mockProductionRoot, 'home');
+    const mockWake = join(mockHome, '.local', 'state', 'orchestrator-pack-wake-supervisor');
+    const mockAoBase = join(mockHome, '.agent-orchestrator');
+    const mockSharedDefault = join(mockTmp, 'orchestrator-escalation-state.json');
+    mkdirSync(mockTmp, { recursive: true });
+    const preexisting = JSON.stringify({ schemaVersion: 1, records: {}, wakeWindows: {}, audit: {} });
+
+    const marker = process.env.OPK_VITEST_HARNESS;
+    process.env.OPK_VITEST_HARNESS = '';
+    try {
+      writeFileSync(mockSharedDefault, preexisting, 'utf8');
+    } finally {
+      process.env.OPK_VITEST_HARNESS = marker;
     }
 
-    const beforeMtime = statSync(sharedDefault).mtimeMs;
+    const guard = startLiveStoreGuard({
+      ...process.env,
+      OPK_VITEST_HARNESS: '1',
+      OPK_VITEST_PRODUCTION_HOME: mockHome,
+      OPK_VITEST_PRODUCTION_TMP: mockTmp,
+      OPK_VITEST_PRODUCTION_AO_BASE: mockAoBase,
+      OPK_VITEST_PRODUCTION_WAKE_ROOT: mockWake,
+      HOME: mockHome,
+      TMPDIR: mockTmp,
+      TEMP: mockTmp,
+      TMP: mockTmp,
+      AO_BASE_DIR: '',
+      AO_WAKE_SUPERVISOR_STATE_DIR: '',
+      ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
+    });
+
     const emit = pwshJson(`
       . ./scripts/lib/Invoke-OrchestratorEscalationEmit.ps1
       $r = Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-review-start-claim' -SourceProcess 'escalation-state-test-isolation' -CorrelationKey 'corr:guard:ac4' -DedupeKey 'dedupe:guard:ac4' -Diagnosis @{ reason = 'guard_proof' } -OrchestratorSessionId 'orch-test' -DryRun
       [pscustomobject]@{ status = [string]$r.status } | ConvertTo-Json -Compress
     `);
     expect(emit.status).toBe('delivered');
-    expect(statSync(sharedDefault).mtimeMs).toBe(beforeMtime);
-    expect(readFileSync(sharedDefault, 'utf8')).toBe(preexisting);
+    expect(() => guard.stop()).not.toThrow();
+    expect(readFileSync(mockSharedDefault, 'utf8')).toBe(preexisting);
   });
 
   it('AC#5: bypass-path child pwsh inherits marker and isolated paths from bootstrap', () => {
