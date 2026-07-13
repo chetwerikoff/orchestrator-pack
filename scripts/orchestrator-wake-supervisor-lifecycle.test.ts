@@ -43,8 +43,8 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       const statusUp = await ows.waitForSupervisorHealthyStatus(stateDir);
       expect(statusUp.status).toBe(0);
       expect(statusUp.stdout).toContain('supervisor: running');
-      expect(statusUp.stdout).toMatch(/review-trigger-reconcile:.*working/);
-      expect(statusUp.stdout).toMatch(/escalation-router:.*working/);
+      expect(statusUp.stdout).toMatch(/review-trigger-reconcile\s+working/);
+      expect(statusUp.stdout).toMatch(/escalation-router\s+working/);
 
       const supervisorPid = Number(
         ows.fs.readFileSync(ows.path.join(stateDir, 'supervisor.pid'), 'utf8').trim(),
@@ -160,7 +160,7 @@ describe('orchestrator-wake-supervisor lifecycle', () => {
       const statusMid = ows.runSupervisor(['-Action', 'Status', '-StateDir', stateDir]);
       expect(statusMid.status).toBe(0);
       expect(statusMid.stdout).toContain('supervisor: running');
-      expect(statusMid.stdout).toMatch(/review-trigger-reconcile:.*working/);
+      expect(statusMid.stdout).toMatch(/review-trigger-reconcile\s+working/);
 
       const stop = ows.runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
       expect(stop.status).toBe(0);
