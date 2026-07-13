@@ -4,37 +4,27 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const repoRoot = process.cwd();
-const files = [
-  'plugins/ao-task-declaration/tests/declare.test.ts',
-  'scripts/audit-jsonl-retention.test.ts',
-  'scripts/autonomous-worker-nudge-boundary.test.ts',
-  'scripts/command-runtime-bootstrap.test.ts',
-  'scripts/github-fleet-cache-coalesce.test.ts',
-  'scripts/orchestrator-wake-supervisor-orphan-identity.test.ts',
-  'scripts/pr-scope-check.test.ts',
-  'scripts/review-head-ready.test.ts',
-  'scripts/review-start-preflight-shield.integration.test.ts',
-  'scripts/review-start-scoped-gh-json-capture.test.ts',
-  'scripts/spawn-worktree-branch-operand-binding.test.ts',
-  'scripts/worker-iteration-cycle.test.ts',
-];
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const result = spawnSync(npm, ['test', '--', ...files, '--reporter=verbose'], {
-  cwd: repoRoot,
-  env: {
-    ...process.env,
-    CI: 'true',
-    VITEST_HEAVY_SHARD: '6',
-    OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+const result = spawnSync(
+  npm,
+  ['test', '--', 'plugins/ao-task-declaration/tests/declare.test.ts', '--reporter=verbose'],
+  {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CI: 'true',
+      VITEST_HEAVY_SHARD: '6',
+      OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+    },
+    encoding: 'utf8',
+    timeout: 3 * 60 * 1000,
+    killSignal: 'SIGKILL',
+    maxBuffer: 64 * 1024 * 1024,
   },
-  encoding: 'utf8',
-  timeout: 12 * 60 * 1000,
-  killSignal: 'SIGKILL',
-  maxBuffer: 64 * 1024 * 1024,
-});
+);
 const payload = {
   schemaVersion: 1,
-  diagnostic: 'issue-752-final-heavy-shard-6',
+  diagnostic: 'issue-752-final-harness-teardown',
   status: result.status,
   signal: result.signal,
   timedOut: result.error?.code === 'ETIMEDOUT',
