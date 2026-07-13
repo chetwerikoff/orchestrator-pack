@@ -31,6 +31,7 @@ function installPwshShim(root, env) {
   const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
   writeFileSync(shimModule, `#!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 const real = process.env.OPK_REAL_PWSH;
 const helper = process.env.OPK_VITEST_PWSH_HELPER;
 if (!real || !helper) { console.error('OPK pwsh shim is missing configuration'); process.exit(70); }
@@ -40,6 +41,12 @@ const encodedIndex = lower.findIndex((value) => value === '-encodedcommand' || v
 if (encodedIndex >= 0) { console.error('OPK_VITEST_LIVE_STORE_BLOCKED encoded PowerShell commands are unsupported by the harness'); process.exit(64); }
 const commandIndex = lower.findIndex((value) => value === '-command' || value === '-c');
 const fileIndex = lower.findIndex((value) => value === '-file' || value === '-f');
+const bypassFile = process.env.OPK_VITEST_PWSH_BYPASS_FILE;
+if (fileIndex >= 0 && bypassFile && argv[fileIndex + 1] && resolve(argv[fileIndex + 1]) === resolve(bypassFile)) {
+  const direct = spawnSync(real, argv, { env: process.env, stdio: 'inherit' });
+  if (direct.error) { console.error(direct.error.message); process.exit(70); }
+  process.exit(direct.status ?? 1);
+}
 let childArgs = [...argv];
 const quote = (value) => \`'\${String(value).replaceAll("'", "''")}'\`;
 const prelude = \`. \${quote(helper)}; Enable-OpkVitestStoreIsolation;\`;
@@ -78,6 +85,7 @@ process.exit(child.status ?? 1);
   }
   env.OPK_REAL_PWSH = realPwsh;
   env.OPK_VITEST_PWSH_HELPER = helper;
+  env.OPK_VITEST_PWSH_BYPASS_FILE = join(repoRoot, 'scripts', 'invoke-testmode-fleet-reaper.ps1');
   env.PATH = `${binDir}${delimiter}${env.PATH ?? ''}`;
 }
 

@@ -267,7 +267,8 @@ function Invoke-OpkVitestProxyGuard {
 function Install-OpkVitestCmdletProxy {
     param([Parameter(Mandatory = $true)][string]$CommandName)
 
-    $cmdlet = Get-Command $CommandName -CommandType Cmdlet -ErrorAction Stop
+    $cmdlet = Get-Command $CommandName -CommandType Cmdlet -ErrorAction SilentlyContinue
+    if (-not $cmdlet) { return $false }
     $metadata = [System.Management.Automation.CommandMetadata]::new($cmdlet)
     $proxyText = [System.Management.Automation.ProxyCommand]::Create($metadata)
     $escapedName = $CommandName.Replace("'", "''")
@@ -275,6 +276,7 @@ function Install-OpkVitestCmdletProxy {
     $proxyText = [regex]::Replace($proxyText, '(?m)^begin\s*\{', "begin`n{$guard", 1)
     $proxyText = [regex]::Replace($proxyText, '(?m)^process\s*\{', "process`n{$guard", 1)
     Set-Item -Path "Function:\global:$CommandName" -Value ([scriptblock]::Create($proxyText)) -Force
+    return $true
 }
 
 function Install-OpkVitestExistingFunctionProxy {
@@ -307,7 +309,7 @@ function Enable-OpkVitestStoreIsolation {
                 'Set-Content', 'Add-Content', 'Out-File', 'Clear-Content', 'New-Item',
                 'Remove-Item', 'Move-Item', 'Copy-Item', 'Rename-Item', 'Set-Acl'
             )) {
-            Install-OpkVitestCmdletProxy -CommandName $cmdlet
+            [void](Install-OpkVitestCmdletProxy -CommandName $cmdlet)
         }
         $Script:OpkVitestStoreProxiesInstalled = $true
     }
@@ -321,8 +323,6 @@ function Enable-OpkVitestStoreIsolation {
         [void](Install-OpkVitestExistingFunctionProxy -CommandName $resolver)
     }
 
-    # Command breakpoints are defense in depth for functions defined after the harness
-    # prelude. Filesystem cmdlet enforcement does not depend on debugger support.
     if ($Script:OpkVitestStoreBreakpoints.Count -eq 0) {
         foreach ($command in @($resolverCommands | Where-Object { $_ } | Select-Object -Unique)) {
             $name = $command
@@ -334,8 +334,7 @@ function Enable-OpkVitestStoreIsolation {
                 $Script:OpkVitestStoreBreakpoints += Set-PSBreakpoint -Command $command -Action $action
             }
             catch {
-                # Resolver breakpoints are optional defense in depth. Proxy cmdlets and
-                # parent snapshots remain mandatory and fail closed at write boundaries.
+                # Optional defense in depth for functions defined after the prelude.
             }
         }
     }
