@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -148,6 +149,15 @@ function runFindingLedgerGuardPs1(args: string[]) {
   );
 }
 
+function writeTempFindingLedgerPair(name: string, capture: string, ledger: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), `finding-ledger-${name}-`));
+  const capturePath = path.join(dir, `${name}.capture.txt`);
+  const ledgerPath = path.join(dir, `${name}.ledger.json`);
+  writeFileSync(capturePath, capture);
+  writeFileSync(ledgerPath, ledger);
+  return { capturePath, ledgerPath };
+}
+
 describe('finding-ledger guard scenario matrix (#679)', () => {
   it('1. ignores echoed contract-evidence binding-id/binding-type fences', () => {
     const { capture, ledger } = loadScenarioFixture('echo-contract-evidence');
@@ -275,8 +285,8 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
     expect(detectProtectedSignalsInCapture(capture)).toContain('security');
   });
 
-  it('still treats protected vocabulary a real finding cites (`denylist`) as a scope-violation signal', () => {
-    const capture = 'A finding: this change edits `denylist` paths outside the declared scope.';
+  it('still treats unquoted protected vocabulary a real finding cites as a scope-violation signal', () => {
+    const capture = 'A finding: this change edits denylist paths outside the declared scope.';
     expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
   });
 
@@ -291,5 +301,130 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
       findings: [{ id: 'carveout-wording', summary: 's', type: 'spec', disposition: 'addressed' }],
     });
     expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(true);
+  });
+
+  it('documents the finding-ledger quotation delimiter forms and fail-closed malformed behavior', () => {
+    const examples = [
+      'Inline code span: `type: scope-violation`',
+      ['```text', 'type: security', '```'].join('\n'),
+      '> [P1 security] quoted rubric row\n',
+      '"/\\btype:\\s*security\\b/i"',
+      "'type: scope-violation; id: fixture-scope'",
+    ];
+
+    for (const example of examples) {
+      expect(detectProtectedSignalsInCapture(example), example).toEqual([]);
+    }
+
+    expect(detectProtectedSignalsInCapture('"type: scope-violation')).toContain('scope-violation');
+  });
+
+  it('does not treat apostrophe contractions as quoted protected-signal spans', () => {
+    const capture = "Don't mark this out of scope because it's risky.";
+    expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
+  });
+
+  it('does not hide operative inline-code policy terms in findings', () => {
+    const capture = [
+      'type: spec; id: policy-inline',
+      'This finding says the change is out of `allowed_roots` and touches `denylist`.',
+    ].join('\n');
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'inline-policy-terms',
+      findings: [
+        {
+          id: 'policy-inline',
+          summary: 'Policy name formatting should still be operative.',
+          type: 'spec',
+          disposition: 'addressed',
+        },
+      ],
+    });
+    expect(detectProtectedSignalsInCapture(capture)).toContain('scope-violation');
+    expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(false);
+  });
+
+  it('passes draft-273-shaped quoted evidence without fabricated protected coverage', () => {
+    const capture = [
+      'type: spec; id: evidence-quote',
+      'The reviewer cites the draft boundary: "type: scope-violation; id: scope-boundary; denylist and allowed_roots text is copied evidence."',
+    ].join('\n');
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'quote-evidence-protected-signal',
+      findings: [
+        {
+          id: 'evidence-quote',
+          summary: 'Reviewer cited draft evidence.',
+          type: 'spec',
+          disposition: 'addressed',
+        },
+      ],
+    });
+    expect(detectTypedFindingsInCapture(capture).map((finding) => finding.type)).toEqual(['spec']);
+    expect(detectProtectedSignalsInCapture(capture)).toEqual([]);
+    expect(checkFindingLedgerGuard(capture, ledger).ok).toBe(true);
+
+    const { capturePath, ledgerPath } = writeTempFindingLedgerPair('quote-evidence', capture, ledger);
+    expect(runCli(['node', 'finding-ledger-guard.mjs', '--capture', capturePath, '--ledger', ledgerPath])).toBe(0);
+    expect(
+      runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
+    ).toBe(0);
+  });
+
+  it('rejects genuine unquoted, mixed, and malformed protected finding-ledger signals', () => {
+    const ledger = JSON.stringify({
+      version: 1,
+      draft: 'scope-signal',
+      findings: [
+        {
+          id: 'evidence-quote',
+          summary: 'Reviewer cited draft evidence.',
+          type: 'spec',
+          disposition: 'addressed',
+        },
+      ],
+    });
+    const cases = new Map([
+      [
+        'genuine-unquoted',
+        [
+          'type: spec; id: evidence-quote',
+          'The reviewer cites the draft boundary.',
+          '',
+          'type: scope-violation; id: scope-boundary',
+          'This change edits denylist paths outside allowed_roots.',
+        ].join('\n'),
+      ],
+      [
+        'mixed',
+        [
+          'type: spec; id: evidence-quote',
+          'The reviewer cites the draft boundary: "type: scope-violation; id: quoted-scope; denylist text is copied evidence."',
+          '',
+          'type: scope-violation; id: real-scope',
+          'The change still edits denylist paths outside allowed_roots.',
+        ].join('\n'),
+      ],
+      [
+        'malformed',
+        [
+          'type: spec; id: evidence-quote',
+          'The reviewer starts a quote but never closes it: "type: scope-violation; id: scope-boundary; denylist and allowed_roots text.',
+        ].join('\n'),
+      ],
+    ]);
+
+    for (const [name, capture] of cases) {
+      expect(detectProtectedSignalsInCapture(capture), name).toContain('scope-violation');
+      expect(checkFindingLedgerGuard(capture, ledger).ok, name).toBe(false);
+
+      const { capturePath, ledgerPath } = writeTempFindingLedgerPair(name, capture, ledger);
+      expect(runCli(['node', 'finding-ledger-guard.mjs', '--capture', capturePath, '--ledger', ledgerPath])).toBe(1);
+      expect(
+        runFindingLedgerGuardPs1(['-CapturePath', capturePath, '-LedgerPath', ledgerPath]).status,
+      ).toBe(1);
+    }
   });
 });

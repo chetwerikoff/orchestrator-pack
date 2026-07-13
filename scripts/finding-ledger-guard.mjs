@@ -86,15 +86,34 @@ export function stripMarkdownFencedCodeBlocks(text) {
 }
 
 /**
- * Remove backtick-quoted finding-type tags so a review that *discusses* the
- * carve-out rules — e.g. `` `type: security` `` inside prose — is not read as an
- * emitted finding. A real reviewer tag is a plain `type: security` line, never
- * backtick-wrapped. Narrowly scoped to quoted `type:` tags only, so protected
- * vocabulary a real finding cites (`` `denylist` ``, `` `allowed_roots` ``) still
- * counts as a signal and the fail-closed contract is preserved.
+ * Mask well-formed quoted/example spans before protected-signal regex scans.
+ * Recognized delimiters are fenced code blocks, inline code spans introduced
+ * as examples, Markdown blockquote lines, balanced double-quoted strings, and balanced single-quoted
+ * strings whose apostrophes are not embedded in words. Unterminated delimiters
+ * are left intact so malformed input cannot create a broad exemption.
  */
-export function stripQuotedTypeTags(text) {
-  return text.replace(/`\s*type:\s*[a-z][a-z0-9-]*\s*`/gi, ' ');
+export function maskDelimitedMarkdownQuotes(text) {
+  const preserveLines = (match) => match.replace(/[^\n]/g, ' ');
+  const blankSpan = (match) => ' '.repeat(match.length);
+  const blankExampleCodeSpan = (match, offset, fullText) => {
+    if (/^`type:\s*(?:security|scope-violation)`$/i.test(match)) {
+      return blankSpan(match);
+    }
+    const priorBreak = fullText.lastIndexOf('\n', offset - 1);
+    const linePrefix = fullText.slice(priorBreak + 1, offset).trimEnd();
+    return /\b(?:inline code span|quoted(?:\s+(?:example|tag|term|text))?|quote|example|regex pattern|test[- ]fixture string)\s*:\s*$/i.test(
+      linePrefix,
+    )
+      ? blankSpan(match)
+      : match;
+  };
+  return [
+    [ /^```[^\n]*\n[\s\S]*?^```\s*$/gm, preserveLines ],
+    [ /`[^`\n]+`/g, blankExampleCodeSpan ],
+    [ /^>[^\n]*(?:\n|$)/gm, preserveLines ],
+    [ /"(?:\\.|[^"\\\n])+"/g, blankSpan ],
+    [ /(?<![A-Za-z0-9])'(?:\\.|[^'\\\n])+'(?![A-Za-z0-9])/g, blankSpan ],
+  ].reduce((current, [pattern, replacer]) => current.replace(pattern, replacer), text);
 }
 
 function hasEchoedReviewContext(text) {
@@ -154,7 +173,7 @@ function indexOfFirstFindingSignal(text, fromIndex = 0) {
 
 /** Scope parsing to reviewer findings — skip echoed rubric, draft body, and fenced blocks. */
 export function extractFindingsScanText(capture) {
-  const withoutFences = stripQuotedTypeTags(stripMarkdownFencedCodeBlocks(capture));
+  const withoutFences = maskDelimitedMarkdownQuotes(capture);
   if (isCleanNoFindings(withoutFences)) {
     return withoutFences;
   }
