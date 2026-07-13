@@ -6,8 +6,10 @@
     "plugins/*"
   ],
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "pretest": "node scripts/check-vitest-live-store-isolation.mjs",
+    "test": "node scripts/run-vitest-with-harness.mjs run",
+    "pretest:watch": "node scripts/check-vitest-live-store-isolation.mjs",
+    "test:watch": "node scripts/run-vitest-with-harness.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

@@ -7,6 +7,11 @@ const repoRoot = join(import.meta.dirname, '..');
 const guardPath = join(repoRoot, 'scripts', 'check-vestigial-fleet-children-retired.ps1');
 const launchContractPath = join(repoRoot, 'scripts', 'check-side-process-launch-contract.ps1');
 const survivorSmokePath = join(repoRoot, 'scripts', 'side-process-launch-contract.test.ts');
+// These verifier subprocesses are mechanically read-only against the checkout;
+// their self-test writes only below the harness-controlled temporary root. Use
+// the preserved binary so spawnSync receives stdout instead of the write-guard
+// transport shim inheriting it directly.
+const readOnlyPwsh = process.env.OPK_REAL_PWSH?.trim() || 'pwsh';
 const retired = [
   ['review-run-recovery', 'review-run-recovery.ps1', 'review-run-recovery-side-effect.lock'],
   ['review-stuck-run-reaper', 'review-stuck-run-reaper.ps1', 'review-stuck-run-reaper-side-effect.lock'],
@@ -40,7 +45,7 @@ function readJson(path: string) {
 }
 
 function runGuard(...args: string[]) {
-  return spawnSync('pwsh', ['-NoProfile', '-File', guardPath, ...args], {
+  return spawnSync(readOnlyPwsh, ['-NoProfile', '-File', guardPath, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: 120_000,
@@ -83,7 +88,7 @@ describe('vestigial fleet retirement (Issue #745 PR-A)', () => {
       expect(child, `missing survivor row: ${id}`).toBeDefined();
       expect(existsSync(join(repoRoot, 'scripts', child!.script)), child!.script).toBe(true);
     }
-    const result = spawnSync('pwsh', ['-NoProfile', '-File', launchContractPath], {
+    const result = spawnSync(readOnlyPwsh, ['-NoProfile', '-File', launchContractPath], {
       cwd: repoRoot,
       encoding: 'utf8',
       timeout: 120_000,
