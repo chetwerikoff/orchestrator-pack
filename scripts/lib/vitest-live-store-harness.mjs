@@ -467,9 +467,17 @@ export function startLiveStoreGuard(env = process.env) {
     try {
       const watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
         if (!filename) return;
-        const candidate = join(dir, String(filename));
+        const candidate = canonicalizeStorePath(join(dir, String(filename)));
         const match = classifyLiveStorePath(candidate, env);
         if (match) touched.add(match.storeId);
+        // If a not-yet-existing store is created and deleted below a missing
+        // ancestor, fs.watch reports the ancestor name. Attribute that event to
+        // every inventoried descendant so create-then-delete cannot escape.
+        for (const store of stores) {
+          if (candidate && pathIsSameOrWithin(store.defaultPath, candidate)) {
+            touched.add(store.id);
+          }
+        }
       });
       watchers.push(watcher);
     } catch {
