@@ -45,7 +45,7 @@
       },
       "reason": "CI verification exposed four harness-integration seams. The reviewer-policy helper needed the supported launcher, read-only verifier subprocesses needed the preserved real PowerShell binary, parent transient monitoring required a shared wrapper, and the legacy escalation isolation fixture had to stop seeding the actual live-default file. The PowerShell transport now performs inventory-driven Node preflight before spawning unchanged argv and forwards stdio/signals without per-process resolver proxy overhead. These are test-path and harness-boundary corrections only; production schemas and default paths remain unchanged.",
       "actor": "chatgpt-issue-752",
-      "timestamp": "2026-07-13T16:20:00.000Z",
+      "timestamp": "2026-07-13T16:31:00.000Z",
       "applied": true
     }
   ]
