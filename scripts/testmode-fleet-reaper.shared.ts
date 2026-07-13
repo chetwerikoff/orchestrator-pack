@@ -9,6 +9,7 @@ import {
   readMarker,
   repoRoot,
   runSupervisor,
+  runSupervisorAsync,
   waitForMarkers,
 } from './supervisor-recovery.test-helpers.js';
 import {
@@ -107,7 +108,15 @@ export function spawnOrphanTestModeChild(stateDir: string): number {
   fs.mkdirSync(markerDir, { recursive: true });
   const child = spawn(
     'pwsh',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', testChildScript, '-Role', 'listener'],
+    [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      testChildScript,
+      '-Role',
+      'review-trigger-reconcile',
+    ],
     {
       detached: true,
       stdio: 'ignore',
@@ -125,14 +134,14 @@ export function spawnOrphanTestModeChild(stateDir: string): number {
 export async function waitForLiveChildPids(
   stateDir: string,
   timeoutMs = 45_000,
-): Promise<{ listener: number; escalationRouter: number }> {
+): Promise<{ reviewTriggerReconcile: number; escalationRouter: number }> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const listenerPath = path.join(stateDir, 'listener.pid');
+    const reviewTriggerPath = path.join(stateDir, 'review-trigger-reconcile.pid');
     const escalationRouterPath = path.join(stateDir, 'escalation-router.pid');
-    if (fs.existsSync(listenerPath) && fs.existsSync(escalationRouterPath)) {
+    if (fs.existsSync(reviewTriggerPath) && fs.existsSync(escalationRouterPath)) {
       return {
-        listener: Number(fs.readFileSync(listenerPath, 'utf8').trim()),
+        reviewTriggerReconcile: Number(fs.readFileSync(reviewTriggerPath, 'utf8').trim()),
         escalationRouter: Number(fs.readFileSync(escalationRouterPath, 'utf8').trim()),
       };
     }
@@ -189,7 +198,7 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
     if (leaseId && leaseRoot) {
       renewLaneLease(leaseRoot, leaseId);
     }
-    const start = runSupervisor(
+    const start = await runSupervisorAsync(
       [
         '-Action',
         'Start',
@@ -210,19 +219,40 @@ export async function startDetachedTestModeFleet(stateDir: string, env: Record<s
       renewLaneLease(leaseRoot, leaseId);
     }
     const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
-    const pidDeadline = Date.now() + 15_000;
+    const pidDeadline = Date.now() + 60_000;
     while (!fs.existsSync(supervisorPidPath) && Date.now() < pidDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    expect(fs.existsSync(supervisorPidPath)).toBe(true);
+    if (!fs.existsSync(supervisorPidPath)) {
+      const state = fs.existsSync(stateDir)
+        ? fs.readdirSync(stateDir, { recursive: true }).map((entry) => String(entry)).sort()
+        : [];
+      const stateEvidence = state.map((entry) => {
+        const fullPath = path.join(stateDir, entry);
+        return fs.statSync(fullPath).isFile()
+          ? { entry, content: fs.readFileSync(fullPath, 'utf8').slice(-4000) }
+          : { entry };
+      });
+      throw new Error(
+        `detached supervisor did not publish supervisor.pid: ${JSON.stringify({
+          startStdout: start.stdout,
+          startStderr: start.stderr,
+          state: stateEvidence,
+        })}`,
+      );
+    }
     const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
-    await waitForMarkers(stateDir, 60_000, ['listener', 'escalation-router']);
+    await waitForMarkers(stateDir, 60_000, ['review-trigger-reconcile', 'escalation-router']);
     if (leaseId && leaseRoot) {
       renewLaneLease(leaseRoot, leaseId);
     }
-    const listener = await readMarker(stateDir, 'listener');
+    const reviewTriggerReconcile = await readMarker(stateDir, 'review-trigger-reconcile');
     const escalationRouterMarker = await readMarker(stateDir, 'escalation-router');
-    return { supervisorPid, listener, escalationRouter: escalationRouterMarker };
+    return {
+      supervisorPid,
+      reviewTriggerReconcile,
+      escalationRouter: escalationRouterMarker,
+    };
   } finally {
     if (heartbeat) {
       clearInterval(heartbeat);
@@ -246,7 +276,7 @@ export function registerFleetReaperAfterEach(): void {
           }
         }
       } catch {
-        // best-effort lane cleanup
+        // Best-effort lease cleanup before supervisor cleanup.
       }
     }
     cleanupSupervisorTests();

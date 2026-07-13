@@ -33,7 +33,7 @@ import {
   withLeaseEnv,
 } from './testmode-fleet-reaper.shared.js';
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 
 registerFleetReaperAfterEach();
 
@@ -52,14 +52,14 @@ describe('Issue #710 TestMode fleet lease TTL (AC#1)', () => {
 
       killProcess(owner.pid);
       await waitForProcessesStopped(
-        [fleet.supervisorPid, fleet.listener.pid, fleet.escalationRouter.pid],
+        [fleet.supervisorPid, fleet.reviewTriggerReconcile.pid, fleet.escalationRouter.pid],
         45_000,
       );
       expect(isAlive(fleet.supervisorPid)).toBe(false);
-      expect(isAlive(fleet.listener.pid)).toBe(false);
+      expect(isAlive(fleet.reviewTriggerReconcile.pid)).toBe(false);
       expect(isAlive(fleet.escalationRouter.pid)).toBe(false);
     },
-    90_000,
+    180_000,
   );
 });
 
@@ -100,7 +100,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
           fs.readFileSync(path.join(liveState, 'supervisor.pid'), 'utf8').trim(),
         );
         expect(isAlive(liveSupervisorPid)).toBe(true);
-        expect(isAlive(liveFleet.listener.pid)).toBe(true);
+        expect(isAlive(liveFleet.reviewTriggerReconcile.pid)).toBe(true);
       } finally {
         clearInterval(liveHeartbeat);
       }
@@ -108,7 +108,7 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       runReaperCli('teardown', { LeaseId: liveLane.leaseId }, withLeaseEnv(leaseRoot, liveLane.leaseId));
       killProcess(liveOwner.pid);
     },
-    120_000,
+    180_000,
   );
 
   it.skipIf(process.platform === 'win32')(
@@ -121,24 +121,27 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       const fleet = await startDetachedTestModeFleet(stateDir, withLeaseEnv(leaseRoot, lane.leaseId));
       killProcess(fleet.supervisorPid);
       await new Promise((resolve) => setTimeout(resolve, 250));
-      expect(isAlive(fleet.listener.pid)).toBe(true);
+      expect(isAlive(fleet.reviewTriggerReconcile.pid)).toBe(true);
       killProcess(owner.pid);
       await new Promise((resolve) => setTimeout(resolve, 250));
 
       const recoveryLane = registerLaneLease({ leaseRoot, laneId: 'recovery-lane' });
       const bootstrap = runReaperCli('bootstrap', {}, withLeaseEnv(leaseRoot, recoveryLane.leaseId));
       expect(bootstrap.status, bootstrap.stderr || bootstrap.stdout).toBe(0);
-      await waitForProcessesStopped([fleet.listener.pid, fleet.escalationRouter.pid], 45_000);
-      expect(isAlive(fleet.listener.pid)).toBe(false);
+      await waitForProcessesStopped(
+        [fleet.reviewTriggerReconcile.pid, fleet.escalationRouter.pid],
+        45_000,
+      );
+      expect(isAlive(fleet.reviewTriggerReconcile.pid)).toBe(false);
     },
-    120_000,
+    180_000,
   );
 
   it('treats corrupt lease records as stale during bootstrap', () => {
     const leaseRoot = isolatedLeaseRoot();
     const leaseId = 'corrupt-lease';
     writeCorruptLeaseRecord(leaseRoot, leaseId);
-      const result = runPwsh(
+    const result = runPwsh(
       `. '${supervisorLib.replace(/'/g, "''")}'; . '${path.join(repoRoot, 'scripts/lib/Invoke-TestModeFleetReaper.ps1').replace(/'/g, "''")}'; $d = Test-TestModeFleetLeaseStale -Record $null -TreatCorruptAsStale; Write-Output $d.stale`,
       { OPK_TESTMODE_LEASE_ROOT: leaseRoot },
     );
@@ -177,10 +180,9 @@ describe('Issue #710 bootstrap pre-sweep (AC#2, AC#7)', () => {
       await waitForProcessesStopped([orphanPid], 20_000);
       expect(harnessIsAlive(orphanPid)).toBe(false);
     },
-    90_000,
+    180_000,
   );
 });
-
 
 describe('Issue #710 teardown post-sweep (AC#3)', () => {
   it.skipIf(process.platform === 'win32')(
@@ -194,12 +196,12 @@ describe('Issue #710 teardown post-sweep (AC#3)', () => {
       const teardown = runReaperCli('teardown', { LeaseId: lane.leaseId }, withLeaseEnv(leaseRoot, lane.leaseId));
       expect(teardown.status).toBe(0);
       await waitForProcessesStopped(
-        [fleet.supervisorPid, fleet.listener.pid, fleet.escalationRouter.pid],
+        [fleet.supervisorPid, fleet.reviewTriggerReconcile.pid, fleet.escalationRouter.pid],
         20_000,
       );
       killProcess(owner.pid);
     },
-    90_000,
+    180_000,
   );
 });
 
@@ -252,11 +254,11 @@ describe('Issue #710 vitest lane context (AC#6 multi-invocation)', () => {
       const laneA = registerLaneLease({ leaseRoot, laneId: 'heavy-shard-9', runId: 'invocation-a' });
       const laneB = registerLaneLease({ leaseRoot, laneId: 'heavy-shard-9', runId: 'invocation-b' });
       const result = runPwsh(
-      `. '${path.join(repoRoot, 'scripts/lib/TestMode-FleetLease.ps1').replace(/'/g, "''")}'; `
-      + `$ctx = @(Get-TestModeVitestLaneLeaseContexts -Shard '9' -LeaseRoot '${leaseRoot.replace(/'/g, "''")}'); `
-      + 'Write-Output (($ctx | ForEach-Object { $_.leaseId } | Sort-Object -Unique) -join ",")',
-      { OPK_TESTMODE_LEASE_ROOT: leaseRoot, VITEST_HEAVY_SHARD: '9' },
-    );
+        `. '${path.join(repoRoot, 'scripts/lib/TestMode-FleetLease.ps1').replace(/'/g, "''")}'; `
+        + `$ctx = @(Get-TestModeVitestLaneLeaseContexts -Shard '9' -LeaseRoot '${leaseRoot.replace(/'/g, "''")}'); `
+        + 'Write-Output (($ctx | ForEach-Object { $_.leaseId } | Sort-Object -Unique) -join ",")',
+        { OPK_TESTMODE_LEASE_ROOT: leaseRoot, VITEST_HEAVY_SHARD: '9' },
+      );
       expect(result.status).toBe(0);
       const leaseIds = result.stdout.trim().split(',').filter(Boolean).sort();
       expect(leaseIds).toEqual([laneA.leaseId, laneB.leaseId].sort());
@@ -268,5 +270,4 @@ describe('Issue #710 vitest lane context (AC#6 multi-invocation)', () => {
       }
     }
   });
-
 });

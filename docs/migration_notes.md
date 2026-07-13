@@ -20,20 +20,21 @@ Source migration note read read-only from:
 `C:\Users\che\.claude\projects\C--Users-che-Documents-Projects-ai-orchestrator\memory\project_composio_migration.md`
 
 
-## Vestigial wake-supervisor child retirement (Issue #745 PR-A)
+## Vestigial wake-supervisor child and listener retirement (Issue #745 PR-A + PR-B)
 
 After deploying this change, the wake supervisor must be drained and restarted so its runtime
 roster matches the registry:
 
 1. Stop the wake supervisor from the operator terminal.
-2. Inspect the supervisor state directory and process table; terminate only orphaned PIDs that
-   belong to child scripts removed by this release. Do not kill processes by port or PID alone.
+2. Inspect the supervisor state directory and process command lines for orphaned PIDs belonging
+   to child scripts removed by this release, including `orchestrator-wake-listener.ps1`.
+   Terminate only identity-matched orphans; do not kill processes by port or PID alone.
 3. Start the wake supervisor from the updated checkout.
-4. Run `-Action Status` and confirm the ten-child PR-A roster: listener plus the nine surviving
-   reconciliation/router children.
+4. Run `-Action Status` and confirm the nine registry-defined surviving children. The roster must
+   not contain `listener`, heartbeat, `review-send-reconcile`, or any PR-A-retired child.
 5. Watch one normal supervisor cadence for crash loops or attempts to relaunch an absent script.
-
-This PR does not decide the listener disposition. That remains a separate probe-gated PR-B change.
+6. Confirm no process attempts to bind `127.0.0.1:17487`; remove local webhook routing that existed
+   only for the retired listener when cleaning up operator configuration.
 
 ## Review-status report-full JSON readers (Issue #611)
 

@@ -50,7 +50,7 @@ describe.sequential('side-process launch contract (#659)', { timeout: pwshTestTi
   it('guard passes on aligned fleet registry (AC#4)', () => {
     const result = runGuard();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toMatch(/validated 10 registry children/i);
+    expect(result.stdout).toMatch(/validated 9 registry children/i);
   });
 
   it('guard fails on mismatch fixture reproducing passProjectId-without-ProjectId (AC#3)', () => {

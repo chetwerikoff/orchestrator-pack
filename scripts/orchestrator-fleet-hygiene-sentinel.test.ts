@@ -634,14 +634,14 @@ describe('Issue #711 fleet hygiene sentinel', () => {
     const roleB = 950011;
     const testChild = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor-test-child.ps1');
     writeCmdlineFixture(cmdFixture, {
-      [roleA]: `pwsh -NoProfile -File ${testChild} -Role listener -MarkerDir ${path.join(stateDir, 'markers')}`,
-      [roleB]: `pwsh -NoProfile -File ${testChild} -Role listener -MarkerDir ${path.join(stateDir, 'markers')}`,
+      [roleA]: `pwsh -NoProfile -File ${testChild} -Role review-trigger-reconcile -MarkerDir ${path.join(stateDir, 'markers')}`,
+      [roleB]: `pwsh -NoProfile -File ${testChild} -Role review-trigger-reconcile -MarkerDir ${path.join(stateDir, 'markers')}`,
     });
     writeEnvFixture(envFixture, {
       [roleA]: { AO_SIDE_PROCESS_STATE_DIR: stateDir },
       [roleB]: { AO_SIDE_PROCESS_STATE_DIR: stateDir },
     });
-    fs.writeFileSync(path.join(stateDir, 'listener.pid'), String(roleA));
+    fs.writeFileSync(path.join(stateDir, 'review-trigger-reconcile.pid'), String(roleA));
 
     const h2Eval = evaluateHygiene({
       STATE_DIR: stateDir,

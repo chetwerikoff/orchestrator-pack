@@ -35,7 +35,6 @@ export function freezeSupervisorPid(pid: number): void {
   }
 }
 
-
 /** Minimum poll cadence for supervisor/wake integration tests (Issue #693). */
 export const SUPERVISOR_TEST_POLL_INTERVAL_MS = 200;
 
@@ -123,14 +122,14 @@ export async function waitForSupervisorLogMatchFromOffset(
 }
 
 export const managedChildRoles = [
-  'listener',
   'review-trigger-reconcile',
   'review-trigger-reeval',
   'review-ready-report-state-seed',
   'ci-green-wake-reconcile',
+  'worker-message-submit-reconcile',
   'review-start-claim-reaper',
   'ci-failure-notification-reconcile',
-  'worker-message-submit-reconcile',
+  'dead-worker-reconcile',
   'escalation-router',
 ] as const;
 
@@ -150,8 +149,6 @@ export function makeStateDir(): string {
   return dir;
 }
 
-
-
 export function cleanupSupervisorTests(): void {
   thawFrozenSupervisorPids();
   for (const root of tmpRoots.splice(0)) {
@@ -159,6 +156,7 @@ export function cleanupSupervisorTests(): void {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
 function killSupervisorStateDir(root: string): void {
   const fastStopEnv = { ...process.env, AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1' };
   try {
@@ -444,7 +442,54 @@ export async function readMarker(
   throw lastError ?? new Error(`timed out reading ${role} marker at ${markerPath}`);
 }
 
+export function countLogMatches(log: string, pattern: RegExp): number {
+  return (log.match(pattern) ?? []).length;
+}
+
+export function readChildRecovery(
+  stateDir: string,
+  childId: string,
+): Record<string, unknown> {
+  const statePath = path.join(stateDir, 'state.json');
+  if (!fs.existsSync(statePath)) {
+    return {};
+  }
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
+    childRecovery?: Record<string, Record<string, unknown>>;
+  };
+  return state.childRecovery?.[childId] ?? {};
+}
+
+export function readChildPid(stateDir: string, childId: string): number {
+  const pidPath = path.join(stateDir, `${childId}.pid`);
+  return Number(fs.readFileSync(pidPath, 'utf8').trim());
+}
+
+export function readSupervisorLog(stateDir: string): string {
+  const logPath = path.join(stateDir, 'supervisor.log');
+  return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+}
+
+export async function waitForSupervisorLogMatch(
+  stateDir: string,
+  pattern: RegExp,
+  timeoutMs = 20_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const log = readSupervisorLog(stateDir);
+    if (pattern.test(log)) {
+      return log;
+    }
+    await sleepMs(300);
+  }
+  throw new Error(`timed out waiting for supervisor log match: ${pattern}`);
+}
+
 export function isAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -467,68 +512,30 @@ export async function waitForProcessesStopped(
   throw new Error(`timed out waiting for processes to stop: ${pids.join(', ')}`);
 }
 
-export function countLogMatches(log: string, pattern: RegExp): number {
-  return (log.match(pattern) ?? []).length;
-}
-
-export function readSupervisorLog(stateDir: string): string {
-  const logPath = path.join(stateDir, 'supervisor.log');
-  return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-}
-
-export function readChildRecovery(
-  stateDir: string,
-  childId: string,
-): Record<string, unknown> {
-  const statePath = path.join(stateDir, 'state.json');
-  if (!fs.existsSync(statePath)) {
-    return {};
-  }
-  const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
-    childRecovery?: Record<string, Record<string, unknown>>;
-  };
-  return state.childRecovery?.[childId] ?? {};
-}
-
-export function readChildPid(stateDir: string, childId: string): number {
-  const pidPath = path.join(stateDir, `${childId}.pid`);
-  return Number(fs.readFileSync(pidPath, 'utf8').trim());
-}
-
-export async function waitForSupervisorLogMatch(
-  stateDir: string,
-  pattern: RegExp,
-  timeoutMs = 20_000,
-): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const log = readSupervisorLog(stateDir);
-    if (pattern.test(log)) {
-      return log;
-    }
-    await sleepMs(300);
-  }
-  throw new Error(`timed out waiting for supervisor log match: ${pattern}`);
-}
-
 export async function stopSupervisorChild(
-  child: { kill: (signal: NodeJS.Signals) => void },
+  child: ChildProcess,
   stateDir: string,
   settleMs = 1000,
 ): Promise<void> {
-  child.kill('SIGTERM');
+  let supervisorPid = 0;
   const supervisorPidPath = path.join(stateDir, 'supervisor.pid');
   if (fs.existsSync(supervisorPidPath)) {
-    const supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
-    if (supervisorPid > 0) {
-      await waitForProcessesStopped([supervisorPid], settleMs);
-    } else {
-      await sleepMs(settleMs);
-    }
-  } else {
-    await sleepMs(settleMs);
+    supervisorPid = Number(fs.readFileSync(supervisorPidPath, 'utf8').trim());
   }
-  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir]);
+  if (supervisorPid > 0 && isAlive(supervisorPid)) {
+    try {
+      process.kill(supervisorPid, 'SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+  child.kill('SIGTERM');
+  if (supervisorPid > 0) {
+    await waitForProcessesStopped([supervisorPid], settleMs);
+  }
+  runSupervisor(['-Action', 'Stop', '-StateDir', stateDir], {
+    AO_WAKE_SUPERVISOR_TEST_FAST_STOP: '1',
+  });
 }
 
 export function runPwsh(script: string): { stdout: string; stderr: string; status: number | null } {

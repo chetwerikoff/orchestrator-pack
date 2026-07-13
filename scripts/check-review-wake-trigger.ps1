@@ -1,175 +1,103 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: Issue #207 event-driven review wake trigger wiring.
+  Regression guard: Issue #207 review wake-trigger primitives after Issue #745 listener retirement.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $listenerScript = Join-Path $Root 'scripts/orchestrator-wake-listener.ps1'
 $triggerMjs = Join-Path $Root 'docs/review-wake-trigger.mjs'
 $triggerLib = Join-Path $Root 'scripts/lib/Invoke-ReviewWakeTrigger.ps1'
+$admissionMjs = Join-Path $Root 'docs/review-handoff-wake-admission.mjs'
+$admissionLib = Join-Path $Root 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1'
 $supervisorLib = Join-Path $Root 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
 $scriptOwnedDoc = Join-Path $Root 'docs/script-owned-review-pipeline.md'
 $wakeRunbook = Join-Path $Root 'docs/orchestrator-wake-runbook.md'
 
-foreach ($path in @($listenerScript, $triggerMjs, $triggerLib)) {
+if (Test-Path -LiteralPath $listenerScript -PathType Leaf) {
+    Write-Host 'orchestrator-wake-listener.ps1 must remain retired after the zero-traffic Issue #745 probe'
+    exit 1
+}
+
+foreach ($path in @($triggerMjs, $triggerLib, $admissionMjs, $admissionLib, $supervisorLib, $registryPath, $scriptOwnedDoc, $wakeRunbook)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Write-Host "Missing required file: $path"
+        Write-Host "Missing required surviving review-trigger surface: $path"
         exit 1
     }
 }
 
-$listener = Get-Content -LiteralPath $listenerScript -Raw
-if ($listener -notmatch 'Invoke-ReviewWakeTriggerOnCompletionWake') {
-    Write-Host 'orchestrator-wake-listener.ps1 must invoke review wake trigger on completion wakes'
-    exit 1
-}
-if ($listener -notmatch 'ready_for_review') {
-    Write-Host 'orchestrator-wake-listener.ps1 must handle ready_for_review hand-off wakes'
-    exit 1
-}
-$admissionMjs = Join-Path $Root 'docs/review-handoff-wake-admission.mjs'
-if (-not (Test-Path -LiteralPath $admissionMjs -PathType Leaf)) {
-    Write-Host "Missing required file: $admissionMjs"
-    exit 1
-}
 $admissionText = Get-Content -LiteralPath $admissionMjs -Raw
 if ($admissionText -notmatch 'isQualifiedReviewPendingInfoHandoffEnvelope') {
-    Write-Host 'review-handoff-wake-admission.mjs must qualify live review.pending(info) handoff envelopes (Issue #390)'
+    Write-Host 'review-handoff-wake-admission.mjs must preserve review.pending(info) envelope classification'
     exit 1
 }
 if ($admissionText -notmatch "REVIEW_PENDING_HANDOFF_EVENT_TYPE = 'review\.pending'") {
-    Write-Host 'review-handoff-wake-admission.mjs must bind review.pending event.type discriminator (Issue #390)'
-    exit 1
-}
-if ($listener -notmatch 'merge\.ready') {
-    Write-Host 'orchestrator-wake-listener.ps1 must handle merge.ready completion wakes'
-    exit 1
-}
-$triggerIdx = $listener.IndexOf('Invoke-ReviewWakeTriggerOnCompletionWake')
-$dedupIdx = $listener.IndexOf('$dedupDecision = Test-AndRecordWakeDedup')
-if ($triggerIdx -lt 0 -or $dedupIdx -lt 0 -or $triggerIdx -gt $dedupIdx) {
-    Write-Host 'orchestrator-wake-listener.ps1 must invoke review wake trigger before wake dedup'
-    exit 1
-}
-if ($listener -notmatch 'review_trigger_failed') {
-    Write-Host 'orchestrator-wake-listener.ps1 must preserve review_trigger_failed classification when review wake trigger fails'
-    exit 1
-}
-if ($listener -match 'Send-OrchestratorWakeMessage') {
-    Write-Host 'orchestrator-wake-listener.ps1 must not emit retired FYI wake sends to the orchestrator session'
+    Write-Host 'review-handoff-wake-admission.mjs must bind the review.pending event discriminator'
     exit 1
 }
 
-if ($listener -match 'Invoke-WakeFilter' -and $listener -match 'body\s*=\s*\(\$BodyJson\s*\|\s*ConvertFrom-Json\)') {
-    Write-Host 'Invoke-WakeFilter must pass raw bodyJson to the Node filter instead of parsing in PowerShell'
-    exit 1
-}
-if ($listener -match 'Invoke-GhOpenPrList' -and $listener -notmatch 'Test-ReadyForReviewHandoffEnvelope') {
-    Write-Host 'orchestrator-wake-listener.ps1 must gate gh pr list on hand-off envelope probe'
-    exit 1
-}
-if ($listener -notmatch 'Invoke-ReviewHandoffWakeAdmissionRecovery') {
-    Write-Host 'orchestrator-wake-listener.ps1 must replay durable handoff admissions on startup'
-    exit 1
-}
-if ($listener -notmatch 'Write-OrchestratorSideProcessProgress -ChildId ''listener''') {
-    Write-Host 'orchestrator-wake-listener.ps1 must emit supervised progress heartbeats for the listener child'
-    exit 1
-}
-if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight\.ps1') {
-    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must compose Invoke-ReviewerWorkspacePreflight.ps1'
-    exit 1
-}
 $triggerLibText = Get-Content -LiteralPath $triggerLib -Raw
+if ($triggerLibText -notmatch 'Invoke-ReviewerWorkspacePreflight\.ps1' -or
+    $triggerLibText -notmatch 'Invoke-ReviewerWorkspacePreflight -RepoRoot') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must retain reviewer workspace preflight composition'
+    exit 1
+}
 if ($triggerLibText -notmatch 'handoff receipt bound exceeded before review run') {
-    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must enforce handoff receipt bound immediately before ao review run'
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must retain the handoff receipt bound before review run'
     exit 1
 }
 $preflightIdx = $triggerLibText.IndexOf('Invoke-ReviewerWorkspacePreflight -RepoRoot')
 $receiptIdx = $triggerLibText.IndexOf('handoff receipt bound exceeded before review run')
 if ($preflightIdx -lt 0 -or $receiptIdx -lt 0 -or $preflightIdx -gt $receiptIdx) {
-    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must recheck handoff receipt bound after workspace preflight and before ao review run'
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must recheck the handoff receipt after workspace preflight'
+    exit 1
+}
+if ($triggerLibText -notmatch 'Test-ReviewWakeTriggerForbiddenCommand') {
+    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must retain the mechanical forbidden-command guard'
     exit 1
 }
 
-$ghChecksPath = Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1'
-$ghChecksText = Get-Content -LiteralPath $ghChecksPath -Raw
-if ($ghChecksText -match 'function Invoke-GhOpenPrList' -and $ghChecksText -notmatch 'baseRefName') {
-    Write-Host 'Invoke-GhOpenPrList must request baseRefName for handoff admission snapshots'
-    exit 1
-}
-$claimAuditIdx = 0
-while (($claimIdx = $triggerLibText.IndexOf('Write-ReviewHandoffClaimAudit', $claimAuditIdx)) -ge 0) {
-    $windowStart = [Math]::Max(0, $claimIdx - 160)
-    $window = $triggerLibText.Substring($windowStart, $claimIdx - $windowStart)
-    if ($window -notmatch '\$isHandoffWake') {
-        Write-Host 'Write-ReviewHandoffClaimAudit must be guarded by $isHandoffWake (handoff wakes only)'
-        exit 1
-    }
-    $claimAuditIdx = $claimIdx + 1
-}
-if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Invoke-ReviewerWorkspacePreflight -RepoRoot') {
-    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must run reviewer-workspace-preflight before ao review run'
-    exit 1
-}
-$admissionLib = Join-Path $Root 'scripts/lib/Record-ReviewHandoffWakeAdmission.ps1'
-$admissionLibText = Get-Content -LiteralPath $admissionLib -Raw
 $mechanicalLoader = 'Get-Mechanical' + 'JsonStateFile'
-if ($admissionLibText -notmatch [regex]::Escape($mechanicalLoader)) {
-    Write-Host 'Record-ReviewHandoffWakeAdmission.ps1 must load admission state via mechanical JSON state helper'
-    exit 1
-}
-
-if ((Get-Content -LiteralPath $triggerLib -Raw) -notmatch 'Test-ReviewWakeTriggerForbiddenCommand') {
-    Write-Host 'Invoke-ReviewWakeTrigger.ps1 must block merge commands in the wake trigger guard'
+if ((Get-Content -LiteralPath $admissionLib -Raw) -notmatch [regex]::Escape($mechanicalLoader)) {
+    Write-Host 'Record-ReviewHandoffWakeAdmission.ps1 must retain mechanical JSON state loading'
     exit 1
 }
 
 $mjs = Get-Content -LiteralPath $triggerMjs -Raw
 if ($mjs -notmatch 'MECHANICAL_FORBIDDEN_REVIEW_WAKE') {
-    Write-Host 'docs/review-wake-trigger.mjs must forbid merge commands in the wake trigger guard'
+    Write-Host 'docs/review-wake-trigger.mjs must retain forbidden review-wake command classification'
     exit 1
 }
 if ($mjs -notmatch 'WAKE_TO_RUN_DECISION_MAX_MS = 5_000') {
-    Write-Host 'docs/review-wake-trigger.mjs must define 5-second wake-to-run decision bound'
+    Write-Host 'docs/review-wake-trigger.mjs must retain the five-second decision bound'
     exit 1
 }
 if ($mjs -notmatch "from '\./review-head-ready\.mjs'") {
-    Write-Host 'docs/review-wake-trigger.mjs must compose review-head-ready.mjs (Issue #195)'
+    Write-Host 'docs/review-wake-trigger.mjs must compose review-head-ready.mjs'
     exit 1
 }
 
-if (-not (Test-Path -LiteralPath $registryPath)) {
-    Write-Host "Missing registry: $registryPath"
-    exit 1
-}
 $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
-$listener = $registry.children | Where-Object { $_.id -eq 'listener' } | Select-Object -First 1
-if (-not $listener -or -not $listener.sideEffecting) {
-    Write-Host 'orchestrator-side-process-registry.json must classify listener as side-effecting'
+if (@($registry.requiredChildIds) -contains 'listener' -or
+    @($registry.children | Where-Object { [string]$_.id -eq 'listener' }).Count -gt 0) {
+    Write-Host 'orchestrator-side-process-registry.json must not reintroduce the retired listener'
     exit 1
 }
-if ($listener.sideEffectLockFile -ne 'listener-side-effect.lock') {
-    Write-Host 'listener sideEffectLockFile must be listener-side-effect.lock'
-    exit 1
-}
-$supervisor = Get-Content -LiteralPath $supervisorLib -Raw
-if ($supervisor -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
-    Write-Host 'Orchestrator-SideProcessSupervisor.ps1 must load child registry'
+if ((Get-Content -LiteralPath $supervisorLib -Raw) -notmatch 'Get-OrchestratorWakeSupervisorChildRegistry') {
+    Write-Host 'Orchestrator-SideProcessSupervisor.ps1 must continue loading the registry-defined fleet'
     exit 1
 }
 
 if ((Get-Content -LiteralPath $scriptOwnedDoc -Raw) -notlike '*event-driven review trigger*') {
-    Write-Host 'docs/script-owned-review-pipeline.md missing event-driven review trigger section'
+    Write-Host 'docs/script-owned-review-pipeline.md must preserve the historical trigger ownership section'
+    exit 1
+}
+$runbook = Get-Content -LiteralPath $wakeRunbook -Raw
+if ($runbook -notmatch 'review-trigger-reconcile' -or $runbook -notmatch 'listener.*retired|retired.*listener') {
+    Write-Host 'docs/orchestrator-wake-runbook.md must document periodic review coverage and listener retirement'
     exit 1
 }
 
-if ((Get-Content -LiteralPath $wakeRunbook -Raw) -notlike '*review-wake-trigger*') {
-    Write-Host 'docs/orchestrator-wake-runbook.md missing review-wake-trigger documentation'
-    exit 1
-}
-
-Write-Host '[PASS] event-driven review wake trigger entrypoint and wiring (Issue #207)'
+Write-Host '[PASS] review wake-trigger primitives retained; listener entrypoint retired (Issues #207 / #745)'
 exit 0

@@ -6,7 +6,6 @@
     "escalation-review-trigger-degraded-ci",
     "escalation-review-run-recovery",
     "escalation-submit-adoption",
-    "escalation-handoff-envelope",
     "escalation-protected-finding",
     "escalation-pipeline-failure",
     "escalation-ci-failure-notify",

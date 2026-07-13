@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "requiredChildIds": [
-    "listener",
     "review-trigger-reconcile",
     "review-trigger-reeval",
     "review-ready-report-state-seed",
@@ -13,20 +12,6 @@
     "escalation-router"
   ],
   "children": [
-    {
-      "id": "listener",
-      "script": "orchestrator-wake-listener.ps1",
-      "sideEffecting": true,
-      "sideEffectLockFile": "listener-side-effect.lock",
-      "requiresOrchestratorSession": true,
-      "passProjectId": true,
-      "cadenceSeconds": 300,
-      "stallGraceMultiplier": 4,
-      "extraArgs": [
-        "-SideEffectStateDir",
-        "{stateRoot}"
-      ]
-    },
     {
       "id": "review-trigger-reconcile",
       "script": "review-trigger-reconcile.ps1",

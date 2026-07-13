@@ -1,13 +1,15 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Supervise orchestrator wake listener, heartbeat, and review-send-reconcile as managed children.
+  Supervise the registry-defined orchestrator side-process fleet.
 
 .DESCRIPTION
-  Single operator entry point to start, monitor, and stop
-  orchestrator-wake-listener.ps1 and orchestrator-wake-heartbeat.ps1.
+  Single operator entry point to start, monitor, and stop the surviving registry-defined children:
+  review-trigger-reconcile, review-trigger-reeval, review-ready-report-state-seed,
+  ci-green-wake-reconcile, worker-message-submit-reconcile, review-start-claim-reaper,
+  ci-failure-notification-reconcile, dead-worker-reconcile, and escalation-router.
   Resolves AO_ORCHESTRATOR_SESSION_ID (override or orchestrator-list adapter), restarts children
-  on exit, and re-targets both when the orchestrator session id changes.
+  on exit, and re-targets session-bound children when the orchestrator session id changes.
 
   See docs/orchestrator-wake-runbook.md and docs/orchestrator-autoloop-go-live.md.
 #>
