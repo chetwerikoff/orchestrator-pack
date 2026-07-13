@@ -65,12 +65,43 @@ const laneOptions = {
 };
 
 let result = buildLanePlan(repoRoot, laneOptions);
+let measurementDiagnostic = null;
 if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
   const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
   if (targets.length > 0) {
-    const preTopologyMeasurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
-    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
+    try {
+      const preTopologyMeasurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
+      result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements });
+    } catch (error) {
+      measurementDiagnostic = {
+        targets,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : null,
+      };
+    }
   }
+}
+
+if (measurementDiagnostic) {
+  const artifact = {
+    heavyShardCount: 1,
+    heavyShardMatrix: [1],
+    fallbackClassification: 'pr768-measurement-diagnostic',
+    discovered: [],
+    fullDiscovered: [],
+    heavyFiles: [],
+    lightFiles: [],
+    postMergeWallclockFiles: [],
+    parkedFiles: [],
+    heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
+    measurementDiagnostic,
+  };
+  writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
+  if (ghaOutput) {
+    writeGhaOutput(artifact);
+  }
+  console.log(JSON.stringify(artifact));
+  process.exit(0);
 }
 
 if (!result.ok) {
