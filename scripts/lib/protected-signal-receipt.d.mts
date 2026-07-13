@@ -58,6 +58,7 @@ export function suppressProtectedSignalHits(
   matches: ProtectedSignalMatch[],
   receipt: ProtectedSignalReceipt,
   guard: string,
+  consumedEntries?: Set<string>,
 ): {
   hits: string[];
   suppressed: Array<{ signal: string; fingerprint: string; occurrence: number }>;

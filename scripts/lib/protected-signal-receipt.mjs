@@ -157,12 +157,11 @@ export function collectProtectedSignalMatches(text, patternSpecs) {
   return matches;
 }
 
-export function suppressProtectedSignalHits(hitSignals, matches, receipt, guard) {
+export function suppressProtectedSignalHits(hitSignals, matches, receipt, guard, consumedEntries = new Set()) {
   if (!receipt || receipt.invalid || !Array.isArray(receipt.entries) || receipt.entries.length === 0) {
     return { hits: [...hitSignals], suppressed: [] };
   }
 
-  const consumedEntries = new Set();
   const remainingSignals = [];
   const suppressed = [];
   for (const signal of hitSignals) {

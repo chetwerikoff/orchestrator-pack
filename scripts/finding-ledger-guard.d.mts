@@ -23,6 +23,8 @@ export interface FindingLedgerGuardOptions {
   repoRoot?: string;
   receiptDir?: string;
   receiptPath?: string;
+  receipt?: import('./lib/protected-signal-receipt.mjs').ProtectedSignalReceipt;
+  consumedReceiptEntries?: Set<string>;
 }
 
 export function detectProtectedSignalsInCapture(

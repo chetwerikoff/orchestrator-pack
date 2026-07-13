@@ -504,4 +504,29 @@ describe('finding-ledger guard treats a backtick-quoted type tag as a quote but 
       rmSync(fixture.root, { recursive: true, force: true });
     }
   });
+
+  it('does not reuse one finding-ledger receipt entry across multiple capture files', () => {
+    const ledger = JSON.stringify({ version: 1, draft: 'receipt-fixture', findings: [] });
+    const fixture = writeTempFindingLedgerReceiptFixture(
+      'receipt-fixture-multi',
+      'Reviewer prose says this draft has a scope-violation false positive.',
+      ledger,
+    );
+
+    try {
+      const secondCapture = 'Another reviewer pass repeats the same scope-violation false positive.';
+      const result = checkFindingLedgerGuard(
+        [readFileSync(fixture.capturePath, 'utf8'), secondCapture],
+        ledger,
+        {
+          draftPath: fixture.draftPath,
+          repoRoot: fixture.root,
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join(' ')).toContain('scope-violation');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 });

@@ -315,12 +315,18 @@ export function detectProtectedSignalsInCapture(capture, options = {}) {
     pattern.lastIndex = 0;
   }
   const hitSignals = [...new Set(signals)];
-  const receipt = loadProtectedSignalReceipt(options);
+  const receipt = options.receipt ?? loadProtectedSignalReceipt(options);
   const matches = collectProtectedSignalMatches(
     scanText,
     PROTECTED_SIGNAL_PATTERNS.map(({ type, pattern }) => ({ signal: type, pattern })),
   );
-  return suppressProtectedSignalHits(hitSignals, matches, receipt, 'finding-ledger').hits;
+  return suppressProtectedSignalHits(
+    hitSignals,
+    matches,
+    receipt,
+    'finding-ledger',
+    options.consumedReceiptEntries,
+  ).hits;
 }
 
 function ledgerHasProtectedCoverage(ledger, protectedType) {
@@ -415,6 +421,8 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   const captures = Array.isArray(captureOrCaptures) ? captureOrCaptures : [captureOrCaptures];
   const errors = [];
   const ledger = parseLedger(ledgerText);
+  const receipt = loadProtectedSignalReceipt(options);
+  const consumedReceiptEntries = new Set();
 
   for (const row of ledgerHasProtectedRejection(ledger)) {
     errors.push(
@@ -432,7 +440,11 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
 
   const protectedSignals = new Set();
   for (const capture of captures) {
-    for (const signal of detectProtectedSignalsInCapture(capture, options)) {
+    for (const signal of detectProtectedSignalsInCapture(capture, {
+      ...options,
+      receipt,
+      consumedReceiptEntries,
+    })) {
       protectedSignals.add(signal);
     }
   }
