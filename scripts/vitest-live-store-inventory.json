@@ -1,0 +1,390 @@
+{
+  "schemaVersion": 1,
+  "issue": 752,
+  "allowedRoots": [
+    "scripts/**",
+    "plugins/**",
+    "vitest.config.ts",
+    "package.json",
+    ".github/workflows/**",
+    "docs/**"
+  ],
+  "liveRoots": [
+    {
+      "id": "wake-supervisor-state-root",
+      "defaultTemplate": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "harnessEnv": "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR",
+      "kind": "directory"
+    },
+    {
+      "id": "ao-base-root",
+      "defaultTemplate": "${HOME}/.agent-orchestrator",
+      "harnessEnv": "AO_BASE_DIR",
+      "kind": "directory"
+    }
+  ],
+  "stores": [
+    {
+      "id": "orchestrator-escalation-state",
+      "kind": "file",
+      "resolver": "Get-OrchestratorEscalationStatePath",
+      "writeBoundary": "Publish-OrchestratorEscalation / Set-MechanicalJsonStateFile",
+      "envOverrides": [
+        "AO_ORCHESTRATOR_ESCALATION_STATE"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-escalation-state.json",
+      "liveRoot": "${TMP}",
+      "sidecars": [
+        "orchestrator-escalation-state.json.tmp",
+        "orchestrator-escalation-state.json.bak",
+        "orchestrator-escalation-state.json.corrupt-*",
+        "orchestrator-escalation-state.json.lock"
+      ],
+      "harnessPath": "state/orchestrator-escalation-state.json",
+      "sourceFiles": [
+        "scripts/lib/Orchestrator-Escalation.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "orchestrator-operator-inbox",
+      "kind": "directory",
+      "resolver": "Get-OrchestratorEscalationOperatorInboxDir",
+      "writeBoundary": "Publish-OrchestratorEscalation operator route",
+      "envOverrides": [
+        "AO_OPERATOR_ESCALATION_INBOX"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-operator-inbox",
+      "liveRoot": "${TMP}",
+      "sidecars": [],
+      "harnessPath": "operator-inbox",
+      "sourceFiles": [
+        "scripts/lib/Orchestrator-Escalation.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "orchestrator-escalation-health-spool",
+      "kind": "directory",
+      "resolver": "Get-OrchestratorEscalationHealthSpoolDir",
+      "writeBoundary": "Publish-OrchestratorEscalation health route",
+      "envOverrides": [
+        "AO_ESCALATION_HEALTH_SPOOL"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-escalation-health",
+      "liveRoot": "${TMP}",
+      "sidecars": [],
+      "harnessPath": "health-spool",
+      "sourceFiles": [
+        "scripts/lib/Orchestrator-Escalation.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "worker-message-dispatch-journal",
+      "kind": "file",
+      "resolver": "Get-WorkerMessageDispatchJournalPath",
+      "writeBoundary": "Set-WorkerMessageDispatchJournal / Set-MechanicalJsonStateFile",
+      "envOverrides": [
+        "AO_WORKER_MESSAGE_DISPATCH_JOURNAL",
+        "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
+      ],
+      "canonicalDefault": "${HOME}/.local/state/orchestrator-pack-wake-supervisor/worker-message-dispatch-journal.json",
+      "liveRoot": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "sidecars": [
+        "worker-message-dispatch-journal.json.tmp",
+        "worker-message-dispatch-journal.json.bak",
+        "worker-message-dispatch-journal.json.corrupt-*",
+        "worker-message-dispatch-journal.json.lock"
+      ],
+      "harnessPath": "wake/worker-message-dispatch-journal.json",
+      "sourceFiles": [
+        "scripts/lib/Record-WorkerMessageDispatch.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "worker-message-submit-state",
+      "kind": "file",
+      "resolver": "Get-SubmitReconcileStatePath",
+      "writeBoundary": "Set-SubmitReconcileState / Set-SubmitReconcileHeartbeat",
+      "envOverrides": [
+        "AO_WORKER_MESSAGE_SUBMIT_STATE"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-worker-message-submit-state.json",
+      "liveRoot": "${TMP}",
+      "sidecars": [
+        "orchestrator-worker-message-submit-state.json.tmp",
+        "orchestrator-worker-message-submit-state.json.bak",
+        "orchestrator-worker-message-submit-state.json.corrupt-*",
+        "orchestrator-worker-message-submit-state.json.lock"
+      ],
+      "harnessPath": "state/orchestrator-worker-message-submit-state.json",
+      "sourceFiles": [
+        "scripts/worker-message-submit-reconcile.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "worker-message-submit-state-root-anchor",
+      "kind": "file",
+      "resolver": "Get-SubmitReconcileStateRootAnchorPath",
+      "writeBoundary": "Write-SubmitReconcileStateRootAnchor",
+      "envOverrides": [
+        "AO_SIDE_PROCESS_STATE_DIR",
+        "AO_WORKER_MESSAGE_DISPATCH_JOURNAL"
+      ],
+      "canonicalDefault": "${HOME}/.local/state/orchestrator-pack-wake-supervisor/worker-message-submit-state-root.anchor.json",
+      "liveRoot": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "sidecars": [
+        "worker-message-submit-state-root.anchor.json.tmp"
+      ],
+      "harnessPath": "wake/worker-message-submit-state-root.anchor.json",
+      "sourceFiles": [
+        "scripts/worker-message-submit-reconcile.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "worker-status-store",
+      "kind": "file",
+      "resolver": "Get-WorkerStatusStorePath",
+      "writeBoundary": "Set-WorkerStatusStoreState / Set-MechanicalJsonStateFile",
+      "envOverrides": [
+        "AO_WORKER_STATUS_STORE",
+        "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
+      ],
+      "canonicalDefault": "${HOME}/.local/state/orchestrator-pack-wake-supervisor/worker-status-store.json",
+      "liveRoot": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "sidecars": [
+        "worker-status-store.json.tmp",
+        "worker-status-store.json.bak",
+        "worker-status-store.json.corrupt-*",
+        "worker-status-store.lock"
+      ],
+      "harnessPath": "wake/worker-status-store.json",
+      "sourceFiles": [
+        "scripts/lib/WorkerStatusStore.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "review-delivery-lifecycle",
+      "kind": "file",
+      "resolver": "Get-ReviewDeliveryLifecycleStorePath",
+      "writeBoundary": "review-delivery-lifecycle.mjs writeJsonAtomic",
+      "envOverrides": [
+        "ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR"
+      ],
+      "canonicalDefault": "${HOME}/.local/state/orchestrator-pack-wake-supervisor/review-delivery-lifecycle.json",
+      "liveRoot": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "sidecars": [
+        "review-delivery-lifecycle.json.*.tmp"
+      ],
+      "harnessPath": "wake/review-delivery-lifecycle.json",
+      "sourceFiles": [
+        "scripts/lib/Review-DeliveryLifecycle.ps1",
+        "docs/review-delivery-lifecycle.mjs"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "review-handoff-wake-admission",
+      "kind": "file",
+      "resolver": "Get-ReviewHandoffWakeAdmissionPath",
+      "writeBoundary": "Set-ReviewHandoffWakeAdmissionState",
+      "envOverrides": [
+        "AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-review-handoff-wake-admission.json",
+      "liveRoot": "${TMP}",
+      "sidecars": [
+        "orchestrator-review-handoff-wake-admission.json.bak",
+        "orchestrator-review-handoff-wake-admission.json.corrupt-*",
+        ".orchestrator-review-handoff-wake-admission.json.*.tmp",
+        "review-handoff-wake-admission.lock"
+      ],
+      "harnessPath": "state/orchestrator-review-handoff-wake-admission.json",
+      "sourceFiles": [
+        "scripts/lib/Record-ReviewHandoffWakeAdmission.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "review-ready-report-state-seed",
+      "kind": "file",
+      "resolver": "Get-ReviewReadyReportStateSeedStatePath",
+      "writeBoundary": "Set-ReviewReadyReportStateSeedState / Set-MechanicalJsonStateFile",
+      "envOverrides": [
+        "AO_REPORT_STATE_SEED_STATE"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-review-ready-report-state-seed-state.json",
+      "liveRoot": "${TMP}",
+      "sidecars": [
+        "orchestrator-review-ready-report-state-seed-state.json.tmp",
+        "orchestrator-review-ready-report-state-seed-state.json.bak",
+        "orchestrator-review-ready-report-state-seed-state.json.corrupt-*",
+        "review-ready-report-state-seed.lock"
+      ],
+      "harnessPath": "state/orchestrator-review-ready-report-state-seed-state.json",
+      "sourceFiles": [
+        "scripts/lib/Record-ReviewReadyReportStateSeed.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "review-trigger-reeval-watch",
+      "kind": "file",
+      "resolver": "Get-ReviewTriggerReevalWatchPath",
+      "writeBoundary": "Set-ReviewTriggerReevalWatchState / Set-MechanicalJsonStateFile",
+      "envOverrides": [
+        "AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE"
+      ],
+      "canonicalDefault": "${TMP}/orchestrator-review-trigger-reeval-watch.json",
+      "liveRoot": "${TMP}",
+      "sidecars": [
+        "orchestrator-review-trigger-reeval-watch.json.tmp",
+        "orchestrator-review-trigger-reeval-watch.json.bak",
+        "orchestrator-review-trigger-reeval-watch.json.corrupt-*",
+        "review-trigger-reeval-watch.lock"
+      ],
+      "harnessPath": "state/orchestrator-review-trigger-reeval-watch.json",
+      "sourceFiles": [
+        "scripts/lib/Record-ReviewTriggerReevalWatch.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "worker-report-store",
+      "kind": "file",
+      "resolver": "resolveWorkerReportStorePath",
+      "writeBoundary": "writeWorkerReportStoreFile",
+      "envOverrides": [
+        "AO_WORKER_REPORT_STORE",
+        "AO_REPORT_STATE_SEED_STATE"
+      ],
+      "canonicalDefault": "${HOME}/.local/state/orchestrator-pack-wake-supervisor/worker-report-store.json",
+      "liveRoot": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "sidecars": [
+        "worker-report-store.json.tmp",
+        "worker-report-store.json.lock"
+      ],
+      "harnessPath": "wake/worker-report-store.json",
+      "sourceFiles": [
+        "docs/worker-report-store.mjs",
+        "scripts/lib/WorkerReportStore.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "pr-session-binding-cache",
+      "kind": "file",
+      "resolver": "resolvePrSessionBindingCachePath",
+      "writeBoundary": "writePrSessionBindingCacheFile / writePrSessionBindingCacheFileWithCas",
+      "envOverrides": [
+        "AO_PR_SESSION_BINDING_CACHE",
+        "AO_REPORT_STATE_SEED_STATE"
+      ],
+      "canonicalDefault": "${HOME}/.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json",
+      "liveRoot": "${HOME}/.local/state/orchestrator-pack-wake-supervisor",
+      "sidecars": [
+        "pr-session-binding-cache.json.tmp.*",
+        "pr-session-binding-cache.json.lock"
+      ],
+      "harnessPath": "wake/pr-session-binding-cache.json",
+      "sourceFiles": [
+        "docs/pr-session-binding-cache.mjs"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "review-start-claim-namespace",
+      "kind": "directory",
+      "resolver": "Resolve-ReviewStartClaimNamespace",
+      "writeBoundary": "Review-StartClaim atomic claim/terminal writes",
+      "envOverrides": [
+        "AO_BASE_DIR",
+        "AO_REVIEW_CLAIM_DIR"
+      ],
+      "canonicalDefault": "${HOME}/.agent-orchestrator/projects/orchestrator-pack/review-start-claims",
+      "liveRoot": "${HOME}/.agent-orchestrator",
+      "sidecars": [
+        ".lock-*",
+        "terminal/*"
+      ],
+      "harnessPath": "ao-base/projects/orchestrator-pack/review-start-claims",
+      "sourceFiles": [
+        "scripts/lib/Review-StartClaim.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "worker-nudge-claim-namespace",
+      "kind": "directory",
+      "resolver": "Resolve-WorkerNudgeClaimNamespace",
+      "writeBoundary": "Worker-NudgeClaim claim/terminal writes",
+      "envOverrides": [
+        "AO_BASE_DIR",
+        "AO_WORKER_NUDGE_CLAIM_DIR"
+      ],
+      "canonicalDefault": "${HOME}/.agent-orchestrator/projects/orchestrator-pack/worker-nudge-claims",
+      "liveRoot": "${HOME}/.agent-orchestrator",
+      "sidecars": [
+        ".lock-*",
+        "terminal/*"
+      ],
+      "harnessPath": "ao-base/projects/orchestrator-pack/worker-nudge-claims",
+      "sourceFiles": [
+        "scripts/lib/Worker-NudgeClaim.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    },
+    {
+      "id": "mechanical-transport",
+      "kind": "directory",
+      "resolver": "Get-MechanicalTransportTempRoot",
+      "writeBoundary": "Write-MechanicalTransportPrivateFile",
+      "envOverrides": [
+        "AO_MECHANICAL_TRANSPORT_TEMP"
+      ],
+      "canonicalDefault": "${HOME}/.orchestrator-mechanical-transport",
+      "liveRoot": "${HOME}",
+      "sidecars": [
+        "*.in.json",
+        "*.out.json",
+        "*.payload"
+      ],
+      "harnessPath": "transport",
+      "sourceFiles": [
+        "scripts/lib/MechanicalReconcileNode.ps1"
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    }
+  ],
+  "exclusions": [
+    {
+      "id": "repo-fixtures-and-golden-files",
+      "reason": "Tracked test fixtures are immutable repository inputs and have no runtime live-default resolver or write seam."
+    },
+    {
+      "id": "vitest-runtime-reports",
+      "reason": "Repository-local CI artifacts are invocation outputs, not operator live stores; they are already scoped to the current checkout and removed/replaced by lane wrappers."
+    }
+  ]
+}

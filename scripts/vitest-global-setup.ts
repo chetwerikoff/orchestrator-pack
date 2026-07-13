@@ -1,10 +1,5 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
-import {
-  applyOpkVitestHarnessEscalationEnv,
-  sharedDefaultEscalationStatePath,
-} from './test-harness-escalation-env.js';
+import { applyOpkVitestHarnessEscalationEnv } from './test-harness-escalation-env.js';
+import { startLiveStoreGuard } from './lib/vitest-live-store-harness.mjs';
 import {
   registerLaneLease,
   runReaperCli,
@@ -13,61 +8,8 @@ import {
   repoRoot,
 } from './testmode-fleet-harness.js';
 
-type SharedDefaultSnapshot = {
-  exists: boolean;
-  mtimeMs?: number;
-  contentHash?: string;
-};
-
-let sharedDefaultSnapshot: SharedDefaultSnapshot;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-
-function snapshotSharedDefaultStore(): SharedDefaultSnapshot {
-  const storePath = sharedDefaultEscalationStatePath();
-  if (!existsSync(storePath)) {
-    return { exists: false };
-  }
-  const stat = statSync(storePath);
-  const content = readFileSync(storePath);
-  return {
-    exists: true,
-    mtimeMs: stat.mtimeMs,
-    contentHash: createHash('sha256').update(content).digest('hex'),
-  };
-}
-
-function assertSharedDefaultUnmutated(): void {
-  const after = snapshotSharedDefaultStore();
-  if (!sharedDefaultSnapshot.exists && !after.exists) {
-    return;
-  }
-  if (sharedDefaultSnapshot.exists !== after.exists) {
-    throw new Error(
-      `shared escalation store existence changed during test run: before=${sharedDefaultSnapshot.exists} after=${after.exists}`,
-    );
-  }
-  if (
-    sharedDefaultSnapshot.mtimeMs !== after.mtimeMs
-    || sharedDefaultSnapshot.contentHash !== after.contentHash
-  ) {
-    const storePath = sharedDefaultEscalationStatePath();
-    let detail = `path=${storePath}`;
-    try {
-      const parsed = JSON.parse(readFileSync(storePath, 'utf8')) as {
-        records?: Record<string, { correlationKey?: string }>;
-      };
-      const testOriginated = Object.values(parsed.records ?? {}).filter((record) =>
-        /opk-vitest/i.test(String(record.correlationKey ?? '')),
-      );
-      if (testOriginated.length > 0) {
-        detail += ` test_originated_records=${testOriginated.length}`;
-      }
-    } catch {
-      // keep hash-only detail when parse fails
-    }
-    throw new Error(`shared escalation store mutated during test run (${detail})`);
-  }
-}
+let liveStoreGuard: { stop(): void } | undefined;
 
 function startLeaseHeartbeat(): void {
   const intervalSeconds = Number(process.env.AO_TESTMODE_FLEET_HEARTBEAT_INTERVAL_SECONDS ?? '5');
@@ -89,7 +31,9 @@ function stopLeaseHeartbeat(): void {
 }
 
 export default function setup() {
-  sharedDefaultSnapshot = snapshotSharedDefaultStore();
+  // This is a second line of defense for marker-bearing direct invocations. The
+  // package/lane parent wrapper starts its guard before Vitest is spawned.
+  liveStoreGuard = startLiveStoreGuard({ ...process.env });
   applyOpkVitestHarnessEscalationEnv();
   process.env.OPK_TESTMODE_FLEET_WORKSPACE_ROOT = repoRoot;
 
@@ -118,6 +62,7 @@ export default function setup() {
 
 export async function teardown() {
   stopLeaseHeartbeat();
+  let primaryFailure: unknown;
   try {
     writeVitestLaneLeaseContextFromEnv();
     if (process.env.VITEST_HEAVY_SHARD?.trim()) {
@@ -129,10 +74,10 @@ export async function teardown() {
         );
       }
     } else {
-      const teardown = runReaperCli('teardown');
-      if (teardown.status !== 0) {
+      const teardownResult = runReaperCli('teardown');
+      if (teardownResult.status !== 0) {
         throw new Error(
-          `TestMode fleet teardown post-sweep failed: status=${teardown.status} ${teardown.stderr || teardown.stdout}`,
+          `TestMode fleet teardown post-sweep failed: status=${teardownResult.status} ${teardownResult.stderr || teardownResult.stdout}`,
         );
       }
       const observe = runReaperCli('observe');
@@ -142,7 +87,21 @@ export async function teardown() {
         );
       }
     }
+  } catch (error) {
+    primaryFailure = error;
   } finally {
-    assertSharedDefaultUnmutated();
+    await new Promise((resolveFlush) => setTimeout(resolveFlush, 25));
+    try {
+      liveStoreGuard?.stop();
+    } catch (guardError) {
+      if (primaryFailure) {
+        throw new AggregateError(
+          [primaryFailure, guardError],
+          'Vitest teardown and live-store guard both failed',
+        );
+      }
+      throw guardError;
+    }
   }
+  if (primaryFailure) throw primaryFailure;
 }

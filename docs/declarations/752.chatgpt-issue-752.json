@@ -1,0 +1,30 @@
+{
+  "issue_number": 752,
+  "iteration_id": "chatgpt-issue-752",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-13T08:16:27.000Z",
+  "baseline": {
+    "commit_sha": "b40047ae9e4c2f562f8df33afb7f5fe9df1e62bc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:be3978baf2568889c285e3304a7b068ccf997f3354e9232ee86d45338158e0e8"
+  },
+  "declared_paths": [
+    "docs/vitest-live-store-audit.md",
+    "package.json",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/lib/OpkVitestStoreIsolation.ps1",
+    "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+    "scripts/lib/vitest-live-store-harness.d.mts",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/run-vitest-with-harness.mjs",
+    "scripts/test-harness-escalation-env.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/vitest-live-store-preload.mjs",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

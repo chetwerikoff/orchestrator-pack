@@ -37,20 +37,29 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
     AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A: '',
     AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B: '',
   };
-  if (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.AO_ORCHESTRATOR_ESCALATION_STATE) {
+  if (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.OPK_VITEST_HARNESS_ROOT) {
     applyOpkVitestHarnessEscalationEnv();
   }
+  const guardHelper = path.join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
+  const guardedScript = `. ${psString(guardHelper)}; Enable-OpkVitestStoreIsolation; ${script}`;
   try {
-    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', guardedScript], {
       cwd: repoRoot,
       encoding: 'utf8',
       env: {
         ...process.env,
         AO_BASE_DIR: managedAoBaseDir ?? inheritedAoBaseDir ?? '',
         OPK_VITEST_HARNESS: '1',
+        OPK_VITEST_HARNESS_ROOT: process.env.OPK_VITEST_HARNESS_ROOT ?? '',
         AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
         AO_OPERATOR_ESCALATION_INBOX: process.env.AO_OPERATOR_ESCALATION_INBOX ?? '',
         AO_ESCALATION_HEALTH_SPOOL: process.env.AO_ESCALATION_HEALTH_SPOOL ?? '',
+        AO_WORKER_MESSAGE_DISPATCH_JOURNAL: process.env.AO_WORKER_MESSAGE_DISPATCH_JOURNAL ?? '',
+        AO_WORKER_MESSAGE_SUBMIT_STATE: process.env.AO_WORKER_MESSAGE_SUBMIT_STATE ?? '',
+        AO_WORKER_STATUS_STORE: process.env.AO_WORKER_STATUS_STORE ?? '',
+        AO_REPORT_STATE_SEED_STATE: process.env.AO_REPORT_STATE_SEED_STATE ?? '',
+        AO_WORKER_REPORT_STORE: process.env.AO_WORKER_REPORT_STORE ?? '',
+        AO_PR_SESSION_BINDING_CACHE: process.env.AO_PR_SESSION_BINDING_CACHE ?? '',
         ...scopedGhHarnessEnv,
         ...extraEnv,
       },
