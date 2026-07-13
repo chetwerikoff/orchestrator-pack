@@ -26,6 +26,15 @@ BeforeAll {
         return ($json[-1] | ConvertFrom-Json)
     }
 
+    function Invoke-Issue771PwshRaw([string]$Command) {
+        $output = @(& pwsh -NoProfile -NonInteractive -Command $Command 2>&1)
+        return @{
+            ExitCode = $LASTEXITCODE
+            Lines    = @($output | ForEach-Object { [string]$_ })
+            Text     = ($output -join "`n")
+        }
+    }
+
     function Test-Issue771Within($Child, $Parent) {
         return ($Child.Extent.StartOffset -ge $Parent.Extent.StartOffset -and
             $Child.Extent.EndOffset -le $Parent.Extent.EndOffset)
@@ -407,7 +416,7 @@ Describe 'Issue #771 fixture-free worker-status recompute' {
         $dir = New-Issue771Temp
         try {
             $store = Join-Path $dir 'worker-status-store.json'
-            $result = Invoke-Issue771Pwsh @"
+            $raw = Invoke-Issue771PwshRaw @"
 . $(Quote-Issue771 $InvokeAo)
 Import-WorkerStatusGithubDependencies
 `$global:Issue771BoundaryCalls=0
@@ -426,6 +435,10 @@ function Get-WorkerStatusWriterGenerationVector { param([string]`$SessionId,[lon
 `$saved=Get-Content $(Quote-Issue771 $store) -Raw | ConvertFrom-Json
 @{ calls=[int]`$global:Issue771BoundaryCalls; degraded=[bool]`$diag.githubDegraded; record=[bool](`$saved.records.PSObject.Properties.Name -contains 'opk-771'); status=[string]`$saved.records.'opk-771'.derivedStatus } | ConvertTo-Json -Compress
 "@
+            $raw.ExitCode | Should -Be 0 -Because $raw.Text
+            $raw.Lines | Should -HaveCount 1 -Because $raw.Text
+            $raw.Lines[0] | Should -Match '^\{'
+            $result = $raw.Lines[0] | ConvertFrom-Json
             $result.calls | Should -BeGreaterThan 0
             $result.degraded | Should -BeFalse
             $result.record | Should -BeTrue

@@ -74,7 +74,7 @@ function Import-WorkerStatusGithubDependencies {
                 . $path
             }
         }
-        $importedModule = @(Import-Module -ModuleInfo $module -Global -Force -PassThru)[0]
+        $importedModule = @(Import-Module -ModuleInfo $module -Global -Force -DisableNameChecking -PassThru)[0]
         if (-not (Test-WorkerStatusGithubDependencyModule -Module $importedModule)) {
             $requiredCommands = @(
                 'Resolve-PackGateRepoRoot',
