@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "9bee9aeb041c7906f8ae1f75b8358dddf7fe664b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f0c3e8244e862ae9916c8213097b5e0c037da2543c38cb19aa7b2177da7efaad"
+    "active_scope_hash": "sha256:f67533019e5bea415ba511479b1cc64cfe27a9e735199312e0347771970bad4d"
   },
   "declared_paths": [
     "docs/vitest-live-store-audit.md",
@@ -42,8 +42,28 @@
     "scripts/orchestrator-review-start-preflight-audit.test.ts",
     "scripts/review-start-envelope-external-io.test.ts",
     "scripts/toolchain/child-process-policy.ts",
-    "scripts/toolchain/raw-child-process-baseline.json"
+    "scripts/toolchain/raw-child-process-baseline.json",
+    "scripts/_test-autonomous-ao-stub-fixture.ts",
+    "scripts/trust-ao-worktree.test.ts",
+    "scripts/reachability-purge.manifest.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f0c3e8244e862ae9916c8213097b5e0c037da2543c38cb19aa7b2177da7efaad",
+      "new_active_scope_hash": "sha256:f67533019e5bea415ba511479b1cc64cfe27a9e735199312e0347771970bad4d",
+      "changed": {
+        "added": [
+          "scripts/_test-autonomous-ao-stub-fixture.ts",
+          "scripts/reachability-purge.manifest.json",
+          "scripts/trust-ao-worktree.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add trust/harness integration files required by #752 CI fixes",
+      "actor": "orchestrator-pack-123",
+      "timestamp": "2026-07-14T11:06:32.340Z",
+      "applied": true
+    }
+  ]
 }
