@@ -42,6 +42,8 @@ interface ReachabilityManifest {
 const buildManifest = buildManifestRuntime as (repoRoot?: string) => Promise<ReachabilityManifest>;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = path.join(repoRoot, 'scripts', 'reachability-purge.manifest.json');
+// Issue #819's committed manifest is a historical pre-#821 snapshot; live reruns
+// remain deterministic, but are intentionally not compared with that snapshot.
 const committedManifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ReachabilityManifest;
 let manifest: ReachabilityManifest;
 
