@@ -1,7 +1,7 @@
 # Shared pwsh resolver for pack bash shims (Issue #406).
 resolve_pwsh() {
   local trusted_only=0
-  [[ "${AO_SESSION_ID:-}" == "1" ]] && trusted_only=1
+  [[ -n "${AO_SESSION_ID:-}" ]] && trusted_only=1
 
   if [[ "${trusted_only}" -eq 0 ]]; then
     if [[ -n "${AO_PWSH_BINARY:-}" && -x "${AO_PWSH_BINARY}" ]]; then
