@@ -296,6 +296,11 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
         || token.endsWith('\\run-vitest-with-harness.mjs');
     });
   };
+  const inheritedHarnessWakeRoot = () => String(
+    harnessSnapshotEnv.AO_WAKE_SUPERVISOR_STATE_DIR
+    || harnessSnapshotEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
+    || '',
+  ).trim();
 
   const hasExplicitHarnessBypass = (env) => {
     if (!env || env.OPK_VITEST_HARNESS !== '') return false;
@@ -359,6 +364,13 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
       const nestedEnv = { ...mergedEnv };
       for (const name of nestedHarnessResetKeys) {
         delete nestedEnv[name];
+      }
+      const wakeRoot = inheritedHarnessWakeRoot();
+      if (wakeRoot) {
+        nestedEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT = wakeRoot;
+        nestedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
+        nestedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
+        nestedEnv.AO_SIDE_PROCESS_STATE_DIR = wakeRoot;
       }
       const nodeOptions = stripSelfPreloadImport(nestedEnv.NODE_OPTIONS);
       if (nodeOptions) nestedEnv.NODE_OPTIONS = nodeOptions;
