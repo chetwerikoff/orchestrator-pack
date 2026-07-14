@@ -980,7 +980,7 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
 }
 
 function stableJson(value) {
-  return `${JSON.stringify(value, null, 2)}\n`;
+  return `${JSON.stringify(value)}\n`;
 }
 
 function main() {
