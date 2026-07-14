@@ -21,7 +21,6 @@ const KEEP_GUARD_TESTS = [
 ];
 
 const REWRITE_LIST_TESTS = [
-  'scripts/autonomous-orchestrator-interposer.test.ts',
   'scripts/ao-session-adapter.test.ts',
   'scripts/review-status-consumer.test.ts',
   'scripts/scripted-review-confirmed-delivery-gate.test.ts',

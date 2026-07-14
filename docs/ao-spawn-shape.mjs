@@ -430,9 +430,7 @@ function isCorpusMarkdown(entry) {
 
 /** Spawn-gate fixture suites referenced by Issue #589 / #163. */
 export const SPAWN_GATE_CORPUS_REL_PATHS = [
-  'scripts/_test-autonomous-ao-stub-fixture.ts',
   'scripts/autonomous-orchestrator-boundary.test.ts',
-  'scripts/autonomous-orchestrator-interposer.test.ts',
   'scripts/autonomous-spawn-policy.test.ts',
   'scripts/autonomous-spawn-worktree-gate.test.ts',
 ];
