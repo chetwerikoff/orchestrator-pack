@@ -1,0 +1,90 @@
+
+===== residual tests (exit 0) =====
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/orchestrator-pack/orchestrator-pack[39m
+
+ [32m✓[39m scripts/review-start-envelope-ledger.test.ts [2m([22m[2m20 tests[22m[2m)[22m[33m 44434[2mms[22m[39m
+     [33m[2m✓[22m[39m cross-attempt-failure-count-persists [33m 827[2mms[22m[39m
+     [33m[2m✓[22m[39m counts infra_transport released_for_retry only [33m 841[2mms[22m[39m
+     [33m[2m✓[22m[39m counts run_not_visible_fenced when decisionReason is readiness_envelope_exceeded [33m 825[2mms[22m[39m
+     [33m[2m✓[22m[39m pre-run-recheck snapshot forwards target-state denial [33m 827[2mms[22m[39m
+     [33m[2m✓[22m[39m pre-run-recheck-snapshot-forwards-transport-failure [33m 829[2mms[22m[39m
+     [33m[2m✓[22m[39m claimed-snapshot-target-state-denial-skips-live-ao-reads [33m 882[2mms[22m[39m
+     [33m[2m✓[22m[39m claimed-snapshot-transport-failure-skips-live-ao-reads [33m 885[2mms[22m[39m
+     [33m[2m✓[22m[39m pre-claim-scoped-transport-failure-skips-live-ao-reads [33m 822[2mms[22m[39m
+     [33m[2m✓[22m[39m claimed-snapshot-transport-failure-survives-ao-read-throw [33m 6368[2mms[22m[39m
+     [33m[2m✓[22m[39m reeval-fresh-snapshot-allows-pre-claim [33m 4547[2mms[22m[39m
+     [33m[2m✓[22m[39m claimed-snapshot-scopes-open-pr-lookup-by-known-pr-number (#557) [33m 840[2mms[22m[39m
+     [33m[2m✓[22m[39m pre-claim snapshot loads post-run retry ledger from claim namespace [33m 2513[2mms[22m[39m
+     [33m[2m✓[22m[39m claim ledger registration tolerates failed runs with startedAt only [33m 1977[2mms[22m[39m
+     [33m[2m✓[22m[39m reeval-fresh-snapshot-scopes-checks-to-planned-pr [33m 838[2mms[22m[39m
+     [33m[2m✓[22m[39m report-state-seed-fresh-snapshot-preserves-terminated-sessions [33m 833[2mms[22m[39m
+     [33m[2m✓[22m[39m consecutive-failure-notify-at-three [33m 891[2mms[22m[39m
+     [33m[2m✓[22m[39m cross-attempt-failure-count-persists across claim terminals [33m 5398[2mms[22m[39m
+     [33m[2m✓[22m[39m consecutive-failure-notify-at-three emits operator-visible escalation [33m 8106[2mms[22m[39m
+     [33m[2m✓[22m[39m all-starter-surfaces-supervised-gh [33m 1720[2mms[22m[39m
+     [33m[2m✓[22m[39m concurrent-surfaces-single-ledger-lineage [33m 3661[2mms[22m[39m
+ [32m✓[39m scripts/worker-recovery-spawn-argv.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 12756[2mms[22m[39m
+     [33m[2m✓[22m[39m builds claim-pr-resume argv with --project, --name, --claim-pr, --no-takeover, and --prompt [33m 842[2mms[22m[39m
+     [33m[2m✓[22m[39m builds spawn-new argv with --issue and --prompt and no positional issue token [33m 827[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps recovery display names within the AO 0.10.x limit [33m 831[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves --project from dead session worktree record before fallback [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves --project from AO session row when synthesized worktree record lacks projectId [33m 845[2mms[22m[39m
+     [33m[2m✓[22m[39m classifies new argv shapes for spawn policy routing [33m 904[2mms[22m[39m
+     [33m[2m✓[22m[39m buildRecoverySpawnPrompt returns non-empty instructive text for both recovery paths [33m 856[2mms[22m[39m
+     [33m[2m✓[22m[39m classifies --no-takeover refusal as bounded defer/escalate reason [33m 833[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery spawn: gate precedes ao invocation in Invoke-WorkerRecoverySpawn [33m 825[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery spawn: pre-route gate uses the same AO 0.10.2 argv builder [33m 831[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery spawn: accepts PSCustomObject worktree records for project resolution [33m 2167[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery spawn: prefers AO session project when synthesized worktree record lacks projectId [33m 2161[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m32 passed[39m[22m[90m (32)[39m
+[2m   Start at [22m 13:31:34
+[2m   Duration [22m 66.14s[2m (transform 1.25s, setup 66ms, import 1.31s, tests 57.19s, environment 0ms)[22m
+
+
+===== review capability (exit 0) =====
+[PASS] autonomous review-start capability inventory
+
+===== boundary capability (exit 0) =====
+[PASS] autonomous orchestrator boundary capability inventory
+
+===== claimed review lookup (exit 0) =====
+[PASS] scoped claimed-review PR lookup regression
+
+===== command runtime bootstrap (exit 0) =====
+[PASS] command-runtime bootstrap wiring
+
+===== starter surfaces (exit 0) =====
+[PASS] review-start envelope ledger starter-surface guard
+
+===== typecheck (exit 0) =====
+
+> typecheck:foundation
+> tsc -p tsconfig.json --noEmit
+
+
+===== lint (exit 0) =====
+
+> lint:foundation
+> node --experimental-strip-types scripts/toolchain/check-ts-policy.ts
+
+TypeScript foundation policy checks passed.
+
+===== pwsh growth (exit 0) =====
+
+> check:pwsh-test-growth
+> node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts
+
+PowerShell child-test baseline is unchanged.
+
+===== retired reference scan (exit 1) =====
+.github/workflows/typescript-foundation.yml:68:          run_check "retired reference scan" bash -lc "! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json'"
+scripts/gh-repo-resolve.test.ts:73:    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+tests/external-output-references/captures/spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561.raw.txt:2:grant mint: ao spawn 561 under AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1
+
+===== artifact absence (exit 0) =====
+
+===== diff check (exit 2) =====
+scripts/worker-recovery-spawn-argv.test.ts:250: new blank line at EOF.

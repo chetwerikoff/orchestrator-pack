@@ -248,4 +248,3 @@ describe('worker recovery AO 0.10.2 spawn argv (#638, #652)', () => {
   });
 });
 
-describe('worker recovery spawn no-bypass matrix (#638 AC#4, #652 fail-closed)', () => {

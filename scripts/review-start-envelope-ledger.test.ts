@@ -385,7 +385,8 @@ describe('review-start-envelope-ledger integration', () => {
         });
         expect(result.status, result.stdout + result.stderr).toBe(0);
         const manifest = JSON.parse(readFileSync(path.join(repoRoot, 'scripts/review-start-envelope-ledger-starter-surfaces.json'), 'utf8'));
-        expect(manifest.surfaces.length).toBeGreaterThanOrEqual(5);
+        expect(manifest.surfaces.length).toBeGreaterThanOrEqual(4);
+        expect(manifest.surfaces.map((row: { path: string }) => row.path)).not.toContain('scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1');
     });
     it('concurrent-surfaces-single-ledger-lineage', () => {
         const dir = tempClaimDir();
