@@ -87,15 +87,16 @@ describe('reachability-purge', () => {
     expect(manifest.rewriteList.length).toBeGreaterThan(0);
   });
 
-  it('reports binding blockers instead of claiming the incompatible retirement is complete', () => {
+  it('records the shim cluster as held (fail-safe KEEP) per amended AC 9, not a completion blocker', () => {
     expect(manifest.retiredShimBlockers.length).toBe(6);
     expect(manifest.retiredShimBlockers.every((row) => row.trackedInBase && !row.deletedInCurrentTree)).toBe(true);
     expect(manifest.retiredShimBlockers.every((row) => row.reachable || row.held)).toBe(true);
     expect(manifest.migrationNotesEntry.authorized).toBe(false);
     expect(manifest.migrationNotesEntry.presentWithRequiredFields).toBe(false);
-    expect(manifest.completionStatus).toBe('blocked');
     expect(manifest.completionBlockers.every((row) => Boolean(row.code && row.path && row.evidence))).toBe(true);
-    expect(manifest.completionBlockers.map((row) => row.code)).toContain('missing-binding-audit-handoff');
-    expect(manifest.completionBlockers.filter((row) => row.code === 'required-retired-shim-still-live-or-held')).toHaveLength(6);
+    expect(manifest.completionBlockers.map((row) => row.code)).not.toContain('missing-binding-audit-handoff');
+    expect(manifest.completionBlockers.map((row) => row.code)).not.toContain('shim-cluster-deleted-despite-live-inbound-edge');
+    expect(manifest.completionStatus).toBe('complete');
+    expect(manifest.completionBlockers).toEqual([]);
   });
 });

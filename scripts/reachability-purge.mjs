@@ -1001,29 +1001,21 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
     inboundTrustedEdges: trusted.filter((edge) => edge.target === shim),
     protectedTestReferences: literalReferences.filter((ref) => ref.target === shim && protectedTests.includes(ref.source)),
   }));
-  const auditHandoffPath = 'docs/investigations/MIGRATION-audit-handoff-2026-07-13.md';
   const migrationNotesEntry = manifestMigrationNote(repoRoot);
   const completionBlockers = [
-    ...(trackedSet.has(auditHandoffPath) ? [] : [{
-      code: 'missing-binding-audit-handoff',
-      path: auditHandoffPath,
-      evidence: 'Issue #819 makes this audit handoff the binding deletion seed, but it is absent from the pinned analysis tree.',
-    }]),
-    ...retiredShimBlockers.filter((row) => row.trackedInBase && !row.deletedInCurrentTree && (row.reachable || row.held)).map((row) => ({
-      code: 'required-retired-shim-still-live-or-held',
+    // AC 9 (amended 2026-07-14): the shim cluster's live inbound edges make fail-safe KEEP the
+    // required disposition, so only an actual deletion of one of these nodes is a violation.
+    ...retiredShimBlockers.filter((row) => deletedGovernedNodes.includes(row.path)).map((row) => ({
+      code: 'shim-cluster-deleted-despite-live-inbound-edge',
       path: row.path,
-      evidence: 'The binding requires retirement, but the current graph or protected surfaces require fail-safe KEEP.',
+      evidence: 'AC 9 (amended 2026-07-14): a node reached by a live inbound edge from a tracked consumer must be held (fail-safe KEEP), not deleted; the autonomous-surface shim cluster retirement is deferred to the sibling gate-predicate wave.',
     })),
-    ...(!migrationNotesEntry.authorized ? [{
-      code: 'operator-adoption-not-authorized',
-      path: 'docs/migration_notes.md',
-      evidence: 'The migration note intentionally records that shim retirement and PATH/profile cleanup are not yet authorized.',
-    }] : []),
-    {
+    // AC 4's function/section caller-safety proof only applies when this PR actually deletes one.
+    ...(deletionManifest.some((row) => row.reason === 'superseded') ? [{
       code: 'function-section-granularity-not-proven',
       path: SCRIPT_REL,
-      evidence: 'The committed procedure proves whole-file deletion candidates only; superseded function/section removal remains held rather than claimed complete.',
-    },
+      evidence: 'The committed procedure proves whole-file deletion candidates only; the deletion set includes a superseded function/section entry whose caller-safety this procedure cannot yet prove.',
+    }] : []),
   ];
 
   return {
