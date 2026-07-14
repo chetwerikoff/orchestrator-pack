@@ -58,7 +58,6 @@ function New-OrchestratorWakeSupervisorChildEnvironment {
         AO_SIDE_PROCESS_CHILD_ID     = $ChildId
         GH_FLEET_CACHE_AUDIT         = '1'
         GH_WRAPPER_AUDIT             = '1'
-        PATH                         = (Merge-OrchestratorSideProcessPackScriptsPath)
     }
     if ($Entry.RequiresOrchestratorSession) {
         $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId
@@ -73,7 +72,10 @@ function New-OrchestratorWakeSupervisorChildEnvironment {
         }
         $childEnv['AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'] = $markerRoot
     }
-    return Merge-OpkVitestChildProcessEnv -Environment $childEnv -PreferExisting
+    $merged = Merge-OpkVitestChildProcessEnv -Environment $childEnv -PreferExisting
+    $pathValue = if ($merged.ContainsKey('PATH')) { [string]$merged['PATH'] } else { $env:PATH }
+    $merged['PATH'] = Merge-OrchestratorSideProcessPackScriptsPath -PathValue $pathValue
+    return $merged
 }
 
 
@@ -2533,6 +2535,10 @@ function Start-OrchestratorWakeSupervisorDaemon {
         [string]$LogPath
     )
 
+    $launcherEnv = Merge-OpkVitestChildProcessEnv -Environment @{} -PreferExisting
+    $launcherPath = if ($launcherEnv.ContainsKey('PATH')) { [string]$launcherEnv['PATH'] } else { $env:PATH }
+    $launcherEnv['PATH'] = Merge-OrchestratorSideProcessPackScriptsPath -PathValue $launcherPath
+
     if ($IsLinux -or $IsMacOS) {
         $stateRoot = Split-Path -Parent $LogPath
         $launcher = Join-Path $stateRoot 'launch-supervisor.sh'
@@ -2541,11 +2547,19 @@ function Start-OrchestratorWakeSupervisorDaemon {
             }) -join ' '
         $packScriptsQuoted = Format-UnixShellSingleQuotedArgument -Value (Get-OrchestratorSideProcessPackScriptsDir)
         $logRedirect = ">> $(Format-UnixShellSingleQuotedArgument -Value $LogPath) 2>&1 < /dev/null &"
+        $envExports = @(
+            $launcherEnv.GetEnumerator() |
+                Sort-Object Name |
+                ForEach-Object {
+                    'export {0}={1}' -f $_.Key, (Format-UnixShellSingleQuotedArgument -Value ([string]$_.Value))
+                }
+        )
         $launcherContent = @(
             '#!/usr/bin/env bash'
             'set -euo pipefail'
             "cd $(Format-UnixShellSingleQuotedArgument -Value $WorkingDirectory)"
             ('export PATH={0}:${{PATH:-}}' -f $packScriptsQuoted)
+            $envExports
             'if command -v setsid >/dev/null 2>&1; then'
             "  setsid nohup pwsh $quotedArgs $logRedirect"
             'else'
@@ -2571,7 +2585,30 @@ function Start-OrchestratorWakeSupervisorDaemon {
     if ($IsWindows -or $env:OS -eq 'Windows_NT') {
         $startArgs['WindowStyle'] = 'Hidden'
     }
-    $proc = Start-Process @startArgs
+    if (Test-StartProcessSupportsEnvironmentParameter) {
+        $startArgs['Environment'] = $launcherEnv
+        $proc = Start-Process @startArgs
+    }
+    else {
+        $savedEnv = @{}
+        foreach ($key in $launcherEnv.Keys) {
+            $savedEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+            Set-Item -Path "Env:$key" -Value $launcherEnv[$key]
+        }
+        try {
+            $proc = Start-Process @startArgs
+        }
+        finally {
+            foreach ($key in $launcherEnv.Keys) {
+                if ([string]::IsNullOrEmpty($savedEnv[$key])) {
+                    Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+                }
+                else {
+                    Set-Item -Path "Env:$key" -Value $savedEnv[$key]
+                }
+            }
+        }
+    }
     return $proc.Id
 }
 

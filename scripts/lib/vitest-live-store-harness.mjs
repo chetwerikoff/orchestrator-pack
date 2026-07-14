@@ -370,18 +370,6 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
       state,
       'orchestrator-worker-message-send-adoption.json',
     ),
-    AO_REVIEW_CLAIM_DIR: join(
-      aoBase,
-      'projects',
-      'orchestrator-pack',
-      'review-start-claims',
-    ),
-    AO_WORKER_NUDGE_CLAIM_DIR: join(
-      aoBase,
-      'projects',
-      'orchestrator-pack',
-      'worker-nudge-claims',
-    ),
   });
   return paths;
 }

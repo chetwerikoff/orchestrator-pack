@@ -11,8 +11,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, relative } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { runProcessSync } from './kernel/subprocess.mjs';
 import {
   applyOpkVitestHarnessEnv,
   assertHarnessWritePathSafe,
@@ -271,12 +271,15 @@ try {
       fail(`Node ${label} write path did not resolve to a harness target`);
       continue;
     }
-    const child = spawnSync(
-      process.execPath,
-      ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', script],
-      { cwd: repoRoot, encoding: 'utf8', env: harnessEnv },
-    );
-    if (child.status !== 0) fail(`Node ${label} write boundary did not stay inside the harness root`);
+    const child = runProcessSync({
+      command: process.execPath,
+      args: ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', script],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: harnessEnv,
+      inheritParentEnv: false,
+    });
+    if (child.exitCode !== 0) fail(`Node ${label} write boundary did not stay inside the harness root`);
     if (existsSync(target)) fail(`Node ${label} write opened a live-default path before blocking`);
     if (!existsSync(redirected)) fail(`Node ${label} write did not land in the harness root`);
     else if (readFileSync(redirected, 'utf8') !== 'red') fail(`Node ${label} redirected content was incorrect`);
@@ -286,23 +289,29 @@ try {
   const helper = join(repoRoot, 'scripts', 'lib', 'OpkVitestStoreIsolation.ps1');
   const psEnv = { ...env, AO_WORKER_STATUS_STORE: liveWorkerStatus };
   const psAssert = `. ${JSON.stringify(helper)}; try { Assert-OpkVitestStorePathSafe -Path ${JSON.stringify(liveWorkerStatus)} -Operation 'self-check'; exit 0 } catch { if ($_.Exception.Message -match 'OPK_VITEST_LIVE_STORE_BLOCKED.*worker-status-store') { exit 42 }; Write-Error $_; exit 1 }`;
-  const assertResult = spawnSync(pwsh, ['-NoProfile', '-Command', psAssert], {
+  const assertResult = runProcessSync({
+    command: pwsh,
+    args: ['-NoProfile', '-Command', psAssert],
     cwd: repoRoot,
     encoding: 'utf8',
     env: psEnv,
+    inheritParentEnv: false,
   });
-  if (!assertResult.error && assertResult.status !== 42) {
+  if (!assertResult.error && assertResult.exitCode !== 42) {
     fail('PowerShell canonical live-store assertion did not fail closed');
   }
 
   const psWriteTarget = join(wake, 'pwsh-direct-state.json');
   const psWrite = `. ${JSON.stringify(helper)}; Enable-OpkVitestStoreIsolation; Set-Content -LiteralPath ${JSON.stringify(psWriteTarget)} -Value 'red'`;
-  const writeResult = spawnSync(pwsh, ['-NoProfile', '-Command', psWrite], {
+  const writeResult = runProcessSync({
+    command: pwsh,
+    args: ['-NoProfile', '-Command', psWrite],
     cwd: repoRoot,
     encoding: 'utf8',
     env,
+    inheritParentEnv: false,
   });
-  if (!writeResult.error && writeResult.status === 0) fail('PowerShell direct write boundary did not fail closed');
+  if (!writeResult.error && writeResult.exitCode === 0) fail('PowerShell direct write boundary did not fail closed');
   if (existsSync(psWriteTarget)) fail('PowerShell write opened a live-default path before blocking');
 
   const packageJson = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));

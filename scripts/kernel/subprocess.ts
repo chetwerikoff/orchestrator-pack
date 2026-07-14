@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessByStdio, type SpawnSyncReturns } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import { constants as osConstants } from 'node:os';
 
@@ -36,6 +36,15 @@ export interface RunProcessOptions {
   readonly onStdoutChunk?: (chunk: string) => void | Promise<void>;
   readonly onStderrChunk?: (chunk: string) => void | Promise<void>;
   readonly onSpawn?: (pid: number) => void;
+}
+
+export interface RunProcessSyncOptions {
+  readonly command: string;
+  readonly args?: readonly string[];
+  readonly cwd?: string;
+  readonly env?: Readonly<NodeJS.ProcessEnv>;
+  readonly inheritParentEnv?: boolean;
+  readonly encoding?: BufferEncoding;
 }
 
 interface TerminalIntent {
@@ -311,6 +320,65 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
     signal: observed.signal,
     stdout: stdoutText,
     stderr: stderrText,
+    timedOut: false,
+    cancelled: false,
+  };
+}
+
+export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
+  if (!options.command.trim()) throw new TypeError('command must be a non-empty executable path or name');
+  if (options.args && !Array.isArray(options.args)) throw new TypeError('args must be an argument array');
+
+  const encoding = options.encoding ?? 'utf8';
+  const env = options.inheritParentEnv
+    ? { ...process.env, ...options.env }
+    : minimalEnvironment(options.env);
+
+  let child: SpawnSyncReturns<string>;
+  try {
+    child = spawnSync(options.command, [...(options.args ?? [])], {
+      cwd: options.cwd,
+      env,
+      shell: false,
+      windowsHide: true,
+      encoding,
+    });
+  } catch (error) {
+    return {
+      outcome: 'spawn-failure',
+      ok: false,
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      cancelled: false,
+      error: describeError(error),
+    };
+  }
+
+  if (child.error) {
+    return {
+      outcome: 'spawn-failure',
+      ok: false,
+      exitCode: null,
+      signal: null,
+      stdout: child.stdout ?? '',
+      stderr: child.stderr ?? '',
+      timedOut: false,
+      cancelled: false,
+      error: describeError(child.error),
+    };
+  }
+
+  const signal = child.signal as NodeJS.Signals | null;
+  return {
+    outcome: signal ? 'signal' : 'exit',
+    ok: child.status === 0,
+    exitCode: child.status,
+    signal,
+    stdout: child.stdout ?? '',
+    stderr: child.stderr ?? '',
     timedOut: false,
     cancelled: false,
   };

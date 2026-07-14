@@ -151,9 +151,6 @@ function Set-OpkVitestHarnessEnv {
     $env:AO_WAKE_DEDUP_STATE = Join-Path $stateDir 'orchestrator-wake-dedup.json'
     $env:AO_WAKE_LISTENER_SIDE_EFFECT_LOCK = Join-Path $stateDir 'orchestrator-wake-listener-side-effect.lock'
     $env:AO_WORKER_MESSAGE_ADOPTION_STATE = Join-Path $stateDir 'orchestrator-worker-message-send-adoption.json'
-    $env:AO_REVIEW_CLAIM_DIR = Join-Path (Join-Path (Join-Path $aoBaseDir 'projects') 'orchestrator-pack') 'review-start-claims'
-    $env:AO_WORKER_NUDGE_CLAIM_DIR = Join-Path (Join-Path (Join-Path $aoBaseDir 'projects') 'orchestrator-pack') 'worker-nudge-claims'
-
     . (Join-Path $PSScriptRoot 'OpkVitestStoreIsolation.ps1')
     Enable-OpkVitestStoreIsolation
 

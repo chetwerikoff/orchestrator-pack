@@ -13,16 +13,25 @@ function Get-OpkVitestChildProcessEnvOverrides {
     $explicitKeys = @(
         'HOME',
         'USERPROFILE',
+        'PATH',
         'TMPDIR',
         'TEMP',
         'TMP',
         'XDG_STATE_HOME',
-        'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR'
+        'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+        'OPK_REAL_PWSH',
+        'OPK_REAL_AO',
+        'OPK_REAL_AO_BINARY',
+        'GIT_REAL_BINARY',
+        'GIT_SYSTEM_BINARY'
     )
 
     foreach ($item in Get-ChildItem Env:) {
         $name = [string]$item.Name
         if (-not $name) {
+            continue
+        }
+        if ($name -in @('AO_REVIEW_CLAIM_DIR', 'AO_WORKER_NUDGE_CLAIM_DIR')) {
             continue
         }
         if ($name -like 'AO_*' -or $name -like 'OPK_VITEST_*' -or $explicitKeys -contains $name) {

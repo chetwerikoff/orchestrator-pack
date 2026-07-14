@@ -667,13 +667,12 @@ describe('review-start-envelope-external-io', () => {
         }
     });
     it('hold-semantics-481-preserved', () => {
-        const result = spawnSync('npm', ['test', '--', 'review-start-claim-budget-semantics'], {
+        const result = spawnSync(process.execPath, ['scripts/run-vitest-with-harness.mjs', 'run', 'review-start-claim-budget-semantics'], {
             cwd: repoRoot,
             encoding: 'utf8',
-            shell: true,
         });
         expect(result.status).toBe(0);
-    });
+    }, 60000);
 });
 describe('review-start-envelope-external-io monotonic clock', () => {
     it('advances independently of wall clock', () => {

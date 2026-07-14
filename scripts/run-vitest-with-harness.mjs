@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { runProcess } from './kernel/subprocess.mjs';
 import {
   applyOpkVitestHarnessEnv,
   cleanupHarnessRoot,
@@ -178,46 +178,15 @@ function signalExitCode(signal) {
 }
 
 function runVitestChild(entrypoint, args, env) {
-  return new Promise((resolveChild, rejectChild) => {
-    const child = spawn(process.execPath, [entrypoint, ...args], {
-      cwd: repoRoot,
-      env,
-      stdio: 'inherit',
-    });
-    const handlers = new Map();
-    let terminatingSignal = null;
-    let forceTimer = null;
-    const childRunning = () => child.exitCode === null && child.signalCode === null;
-
-    for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
-      const handler = () => {
-        if (!childRunning()) return;
-        if (terminatingSignal) {
-          child.kill('SIGKILL');
-          return;
-        }
-        terminatingSignal = signal;
-        child.kill(signal);
-        forceTimer = setTimeout(() => {
-          if (childRunning()) child.kill('SIGKILL');
-        }, SIGNAL_GRACE_MS);
-      };
-      handlers.set(signal, handler);
-      process.once(signal, handler);
-    }
-    const cleanupSignals = () => {
-      if (forceTimer) clearTimeout(forceTimer);
-      for (const [signal, handler] of handlers) process.removeListener(signal, handler);
-    };
-    child.once('error', (error) => {
-      cleanupSignals();
-      rejectChild(error);
-    });
-    child.once('close', (code, signal) => {
-      cleanupSignals();
-      resolveChild(code ?? signalExitCode(terminatingSignal ?? signal));
-    });
-  });
+  return runProcess({
+    command: process.execPath,
+    args: [entrypoint, ...args],
+    cwd: repoRoot,
+    env,
+    inheritParentEnv: false,
+    detached: process.platform !== 'win32',
+    stdio: 'inherit',
+  }).then((result) => result.exitCode ?? signalExitCode(result.signal));
 }
 
 const invocationRoot = createHarnessRoot();
