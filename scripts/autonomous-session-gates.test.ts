@@ -37,6 +37,7 @@ function evaluateSessionCell(sessionId: string | null) {
     finally {
       if ($prior) { $env:AO_SESSION_ID = $prior } else { Remove-Item Env:AO_SESSION_ID -ErrorAction SilentlyContinue }
     }
+    exit 0
   `);
   return JSON.parse(output.trim());
 }

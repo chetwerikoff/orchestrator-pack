@@ -1099,6 +1099,6 @@ this runbook before operators require a worker-send adoption proof again.
 
 When the LLM orchestrator turn repeats worker nudges within the same review round or CI transition,
 verify `scripts/invoke-gated-worker-nudge.ps1` is named in live `orchestratorRules` and
-`pwsh -NoProfile -File scripts/check-worker-nudge-gate-adoption.ps1` passes. Audit rows live under
+`pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart` passes, and `scripts/autonomous-session-gates.test.ts` covers the AO 0.10.2 role matrix. Audit rows live under
 `~/.agent-orchestrator/projects/<project>/worker-nudge-gate-audit/`. See
 [`docs/migration_notes.md`](migration_notes.md#llm-orchestrator-gated-worker-nudge-gate-issue-384). Issue #430 adds issue-keyed `task-continuation` (`-IssueNumber` + `-IntentClass task-continuation`); PR-keyed classes unchanged.

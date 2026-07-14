@@ -23,7 +23,6 @@
   ],
   "commandEntrypoints": [
     "scripts/ao",
-    "scripts/ao-autonomous-guard.ps1",
     "scripts/journaled-worker-send.ps1"
   ],
   "orchestratorRulesBindings": [

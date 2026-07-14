@@ -384,16 +384,16 @@ projects:
       ROUTINE REVIEW TRIGGER (script-owned — operator reference prose; NOT an LLM turn
       checklist on AO 0.10). Routine review rounds are started by side-process scripts
       named above — the LLM orchestrator turn does not start or drive them. The block
-      below documents legacy import / operator reference only. Historical claimed entry
-      point (non-routine — not the 0.10 default path):
-          -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
-      Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
-      AO_SESSION_ID=1, resolve real ao/git out-of-band via
-      and prepend pack scripts/ to PATH so `ao`, `git`, and `gh` resolve to pack shims (deny spawn and
-      direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
-      only the claimed entry point may launch review runs. Gate capability markers:
-      orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
+      below documents legacy import / operator reference only.
+      IN-PROCESS AUTONOMOUS GATES (Issue #821): AO 0.10.2 injects a non-empty
+      AO_SESSION_ID into orchestrator and worker sessions. Shared spawn, review-start,
+      worker-nudge, and git policy gates activate from presence of that identifier.
+      The sampled review role, operator shells, and CI have no AO_SESSION_ID and remain
+      outside those in-process gates. PATH shims, real-binary indirection, and the
+      claimed-run shell wrapper are retired; direct ao/git shell invocation is not a
+      process-boundary enforcement surface.
       Command-runtime bootstrap (refuses command turns when tools/PATH are incomplete):
+      capability marker: command-runtime-bootstrap/v1
       pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1
       Recovery-boundary: command-runtime failures route to Issue #522/#527 — no ad hoc cleanup here.
       Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File

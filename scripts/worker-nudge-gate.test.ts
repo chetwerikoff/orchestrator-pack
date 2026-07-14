@@ -499,16 +499,6 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         });
         expect(result.status).toBe(46);
     });
-    it('ao shim denies raw worker send on autonomous surface', () => {
-        const aoShim = path.join(repoRoot, 'scripts/ao');
-        const result = spawnSync('bash', [aoShim, 'send', 'opk-worker', 'ping'], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            env: { ...process.env, AO_SESSION_ID: '1' },
-        });
-        expect(result.status).toBe(93);
-        expect(result.stderr).toMatch(/autonomous worker nudges paused/i);
-    });
     it('autonomous guard allows registered journaled transport internal capability', () => {
         const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
         const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
@@ -622,26 +612,6 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         expect(result.trusted).toBe(true);
     });
     describe('internal capability deny', () => {
-        it('raw ao send on autonomous surface is internal capability deny exit 93', () => {
-            const aoShim = path.join(repoRoot, 'scripts/ao');
-            const result = spawnSync('bash', [aoShim, 'send', 'opk-worker', 'ping'], {
-                cwd: repoRoot,
-                encoding: 'utf8',
-                env: { ...process.env, AO_SESSION_ID: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
-            });
-            expect(result.status).toBe(93);
-            expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
-        });
-        it('raw ao send --help without capability is internal capability deny exit 93', () => {
-            const aoShim = path.join(repoRoot, 'scripts/ao');
-            const result = spawnSync('bash', [aoShim, 'send', '--help'], {
-                cwd: repoRoot,
-                encoding: 'utf8',
-                env: { ...process.env, AO_SESSION_ID: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
-            });
-            expect(result.status).toBe(93);
-            expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
-        });
         it('forged unregistered internal capability token is internal capability deny exit 93', () => {
             const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
             const script = `

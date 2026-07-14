@@ -1,11 +1,11 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, cpSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
-import { AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION, TURN_VISIBLE_REAL_BINARY_ENV_VARS, evaluateAutonomousGitBoundary, evaluateAutonomousSpawnBoundary, evaluateBoundaryCapabilityPreflight, evaluateTurnVisibleRealBinaryBypass, gitArgvDefinesAlias, gitSubcommandFromArgv, hasSanctionedGitParentChain, isMutatingGitArgv, isSanctionedGitParentCommandLine, isSpawnAoArgv, loadAutonomousOrchestratorBoundaryInventory, validateBoundaryCapabilityInventory } from '../docs/autonomous-orchestrator-boundary.mjs';
+import { AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION, TURN_VISIBLE_REAL_BINARY_ENV_VARS, evaluateAutonomousGitBoundary, evaluateAutonomousSpawnBoundary, evaluateBoundaryCapabilityPreflight, gitArgvDefinesAlias, gitSubcommandFromArgv, hasSanctionedGitParentChain, isMutatingGitArgv, isSanctionedGitParentCommandLine, isSpawnAoArgv, loadAutonomousOrchestratorBoundaryInventory, validateBoundaryCapabilityInventory } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
 function initCoordinatedIssue324Fixture() {
@@ -190,35 +190,6 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120000 
         expect(yaml).toMatch(/scripts\/ao \+ scripts\/git/);
         expect(yaml).toMatch(/AO_SESSION_ID/);
     });
-    it('detects turn-visible real-binary bypass vectors', () => {
-        expect(evaluateTurnVisibleRealBinaryBypass({
-            env: { AO_REAL_BINARY: '/usr/bin/ao' },
-            pathValue: '/pack/scripts:/usr/bin',
-        }).bypassPresent).toBe(true);
-        const misorderedPath = `/usr/bin:${path.join(repoRoot, 'scripts')}:/usr/bin`;
-        const misordered = evaluateTurnVisibleRealBinaryBypass({
-            env: {},
-            pathValue: misorderedPath,
-        });
-        if (existsSync('/usr/bin/git') || existsSync('/usr/bin/ao')) {
-            expect(misordered.bypassPresent).toBe(true);
-            expect(misordered.reason).toBe('real_binary_before_shim_on_path');
-        }
-        const emptyDir = mkdtempSync(path.join(tmpdir(), 'autonomous-path-empty-'));
-        try {
-            expect(evaluateTurnVisibleRealBinaryBypass({
-                env: {},
-                pathValue: `${emptyDir}:${path.join(repoRoot, 'scripts')}:/usr/bin`,
-            }).bypassPresent).toBe(false);
-        }
-        finally {
-            rmSync(emptyDir, { recursive: true, force: true });
-        }
-        expect(evaluateTurnVisibleRealBinaryBypass({
-            env: {},
-            pathValue: '/pack/scripts:/usr/bin:/bin',
-        }).bypassPresent).toBe(false);
-    });
     describe('broken explicit ao pointer policy (Issue #495)', { timeout: 120000 }, () => {
         const BROKEN_POINTER_RE = /autonomous real-binary config: explicit ao pointer missing or not executable:/;
         const INVALID_JSON_RE = /autonomous real-binary config: invalid JSON/;
@@ -268,38 +239,6 @@ exit 0
                 rmSync(packRoot, { recursive: true, force: true });
             }
         }
-        it('emits resolver-path warning and falls back on autonomous surface bash fast path', () => {
-            withBrokenAoPointerFixture(({ packRoot, pathBin }) => {
-                const result = spawnAoFixtureBash([path.join(packRoot, 'scripts/ao'), 'status', '--json'], packRoot, {
-                    AO_SESSION_ID: '1',
-                    PATH: `${pathBin}:${path.join(packRoot, 'scripts')}:${process.env.PATH ?? ''}`,
-                });
-                expect(result.status).toBe(0);
-                expect(result.stderr).toMatch(BROKEN_POINTER_RE);
-                expect(() => JSON.parse(result.stdout)).not.toThrow();
-            });
-        });
-        it('emits resolver-path warning and falls back on autonomous surface PS guard path', () => {
-            withBrokenAoPointerFixture(({ packRoot, pathBin, fallbackAo, brokenAo }) => {
-                const scriptsDir = path.join(packRoot, 'scripts');
-                const minimalPath = `${pathBin}:${scriptsDir}:/usr/bin:/bin`;
-                const output = runPwsh(`
-          $env:AO_SESSION_ID = '1'
-          $env:PATH = ${psString(minimalPath)}
-          . ${psString(boundaryLibPath)}
-          Invoke-AutonomousExplicitAoConfigSurfacePolicy -PackRoot ${psString(packRoot)} | Out-Null
-          $resolved = Resolve-RealAoExecutable -PackRoot ${psString(packRoot)}
-          [pscustomobject]@{
-            resolved = [string]$resolved
-            usesFallback = [bool]($resolved -eq ${psString(fallbackAo)})
-            avoidsBroken = [bool]($resolved -ne ${psString(brokenAo)})
-          } | ConvertTo-Json -Compress
-        `);
-                const parsed = JSON.parse(output);
-                expect(parsed.usesFallback).toBe(true);
-                expect(parsed.avoidsBroken).toBe(true);
-            });
-        });
     });
     it('resolves pack root from boundary lib without explicit PackRoot', () => {
         const output = runPwsh(`
