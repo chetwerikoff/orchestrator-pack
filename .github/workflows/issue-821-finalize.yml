@@ -1,0 +1,90 @@
+name: Finalize issue 821
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/scripts/finalize-issue-821.mjs
+      - .github/workflows/issue-821-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-821-retire-autonomous-surface
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Apply finalization, validate, and commit
+        shell: bash
+        run: |
+          set +e
+          report=issue-821-finalize-report.txt
+          : > "$report"
+
+          run_check() {
+            name="$1"
+            shift
+            tmp="$(mktemp)"
+            "$@" >"$tmp" 2>&1
+            status=$?
+            {
+              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
+              tail -n 500 "$tmp"
+            } >> "$report"
+            rm -f "$tmp"
+            return "$status"
+          }
+
+          overall=0
+          run_check "transform" node .github/scripts/finalize-issue-821.mjs || overall=1
+
+          if (( overall == 0 )); then
+            run_check "write raw-child baseline" npm run lint:foundation -- --write-baseline || overall=1
+            run_check "write pwsh-child baseline" npm run check:pwsh-test-growth -- --write-baseline || overall=1
+
+            run_check "target vitest" npx vitest run \
+              scripts/autonomous-session-gates.test.ts \
+              scripts/autonomous-spawn-policy.test.ts \
+              scripts/worker-nudge-gate.test.ts \
+              scripts/spawn-worktree-grant-finalization.test.ts \
+              scripts/orchestrator-claimed-review-run.test.ts \
+              scripts/autonomous-orchestrator-boundary.test.ts \
+              scripts/autonomous-spawn-worktree-gate.test.ts \
+              scripts/autonomous-review-worktree-e2e-smoke.test.ts \
+              scripts/orchestrator-review-start-preflight-audit.test.ts \
+              scripts/review-start-envelope-external-io.test.ts || overall=1
+            run_check "review capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart || overall=1
+            run_check "boundary capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary || overall=1
+            run_check "claimed review lookup guard" pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1 || overall=1
+            run_check "command runtime bootstrap guard" pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1 || overall=1
+            run_check "typecheck foundation" npm run typecheck:foundation || overall=1
+            run_check "lint foundation" npm run lint:foundation || overall=1
+            run_check "pwsh child growth" npm run check:pwsh-test-growth || overall=1
+            run_check "working-tree diff check" git diff --check || overall=1
+          fi
+
+          rm -f .github/scripts/finalize-issue-821.mjs .github/workflows/issue-821-finalize.yml
+          if (( overall == 0 )); then
+            rm -f "$report"
+          fi
+
+          git add -A
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize in-process autonomous session gates"
+            git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          fi
+
+          exit "$overall"
