@@ -1,0 +1,122 @@
+name: Issue 821 final pass
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/issue-821-final-pass.yml
+
+permissions:
+  contents: write
+
+jobs:
+  final-pass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-821-retire-autonomous-surface
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Finish active-reference cleanup, validate, and commit
+        shell: bash
+        run: |
+          set +e
+          report=issue-821-final-pass-report.txt
+          rm -f issue-821-continue-report.txt issue-821-finalize-report.txt
+          : > "$report"
+
+          run_check() {
+            name="$1"
+            shift
+            tmp="$(mktemp)"
+            "$@" >"$tmp" 2>&1
+            status=$?
+            {
+              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
+              tail -n 600 "$tmp"
+            } >> "$report"
+            rm -f "$tmp"
+            return "$status"
+          }
+
+          overall=0
+          run_check "active registry cleanup" python - <<'PY' || overall=1
+          import json
+          from pathlib import Path
+
+          helper = Path('scripts/_test-autonomous-ao-stub-fixture.ts')
+          helper.unlink(missing_ok=True)
+
+          spawn_shape = Path('docs/ao-spawn-shape.mjs')
+          text = spawn_shape.read_text(encoding='utf-8')
+          for line in (
+              "  'scripts/_test-autonomous-ao-stub-fixture.ts',\n",
+              "  'scripts/autonomous-orchestrator-interposer.test.ts',\n",
+          ):
+              text = text.replace(line, '')
+          spawn_shape.write_text(text, encoding='utf-8')
+
+          manifest_path = Path('scripts/launch-argv-test-exclusions.manifest.json')
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          retired = {
+              'scripts/_test-autonomous-ao-stub-fixture.ts',
+              'scripts/_test-spawn-budget-fixture.ts',
+              'scripts/_test-interposer-pack-fixture.ts',
+          }
+          manifest['dedicatedTestHelperModules'] = [
+              item for item in manifest.get('dedicatedTestHelperModules', []) if item not in retired
+          ]
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+
+          reachability = Path('scripts/reachability-purge.mjs')
+          text = reachability.read_text(encoding='utf-8')
+          text = text.replace("  'scripts/autonomous-orchestrator-interposer.test.ts',\n", '')
+          text = text.replace("  'scripts/autonomous-spawn-budget.test.ts',\n", '')
+          text = text.replace("  'scripts/review-pipeline-spawn-budget.test.ts',\n", '')
+          reachability.write_text(text, encoding='utf-8')
+          PY
+
+          if (( overall == 0 )); then
+            run_check "active retired-reference scan" bash -lc "! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!scripts/reachability-purge.manifest.json' ':!.github/workflows/issue-821-final-pass.yml'" || overall=1
+            run_check "write raw-child baseline" npm run lint:foundation -- --write-baseline || overall=1
+            run_check "write pwsh-child baseline" npm run check:pwsh-test-growth -- --write-baseline || overall=1
+            run_check "target vitest" npx vitest run \
+              scripts/autonomous-session-gates.test.ts \
+              scripts/autonomous-spawn-policy.test.ts \
+              scripts/worker-nudge-gate.test.ts \
+              scripts/spawn-worktree-grant-finalization.test.ts \
+              scripts/orchestrator-claimed-review-run.test.ts \
+              scripts/autonomous-orchestrator-boundary.test.ts \
+              scripts/autonomous-spawn-worktree-gate.test.ts \
+              scripts/autonomous-review-worktree-e2e-smoke.test.ts \
+              scripts/orchestrator-review-start-preflight-audit.test.ts \
+              scripts/review-start-envelope-external-io.test.ts || overall=1
+            run_check "review capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart || overall=1
+            run_check "boundary capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary || overall=1
+            run_check "claimed review lookup guard" pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1 || overall=1
+            run_check "command runtime bootstrap guard" pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1 || overall=1
+            run_check "typecheck foundation" npm run typecheck:foundation || overall=1
+            run_check "lint foundation" npm run lint:foundation || overall=1
+            run_check "pwsh child growth" npm run check:pwsh-test-growth || overall=1
+            run_check "working-tree diff check" git diff --check || overall=1
+          fi
+
+          rm -f .github/workflows/issue-821-final-pass.yml
+          if (( overall == 0 )); then
+            rm -f "$report"
+          fi
+          git add -A
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if ! git diff --cached --quiet; then
+            git commit -m "Validate autonomous session gate retirement"
+            git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          fi
+          exit "$overall"
