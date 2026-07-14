@@ -7,9 +7,9 @@ permissions:
   contents: write
 
 jobs:
-  issue-821-finalize:
+  issue-821-final-report:
     if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 final baseline and guards
+    name: Issue 821 final validation report
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -22,39 +22,52 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --include=dev
-      - name: Regenerate final policy baseline
+      - name: Run checks and persist result
         shell: bash
         run: |
+          set +e
           rm -f issue-821-*.txt
-          npm run lint:foundation -- --write-baseline
-      - name: Run focused tests and guards
-        shell: bash
-        run: |
-          npx vitest run \
-            scripts/worker-nudge-gate.test.ts \
-            scripts/autonomous-spawn-worktree-gate.test.ts
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
-          pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
-          pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
-          ! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\.ao/autonomous-real-binaries\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'
-          git diff --check
-      - name: Commit validated result and restore workflow
-        shell: bash
-        run: |
+          report=issue-821-final-validation-report.txt
+          : > "$report"
+          overall=0
+
+          run_check() {
+            name="$1"
+            shift
+            tmp="$(mktemp)"
+            "$@" >"$tmp" 2>&1
+            status=$?
+            {
+              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
+              cat "$tmp"
+            } >> "$report"
+            rm -f "$tmp"
+            if (( status != 0 )); then overall=1; fi
+          }
+
+          run_check "write policy baseline" npm run lint:foundation -- --write-baseline
+          run_check "focused restored suites" npx vitest run scripts/worker-nudge-gate.test.ts scripts/autonomous-spawn-worktree-gate.test.ts
+          run_check "review capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
+          run_check "boundary capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
+          run_check "claimed review lookup guard" pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
+          run_check "command runtime bootstrap guard" pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
+          run_check "typecheck foundation" npm run typecheck:foundation
+          run_check "lint foundation" npm run lint:foundation
+          run_check "pwsh child growth" npm run check:pwsh-test-growth
+          run_check "active retired-reference scan" bash -lc "! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'"
+          run_check "working-tree diff check" git diff --check
+
           git checkout origin/main -- .github/workflows/typescript-foundation.yml
           rm -f \
             .github/issue-821-trigger.txt \
             .github/scripts/restore-issue-821-tests.mjs \
             .github/workflows/issue-821-minimal-runner.yml \
             .github/workflows/issue-821-run-test-restore.yml \
-            .github/workflows/issue-821-restore-minimal-tests.yml \
-            issue-821-*.txt
+            .github/workflows/issue-821-restore-minimal-tests.yml
+          if (( overall == 0 )); then rm -f "$report"; fi
           git add -A
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Finalize issue 821 policy baseline"
+          git commit -m "Persist final issue 821 validation result"
           git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          exit "$overall"
