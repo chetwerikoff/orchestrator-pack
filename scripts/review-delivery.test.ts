@@ -435,6 +435,7 @@ describe('review delivery journal durable path', () => {
       ?? (productionHome ? path.join(productionHome, '.local', 'state') : '');
     const parsed = JSON.parse(runPwsh(script, {
       OPK_VITEST_HARNESS: '',
+      OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
       OPK_VITEST_HARNESS_ROOT: '',
       OPK_VITEST_HARNESS_INVENTORY: '',
       AO_WORKER_MESSAGE_DISPATCH_JOURNAL: '',

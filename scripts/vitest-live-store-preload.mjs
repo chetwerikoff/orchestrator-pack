@@ -235,15 +235,69 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
   ]);
 
+  const harnessSnapshotEnv = { ...process.env };
+  const stableHarnessKeys = new Set([
+    ...Object.keys(harnessSnapshotEnv).filter((name) =>
+      name.startsWith('AO_')
+      || name.startsWith('OPK_VITEST_')
+      || explicitChildPassthroughKeys.has(name),
+    ),
+    'PATH',
+    'OPK_REAL_PWSH',
+    'OPK_REAL_AO',
+    'OPK_REAL_AO_BINARY',
+    'GIT_REAL_BINARY',
+    'GIT_SYSTEM_BINARY',
+  ]);
+  const explicitBypassKeys = [
+    'OPK_VITEST_HARNESS_ROOT',
+    'OPK_VITEST_HARNESS_INVENTORY',
+    'AO_ORCHESTRATOR_ESCALATION_STATE',
+    'AO_OPERATOR_ESCALATION_INBOX',
+    'AO_ESCALATION_HEALTH_SPOOL',
+    'AO_WAKE_SUPERVISOR_STATE_DIR',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+    'AO_SIDE_PROCESS_STATE_DIR',
+    'AO_BASE_DIR',
+    'AO_MECHANICAL_TRANSPORT_TEMP',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'XDG_STATE_HOME',
+  ];
+
+  const hasExplicitHarnessBypass = (env) => {
+    if (!env || env.OPK_VITEST_HARNESS !== '') return false;
+    if (env.OPK_VITEST_SKIP_CHILD_ENV_MERGE === '1') return true;
+    return explicitBypassKeys.some((name) =>
+      Object.prototype.hasOwnProperty.call(env, name) && String(env[name] ?? '') === '',
+    );
+  };
+
+  const restoreStableHarnessEnv = (env) => {
+    if (!env || env.OPK_VITEST_HARNESS !== '' || hasExplicitHarnessBypass(env)) {
+      return env;
+    }
+    const restored = { ...env };
+    for (const name of stableHarnessKeys) {
+      const snapshotValue = harnessSnapshotEnv[name];
+      if (snapshotValue == null || snapshotValue === '') {
+        continue;
+      }
+      restored[name] = snapshotValue;
+    }
+    return restored;
+  };
+
   const mergeHarnessChildEnv = (targetEnv) => {
     const mergedEnv = {
-      ...(targetEnv ?? {}),
+      ...restoreStableHarnessEnv(targetEnv ?? {}),
     };
-    for (const [name, value] of Object.entries(process.env)) {
+    for (const [name, value] of Object.entries(harnessSnapshotEnv)) {
       if (!name || value == null) {
         continue;
       }
-      if (name.startsWith('AO_') || name.startsWith('OPK_VITEST_') || explicitChildPassthroughKeys.has(name)) {
+      if (stableHarnessKeys.has(name)) {
         if (!Object.prototype.hasOwnProperty.call(mergedEnv, name)) {
           mergedEnv[name] = value;
         }
@@ -262,7 +316,7 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     }
     const mergedEnv = explicitEnv
       ? mergeHarnessChildEnv(explicitEnv)
-      : { ...process.env };
+      : mergeHarnessChildEnv(process.env);
     if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
       && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
       mergedEnv.OPK_VITEST_PRODUCTION_HOME = resolveProductionHomeForChild(mergedEnv);
@@ -303,7 +357,7 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
       mergedEnv.AO_SIDE_PROCESS_STATE_DIR = explicitStateDir;
     }
     if (commandBase === 'ao' || commandBase === 'ao.cmd' || commandBase === 'ao.exe' || commandBase === 'ao.bat') {
-      const productionHome = String(process.env.OPK_VITEST_PRODUCTION_HOME ?? '').trim();
+      const productionHome = String(harnessSnapshotEnv.OPK_VITEST_PRODUCTION_HOME ?? '').trim();
       if (productionHome && !Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'HOME')) {
         mergedEnv.HOME = productionHome;
       }
