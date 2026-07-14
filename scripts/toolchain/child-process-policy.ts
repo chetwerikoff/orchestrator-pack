@@ -94,7 +94,8 @@ function fingerprint(source: string): string {
 }
 
 function defaultExempt(path: string): boolean {
-  return path === 'scripts/kernel/subprocess.ts' || path === 'scripts/kernel/subprocess.test.ts';
+  return path === 'scripts/kernel/subprocess.ts'
+    || path === 'scripts/kernel/subprocess.test.ts';
 }
 
 function scriptKind(path: string): ts.ScriptKind {

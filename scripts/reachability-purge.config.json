@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "issue": 819,
+  "analysisMode": "fail-closed",
+  "analysisBaseCommit": "cc209d15dfb88b81948430d223e46783112609b9",
+  "knownBrokenSuspectEdges": [
+    {
+      "source": "scripts/lib/WorkerStatusStore.ps1",
+      "line": 74,
+      "evidence": "Issue #819 records the #748/#765 WorkerStatusStore outage: an in-function dot-source did not make definitions visible to the cross-scope consumer.",
+      "possibleTargets": [
+        "scripts/lib/Autonomous-GateCommon.ps1",
+        "scripts/lib/Gh-PrChecks.ps1",
+        "scripts/lib/Get-ReconcileChecksByPr.ps1",
+        "scripts/lib/Review-PostRunRetry.ps1"
+      ]
+    }
+  ],
+  "knownGood": [
+    "docs/pr-session-binding-cache.mjs",
+    "scripts/reaction-config-messages.mjs",
+    "scripts/ci-green-wake-reconcile.ps1"
+  ]
+}
