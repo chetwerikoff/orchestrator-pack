@@ -372,6 +372,24 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     ) {
       delete mergedEnv.AO_WORKER_SESSION_ID;
     }
+    if (mergedEnv.OPK_VITEST_HARNESS === '1' && explicitEnv) {
+      for (const key of [
+        'AO_SIDE_PROCESS_STATE_DIR',
+        'AO_WAKE_SUPERVISOR_STATE_DIR',
+        'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+      ]) {
+        if (!Object.prototype.hasOwnProperty.call(explicitEnv, key)) {
+          continue;
+        }
+        if (String(explicitEnv[key] ?? '').trim() !== '') {
+          continue;
+        }
+        const inheritedValue = String(harnessSnapshotEnv[key] ?? '').trim();
+        if (inheritedValue) {
+          mergedEnv[key] = inheritedValue;
+        }
+      }
+    }
     if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
       && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
       mergedEnv.OPK_VITEST_PRODUCTION_HOME = resolveProductionHomeForChild(mergedEnv);
