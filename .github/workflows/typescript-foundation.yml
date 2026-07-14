@@ -1,0 +1,100 @@
+name: TypeScript foundation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  runtime:
+    name: TypeScript runtime (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
+
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
+
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth

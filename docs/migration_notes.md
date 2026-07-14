@@ -1,5 +1,38 @@
 # Migration notes
 
+
+## TypeScript migration foundation (Issue #800)
+
+This change adds the directly executable TypeScript runtime, strict typecheck and policy lint,
+the sanctioned subprocess/JSON kernels, and the PowerShell-child-test growth baseline. It is
+additive: no live PowerShell consumer or on-disk JSON artifact is migrated by this PR.
+
+### Operator adoption: required status checks
+
+After the PR is merged and the jobs have reported at least once on `main`, add these exact check
+names to the `main` branch protection required-status set:
+
+- `TypeScript runtime (Node 22)`
+- `TypeScript strict typecheck`
+- `TypeScript policy lint`
+- `TypeScript kernel tests`
+- `PowerShell child-test growth guard`
+
+Verify adoption in repository branch-protection settings (or through the GitHub branch-protection
+API) by recording evidence that all five names appear in the required-check set. Then open or
+refresh a test pull request and confirm that GitHub waits for every listed job before allowing the
+merge button to become eligible. The workflow landing alone does not make these checks
+merge-blocking; only this verified settings step does.
+
+### Rollback pairing
+
+The code rollback is a single `git revert` of the merge commit because this PR has no live
+TypeScript consumers and changes no persisted artifact format. Before or together with that revert,
+remove the five names above from branch protection. After the revert, refresh an open pull request
+and confirm mergeability: no required check may remain that can no longer report. Later migration
+PRs may depend on these kernels only after this foundation has merged and remained green.
+
+
 **Wake-supervisor operator reference (Issue #702):** for live fleet triage (16 registry
 children, F1/F1b/F2, known-broken flags), use
 [`wake-supervisor-fleet-operator-reference.md`](wake-supervisor-fleet-operator-reference.md)
