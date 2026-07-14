@@ -1,0 +1,93 @@
+exit=1
+> lint:foundation
+> node --experimental-strip-types scripts/toolchain/check-ts-policy.ts
+
+scripts/_test-interposer-pack-fixture.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (c6644507314a6312ea04) is stale; remove its baseline entry.
+scripts/_test-interposer-pack-fixture.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (19c0712e18c6bff43eb7) is stale; remove its baseline entry.
+scripts/_test-interposer-pack-fixture.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (d744cafed192b7164027) is stale; remove its baseline entry.
+scripts/_test-spawn-budget-fixture.ts:1:1 raw-child-process: New raw spawnSync call (2af98ede01b30bb1b7f9) must use scripts/kernel/subprocess.ts.
+scripts/_test-spawn-budget-fixture.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (471178056602dacbe827) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (2fad0f16efe80243c193) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (311394e4f98af94c8478) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (a25350f966777cbe59a8) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (de0f04d4e6c28dadb4f7) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (b9f7d8c7d9e9e6167135) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (cd74dbf5a11caaef58fe) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (abede4ccf45fcff2f7d7) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (c389430f1b38f1751eb1) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (4700c656b9bcac268201) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (b5a54f662c2fede61e89) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (d62123a7fc38f1e6786e) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (8de0291edcafd92df1d6) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (f5087219e59daa44f5ba) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (eafe7c1c57b1b7dd1d8f) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (dd5a0629e526f1162ab6) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (adde5ed98ed36f22f64d) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (2937a052259c5ba235e7) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (47bf6bd92cc08dbdf731) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (2f979303e8c87e3edffc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (4032c254035aca35926f) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (8f4e63bbf3c1b5a3816b) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (3508691bdb9549c549cd) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (5802af656646b1d4e508) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (cb5acf0f7d100af44829) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (041fb97e832309d76fd4) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (af178918fbb190299d1d) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (66c5718dbec07f2bfbdd) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (9e9b94c23d50234df7f9) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (cf497e1c6d01112c6e73) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (472415eb0a0f247f4778) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (91659278c104960b9ef8) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (0cb05ce6dcf82869cabb) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (ffc73e1b8ebd6fc78bcc) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (8b54d5de9996d3a0a032) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (585da74f475b44aa4484) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (477d3534b3210adfdee5) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (39c5c52b48d18c5d8b57) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (39c5c52b48d18c5d8b57) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (9a781e1c0a078e055718) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (9a781e1c0a078e055718) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-boundary.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (4953524f41c2e27c860d) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (e122b337bcdc3a187177) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (a7a933f2e78b92c07c1a) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (a43016a14f5843540e6d) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (63f27c3dd7197d0821d1) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (991f2428a754b5e3e2c2) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (d99f13ae9f4a8552f077) is stale; remove its baseline entry.
+scripts/autonomous-orchestrator-interposer.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (0064a94334d75c8c9da3) is stale; remove its baseline entry.
+scripts/autonomous-spawn-budget.test.ts:1:1 raw-child-process: New raw spawnSync call (bd9474aa48d91a0e544b) must use scripts/kernel/subprocess.ts.
+scripts/autonomous-spawn-budget.test.ts:1:1 raw-child-process: New raw spawnSync call (fb021d9aacf00a3a2ac7) must use scripts/kernel/subprocess.ts.
+scripts/autonomous-spawn-budget.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (fe9b7562343e15c5e954) is stale; remove its baseline entry.
+scripts/autonomous-spawn-budget.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (05750d790dc163360863) is stale; remove its baseline entry.
+scripts/autonomous-spawn-policy.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (9219cbe75b873470886b) is stale; remove its baseline entry.
+scripts/autonomous-spawn-policy.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (4c95ae65f0bf0d46da3a) is stale; remove its baseline entry.
+scripts/autonomous-spawn-policy.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (c4b13b39174bce8c0a84) is stale; remove its baseline entry.
+scripts/autonomous-spawn-policy.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (d73acbb693c15a08a870) is stale; remove its baseline entry.
+scripts/autonomous-spawn-policy.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (311c460555325633b9fe) is stale; remove its baseline entry.
+scripts/orchestrator-claimed-review-run.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (63acdeda1bc38be25aa6) is stale; remove its baseline entry.
+scripts/orchestrator-claimed-review-run.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (1699fdaa3789b2ab9929) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (a2197c4ff9a84613d60d) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (bb0caf62a087ae38cb00) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (8f9553423a7823b54b35) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (53654784236424614c75) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (3334da544b589610418b) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (42ea2070dfc15126c154) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (8fa884fe556ec45c9f14) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (8bc854b53c3647fb9071) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (fed48f96aa7f5bb5466c) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (6eb9a5064326cc0e7867) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (be0f9192b4e567529ff0) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (0f13c3a263af78022698) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (4b3bb722801be18ae0ac) is stale; remove its baseline entry.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: Grandfathered raw spawnSync call (4b3bb722801be18ae0ac) is stale; remove its baseline entry.

@@ -1,0 +1,2 @@
+exit=1
+agent-orchestrator.yaml.example missing command-runtime bootstrap phrases: command-runtime-bootstrap/v1

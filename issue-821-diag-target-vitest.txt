@@ -1,0 +1,400 @@
+exit=1
+ROUTINE REVIEW TRIGGER (script-owned — operator reference prose; NOT an LLM turn
+      checklist on AO 0.10). Routine review rounds are started by side-process scripts
+      named above — the LLM orchestrator turn does not start or drive them. The block
+      below documents legacy import / operator reference only. Historical claimed entry
+      point (non-routine — not the 0.10 default path):
+          -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
+      Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
+      AO_SESSION_ID=1, resolve real ao/git out-of-band via
+      and prepend pack scripts/ to PATH so `ao`, `git`, and `gh` resolve to pack shims (deny spawn and
+      direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
+      only the claimed entry point may launch review runs. Gate capability markers:
+      orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
+      Command-runtime bootstrap (refuses command turns when tools/PATH are incomplete):
+      pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1
+      Recovery-boundary: command-runtime failures route to Issue #522/#527 — no ad hoc cleanup here.
+      Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
+      scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
+      PR 999999 — must record covered-head denial, not merely head-resolution refusal).
+      Manual operator override (outside autonomous surface): scripts/invoke-manual-review-run.ps1
+      (emits advisory warning on covered/pending heads; does not acquire the autonomous gate).
+      Prose REVIEW RUN IDEMPOTENCY below remains guidance; Issue #318 gate is authoritative
+      for autonomous starts. Do not wait for operator words review or loop.
+      Script-owned starters remain authoritative — review-trigger-reconcile.ps1 converges
+      from GitHub + review list state even when reports are missing and the LLM orchestrator
+      session is idle.
+
+      EVENT-DRIVEN REVIEW TRIGGER (Issue #207 — wake listener, review-run only). On
+      merge.ready (approved-and-green completion wake), orchestrator-wake-listener.ps1
+      evaluates HEAD READY FOR REVIEW (#195), acquires the shared review-start claim, then
+      may ao-review run before forwarding the merge-intent wake. Merge handling must re-read
+      run state (mergeable=false annotation when review is in-flight). Processing bound: 5s
+      wake-to-run decision (listener-local). Side-effecting supervised child; additive to
+      periodic reconcile below and heartbeat — not a replacement. Safety: never ao spawn,
+      --claim-pr, ao session kill, ao send, or merge from this path — only ao-review run.
+
+      REVIEW-STATUS READER (Issue #611): worker report state comes from report-full snapshots only — `$.data[]` session rows with `reports[*]` via `Get-AoStatusSessionsWithReports` / audit-backed `.agent-report-audit`, never plain `ao session ls` or empty `reports: []` without naming the non-report-full source.
+
+      STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A
+      low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:
+        pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1
+      Default cadence: 10 minutes (tens of minutes). Override with
+      AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES or -IntervalMinutes. State file:
+      AO_REVIEW_TRIGGER_RECONCILE_STATE or %TEMP%\\orchestrator-review-reconcile-state.json.
+      Each tick:
+        1. gh pr list --state open --json number,headRefOid
+        2. Get-AoReviewRuns — coverage per PR head SHA (compose with REVIEW RUN
+           IDEMPOTENCY above: in-flight, up_to_date, changes_requested count as covered;
+           only outdated or absent runs are uncovered)
+        3. ao status --json --reports full — resolve worker session and latest accepted
+           report for each PR head
+        4. gh pr checks + branch-protection required-check names — classify required CI per
+           HEAD READY FOR REVIEW (#195; red defers, green/pending eligible, missing routes to
+           degraded-CI orchestrator branch)
+        5. For each head that is ready for review with a linked worker session: acquire the
+           shared review-start claim, run STALE REVIEWER WORKSPACE preflight, PRE-RUN
+           HEAD-READY RE-CHECK inside the claim, then ao-review run <worker-session-id>
+      Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill, never ao send
+      from this process — only ao-review run for a head ready for review. Skip uncovered-but-
+      not-ready heads with no worker-lifecycle action. Skip PRs with no linked worker session
+      (orchestrator respawn discipline owns session creation). Verification:
+        pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
+      See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.
+
+      DEFERRED-HEAD REVIEW RE-EVALUATION (Issue #235 — scoped supervised child, review-run
+      only). When merge.ready defers as uncovered_not_ready / no_ready_for_review (#212),
+      scripts/review-trigger-reeval.ps1 watches the small deferred-head set and may
+      acquire the shared review-start claim and ao-review run seconds-scale when #195
+      readiness lands on the current head SHA.
+      Poll classification: scoped_deferred_head_watch (5-minute bounded window; incident
+      wake-to-readiness delay ~77 s). Watch state: {stateRoot}/review-trigger-reeval-watch.json.
+      Default poll: 5 s (-PollSeconds). Side-effect lock: review-trigger-reeval-side-effect.lock.
+      Additive to #207 wake edge and #163 periodic reconcile backstop — not a full-PR sweep.
+      Genuinely zero-signal heads (no wake and no in-progress report) remain backstop-only.
+      Safety: never ao spawn, --claim-pr, ao session kill, ao send, or merge — only ao-review run.
+      Verification:
+        pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -Once -DryRun
+
+      STATE-DERIVED FIRST REVIEW SEND (Issue #202 — REMOVED on AO 0.10).
+      scripts/review-send-reconcile.ps1 is a REMOVED stub (exit 2). AO 0.10 auto-delivers
+      findings on submit — no ao-review send loop. Delivery confirmation and stuck-open recovery:
+        pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1
+      Default cadence: 5 minutes. See docs/orchestrator-autoloop-go-live.md.
+
+      NAMED PENDING STATE: waiting_worker_review_response.
+      A PR enters this state after auto-delivery for a changes_requested run (deliveredAt set,
+      deliveredFindingCount > 0), or while any delivered changes_requested run for that PR
+      has openFindingCount > 0 and the worker has not yet satisfied an
+      exit condition.
+      While in waiting_worker_review_response, do NOT treat merge_ready,
+      ready_for_review, or stale dashboard metadata as task-complete for that PR.
+
+      EXIT waiting_worker_review_response when ANY of:
+        1. Worker reports addressing_reviews via ao report.
+        2. Worker pushes a new commit on the PR branch (head SHA advances).
+        3. Worker reports terminal failure with a reason (completed with failure note
+           or ao send to orchestrator explaining the blocker).
+        4. Orchestrator observed the worker session is unavailable, killed it, and
+           respawned via ao spawn --project <project> --name '<label>' --claim-pr <PR> (ping/respawn discipline below).
+        5. The linked worker PR is merged on GitHub (MERGED PR — REVIEW LOOP TERMINAL
+           above; verify via gh pr view, not session status alone).
+
+
+      TASK CONTINUATION (Issue #430 — issue-keyed, pre- and post-PR). When exactly one live
+      issue-bound worker owns the task (ao status issue match + runtime alive) and no prior
+      task-continuation tuple was served for the current issue generation, send exactly ONE
+      continuation via the gated worker-nudge command (never raw ao send):
+        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `
+          -SessionId <session> -IssueNumber <issue> -IntentClass task-continuation -Surface orchestrator-turn
+        Optional -PrNumber is audit context only after PR open; dedup stays issue-keyed.
+        Message file should remind the worker to commit, rebase, open PR, and report when ready.
+        Gate version: worker-nudge-gate/v1.
+
+      PING DISCIPLINE (one ping per pending episode). On the next orchestrator turn
+      while still in waiting_worker_review_response, if there is no worker
+      addressing_reviews report since the send timestamp and no new PR commit, and
+      ao events list --json shows no prior ao send ping for this pending episode,
+      send exactly ONE message via the gated worker-nudge command (never raw ao send):
+        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `
+          -SessionId <session> -PrNumber <PR> -HeadSha <head-sha> -ReviewRunId <review-run-id> `
+          -IntentClass review-findings -Surface waiting_worker_review_response
+        Transport chokepoint: scripts/journaled-worker-send.ps1 (claim token required).
+        Message file must hold the reminder to check pending AO review findings (Get-AoReviewRuns),
+        report ao report addressing_reviews, or report terminal failure with a reason.
+        Gate version: worker-nudge-gate/v1.
+      Do NOT send a second ping before observing the next worker response or commit.
+
+      RESPAWN DISCIPLINE. On a later orchestrator turn, if still in
+      waiting_worker_review_response with no addressing_reviews, no new commit, and
+      a ping was already sent for this episode (visible in ao events list), run:
+        ao session kill <session>
+        ao spawn --project <project> --name '<label>' --claim-pr <PR>
+      Reset ping tracking for the new session.
+
+      REVIEW-READY WORKER STUCK GUARD (Issue #174). On EVERY orchestrator turn,
+      BEFORE kill/respawn/claim-pr discipline above for a worker flagged stuck or
+      probe_failure, classify one consistent snapshot from ao status --json --reports
+      full, gh pr view (current head), gh pr checks (required CI), and Get-AoReviewRuns
+      (no pane scraping):
+        Linked session owns the PR current head AND runtime alive AND required
+        merge-contract CI green on that head AND last accepted ready_for_review is
+        for that head AND a review run with status up_to_date and findingCount 0 covers
+        the same head/session pair.
+        delivered changes_requested does NOT grant protection (mid-fix; Issue #171 owns delivery).
+        Red or pending required CI disqualifies protection — use CI FAILURE DISCIPLINE.
+      When classified review-ready on false stuck:
+        Do NOT immediately ao spawn, --claim-pr, ao session kill, or respawn.
+        Hold for bounded grace (default 15 minutes, monotonic per session+head:
+        anchored to first false stuck; repeated stuck reports do NOT extend grace).
+        Optional helper: docs/review-ready-stuck-guard.mjs (plan/classify stdin JSON).
+        Env override: AO_REVIEW_READY_STUCK_GRACE_MINUTES.
+      Within grace, recovery requires affirmative unreachability evidence only:
+        failed bounded reachability attempt; Issue #171 delivery unconfirmed/escalated
+        for the linked run; or Issue #173 terminal_mux_paired_flap still flagged after
+        stop-verify. Mere silence (no outbound report) is NOT evidence — do not recover
+        on silence alone before grace deadline.
+      When evidence exists, prefer careful recycle (ao session kill + operator
+      escalation/notify) over blind ao spawn --claim-pr (PR #97 split-brain).
+      After grace expires without affirmative unreachable evidence, normal stuck
+      handling may resume.
+      Genuine death (runtime not alive) is NOT shielded — orphan/respawn (#98) applies.
+      Operator adoption: merge this block into live orchestratorRules, then ao stop
+      and ao start. See docs/orchestrator-recovery-runbook.md (Review-ready worker
+      false stuck).
+
+      ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the
+      last review run's target SHA, apply HEAD READY FOR REVIEW (#195) and PRE-RUN
+      HEAD-READY RE-CHECK, then ao-review run <session> for the next round only when the new head is ready for review — do not
+      ask the operator. Intermediate commits while the worker is still fixing must not trigger
+      a review run.
+
+      REVIEW-CYCLE CAP (Issue #646 — tier-keyed distinct-head budget). Count budget
+      units by distinct reviewed head (normalized targetSha) from Get-AoReviewRuns rows,
+      not raw run count. Tier caps: T1 = 2, T2 = 4, T3 = 8 (default T2 when the bound
+      issue has no complexity-tier fence). First terminal clean run on a distinct head
+      records clean_early_stop and makes the PR merge-eligible — stop auto review starts
+      on that head until a new commit opens a fresh cycle. When the distinct-head budget
+      is exhausted with open findings, emit at_cap_open_findings and stop auto review
+      starts until operator/Brief-B triage clears the terminal. Same-sha infra retries
+      and zero-finding failed/cancelled runs do not consume budget.
+
+      OPERATOR ADOPTION HANDOFF (Issue #101). When a worker PR is merge-ready or
+      mergeable per the rules below (required CI green, up_to_date review, worker
+      ready_for_review), before assuming the autonomous loop is fully live for the
+      next spawn, remind the operator: execute the ## Operator adoption checklist
+      from that PR body and the matching docs/migration_notes.md subsection.
+      Workers document adoption; the operator owns live agent-orchestrator.yaml,
+      listeners, env, and ao stop / ao start. Do not treat merged example YAML or
+      migration prose as executed until the operator confirms.
+
+      NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge. Merge is
+      operator-only — no AO-managed agent performs or directs a PR merge. Also
+      MUST NOT direct, instruct, ask, nudge, or otherwise prompt any worker or
+      other agent to merge; proceed-to-merge or go-ahead-and-merge messages to a
+      worker are forbidden.
+      The approved-and-green / merge.ready completion wake is a hand-off addressed
+      to the operator (human), not a cue to merge. On that wake, when the ALL-true
+      gate below holds, emit the ready-for-human-merge notification to the
+      operator and stop at the merge boundary — do not merge and do not delegate
+      the merge.
+      Emit ready-for-human-merge notification only when ALL are true:
+        - Latest AO-local review run for current PR head has findingCount: 0 and up_to_date status
+          (no open or sent findings remain);
+        - PR is open with required CI green on the same head SHA (see REQUIRED CI);
+        - Worker reported ready_for_review for current head, OR the latest clean
+          review completed after the worker's latest ready_for_review with no newer
+          commits;
+        - No later changes-requested, ci-failed, or failed review run for that head.
+
+      Operator input is required only for merge, round-limit escalation, or
+      unrecoverable worker/reviewer failure — not between review rounds.
+
+# Review model policy:
+# - Desired reviewer: Codex CLI with model gpt-5.5.
+# - Current upstream AO schema supports orchestrator and worker role config directly.
+# - Keep Codex reviewer integration upgrade-safe: implement it as an external plugin/workflow
+#   under plugins/** or CI, never as a packages/core patch.
+
+# CI-FAILURE REACTION RECORD (Issue #342 — executable wiring; not orchestratorRules prose):
+# Side-process supervisor child ci-failure-notification-reaction records pending episodes:
+#   pwsh -NoProfile -File scripts/ci-failure-notification-reaction.ps1
+# Delivery evaluation remains in ci-failure-notification-reconcile.ps1 (ao send only there).
+
+reactions:
+  ci-failed:
+    auto: true
+    action: notify
+    message: >-
+      Red CI enqueued for pack ci-failure-notification reconcile delivery (Issue #342).
+      Pending episode record runs via ci-failure-notification-reaction.ps1; worker ping
+      is never sent from this reaction path.
+    priority: action
+  changes-requested:
+    auto: true
+    action: send-to-agent
+    escalateAfter: 30m
+  approved-and-green:
+    auto: false
+    action: notify
+    priority: action
+  report-stale:
+    auto: true
+    action: send-to-agent
+    message: >-
+      Worker idle (report-stale backstop). Check pending AO review findings via
+      `Get-AoReviewRuns` and report `ao report addressing_reviews`, or report a
+      terminal failure with a reason. Do not stay silent after review findings land.
+
+# Upgrade-safe extension notes:
+# - Implement task declaration, runtime scope guard, and token chain ledger through
+#   AO plugin slots, wrappers, hooks, external state, and CI.
+# - Do not patch Composio AO packages/core.
+# - PR CI scope validation is the second line of defense; runtime guard is first.
+
+# AO 0.10 review harness (Issue #623)
+# On AO 0.10.x, configure reviewers via project config API — not REVIEW_COMMAND/--command:
+#   ao project set-config orchestrator-pack --config-json '{\"reviewers\":[{\"harness\":\"codex\"}]}'
+# Pack trigger loop uses POST /api/v1/sessions/{workerId}/reviews/trigger (scripts/ao-review.ps1 shim).
+# Operator adoption: docs/ao-0-10-review-harness-adoption.md
+
+"
+
+[36m [2m❯[22m scripts/autonomous-orchestrator-boundary.test.ts:[2m189:22[22m[39m
+    [90m187|[39m         [34mexpect[39m(yaml)[33m.[39mnot[33m.[39m[34mtoMatch[39m([36m/^\s*AO_REAL_BINARY:/m[39m)[33m;[39m
+    [90m188|[39m         [34mexpect[39m(yaml)[33m.[39mnot[33m.[39m[34mtoMatch[39m([36m/^\s*GIT_REAL_BINARY:/m[39m)[33m;[39m
+    [90m189|[39m         [34mexpect[39m(yaml)[33m.[39m[34mtoMatch[39m([36m/autonomous-real-binaries\.json/[39m)[33m;[39m
+    [90m   |[39m                      [31m^[39m
+    [90m190|[39m         [34mexpect[39m(yaml)[33m.[39m[34mtoMatch[39m([36m/scripts\/ao \+ scripts\/git/[39m)[33m;[39m
+    [90m191|[39m         [34mexpect[39m(yaml)[33m.[39m[34mtoMatch[39m([36m/AO_SESSION_ID/[39m)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m scripts/autonomous-orchestrator-boundary.test.ts[2m > [22mautonomous orchestrator spawn/git boundary (#324)[2m > [22mbroken explicit ao pointer policy (Issue #495)[2m > [22memits resolver-path warning and falls back on autonomous surface bash fast path
+[31m[1mError[22m: ENOENT: no such file or directory, lstat '/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/ao'[39m
+[36m [2m❯[22m withBrokenAoPointerFixture scripts/autonomous-orchestrator-boundary.test.ts:[2m260:21[22m[39m
+    [90m258|[39m                 mkdirSync(path.join(packRoot, 'scripts'), { recursive:…
+    [90m259|[39m                 for (const name of ['ao', '_resolve-pwsh.sh', 'ao-auto…
+    [90m260|[39m                     cpSync(path.join(repoRoot, 'scripts', name), path.…
+    [90m   |[39m                     [31m^[39m
+    [90m261|[39m                     chmodSync(path.join(packRoot, 'scripts', name), 0o…
+    [90m262|[39m                 }
+[90m [2m❯[22m scripts/autonomous-orchestrator-boundary.test.ts:[2m272:13[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m scripts/autonomous-orchestrator-boundary.test.ts[2m > [22mautonomous orchestrator spawn/git boundary (#324)[2m > [22mbroken explicit ao pointer policy (Issue #495)[2m > [22memits resolver-path warning and falls back on autonomous surface PS guard path
+[31m[1mError[22m: ENOENT: no such file or directory, lstat '/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/ao'[39m
+[36m [2m❯[22m withBrokenAoPointerFixture scripts/autonomous-orchestrator-boundary.test.ts:[2m260:21[22m[39m
+    [90m258|[39m                 mkdirSync(path.join(packRoot, 'scripts'), { recursive:…
+    [90m259|[39m                 for (const name of ['ao', '_resolve-pwsh.sh', 'ao-auto…
+    [90m260|[39m                     cpSync(path.join(repoRoot, 'scripts', name), path.…
+    [90m   |[39m                     [31m^[39m
+    [90m261|[39m                     chmodSync(path.join(packRoot, 'scripts', name), 0o…
+    [90m262|[39m                 }
+[90m [2m❯[22m scripts/autonomous-orchestrator-boundary.test.ts:[2m283:13[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m scripts/autonomous-session-gates.test.ts[2m > [22mAO 0.10.2 in-process autonomous gate activation (#821)[2m > [22mreview without a session id remains outside the in-process gate
+[41m[1m FAIL [22m[49m scripts/autonomous-session-gates.test.ts[2m > [22mAO 0.10.2 in-process autonomous gate activation (#821)[2m > [22moperator manual shell without a session id remains outside the in-process gate
+[41m[1m FAIL [22m[49m scripts/autonomous-session-gates.test.ts[2m > [22mAO 0.10.2 in-process autonomous gate activation (#821)[2m > [22mCI without a session id remains outside the in-process gate
+[31m[1mError[22m: pwsh failed 1
+STDOUT:
+{"spawn":false,"review":false,"boundary":false,"reviewDenied":false,"reviewReason":"manual_surface","workerDenied":false,"workerReason":"manual_surface","gitDenied":false,"gitReason":"manual_surface"}
+
+STDERR:
+[39m
+[36m [2m❯[22m runPwsh scripts/_test-pwsh-helpers.ts:[2m59:13[22m[39m
+    [90m 57|[39m     })[33m;[39m
+    [90m 58|[39m     [35mif[39m (result[33m.[39mstatus [33m!==[39m [34m0[39m) {
+    [90m 59|[39m       throw new Error(`pwsh failed ${result.status}\nSTDOUT:\n${result…
+    [90m   |[39m             [31m^[39m
+    [90m 60|[39m     }
+    [90m 61|[39m     [35mreturn[39m result[33m.[39mstdout[33m.[39m[34mtrim[39m()[33m;[39m
+[90m [2m❯[22m evaluateSessionCell scripts/autonomous-session-gates.test.ts:[2m13:18[22m[39m
+[90m [2m❯[22m scripts/autonomous-session-gates.test.ts:[2m66:20[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m scripts/worker-nudge-gate.test.ts[2m > [22mWorker-NudgeClaim single-flight contract[2m > [22mao shim denies raw worker send on autonomous surface
+[31m[1mAssertionError[22m: expected 127 to be 93 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 93[39m
+[31m+ 127[39m
+
+[36m [2m❯[22m scripts/worker-nudge-gate.test.ts:[2m509:31[22m[39m
+    [90m507|[39m             env[33m:[39m { [33m...[39mprocess[33m.[39menv[33m,[39m [33mAO_SESSION_ID[39m[33m:[39m [32m'1'[39m }[33m,[39m
+    [90m508|[39m         })[33m;[39m
+    [90m509|[39m         [34mexpect[39m(result[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m93[39m)[33m;[39m
+    [90m   |[39m                               [31m^[39m
+    [90m510|[39m         expect(result.stderr).toMatch(/autonomous worker nudges paused…
+    [90m511|[39m     })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m scripts/worker-nudge-gate.test.ts[2m > [22mWorker-NudgeClaim single-flight contract[2m > [22minternal capability deny[2m > [22mraw ao send on autonomous surface is internal capability deny exit 93
+[31m[1mAssertionError[22m: expected 127 to be 93 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 93[39m
+[31m+ 127[39m
+
+[36m [2m❯[22m scripts/worker-nudge-gate.test.ts:[2m632:35[22m[39m
+    [90m630|[39m                 env: { ...process.env, AO_SESSION_ID: '1', PATH: `${pa…
+    [90m631|[39m             })[33m;[39m
+    [90m632|[39m             [34mexpect[39m(result[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m93[39m)[33m;[39m
+    [90m   |[39m                                   [31m^[39m
+    [90m633|[39m             expect(`${result.stderr}${result.stdout}`).toMatch(/autono…
+    [90m634|[39m         })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m scripts/worker-nudge-gate.test.ts[2m > [22mWorker-NudgeClaim single-flight contract[2m > [22minternal capability deny[2m > [22mraw ao send --help without capability is internal capability deny exit 93
+[31m[1mAssertionError[22m: expected 127 to be 93 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 93[39m
+[31m+ 127[39m
+
+[36m [2m❯[22m scripts/worker-nudge-gate.test.ts:[2m642:35[22m[39m
+    [90m640|[39m                 env: { ...process.env, AO_SESSION_ID: '1', PATH: `${pa…
+    [90m641|[39m             })[33m;[39m
+    [90m642|[39m             [34mexpect[39m(result[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m93[39m)[33m;[39m
+    [90m   |[39m                                   [31m^[39m
+    [90m643|[39m             expect(`${result.stderr}${result.stdout}`).toMatch(/autono…
+    [90m644|[39m         })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m3 passed[39m[22m[90m (6)[39m
+[2m      Tests [22m [1m[31m9 failed[39m[22m[2m | [22m[1m[32m180 passed[39m[22m[90m (189)[39m
+[2m   Start at [22m 09:12:21
+[2m   Duration [22m 269.12s[2m (transform 615ms, setup 136ms, import 981ms, tests 261.07s, environment 1ms)[22m
+
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/autonomous-orchestrator-boundary.test.ts,title=scripts/autonomous-orchestrator-boundary.test.ts > autonomous orchestrator spawn/git boundary (#324) > example yaml documents out-of-band real binaries and git shim PATH,line=189,column=22::AssertionError: expected '$schema: https://raw.githubuserconten…' to match /autonomous-real-binaries\.json/%0A%0A- Expected:%0A/autonomous-real-binaries\.json/%0A%0A+ Received:%0A"$schema: https://raw.githubusercontent.com/ComposioHQ/agent-orchestrator/main/schema/config.schema.json%0A# Linux-first Composio Agent Orchestrator example for orchestrator-pack.%0A# Copy to agent-orchestrator.yaml and edit the project block before running AO.%0A# Supported on Ubuntu / WSL2 Ubuntu (pwsh 7+). Native Windows is not a runtime target.%0A%0Aport: 3000%0A%0Adefaults:%0A  runtime: process        # Linux: native process runtime; tmux optional if you prefer AO tmux mode.%0A  agent: cursor           # Primary agent plugin: Cursor CLI.%0A  orchestrator:%0A    agent: cursor         # Planner/orchestrator role: Cursor CLI.%0A  worker:%0A    agent: cursor         # Coding/worker role: Cursor CLI.%0A  workspace: worktree%0A  notifiers: [desktop]%0A%0A# Orchestrator wake (issues #39 / #59): webhook listener + heartbeat backstop.%0A# AO webhook POSTs urgent/action notifications to the local listener; a separate%0A# heartbeat process delivers periodic `ao send` nudges during event silence.%0A# Start scripts/orchestrator-wake-supervisor.ps1 (listener + heartbeat + reconcile children),%0A# scripts/review-trigger-reconcile.ps1, and other reconcile loops alongside `ao start` — see%0A# docs/orchestrator-wake-runbook.md and docs/orchestrator-autoloop-go-live.md.%0Anotifiers:%0A  webhook:%0A    plugin: webhook%0A    url: http://127.0.0.1:17487/ao-wake%0A    retries: 1%0A    retryDelayMs: 500%0A%0AnotificationRouting:%0A  urgent:%0A    - desktop%0A    - webhook%0A  action:%0A    - desktop%0A    - webhook%0A  warning:%0A    - desktop%0A  info:%0A    - desktop%0A%0Aprojects:%0A  example:%0A    repo: your-org/your-repo%0A    path: /home/you/projects/your-target-repo%0A    defaultBranch: main%0A    sessionPrefix: ex%0A    tracker:%0A      plugin: github      # Tasks are GitHub Issues by default/explicit config.%0A    scm:%0A      plugin: github%0A    orchestrator:%0A      agent: cursor%0A      agentConfig:%0A        permissions: permissionless%0A    worker:%0A      agent: cursor%0A      agentConfig:%0A        permissions: permissionless%0A    orchestratorRules: |%0A      Use GitHub Issues as the task source of truth.%0A      Plan from open GitHub Issues, spawn coding workers with the Cursor CLI agent,%0A      and keep PRs linked back to their source issues with Closes #N or Fixes #N in the PR body.%0A      Do not use Vibe Kanban or Linear for this project unless explicitly reconfigured.%0A      Do not add unsupported reviewer fields to this YAML — drive review through CLI.%0A%0A      REVIEW DRIVING — AO 0.10 does not auto-trigger Codex review on PR open.%0A      Live procedure: AGENTS.md + side-process scripts (orchestratorRules below is legacy-import reference only).%0A      The orchestrator and reconcile loops jump the gaps via ao-review run / Get-AoReviewRuns.%0A%0A      Always invoke review through the pack wrapper (Issue #9 / NO_FINDINGS contract).%0A      Never run review without the pack REVIEW_COMMAND wrapper — built-in Codex%0A      wraps clean-review prose as a false `severity: warning` finding.%0A%0A      PACK_REVIEWER (operator selector — single source of truth; set before ao start):%0A        Recognized values: codex | claude. Dispatches to tracked wrappers only (not REVIEW_COMMAND).%0A        Unset or unrecognized PACK_REVIEWER: invoke-pack-review.ps1 exits non-zero and runs no reviewer (fail-closed; no Codex default).%0A        Switch reviewers by changing PACK_REVIEWER only — do not edit REVIEW_COMMAND. See docs/reviewer-switch-runbook.md.%0A        Gitignored .ao paths are deprecated; never use .ao/ in REVIEW_COMMAND.%0A      NAMED REVIEW_COMMAND (reviewer-agnostic entrypoint; run from the reviewed repo root):%0A        pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main%0A%0A      RUNTIME INVOCATION (shell only — do NOT embed --command in orchestratorRules):%0A        At review time: ao-review run <worker-session-id>  (scripts/ao-review.ps1 shim → POST .../reviews/trigger)%0A        REVIEW_COMMAND is configured in project review settings / operator shell — not re-pasted here.%0A        Discover/idempotency: Get-AoReviewRuns fan-out (GET /api/v1/sessions/{id}/reviews) or ao-review list <session-id> --json.%0A        Do not add double-quote characters inside this orchestratorRules literal.%0A%0A      COMMAND DISCIPLINE — non-negotiable at shell time:%0A        Copy REVIEW_COMMAND verbatim into --command. Quote the value per your shell when needed.%0A        FORBIDDEN alternate commands: plugins/ao-codex-pr-reviewer/bin/review.ps1 without invoke-pack-review.ps1; per-reviewer run-pack-review*.ps1 as REVIEW_COMMAND; cmd /c npm ci && …; bare cmd.exe; inventing npm ci preflight chains; bare ao-review without REVIEW_COMMAND configured (built-in Codex path).%0A        On failed or cancelled runs, read latestRun.body (failure detail) before any retry; never treat findingCount 0 as up_to_date.%0A        Before merge or reporting review passed, run scripts/orchestrator-diagnose.ps1 -Strict (live) or scripts/invoke-pack-review-strict-gate.ps1 on fixtures in CI, and confirm the latest run for the PR head is up_to_date — not failed with zero findings.%0A%0A      EMPTY REVIEW TRAP — failed or cancelled with findingCount 0 is NEVER up_to_date:%0A        AO may list 0 open findings while status is failed — that means the reviewer command crashed or Codex/Claude exited non-zero, not a clean NO_FINDINGS review.%0A        Always read latestRun.body (failure detail) from Get-AoReviewRuns first. Common causes: Codex usage limit (set PACK_REVIEWER=claude per docs/reviewer-switch-runbook.md), missing PACK_REVIEWER, missing npm preflight (forbidden bare review.ps1), or selector mismatch (failure detail shows a different wrapper than PACK_REVIEWER).%0A        Do not tell the worker review is complete when only failed runs exist for the current head. Retry once with the live REVIEW_COMMAND after fixing the cause; if still failed, escalate to the operator.%0A%0A      WALL-CLOCK NOTE. Targets such as ~2 minutes for worker acknowledgement and%0A      ~3 minutes after ping before respawn are operator guidance applied on the next%0A      orchestrator turn, not independently enforced timers. There is no background%0A      watchdog. The 30-minute AO report-stale reaction is a long-tail backstop only.%0A%0A      REQUIRED CI (CI green) — same definition as AGENTS.md:%0A        Preferred: GitHub required status checks for the PR base branch when branch%0A        protection lists them.%0A        Fallback: when no required checks are configured, all checks on the PR head%0A        that belong to this pack merge contract — scope-guard workflow jobs%0A        Verify orchestrator-pack structure, PR scope guard, Run pack contract tests,%0A        Self-architect lint — not every optional third-party check unless the repo%0A        already treats it as merge-blocking.%0A%0A      CI FAILURE DISCIPLINE (Issues #109/#283/#342). A failing GitHub check does NOT%0A      by itself schedule an orchestrator turn. Pack rules apply on the next orchestrator%0A      turn only (worker ao report, webhook wake, operator activity). If nothing creates%0A      a turn, reactions.report-stale (~30 minutes) and the unconditional reactions.ci-failed%0A      instant backstop remain upstream — not replaced by pack prose.%0A%0A      ENQUEUE-ONLY ci-failed + DELIVERY-TIME LIVE-STATE EVALUATION (#342). The built-in%0A      reactions.ci-failed reaction records a pending episode (phase=record) keyed to the%0A      full episode tuple {repo, PR number, head SHA, aggregate red-period discriminator,%0A      active notification targetId + targetGeneration}. It does NOT decide SEND at fire time.%0A      A supervised reconcile loop evaluates each eligible pending episode once against live%0A      PR-owner worker state (ao status sessions + open PR heads):%0A        pwsh -NoProfile -File scripts/ci-failure-notification-reconcile.ps1%0A      Default cadence: 1 minute. State/store: AO_CI_FAILURE_NOTIFICATION_STORE or%0A      %25TEMP%25\\orchestrator-ci-failure-notification. Eligibility boundary: at least one%0A      reconcile tick after enqueue (never evaluate in the enqueue tick). Freshness SLA:%0A      max-eligible-evaluation-age ≤ 3× reconcile interval and < report-stale (~30m).%0A%0A      OPERATOR REFERENCE — mechanical CI-failure notification pair (Issues #283/#342/#645).%0A      Red-CI worker delivery is owned by supervised side-process children, not orchestratorRules%0A      on AO 0.10.2+. Copy this block into live yaml only as documentation; wiring is via%0A      agent-orchestrator.yaml.example reactions + sideProcessChildren (not orchestrator turn prose).%0A%0A      Record path (phase=record): reactions.ci-failed enqueues a pending episode via%0A        pwsh -NoProfile -File scripts/ci-failure-notification-reaction.ps1%0A      Evaluate + send path: supervised reconcile evaluates live workerState and sends via%0A        pwsh -NoProfile -File scripts/ci-failure-notification-reconcile.ps1%0A      Low-level helper (reaction/reconcile invoke this; operators rarely call directly):%0A        pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode record%0A        pwsh -NoProfile -File scripts/ci-failure-notification.ps1 -Mode evaluate%0A%0A      Episode identity uses the full episode key tuple {repo, PR number, head SHA, aggregate%0A      red-period discriminator, active notification targetId + targetGeneration}. The failing%0A      required-check set is message context only, never part of the episode identity.%0A      Feed JSON containing the episode key, workerState {sessions, openPrs} from%0A      ao status --json --reports full + gh pr list, minimized reaction.action_succeeded%0A      events with reactionKey=ci-failed, and exact-key intent-token state (excluding%0A      the episode's own pending record/claim from dedup/intent suppressors).%0A      The wrapper timeout/error contract emits phase=diagnostic hard failures;%0A      repeated helper errors are operator-visible via reconcile health.%0A%0A      Reconcile delivery-time rules (authoritative at evaluate/send, not at reaction fire):%0A        Terminal_action when phase=terminal is SEND or SUPPRESS only. Missing/incompatible%0A        workerState is a non-terminal hard failure (re-evaluable next tick).%0A        SUPPRESS when the predicate binds a reaction.action_succeeded event with%0A        reactionKey=ci-failed and action=send-to-agent to the full episode identity%0A        (excluding own record). Notify-only ci-failed reactions (action: notify) record%0A        pending episodes but do not prove worker delivery and MUST NOT suppress the%0A        reconcile ping. Also SUPPRESS when the live PR-owning worker session is in%0A        fixing_ci and passes liveness (suppressed-live-worker), when no live owner exists%0A        (abandoned-no-live-owner), when the episode is superseded (abandoned-superseded),%0A        or when an exact episode-keyed orchestrator intent token already owns the ping.%0A        working and pr_created do NOT suppress. A reaction/intent for an earlier head,%0A        earlier red-period, or superseded session MUST NOT suppress the active session's ping.%0A        SEND uses strict outbox: claim/preflight → pre-submit revalidation against live%0A        workerState → reserve submit-intent → ao send + Register-WorkerMessageDispatch.%0A      Audit lines use phase=record|diagnostic|terminal; only phase=terminal is authoritative.%0A%0A      Startup / operator adoption gate (machine-checkable on live gitignored yaml):%0A        pwsh -NoProfile -File scripts/check-ci-failure-notification-adoption.ps1%0A      reactions.ci-failed is enabled only when workerState wiring AND durable submit-ack%0A      (#232 dispatch journal) are both present; otherwise degraded health disables only%0A      this reaction — never the whole orchestrator.%0A%0A      The dominant ordering closed here is reaction-first for dedup: the orchestrator defers to the%0A      observable ci-failed reaction send. Live fixing_ci suppression closes the reproduced ~60s gap%0A      via delivery-time evaluation, not episode-key report binding.%0A%0A      Operator target: within ~3 minutes after the next orchestrator turn that observes%0A      red CI — NOT within ~3 minutes of CI failure wall-clock. Op-6 class: catching turn%0A      was worker ready_for_review while CI still red; orchestrator should have pinged then.%0A%0A      RESIDUAL RISK (gated + silently idle). Worker never reports ready_for_review on red%0A      CI but stays idle in fixing_ci with no commits and no further reports — no turn,%0A      so pack rules cannot ping. Expect only report-stale (~30 min), reactions.ci-failed,%0A      or operator ao send / kill-respawn per docs/orchestrator-recovery-runbook.md.%0A%0A      STATE-DERIVED CI-GREEN WORKER WAKE (Issue #191 — separate process, ao send only).%0A      AO 0.9.x has no CI-green/CI-success reaction key for send-to-agent (reactions only%0A      expose ci-failed, changes-requested, report-stale, approved-and-green→notify). The%0A      fast path is a dedicated reconciliation loop outside the LLM orchestrator turn:%0A        pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1%0A      Default cadence: 1 minute (worst-case green-observed → ao send ~60s poll + 1m tick,%0A      far below report-stale ~30m). Override with AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES%0A      or -IntervalMinutes. State file: AO_CI_GREEN_WAKE_RECONCILE_STATE or%0A      %25TEMP%25\\orchestrator-ci-green-wake-state.json.%0A      Each tick (level/state-derived, not edge-only):%0A        1. gh pr list --state open --json number,headRefOid%0A        2. gh pr checks <n> --json name,state,bucket,link,startedAt,completedAt,workflow,description per PR — required CI per REQUIRED CI above%0A        3. ao status --json --reports full — linked worker session + report states%0A        4. For each open PR whose required CI is currently green, whose linked worker is%0A           runtime alive, head-owning, and pre-hand-off (fixing_ci / working / pr_created%0A           with no ready_for_review or addressing_reviews accepted on that head), and%0A           not yet nudged for this green transition: pre-send recheck on one snapshot,%0A           then ao send continue-hand-off message to that session id only%0A      Transition identity and dedupe live in the state file (survives sender restart;%0A      new red/pending→green on the same head SHA is a new transition). Record dedupe only%0A      after a successful send to a confirmed-live owner; failed/stale sends consume no slot.%0A      Does not recover dead workers (#98) — reduces how often respawn is needed.%0A      Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill from this%0A      process. Does not alter approved-and-green or merge rules. reactions.report-stale and%0A      reactions.ci-failed remain upstream backstops (additive fast path, not a replacement).%0A      Verification:%0A        pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -Once -DryRun%0A%0A      DEAD WORKER RECONCILE (Issue #593 — assigned-task recovery only, default-OFF).%0A      Detects capture-backed death evidence for workers with unfinished bound issue/PR%0A      and may invoke scripts/invoke-worker-recovery.ps1 -Trigger reconcile_dead_worker%0A      when allowReconcileDeadWorkerRespawn is explicitly enabled in docs/autonomous-respawn-policy.json%0A      and all enablement gates pass. Never plans new work from open issues or the GitHub queue (assigned-task only). operator kill/%0A      shutdown and project-level shutdown windows suppress respawn. Uncaptured event shapes%0A      and ambiguous task state fail closed to audit-only. Storm bounds: per-key retry with%0A      suggested defaults 3 attempts, 60s initial exponential backoff with jitter, concurrency%0A      cap 1 (operator-tunable in policy JSON).%0A        pwsh -NoProfile -File scripts/dead-worker-reconcile.ps1%0A      State file: AO_DEAD_WORKER_RECONCILE_STATE or%0A      %25TEMP%25\\orchestrator-dead-worker-reconcile-state.json.%0A      Safety: invokes only the #522 recovery entrypoint with caller-proved%0A      -ProbedDeadEvidence; never raw ao spawn from this loop.%0A      Verification:%0A        pwsh -NoProfile -File scripts/dead-worker-reconcile.ps1 -Once -DryRun%0A%0A%0A      See docs/orchestrator-autoloop-go-live.md and docs/migration_notes.md.%0A%0A      MERGED PR — REVIEW LOOP TERMINAL (Issue #54). On EVERY orchestrator turn,%0A      BEFORE autonomous review-loop reads below, for each PR that has entries in%0A      Get-AoReviewRuns fan-out or an open worker session with a PR ref:%0A        Verify that PR merge state on GitHub (e.g. gh pr view <n> --json state,mergedAt).%0A        Key off the linked PR merge state, NOT solely ao status session merged or%0A        terminated — merge cleanup may kill the worker session while code-reviews/%0A        runs persist, so session-only checks miss this case. A visible merged or%0A        terminated worker session is sufficient but not necessary.%0A%0A      Runs with no prNumber on the run record: resolve merge state via the run's%0A      linkedSessionId in ao status --json (match name, sessionId, or id on the%0A      linked worker session), then gh pr view on that session's PR — not solely a%0A      prNumber field on the run. When that linked worker PR is merged on GitHub,%0A      treat the run as terminal the same as runs that carry prNumber. When merge%0A      state cannot be resolved to a specific merged PR (linked session missing from%0A      ao status, restored under an unmatched session id, or PR metadata missing or%0A      ambiguous), fail closed to inaction — no new review round,%0A      no worker-lifecycle action; surface the run for the operator rather than guess.%0A%0A      When the linked worker PR is merged on GitHub (human merge per repo policy):%0A        Treat all AO-local review runs for that PR as historical, not queue work.%0A        MUST NOT re-trigger delivery for any run linked to that PR (including prNumber-less%0A        runs resolved via linked session above).%0A        MUST NOT ao-review run for a new round on that PR.%0A        MUST NOT ao send ping, ao session kill, or ao spawn --claim-pr for review-loop%0A        purposes on that PR.%0A        MUST NOT treat changes_requested or up_to_date runs for that PR as blocking%0A        other work or as requiring autonomous-loop recovery.%0A        Linked PR merged is an additional EXIT for waiting_worker_review_response%0A        (see EXIT list below) — leave that state; do not ping or respawn for review.%0A        MAY proceed to other open issues and PRs normally.%0A%0A      AO 0.9.x does not cancel or archive review runs on PR merge; stale dashboard%0A      cards are expected until upstream adds cancel or outdate-on-merge. Pack policy%0A      is orchestrator inaction and operator docs — not hand-editing code-reviews/ JSON.%0A      There is no ao-review cancel CLI today; see docs/orchestrator-recovery-runbook.md.%0A%0A      AUTONOMOUS REVIEW LOOP — drive review→fix without waiting for a human to type%0A      review or loop. On every orchestrator turn after CI failure discipline above,%0A      while any open PR has an active review path, read these BEFORE any other planning%0A      work:%0A        Get-AoReviewRuns fan-out (or ao-review list per session)%0A        ao status --json --reports full%0A        ao events list --json%0A%0A      REVIEW RUN STATUSES (AO 0.10 — normalized from Get-AoReviewRuns / GET /sessions/{id}/reviews):%0A        changes_requested (undelivered) — run finished; deliveredAt is null (operator/diagnostic only on 0.10).%0A          AO auto-delivers on submit; do not ao-review send (REMOVED). Use review-finding-delivery-confirm.ps1 (#171).%0A        changes_requested (delivered) — deliveredAt set, deliveredFindingCount > 0; findings with worker.%0A          Any run in this state is in waiting_worker_review_response until an exit%0A          condition fires (findings already delivered — do not re-trigger send).%0A        up_to_date — findingCount: 0 for that run's target SHA (clean / NO_FINDINGS).%0A        queued / preparing / running — review in flight; poll on next tick.%0A        outdated — superseded by a newer worker commit; trigger ao-review run when head ready.%0A        failed / cancelled — inspect latestRun.body (failure detail) from Get-AoReviewRuns;%0A          NEVER treat as up_to_date when findingCount is 0; NEVER report or infer Codex review%0A          passed when status is failed or cancelled; notify human or retry once after reading failure detail.%0A%0A      Do NOT invent statuses — use producer-normalized values only (docs/review-producer-contract.mjs).%0A%0A      CLEANLINESS FROM COUNTS ONLY. A review is up_to_date only when Get-AoReviewRuns shows%0A      up_to_date with findingCount: 0 for the current PR head. changes_requested is NOT up_to_date.%0A      findingCount 0 on failed or cancelled runs is NOT up_to_date. Never read or%0A      pattern-match finding body prose (NO_FINDINGS contract).%0A%0A      SCRIPT-OWNED ROUTINE REVIEW (Issue #625 — operator reference). On AO 0.10 the LLM%0A      orchestrator turn does NOT start or drive routine ao-review run rounds. Covered-head,%0A      head-ready, and claim procedures belong to review-trigger-reconcile.ps1,%0A      review-trigger-reeval.ps1, and orchestrator-wake-listener.ps1. Exception-only LLM%0A      handling (contested protected finding E7, escalation wakes): issue #641 — pointer only.%0A      Manual operator ao-review run remains outside the automated claim.%0A%0A      REVIEW RUN IDEMPOTENCY (Issue #98, widened Issue #189 — additive to EMPTY REVIEW TRAP).%0A      Before calling ao-review run for a worker session, read Get-AoReviewRuns and the%0A      current PR head sha (from gh pr view or the worker PR ref). A head SHA is covered —%0A      do not spawn a new run — when any run matches the SAME prNumber linkage AND the EXACT%0A      normalized head SHA (targetSha, case-insensitive) and is in-flight (queued, preparing,%0A      running, reviewing) OR covered terminal (up_to_date, changes_requested). A run on%0A      the same SHA for a different PR does NOT count as coverage. A run on the same PR with a%0A      different targetSha does NOT count as coverage for the current head. Only a head with no%0A      run at all, or whose only runs on that PR+head are outdated, may use the plain uncovered%0A      start path.%0A%0A      FAILED / CANCELLED ON CURRENT HEAD (not covered — not plain uncovered). A failed or%0A      cancelled run on the current head is NOT a covered terminal status (never treat%0A      findingCount: 0 on failed as clean). Do not start a new run through the plain uncovered%0A      path; follow EMPTY REVIEW TRAP: read latestRun.body (failure detail), retry at most once after%0A      diagnosis, escalate otherwise.%0A%0A      AUTOMATED REVIEW-START CLAIM (Issue #267, closes the #189/#207/#235 concurrent%0A      window). Every automated starter surface must acquire the shared machine-local%0A      review-start claim keyed by (prNumber, full normalized head SHA) before ao-review run:%0A      review-trigger-reconcile.ps1, orchestrator-wake-listener.ps1, review-trigger-reeval.ps1,%0A      and future noninteractive starters. The claim is an atomic cross-process%0A      test-and-set and stays effective until a covering run record is visible or a terminal%0A      outcome is recorded. Claim storage failure, unreadable/partial records, short SHAs,%0A      divergent SHA normalization, anomalous timestamps, or unknowable registration state%0A      fail closed with a visible escalation — never claim unavailable / proceed anyway.%0A      Losing surfaces log claim-skip with the key and restart-correlatable holder identity.%0A      Operator-invoked manual ao-review run remains outside the claim; automation treats a%0A      visible manual run record as coverage, while an operator racing inside AO registration%0A      lag is the accepted manual residual.%0A%0A      PRE-RUN COVERAGE RE-CHECK / HEAD-READY RE-CHECK INSIDE THE CLAIM. After acquiring the claim and%0A      immediately before emitting ao-review run, re-read Get-AoReviewRuns and re-apply%0A      the covered-head predicate above with the smallest gap between read and run. If the%0A      head became covered between the turn's first observation and this re-check, abort and%0A      terminalize the claim as recheck-aborted. A stalled claimant that lost ownership to%0A      stale recovery must abort at the final ownership fence instead of starting.%0A%0A      HEAD READY FOR REVIEW (Issue #195 — one predicate for all review-trigger paths).%0A      Before any automated ao-review run (review-trigger-reconcile.ps1,%0A      review-trigger-reeval.ps1, orchestrator-wake-listener.ps1 — not LLM turns), evaluate%0A      failed/cancelled on the current head FIRST (EMPTY REVIEW TRAP —%0A      never the plain uncovered-ready path). Then a PR head SHA is ready for review only when%0A      ALL hold on one consistent snapshot:%0A        - latest accepted worker report for that exact current head SHA is ready_for_review%0A          (a ready_for_review for an earlier head does not authorize a later head — reuse #186%0A          current-head-at-report-time semantics);%0A        - required CI on that head (same Required CI definition as AGENTS.md) is%0A          green or genuinely pending/queued against a known required-check set — explicitly NOT%0A          red/failing and NOT missing/unknown/unresolvable (red defers; missing routes to the%0A          degraded-CI orchestrator branch below);%0A        - the head is not already covered per REVIEW RUN IDEMPOTENCY (#189); and%0A        - no failed/cancelled run on the current head awaits EMPTY REVIEW TRAP handling.%0A      Uncovered-but-not-ready heads are left alone: no review run and no worker-lifecycle%0A      action from the reconciler. Defer, never drop — report-stale and ping/respawn backstops%0A      still reach idle/dead workers; #191 CI-green wake speeds pre-hand-off re-engagement.%0A      Worker degraded-CI hand-off (#186 evidence-backed escalation, not ready_for_review)%0A      routes to the orchestrator/reconciler degraded-CI branch — bounded re-attempts to resolve%0A      required-check visibility, then observable operator escalation — not generic%0A      uncovered-not-ready worker-liveness handling. PRE-RUN HEAD-READY RE-CHECK widens #189:%0A      immediately before ao-review run, re-read current head SHA, latest accepted report,%0A      required-CI state, and coverage; abort if the predicate no longer holds. Mechanical%0A      implementation: docs/review-head-ready.mjs (shared with review-trigger-reconcile.ps1%0A      and docs/review-orchestrator-loop.mjs).%0A%0A      STALE REVIEWER WORKSPACE (Issue #98). Before ao-review run when the prior attempt for%0A      the same PR head failed with failure detail containing worktree add and already%0A      exists, or when retrying after a failed reviewer infra run, run from the pack repo root:%0A        pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .%0A      That removes an orphan code-reviews/workspaces path so AO git worktree add can succeed.%0A      See docs/orchestrator-recovery-runbook.md (Orphan review run after worker respawn).%0A%0A      ROUTINE REVIEW TRIGGER (script-owned — operator reference prose; NOT an LLM turn%0A      checklist on AO 0.10). Routine review rounds are started by side-process scripts%0A      named above — the LLM orchestrator turn does not start or drive them. The block%0A      below documents legacy import / operator reference only. Historical claimed entry%0A      point (non-routine — not the 0.10 default path):%0A          -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]%0A      Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set%0A      AO_SESSION_ID=1, resolve real ao/git out-of-band via%0A      and prepend pack scripts/ to PATH so `ao`, `git`, and `gh` resolve to pack shims (deny spawn and%0A      direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);%0A      only the claimed entry point may launch review runs. Gate capability markers:%0A      orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.%0A      Command-runtime bootstrap (refuses command turns when tools/PATH are incomplete):%0A      pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1%0A      Recovery-boundary: command-runtime failures route to Issue #522/#527 — no ad hoc cleanup here.%0A      Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File%0A      scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after%0A      PR 999999 — must record covered-head denial, not merely head-resolution refusal).%0A      Manual operator override (outside autonomous surface): scripts/invoke-manual-review-run.ps1%0A      (emits advisory warning on covered/pending heads; does not acquire the autonomous gate).%0A      Prose REVIEW RUN IDEMPOTENCY below remains guidance; Issue #318 gate is authoritative%0A      for autonomous starts. Do not wait for operator words review or loop.%0A      Script-owned starters remain authoritative — review-trigger-reconcile.ps1 converges%0A      from GitHub + review list state even when reports are missing and the LLM orchestrator%0A      session is idle.%0A%0A      EVENT-DRIVEN REVIEW TRIGGER (Issue #207 — wake listener, review-run only). On%0A      merge.ready (approved-and-green completion wake), orchestrator-wake-listener.ps1%0A      evaluates HEAD READY FOR REVIEW (#195), acquires the shared review-start claim, then%0A      may ao-review run before forwarding the merge-intent wake. Merge handling must re-read%0A      run state (mergeable=false annotation when review is in-flight). Processing bound: 5s%0A      wake-to-run decision (listener-local). Side-effecting supervised child; additive to%0A      periodic reconcile below and heartbeat — not a replacement. Safety: never ao spawn,%0A      --claim-pr, ao session kill, ao send, or merge from this path — only ao-review run.%0A%0A      REVIEW-STATUS READER (Issue #611): worker report state comes from report-full snapshots only — `$.data[]` session rows with `reports[*]` via `Get-AoStatusSessionsWithReports` / audit-backed `.agent-report-audit`, never plain `ao session ls` or empty `reports: []` without naming the non-report-full source.%0A%0A      STATE-DERIVED REVIEW TRIGGER (Issue #163 — separate process, review-run only). A%0A      low-frequency reconciliation loop runs outside the LLM orchestrator turn loop:%0A        pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1%0A      Default cadence: 10 minutes (tens of minutes). Override with%0A      AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES or -IntervalMinutes. State file:%0A      AO_REVIEW_TRIGGER_RECONCILE_STATE or %25TEMP%25\\orchestrator-review-reconcile-state.json.%0A      Each tick:%0A        1. gh pr list --state open --json number,headRefOid%0A        2. Get-AoReviewRuns — coverage per PR head SHA (compose with REVIEW RUN%0A           IDEMPOTENCY above: in-flight, up_to_date, changes_requested count as covered;%0A           only outdated or absent runs are uncovered)%0A        3. ao status --json --reports full — resolve worker session and latest accepted%0A           report for each PR head%0A        4. gh pr checks + branch-protection required-check names — classify required CI per%0A           HEAD READY FOR REVIEW (#195; red defers, green/pending eligible, missing routes to%0A           degraded-CI orchestrator branch)%0A        5. For each head that is ready for review with a linked worker session: acquire the%0A           shared review-start claim, run STALE REVIEWER WORKSPACE preflight, PRE-RUN%0A           HEAD-READY RE-CHECK inside the claim, then ao-review run <worker-session-id>%0A      Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill, never ao send%0A      from this process — only ao-review run for a head ready for review. Skip uncovered-but-%0A      not-ready heads with no worker-lifecycle action. Skip PRs with no linked worker session%0A      (orchestrator respawn discipline owns session creation). Verification:%0A        pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun%0A      See docs/orchestrator-autoloop-go-live.md and docs/orchestrator-recovery-runbook.md.%0A%0A      DEFERRED-HEAD REVIEW RE-EVALUATION (Issue #235 — scoped supervised child, review-run%0A      only). When merge.ready defers as uncovered_not_ready / no_ready_for_review (#212),%0A      scripts/review-trigger-reeval.ps1 watches the small deferred-head set and may%0A      acquire the shared review-start claim and ao-review run seconds-scale when #195%0A      readiness lands on the current head SHA.%0A      Poll classification: scoped_deferred_head_watch (5-minute bounded window; incident%0A      wake-to-readiness delay ~77 s). Watch state: {stateRoot}/review-trigger-reeval-watch.json.%0A      Default poll: 5 s (-PollSeconds). Side-effect lock: review-trigger-reeval-side-effect.lock.%0A      Additive to #207 wake edge and #163 periodic reconcile backstop — not a full-PR sweep.%0A      Genuinely zero-signal heads (no wake and no in-progress report) remain backstop-only.%0A      Safety: never ao spawn, --claim-pr, ao session kill, ao send, or merge — only ao-review run.%0A      Verification:%0A        pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -Once -DryRun%0A%0A      STATE-DERIVED FIRST REVIEW SEND (Issue #202 — REMOVED on AO 0.10).%0A      scripts/review-send-reconcile.ps1 is a REMOVED stub (exit 2). AO 0.10 auto-delivers%0A      findings on submit — no ao-review send loop. Delivery confirmation and stuck-open recovery:%0A        pwsh -NoProfile -File scripts/review-finding-delivery-confirm.ps1%0A      Default cadence: 5 minutes. See docs/orchestrator-autoloop-go-live.md.%0A%0A      NAMED PENDING STATE: waiting_worker_review_response.%0A      A PR enters this state after auto-delivery for a changes_requested run (deliveredAt set,%0A      deliveredFindingCount > 0), or while any delivered changes_requested run for that PR%0A      has openFindingCount > 0 and the worker has not yet satisfied an%0A      exit condition.%0A      While in waiting_worker_review_response, do NOT treat merge_ready,%0A      ready_for_review, or stale dashboard metadata as task-complete for that PR.%0A%0A      EXIT waiting_worker_review_response when ANY of:%0A        1. Worker reports addressing_reviews via ao report.%0A        2. Worker pushes a new commit on the PR branch (head SHA advances).%0A        3. Worker reports terminal failure with a reason (completed with failure note%0A           or ao send to orchestrator explaining the blocker).%0A        4. Orchestrator observed the worker session is unavailable, killed it, and%0A           respawned via ao spawn --project <project> --name '<label>' --claim-pr <PR> (ping/respawn discipline below).%0A        5. The linked worker PR is merged on GitHub (MERGED PR — REVIEW LOOP TERMINAL%0A           above; verify via gh pr view, not session status alone).%0A%0A%0A      TASK CONTINUATION (Issue #430 — issue-keyed, pre- and post-PR). When exactly one live%0A      issue-bound worker owns the task (ao status issue match + runtime alive) and no prior%0A      task-continuation tuple was served for the current issue generation, send exactly ONE%0A      continuation via the gated worker-nudge command (never raw ao send):%0A        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `%0A          -SessionId <session> -IssueNumber <issue> -IntentClass task-continuation -Surface orchestrator-turn%0A        Optional -PrNumber is audit context only after PR open; dedup stays issue-keyed.%0A        Message file should remind the worker to commit, rebase, open PR, and report when ready.%0A        Gate version: worker-nudge-gate/v1.%0A%0A      PING DISCIPLINE (one ping per pending episode). On the next orchestrator turn%0A      while still in waiting_worker_review_response, if there is no worker%0A      addressing_reviews report since the send timestamp and no new PR commit, and%0A      ao events list --json shows no prior ao send ping for this pending episode,%0A      send exactly ONE message via the gated worker-nudge command (never raw ao send):%0A        Get-Content -Raw -Path <message-file> | pwsh -NoProfile -File scripts/invoke-gated-worker-nudge.ps1 `%0A          -SessionId <session> -PrNumber <PR> -HeadSha <head-sha> -ReviewRunId <review-run-id> `%0A          -IntentClass review-findings -Surface waiting_worker_review_response%0A        Transport chokepoint: scripts/journaled-worker-send.ps1 (claim token required).%0A        Message file must hold the reminder to check pending AO review findings (Get-AoReviewRuns),%0A        report ao report addressing_reviews, or report terminal failure with a reason.%0A        Gate version: worker-nudge-gate/v1.%0A      Do NOT send a second ping before observing the next worker response or commit.%0A%0A      RESPAWN DISCIPLINE. On a later orchestrator turn, if still in%0A      waiting_worker_review_response with no addressing_reviews, no new commit, and%0A      a ping was already sent for this episode (visible in ao events list), run:%0A        ao session kill <session>%0A        ao spawn --project <project> --name '<label>' --claim-pr <PR>%0A      Reset ping tracking for the new session.%0A%0A      REVIEW-READY WORKER STUCK GUARD (Issue #174). On EVERY orchestrator turn,%0A      BEFORE kill/respawn/claim-pr discipline above for a worker flagged stuck or%0A      probe_failure, classify one consistent snapshot from ao status --json --reports%0A      full, gh pr view (current head), gh pr checks (required CI), and Get-AoReviewRuns%0A      (no pane scraping):%0A        Linked session owns the PR current head AND runtime alive AND required%0A        merge-contract CI green on that head AND last accepted ready_for_review is%0A        for that head AND a review run with status up_to_date and findingCount 0 covers%0A        the same head/session pair.%0A        delivered changes_requested does NOT grant protection (mid-fix; Issue #171 owns delivery).%0A        Red or pending required CI disqualifies protection — use CI FAILURE DISCIPLINE.%0A      When classified review-ready on false stuck:%0A        Do NOT immediately ao spawn, --claim-pr, ao session kill, or respawn.%0A        Hold for bounded grace (default 15 minutes, monotonic per session+head:%0A        anchored to first false stuck; repeated stuck reports do NOT extend grace).%0A        Optional helper: docs/review-ready-stuck-guard.mjs (plan/classify stdin JSON).%0A        Env override: AO_REVIEW_READY_STUCK_GRACE_MINUTES.%0A      Within grace, recovery requires affirmative unreachability evidence only:%0A        failed bounded reachability attempt; Issue #171 delivery unconfirmed/escalated%0A        for the linked run; or Issue #173 terminal_mux_paired_flap still flagged after%0A        stop-verify. Mere silence (no outbound report) is NOT evidence — do not recover%0A        on silence alone before grace deadline.%0A      When evidence exists, prefer careful recycle (ao session kill + operator%0A      escalation/notify) over blind ao spawn --claim-pr (PR #97 split-brain).%0A      After grace expires without affirmative unreachable evidence, normal stuck%0A      handling may resume.%0A      Genuine death (runtime not alive) is NOT shielded — orphan/respawn (#98) applies.%0A      Operator adoption: merge this block into live orchestratorRules, then ao stop%0A      and ao start. See docs/orchestrator-recovery-runbook.md (Review-ready worker%0A      false stuck).%0A%0A      ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the%0A      last review run's target SHA, apply HEAD READY FOR REVIEW (#195) and PRE-RUN%0A      HEAD-READY RE-CHECK, then ao-review run <session> for the next round only when the new head is ready for review — do not%0A      ask the operator. Intermediate commits while the worker is still fixing must not trigger%0A      a review run.%0A%0A      REVIEW-CYCLE CAP (Issue #646 — tier-keyed distinct-head budget). Count budget%0A      units by distinct reviewed head (normalized targetSha) from Get-AoReviewRuns rows,%0A      not raw run count. Tier caps: T1 = 2, T2 = 4, T3 = 8 (default T2 when the bound%0A      issue has no complexity-tier fence). First terminal clean run on a distinct head%0A      records clean_early_stop and makes the PR merge-eligible — stop auto review starts%0A      on that head until a new commit opens a fresh cycle. When the distinct-head budget%0A      is exhausted with open findings, emit at_cap_open_findings and stop auto review%0A      starts until operator/Brief-B triage clears the terminal. Same-sha infra retries%0A      and zero-finding failed/cancelled runs do not consume budget.%0A%0A      OPERATOR ADOPTION HANDOFF (Issue #101). When a worker PR is merge-ready or%0A      mergeable per the rules below (required CI green, up_to_date review, worker%0A      ready_for_review), before assuming the autonomous loop is fully live for the%0A      next spawn, remind the operator: execute the ## Operator adoption checklist%0A      from that PR body and the matching docs/migration_notes.md subsection.%0A      Workers document adoption; the operator owns live agent-orchestrator.yaml,%0A      listeners, env, and ao stop / ao start. Do not treat merged example YAML or%0A      migration prose as executed until the operator confirms.%0A%0A      NO MERGE BY ORCHESTRATOR. Never call gh pr merge or click Merge. Merge is%0A      operator-only — no AO-managed agent performs or directs a PR merge. Also%0A      MUST NOT direct, instruct, ask, nudge, or otherwise prompt any worker or%0A      other agent to merge; proceed-to-merge or go-ahead-and-merge messages to a%0A      worker are forbidden.%0A      The approved-and-green / merge.ready completion wake is a hand-off addressed%0A      to the operator (human), not a cue to merge. On that wake, when the ALL-true%0A      gate below holds, emit the ready-for-human-merge notification to the%0A      operator and stop at the merge boundary — do not merge and do not delegate%0A      the merge.%0A      Emit ready-for-human-merge notification only when ALL are true:%0A        - Latest AO-local review run for current PR head has findingCount: 0 and up_to_date status%0A          (no open or sent findings remain);%0A        - PR is open with required CI green on the same head SHA (see REQUIRED CI);%0A        - Worker reported ready_for_review for current head, OR the latest clean%0A          review completed after the worker's latest ready_for_review with no newer%0A          commits;%0A        - No later changes-requested, ci-failed, or failed review run for that head.%0A%0A      Operator input is required only for merge, round-limit escalation, or%0A      unrecoverable worker/reviewer failure — not between review rounds.%0A%0A# Review model policy:%0A# - Desired reviewer: Codex CLI with model gpt-5.5.%0A# - Current upstream AO schema supports orchestrator and worker role config directly.%0A# - Keep Codex reviewer integration upgrade-safe: implement it as an external plugin/workflow%0A#   under plugins/** or CI, never as a packages/core patch.%0A%0A# CI-FAILURE REACTION RECORD (Issue #342 — executable wiring; not orchestratorRules prose):%0A# Side-process supervisor child ci-failure-notification-reaction records pending episodes:%0A#   pwsh -NoProfile -File scripts/ci-failure-notification-reaction.ps1%0A# Delivery evaluation remains in ci-failure-notification-reconcile.ps1 (ao send only there).%0A%0Areactions:%0A  ci-failed:%0A    auto: true%0A    action: notify%0A    message: >-%0A      Red CI enqueued for pack ci-failure-notification reconcile delivery (Issue #342).%0A      Pending episode record runs via ci-failure-notification-reaction.ps1; worker ping%0A      is never sent from this reaction path.%0A    priority: action%0A  changes-requested:%0A    auto: true%0A    action: send-to-agent%0A    escalateAfter: 30m%0A  approved-and-green:%0A    auto: false%0A    action: notify%0A    priority: action%0A  report-stale:%0A    auto: true%0A    action: send-to-agent%0A    message: >-%0A      Worker idle (report-stale backstop). Check pending AO review findings via%0A      `Get-AoReviewRuns` and report `ao report addressing_reviews`, or report a%0A      terminal failure with a reason. Do not stay silent after review findings land.%0A%0A# Upgrade-safe extension notes:%0A# - Implement task declaration, runtime scope guard, and token chain ledger through%0A#   AO plugin slots, wrappers, hooks, external state, and CI.%0A# - Do not patch Composio AO packages/core.%0A# - PR CI scope validation is the second line of defense; runtime guard is first.%0A%0A# AO 0.10 review harness (Issue #623)%0A# On AO 0.10.x, configure reviewers via project config API — not REVIEW_COMMAND/--command:%0A#   ao project set-config orchestrator-pack --config-json '{\"reviewers\":[{\"harness\":\"codex\"}]}'%0A# Pack trigger loop uses POST /api/v1/sessions/{workerId}/reviews/trigger (scripts/ao-review.ps1 shim).%0A# Operator adoption: docs/ao-0-10-review-harness-adoption.md%0A%0A"%0A%0A ❯ scripts/autonomous-orchestrator-boundary.test.ts:189:22%0A%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/autonomous-orchestrator-boundary.test.ts,title=scripts/autonomous-orchestrator-boundary.test.ts > autonomous orchestrator spawn/git boundary (#324) > broken explicit ao pointer policy (Issue #495) > emits resolver-path warning and falls back on autonomous surface bash fast path,line=260,column=21::Error: ENOENT: no such file or directory, lstat '/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/ao'%0A ❯ withBrokenAoPointerFixture scripts/autonomous-orchestrator-boundary.test.ts:260:21%0A ❯ scripts/autonomous-orchestrator-boundary.test.ts:272:13%0A%0A⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯%0ASerialized Error: { errno: -2, code: 'ENOENT', syscall: 'lstat', path: '/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/ao' }%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/autonomous-orchestrator-boundary.test.ts,title=scripts/autonomous-orchestrator-boundary.test.ts > autonomous orchestrator spawn/git boundary (#324) > broken explicit ao pointer policy (Issue #495) > emits resolver-path warning and falls back on autonomous surface PS guard path,line=260,column=21::Error: ENOENT: no such file or directory, lstat '/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/ao'%0A ❯ withBrokenAoPointerFixture scripts/autonomous-orchestrator-boundary.test.ts:260:21%0A ❯ scripts/autonomous-orchestrator-boundary.test.ts:283:13%0A%0A⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯%0ASerialized Error: { errno: -2, code: 'ENOENT', syscall: 'lstat', path: '/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/ao' }%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/_test-pwsh-helpers.ts,title=scripts/autonomous-session-gates.test.ts > AO 0.10.2 in-process autonomous gate activation (#821) > review without a session id remains outside the in-process gate,line=59,column=13::Error: pwsh failed 1%0ASTDOUT:%0A{"spawn":false,"review":false,"boundary":false,"reviewDenied":false,"reviewReason":"manual_surface","workerDenied":false,"workerReason":"manual_surface","gitDenied":false,"gitReason":"manual_surface"}%0A%0ASTDERR:%0A%0A ❯ runPwsh scripts/_test-pwsh-helpers.ts:59:13%0A ❯ evaluateSessionCell scripts/autonomous-session-gates.test.ts:13:18%0A ❯ scripts/autonomous-session-gates.test.ts:66:20%0A%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/_test-pwsh-helpers.ts,title=scripts/autonomous-session-gates.test.ts > AO 0.10.2 in-process autonomous gate activation (#821) > operator manual shell without a session id remains outside the in-process gate,line=59,column=13::Error: pwsh failed 1%0ASTDOUT:%0A{"spawn":false,"review":false,"boundary":false,"reviewDenied":false,"reviewReason":"manual_surface","workerDenied":false,"workerReason":"manual_surface","gitDenied":false,"gitReason":"manual_surface"}%0A%0ASTDERR:%0A%0A ❯ runPwsh scripts/_test-pwsh-helpers.ts:59:13%0A ❯ evaluateSessionCell scripts/autonomous-session-gates.test.ts:13:18%0A ❯ scripts/autonomous-session-gates.test.ts:66:20%0A%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/_test-pwsh-helpers.ts,title=scripts/autonomous-session-gates.test.ts > AO 0.10.2 in-process autonomous gate activation (#821) > CI without a session id remains outside the in-process gate,line=59,column=13::Error: pwsh failed 1%0ASTDOUT:%0A{"spawn":false,"review":false,"boundary":false,"reviewDenied":false,"reviewReason":"manual_surface","workerDenied":false,"workerReason":"manual_surface","gitDenied":false,"gitReason":"manual_surface"}%0A%0ASTDERR:%0A%0A ❯ runPwsh scripts/_test-pwsh-helpers.ts:59:13%0A ❯ evaluateSessionCell scripts/autonomous-session-gates.test.ts:13:18%0A ❯ scripts/autonomous-session-gates.test.ts:66:20%0A%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/worker-nudge-gate.test.ts,title=scripts/worker-nudge-gate.test.ts > Worker-NudgeClaim single-flight contract > ao shim denies raw worker send on autonomous surface,line=509,column=31::AssertionError: expected 127 to be 93 // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- 93%0A+ 127%0A%0A ❯ scripts/worker-nudge-gate.test.ts:509:31%0A%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/worker-nudge-gate.test.ts,title=scripts/worker-nudge-gate.test.ts > Worker-NudgeClaim single-flight contract > internal capability deny > raw ao send on autonomous surface is internal capability deny exit 93,line=632,column=35::AssertionError: expected 127 to be 93 // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- 93%0A+ 127%0A%0A ❯ scripts/worker-nudge-gate.test.ts:632:35%0A%0A
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/worker-nudge-gate.test.ts,title=scripts/worker-nudge-gate.test.ts > Worker-NudgeClaim single-flight contract > internal capability deny > raw ao send --help without capability is internal capability deny exit 93,line=642,column=35::AssertionError: expected 127 to be 93 // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- 93%0A+ 127%0A%0A ❯ scripts/worker-nudge-gate.test.ts:642:35%0A%0A
