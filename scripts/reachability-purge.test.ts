@@ -17,6 +17,8 @@ interface ReachabilityManifest {
     consumerScope?: string;
   }>;
   unresolvedDynamicForms: Array<{
+    source?: string;
+    kind?: string;
     foldedIntoZeroReachability: boolean;
     possibleTargets?: string[];
   }>;
@@ -69,6 +71,14 @@ describe('reachability-purge', () => {
   it('unresolved dynamic invocation forms are inventoried and held, not counted as zero-reachability', () => {
     expect(manifest.unresolvedDynamicForms.length).toBeGreaterThan(0);
     expect(manifest.unresolvedDynamicForms.some((row) => row.foldedIntoZeroReachability)).toBe(false);
+    expect(
+      manifest.unresolvedDynamicForms.some(
+        (row) =>
+          row.kind === 'start-process'
+          && row.source === 'scripts/worker-nudge-gate.test.ts'
+          && (row.possibleTargets ?? []).includes('scripts/ao'),
+      ),
+    ).toBe(true);
     const held = new Set(manifest.heldNodes.map((row) => row.path));
     for (const row of manifest.unresolvedDynamicForms) {
       for (const target of row.possibleTargets ?? []) expect(held.has(target)).toBe(true);

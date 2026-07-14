@@ -352,6 +352,29 @@ function powerShellAssignments(repoRoot, trackedSet, sourceRel, states) {
   return variables;
 }
 
+function inferLinePossibleTargets(repoRoot, trackedSet, sourceRel, line, variables = null) {
+  const targets = new Set();
+  for (const candidate of extractRepoPaths(line)) {
+    const target = resolveExistingPath(repoRoot, trackedSet, sourceRel, candidate);
+    if (target) targets.add(target);
+  }
+  const joined = /path\.(?:join|resolve)\(\s*(?:repoRoot|root|packRoot|process\.cwd\(\))\s*,\s*['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?\s*\)/g;
+  let joinMatch;
+  while ((joinMatch = joined.exec(line)) !== null) {
+    const candidate = joinMatch[2] ? `${joinMatch[1]}/${joinMatch[2]}` : joinMatch[1];
+    const target = resolveExistingPath(repoRoot, trackedSet, sourceRel, candidate);
+    if (target) targets.add(target);
+  }
+  if (variables) {
+    for (const [variableName, variableTarget] of variables) {
+      if (new RegExp(`\\$${variableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(line)) {
+        targets.add(variableTarget);
+      }
+    }
+  }
+  return [...targets].sort();
+}
+
 function parsePowerShell(repoRoot, trackedSet, sourceRel, text) {
   const trustedEdges = [];
   const suspectEdges = [];
@@ -426,6 +449,11 @@ function parsePowerShell(repoRoot, trackedSet, sourceRel, text) {
       const target = resolvePowerShellExpression(repoRoot, trackedSet, sourceRel, pwsh[1], variables);
       if (target) trustedEdges.push({ source: sourceRel, target, line: state.lineNumber, kind: 'pwsh-file' });
       else pushUnresolved(state, 'pwsh-file', pwsh[1]);
+    }
+
+    if (/\bStart-Process\b[^#\r\n]*\s-FilePath\b/i.test(line)) {
+      const possibleTargets = inferLinePossibleTargets(repoRoot, trackedSet, sourceRel, line, variables);
+      if (possibleTargets.length > 0) pushUnresolved(state, 'start-process', line, possibleTargets);
     }
 
     for (const candidate of extractRepoPaths(line)) {
@@ -511,6 +539,21 @@ function parseJavaScript(repoRoot, trackedSet, sourceRel, text) {
     for (const candidate of extractRepoPaths(line)) {
       const target = resolveExistingPath(repoRoot, trackedSet, sourceRel, candidate);
       if (target) references.push({ source: sourceRel, target, line: lineNumber, kind: 'literal-reference' });
+    }
+
+    if (/\bStart-Process\b[^\r\n]*\s-FilePath\b/i.test(line)) {
+      const possibleTargets = inferLinePossibleTargets(repoRoot, trackedSet, sourceRel, line);
+      if (possibleTargets.length > 0) {
+        unresolved.push({
+          source: sourceRel,
+          line: lineNumber,
+          kind: 'start-process',
+          expression: line.trim(),
+          possibleTargets,
+          foldedIntoZeroReachability: false,
+          evidence: 'Start-Process dispatch is treated as an unresolved dynamic invocation; inferred repository-local targets are held until a dedicated parser proves them.',
+        });
+      }
     }
 
     const spawn = line.match(/\b(?:spawn|spawnSync|execFile|execFileSync|fork)\s*\(\s*([^,\n]+)/);
