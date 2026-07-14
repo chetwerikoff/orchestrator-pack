@@ -9,7 +9,6 @@
 . (Join-Path $PSScriptRoot 'Autonomous-WorkerRecoveryGate.ps1')
 
 $Script:AutonomousBoundaryExitCode = 93
-$Script:TurnVisibleRealBinaryEnvVars = @('AO_REAL_BINARY', 'GIT_REAL_BINARY')
 $Script:SanctionedGitPreflightPatterns = @(
     'reviewer-workspace-preflight.ps1',
     'orchestrator-worktree-preflight.ps1'
@@ -24,48 +23,6 @@ function Get-PackRootFromBoundaryLib {
 
 function Test-OrchestratorAutonomousSurfaceActiveForBoundary {
     return -not [string]::IsNullOrEmpty([string]$env:AO_SESSION_ID)
-}
-
-function Resolve-RealAoExecutable {
-    param([string]$PackRoot = '')
-
-    $command = Get-Command ao -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
-    return 'ao'
-}
-
-function Resolve-SystemGitExecutable {
-    param([string]$PackRoot = '')
-
-    foreach ($candidate in @('/usr/bin/git', '/bin/git', '/usr/local/bin/git')) {
-        if (Test-Path -LiteralPath $candidate) {
-            return (Resolve-Path -LiteralPath $candidate).Path
-        }
-    }
-    $command = Get-Command git -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
-    return 'git'
-}
-
-function Resolve-RealGitExecutable {
-    return Resolve-SystemGitExecutable
-}
-
-function Test-TurnVisibleRealBinaryBypassPresent {
-    foreach ($name in $Script:TurnVisibleRealBinaryEnvVars) {
-        if ([Environment]::GetEnvironmentVariable($name)) { return $true }
-    }
-    return $false
-}
-
-function Test-IsKnownSystemGitBinaryPath {
-    param([string]$CandidatePath)
-
-    if (-not $CandidatePath) { return $false }
-    $leaf = Split-Path -Leaf $CandidatePath
-    if ($leaf -ne 'git') { return $false }
-    $normalized = ($CandidatePath -replace '\\', '/')
-    return $normalized -match '^(?i)(/usr/bin/|/bin/|/usr/local/bin/)'
 }
 
 function Get-LinuxParentProcessId {

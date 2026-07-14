@@ -33,41 +33,16 @@ function Get-AutonomousCapabilityInventoryViolations {
     }
 
     if ($IncludeBoundaryChecks) {
-        foreach ($id in @('ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env')) {
-            $row = $repoInventory | Where-Object { [string]$_.id -eq $id } | Select-Object -First 1
-            if (-not $row -or [string]$row.classification -ne 'unavailable') {
-                $violations.Add("required unavailable capability missing or misclassified: $id")
-            }
-        }
-        foreach ($id in @('git-shim', 'git-autonomous-guard', 'autonomous-real-binaries-config')) {
+        foreach ($id in @(
+            'autonomous-session-id',
+            'autonomous-spawn-gate',
+            'autonomous-review-start-gate',
+            'autonomous-worker-nudge-gate',
+            'autonomous-git-boundary'
+        )) {
             $row = $repoInventory | Where-Object { [string]$_.id -eq $id } | Select-Object -First 1
             if (-not $row -or [string]$row.classification -ne 'gated') {
-                $violations.Add("required gated capability missing or misclassified: $id")
-            }
-        }
-
-        $configPath = Join-Path $RepoRoot '.ao' 'autonomous-real-binaries.json'
-        if (Test-Path -LiteralPath $configPath) {
-            try {
-                $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-                . (Join-Path $RepoRoot 'scripts/lib/Orchestrator-AutonomousBoundary.ps1')
-                $configuredAo = [string]$config.ao
-                if ($configuredAo -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configuredAo -PackRoot $RepoRoot)) {
-                    $violations.Add("broken explicit ao pointer: $configuredAo")
-                }
-                $configuredGit = [string]$config.git
-                if ($configuredGit) {
-                    if (Test-IsKnownSystemGitBinaryPath -CandidatePath $configuredGit) {
-                        $violations.Add('configured git must be pack scripts/git-real-binary, not a host system binary')
-                    }
-                    $expectedWrapper = Get-PackGitRealBinaryPath -PackRoot $RepoRoot
-                    if ($configuredGit -ne $expectedWrapper) {
-                        $violations.Add("configured git must resolve to $expectedWrapper")
-                    }
-                }
-            }
-            catch {
-                $violations.Add('invalid .ao/autonomous-real-binaries.json')
+                $violations.Add("required in-process capability missing or misclassified: $id")
             }
         }
 
@@ -108,7 +83,7 @@ function Get-UnclassifiedReviewStartHelperViolations {
     }
     foreach ($file in @($files)) {
         $rel = [System.IO.Path]::GetRelativePath($RepoRoot, $file.FullName).Replace('\', '/')
-        if ($rel -match 'invoke-orchestrator-claimed-review-run|invoke-manual-review-run|ao-autonomous-guard|git-autonomous-guard|scripts/ao$|scripts/git$|Invoke-OrchestratorClaimedReviewRun') {
+        if ($rel -match 'invoke-manual-review-run') {
             continue
         }
         $text = Get-Content -LiteralPath $file.FullName -Raw

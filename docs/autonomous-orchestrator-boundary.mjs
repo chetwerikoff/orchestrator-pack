@@ -15,12 +15,10 @@ export const AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION =
   'autonomous-orchestrator-boundary/v1';
 export const AUTONOMOUS_SPAWN_POLICY_VERSION = 'autonomous-spawn-policy/v1';
 export const AUTONOMOUS_SPAWN_POLICY_RELATIVE_PATH = 'docs/autonomous-spawn-policy.json';
-export const TURN_VISIBLE_REAL_BINARY_ENV_VARS = ['AO_REAL_BINARY', 'GIT_REAL_BINARY'];
 const PREFLIGHT_GIT_PARENTS = [
   'reviewer-workspace-preflight.ps1',
   'orchestrator-worktree-preflight.ps1',
 ];
-const CLAIMED_REVIEW_RUN_INVOKER = 'Invoke-OrchestratorClaimedReviewRun.ps1';
 
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
   'status',
@@ -752,67 +750,6 @@ export function isSanctionedGitParentCommandLine(commandLine, sanctionedScripts)
 const SYSTEM_GIT_PREFIXES = ['/usr/bin/', '/bin/', '/usr/local/bin/'];
 
 /**
- * @param {string} candidatePath
- */
-export function isKnownSystemGitBinaryPath(candidatePath) {
-  const normalized = String(candidatePath ?? '').replace(/\\/g, '/');
-  const leaf = normalized.split('/').pop() ?? '';
-  if (leaf !== 'git') {
-    return false;
-  }
-  return SYSTEM_GIT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-/**
- * @param {object} input
- * @param {string} [input.configuredGitPath]
- * @param {string} [input.packRoot]
- */
-export function evaluateConfiguredGitBinaryBypass(input) {
-  const configured = String(input.configuredGitPath ?? '');
-  const packRoot = String(input.packRoot ?? '');
-  if (!configured) {
-    return { bypassPresent: false, reason: 'no_configured_git' };
-  }
-  if (isKnownSystemGitBinaryPath(configured)) {
-    return { bypassPresent: true, reason: 'configured_system_git_binary' };
-  }
-  const expectedSuffix = '/scripts/git-real-binary';
-  if (!configured.endsWith('git-real-binary') && !configured.endsWith(expectedSuffix)) {
-    return { bypassPresent: true, reason: 'configured_git_not_pack_wrapper' };
-  }
-  if (packRoot) {
-    const expected = `${packRoot.replace(/\\/g, '/')}/scripts/git-real-binary`;
-    if (configured.replace(/\\/g, '/') !== expected) {
-      return { bypassPresent: true, reason: 'configured_git_not_pack_wrapper' };
-    }
-  }
-  return { bypassPresent: false, reason: 'configured_git_wrapper_ok' };
-}
-
-/**
- * @param {object} input
- * @param {string} [input.commandLine]
- */
-export function evaluateAbsoluteSystemGitInvocationBoundary(input) {
-  const commandLine = String(input.commandLine ?? '');
-  const match = /^(\/usr\/bin\/git|\/bin\/git|\/usr\/local\/bin\/git)\b(.*)$/i.exec(commandLine);
-  if (!match) {
-    return { allowed: true, reason: 'not_absolute_system_git' };
-  }
-  if (!input.autonomousSurface) {
-    return { allowed: true, reason: 'manual_surface' };
-  }
-  const argv = match[2].trim().split(/\s+/).filter(Boolean);
-  return evaluateAutonomousGitBoundary({
-    argv,
-    autonomousSurface: true,
-    parentChain: input.parentChain,
-    claimedBypass: input.claimedBypass,
-  });
-}
-
-/**
  * @param {string[]} argv
  */
 export function isGitArgvAoOwnedWorktreeAdd(argv) {
@@ -846,9 +783,6 @@ export function classifySanctionedGitProvenance(parentChain, maxDepth) {
     }
   }
   for (const line of chain.slice(0, depthLimit)) {
-    if (isSanctionedGitParentCommandLine(line, [CLAIMED_REVIEW_RUN_INVOKER])) {
-      return 'claimed_review_run';
-    }
     if (isAoReviewRunGitWorktreeSetupCommandLine(line)) {
       return 'review_run_worktree_command';
     }
@@ -873,50 +807,6 @@ export function hasSanctionedGitParentChain(parentChain, argv = [], claimedBypas
 }
 
 /**
- * @param {string} segment
- * @param {string} binaryName
- */
-function pathSegmentContainsBinary(segment, binaryName) {
-  if (!segment) {
-    return false;
-  }
-  try {
-    return existsSync(join(segment, binaryName));
-  } catch {
-    return false;
-  }
-}
-
-/**
- * @param {object} input
- * @param {Record<string, string | undefined>} [input.env]
- * @param {string} [input.pathValue]
- */
-export function evaluateTurnVisibleRealBinaryBypass(input) {
-  const env = input.env ?? {};
-  for (const name of TURN_VISIBLE_REAL_BINARY_ENV_VARS) {
-    if (env[name]) {
-      return { bypassPresent: true, reason: 'turn_visible_real_binary_env', name };
-    }
-  }
-  const pathValue = String(input.pathValue ?? env.PATH ?? '');
-  const segments = pathValue.split(':').filter(Boolean);
-  const scriptsIdx = segments.findIndex((segment) => segment.endsWith('/scripts'));
-  if (scriptsIdx > 0) {
-    const before = segments.slice(0, scriptsIdx);
-    for (const segment of before) {
-      if (segment.endsWith('/ao') || segment.endsWith('/git')) {
-        return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
-      }
-      if (pathSegmentContainsBinary(segment, 'ao') || pathSegmentContainsBinary(segment, 'git')) {
-        return { bypassPresent: true, reason: 'real_binary_before_shim_on_path' };
-      }
-    }
-  }
-  return { bypassPresent: false, reason: 'no_turn_visible_bypass' };
-}
-
-/**
  * @param {object} input
  * @param {Array<{ id: string, classification: string }>} [input.liveCapabilities]
  */
@@ -924,15 +814,14 @@ export function evaluateBoundaryCapabilityPreflight(input) {
   const violations = [];
   const rows = Array.isArray(input.liveCapabilities) ? input.liveCapabilities : [];
   const byId = new Map(rows.map((row) => [String(row.id), String(row.classification)]));
-  for (const id of ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env']) {
-    const classification = byId.get(id);
-    if (classification !== 'unavailable') {
-      violations.push(`${id}_not_unavailable`);
-    }
-  }
-  for (const id of ['git-shim', 'git-autonomous-guard', 'autonomous-real-binaries-config']) {
-    const classification = byId.get(id);
-    if (classification !== 'gated') {
+  for (const id of [
+    'autonomous-session-id',
+    'autonomous-spawn-gate',
+    'autonomous-review-start-gate',
+    'autonomous-worker-nudge-gate',
+    'autonomous-git-boundary',
+  ]) {
+    if (byId.get(id) !== 'gated') {
       violations.push(`${id}_not_gated`);
     }
   }
@@ -964,6 +853,5 @@ runStdinJsonCli('autonomous-orchestrator-boundary.mjs', {
   evaluateClaimPrResumeSafety: () => evaluateClaimPrResumeSafety(readStdinJson()),
   validateSpawnPolicy: () => validateAutonomousSpawnPolicy(readStdinJson()),
   evaluateGitBoundary: () => evaluateAutonomousGitBoundary(readStdinJson()),
-  evaluateTurnBypass: () => evaluateTurnVisibleRealBinaryBypass(readStdinJson()),
   evaluatePreflight: () => evaluateBoundaryCapabilityPreflight(readStdinJson()),
 });

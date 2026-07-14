@@ -1361,8 +1361,12 @@ export function evaluatePreflight(input) {
   return evaluateAutonomousGatePreflight(input, {
     expectedGateVersion: WORKER_NUDGE_GATE_VERSION,
     atomicClaimCapability: ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY,
-    rawCapabilityId: 'ao-worker-send-raw',
-    rawNotUnavailableReason: 'raw_worker_send_not_unavailable',
+    requiredCapabilities: [
+      { id: 'autonomous-session-id', classification: 'gated' },
+      { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+      { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+      { id: 'journaled-worker-send-gated', classification: 'gated' },
+    ],
   });
 }
 
