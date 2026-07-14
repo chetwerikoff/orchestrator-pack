@@ -139,9 +139,9 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
   if (typeof fs.rename === 'function') {
     const nativeRename = fs.rename;
     fs.rename = function opkVitestGuardedRename(source, destination, ...rest) {
-      guardPath(source, 'fs.rename.source');
-      guardPath(destination, 'fs.rename.destination');
-      return nativeRename.call(this, source, destination, ...rest);
+      const nextSource = remapPath(source, 'fs.rename.source');
+      const nextDestination = remapPath(destination, 'fs.rename.destination');
+      return nativeRename.call(this, nextSource, nextDestination, ...rest);
     };
   }
 

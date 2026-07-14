@@ -6,7 +6,7 @@
     "plugins/*"
   ],
   "scripts": {
-    "test": "vitest run",
+    "test": "node scripts/run-vitest-with-harness.mjs run",
     "test:watch": "vitest",
     "ts:smoke": "node --experimental-strip-types scripts/typescript-smoke.ts",
     "check:node-major": "node --experimental-strip-types scripts/toolchain/check-node-major.ts",
