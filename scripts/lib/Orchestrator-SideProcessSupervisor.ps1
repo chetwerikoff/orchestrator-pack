@@ -53,12 +53,14 @@ function New-OrchestratorWakeSupervisorChildEnvironment {
     )
 
     $childEnv = @{
-        AO_SIDE_PROCESS_STATE_DIR    = $Paths.Root
-        AO_SIDE_PROCESS_PROGRESS_DIR = $Paths.ProgressDir
-        AO_SIDE_PROCESS_CHILD_ID     = $ChildId
-        GH_FLEET_CACHE_AUDIT         = '1'
-        GH_WRAPPER_AUDIT             = '1'
-        PATH                         = (Merge-OrchestratorSideProcessPackScriptsPath)
+        AO_SIDE_PROCESS_STATE_DIR                 = $Paths.Root
+        AO_WAKE_SUPERVISOR_STATE_DIR             = $Paths.Root
+        ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $Paths.Root
+        AO_SIDE_PROCESS_PROGRESS_DIR             = $Paths.ProgressDir
+        AO_SIDE_PROCESS_CHILD_ID                 = $ChildId
+        GH_FLEET_CACHE_AUDIT                     = '1'
+        GH_WRAPPER_AUDIT                         = '1'
+        PATH                                     = (Merge-OrchestratorSideProcessPackScriptsPath)
     }
     if ($Entry.RequiresOrchestratorSession) {
         $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId

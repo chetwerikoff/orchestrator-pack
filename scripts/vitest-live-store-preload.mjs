@@ -410,6 +410,8 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     if ((commandBase === 'pwsh' || commandBase === 'pwsh.exe' || commandBase === 'powershell' || commandBase === 'powershell.exe')
       && explicitStateDir) {
       mergedEnv.AO_SIDE_PROCESS_STATE_DIR = explicitStateDir;
+      mergedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
+      mergedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
     }
     if (commandBase === 'ao' || commandBase === 'ao.cmd' || commandBase === 'ao.exe' || commandBase === 'ao.bat') {
       const productionHome = String(harnessSnapshotEnv.OPK_VITEST_PRODUCTION_HOME ?? '').trim();

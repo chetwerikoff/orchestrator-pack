@@ -32,9 +32,6 @@ function Get-OpkVitestChildProcessEnvOverrides {
         if (-not $name) {
             continue
         }
-        if ($name -in @('AO_REVIEW_CLAIM_DIR', 'AO_WORKER_NUDGE_CLAIM_DIR')) {
-            continue
-        }
         if ($name -like 'AO_*' -or $name -like 'OPK_VITEST_*' -or $explicitKeys -contains $name) {
             $overrides[$name] = [string]$item.Value
         }
