@@ -1,0 +1,48 @@
+
+===== manifest verifier (exit 0) =====
+reachability purge manifest: PASS
+
+===== reachability test (exit 1) =====
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/orchestrator-pack/orchestrator-pack[39m
+
+ [31m❯[39m scripts/reachability-purge.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 7848[2mms[22m[39m
+     [33m[2m✓[22m[39m manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift [33m 897[2mms[22m[39m
+     [33m[2m✓[22m[39m every suspect edge has an explicit disposition with recorded evidence, and no cross-scope works row lacks proof beyond edge-fired evidence [33m 919[2mms[22m[39m
+     [33m[2m✓[22m[39m unresolved dynamic invocation forms are inventoried and held, not counted as zero-reachability [33m 866[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed when current tracked sources add a surviving reference to a deleted file [33m 1597[2mms[22m[39m
+     [33m[2m✓[22m[39m deletion set matches deadness formula including superseded-caller resolution [33m 980[2mms[22m[39m
+     [33m[2m✓[22m[39m KEEP-guard and REWRITE-list tests survive [33m 873[2mms[22m[39m
+[31m     [31m×[31m records the completed #821 prerequisite deletions without attributing them to #819[39m[33m 913[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m scripts/reachability-purge.test.ts[2m > [22mreachability-purge[2m > [22mrecords the completed #821 prerequisite deletions without attributing them to #819
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m scripts/reachability-purge.test.ts:[2m125:114[22m[39m
+    [90m123|[39m     [34mexpect[39m(manifest[33m.[39mexternalPrerequisiteDeletions)[33m.[39m[34mtoHaveLength[39m([34m13[39m)[33m;[39m
+    [90m124|[39m     expect(manifest.externalPrerequisiteDeletions.every((row) => row.i…
+    [90m125|[39m     expect(manifest.externalPrerequisiteDeletions.every((row) => row.t…
+    [90m   |[39m                                                                                                                  [31m^[39m
+    [90m126|[39m     expect(manifest.externalPrerequisiteDeletions.every((row) => Boole…
+    [90m127|[39m     const externallyOwned = new Set(manifest.externalPrerequisiteDelet…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m6 passed[39m[22m[90m (7)[39m
+[2m   Start at [22m 12:15:29
+[2m   Duration [22m 15.32s[2m (transform 79ms, setup 61ms, import 49ms, tests 7.85s, environment 0ms)[22m
+
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/reachability-purge.test.ts,title=scripts/reachability-purge.test.ts > reachability-purge > records the completed #821 prerequisite deletions without attributing them to #819,line=125,column=114::AssertionError: expected false to be true // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- true%0A+ false%0A%0A ❯ scripts/reachability-purge.test.ts:125:114%0A%0A
+
+===== tsconfig base (exit 0) =====

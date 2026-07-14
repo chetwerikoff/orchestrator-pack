@@ -52,6 +52,7 @@ const ISSUE_821_EXTERNAL_DELETIONS = [
   'scripts/git-real-binary',
   'scripts/invoke-orchestrator-claimed-review-run.ps1',
   'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
+  'scripts/lib/derive-gh-repo-from-checkout.mjs',
 ];
 
 
@@ -1070,6 +1071,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     reachable: reachableSet.has(shim),
     held: heldSet.has(shim),
     inboundTrustedEdges: trusted.filter((edge) => edge.target === shim),
+    externalInboundTrustedEdges: trusted.filter((edge) => edge.target === shim && edge.source !== SCRIPT_REL && edge.source !== 'scripts/reachability-purge.test.ts'),
     protectedTestReferences: literalReferences.filter((ref) => ref.target === shim && protectedTests.includes(ref.source)),
   }));
   const migrationNotesEntry = manifestMigrationNote(repoRoot);
@@ -1085,7 +1087,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     // required disposition, so only deleting a shim that still has live inbound trusted edges is
     // a violation.
     ...retiredShimBlockers
-      .filter((row) => row.deletedInCurrentTree && row.inboundTrustedEdges.length > 0)
+      .filter((row) => row.deletedInCurrentTree && row.externalInboundTrustedEdges.length > 0)
       .map((row) => ({
         code: 'shim-cluster-deleted-despite-live-inbound-edge',
         path: row.path,

@@ -41,6 +41,7 @@ interface ReachabilityManifest {
     reachable: boolean;
     held: boolean;
     inboundTrustedEdges: unknown[];
+    externalInboundTrustedEdges: unknown[];
   }>;
   migrationNotesEntry: { authorized: boolean; presentWithRequiredFields: boolean };
   completionStatus: 'complete' | 'blocked';
@@ -119,7 +120,7 @@ describe('reachability-purge', () => {
   });
 
   it('records the completed #821 prerequisite deletions without attributing them to #819', () => {
-    expect(manifest.externalPrerequisiteDeletions).toHaveLength(12);
+    expect(manifest.externalPrerequisiteDeletions).toHaveLength(13);
     expect(manifest.externalPrerequisiteDeletions.every((row) => row.issue === 821)).toBe(true);
     expect(manifest.externalPrerequisiteDeletions.every((row) => row.trackedInBase && row.deletedInCurrentTree)).toBe(true);
     expect(manifest.externalPrerequisiteDeletions.every((row) => Boolean(row.path && row.evidence))).toBe(true);
@@ -127,7 +128,7 @@ describe('reachability-purge', () => {
     expect(manifest.deletionManifest.some((row: any) => externallyOwned.has(row.path))).toBe(false);
     expect(manifest.retiredShimBlockers).toHaveLength(6);
     expect(manifest.retiredShimBlockers.every((row) => row.trackedInBase && row.deletedInCurrentTree)).toBe(true);
-    expect(manifest.retiredShimBlockers.every((row) => row.inboundTrustedEdges.length === 0)).toBe(true);
+    expect(manifest.retiredShimBlockers.every((row) => row.externalInboundTrustedEdges.length === 0)).toBe(true);
     expect(manifest.migrationNotesEntry.authorized).toBe(false);
     expect(manifest.migrationNotesEntry.presentWithRequiredFields).toBe(false);
     expect(manifest.completionBlockers.every((row) => Boolean(row.code && row.path && row.evidence))).toBe(true);

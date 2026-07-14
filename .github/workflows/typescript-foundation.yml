@@ -1,53 +1,100 @@
 name: TypeScript foundation
-on: [pull_request]
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  issue-821-diagnostic:
-    name: Issue 821 focused reachability diagnostic
+  runtime:
+    name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-821-retire-autonomous-surface
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --include=dev
-      - name: Apply candidate and persist focused report
-        shell: bash
-        run: |
-          set +e
-          node --input-type=module -e "import{readFileSync,writeFileSync}from'node:fs';let p='scripts/reachability-purge.mjs',s=readFileSync(p,'utf8');s=s.replace(\"  'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',\\n];\",\"  'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',\\n  'scripts/lib/derive-gh-repo-from-checkout.mjs',\\n];\");s=s.replace(\"    inboundTrustedEdges: trusted.filter((edge) => edge.target === shim),\\n    protectedTestReferences:\",\"    inboundTrustedEdges: trusted.filter((edge) => edge.target === shim),\\n    externalInboundTrustedEdges: trusted.filter((edge) => edge.target === shim && edge.source !== SCRIPT_REL && edge.source !== 'scripts/reachability-purge.test.ts'),\\n    protectedTestReferences:\");s=s.replace(\"row.deletedInCurrentTree && row.inboundTrustedEdges.length > 0\",\"row.deletedInCurrentTree && row.externalInboundTrustedEdges.length > 0\");writeFileSync(p,s);p='scripts/reachability-purge.test.ts';s=readFileSync(p,'utf8');s=s.replace(\"    inboundTrustedEdges: unknown[];\\n  }>;\",\"    inboundTrustedEdges: unknown[];\\n    externalInboundTrustedEdges: unknown[];\\n  }>;\");s=s.replace('toHaveLength(12)','toHaveLength(13)');s=s.replace('row.inboundTrustedEdges.length === 0','row.externalInboundTrustedEdges.length === 0');writeFileSync(p,s);"
-          rm -f scripts/lib/derive-gh-repo-from-checkout.mjs issue-821-*.txt
-          node scripts/reachability-purge.mjs --write
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
 
-          report=issue-821-final-reachability-report.txt
-          : > "$report"
-          overall=0
-          run_check() {
-            name="$1"; shift
-            tmp="$(mktemp)"
-            "$@" >"$tmp" 2>&1
-            status=$?
-            { printf '\n===== %s (exit %s) =====\n' "$name" "$status"; cat "$tmp"; } >> "$report"
-            rm -f "$tmp"
-            if (( status != 0 )); then overall=1; fi
-          }
-          run_check "manifest verifier" node scripts/reachability-purge.mjs
-          run_check "reachability test" npx vitest run scripts/reachability-purge.test.ts
-          run_check "tsconfig base" npx tsc --project tsconfig.base.json --noEmit
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
 
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f .github/issue-821-reachability-trigger.txt .github/scripts/issue-821-finalize.mjs issue-821-reachability-candidate-report.txt .vitest-runtime-report-light.json scripts/vitest-heavy-topology.plan.json
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Persist final issue 821 reachability diagnostic"
-          git push origin HEAD:agent/issue-821-retire-autonomous-surface
-          exit "$overall"
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth
