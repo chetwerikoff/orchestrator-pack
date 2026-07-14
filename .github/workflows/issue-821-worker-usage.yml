@@ -1,0 +1,90 @@
+name: Inspect issue 821 worker test usage
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/issue-821-worker-usage.yml
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-821-retire-autonomous-surface
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Inspect main worker test and persist report
+        shell: bash
+        run: |
+          git show main:scripts/worker-nudge-gate.test.ts > /tmp/worker-main.ts
+          node --input-type=module <<'NODE' > issue-821-worker-main-usage.txt
+          import { readFileSync } from 'node:fs';
+          import * as ts from 'typescript';
+
+          const file = '/tmp/worker-main.ts';
+          const text = readFileSync(file, 'utf8');
+          const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+          const markers = [
+            'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE',
+            'aoShimPath',
+            'autonomousProductionChainEnv',
+            'withAutonomousRealBinariesConfig',
+            'writeDownstreamAoStub',
+            '_test-autonomous-ao-stub-fixture',
+            '.ao/autonomous-real-binaries.json',
+            'ao-autonomous-guard',
+            'scripts/ao',
+            'autonomousBashEnv',
+            'AO_REAL_BINARY',
+            'GIT_REAL_BINARY',
+          ];
+          const pos = (node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+          const end = (node) => sf.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
+          const rootName = (expr) => {
+            let cur = expr;
+            while (ts.isCallExpression(cur)) cur = cur.expression;
+            while (ts.isPropertyAccessExpression(cur)) cur = cur.expression;
+            return ts.isIdentifier(cur) ? cur.text : '';
+          };
+          const title = (call) => {
+            const arg = call.arguments[0];
+            return arg && ts.isStringLiteralLike(arg) ? arg.text : '<dynamic>';
+          };
+          const matching = (node) => markers.filter((m) => node.getFullText(sf).includes(m));
+          const visit = (node) => {
+            if (ts.isCallExpression(node) && ['it', 'test'].includes(rootName(node.expression))) {
+              const hits = matching(node);
+              if (hits.length) console.log(`TEST ${pos(node)}-${end(node)} :: ${title(node)} :: ${hits.join(', ')}`);
+            }
+            ts.forEachChild(node, visit);
+          };
+          visit(sf);
+          console.log('\nTOP LEVEL DECLARATIONS');
+          for (const node of sf.statements) {
+            if (ts.isImportDeclaration(node) || ts.isVariableStatement(node) || ts.isFunctionDeclaration(node)) {
+              const hits = matching(node);
+              if (!hits.length) continue;
+              let name = '<import>';
+              if (ts.isFunctionDeclaration(node)) name = node.name?.text ?? '<function>';
+              if (ts.isVariableStatement(node)) name = node.declarationList.declarations.map((d) => d.name.getText(sf)).join(', ');
+              console.log(`DECL ${pos(node)}-${end(node)} :: ${name} :: ${hits.join(', ')}`);
+            }
+          }
+          NODE
+
+          rm -f .github/workflows/issue-821-worker-usage.yml
+          git add -A
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Record worker nudge shim test usage"
+          git push origin HEAD:agent/issue-821-retire-autonomous-surface
