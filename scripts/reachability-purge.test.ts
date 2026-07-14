@@ -94,6 +94,7 @@ describe('reachability-purge', () => {
     expect(manifest.migrationNotesEntry.authorized).toBe(false);
     expect(manifest.migrationNotesEntry.presentWithRequiredFields).toBe(false);
     expect(manifest.completionStatus).toBe('blocked');
+    expect(manifest.completionBlockers.every((row) => Boolean(row.code && row.path && row.evidence))).toBe(true);
     expect(manifest.completionBlockers.map((row) => row.code)).toContain('missing-binding-audit-handoff');
     expect(manifest.completionBlockers.filter((row) => row.code === 'required-retired-shim-still-live-or-held')).toHaveLength(6);
   });
