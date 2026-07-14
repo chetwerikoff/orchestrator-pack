@@ -1,0 +1,35 @@
+{
+  "issue_number": 752,
+  "iteration_id": "chatgpt-issue-752-rollover",
+  "iteration_id_source": "ao_session",
+  "supersedes": "chatgpt-issue-752",
+  "created_at": "2026-07-14T01:39:47.236Z",
+  "baseline": {
+    "commit_sha": "ea7f98c52d8e9c3b63e1ac8f271f4e6af137c689",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f7a6d2c3244fe1c31e7038fe801f85647c55966e37f15517c9e3bf411df27730"
+  },
+  "declared_paths": [
+    "docs/vitest-live-store-audit.md",
+    "package.json",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/escalation-state-test-isolation.test.ts",
+    "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
+    "scripts/lib/OpkVitestStoreIsolation.ps1",
+    "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+    "scripts/lib/vitest-live-store-harness.d.mts",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/run-vitest-with-harness.mjs",
+    "scripts/test-harness-escalation-env.ts",
+    "scripts/vestigial-fleet-retirement.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/vitest-live-store-preload.mjs",
+    "scripts/review-delivery.test.ts",
+    "vitest.config.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
