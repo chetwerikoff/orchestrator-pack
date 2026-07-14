@@ -25,33 +25,59 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
 
-      - name: Capture focused gate logs
+      - name: Capture typecheck
+        shell: bash
+        run: |
+          set +e
+          npx tsc --project tsconfig.base.json --noEmit > typecheck.log 2>&1
+          echo $? > typecheck.exit
+          exit 0
+
+      - name: Upload typecheck
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-819-typecheck
+          path: |
+            typecheck.log
+            typecheck.exit
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Capture self-architect
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set +e
-          npx tsc --project tsconfig.base.json --noEmit > typecheck.log 2>&1
-          echo $? > typecheck.exit
           timeout 240s pwsh -NoLogo -NoProfile -Command "./scripts/lint-self-architect.ps1 -Strict -BaseRef '$PR_BASE_SHA' -HeadRef '$PR_HEAD_SHA'" > self-architect.log 2>&1
           echo $? > self-architect.exit
-          timeout 360s pwsh -NoLogo -NoProfile -File scripts/verify.ps1 > verify.log 2>&1
-          echo $? > verify.exit
-          printf 'verify=%s self_architect=%s typecheck=%s\n' "$(cat verify.exit)" "$(cat self-architect.exit)" "$(cat typecheck.exit)" | tee summary.txt
           exit 0
 
-      - name: Upload diagnostic logs
+      - name: Upload self-architect
         uses: actions/upload-artifact@v4
         with:
-          name: issue-819-diagnostic-fast
+          name: issue-819-self-architect
+          path: |
+            self-architect.log
+            self-architect.exit
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Capture verifier
+        shell: bash
+        run: |
+          set +e
+          timeout 300s pwsh -NoLogo -NoProfile -File scripts/verify.ps1 > verify.log 2>&1
+          echo $? > verify.exit
+          exit 0
+
+      - name: Upload verifier
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-819-verify
           path: |
             verify.log
             verify.exit
-            self-architect.log
-            self-architect.exit
-            typecheck.log
-            typecheck.exit
-            summary.txt
           retention-days: 1
           if-no-files-found: error
