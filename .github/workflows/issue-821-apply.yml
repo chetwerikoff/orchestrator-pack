@@ -7,6 +7,12 @@ on:
     paths:
       - .github/scripts/apply-issue-821.mjs
       - .github/workflows/issue-821-apply.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/scripts/apply-issue-821.mjs
+      - .github/workflows/issue-821-apply.yml
 
 permissions:
   contents: write
@@ -18,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: agent/issue-821-retire-autonomous-surface
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
