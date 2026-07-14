@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { expect } from 'vitest';
+import { runProcessSync } from '#opk-kernel/subprocess';
 import { applyOpkVitestHarnessEscalationEnv } from './test-harness-escalation-env.js';
 
 export const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,7 +50,9 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
     AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B: '',
   };
   try {
-    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    const result = runProcessSync({
+      command: 'pwsh',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
       cwd: repoRoot,
       encoding: 'utf8',
       env: {
@@ -64,9 +66,10 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
         ...scopedGhHarnessEnv,
         ...extraEnv,
       },
+      inheritParentEnv: false,
     });
-    if (result.status !== 0) {
-      throw new Error(`pwsh failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+    if (!result.ok) {
+      throw new Error(`pwsh failed ${result.exitCode ?? result.outcome}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
     }
     return result.stdout.trim();
   } finally {
