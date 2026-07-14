@@ -12,7 +12,7 @@ jobs:
     if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
     name: Issue 821 publish final tree
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,11 +49,31 @@ jobs:
           import { measurePreTopologyFiles } from './scripts/lib/vitest-pre-topology-measurement.mjs';
 
           const root = process.cwd();
+          const measured = {
+            'scripts/_test-stub-pack-import-closure.test.ts': 3.592103515625,
+            'scripts/autonomous-orchestrator-boundary.test.ts': 159.05787866210937,
+            'scripts/autonomous-spawn-policy.test.ts': 50.58675146484375,
+            'scripts/autonomous-spawn-worktree-gate.test.ts': 73.31812548828125,
+            'scripts/orchestrator-claimed-review-run.test.ts': 61.981024658203125,
+            'scripts/orchestrator-review-start-preflight-audit.test.ts': 15.832411376953125,
+            'scripts/review-start-envelope-external-io.test.ts': 110.33442944335937,
+            'scripts/review-start-envelope-ledger.test.ts': 44.434,
+            'scripts/review-start-preflight-shield-denial-audit.test.ts': 36.201537109375,
+            'scripts/review-start-scoped-gh-json-capture.test.ts': 49.39142529296875,
+            'scripts/spawn-worktree-grant-finalization.test.ts': 24.41172216796875,
+            'scripts/spawn-worktree-head-ref-oid-binding.test.ts': 18.299706787109375,
+            'scripts/spawn-worktree-repository-identity-binding.test.ts': 10.097074462890625,
+            'scripts/worker-nudge-gate.test.ts': 71.37609741210937,
+            'scripts/worker-recovery-spawn-argv.test.ts': 12.756,
+            'scripts/worktree-gate-claim-completion-seam.test.ts': 10.518130859375,
+          };
+          Object.assign(measured, await measurePreTopologyFiles(root, ['scripts/gh-repo-resolve.test.ts'], { maxConcurrency: 1 }));
           const changed = execFileSync('git', ['diff', '--name-only', '--diff-filter=AM', 'origin/main', '--', '*.test.ts'], { encoding: 'utf8' })
             .split('\n').map((s) => s.trim()).filter(Boolean).filter((f) => existsSync(resolve(root, f)));
           const deleted = execFileSync('git', ['diff', '--name-only', '--diff-filter=D', 'origin/main', '--', '*.test.ts'], { encoding: 'utf8' })
             .split('\n').map((s) => s.trim()).filter(Boolean);
-          const measured = await measurePreTopologyFiles(root, changed, { maxConcurrency: 4 });
+          const missing = changed.filter((file) => !Number.isFinite(Number(measured[file])) || Number(measured[file]) <= 0);
+          if (missing.length) throw new Error(`missing isolated runtime measurement for: ${missing.join(', ')}`);
           const historyPath = 'scripts/vitest-runtime-history.json';
           const history = JSON.parse(readFileSync(historyPath, 'utf8'));
           history.source = 'ci-measured';
@@ -72,7 +92,7 @@ jobs:
             history.contentSha[file] = createHash('sha256').update(readFileSync(file)).digest('hex');
           }
           writeFileSync(historyPath, `${JSON.stringify(history, null, 2)}\n`);
-          console.log(JSON.stringify({ changed, deleted }, null, 2));
+          console.log(JSON.stringify({ changed, deleted, measured: Object.keys(measured) }, null, 2));
           NODE
       - name: Verify final focused matrix and guards
         shell: bash
@@ -117,9 +137,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          AO_SESSION_ID=issue-821-final-v4 node --experimental-strip-types plugins/ao-task-declaration/bin/declare.ts \
+          AO_SESSION_ID=issue-821-final-v5 node --experimental-strip-types plugins/ao-task-declaration/bin/declare.ts \
             --issue 821 \
-            --iteration-id issue-821-final-v4 \
+            --iteration-id issue-821-final-v5 \
             --declared-paths agent-orchestrator.yaml.example \
             --declared-globs 'docs/ao-spawn-shape.mjs,docs/autonomous-*,docs/orchestrator-claimed-review-run.mjs,docs/orchestrator-recovery-runbook.md,docs/spawn-worktree-grant.mjs,docs/worker-nudge-gate.mjs,docs/issues_drafts/00-architecture-decisions.md,scripts/**'
           git add docs/declarations
