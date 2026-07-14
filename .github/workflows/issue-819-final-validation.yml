@@ -30,6 +30,36 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  light-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Capture standard light lane
+        shell: bash
+        run: |
+          set +e
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 > issue-819-light.log 2>&1
+          printf '%s\n' "$?" > issue-819-light.exit
+          exit 0
+      - name: Upload light-lane diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-819-light-diagnostic
+          path: |
+            issue-819-light.log
+            issue-819-light.exit
+          retention-days: 1
+          if-no-files-found: error
+
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 25
