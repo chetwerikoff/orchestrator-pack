@@ -70,7 +70,7 @@ function writeWorktreePointerCheckout(originUrl: string) {
 function autonomousSurfaceEnv(packScriptsDir: string, extra: Record<string, string | undefined> = {}) {
   return {
     ...stripInterposerBashEnvBlockers(process.env),
-    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+    AO_SESSION_ID: 'opk-orchestrator',
     AO_TMUX_NAME: 'opk-orchestrator',
     AO_COMMAND_RUNTIME_PREFLIGHT_SKIP: '1',
     PATH: `${packScriptsDir}:${process.env.PATH ?? ''}`,

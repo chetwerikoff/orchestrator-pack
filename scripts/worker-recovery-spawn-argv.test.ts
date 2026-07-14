@@ -247,4 +247,3 @@ describe('worker recovery AO 0.10.2 spawn argv (#638, #652)', () => {
     expect(parsed.projectId).toBe('other-pack');
   });
 });
-

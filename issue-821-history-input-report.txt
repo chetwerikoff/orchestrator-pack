@@ -1,0 +1,37 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/orchestrator-pack/orchestrator-pack[39m
+
+ [31m❯[39m scripts/gh-repo-resolve.test.ts [2m([22m[2m0 test[22m[2m)[22m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Suites 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m scripts/gh-repo-resolve.test.ts[2m [ scripts/gh-repo-resolve.test.ts ][22m
+[31m[1mError[22m: Cannot find module './_test-interposer-pack-fixture.js' imported from /home/runner/work/orchestrator-pack/orchestrator-pack/scripts/gh-repo-resolve.test.ts[39m
+[36m [2m❯[22m scripts/gh-repo-resolve.test.ts:[2m16:1[22m[39m
+    [90m 14|[39m import { resolveNameWithOwner, resolveRepoContext, RESOLVER_GIT_ARGV a…
+    [90m 15|[39m [35mimport[39m { resolveRealGhBinary } [35mfrom[39m [32m'./lib/gh-resolve-real-binary.mjs'[39m[33m;[39m
+    [90m 16|[39m [35mimport[39m {
+    [90m   |[39m [31m^[39m
+    [90m 17|[39m   createIsolatedInterposerPack[33m,[39m
+    [90m 18|[39m   stripInterposerBashEnvBlockers[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [2mno tests[22m
+[2m   Start at [22m 13:49:08
+[2m   Duration [22m 7.23s[2m (transform 303ms, setup 59ms, import 0ms, tests 0ms, environment 0ms)[22m
+
+
+::error file=/home/runner/work/orchestrator-pack/orchestrator-pack/scripts/gh-repo-resolve.test.ts,title=scripts/gh-repo-resolve.test.ts,line=16,column=1::Error: Cannot find module './_test-interposer-pack-fixture.js' imported from /home/runner/work/orchestrator-pack/orchestrator-pack/scripts/gh-repo-resolve.test.ts%0A ❯ scripts/gh-repo-resolve.test.ts:16:1%0A%0A⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯%0ASerialized Error: { code: 'ERR_MODULE_NOT_FOUND' }%0A
+CHANGED=["scripts/_test-stub-pack-import-closure.test.ts","scripts/autonomous-orchestrator-boundary.test.ts","scripts/autonomous-spawn-policy.test.ts","scripts/autonomous-spawn-worktree-gate.test.ts","scripts/gh-repo-resolve.test.ts","scripts/orchestrator-claimed-review-run.test.ts","scripts/orchestrator-review-start-preflight-audit.test.ts","scripts/review-start-envelope-external-io.test.ts","scripts/review-start-envelope-ledger.test.ts","scripts/review-start-preflight-shield-denial-audit.test.ts","scripts/review-start-scoped-gh-json-capture.test.ts","scripts/spawn-worktree-grant-finalization.test.ts","scripts/spawn-worktree-head-ref-oid-binding.test.ts","scripts/spawn-worktree-repository-identity-binding.test.ts","scripts/worker-nudge-gate.test.ts","scripts/worker-recovery-spawn-argv.test.ts","scripts/worktree-gate-claim-completion-seam.test.ts"]
+MEASUREMENT_ERROR=Error: pre-topology measurement tests failed (exit 1, signal none) for: scripts/gh-repo-resolve.test.ts
+> test
+> vitest run scripts/gh-repo-resolve.test.ts --reporter=json --outputFile=/tmp/opk-pre-topology-3m5XzN/run-01/vitest-pre-topology.json
+
+JSON report written to /tmp/opk-pre-topology-3m5XzN/run-01/vitest-pre-topology.json
+    at ChildProcess.<anonymous> (file:///home/runner/work/orchestrator-pack/orchestrator-pack/scripts/lib/vitest-pre-topology-measurement.mjs:139:23)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:304:5)
