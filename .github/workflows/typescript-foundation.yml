@@ -2,122 +2,99 @@ name: TypeScript foundation
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  issue-821-scope-diagnostic:
-    if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 full-scope lane diagnostic
+  runtime:
+    name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-821-retire-autonomous-surface
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --include=dev
-      - name: Apply candidate cleanup, run commands independently, persist report
-        shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
-        run: |
-          set +e
-          report=/tmp/issue-821-full-scope-lane-diagnostic.txt
-          : > "$report"
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
 
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import * as ts from 'typescript';
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
 
-          const testFile = 'scripts/review-start-scoped-gh-json-capture.test.ts';
-          const source = readFileSync(testFile, 'utf8');
-          const sf = ts.createSourceFile(testFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-          const titles = new Set([
-            'AC3 positive-outcome: harmless stderr does not deny review-start for green uncovered ready head',
-            'AC4: pre-claim infrastructure denial does not acquire review-start claim',
-          ]);
-          const found = new Set();
-          const ranges = [];
-          function rootName(expression) {
-            let current = expression;
-            while (ts.isCallExpression(current)) current = current.expression;
-            while (ts.isPropertyAccessExpression(current)) current = current.expression;
-            return ts.isIdentifier(current) ? current.text : '';
-          }
-          function visit(node) {
-            if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && rootName(node.expression.expression) === 'it') {
-              const arg = node.expression.arguments[0];
-              if (arg && ts.isStringLiteralLike(arg) && titles.has(arg.text)) {
-                found.add(arg.text);
-                ranges.push([node.getFullStart(), node.getEnd()]);
-                return;
-              }
-            }
-            ts.forEachChild(node, visit);
-          }
-          visit(sf);
-          const missing = [...titles].filter((title) => !found.has(title));
-          if (missing.length) throw new Error(`missing wrapper-only tests: ${missing.join(' | ')}`);
-          ranges.sort((a, b) => b[0] - a[0]);
-          let output = source;
-          for (const [start, end] of ranges) output = output.slice(0, start) + output.slice(end);
-          writeFileSync(testFile, output, 'utf8');
-
-          const configFile = 'scripts/vitest-ci-lanes.config.json';
-          const config = JSON.parse(readFileSync(configFile, 'utf8'));
-          for (const file of [
-            'scripts/autonomous-orchestrator-interposer.test.ts',
-            'scripts/autonomous-review-worktree-e2e-smoke.test.ts',
-            'scripts/autonomous-spawn-budget.test.ts',
-            'scripts/review-pipeline-spawn-budget.test.ts',
-          ]) delete config.classification[file];
-          writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-          NODE
-
-          for file in \
-            plugins/ao-codex-pr-reviewer/bin/review.ts \
-            plugins/ao-scope-guard/bin/agent-wrap.ts \
-            plugins/ao-scope-guard/bin/scope-check.ts \
-            plugins/ao-task-declaration/bin/declare.ts \
-            plugins/ao-token-chain-ledger/bin/ledger.mjs; do
-            git update-index --chmod=-x "$file"
-          done
-
-          run_check() {
-            name="$1"
-            shift
-            tmp="$(mktemp)"
-            "$@" >"$tmp" 2>&1
-            status=$?
-            {
-              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
-              cat "$tmp"
-            } >> "$report"
-            rm -f "$tmp"
-          }
-
-          run_check "candidate diff summary" git diff --summary
-          run_check "tsconfig.base typecheck" npx tsc --project tsconfig.base.json --noEmit
-          run_check "vitest light lane" pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
-          run_check "emit changed paths manifest" node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"
-          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          run_check "emit heavy topology" node scripts/emit-vitest-heavy-topology.mjs --gha-output
-
-          git reset --hard HEAD
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f issue-821-*.txt .vitest-runtime-report-light.json scripts/vitest-heavy-topology.plan.json
-          cp "$report" issue-821-full-scope-lane-diagnostic.txt
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Record issue 821 full-scope lane diagnostics"
-          git push origin HEAD:agent/issue-821-retire-autonomous-surface
-          exit 1
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth
