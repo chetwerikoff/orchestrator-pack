@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/issue-819-reachability-purge
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
