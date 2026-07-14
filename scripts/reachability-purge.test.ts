@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -82,6 +82,27 @@ describe('reachability-purge', () => {
     const held = new Set(manifest.heldNodes.map((row) => row.path));
     for (const row of manifest.unresolvedDynamicForms) {
       for (const target of row.possibleTargets ?? []) expect(held.has(target)).toBe(true);
+    }
+  });
+
+  it('fails closed when current tracked sources add a surviving reference to a deleted file', () => {
+    const deletedPath = ['scripts', 'lib', ['Invoke-ContractEvidenceReverify', 'ps1'].join('.')].join('/');
+    const agentsPath = path.join(repoRoot, 'AGENTS.md');
+    const original = readFileSync(agentsPath, 'utf8');
+    try {
+      writeFileSync(agentsPath, `${original}\n${deletedPath}\n`, 'utf8');
+      const mutated = buildManifest(repoRoot);
+      expect(
+        mutated.unresolvedDynamicForms.some(
+          (row) =>
+            row.kind === 'live-literal-reference-not-proven-invocation'
+            && row.source === 'AGENTS.md'
+            && (row.possibleTargets ?? []).includes(deletedPath),
+        ),
+      ).toBe(true);
+      expect(mutated.deletionSetDiffFromFormula.unexpected).toContain(deletedPath);
+    } finally {
+      writeFileSync(agentsPath, original, 'utf8');
     }
   });
 

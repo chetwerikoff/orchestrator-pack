@@ -106,6 +106,12 @@ function readTextMapAt(repoRoot, ref, paths) {
   return result;
 }
 
+function readTextMap(repoRoot, paths) {
+  const result = new Map();
+  for (const rel of [...new Set(paths)].sort()) result.set(rel, readText(repoRoot, rel));
+  return result;
+}
+
 function loadConfig(repoRoot) {
   const raw = readText(repoRoot, CONFIG_REL);
   if (!raw) throw new Error(`${CONFIG_REL} is missing`);
@@ -785,6 +791,7 @@ function classifySupersededSurface(node, text, inboundTrustedEdges) {
 function configDrivenDynamicRows(repoRoot, tracked, trackedSet, readSource) {
   const rows = [];
   for (const rel of tracked.filter((item) => item.startsWith('scripts/') && /\.(?:json|ya?ml)$/i.test(item))) {
+    if (rel === MANIFEST_REL) continue;
     const text = readSource(rel);
     const stringRegex = /["']([^"'\r\n]+\.(?:ps1|mjs|js|cjs|ts|mts|cts|sh))["']/gi;
     let match;
@@ -824,28 +831,34 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   const trackedSet = new Set(tracked);
   const currentTracked = gitTrackedFiles(repoRoot);
   const currentTrackedSet = new Set(currentTracked);
-  const graphNodes = tracked.filter(isGraphNode).sort();
-  const deletionGraphNodes = tracked.filter(isDeletionGraphNode).sort();
-  const sourceInputs = new Set(graphNodes);
-  for (const rel of tracked) {
+  const deletedFromBase = tracked.filter((item) => !currentTrackedSet.has(item));
+  const retainedDeletedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
+  const analysisTracked = [...new Set([...currentTracked, ...retainedDeletedNodes])].sort();
+  const analysisTrackedSet = new Set(analysisTracked);
+  const graphNodes = analysisTracked.filter(isGraphNode).sort();
+  const currentGraphNodes = currentTracked.filter(isGraphNode).sort();
+  const deletionGraphNodes = analysisTracked.filter(isDeletionGraphNode).sort();
+  const sourceInputs = new Set(currentGraphNodes);
+  for (const rel of currentTracked) {
     if (rel.startsWith('docs/declarations/')) continue;
+    if (rel === MANIFEST_REL) continue;
     if (/\.(?:ps1|mjs|js|cjs|ts|mts|cts|sh|json|ya?ml|md)$/i.test(rel) || rel === 'package.json' || rel === 'AGENTS.md' || rel === 'CLAUDE.md') sourceInputs.add(rel);
   }
-  const sourceMap = readTextMapAt(repoRoot, baseRef, [...sourceInputs]);
+  const sourceMap = readTextMap(repoRoot, [...sourceInputs]);
   const readSource = (rel) => sourceMap.get(rel) ?? '';
-  const roots = rootRecords(repoRoot, tracked, trackedSet, readSource);
+  const roots = rootRecords(repoRoot, currentTracked, currentTrackedSet, readSource);
   const trustedEdges = [];
   const suspectEdges = [];
   const unresolvedDynamicForms = [];
   const references = [];
-  for (const node of graphNodes) {
-    const parsed = parseNode(repoRoot, trackedSet, node, readSource(node));
+  for (const node of currentGraphNodes) {
+    const parsed = parseNode(repoRoot, analysisTrackedSet, node, readSource(node));
     trustedEdges.push(...parsed.trustedEdges);
     suspectEdges.push(...parsed.suspectEdges);
     unresolvedDynamicForms.push(...parsed.unresolved);
     references.push(...parsed.references);
   }
-  unresolvedDynamicForms.push(...configDrivenDynamicRows(repoRoot, tracked, trackedSet, readSource));
+  unresolvedDynamicForms.push(...configDrivenDynamicRows(repoRoot, currentTracked, analysisTrackedSet, readSource));
 
   const graphNodesByBasename = new Map();
   for (const node of graphNodes) {
@@ -853,7 +866,7 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
     if (!graphNodesByBasename.has(basename)) graphNodesByBasename.set(basename, []);
     graphNodesByBasename.get(basename).push(node);
   }
-  for (const testPath of roots.tests.map((item) => item.path).filter((item) => trackedSet.has(item))) {
+  for (const testPath of roots.tests.map((item) => item.path).filter((item) => currentTrackedSet.has(item))) {
     const text = readSource(testPath);
     const literalName = /['"]([^/'"\r\n]+\.(?:ps1|mjs|js|cjs|ts|mts|cts|sh))['"]/gi;
     let match;
@@ -880,12 +893,12 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   const dedupe = (items) => [...new Map(items.map((item) => [edgeKey(item), item])).values()];
   const testRootSet = new Set(roots.tests.map((item) => item.path));
   for (const ref of references) {
-    if (testRootSet.has(ref.source) && trackedSet.has(ref.target) && isGraphNode(ref.target)) {
+    if (testRootSet.has(ref.source) && analysisTrackedSet.has(ref.target) && isGraphNode(ref.target)) {
       trustedEdges.push({ ...ref, kind: 'test-literal-dependency' });
     }
   }
 
-  const trusted = dedupe(trustedEdges).filter((edge) => trackedSet.has(edge.target)).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
+  const trusted = dedupe(trustedEdges).filter((edge) => analysisTrackedSet.has(edge.target)).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
   const brokenByKey = new Map((config.knownBrokenSuspectEdges ?? []).map((row) => [`${row.source}:${row.line}`, row]));
   const suspects = dedupe(suspectEdges).map((edge) => {
     const known = brokenByKey.get(`${edge.source}:${edge.line}`);
@@ -913,8 +926,8 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   let unresolved = dedupe(unresolvedDynamicForms).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
   const literalReferences = dedupe(references).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
 
-  const allRootPaths = [...roots.production, ...roots.tests].map((item) => item.path).filter((item) => trackedSet.has(item));
-  const reachableNodes = transitiveClosure(allRootPaths, trusted).filter((item) => trackedSet.has(item));
+  const allRootPaths = [...roots.production, ...roots.tests].map((item) => item.path).filter((item) => currentTrackedSet.has(item));
+  const reachableNodes = transitiveClosure(allRootPaths, trusted).filter((item) => analysisTrackedSet.has(item));
   const reachableSet = new Set(reachableNodes);
   const zeroReachabilityNodes = deletionGraphNodes.filter((item) => !reachableSet.has(item));
   const zeroSet = new Set(zeroReachabilityNodes);
@@ -941,14 +954,14 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
     if (!sourceIsLive) continue;
     const found = new Set();
     for (const candidate of extractRepoPaths(text)) {
-      const target = resolveExistingPath(repoRoot, trackedSet, source, candidate);
+      const target = resolveExistingPath(repoRoot, analysisTrackedSet, source, candidate);
       if (target && zeroSet.has(target) && target !== source) found.add(target);
     }
     const literalName = /['"]([^'"\r\n]+\.(?:ps1|mjs|sh))['"]/gi;
     let match;
     while ((match = literalName.exec(text)) !== null) {
       const raw = normalizeRel(match[1]);
-      const direct = resolveExistingPath(repoRoot, trackedSet, source, raw);
+      const direct = resolveExistingPath(repoRoot, analysisTrackedSet, source, raw);
       if (direct && zeroSet.has(direct) && direct !== source) found.add(direct);
       const candidates = uniqueByBasename.get(path.posix.basename(raw)) ?? [];
       if (candidates.length === 1 && zeroSet.has(candidates[0]) && candidates[0] !== source) found.add(candidates[0]);
@@ -969,7 +982,7 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
 
   const holds = new Map();
   const hold = (target, reason) => {
-    if (!target || !trackedSet.has(target)) return;
+    if (!target || !analysisTrackedSet.has(target)) return;
     if (!holds.has(target)) holds.set(target, new Set());
     holds.get(target).add(reason);
   };
@@ -983,7 +996,7 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   for (const row of unresolved) for (const target of row.possibleTargets ?? []) hold(target, `unresolved-dynamic:${row.source}:${row.line}`);
   for (const item of config.knownGood ?? []) hold(item, 'binding:known-good');
 
-  const protectedTests = [...new Set([...KEEP_GUARD_TESTS, ...REWRITE_LIST_TESTS])].filter((item) => trackedSet.has(item));
+  const protectedTests = [...new Set([...KEEP_GUARD_TESTS, ...REWRITE_LIST_TESTS])].filter((item) => currentTrackedSet.has(item));
   for (const testPath of protectedTests) {
     hold(testPath, `binding:protected-test:${testPath}`);
     for (const ref of literalReferences.filter((item) => item.source === testPath)) hold(ref.target, `protected-test-reference:${testPath}`);
@@ -996,7 +1009,7 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
 
   const supersededSurfaceInventory = deletionGraphNodes.map((node) => classifySupersededSurface(node, readSource(node), trusted.filter((edge) => edge.target === node))).filter(Boolean);
   const supersededCandidates = supersededSurfaceInventory.filter((row) => row.disposition === 'delete').map((row) => row.path);
-  const backupCandidates = tracked.filter((item) => BACKUP_PATTERN.test(item));
+  const backupCandidates = analysisTracked.filter((item) => BACKUP_PATTERN.test(item));
   const backupReferenceEvidence = backupCandidates.map((item) => ({
     path: item,
     sources: [...sourceMap.entries()]
@@ -1008,7 +1021,6 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   const deletableBackupCandidates = backupCandidates.filter((item) => !unsafeBackupCandidates.includes(item));
   const formulaCandidates = [...new Set([...zeroReachabilityCandidates, ...supersededCandidates, ...deletableBackupCandidates])].sort();
 
-  const deletedFromBase = tracked.filter((item) => !currentTrackedSet.has(item));
   const deletedGovernedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
   const deletedTests = deletedFromBase.filter(isTestFile);
   const formulaSet = new Set(formulaCandidates);
@@ -1032,8 +1044,8 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   });
 
   const protectedExisting = {
-    keepGuardList: KEEP_GUARD_TESTS.filter((item) => trackedSet.has(item)),
-    rewriteList: REWRITE_LIST_TESTS.filter((item) => trackedSet.has(item)),
+    keepGuardList: KEEP_GUARD_TESTS.filter((item) => currentTrackedSet.has(item)),
+    rewriteList: REWRITE_LIST_TESTS.filter((item) => currentTrackedSet.has(item)),
   };
   const retiredShimBlockers = REQUIRED_RETIRED_SHIMS.map((shim) => ({
     path: shim,
