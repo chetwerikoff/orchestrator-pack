@@ -1,0 +1,247 @@
+name: Restore minimal issue 821 test diffs
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/issue-821-restore-minimal-tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-821-retire-autonomous-surface
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Restore minimal diffs, validate, and commit
+        shell: bash
+        run: |
+          set +e
+          report=issue-821-minimal-test-restore-report.txt
+          rm -f issue-821-gap-closure-report.txt issue-821-worker-main-usage.txt
+          : > "$report"
+
+          run_check() {
+            name="$1"
+            shift
+            tmp="$(mktemp)"
+            "$@" >"$tmp" 2>&1
+            status=$?
+            {
+              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
+              tail -n 800 "$tmp"
+            } >> "$report"
+            rm -f "$tmp"
+            return "$status"
+          }
+
+          overall=0
+          run_check "restore and patch tests" node --input-type=module <<'NODE' || overall=1
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import * as ts from 'typescript';
+
+          function fromMain(file) {
+            return execFileSync('git', ['show', `origin/main:${file}`], { encoding: 'utf8' });
+          }
+          function write(file, text) {
+            writeFileSync(file, text.replaceAll('\r\n', '\n'), 'utf8');
+          }
+          function rootCallName(expression) {
+            let current = expression;
+            while (ts.isCallExpression(current)) current = current.expression;
+            while (ts.isPropertyAccessExpression(current)) current = current.expression;
+            return ts.isIdentifier(current) ? current.text : '';
+          }
+          function removeTestsAndFunctions(source, file, testTitles, functionNames) {
+            const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+            const ranges = [];
+            const foundTests = new Set();
+            const foundFunctions = new Set();
+            function visit(node) {
+              if (ts.isFunctionDeclaration(node) && node.name && functionNames.has(node.name.text)) {
+                ranges.push([node.getFullStart(), node.getEnd()]);
+                foundFunctions.add(node.name.text);
+                return;
+              }
+              if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)) {
+                const call = node.expression;
+                if (rootCallName(call.expression) === 'it') {
+                  const arg = call.arguments[0];
+                  if (arg && ts.isStringLiteralLike(arg) && testTitles.has(arg.text)) {
+                    ranges.push([node.getFullStart(), node.getEnd()]);
+                    foundTests.add(arg.text);
+                    return;
+                  }
+                }
+              }
+              ts.forEachChild(node, visit);
+            }
+            visit(sf);
+            const missingTests = [...testTitles].filter((title) => !foundTests.has(title));
+            const missingFunctions = [...functionNames].filter((name) => !foundFunctions.has(name));
+            if (missingTests.length || missingFunctions.length) {
+              throw new Error(`${file}: missing tests=${missingTests.join('|')} functions=${missingFunctions.join('|')}`);
+            }
+            ranges.sort((a, b) => b[0] - a[0]);
+            let output = source;
+            for (const [start, end] of ranges) output = output.slice(0, start) + output.slice(end);
+            return output;
+          }
+          function replaceOne(source, search, replacement, label) {
+            const first = source.indexOf(search);
+            if (first < 0 || source.indexOf(search, first + search.length) >= 0) {
+              throw new Error(`${label}: expected one exact match`);
+            }
+            return source.slice(0, first) + replacement + source.slice(first + search.length);
+          }
+
+          const spawnFile = 'scripts/autonomous-spawn-worktree-gate.test.ts';
+          let spawnSource = fromMain(spawnFile);
+          spawnSource = removeTestsAndFunctions(
+            spawnSource,
+            spawnFile,
+            new Set([
+              'boundary escape audit detects surface unset after bootstrap',
+              'guard integration: allowed spawn sets grant env for downstream git',
+              'unsanctioned mutating git still denied on autonomous surface',
+            ]),
+            new Set(),
+          );
+          spawnSource = spawnSource
+            .replace("  evaluateBoundaryEscapeSignal,\n", '')
+            .replace("import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';\n", '')
+            .replace("import { autonomousBashEnv } from './_test-git-fixture.js';\n", '')
+            .replace("const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');\n", '')
+            .replaceAll('AO_AUTONOMOUS_ORCHESTRATOR_SURFACE', 'AO_SESSION_ID');
+          write(spawnFile, spawnSource);
+
+          const workerFile = 'scripts/worker-nudge-gate.test.ts';
+          let workerSource = fromMain(workerFile);
+          workerSource = removeTestsAndFunctions(
+            workerSource,
+            workerFile,
+            new Set([
+              'ao shim denies raw worker send on autonomous surface',
+              'production chain help probe: journaled-worker-send DryRun preflight through real scripts/ao',
+              'production chain delivery: gated journaled send through real scripts/ao and guard',
+              'raw ao send on autonomous surface is internal capability deny exit 93',
+              'raw ao send --help without capability is internal capability deny exit 93',
+              'TTL-expired internal capability token is internal capability deny exit 93',
+              'sibling ao send --file with live unconsumed token is internal capability deny exit 93',
+            ]),
+            new Set([
+              'writeDownstreamAoStub',
+              'withAutonomousRealBinariesConfig',
+              'autonomousProductionChainEnv',
+            ]),
+          );
+          workerSource = workerSource
+            .replace(
+              "import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';",
+              "import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';",
+            )
+            .replace("import { AO_SEND_0102_HELP } from './_ao-send-0102-test-fixture.js';\n", '')
+            .replaceAll('AO_AUTONOMOUS_ORCHESTRATOR_SURFACE', 'AO_SESSION_ID');
+          workerSource = replaceOne(
+            workerSource,
+            `  it('preflight fails closed when raw send capability is missing from live inventory', () => {
+    const result = evaluatePreflight({
+      loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
+      atomicClaimPresent: true,
+      liveCapabilities: [
+        { id: 'invoke-gated-worker-nudge', classification: 'gated' },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('ao-worker-send-raw_missing');
+  });
+
+  it('preflight passes with gated inventory', () => {
+    const result = evaluatePreflight({
+      loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
+      atomicClaimPresent: true,
+      liveCapabilities: [
+        { id: 'invoke-gated-worker-nudge', classification: 'gated' },
+        { id: 'ao-worker-send-raw', classification: 'unavailable' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });`,
+            `  it('preflight fails closed when the daemon session capability is missing', () => {
+    const result = evaluatePreflight({
+      loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
+      atomicClaimPresent: true,
+      liveCapabilities: [
+        { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+        { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+        { id: 'journaled-worker-send-gated', classification: 'gated' },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('autonomous-session-id_missing');
+  });
+
+  it('preflight passes with the AO 0.10.2 in-process capability inventory', () => {
+    const result = evaluatePreflight({
+      loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
+      atomicClaimPresent: true,
+      liveCapabilities: [
+        { id: 'autonomous-session-id', classification: 'gated' },
+        { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+        { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+        { id: 'journaled-worker-send-gated', classification: 'gated' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });`,
+            'worker preflight tests',
+          );
+          write(workerFile, workerSource);
+          NODE
+
+          if (( overall == 0 )); then
+            run_check "write raw-child baseline" npm run lint:foundation -- --write-baseline || overall=1
+            run_check "write pwsh-child baseline" npm run check:pwsh-test-growth -- --write-baseline || overall=1
+            run_check "affected vitest matrix" npx vitest run \
+              scripts/autonomous-orchestrator-boundary.test.ts \
+              scripts/autonomous-spawn-policy.test.ts \
+              scripts/worker-nudge-gate.test.ts \
+              scripts/spawn-worktree-grant-finalization.test.ts \
+              scripts/orchestrator-claimed-review-run.test.ts \
+              scripts/autonomous-spawn-worktree-gate.test.ts \
+              scripts/orchestrator-review-start-preflight-audit.test.ts \
+              scripts/review-start-envelope-external-io.test.ts || overall=1
+            run_check "review capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart || overall=1
+            run_check "boundary capability guard" pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary || overall=1
+            run_check "claimed review lookup guard" pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1 || overall=1
+            run_check "command runtime bootstrap guard" pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1 || overall=1
+            run_check "typecheck foundation" npm run typecheck:foundation || overall=1
+            run_check "lint foundation" npm run lint:foundation || overall=1
+            run_check "pwsh child growth" npm run check:pwsh-test-growth || overall=1
+            run_check "active retired-reference scan" bash -lc "! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'" || overall=1
+            run_check "working-tree diff check" git diff --check || overall=1
+          fi
+
+          rm -f .github/workflows/issue-821-restore-minimal-tests.yml
+          if (( overall == 0 )); then
+            rm -f "$report"
+          fi
+          git add -A
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if ! git diff --cached --quiet; then
+            git commit -m "Restore minimal gate test diffs"
+            git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          fi
+          exit "$overall"
