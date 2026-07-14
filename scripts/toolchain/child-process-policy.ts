@@ -90,7 +90,7 @@ function fingerprint(source: string): string {
 export function discoverRawChildProcessCalls(
   repoRoot: string,
   exempt: (path: string) => boolean = (path) => path === 'scripts/kernel/subprocess.ts'
-    || /^scripts\/kernel\/.*\.test\.ts$/.test(path),
+    || path === 'scripts/kernel/subprocess.test.ts',
 ): RawChildProcessCall[] {
   const discovered: Omit<RawChildProcessCall, 'ordinal'>[] = [];
   for (const absolutePath of walkFiles(repoRoot, (path) => SOURCE_EXTENSIONS.has(extname(path)))) {

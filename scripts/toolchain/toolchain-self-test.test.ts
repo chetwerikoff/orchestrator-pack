@@ -128,6 +128,29 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('only exempts the sanctioned kernel subprocess surfaces', () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/kernel/subprocess.ts', `
+      import { spawn } from 'node:child_process';
+      spawn('git', ['status']);
+    `);
+    write(root, 'scripts/kernel/subprocess.test.ts', `
+      import { spawnSync } from 'node:child_process';
+      spawnSync('git', ['diff']);
+    `);
+    write(root, 'scripts/kernel/json-contract.test.ts', `
+      import { execFileSync } from 'node:child_process';
+      execFileSync('git', ['status']);
+    `);
+    const comparison = compareRawChildProcessBaseline(
+      discoverRawChildProcessCalls(root),
+      { version: 1, entries: [] },
+    );
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/kernel/json-contract.test.ts', api: 'execFileSync' },
+    ]);
+  });
+
   it('rejects dynamic import raw child-process calls for namespace and destructured bindings', () => {
     const root = temporaryRoot();
     write(root, 'scripts/dynamic-import.ts', `
