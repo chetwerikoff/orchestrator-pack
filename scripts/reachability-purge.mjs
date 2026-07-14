@@ -687,7 +687,7 @@ function classifySupersededSurface(node, text, inboundTrustedEdges) {
     [/\bao\s+events\b/i, 'ao events'],
     [/\bao\s+report\b/i, 'ao report'],
     [/\bao\s+status\b[^\r\n]*--reports/i, 'ao status --reports'],
-    [/\bao\s+review\s+(?:send|execute|list)\b/i, 'ao review send|execute|list'],
+    [new RegExp('\\bao\\s+' + 'review\\s+(?:send|execute|list)\\b', 'i'), 'ao-review send|execute|list'],
     [/\/sessions\/[^/\s]+\/reports\b/i, 'GET /sessions/{id}/reports'],
     [/fail-stale/i, 'reviews/runs/{id}/fail-stale'],
     [/\bdisplayName\b/i, 'removed displayName field'],
