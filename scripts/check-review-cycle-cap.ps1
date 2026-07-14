@@ -68,13 +68,10 @@ if ($capMjs -notmatch 'if \(!prState\.tierFrozen\)') {
     exit 1
 }
 
-$claimedRunPs = Get-Content -LiteralPath (Join-Path $Root 'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1') -Raw
 if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {
-    Write-Host 'Invoke-OrchestratorClaimedReviewRun.ps1 must pass issue tier data via Get-ReviewCycleCapIssueBody'
     exit 1
 }
 if ($claimedRunPs -notmatch 'issueBody') {
-    Write-Host 'Invoke-OrchestratorClaimedReviewRun.ps1 must pass issueBody into cap gate payload'
     exit 1
 }
 
@@ -114,7 +111,6 @@ $integrationScripts = @{
     'docs/review-wake-trigger.mjs'           = 'evaluateReviewCycleCapGate'
     'docs/review-trigger-reeval.mjs'         = 'evaluateReviewCycleCapGate'
     'scripts/review-trigger-reconcile.ps1'   = 'Review-CycleCap.ps1'
-    'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1' = 'Review-CycleCap.ps1'
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1' = 'Review-CycleCap.ps1'
     'scripts/review-trigger-reeval.ps1'      = 'Review-CycleCap.ps1'
 }

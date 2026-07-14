@@ -439,7 +439,7 @@ describe('spawn worktree head-ref OID binding (#493)', () => {
       const output = runPwsh(`
         . ${psString(spawnWorktreeGatePath)}
         . ${psString(boundaryLibPath)}
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $env:AO_SPAWN_WORKTREE_FIXTURE_MODE = '1'
         $env:AO_BASE_DIR = ${psString(aoBase)}
         $env:AO_PROJECT_ID = ${psString(projectId)}

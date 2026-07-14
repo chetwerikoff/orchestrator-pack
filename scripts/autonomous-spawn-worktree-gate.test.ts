@@ -53,7 +53,7 @@ function buildGrantForRepo(root: string, input: Record<string, unknown>) {
 function runSpawnGitDenied(argv: string[], extraEnv: Record<string, string> = {}) {
   const output = runPwsh(`
     . ${psString(boundaryLibPath)}
-    $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+    $env:AO_SESSION_ID = '1'
     $verdict = Test-AutonomousGitDenied -Argv @(${argv.map((part) => psString(part)).join(',')})
     [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
   `, extraEnv);
@@ -81,7 +81,7 @@ describe('spawn worktree grant (#470)', () => {
     const mint = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
@@ -121,7 +121,7 @@ describe('spawn worktree grant (#470)', () => {
 
     const output = runPwsh(`
       . ${psString(spawnGateLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','--claim-pr','999991') -FixtureMode -FixturePolicy @{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }
@@ -152,7 +152,7 @@ describe('spawn worktree grant (#470)', () => {
     const output = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
@@ -213,7 +213,7 @@ describe('spawn worktree grant (#470)', () => {
     const probeScript = (target: string) => `
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
@@ -277,7 +277,7 @@ describe('spawn worktree grant (#470)', () => {
     tempRoots.push(aoBase);
     const output = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = 'orchestrator-pack'
       $holder = @{ pid = $PID; host = 'test'; processGuid = 'a'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -321,7 +321,7 @@ describe('spawn worktree grant (#470)', () => {
       env: {
         AO_TMUX_NAME: 'op-orchestrator',
         __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: '1',
-        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+        AO_SESSION_ID: '',
         PATH: '/usr/bin:/bin',
       },
       packScriptsDir: '/repo/scripts',
@@ -525,7 +525,7 @@ describe('spawn worktree grant (#470)', () => {
   it('denies prompt-only spawn-new without derivable issue target (#652)', () => {
     const output = runPwsh(`
       . ${psString(spawnGateLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','--prompt','fixture holder prompt') -FixtureMode -FixturePolicy @{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }
       [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason; grantId = [string]$env:AO_SPAWN_WORKTREE_GRANT_ID } | ConvertTo-Json -Compress
     `);

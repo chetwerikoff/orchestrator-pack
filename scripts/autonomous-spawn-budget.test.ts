@@ -107,7 +107,7 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
-        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+        AO_SESSION_ID: '',
       },
     });
     expect(result.status).toBe(0);
@@ -149,7 +149,7 @@ describe('autonomous spawn budget contract (Issue #462)', () => {
         '-c',
         [
           `source "${scriptsDir}/_resolve-system-git.sh"`,
-          'export AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1',
+          'export AO_SESSION_ID=1',
           `export GIT_SYSTEM_BINARY="${fakeGit}"`,
           `export fakeGit="${fakeGit}"`,
           `PATH="${externalBin}:${scriptsDir}"`,

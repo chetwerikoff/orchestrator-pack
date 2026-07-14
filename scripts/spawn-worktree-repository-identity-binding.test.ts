@@ -290,7 +290,7 @@ describe('spawn worktree repository identity binding (#511)', () => {
       $ns = Get-AutonomousSpawnWorktreeGrantNamespace
       Write-AutonomousSpawnWorktreeGrantAtomic -Namespace $ns -GrantId ${psString(grantId)} -Record $built.grant | Out-Null
       Set-Location ${psString(fixture.mainRoot)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
       $verdict = Test-AutonomousGitDenied -Argv @('worktree','add',${psString(target)},'HEAD')
       [pscustomobject]@{

@@ -76,7 +76,7 @@ export function runAutonomousSurfaceCommand(
     encoding: 'utf8',
     env: {
       ...stripInterposerBashEnvBlockers(process.env),
-      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+      AO_SESSION_ID: '1',
       AO_TMUX_NAME: 'opk-orchestrator',
       PATH: `${pack.scriptsDir}:${process.env.PATH ?? ''}`,
       ...extraEnv,

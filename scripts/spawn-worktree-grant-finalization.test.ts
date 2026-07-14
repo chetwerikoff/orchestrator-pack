@@ -50,7 +50,7 @@ describe('spawn worktree grant finalization (#567)', () => {
     const output = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
@@ -329,8 +329,8 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(diagnosis.reason).toBe('grant_already_consumed');
     const manualSurface = runPwsh(`
       . ${psString(path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1'))}
-      Remove-Item Env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -ErrorAction SilentlyContinue
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = ''
+      Remove-Item Env:AO_SESSION_ID -ErrorAction SilentlyContinue
+      $env:AO_SESSION_ID = ''
       $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','567') -FixtureMode
       [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason } | ConvertTo-Json -Compress
     `);

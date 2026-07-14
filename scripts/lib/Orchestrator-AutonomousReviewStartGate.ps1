@@ -13,7 +13,7 @@ $Script:AutonomousCapabilityInventory = Join-Path (Split-Path -Parent (Split-Pat
 . (Join-Path $PSScriptRoot 'Autonomous-GateCommon.ps1')
 
 function Test-OrchestratorAutonomousSurfaceActive {
-    return [string]$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -eq '1'
+    return -not [string]::IsNullOrEmpty([string]$env:AO_SESSION_ID)
 }
 
 function Test-OrchestratorClaimedReviewRunBypassActive {
@@ -88,7 +88,3 @@ function Test-OrchestratorReviewStartGatePreflight {
     return Invoke-OrchestratorClaimedReviewRunFilterCli -Subcommand 'evaluatePreflight' -Payload $payload
 }
 
-function Test-IsPackAoShimPath {
-  param([string]$CandidatePath)
-  return Test-IsPackAoShimPathForBoundary -CandidatePath $CandidatePath
-}

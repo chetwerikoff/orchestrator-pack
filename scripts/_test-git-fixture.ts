@@ -23,7 +23,7 @@ function sanitizeFixturePath(pathValue: string | undefined): string {
 
 export function gitFixtureEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const {
-    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: _surface,
+    AO_SESSION_ID: _surface,
     AO_TMUX_NAME: _tmux,
     BASH_ENV: _bashEnv,
     AO_REAL_BINARY: _aoReal,
@@ -35,7 +35,7 @@ export function gitFixtureEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.
   return {
     ...rest,
     PATH: sanitizeFixturePath(rest.PATH),
-    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
+    AO_SESSION_ID: '',
   };
 }
 
@@ -46,7 +46,7 @@ export function autonomousBashEnv(
 ): NodeJS.ProcessEnv {
   return {
     ...gitFixtureEnv(baseEnv),
-    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
+    AO_SESSION_ID: '1',
     ...overrides,
   };
 }

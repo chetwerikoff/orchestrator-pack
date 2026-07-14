@@ -305,7 +305,7 @@ describe('worker recovery spawn no-bypass matrix (#638 AC#4, #652 fail-closed)',
       const recoveryScript = path.join(pack.scriptsDir, 'lib', 'Worker-Recovery.ps1');
       const script = `
         . '${recoveryScript.replace(/'/g, "''")}'
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $result = Invoke-WorkerRecoverySpawn -SpawnAction 'spawn-new' -ProjectId 'orchestrator-pack' `
         + `-IssueNumber 638 -PackRoot ${psString(pack.packRoot)} `
         + `-SpawnPolicy @{ version='${AUTONOMOUS_SPAWN_POLICY_VERSION}'; allowSpawnNew=$false; allowClaimPrResume=$true } -FixtureMode
@@ -330,7 +330,7 @@ describe('worker recovery spawn no-bypass matrix (#638 AC#4, #652 fail-closed)',
       const recoveryScript = path.join(pack.scriptsDir, 'lib', 'Worker-Recovery.ps1');
       const script = `
         . '${recoveryScript.replace(/'/g, "''")}'
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $result = Invoke-WorkerRecoverySpawn -SpawnAction 'claim-pr-resume' -ProjectId 'orchestrator-pack' `
         + `-PrNumber 589 -PackRoot ${psString(pack.packRoot)} `
         + `-SpawnPolicy @{ version='${AUTONOMOUS_SPAWN_POLICY_VERSION}'; allowSpawnNew=$true; allowClaimPrResume=$false } -FixtureMode
@@ -354,7 +354,7 @@ describe('worker recovery spawn no-bypass matrix (#638 AC#4, #652 fail-closed)',
     withAoSpawnProbeStub(({ probeFile, pack }) => {
       const script = `
         . '${path.join(pack.scriptsDir, 'lib', 'Orchestrator-AutonomousSpawnGate.ps1').replace(/'/g, "''")}'
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $spawn = Test-AutonomousSpawnDenied -Argv @(
           'spawn','--project','orchestrator-pack','--name','wr-i652','--prompt','holder prompt without issue'
         ) -FixtureMode -FixturePolicy @{ version='${AUTONOMOUS_SPAWN_POLICY_VERSION}'; allowSpawnNew=$true; allowClaimPrResume=$true }
