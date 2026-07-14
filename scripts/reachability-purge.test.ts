@@ -3,11 +3,39 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { buildManifest } from './reachability-purge.mjs';
+// @ts-expect-error -- the production audit is a checked-in ESM script without generated declarations.
+import { buildManifest as buildManifestRuntime } from './reachability-purge.mjs';
 
+interface ReachabilityManifest {
+  graphNodeCount: number;
+  deletionManifest: Array<{ reason: string }>;
+  suspectEdges: Array<{
+    disposition?: string;
+    evidence?: string;
+    consumerScope?: string;
+  }>;
+  unresolvedDynamicForms: Array<{
+    foldedIntoZeroReachability: boolean;
+    possibleTargets?: string[];
+  }>;
+  heldNodes: Array<{ path: string }>;
+  deletionSetDiffFromFormula: { missing: string[]; unexpected: string[] };
+  supersededSurfaceInventory: Array<{ disposition: string }>;
+  protectedTestsDeleted: string[];
+  keepGuardList: string[];
+  rewriteList: string[];
+  retiredShimBlockers: Array<{
+    trackedInBase: boolean;
+    deletedInCurrentTree: boolean;
+    reachable: boolean;
+    held: boolean;
+  }>;
+}
+
+const buildManifest = buildManifestRuntime as (repoRoot?: string) => ReachabilityManifest;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = path.join(repoRoot, 'scripts', 'reachability-purge.manifest.json');
-let manifest: ReturnType<typeof buildManifest>;
+let manifest: ReachabilityManifest;
 
 beforeAll(() => {
   manifest = buildManifest(repoRoot);
