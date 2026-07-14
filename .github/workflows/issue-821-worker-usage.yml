@@ -26,7 +26,7 @@ jobs:
       - name: Inspect main worker test and persist report
         shell: bash
         run: |
-          git show main:scripts/worker-nudge-gate.test.ts > /tmp/worker-main.ts
+          git show origin/main:scripts/worker-nudge-gate.test.ts > /tmp/worker-main.ts
           node --input-type=module <<'NODE' > issue-821-worker-main-usage.txt
           import { readFileSync } from 'node:fs';
           import * as ts from 'typescript';
