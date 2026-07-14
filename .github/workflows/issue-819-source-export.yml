@@ -1,0 +1,25 @@
+name: issue-819-source-export
+
+on:
+  push:
+    branches:
+      - agent/issue-819-reachability-purge
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive reviewed tree
+        shell: bash
+        run: git archive --format=zip --output=orchestrator-pack-source.zip HEAD
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-819-source
+          path: orchestrator-pack-source.zip
+          retention-days: 1
+          if-no-files-found: error
