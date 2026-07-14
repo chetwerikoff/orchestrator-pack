@@ -284,7 +284,14 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
       if (snapshotValue == null || snapshotValue === '') {
         continue;
       }
-      restored[name] = snapshotValue;
+      const currentValue = restored[name];
+      if (name === 'OPK_VITEST_HARNESS') {
+        restored[name] = snapshotValue;
+        continue;
+      }
+      if (currentValue == null || currentValue === '') {
+        restored[name] = snapshotValue;
+      }
     }
     return restored;
   };
