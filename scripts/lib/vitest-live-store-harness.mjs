@@ -312,7 +312,19 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
   const health = join(root, 'health-spool');
   const aoBase = join(root, 'ao-base');
   const transport = join(root, 'transport');
-  for (const dir of [wake, state, isolatedTmp, inbox, health, aoBase, transport]) {
+  const reviewStartClaims = join(aoBase, 'projects', 'orchestrator-pack', 'review-start-claims');
+  const workerNudgeClaims = join(aoBase, 'projects', 'orchestrator-pack', 'worker-nudge-claims');
+  for (const dir of [
+    wake,
+    state,
+    isolatedTmp,
+    inbox,
+    health,
+    aoBase,
+    transport,
+    reviewStartClaims,
+    workerNudgeClaims,
+  ]) {
     ensurePrivateDirectory(dir);
   }
 
@@ -370,6 +382,8 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
       state,
       'orchestrator-wake-listener-side-effect.lock',
     ),
+    AO_REVIEW_CLAIM_DIR: reviewStartClaims,
+    AO_WORKER_NUDGE_CLAIM_DIR: workerNudgeClaims,
     AO_WORKER_MESSAGE_ADOPTION_STATE: join(
       state,
       'orchestrator-worker-message-send-adoption.json',
