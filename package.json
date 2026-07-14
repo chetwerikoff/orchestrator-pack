@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "test": "node scripts/run-vitest-with-harness.mjs run",
-    "test:watch": "vitest",
+    "test:watch": "node scripts/run-vitest-with-harness.mjs watch",
     "ts:smoke": "node --experimental-strip-types scripts/typescript-smoke.ts",
     "check:node-major": "node --experimental-strip-types scripts/toolchain/check-node-major.ts",
     "typecheck:foundation": "tsc -p tsconfig.json --noEmit",

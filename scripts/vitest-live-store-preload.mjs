@@ -414,6 +414,20 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     return nativeExecFileSync.call(this, file, ...wrapChildOptions(file, args, Array.isArray(args[0]) ? 1 : 0));
   };
 
+  if (typeof childProcess.exec === 'function') {
+    const nativeExec = childProcess.exec;
+    childProcess.exec = function opkVitestGuardedExec(command, ...args) {
+      return nativeExec.call(this, command, ...wrapChildOptions(command, args, 0));
+    };
+  }
+
+  if (typeof childProcess.execSync === 'function') {
+    const nativeExecSync = childProcess.execSync;
+    childProcess.execSync = function opkVitestGuardedExecSync(command, ...args) {
+      return nativeExecSync.call(this, command, ...wrapChildOptions(command, args, 0));
+    };
+  }
+
   if (typeof childProcess.fork === 'function') {
     const nativeFork = childProcess.fork;
     childProcess.fork = function opkVitestGuardedFork(modulePath, ...args) {
