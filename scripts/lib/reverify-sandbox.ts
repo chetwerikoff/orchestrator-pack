@@ -154,6 +154,7 @@ function buildIsolatedEnv(
     HOME: isolatedHome,
     TMPDIR: isolatedTmp,
     NODE_ENV: 'test',
+    OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
     ...extraEnv,
   };
   for (const key of Object.keys(process.env)) {

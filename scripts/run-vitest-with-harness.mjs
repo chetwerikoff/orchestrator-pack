@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -113,6 +113,61 @@ else {
   env.PATH = `${binDir}${delimiter}${env.PATH ?? ''}`;
 }
 
+function installAoShim(root, env) {
+  const realAo = env.OPK_REAL_AO || findExecutable('ao', env.PATH ?? '');
+  if (!realAo) return;
+  let resolvedAo = realAo;
+  try {
+    const wrapperText = readFileSync(realAo, 'utf8');
+    const realAoMatch = wrapperText.match(/^\s*REAL_AO=(['"])(.+?)\1\s*$/m);
+    if (realAoMatch?.[2]) {
+      resolvedAo = realAoMatch[2];
+    }
+  } catch {
+    // Non-text executables or unreadable shims fall back to the discovered path.
+  }
+  const binDir = join(root, 'bin');
+  mkdirSync(binDir, { recursive: true, mode: 0o700 });
+  const shimModule = join(binDir, 'ao-shim.mjs');
+  writeFileSync(shimModule, `#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+const real = process.env.OPK_REAL_AO_BINARY || process.env.OPK_REAL_AO;
+if (!real) { console.error('OPK ao shim is missing configuration'); process.exitCode = 70; }
+else {
+  const argv = process.argv.slice(2);
+  const env = { ...process.env };
+  const productionHome = String(env.OPK_VITEST_PRODUCTION_HOME ?? '').trim();
+  if (productionHome) env.HOME = productionHome;
+  const child = spawn(real, argv, {
+    env,
+    stdio: 'inherit',
+  });
+  const status = await new Promise((resolveChild) => {
+    child.once('error', (error) => {
+      console.error(error.message);
+      resolveChild(70);
+    });
+    child.once('close', (code, signal) => {
+      resolveChild(code ?? ({ SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }[signal] ?? 1));
+    });
+  });
+  process.exitCode = status;
+}
+`, 'utf8');
+  chmodSync(shimModule, 0o700);
+
+  if (process.platform === 'win32') {
+    writeFileSync(join(binDir, 'ao.cmd'), `@echo off\r\n"${process.execPath}" "${shimModule}" %*\r\n`, 'utf8');
+  } else {
+    const shim = join(binDir, 'ao');
+    writeFileSync(shim, `#!/usr/bin/env sh\nexec "${process.execPath}" "${shimModule}" "$@"\n`, 'utf8');
+    chmodSync(shim, 0o700);
+  }
+  env.OPK_REAL_AO = realAo;
+  env.OPK_REAL_AO_BINARY = resolvedAo;
+  env.PATH = `${binDir}${delimiter}${env.PATH ?? ''}`;
+}
+
 function appendNodeImport(nodeOptions, modulePath) {
   const flag = `--import=${pathToFileURL(modulePath).href}`;
   return [String(nodeOptions ?? '').trim(), flag].filter(Boolean).join(' ');
@@ -175,6 +230,7 @@ try {
   applyOpkVitestHarnessEnv(invocationRoot, childEnv);
   childEnv.OPK_TESTMODE_LEASE_ROOT = join(invocationRoot, 'state', 'testmode-fleet-leases');
   installPwshShim(invocationRoot, childEnv);
+  installAoShim(invocationRoot, childEnv);
   childEnv.NODE_OPTIONS = appendNodeImport(
     childEnv.NODE_OPTIONS,
     join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs'),

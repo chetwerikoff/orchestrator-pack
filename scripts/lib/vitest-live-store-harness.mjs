@@ -196,6 +196,55 @@ export function classifyLiveStorePath(candidate, env = process.env) {
   return null;
 }
 
+function resolveHarnessScopedPath(baseRoot, candidate, sourceRoot) {
+  if (!baseRoot || !sourceRoot) return '';
+  return normalizeCase(resolve(baseRoot, relative(sourceRoot, candidate)));
+}
+
+export function redirectHarnessWritePath(candidate, env = process.env) {
+  if (env[OPK_VITEST_HARNESS_MARKER] !== '1') return '';
+  const canonical = canonicalizeStorePath(candidate);
+  if (!canonical) return '';
+  const harnessRoot = canonicalizeStorePath(env[OPK_VITEST_HARNESS_ROOT]);
+  if (!harnessRoot) return '';
+  if (pathIsSameOrWithin(canonical, harnessRoot)) return canonical;
+
+  for (const store of resolvedLiveStores(env)) {
+    if (store.kind === 'directory' && pathIsSameOrWithin(canonical, store.defaultPath)) {
+      return resolveHarnessScopedPath(join(harnessRoot, store.harnessPath), canonical, store.defaultPath);
+    }
+    if (store.kind === 'pattern'
+      && patternMatchesPath(canonical, store.defaultPath, store.basenameMatcher, store.sidecarMatchers)) {
+      return resolveHarnessScopedPath(join(harnessRoot, store.harnessPath), canonical, store.defaultPath);
+    }
+    if (canonical === store.defaultPath) {
+      return normalizeCase(resolve(harnessRoot, store.harnessPath));
+    }
+    if (dirname(canonical) === store.parentPath) {
+      const leaf = basename(canonical).replaceAll('\\', '/');
+      if (store.sidecarMatchers.some((matcher) => matcher.test(leaf))) {
+        return normalizeCase(resolve(dirname(join(harnessRoot, store.harnessPath)), leaf));
+      }
+    }
+  }
+
+  for (const fence of resolvedClassFences(env)) {
+    if (patternMatchesPath(canonical, fence.rootPath, null, fence.matchers)) {
+      const tmpRoot = canonicalizeStorePath(env.TMPDIR || env.TEMP || env.TMP || join(harnessRoot, 'tmp'));
+      return resolveHarnessScopedPath(tmpRoot, canonical, fence.rootPath);
+    }
+  }
+
+  for (const root of liveStoreInventory.liveRoots ?? []) {
+    const rootPath = canonicalizeStorePath(expandInventoryTemplate(root.defaultTemplate, env));
+    const harnessPath = canonicalizeStorePath(env[root.harnessEnv] || join(harnessRoot, root.kind === 'directory' ? root.id : ''));
+    if (rootPath && harnessPath && pathIsSameOrWithin(canonical, rootPath)) {
+      return resolveHarnessScopedPath(harnessPath, canonical, rootPath);
+    }
+  }
+  return '';
+}
+
 export function assertHarnessWritePathSafe(candidate, operation = 'write', env = process.env) {
   if (env[OPK_VITEST_HARNESS_MARKER] !== '1') return;
   const match = classifyLiveStorePath(candidate, env);
@@ -356,10 +405,15 @@ function hashDirectory(path) {
       .sort((a, b) => a.name.localeCompare(b.name))) {
       const full = join(dir, entry.name);
       const rel = join(prefix, entry.name).replaceAll('\\', '/');
-      hash.update(entry.isDirectory() ? `d:${rel}\n` : `f:${rel}\n`);
-      if (entry.isDirectory()) walk(full, rel);
-      else if (entry.isFile()) hash.update(readFileSync(full));
-      else hash.update(`other:${entry.name}\n`);
+      try {
+        hash.update(entry.isDirectory() ? `d:${rel}\n` : `f:${rel}\n`);
+        if (entry.isDirectory()) walk(full, rel);
+        else if (entry.isFile()) hash.update(readFileSync(full));
+        else hash.update(`other:${entry.name}\n`);
+      } catch (error) {
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue;
+        throw error;
+      }
     }
   };
   walk(path);
@@ -372,16 +426,21 @@ function hashDirectory(path) {
 }
 
 function snapshotPath(path) {
-  if (!existsSync(path)) return { exists: false };
-  const stat = lstatSync(path);
-  if (stat.isDirectory()) return { exists: true, ...hashDirectory(path) };
-  if (stat.isFile()) return { exists: true, ...hashFile(path) };
-  return {
-    exists: true,
-    type: 'other',
-    size: stat.size,
-    mtimeNs: String(stat.mtimeNs ?? BigInt(Math.round(stat.mtimeMs * 1e6))),
-  };
+  try {
+    if (!existsSync(path)) return { exists: false };
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) return { exists: true, ...hashDirectory(path) };
+    if (stat.isFile()) return { exists: true, ...hashFile(path) };
+    return {
+      exists: true,
+      type: 'other',
+      size: stat.size,
+      mtimeNs: String(stat.mtimeNs ?? BigInt(Math.round(stat.mtimeMs * 1e6))),
+    };
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false };
+    throw error;
+  }
 }
 
 function listPatternPaths(rootPath, matchers) {

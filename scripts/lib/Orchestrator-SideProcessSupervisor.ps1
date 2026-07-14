@@ -16,6 +16,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorLease.ps1')
 . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorStateRoot.ps1')
 . (Join-Path $PSScriptRoot 'TestMode-FleetLease.ps1')
+. (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')
 
 $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
 $Script:OrchestratorSideProcessRegistryPath = Join-Path $Script:OrchestratorSideProcessPackRoot 'scripts/orchestrator-side-process-registry.json'
@@ -72,7 +73,7 @@ function New-OrchestratorWakeSupervisorChildEnvironment {
         }
         $childEnv['AO_WAKE_SUPERVISOR_TEST_MARKER_DIR'] = $markerRoot
     }
-    return $childEnv
+    return Merge-OpkVitestChildProcessEnv -Environment $childEnv -PreferExisting
 }
 
 

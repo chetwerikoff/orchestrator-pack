@@ -8,17 +8,17 @@ $Script:OpkVitestStoreInventoryPath = Join-Path (Split-Path -Parent $PSScriptRoo
 $Script:OpkVitestStoreBreakpoints = @()
 $Script:OpkVitestStoreInventory = $null
 
-function Test-OpkVitestHarnessMarkerActive {
+function global:Test-OpkVitestHarnessMarkerActive {
     return $env:OPK_VITEST_HARNESS -eq '1'
 }
 
-function Get-OpkVitestProductionHome {
+function global:Get-OpkVitestProductionHome {
     if ($env:OPK_VITEST_PRODUCTION_HOME) { return $env:OPK_VITEST_PRODUCTION_HOME }
     if ($env:HOME) { return $env:HOME }
     return [Environment]::GetFolderPath('UserProfile')
 }
 
-function Get-OpkVitestProductionTemp {
+function global:Get-OpkVitestProductionTemp {
     if ($env:OPK_VITEST_PRODUCTION_TMP) { return $env:OPK_VITEST_PRODUCTION_TMP }
     if ($env:TMPDIR) { return $env:TMPDIR }
     if ($env:TEMP) { return $env:TEMP }
@@ -26,13 +26,13 @@ function Get-OpkVitestProductionTemp {
     return [System.IO.Path]::GetTempPath()
 }
 
-function Get-OpkVitestProductionAoBase {
+function global:Get-OpkVitestProductionAoBase {
     if ($env:OPK_VITEST_PRODUCTION_AO_BASE) { return $env:OPK_VITEST_PRODUCTION_AO_BASE }
     if ($env:AO_BASE_DIR) { return $env:AO_BASE_DIR }
     return Join-Path (Get-OpkVitestProductionHome) '.agent-orchestrator'
 }
 
-function Get-OpkVitestProductionWakeRoot {
+function global:Get-OpkVitestProductionWakeRoot {
     if ($env:OPK_VITEST_PRODUCTION_WAKE_ROOT) { return $env:OPK_VITEST_PRODUCTION_WAKE_ROOT }
     if ($env:AO_WAKE_SUPERVISOR_STATE_DIR) { return $env:AO_WAKE_SUPERVISOR_STATE_DIR }
     if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) { return $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR }
@@ -41,7 +41,7 @@ function Get-OpkVitestProductionWakeRoot {
     return Join-Path (Join-Path (Join-Path (Get-OpkVitestProductionHome) '.local') 'state') 'orchestrator-pack-wake-supervisor'
 }
 
-function Expand-OpkVitestStoreTemplate {
+function global:Expand-OpkVitestStoreTemplate {
     param([string]$Template)
 
     $expanded = [string]$Template
@@ -52,7 +52,7 @@ function Expand-OpkVitestStoreTemplate {
     return $expanded
 }
 
-function Resolve-OpkVitestCanonicalPath {
+function global:Resolve-OpkVitestCanonicalPath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
@@ -79,7 +79,7 @@ function Resolve-OpkVitestCanonicalPath {
     return $cursor
 }
 
-function Test-OpkVitestPathWithin {
+function global:Test-OpkVitestPathWithin {
     param([string]$Candidate, [string]$Root)
 
     if (-not $Candidate -or -not $Root) { return $false }
@@ -94,7 +94,7 @@ function Test-OpkVitestPathWithin {
     return $Candidate.StartsWith($Root.TrimEnd('/', '\') + $separator, $comparison)
 }
 
-function ConvertTo-OpkVitestGlobRegex {
+function global:ConvertTo-OpkVitestGlobRegex {
     param([string]$Pattern)
 
     $escaped = [regex]::Escape(([string]$Pattern).Replace('\', '/'))
@@ -102,7 +102,7 @@ function ConvertTo-OpkVitestGlobRegex {
     return '^' + $escaped + '$'
 }
 
-function Test-OpkVitestPatternPath {
+function global:Test-OpkVitestPatternPath {
     param([string]$Candidate, [string]$Root, [string[]]$Patterns)
 
     if ((Split-Path -Parent $Candidate) -ne $Root) { return $false }
@@ -113,7 +113,7 @@ function Test-OpkVitestPatternPath {
     return $false
 }
 
-function Get-OpkVitestStoreInventory {
+function global:Get-OpkVitestStoreInventory {
     if ($Script:OpkVitestStoreInventory) { return $Script:OpkVitestStoreInventory }
     if (-not (Test-Path -LiteralPath $Script:OpkVitestStoreInventoryPath -PathType Leaf)) {
         throw "vitest live-store inventory missing: $Script:OpkVitestStoreInventoryPath"
@@ -122,14 +122,14 @@ function Get-OpkVitestStoreInventory {
     return $Script:OpkVitestStoreInventory
 }
 
-function Get-OpkVitestOrderedStores {
+function global:Get-OpkVitestOrderedStores {
     $inventory = Get-OpkVitestStoreInventory
     $nonDirectories = @($inventory.stores | Where-Object { -not $_.excluded -and [string]$_.kind -ne 'directory' })
     $directories = @($inventory.stores | Where-Object { -not $_.excluded -and [string]$_.kind -eq 'directory' } | Sort-Object { ([string]$_.canonicalDefault).Length } -Descending)
     return @($nonDirectories) + @($directories)
 }
 
-function Find-OpkVitestLiveStoreMatch {
+function global:Find-OpkVitestLiveStoreMatch {
     param([string]$Path)
 
     $candidate = Resolve-OpkVitestCanonicalPath -Path $Path
@@ -177,7 +177,7 @@ function Find-OpkVitestLiveStoreMatch {
     return $null
 }
 
-function Assert-OpkVitestStorePathSafe {
+function global:Assert-OpkVitestStorePathSafe {
     param([Parameter(Mandatory = $true)][string]$Path, [string]$Operation = 'write')
 
     if (-not (Test-OpkVitestHarnessMarkerActive)) { return }
@@ -185,7 +185,7 @@ function Assert-OpkVitestStorePathSafe {
     if ($match) { throw "OPK_VITEST_LIVE_STORE_BLOCKED operation=$Operation store=$($match.storeId)" }
 }
 
-function Get-OpkVitestBoundValues {
+function global:Get-OpkVitestBoundValues {
     param([object]$BoundParameters, [string[]]$Names)
 
     $values = @()
@@ -198,7 +198,7 @@ function Get-OpkVitestBoundValues {
     return @($values)
 }
 
-function Get-OpkVitestResolverStores {
+function global:Get-OpkVitestResolverStores {
     param([string]$CommandName)
 
     $matches = @()
@@ -209,7 +209,7 @@ function Get-OpkVitestResolverStores {
     return @($matches)
 }
 
-function Resolve-OpkVitestBreakpointCandidates {
+function global:Resolve-OpkVitestBreakpointCandidates {
     param([string]$CommandName, [object]$BoundParameters)
 
     $pathNames = @(
@@ -251,7 +251,7 @@ function Resolve-OpkVitestBreakpointCandidates {
     return @($candidates | Select-Object -Unique)
 }
 
-function Invoke-OpkVitestProxyGuard {
+function global:Invoke-OpkVitestProxyGuard {
     param(
         [string]$CommandName,
         [object]$BoundParameters
@@ -264,7 +264,7 @@ function Invoke-OpkVitestProxyGuard {
     }
 }
 
-function Install-OpkVitestCmdletProxy {
+function global:Install-OpkVitestCmdletProxy {
     param([Parameter(Mandatory = $true)][string]$CommandName)
 
     $cmdlet = Get-Command $CommandName -CommandType Cmdlet -ErrorAction SilentlyContinue
@@ -279,7 +279,7 @@ function Install-OpkVitestCmdletProxy {
     return $true
 }
 
-function Install-OpkVitestExistingFunctionProxy {
+function global:Install-OpkVitestExistingFunctionProxy {
     param([Parameter(Mandatory = $true)][string]$CommandName)
 
     $existing = Get-Command $CommandName -CommandType Function -ErrorAction SilentlyContinue
@@ -301,7 +301,7 @@ function Install-OpkVitestExistingFunctionProxy {
     return $true
 }
 
-function Enable-OpkVitestStoreIsolation {
+function global:Enable-OpkVitestStoreIsolation {
     if (-not (Test-OpkVitestHarnessMarkerActive)) { return }
 
     if (-not $Script:OpkVitestStoreProxiesInstalled) {

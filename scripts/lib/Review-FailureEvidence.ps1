@@ -1,6 +1,7 @@
 # Utilities for Issue #312 reviewer failure evidence artifacts.
 
 . (Join-Path $PSScriptRoot 'QuotedProcessArguments.ps1')
+. (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')
 
 function Get-ReviewFailureEvidenceOutputTailLimit {
     $default = 8192
@@ -135,6 +136,7 @@ function Get-PackReviewWrapperProcessStartInfo {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    Set-OpkVitestProcessStartInfoEnvironment -ProcessStartInfo $psi
     $argv = @('-NoProfile', '-File', $WrapperPath) + @($WrapperArgs | ForEach-Object { [string]$_ })
     if (Test-PackReviewProcessStartInfoSupportsArgumentList) {
         foreach ($arg in $argv) {

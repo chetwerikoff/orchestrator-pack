@@ -26,12 +26,15 @@ yet), and use case-insensitive comparison only on Windows. A directory store pro
 its full subtree. File stores protect the primary basename plus only the sidecar patterns
 declared in their row.
 
-With `OPK_VITEST_HARNESS=1`, a match fails closed before a Node filesystem write or
-before a PowerShell child is spawned with a live-default environment override, explicit
-path argument, or literal write target. Computed internal paths remain covered by the
-parent hash/transient guard. The PowerShell helper retains a direct mechanical pre-open
-fence for the isolation self-check. Diagnostics contain the store identifier and
-operation only; they do not print file contents or resolved live paths.
+With `OPK_VITEST_HARNESS=1`, explicit Node filesystem writes that still name a
+production live-default path are rewritten into the current per-invocation harness
+root before the write executes. If a path cannot be mapped to an isolated harness
+target, the write still fails closed. PowerShell children continue to fail closed
+before they can spawn with a live-default environment override, explicit path
+argument, or literal write target. Computed internal paths remain covered by the
+parent hash/transient guard. The PowerShell helper retains a direct mechanical
+pre-open fence for the isolation self-check. Diagnostics contain the store identifier
+and operation only; they do not print file contents or resolved live paths.
 
 ## Invocation ownership
 

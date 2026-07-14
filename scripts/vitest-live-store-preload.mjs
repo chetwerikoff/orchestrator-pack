@@ -1,10 +1,14 @@
 import fs from 'node:fs';
+import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { assertHarnessWritePathSafe } from './lib/vitest-live-store-harness.mjs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { assertHarnessWritePathSafe, redirectHarnessWritePath } from './lib/vitest-live-store-harness.mjs';
 
-if (process.env.OPK_VITEST_HARNESS === '1') {
+const preloadInstalledKey = Symbol.for('opk.vitest.liveStorePreloadInstalled');
+
+if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) {
+  globalThis[preloadInstalledKey] = true;
   const asPathText = (candidate) => {
     if (candidate instanceof URL) return fileURLToPath(candidate);
     if (Buffer.isBuffer(candidate)) return candidate.toString();
@@ -40,13 +44,16 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
   };
 
   const harnessRoot = canonicalizeFast(process.env.OPK_VITEST_HARNESS_ROOT);
-  const guardPath = (candidate, operation) => {
+  const remapPath = (candidate, operation) => {
     // Most test writes are already redirected below the per-invocation root.
     // Resolve the nearest existing ancestor once so a symlink inside that root
     // cannot hide a destination outside it, then skip the full 30-store catalog.
     const canonical = canonicalizeFast(candidate);
-    if (canonical && harnessRoot && pathIsSameOrWithin(canonical, harnessRoot)) return;
+    if (canonical && harnessRoot && pathIsSameOrWithin(canonical, harnessRoot)) return candidate;
+    const redirected = redirectHarnessWritePath(candidate);
+    if (redirected) return redirected;
     assertHarnessWritePathSafe(candidate, operation);
+    return candidate;
   };
 
   const wrapSyncPath = (name, index = 0, shouldGuard = () => true) => {
@@ -54,7 +61,7 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
     if (typeof original !== 'function') return;
     fs[name] = function opkVitestGuardedFsSyncCall(...args) {
       if (shouldGuard(args)) {
-        guardPath(args[index], `fs.${name}`);
+        args[index] = remapPath(args[index], `fs.${name}`);
       }
       return original.apply(this, args);
     };
@@ -65,7 +72,7 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
     if (typeof original !== 'function') return;
     fs[name] = function opkVitestGuardedFsCallbackCall(...args) {
       if (shouldGuard(args)) {
-        guardPath(args[index], `fs.${name}`);
+        args[index] = remapPath(args[index], `fs.${name}`);
       }
       return original.apply(this, args);
     };
@@ -105,9 +112,9 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
 
   const nativeRenameSync = fs.renameSync;
   fs.renameSync = function opkVitestGuardedRenameSync(source, destination, ...rest) {
-    guardPath(source, 'fs.renameSync.source');
-    guardPath(destination, 'fs.renameSync.destination');
-    return nativeRenameSync.call(this, source, destination, ...rest);
+    const nextSource = remapPath(source, 'fs.renameSync.source');
+    const nextDestination = remapPath(destination, 'fs.renameSync.destination');
+    return nativeRenameSync.call(this, nextSource, nextDestination, ...rest);
   };
 
   for (const name of [
@@ -144,7 +151,7 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
     if (typeof original !== 'function') return;
     promises[name] = async function opkVitestGuardedFsPromise(...args) {
       if (shouldGuard(args)) {
-        guardPath(args[index], `fs.promises.${name}`);
+        args[index] = remapPath(args[index], `fs.promises.${name}`);
       }
       return original.apply(this, args);
     };
@@ -171,18 +178,185 @@ if (process.env.OPK_VITEST_HARNESS === '1') {
   if (typeof promises?.rename === 'function') {
     const nativePromiseRename = promises.rename.bind(promises);
     promises.rename = async (source, destination) => {
-      guardPath(source, 'fs.promises.rename.source');
-      guardPath(destination, 'fs.promises.rename.destination');
-      return nativePromiseRename(source, destination);
+      return nativePromiseRename(
+        remapPath(source, 'fs.promises.rename.source'),
+        remapPath(destination, 'fs.promises.rename.destination'),
+      );
     };
   }
   if (typeof promises?.open === 'function') {
     const nativePromiseOpen = promises.open.bind(promises);
     promises.open = async (path, flags, ...rest) => {
       if (writeOpenFlags(flags)) {
-        guardPath(path, 'fs.promises.open');
+        path = remapPath(path, 'fs.promises.open');
       }
       return nativePromiseOpen(path, flags, ...rest);
+    };
+  }
+
+  const resolveProductionHomeForChild = (env) => {
+    const explicitHome = String(env.HOME ?? '').trim();
+    if (String(env.OPK_VITEST_PRODUCTION_HOME ?? '').trim()) {
+      return env.OPK_VITEST_PRODUCTION_HOME;
+    }
+    return explicitHome;
+  };
+
+  const resolveProductionTmpForChild = (env) => {
+    if (String(env.OPK_VITEST_PRODUCTION_TMP ?? '').trim()) {
+      return env.OPK_VITEST_PRODUCTION_TMP;
+    }
+    return env.TMPDIR || env.TEMP || env.TMP || '';
+  };
+
+  const getPowerShellSwitchValue = (argv, switchName) => {
+    const values = Array.isArray(argv) ? argv.map((value) => String(value)) : [];
+    for (let index = 0; index < values.length; index += 1) {
+      const token = values[index];
+      if (token === switchName) {
+        const next = values[index + 1];
+        if (next && !next.startsWith('-')) return next;
+        return 'true';
+      }
+      if (token.startsWith(`${switchName}=`) && token.length > switchName.length + 1) {
+        return token.slice(switchName.length + 1);
+      }
+    }
+    return '';
+  };
+
+  const explicitChildPassthroughKeys = new Set([
+    'HOME',
+    'USERPROFILE',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'XDG_STATE_HOME',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+  ]);
+
+  const mergeHarnessChildEnv = (targetEnv) => {
+    const mergedEnv = {
+      ...(targetEnv ?? {}),
+    };
+    for (const [name, value] of Object.entries(process.env)) {
+      if (!name || value == null) {
+        continue;
+      }
+      if (name.startsWith('AO_') || name.startsWith('OPK_VITEST_') || explicitChildPassthroughKeys.has(name)) {
+        if (!Object.prototype.hasOwnProperty.call(mergedEnv, name)) {
+          mergedEnv[name] = value;
+        }
+      }
+    }
+    return mergedEnv;
+  };
+
+  const normalizeChildEnv = (command, explicitEnv, argv = []) => {
+    if (explicitEnv?.OPK_VITEST_SKIP_CHILD_ENV_MERGE === '1') {
+      const passthroughEnv = {
+        ...(explicitEnv ?? {}),
+      };
+      delete passthroughEnv.OPK_VITEST_SKIP_CHILD_ENV_MERGE;
+      return passthroughEnv;
+    }
+    const mergedEnv = explicitEnv
+      ? mergeHarnessChildEnv(explicitEnv)
+      : { ...process.env };
+    if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
+      mergedEnv.OPK_VITEST_PRODUCTION_HOME = resolveProductionHomeForChild(mergedEnv);
+    }
+    if ((explicitEnv && (
+      Object.prototype.hasOwnProperty.call(explicitEnv, 'TMPDIR')
+      || Object.prototype.hasOwnProperty.call(explicitEnv, 'TEMP')
+      || Object.prototype.hasOwnProperty.call(explicitEnv, 'TMP')
+    )) && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_TMP')) {
+      const productionTmp = resolveProductionTmpForChild(mergedEnv);
+      if (String(productionTmp).trim()) {
+        mergedEnv.OPK_VITEST_PRODUCTION_TMP = productionTmp;
+      }
+    }
+    if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_BASE_DIR')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_AO_BASE')) {
+      const explicitAoBase = String(mergedEnv.AO_BASE_DIR ?? '').trim();
+      if (explicitAoBase) {
+        mergedEnv.OPK_VITEST_PRODUCTION_AO_BASE = explicitAoBase;
+      }
+    }
+    const explicitWake = String(
+      mergedEnv.AO_WAKE_SUPERVISOR_STATE_DIR
+      || mergedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
+      || '',
+    ).trim();
+    if (explicitEnv && (
+      Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_WAKE_SUPERVISOR_STATE_DIR')
+      || Object.prototype.hasOwnProperty.call(explicitEnv, 'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR')
+    ) && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_WAKE_ROOT')
+      && explicitWake) {
+      mergedEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT = explicitWake;
+    }
+    const commandBase = basename(String(command ?? '')).toLowerCase();
+    const explicitStateDir = getPowerShellSwitchValue(argv, '-StateDir');
+    if ((commandBase === 'pwsh' || commandBase === 'pwsh.exe' || commandBase === 'powershell' || commandBase === 'powershell.exe')
+      && explicitStateDir) {
+      mergedEnv.AO_SIDE_PROCESS_STATE_DIR = explicitStateDir;
+    }
+    if (commandBase === 'ao' || commandBase === 'ao.cmd' || commandBase === 'ao.exe' || commandBase === 'ao.bat') {
+      const productionHome = String(process.env.OPK_VITEST_PRODUCTION_HOME ?? '').trim();
+      if (productionHome && !Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'HOME')) {
+        mergedEnv.HOME = productionHome;
+      }
+    }
+    return mergedEnv;
+  };
+
+  const wrapChildOptions = (command, args, optionsIndex) => {
+    const nextArgs = [...args];
+    const options = nextArgs[optionsIndex];
+    const argv = Array.isArray(nextArgs[0]) ? nextArgs[0] : [];
+    if (options && typeof options === 'object' && !Array.isArray(options)) {
+      nextArgs[optionsIndex] = {
+        ...options,
+        env: normalizeChildEnv(command, options.env, argv),
+      };
+      return nextArgs;
+    }
+    const normalizedOptions = {
+      env: normalizeChildEnv(command, undefined, argv),
+    };
+    if (optionsIndex <= nextArgs.length) {
+      nextArgs.splice(optionsIndex, 0, normalizedOptions);
+    } else {
+      nextArgs[optionsIndex] = normalizedOptions;
+    }
+    return nextArgs;
+  };
+
+  const nativeSpawn = childProcess.spawn;
+  childProcess.spawn = function opkVitestGuardedSpawn(command, ...args) {
+    return nativeSpawn.call(this, command, ...wrapChildOptions(command, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  const nativeSpawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = function opkVitestGuardedSpawnSync(command, ...args) {
+    return nativeSpawnSync.call(this, command, ...wrapChildOptions(command, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  const nativeExecFile = childProcess.execFile;
+  childProcess.execFile = function opkVitestGuardedExecFile(file, ...args) {
+    return nativeExecFile.call(this, file, ...wrapChildOptions(file, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  const nativeExecFileSync = childProcess.execFileSync;
+  childProcess.execFileSync = function opkVitestGuardedExecFileSync(file, ...args) {
+    return nativeExecFileSync.call(this, file, ...wrapChildOptions(file, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  if (typeof childProcess.fork === 'function') {
+    const nativeFork = childProcess.fork;
+    childProcess.fork = function opkVitestGuardedFork(modulePath, ...args) {
+      return nativeFork.call(this, modulePath, ...wrapChildOptions(modulePath, args, Array.isArray(args[0]) ? 1 : 0));
     };
   }
 

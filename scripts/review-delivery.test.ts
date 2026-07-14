@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -429,9 +430,32 @@ describe('review delivery journal durable path', () => {
       $path = Get-WorkerMessageDispatchJournalPath
       @{ path = $path; underTemp = $path.StartsWith([System.IO.Path]::GetTempPath()) } | ConvertTo-Json -Compress
     `;
-    const result = JSON.parse(runPwsh(script));
-    expect(result.underTemp).toBe(false);
-    expect(result.path).toContain('orchestrator-pack-wake-supervisor');
+    const pwsh = process.env.OPK_REAL_PWSH?.trim() || 'pwsh';
+    const productionTmp = process.env.OPK_VITEST_PRODUCTION_TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '';
+    const result = spawnSync(pwsh, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        OPK_VITEST_HARNESS: '',
+        OPK_VITEST_HARNESS_ROOT: '',
+        OPK_VITEST_HARNESS_INVENTORY: '',
+        AO_WORKER_MESSAGE_DISPATCH_JOURNAL: '',
+        AO_WAKE_SUPERVISOR_STATE_DIR: '',
+        ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
+        AO_SIDE_PROCESS_STATE_DIR: '',
+        HOME: process.env.OPK_VITEST_PRODUCTION_HOME ?? process.env.HOME ?? '',
+        TMPDIR: productionTmp,
+        TEMP: productionTmp,
+        TMP: productionTmp,
+      },
+    });
+    if (result.status !== 0) {
+      throw new Error(`pwsh failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+    }
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.underTemp).toBe(false);
+    expect(parsed.path).toContain('orchestrator-pack-wake-supervisor');
   });
 });
 

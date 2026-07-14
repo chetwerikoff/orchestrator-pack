@@ -21,6 +21,7 @@ import {
   createHarnessRoot,
   inventoryPath,
   liveStoreInventory,
+  redirectHarnessWritePath,
   repoRoot,
   startLiveStoreGuard,
 } from './lib/vitest-live-store-harness.mjs';
@@ -96,6 +97,9 @@ const enforcementFiles = new Set([
   'scripts/lib/vitest-live-store-harness.mjs',
   'scripts/vitest-live-store-inventory.json',
 ]);
+const generatedArtifacts = new Set([
+  'scripts/vitest-heavy-topology.plan.json',
+]);
 const exclusionByPath = new Map(
   (liveStoreInventory.discoveryExclusions ?? []).map((entry) => [entry.path, entry]),
 );
@@ -138,7 +142,9 @@ const auditInputs = [
 ];
 for (const full of auditInputs) {
   const rel = relative(repoRoot, full).replaceAll('\\', '/');
-  if (ignoredSegments.some((segment) => `/${rel}`.includes(segment)) || enforcementFiles.has(rel)) continue;
+  if (ignoredSegments.some((segment) => `/${rel}`.includes(segment))
+    || enforcementFiles.has(rel)
+    || generatedArtifacts.has(rel)) continue;
   const source = readFileSync(full, 'utf8');
   const hasDefault = defaultSignals.some((pattern) => {
     pattern.lastIndex = 0;
@@ -256,17 +262,24 @@ try {
   const preload = join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs');
   const nodeCases = [
     ['sync', liveWorkerStatus, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(liveWorkerStatus)}, 'red');`],
-    ['callback', join(wake, 'callback-state.json'), `import { writeFile } from 'node:fs'; writeFile(${JSON.stringify(join(wake, 'callback-state.json'))}, 'red', () => {});`],
+    ['callback', join(wake, 'callback-state.json'), `import { writeFile } from 'node:fs'; await new Promise((resolveWrite, rejectWrite) => writeFile(${JSON.stringify(join(wake, 'callback-state.json'))}, 'red', (error) => error ? rejectWrite(error) : resolveWrite()));`],
     ['promise', join(wake, 'promise-state.json'), `import { promises as fs } from 'node:fs'; await fs.writeFile(${JSON.stringify(join(wake, 'promise-state.json'))}, 'red');`],
   ];
   for (const [label, target, script] of nodeCases) {
+    const redirected = redirectHarnessWritePath(target, harnessEnv);
+    if (!redirected) {
+      fail(`Node ${label} write path did not resolve to a harness target`);
+      continue;
+    }
     const child = spawnSync(
       process.execPath,
       ['--import', pathToFileURL(preload).href, '--input-type=module', '--eval', script],
-      { cwd: repoRoot, encoding: 'utf8', env },
+      { cwd: repoRoot, encoding: 'utf8', env: harnessEnv },
     );
-    if (child.status === 0) fail(`Node ${label} write boundary did not fail closed`);
+    if (child.status !== 0) fail(`Node ${label} write boundary did not stay inside the harness root`);
     if (existsSync(target)) fail(`Node ${label} write opened a live-default path before blocking`);
+    if (!existsSync(redirected)) fail(`Node ${label} write did not land in the harness root`);
+    else if (readFileSync(redirected, 'utf8') !== 'red') fail(`Node ${label} redirected content was incorrect`);
   }
 
   const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';

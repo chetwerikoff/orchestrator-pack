@@ -5,6 +5,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'Gh-FleetInventoryCache.ps1')
+. (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')
 
 function Write-GhPrChecksLog {
     param([string]$Message)
@@ -138,6 +139,7 @@ function Invoke-GhPrViewStructuredCapture {
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    Set-OpkVitestProcessStartInfoEnvironment -ProcessStartInfo $psi
     $psi.WorkingDirectory = $RepoRoot
 
     try {
