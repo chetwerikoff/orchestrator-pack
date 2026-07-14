@@ -1,7 +1,0 @@
-{
-  "projectId": "orchestrator-pack-e2e",
-  "targetBasename": "opk-rev-429-e2e",
-  "denyBranchExit": 93,
-  "allowWorktreeExit": 0,
-  "worktreeExists": true
-}
