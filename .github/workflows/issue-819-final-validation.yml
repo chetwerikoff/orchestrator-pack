@@ -1,0 +1,53 @@
+name: issue-819-final-validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Full pack verifier
+        shell: pwsh
+        run: ./scripts/verify.ps1
+
+      - name: Strict self-architect lint
+        shell: pwsh
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef $env:PR_HEAD_SHA
+
+      - name: Typecheck
+        run: npx tsc --project tsconfig.base.json --noEmit
+
+      - name: Focused reachability acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "import { defineConfig } from 'vitest/config';" \
+            "export default defineConfig({ test: {" \
+            "  include: ['scripts/reachability-purge.test.ts']," \
+            "  fileParallelism: false, maxWorkers: 1," \
+            "  testTimeout: 120000, hookTimeout: 120000," \
+            "} });" > vitest.issue-819.config.mjs
+          npx vitest run --config vitest.issue-819.config.mjs
