@@ -47,6 +47,9 @@ $Script:DefaultIntervalSeconds = 30
 . (Join-Path $PSScriptRoot 'lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReactionMessagesFromYaml.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
+. (Join-Path $PSScriptRoot 'lib/Ci-Red-Watchdog.ps1')
 
 $Script:SubmitReconcileTerminalStates = @('submitted', 'escalated', 'noop')
 
@@ -635,8 +638,45 @@ function Invoke-SubmitReconcileTick {
                     continue
                 }
 
+                if (-not $DryRunMode -and -not $Fixture -and (Test-CiRedWatchdogDeliveryAttemptId -DeliveryId ([string]$action.deliveryId))) {
+                    $watchdogBoundary = Test-CiRedWatchdogSubmitBoundary `
+                        -DeliveryId ([string]$action.deliveryId) `
+                        -SessionId ([string]$action.sessionId) `
+                        -RepoRoot $PackRoot `
+                        -ProjectId $Project `
+                        -Sessions @($sessions)
+                    if (-not $watchdogBoundary.ok) {
+                        $boundaryReason = if ($watchdogBoundary.reason) { [string]$watchdogBoundary.reason } else { 'unknown' }
+                        try {
+                            $journalUpdate = Update-WorkerMessageDispatchOutcome `
+                                -DeliveryId ([string]$action.deliveryId) `
+                                -DispatchOutcome 'send_failed' `
+                                -DraftState 'unknown' `
+                                -JournalPath $JournalPath
+                            if (-not $journalUpdate.updated) {
+                                Write-SubmitReconcileLog "watchdog boundary journal update failed: delivery=$($action.deliveryId) reason=$($journalUpdate.reason)"
+                            }
+                        }
+                        catch {
+                            Write-SubmitReconcileLog "watchdog boundary journal update failed: delivery=$($action.deliveryId) error=$($_.Exception.Message)"
+                        }
+                        $null = Release-CiRedWatchdogSubmitBoundaryAttempt `
+                            -DeliveryId ([string]$action.deliveryId) `
+                            -Reason $boundaryReason
+                        Write-SubmitReconcileLog "watchdog submit aborted (fail-closed): delivery=$($action.deliveryId) session=$($action.sessionId) reason=$boundaryReason"
+                        $noop++
+                        $submitOutcomes += @{
+                            deliveryId = [string]$action.deliveryId
+                            claimKey   = [string]$action.claimKey
+                            outcome    = 'released'
+                            reason     = "ci_red_watchdog_boundary_$boundaryReason"
+                        }
+                        continue
+                    }
+                }
+
                 if (-not $DryRunMode -and -not $Fixture) {
-                    Set-SubmitReconcileState -Path $StatePath -State $tracking
+                    Set-SubmitReconcileState -Path $StatePath -State $tracking -JournalPath $JournalPath
                 }
                 if ($DryRunMode -or $Fixture) {
                     $submitResult = Invoke-WorkerInputDraftSubmit `

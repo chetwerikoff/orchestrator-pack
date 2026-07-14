@@ -39,6 +39,9 @@ $HelperCli = Join-Path $PackRoot 'docs/ci-failure-notification.mjs'
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
+. (Join-Path $PSScriptRoot 'lib/Ci-Red-Watchdog.ps1')
+
+$Script:CiFailureFixtureChecksBundle = $null
 
 function Get-CiFailureReactionEvents {
     return @()
@@ -164,7 +167,6 @@ function Invoke-CiFailurePreSendRecheckFailure {
         diagnostics    = @{ pre_send_recheck = $Reason }
     }
 }
-
 function Invoke-CiFailureTerminalizeCiRecovered {
     param(
         [object]$Episode,
@@ -504,7 +506,6 @@ function Invoke-CiFailureEpisodeDelivery {
             $null = Invoke-CiFailureHelper -Mode 'release-submit-intent' -Payload @{ storeDir = $StoreDir; episode = $Episode }
             return $false
         }
-
         $null = Invoke-CiFailureHelper -Mode 'mark-send-delivered' -Payload @{ storeDir = $StoreDir; episode = $Episode }
         $sendDelivered = $true
     }
@@ -561,15 +562,23 @@ function Invoke-CiFailureNotificationTick {
 
     $repo = Get-RepoIdentity
     $openPrs = @($WorkerState.openPrs)
-    if ($openPrs.Count -gt 0 -and -not $DryRun) {
-        $checksBundle = Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
-        $null = Invoke-CiFailureHelper -Mode 'sync-red-period-trackers' -Payload @{
-            storeDir                      = $StoreDir
-            repo                          = $repo
-            openPrs                       = $openPrs
-            ciChecksByPr                  = $checksBundle.ciChecksByPr
-            requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
-            requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+    $checksBundle = $null
+    if ($openPrs.Count -gt 0) {
+        $checksBundle = if ($Script:CiFailureFixtureChecksBundle) {
+            $Script:CiFailureFixtureChecksBundle
+        }
+        else {
+            Get-ReconcileChecksByPr -RepoRoot $RepoRoot -OpenPrs $openPrs
+        }
+        if (-not $DryRun) {
+            $null = Invoke-CiFailureHelper -Mode 'sync-red-period-trackers' -Payload @{
+                storeDir                      = $StoreDir
+                repo                          = $repo
+                openPrs                       = $openPrs
+                ciChecksByPr                  = $checksBundle.ciChecksByPr
+                requiredCheckNamesByPr        = $checksBundle.requiredCheckNamesByPr
+                requiredCheckLookupFailedByPr = $checksBundle.requiredCheckLookupFailedByPr
+            }
         }
     }
 
@@ -581,6 +590,22 @@ function Invoke-CiFailureNotificationTick {
     }
     if ($plan.hard_failure) {
         throw "ci-failure reconcile-plan hard_failure: $($plan.reason)"
+    }
+
+    $legacyRecoveryPending = @($plan.actions | Where-Object { $_.type -eq 'recover_in_flight' }).Count -gt 0
+    if ($checksBundle) {
+        if ($legacyRecoveryPending -and -not $DryRun) {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message 'ci-red watchdog deferred for this tick: legacy delivery recovery owns the channel'
+        }
+        else {
+            if ($DryRun) {
+                Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message 'dry-run would evaluate CI-red fallback through watchdog without side effects'
+            }
+            $watchdogResult = Invoke-CiRedWatchdogTick -RepoRoot $RepoRoot -ProjectId $ProjectId `
+                -WorkerState $WorkerState -ChecksBundle $checksBundle -DryRunMode:$DryRun
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message `
+                "ci-red watchdog tick evaluated=$($watchdogResult.evaluated) sent=$($watchdogResult.sent) deferred=$($watchdogResult.deferred) verified=$($watchdogResult.verified)"
+        }
     }
 
     foreach ($action in @($plan.actions)) {
@@ -610,35 +635,11 @@ function Invoke-CiFailureNotificationTick {
                 -StoreDir $StoreDir -Digest ([string]$action.digest) -Phase $phase
             continue
         }
-        if ($action.type -ne 'evaluate') { continue }
-
-        $episode = $action.episode
-        if ($DryRun) {
-            $dedup = Get-CiFailureDedupPayload -StoreDir $StoreDir
-            $preview = Invoke-CiFailureHelper -Mode 'preflight-revalidate' -Payload @{
-                storeDir       = $StoreDir
-                episode        = $episode
-                workerState    = $WorkerState
-                reactionEvents = @($dedup.reactionEvents)
-                intentTokens   = @($dedup.intentTokens)
-            }
-            $previewAction = if ($preview.action -eq 'send_allowed') { 'send ci-failed ping' } else { "skip ($($preview.action))" }
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "dry-run would evaluate digest=$($action.digest) -> $previewAction"
+        if ($action.type -eq 'evaluate') {
+            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message `
+                "legacy evaluate suppressed digest=$($action.digest): ci-red watchdog owns new fallback delivery"
             continue
         }
-        $claim = Invoke-CiFailureHelper -Mode 'claim-preflight' -Payload @{
-            storeDir    = $StoreDir
-            episode     = $episode
-            claimOwner  = $EnqueueTickId
-        }
-        if ($claim.hard_failure) {
-            Write-CiFailureNotificationLog -Prefix $Script:ReconcileLogPrefix -Message "claim hard_failure digest=$($action.digest) reason=$($claim.reason)"
-            continue
-        }
-        if (-not $claim.claimed) { continue }
-
-        $null = Invoke-CiFailureEpisodeDelivery -Episode $episode -WorkerState $WorkerState `
-            -StoreDir $StoreDir -Digest ([string]$action.digest) -Phase 'full'
     }
 
     return $plan
@@ -646,6 +647,16 @@ function Invoke-CiFailureNotificationTick {
 
 if ($FixturePath) {
     $fixture = Get-Content -LiteralPath $FixturePath -Raw | ConvertFrom-Json
+    if ($fixture.checksBundle) {
+        $Script:CiFailureFixtureChecksBundle = $fixture.checksBundle
+    }
+    elseif ($fixture.ciChecksByPr -or $fixture.requiredCheckNamesByPr -or $fixture.requiredCheckLookupFailedByPr) {
+        $Script:CiFailureFixtureChecksBundle = @{
+            ciChecksByPr                  = $fixture.ciChecksByPr
+            requiredCheckNamesByPr        = $fixture.requiredCheckNamesByPr
+            requiredCheckLookupFailedByPr = $fixture.requiredCheckLookupFailedByPr
+        }
+    }
     $store = Get-CiFailureNotificationStoreDir -ProjectIdOverride $ProjectId
     $tickId = "fixture-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
     $null = Invoke-CiFailureNotificationTick -WorkerState @{
