@@ -98,6 +98,9 @@ function Set-OpkVitestHarnessEnv {
     if (-not $env:OPK_VITEST_PRODUCTION_HOME) {
         $env:OPK_VITEST_PRODUCTION_HOME = if ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
     }
+    if (-not (Test-Path variable:env:OPK_VITEST_PRODUCTION_XDG_STATE_HOME)) {
+        $env:OPK_VITEST_PRODUCTION_XDG_STATE_HOME = if ($env:XDG_STATE_HOME) { $env:XDG_STATE_HOME } else { '' }
+    }
     if (-not $env:OPK_VITEST_PRODUCTION_TMP) {
         $env:OPK_VITEST_PRODUCTION_TMP = if ($env:TMPDIR) { $env:TMPDIR } elseif ($env:TEMP) { $env:TEMP } elseif ($env:TMP) { $env:TMP } else { [System.IO.Path]::GetTempPath() }
     }
@@ -126,6 +129,7 @@ function Set-OpkVitestHarnessEnv {
     $env:OPK_VITEST_HARNESS_ROOT = $RootDir
     $env:OPK_VITEST_HARNESS_INVENTORY = Join-Path (Split-Path -Parent $PSScriptRoot) 'vitest-live-store-inventory.json'
     $env:OPK_TESTMODE_LEASE_ROOT = Join-Path $stateDir 'testmode-fleet-leases'
+    $env:XDG_STATE_HOME = $stateDir
     $env:TMPDIR = $tmpDir
     $env:TEMP = $tmpDir
     $env:TMP = $tmpDir

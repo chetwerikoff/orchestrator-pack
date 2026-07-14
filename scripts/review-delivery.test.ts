@@ -430,6 +430,9 @@ describe('review delivery journal durable path', () => {
       @{ path = $path; underTemp = $path.StartsWith([System.IO.Path]::GetTempPath()) } | ConvertTo-Json -Compress
     `;
     const productionTmp = process.env.OPK_VITEST_PRODUCTION_TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '';
+    const productionHome = process.env.OPK_VITEST_PRODUCTION_HOME ?? process.env.HOME ?? '';
+    const productionXdgStateHome = process.env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME
+      ?? (productionHome ? path.join(productionHome, '.local', 'state') : '');
     const parsed = JSON.parse(runPwsh(script, {
       OPK_VITEST_HARNESS: '',
       OPK_VITEST_HARNESS_ROOT: '',
@@ -438,7 +441,8 @@ describe('review delivery journal durable path', () => {
       AO_WAKE_SUPERVISOR_STATE_DIR: '',
       ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
       AO_SIDE_PROCESS_STATE_DIR: '',
-      HOME: process.env.OPK_VITEST_PRODUCTION_HOME ?? process.env.HOME ?? '',
+      HOME: productionHome,
+      XDG_STATE_HOME: productionXdgStateHome,
       TMPDIR: productionTmp,
       TEMP: productionTmp,
       TMP: productionTmp,

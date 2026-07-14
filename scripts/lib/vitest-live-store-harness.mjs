@@ -295,6 +295,9 @@ function ensurePrivateDirectory(path) {
 
 export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
   env.OPK_VITEST_PRODUCTION_HOME ||= env.HOME || homedir();
+  if (!Object.prototype.hasOwnProperty.call(env, 'OPK_VITEST_PRODUCTION_XDG_STATE_HOME')) {
+    env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME = env.XDG_STATE_HOME || '';
+  }
   env.OPK_VITEST_PRODUCTION_TMP ||= env.TMPDIR || env.TEMP || env.TMP || tmpdir();
   env.OPK_VITEST_PRODUCTION_AO_BASE ||= env.AO_BASE_DIR
     || join(env.OPK_VITEST_PRODUCTION_HOME, '.agent-orchestrator');
@@ -327,6 +330,7 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
     OPK_VITEST_HARNESS: '1',
     OPK_VITEST_HARNESS_ROOT: root,
     OPK_VITEST_HARNESS_INVENTORY: inventoryPath,
+    XDG_STATE_HOME: state,
     TMPDIR: isolatedTmp,
     TEMP: isolatedTmp,
     TMP: isolatedTmp,

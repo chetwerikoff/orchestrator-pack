@@ -58,6 +58,7 @@ function New-OrchestratorWakeSupervisorChildEnvironment {
         AO_SIDE_PROCESS_CHILD_ID     = $ChildId
         GH_FLEET_CACHE_AUDIT         = '1'
         GH_WRAPPER_AUDIT             = '1'
+        PATH                         = (Merge-OrchestratorSideProcessPackScriptsPath)
     }
     if ($Entry.RequiresOrchestratorSession) {
         $childEnv['AO_ORCHESTRATOR_SESSION_ID'] = $OrchestratorSessionId

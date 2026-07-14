@@ -18,6 +18,7 @@ function Get-OpkVitestChildProcessEnvOverrides {
         'TEMP',
         'TMP',
         'XDG_STATE_HOME',
+        'OPK_VITEST_PRODUCTION_XDG_STATE_HOME',
         'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
         'OPK_REAL_PWSH',
         'OPK_REAL_AO',
