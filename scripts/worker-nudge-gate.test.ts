@@ -392,24 +392,28 @@ describe('worker nudge gate (#384)', () => {
         expect(verdict.allowed).toBe(false);
         expect(findForbiddenAutonomousWorkerSendInvocations(['ao send opk-worker ping'])).toHaveLength(1);
     });
-    it('preflight fails closed when raw send capability is missing from live inventory', () => {
+    it('preflight fails closed when the daemon session capability is missing', () => {
         const result = evaluatePreflight({
             loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
             atomicClaimPresent: true,
             liveCapabilities: [
-                { id: 'invoke-gated-worker-nudge', classification: 'gated' },
+                { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+                { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+                { id: 'journaled-worker-send-gated', classification: 'gated' },
             ],
         });
         expect(result.ok).toBe(false);
-        expect(result.reason).toBe('ao-worker-send-raw_missing');
+        expect(result.reason).toBe('autonomous-session-id_missing');
     });
-    it('preflight passes with gated inventory', () => {
+    it('preflight passes with the AO 0.10.2 in-process capability inventory', () => {
         const result = evaluatePreflight({
             loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
             atomicClaimPresent: true,
             liveCapabilities: [
-                { id: 'invoke-gated-worker-nudge', classification: 'gated' },
-                { id: 'ao-worker-send-raw', classification: 'unavailable' },
+                { id: 'autonomous-session-id', classification: 'gated' },
+                { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+                { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+                { id: 'journaled-worker-send-gated', classification: 'gated' },
             ],
         });
         expect(result.ok).toBe(true);

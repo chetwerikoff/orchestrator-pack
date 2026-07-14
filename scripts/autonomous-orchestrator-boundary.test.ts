@@ -1,13 +1,51 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync, cpSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
-import { AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION, TURN_VISIBLE_REAL_BINARY_ENV_VARS, evaluateAutonomousGitBoundary, evaluateAutonomousSpawnBoundary, evaluateBoundaryCapabilityPreflight, gitArgvDefinesAlias, gitSubcommandFromArgv, hasSanctionedGitParentChain, isMutatingGitArgv, isSanctionedGitParentCommandLine, isSpawnAoArgv, loadAutonomousOrchestratorBoundaryInventory, validateBoundaryCapabilityInventory } from '../docs/autonomous-orchestrator-boundary.mjs';
+import { AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION, evaluateAutonomousGitBoundary, evaluateAutonomousSpawnBoundary, evaluateBoundaryCapabilityPreflight, gitArgvDefinesAlias, gitSubcommandFromArgv, hasSanctionedGitParentChain, isMutatingGitArgv, isSanctionedGitParentCommandLine, isSpawnAoArgv, loadAutonomousOrchestratorBoundaryInventory, validateBoundaryCapabilityInventory } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { checkProtectedRuntimeDiff, checkProtectedRuntimeForRepo } from '../docs/orchestrator-message-registry.mjs';
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
+const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
+const reviewStartGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1');
+const workerNudgeGateLibPath = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
+
+function evaluateSessionRoleCell(sessionId: string | null) {
+    const literal = sessionId === null ? '$null' : psString(sessionId);
+    const output = runPwsh(`
+      $prior = $env:AO_SESSION_ID
+      try {
+        if (${literal} -eq $null) { Remove-Item Env:AO_SESSION_ID -ErrorAction SilentlyContinue }
+        else { $env:AO_SESSION_ID = ${literal} }
+        . ${psString(spawnGateLibPath)}
+        . ${psString(reviewStartGateLibPath)}
+        . ${psString(workerNudgeGateLibPath)}
+        . ${psString(boundaryLibPath)}
+        $review = Test-AutonomousRawReviewRunDenied -Argv @('review','run')
+        $worker = Test-AutonomousRawWorkerSendDenied -Argv @('send','worker-1')
+        $git = Test-AutonomousGitDenied -Argv @('branch','-m','blocked')
+        [pscustomobject]@{
+          spawn = [bool](Test-OrchestratorAutonomousSurfaceActiveForSpawnGate)
+          review = [bool](Test-OrchestratorAutonomousSurfaceActive)
+          boundary = [bool](Test-OrchestratorAutonomousSurfaceActiveForBoundary)
+          reviewDenied = [bool]$review.denied
+          reviewReason = [string]$review.reason
+          workerDenied = [bool]$worker.denied
+          workerReason = [string]$worker.reason
+          gitDenied = [bool]$git.denied
+          gitReason = [string]$git.reason
+        } | ConvertTo-Json -Compress
+      }
+      finally {
+        if ($prior) { $env:AO_SESSION_ID = $prior }
+        else { Remove-Item Env:AO_SESSION_ID -ErrorAction SilentlyContinue }
+      }
+      exit 0
+    `);
+    return JSON.parse(output.trim());
+}
 function initCoordinatedIssue324Fixture() {
     const dir = mkdtempSync(path.join(tmpdir(), 'coord-path-324-'));
     spawnSync('git', ['init', '-b', 'main'], { cwd: dir, encoding: 'utf8' });
@@ -70,10 +108,66 @@ function withoutGithubActionsEnv<T>(run: () => T): T {
     }
 }
 describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120000 }, () => {
-    it('exports stable boundary markers', () => {
+    it('exports the stable boundary marker', () => {
         expect(AUTONOMOUS_ORCHESTRATOR_BOUNDARY_VERSION).toBe('autonomous-orchestrator-boundary/v1');
-        expect(TURN_VISIBLE_REAL_BINARY_ENV_VARS).toContain('AO_REAL_BINARY');
-        expect(TURN_VISIBLE_REAL_BINARY_ENV_VARS).toContain('GIT_REAL_BINARY');
+    });
+    it.each([
+        ['orchestrator', 'orchestrator-session'],
+        ['worker', 'worker-session'],
+    ])('%s session activates all in-process autonomous predicates', (_role, sessionId) => {
+        const result = evaluateSessionRoleCell(sessionId);
+        expect(result.spawn).toBe(true);
+        expect(result.review).toBe(true);
+        expect(result.boundary).toBe(true);
+        expect(result.reviewDenied).toBe(true);
+        expect(result.reviewReason).toBe('autonomous_raw_review_run_denied');
+        expect(result.workerDenied).toBe(true);
+        expect(result.workerReason).toBe('autonomous_raw_worker_send_denied');
+        expect(result.gitDenied).toBe(true);
+        expect(result.gitReason).toBe('autonomous_mutating_git_denied');
+    });
+    it.each([
+        ['review', null],
+        ['operator manual shell', null],
+        ['CI', null],
+    ])('%s without AO_SESSION_ID remains outside the in-process gate', (_role, sessionId) => {
+        const result = evaluateSessionRoleCell(sessionId);
+        expect(result.spawn).toBe(false);
+        expect(result.review).toBe(false);
+        expect(result.boundary).toBe(false);
+        expect(result.reviewDenied).toBe(false);
+        expect(result.reviewReason).toBe('manual_surface');
+        expect(result.workerDenied).toBe(false);
+        expect(result.workerReason).toBe('manual_surface');
+        expect(result.gitDenied).toBe(false);
+        expect(result.gitReason).toBe('manual_surface');
+    });
+    it('uses AO_SESSION_ID presence rather than a magic value', () => {
+        const result = evaluateSessionRoleCell('worker-any-nonempty-value');
+        expect(result.spawn).toBe(true);
+        expect(result.review).toBe(true);
+        expect(result.boundary).toBe(true);
+    });
+    it('retains the claimed-review bypass reason', () => {
+        const output = runPwsh(`
+          . ${psString(reviewStartGateLibPath)}
+          $env:AO_SESSION_ID = 'orchestrator-session'
+          $env:AO_CLAIMED_REVIEW_RUN_BYPASS = '1'
+          (Test-AutonomousRawReviewRunDenied -Argv @('review','run')) | ConvertTo-Json -Compress
+        `);
+        const result = JSON.parse(output.trim());
+        expect(result.denied).toBe(false);
+        expect(result.reason).toBe('claimed_bypass');
+    });
+    it('retires direct-command boundary wrappers', () => {
+        for (const retired of [
+            'scripts/ao',
+            'scripts/git',
+            'scripts/ao-autonomous-guard.ps1',
+            'scripts/git-autonomous-guard.ps1',
+        ]) {
+            expect(existsSync(path.join(repoRoot, retired))).toBe(false);
+        }
     });
     it('policy-aware spawn boundary allows default-on autonomous spawn', () => {
         for (const commandLine of [
@@ -182,80 +276,14 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120000 
             liveCapabilities: inventory.capabilities,
         }).ok).toBe(true);
     });
-    it('example yaml documents out-of-band real binaries and git shim PATH', () => {
+    it('example yaml documents AO 0.10.2 in-process session gates', () => {
         const yaml = readFileSync(path.join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
         expect(yaml).not.toMatch(/^\s*AO_REAL_BINARY:/m);
         expect(yaml).not.toMatch(/^\s*GIT_REAL_BINARY:/m);
-        expect(yaml).toMatch(/autonomous-real-binaries\.json/);
-        expect(yaml).toMatch(/scripts\/ao \+ scripts\/git/);
+        expect(yaml).not.toMatch(/autonomous-real-binaries\.json/);
+        expect(yaml).not.toMatch(/scripts\/ao \+ scripts\/git/);
         expect(yaml).toMatch(/AO_SESSION_ID/);
-    });
-    describe('broken explicit ao pointer policy (Issue #495)', { timeout: 120000 }, () => {
-        const BROKEN_POINTER_RE = /autonomous real-binary config: explicit ao pointer missing or not executable:/;
-        const INVALID_JSON_RE = /autonomous real-binary config: invalid JSON/;
-        function spawnAoFixtureBash(argv: string[], cwd: string, extraEnv: Record<string, string | undefined>) {
-            return spawnSync('bash', argv, {
-                cwd,
-                encoding: 'utf8',
-                env: {
-                    ...stripInterposerBashEnvBlockers(process.env),
-                    ...extraEnv,
-                },
-            });
-        }
-        function withBrokenAoPointerFixture(run: (ctx: {
-            packRoot: string;
-            brokenAo: string;
-            fallbackAo: string;
-            pathBin: string;
-            configPath: string;
-        }) => void) {
-            const packRoot = mkdtempSync(path.join(tmpdir(), 'autonomous-broken-ao-'));
-            const brokenAo = path.join(packRoot, 'deleted-ao-stub.sh');
-            const pathBin = path.join(packRoot, 'bin');
-            const fallbackAo = path.join(pathBin, 'ao');
-            const configPath = path.join(packRoot, '.ao/autonomous-real-binaries.json');
-            try {
-                mkdirSync(path.join(packRoot, '.ao'), { recursive: true });
-                mkdirSync(pathBin, { recursive: true });
-                writeFileSync(fallbackAo, `#!/usr/bin/env bash
-case "\${1:-}" in
-  status) printf '{"data":[]}\n'; exit 0 ;;
-  help) printf 'fallback-ao-help\n'; exit 0 ;;
-esac
-exit 0
-`);
-                chmodSync(fallbackAo, 0o755);
-                mkdirSync(path.join(packRoot, 'scripts'), { recursive: true });
-                for (const name of ['ao', '_resolve-pwsh.sh', 'ao-autonomous-guard.ps1']) {
-                    cpSync(path.join(repoRoot, 'scripts', name), path.join(packRoot, 'scripts', name));
-                    chmodSync(path.join(packRoot, 'scripts', name), 0o755);
-                }
-                cpSync(path.join(repoRoot, 'scripts/lib'), path.join(packRoot, 'scripts/lib'), { recursive: true });
-                writeFileSync(configPath, `${JSON.stringify({ ao: brokenAo, git: path.join(repoRoot, 'scripts/git-real-binary'), gitSystemBinary: '/usr/bin/git' }, null, 2)}\n`);
-                run({ packRoot, brokenAo, fallbackAo, pathBin, configPath });
-            }
-            finally {
-                rmSync(packRoot, { recursive: true, force: true });
-            }
-        }
-    });
-    it('resolves pack root from boundary lib without explicit PackRoot', () => {
-        const output = runPwsh(`
-      . ${psString(boundaryLibPath)}
-      $packRoot = Get-PackRootFromBoundaryLib
-      $scripts = Join-Path $packRoot 'scripts'
-      $resolved = Resolve-AutonomousRealBinaryPath -BinaryName 'git'
-      [pscustomobject]@{
-        packRootEndsScripts = [bool]($packRoot -notlike '*\\scripts' -and $packRoot -notlike '*/scripts')
-        scriptsDirExists = [bool](Test-Path -LiteralPath $scripts)
-        resolvedNotScriptsScripts = [bool]($resolved -notlike '*scripts/scripts*')
-      } | ConvertTo-Json -Compress
-    `);
-        const parsed = JSON.parse(output);
-        expect(parsed.packRootEndsScripts).toBe(true);
-        expect(parsed.scriptsDirExists).toBe(true);
-        expect(parsed.resolvedNotScriptsScripts).toBe(true);
+        expect(yaml).toMatch(/in-process gates/i);
     });
     it('allows coordinated agent-orchestrator.yaml.example edits for issue 324', () => {
         const manifest = JSON.parse(readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'));

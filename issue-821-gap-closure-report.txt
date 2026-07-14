@@ -1,0 +1,297 @@
+
+===== transform (exit 0) =====
+Closed the remaining Issue #821 test and inventory gaps.
+
+===== write raw-child baseline (exit 0) =====
+
+> lint:foundation
+> node --experimental-strip-types scripts/toolchain/check-ts-policy.ts --write-baseline
+
+Wrote raw child-process baseline.
+
+===== write pwsh-child baseline (exit 0) =====
+
+> check:pwsh-test-growth
+> node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts --write-baseline
+
+Wrote PowerShell child-test baseline.
+
+===== affected vitest matrix (exit 0) =====
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/orchestrator-pack/orchestrator-pack[39m
+
+ [32m✓[39m scripts/worker-nudge-gate.test.ts [2m([22m[2m89 tests[22m[2m)[22m[33m 130237[2mms[22m[39m
+     [33m[2m✓[22m[39m exports stable gate capability markers [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m classifies incident surfaces into review-findings [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m maps unknown phrasing to unknown-worker-nudge [33m 830[2mms[22m[39m
+     [33m[2m✓[22m[39m allows materially new message content for an already-served tuple with escalation [33m 838[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes invalid explicit intent hints to unknown-worker-nudge via classifier [33m 912[2mms[22m[39m
+     [33m[2m✓[22m[39m derives same cycle keys for review-findings from two callers [33m 903[2mms[22m[39m
+     [33m[2m✓[22m[39m canonicalizes WSL and Windows store path strings to one id [33m 954[2mms[22m[39m
+     [33m[2m✓[22m[39m script-recorded tuple suppresses LLM-turn nudge for same tuple [33m 818[2mms[22m[39m
+     [33m[2m✓[22m[39m classifies review-finding-delivery-confirm as review-findings-redelivery [33m 829[2mms[22m[39m
+     [33m[2m✓[22m[39m derives per-attempt redelivery cycle keys distinct from first findings-delivery send [33m 834[2mms[22m[39m
+     [33m[2m✓[22m[39m allows redelivery claim after first findings-delivery tuple is terminal SENT [33m 2945[2mms[22m[39m
+     [33m[2m✓[22m[39m does not suppress distinct intent-class in same cycle [33m 839[2mms[22m[39m
+     [33m[2m✓[22m[39m reverse symmetry: LLM-recorded tuple suppresses script path [33m 902[2mms[22m[39m
+     [33m[2m✓[22m[39m maps unclassified verifiable legacy records to review-findings [33m 825[2mms[22m[39m
+     [33m[2m✓[22m[39m verifiable legacy #332 record suppresses equivalent nudge; unverifiable does not [33m 981[2mms[22m[39m
+     [33m[2m✓[22m[39m allows gate retry when only FAILED_DEFINITIVE terminal claim exists [33m 869[2mms[22m[39m
+     [33m[2m✓[22m[39m still suppresses when SENT terminal exists even if FAILED_DEFINITIVE is listed first [33m 822[2mms[22m[39m
+     [33m[2m✓[22m[39m FAILED_DEFINITIVE finalize is retryable; UNCERTAIN is not [33m 826[2mms[22m[39m
+     [33m[2m✓[22m[39m fail-closed when state is unreadable [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m escalates claim-store failures after bounded unresolved count [33m 828[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects forged journaled internal capability tokens [33m 899[2mms[22m[39m
+     [33m[2m✓[22m[39m structured audit requires binding fields [33m 868[2mms[22m[39m
+     [33m[2m✓[22m[39m denies raw worker send at autonomous boundary [33m 828[2mms[22m[39m
+     [33m[2m✓[22m[39m preflight fails closed when the daemon session capability is missing [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m preflight passes with the AO 0.10.2 in-process capability inventory [33m 820[2mms[22m[39m
+     [33m[2m✓[22m[39m adoption gate degrades when gated command missing [33m 830[2mms[22m[39m
+     [33m[2m✓[22m[39m never leaves two active claim records for one tuple under overlap [33m 3422[2mms[22m[39m
+     [33m[2m✓[22m[39m concurrent same-tuple resolves to one winner [33m 2762[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects journaled send without claim token [33m 1952[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects ungated journaled send on autonomous surface [33m 1989[2mms[22m[39m
+     [33m[2m✓[22m[39m autonomous guard allows registered journaled transport internal capability [33m 3095[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects forged AO_JOURNALED_SEND_INTERNAL bypass [33m 2063[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects capability registration outside journaled transport [33m 1969[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects capability registration from a forged journaled-worker-send script path [33m 1895[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves trusted journaled-worker-send path to the pack script [33m 1961[2mms[22m[39m
+     [33m[2m✓[22m[39m Split-ProcessCommandLineTokens return-shape: Get-ScriptPathsFromProcessCommandLine finds -File path [33m 1977[2mms[22m[39m
+       [33m[2m✓[22m[39m forged unregistered internal capability token is internal capability deny exit 93 [33m 1981[2mms[22m[39m
+       [33m[2m✓[22m[39m replayed internal capability nonce is internal capability deny exit 93 [33m 2007[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects well-formed but unregistered journaled internal capability tokens [33m 1980[2mms[22m[39m
+     [33m[2m✓[22m[39m persists messageContentHash on active claim through terminal finalize [33m 2717[2mms[22m[39m
+     [33m[2m✓[22m[39m reacquires after terminal FAILED_DEFINITIVE claim [33m 2586[2mms[22m[39m
+     [33m[2m✓[22m[39m does not reacquire after terminal SENT claim [33m 2711[2mms[22m[39m
+     [33m[2m✓[22m[39m persists SEND_ATTEMPTED on gated claim before transport [33m 2380[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects forged claim tokens bound to writable paths outside the canonical store [33m 3484[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects replayed claim tokens after send begins [33m 4104[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects claim token when send session does not match token session [33m 3183[2mms[22m[39m
+     [33m[2m✓[22m[39m releases active claim when message hash persistence fails [33m 2690[2mms[22m[39m
+     [33m[2m✓[22m[39m invoke-gated-worker-nudge releases claim on message hash persist failure [33m 825[2mms[22m[39m
+     [33m[2m✓[22m[39m finalizes gated claim when transport preflight fails [33m 5237[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves head owner when multiple PR sessions exist [33m 831[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects supplied session when it does not own head [33m 945[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed when multiple issue-only workers match the same PR without head owner [33m 872[2mms[22m[39m
+     [33m[2m✓[22m[39m matches PR ownership fallback only when session pr URL equals requested PR [33m 1742[2mms[22m[39m
+     [33m[2m✓[22m[39m recovers CLAIMED records immediately after lease expiry [33m 2733[2mms[22m[39m
+   [33m[2m✓[22m[39m uses PS 5.1-compatible claim overwrite without File.Move(source, dest, overwrite) [33m 835[2mms[22m[39m
+   [33m[2m✓[22m[39m retires invoke-gated-worker-nudge ci-failure arm (Issue #645) [33m 905[2mms[22m[39m
+   [33m[2m✓[22m[39m resolves ci-failure headSha from episodeKey when headSha is omitted [33m 834[2mms[22m[39m
+   [33m[2m✓[22m[39m resolves openPrs headSha before ci-failure tuple derivation [33m 821[2mms[22m[39m
+   [33m[2m✓[22m[39m fail-closes ci-failure gate when headSha cannot be resolved from episodeKey [33m 874[2mms[22m[39m
+   [33m[2m✓[22m[39m resolves worker target before deriving fallback cycles [33m 906[2mms[22m[39m
+   [33m[2m✓[22m[39m keeps PR-claim target resolution fail-closed on the gated invoke path [33m 901[2mms[22m[39m
+   [33m[2m✓[22m[39m derives liveness cycle keys after worker target is populated [33m 826[2mms[22m[39m
+   [33m[2m✓[22m[39m preserves live mutex after stale threshold when owner PID is alive [33m 1757[2mms[22m[39m
+   [33m[2m✓[22m[39m recovers stale issue-ownership legacy lock files and mutex dirs [33m 1962[2mms[22m[39m
+   [33m[2m✓[22m[39m uses claim mutex for issue-owner bootstrap locking [33m 839[2mms[22m[39m
+   [33m[2m✓[22m[39m routes gated transport to PR-resolved owner session [33m 827[2mms[22m[39m
+   [33m[2m✓[22m[39m treats journaled journal-update failure as uncertain claim outcome [33m 847[2mms[22m[39m
+   [33m[2m✓[22m[39m treats ci-green journaled journal-update failure as uncertain claim outcome [33m 837[2mms[22m[39m
+   [33m[2m✓[22m[39m resolves reconcile script tuples from PR ownership claim [33m 923[2mms[22m[39m
+   [33m[2m✓[22m[39m does not register dispatch journal twice after journaled CI-green send [33m 836[2mms[22m[39m
+   [33m[2m✓[22m[39m persists CI-green message hashes before journaled send [33m 824[2mms[22m[39m
+   [33m[2m✓[22m[39m passes GatedNudge marker from ci-green wake journaled send [33m 835[2mms[22m[39m
+     [33m[2m✓[22m[39m loads capture-backed fixture and collapses duplicate review-findings nudges [33m 838[2mms[22m[39m
+     [33m[2m✓[22m[39m escalates persistent claim-store failures from invoke path [33m 2802[2mms[22m[39m
+     [33m[2m✓[22m[39m infers resume lineage from same worktree plus restoredAt signal [33m 821[2mms[22m[39m
+     [33m[2m✓[22m[39m does not infer resume lineage for same-worktree replacement without resume signal [33m 822[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps generation only when resume lineage is explicitly signaled [33m 895[2mms[22m[39m
+     [33m[2m✓[22m[39m bumps generation for replacement on the same worktree [33m 981[2mms[22m[39m
+     [33m[2m✓[22m[39m bumps generation for replacement claim-pr ownership [33m 876[2mms[22m[39m
+     [33m[2m✓[22m[39m does not suppress replacement generation after prior tuple was served [33m 824[2mms[22m[39m
+     [33m[2m✓[22m[39m passes Test-WorkerNudgeGateWiring for every sender surface [33m 1698[2mms[22m[39m
+     [33m[2m✓[22m[39m review-send-reconcile is REMOVED on AO 0.10 (auto-delivery) [33m 823[2mms[22m[39m
+     [33m[2m✓[22m[39m converges already-served ci-failure claim skips for SENT and UNCERTAIN phases [33m 914[2mms[22m[39m
+     [33m[2m✓[22m[39m reuses pre-registered delivery id for ci-failure journaled sends [33m 859[2mms[22m[39m
+     [33m[2m✓[22m[39m binds claim tokens to the selected project namespace [33m 3174[2mms[22m[39m
+     [33m[2m✓[22m[39m binds claim tokens to the canonical claim store [33m 940[2mms[22m[39m
+     [33m[2m✓[22m[39m requires claim gating on all worker-observable senders [33m 860[2mms[22m[39m
+     [33m[2m✓[22m[39m maps equivalent AO_WORKER_NUDGE_CLAIM_DIR forms to one physical namespace [33m 2508[2mms[22m[39m
+     [33m[2m✓[22m[39m clamps AO_WORKER_NUDGE_CLAIM_LEASE_MS above report-stale bound [33m 1783[2mms[22m[39m
+ [32m✓[39m scripts/autonomous-orchestrator-boundary.test.ts [2m([22m[2m37 tests[22m[2m)[22m[33m 67683[2mms[22m[39m
+     [33m[2m✓[22m[39m exports the stable boundary marker [33m 893[2mms[22m[39m
+     [33m[2m✓[22m[39m orchestrator session activates all in-process autonomous predicates [33m 2318[2mms[22m[39m
+     [33m[2m✓[22m[39m worker session activates all in-process autonomous predicates [33m 2449[2mms[22m[39m
+     [33m[2m✓[22m[39m review without AO_SESSION_ID remains outside the in-process gate [33m 2102[2mms[22m[39m
+     [33m[2m✓[22m[39m operator manual shell without AO_SESSION_ID remains outside the in-process gate [33m 2209[2mms[22m[39m
+     [33m[2m✓[22m[39m CI without AO_SESSION_ID remains outside the in-process gate [33m 2127[2mms[22m[39m
+     [33m[2m✓[22m[39m uses AO_SESSION_ID presence rather than a magic value [33m 2521[2mms[22m[39m
+     [33m[2m✓[22m[39m retains the claimed-review bypass reason [33m 1920[2mms[22m[39m
+     [33m[2m✓[22m[39m retires direct-command boundary wrappers [33m 834[2mms[22m[39m
+     [33m[2m✓[22m[39m policy-aware spawn boundary allows default-on autonomous spawn [33m 835[2mms[22m[39m
+     [33m[2m✓[22m[39m classifies mutating vs read-only git argv [33m 917[2mms[22m[39m
+     [33m[2m✓[22m[39m denies ambiguous provenance even with spoofed bypass env on direct git [33m 875[2mms[22m[39m
+     [33m[2m✓[22m[39m allows sanctioned preflight parent for mutating git [33m 835[2mms[22m[39m
+     [33m[2m✓[22m[39m validates capability inventory artifact [33m 827[2mms[22m[39m
+     [33m[2m✓[22m[39m example yaml documents AO 0.10.2 in-process session gates [33m 834[2mms[22m[39m
+     [33m[2m✓[22m[39m allows coordinated agent-orchestrator.yaml.example edits for issue 324 [33m 833[2mms[22m[39m
+     [33m[2m✓[22m[39m does not self-authorize issue-324 from yaml.example edits without explicit link [33m 1046[2mms[22m[39m
+     [33m[2m✓[22m[39m allows issue-324 yaml.example edits when ORCHESTRATOR_MESSAGE_LINKED_ISSUES is set [33m 945[2mms[22m[39m
+     [33m[2m✓[22m[39m allows issue-324 yaml.example edits from committed declaration snapshot without env link [33m 967[2mms[22m[39m
+     [33m[2m✓[22m[39m does not self-authorize issue-324 from fake declaration snapshots in the gated diff [33m 916[2mms[22m[39m
+     [33m[2m✓[22m[39m worktree-path-hardening: allows a new workspace under the canonical prefix [33m 1979[2mms[22m[39m
+     [33m[2m✓[22m[39m worktree-path-hardening: denies traversal escape attempts [33m 1990[2mms[22m[39m
+     [33m[2m✓[22m[39m worktree-path-hardening: denies symlink escape attempts [33m 1983[2mms[22m[39m
+     [33m[2m✓[22m[39m worktree-path-hardening: denies projectId namespace mismatch [33m 2056[2mms[22m[39m
+     [33m[2m✓[22m[39m worktree-path-hardening: denies pre-existing workspace directories [33m 1888[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: allows live owned claim with explicit commit and detach [33m 2800[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies when claim is missing [33m 1934[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies active claim with dead holder [33m 4421[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies wrong head sha [33m 2624[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies implicit commit worktree add [33m 2475[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies env bypass without live claim [33m 1941[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies replay after claim is consumed by first worktree allow [33m 4594[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies non-SHA commit refs without throwing [33m 2308[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-bound-worktree: denies stale claim when holder PID is reused with wrong startTimeTicks [33m 2788[2mms[22m[39m
+     [33m[2m✓[22m[39m documents cooperative residual: concurrent live claim may allow armed-manual worktree add [33m 2894[2mms[22m[39m
+     [33m[2m✓[22m[39m worktree list recovery boundary: allows list and denies mutating worktree without recovery parent [33m 896[2mms[22m[39m
+     [33m[2m✓[22m[39m sanctioned worker recovery parent: allows claim-bound remove and denies spoofed parent [33m 902[2mms[22m[39m
+ [32m✓[39m scripts/review-start-envelope-external-io.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 66482[2mms[22m[39m
+     [33m[2m✓[22m[39m graphql-quota drill: review-start reconcile surfaces are inventory-classified (Issue #549) [33m 926[2mms[22m[39m
+     [33m[2m✓[22m[39m infra-stall-not-envelope-exhausted [33m 924[2mms[22m[39m
+     [33m[2m✓[22m[39m pr510-shaped-pass-and-reproduce [33m 3790[2mms[22m[39m
+     [33m[2m✓[22m[39m reaper-pause-parity [33m 2256[2mms[22m[39m
+     [33m[2m✓[22m[39m not-ready-and-auth-not-classified-as-infra [33m 835[2mms[22m[39m
+     [33m[2m✓[22m[39m monotonic-attempt-ceiling-terminalizes [33m 917[2mms[22m[39m
+     [33m[2m✓[22m[39m hung-gh-and-claim-loss-cleanup [33m 4474[2mms[22m[39m
+     [33m[2m✓[22m[39m ownership-loss-cleanup-does-not-kill-new-owner-supervised-gh [33m 3550[2mms[22m[39m
+     [33m[2m✓[22m[39m supervised-gh-kills-child-immediately-on-post-start-ownership-loss [33m 4799[2mms[22m[39m
+     [33m[2m✓[22m[39m kills-wrapper-spawned-child-on-supervised-gh-timeout [33m 3055[2mms[22m[39m
+     [33m[2m✓[22m[39m drains-redirected-gh-output-before-waiting-for-exit [33m 3432[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves-first-attempt-monotonic-ms-across-recovered-claims [33m 2503[2mms[22m[39m
+     [33m[2m✓[22m[39m readiness-envelope-uses-per-retry-start-after-terminal-reacquire [33m 907[2mms[22m[39m
+     [33m[2m✓[22m[39m supervised-gh-deadline-honors-configured-attempt-ceiling [33m 12583[2mms[22m[39m
+     [33m[2m✓[22m[39m corrupt-run-evidence-blocks-before-attempt-ceiling [33m 900[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves-first-attempt-monotonic-ms-across-aborted-by-recheck-retry [33m 2331[2mms[22m[39m
+     [33m[2m✓[22m[39m hold-semantics-481-preserved [33m 17285[2mms[22m[39m
+     [33m[2m✓[22m[39m advances independently of wall clock [33m 1013[2mms[22m[39m
+ [32m✓[39m scripts/autonomous-spawn-worktree-gate.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 30243[2mms[22m[39m
+     [33m[2m✓[22m[39m spawn policy allow reaches sanctioned worker-worktree mutation [33m 2677[2mms[22m[39m
+     [33m[2m✓[22m[39m denies worker worktree add without sanctioned spawn provenance [33m 2020[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-pr spawn mints grant and allows bound worktree add [33m 3767[2mms[22m[39m
+     [33m[2m✓[22m[39m grant consume is single-use after terminal finalize [33m 3506[2mms[22m[39m
+     [33m[2m✓[22m[39m concurrent consume: only one parallel git child wins the same grant [33m 4160[2mms[22m[39m
+     [33m[2m✓[22m[39m serializes concurrent mint for the same spawn target [33m 1842[2mms[22m[39m
+     [33m[2m✓[22m[39m path hardening denies escape outside worktrees prefix [33m 845[2mms[22m[39m
+     [33m[2m✓[22m[39m mjs git boundary honors spawn grant allow flag [33m 973[2mms[22m[39m
+     [33m[2m✓[22m[39m parses spawn worktree argv shapes [33m 837[2mms[22m[39m
+     [33m[2m✓[22m[39m does not authorize prompt text as spawn worktree basename [33m 905[2mms[22m[39m
+     [33m[2m✓[22m[39m authorizes AO session basename when spawn target differs from allocated session id (#472) [33m 907[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-pr grant allows AO session basename without minting the session id (#472) [33m 855[2mms[22m[39m
+     [33m[2m✓[22m[39m denies non-AO worktree basenames with drift-visible diagnostics (#472) [33m 913[2mms[22m[39m
+     [33m[2m✓[22m[39m denies prompt-only spawn-new without derivable issue target (#652) [33m 2504[2mms[22m[39m
+     [33m[2m✓[22m[39m denies unexpected branch flags on spawn grant consume [33m 831[2mms[22m[39m
+     [33m[2m✓[22m[39m denies source-selecting git globals on spawn grant consume [33m 830[2mms[22m[39m
+     [33m[2m✓[22m[39m denies spawn grant consume when repository root mismatches minted binding [33m 966[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery spawn uses pack root cwd so grant roots align [33m 901[2mms[22m[39m
+ [32m✓[39m scripts/spawn-worktree-grant-finalization.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 21094[2mms[22m[39m
+     [33m[2m✓[22m[39m grant-consumed-before-durable-worker: reserve allows bounded same-lineage retry before finalize [33m 3077[2mms[22m[39m
+     [33m[2m✓[22m[39m commit-after-real-add: terminal consumed is written only after durable git worktree add [33m 4365[2mms[22m[39m
+     [33m[2m✓[22m[39m reserved durable idempotent retry skips git mutation and commits finalize [33m 3692[2mms[22m[39m
+     [33m[2m✓[22m[39m validates same-lineage before reserved durable idempotent allow [33m 912[2mms[22m[39m
+     [33m[2m✓[22m[39m replay-deny-preserved: consumed grant from another path still denies before mutation [33m 836[2mms[22m[39m
+     [33m[2m✓[22m[39m manual spawn success is not autonomous closure evidence [33m 2023[2mms[22m[39m
+     [33m[2m✓[22m[39m diagnostics separate auth from grant finalization when GitHub reads succeeded [33m 915[2mms[22m[39m
+     [33m[2m✓[22m[39m bounded retry stops after max finalization attempts [33m 907[2mms[22m[39m
+     [33m[2m✓[22m[39m exhausted reserved grant still allows durable idempotent finalize recovery [33m 845[2mms[22m[39m
+     [33m[2m✓[22m[39m consumed grant requires durable worktree for same-path idempotent replay [33m 857[2mms[22m[39m
+     [33m[2m✓[22m[39m reserved plain preexisting path is not idempotent without durable worktree [33m 916[2mms[22m[39m
+     [33m[2m✓[22m[39m evaluatePathDurable rejects foreign git repository at grant path [33m 917[2mms[22m[39m
+     [33m[2m✓[22m[39m evaluateFinalize rejects commit when worktree is not durable [33m 830[2mms[22m[39m
+ [32m✓[39m scripts/orchestrator-claimed-review-run.test.ts [2m([22m[2m26 tests[22m[2m)[22m[33m 24350[2mms[22m[39m
+     [33m[2m✓[22m[39m exports stable gate capability markers [33m 841[2mms[22m[39m
+     [33m[2m✓[22m[39m positive-outcome: uncovered ready head launches through gate evaluation [33m 863[2mms[22m[39m
+     [33m[2m✓[22m[39m positive-outcome: clean covered head aborts with capture-backed shape [33m 1015[2mms[22m[39m
+     [33m[2m✓[22m[39m mixed-row fixture ignores stale superseded-head clean row [33m 889[2mms[22m[39m
+     [33m[2m✓[22m[39m failed findingCount 0 is failed_or_cancelled not clean [33m 838[2mms[22m[39m
+     [33m[2m✓[22m[39m retry-eligible failed run launches through full turn gate recheck [33m 844[2mms[22m[39m
+     [33m[2m✓[22m[39m latest exhausted failed row blocks orchestrator-turn retry launches [33m 828[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='none' claim-free launch=true [33m 827[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='running' claim-free launch=false [33m 955[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='clean' claim-free launch=false [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='needs_triage' claim-free launch=false [33m 832[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='waiting_update' claim-free launch=false [33m 842[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='failed' claim-free launch=true [33m 837[2mms[22m[39m
+     [33m[2m✓[22m[39m scenario matrix status='cancelled' claim-free launch=true [33m 928[2mms[22m[39m
+     [33m[2m✓[22m[39m claim held by other starter aborts deterministically [33m 907[2mms[22m[39m
+     [33m[2m✓[22m[39m denies autonomous raw review run invocations across command spellings [33m 835[2mms[22m[39m
+     [33m[2m✓[22m[39m preflight fails closed on stale gate marker or missing atomic claim capability [33m 828[2mms[22m[39m
+     [33m[2m✓[22m[39m stale event head keys on authoritative current head [33m 841[2mms[22m[39m
+     [33m[2m✓[22m[39m unknown run-list row is fail-closed [33m 908[2mms[22m[39m
+     [33m[2m✓[22m[39m coalesces denial audit records and redacts secrets [33m 975[2mms[22m[39m
+     [33m[2m✓[22m[39m validates capability inventory artifact [33m 910[2mms[22m[39m
+     [33m[2m✓[22m[39m defines Get-ReconcileChecksByPr exactly once in scripts/lib [33m 843[2mms[22m[39m
+     [33m[2m✓[22m[39m shared reconcile helper is loadable without review-trigger-reconcile.ps1 [33m 1667[2mms[22m[39m
+     [33m[2m✓[22m[39m returns an empty bundle when OpenPrs is an empty collection [33m 1734[2mms[22m[39m
+     [33m[2m✓[22m[39m static regression guard: snapshot helper avoids full open-PR list for known PR [33m 901[2mms[22m[39m
+     [33m[2m✓[22m[39m post-claim recheck uses scoped pr view transport, not full open-PR list [33m 825[2mms[22m[39m
+ [32m✓[39m scripts/autonomous-spawn-policy.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 20877[2mms[22m[39m
+     [33m[2m✓[22m[39m spawn policy: explicit default-on and fail-closed on load error [33m 823[2mms[22m[39m
+     [33m[2m✓[22m[39m spawn policy matrix: independent toggles [33m 822[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-pr classification: robust argv parsing [33m 963[2mms[22m[39m
+   [33m[2m✓[22m[39m classifies AO 0.10.2 recovery-shaped spawn argv (#638) [33m 914[2mms[22m[39m
+   [33m[2m✓[22m[39m denies malformed claim-pr spawns with invalid_pr instead of spawn-new [33m 836[2mms[22m[39m
+     [33m[2m✓[22m[39m spawn policy audit: emits allow and deny lines [33m 826[2mms[22m[39m
+     [33m[2m✓[22m[39m claim-pr collision: cleanup-required when live owner present [33m 821[2mms[22m[39m
+     [33m[2m✓[22m[39m duplicate resume: concurrent attempt loses mutex [33m 837[2mms[22m[39m
+     [33m[2m✓[22m[39m cleanup-required: pack gate denies claim-pr when fixture live owner exists [33m 2265[2mms[22m[39m
+     [33m[2m✓[22m[39m allows claim-pr when live owner holds a different PR (no param shadowing) [33m 1825[2mms[22m[39m
+     [33m[2m✓[22m[39m cleanup-required: denies claim-pr when terminated owner left residual worktree [33m 2356[2mms[22m[39m
+     [33m[2m✓[22m[39m allows claim-pr when terminated owner has no residual worktree artifacts [33m 1931[2mms[22m[39m
+     [33m[2m✓[22m[39m operator adoption: documents live yaml override and preserves per-path fences [33m 823[2mms[22m[39m
+     [33m[2m✓[22m[39m denies spawn when policy toggle is false via fixture policy [33m 2291[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery: allowSpawnNew=false denies recovery spawn-new route [33m 902[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery: allowClaimPrResume=false denies claim-pr resume [33m 818[2mms[22m[39m
+     [33m[2m✓[22m[39m worker recovery: missing policy fails closed [33m 820[2mms[22m[39m
+ [32m✓[39m scripts/orchestrator-review-start-preflight-audit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 6520[2mms[22m[39m
+     [33m[2m✓[22m[39m records PR and head identity keys on preflight refusals [33m 1816[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps legacy unkeyed records readable for backward compatibility [33m 1758[2mms[22m[39m
+     [33m[2m✓[22m[39m fails closed under test context when AO_BASE_DIR is not isolated [33m 1249[2mms[22m[39m
+     [33m[2m✓[22m[39m requires PR/head arguments at every preflight refusal producer call site [33m 842[2mms[22m[39m
+     [33m[2m✓[22m[39m does not regress denial audit PR/head keying at sibling call sites [33m 853[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m8 passed[39m[22m[90m (8)[39m
+[2m      Tests [22m [1m[32m223 passed[39m[22m[90m (223)[39m
+[2m   Start at [22m 09:56:25
+[2m   Duration [22m 374.48s[2m (transform 758ms, setup 172ms, import 1.20s, tests 367.49s, environment 1ms)[22m
+
+
+===== review capability guard (exit 0) =====
+[PASS] autonomous review-start capability inventory
+
+===== boundary capability guard (exit 0) =====
+[PASS] autonomous orchestrator boundary capability inventory
+
+===== claimed review lookup guard (exit 0) =====
+[PASS] scoped claimed-review PR lookup regression
+
+===== command runtime bootstrap guard (exit 0) =====
+[PASS] command-runtime bootstrap wiring
+
+===== typecheck foundation (exit 0) =====
+
+> typecheck:foundation
+> tsc -p tsconfig.json --noEmit
+
+
+===== lint foundation (exit 1) =====
+
+> lint:foundation
+> node --experimental-strip-types scripts/toolchain/check-ts-policy.ts
+
+scripts/autonomous-spawn-worktree-gate.test.ts:1:1 raw-child-process: New raw spawn call (3a6e92aa3b8e28c8227a) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (53654784236424614c75) must use scripts/kernel/subprocess.ts.
+scripts/worker-nudge-gate.test.ts:1:1 raw-child-process: New raw spawnSync call (3334da544b589610418b) must use scripts/kernel/subprocess.ts.
+
+===== pwsh child growth (exit 0) =====
+
+> check:pwsh-test-growth
+> node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts
+
+PowerShell child-test baseline is unchanged.
+
+===== active retired-reference scan (exit 0) =====
+
+===== working-tree diff check (exit 0) =====

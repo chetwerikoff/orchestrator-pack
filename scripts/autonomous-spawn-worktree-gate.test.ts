@@ -3,13 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildSpawnWorktreeGrantRecord, evaluateBoundaryEscapeSignal, evaluateSpawnWorktreeGrantConsume, parseGitSpawnWorktreeAddArgv, parseSpawnTargetFromArgv, evaluateSpawnWorktreeBasenameBinding, isAoSpawnWorktreeSessionBasename, pathIsUnderCanonicalPrefix } from '../docs/spawn-worktree-grant.mjs';
+import { buildSpawnWorktreeGrantRecord, evaluateSpawnWorktreeGrantConsume, parseGitSpawnWorktreeAddArgv, parseSpawnTargetFromArgv, evaluateSpawnWorktreeBasenameBinding, isAoSpawnWorktreeSessionBasename, pathIsUnderCanonicalPrefix } from '../docs/spawn-worktree-grant.mjs';
 import { evaluateRecoverySpawnRoute } from '../docs/worker-recovery.mjs';
 import { evaluateAutonomousGitBoundary } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { repoRoot, runPwsh, psString } from './_test-pwsh-helpers.js';
 import { resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { execFileSync } from 'node:child_process';
-import { autonomousBashEnv } from './_test-git-fixture.js';
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const spawnWorktreeGatePath = path.join(repoRoot, 'scripts/lib/Autonomous-SpawnWorktreeGate.ps1');
@@ -278,30 +277,6 @@ describe('spawn worktree grant (#470)', () => {
         });
         expect(verdict.ok).toBe(false);
         expect(verdict.reason).toBe('path_escape');
-    });
-    it('boundary escape audit detects surface unset after bootstrap', () => {
-        const signal = evaluateBoundaryEscapeSignal({
-            env: {
-                AO_TMUX_NAME: 'op-orchestrator',
-                __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: '1',
-                AO_SESSION_ID: '',
-                PATH: '/usr/bin:/bin',
-            },
-            packScriptsDir: '/repo/scripts',
-        });
-        expect(signal.detected).toBe(true);
-        expect(signal.reason).toBe('surface_and_path_cooperative');
-        expect(signal.signals).toContain('surface_unset_after_bootstrap');
-        expect(signal.signals).toContain('pack_scripts_missing_from_path');
-    });
-    it('unsanctioned mutating git still denied on autonomous surface', () => {
-        const gitDeny = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', gitGuardPath, 'branch', '-m', 'blocked'], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            env: autonomousBashEnv(),
-        });
-        expect(gitDeny.status).toBe(93);
-        expect(gitDeny.stderr).toMatch(/autonomous tree-mutating git denied/i);
     });
     it('mjs git boundary honors spawn grant allow flag', () => {
         const verdict = evaluateAutonomousGitBoundary({

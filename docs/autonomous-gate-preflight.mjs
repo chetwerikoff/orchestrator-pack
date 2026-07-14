@@ -114,7 +114,11 @@ export function validateCapabilityInventory(input) {
 export function loadAutonomousCapabilitiesInventory(inventoryPath, defaultRelativePath) {
   const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const resolved = inventoryPath ?? path.join(repoRoot, defaultRelativePath);
-  return JSON.parse(readFileSync(resolved, 'utf8'));
+  const inventory = JSON.parse(readFileSync(resolved, 'utf8'));
+  if (!inventory?.sharedCapabilitiesPath) return inventory;
+  const sharedPath = path.join(repoRoot, String(inventory.sharedCapabilitiesPath));
+  const shared = JSON.parse(readFileSync(sharedPath, 'utf8'));
+  return mergeAutonomousCapabilitiesInventory(inventory, shared);
 }
 
 /**
