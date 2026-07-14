@@ -1004,12 +1004,15 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   const migrationNotesEntry = manifestMigrationNote(repoRoot);
   const completionBlockers = [
     // AC 9 (amended 2026-07-14): the shim cluster's live inbound edges make fail-safe KEEP the
-    // required disposition, so only an actual deletion of one of these nodes is a violation.
-    ...retiredShimBlockers.filter((row) => deletedGovernedNodes.includes(row.path)).map((row) => ({
-      code: 'shim-cluster-deleted-despite-live-inbound-edge',
-      path: row.path,
-      evidence: 'AC 9 (amended 2026-07-14): a node reached by a live inbound edge from a tracked consumer must be held (fail-safe KEEP), not deleted; the autonomous-surface shim cluster retirement is deferred to the sibling gate-predicate wave.',
-    })),
+    // required disposition, so only deleting a shim that still has live inbound trusted edges is
+    // a violation.
+    ...retiredShimBlockers
+      .filter((row) => row.deletedInCurrentTree && row.inboundTrustedEdges.length > 0)
+      .map((row) => ({
+        code: 'shim-cluster-deleted-despite-live-inbound-edge',
+        path: row.path,
+        evidence: 'AC 9 (amended 2026-07-14): a node reached by a live inbound edge from a tracked consumer must be held (fail-safe KEEP), not deleted; the autonomous-surface shim cluster retirement is deferred to the sibling gate-predicate wave.',
+      })),
     // AC 4's function/section caller-safety proof only applies when this PR actually deletes one.
     ...(deletionManifest.some((row) => row.reason === 'superseded') ? [{
       code: 'function-section-granularity-not-proven',
