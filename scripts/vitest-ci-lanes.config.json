@@ -108,6 +108,7 @@
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/protected-signal-receipt.test.ts": "light",
     "scripts/publish-issue-body-sync.test.ts": "heavy",
+    "scripts/reachability-purge.test.ts": "light",
     "scripts/reaction-config-messages.test.ts": "light",
     "scripts/read-delegation-audit.test.ts": "heavy",
     "scripts/reverify-allowlist-config.test.ts": "heavy",

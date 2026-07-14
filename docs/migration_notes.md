@@ -2461,3 +2461,20 @@ the module on next tick after deploy.
    relying on automated delivery again.
 5. Run one end-to-end refresh after the secret is present and confirm the trusted
    `pull_request_target` delivery workflow merges the generated PR.
+
+## Reachability purge precondition audit (Issue #819)
+
+The committed reachability procedure found that the proposed autonomous-surface shim retirement is
+not yet safe on the pinned `main` tree. `scripts/ao`, `scripts/git`,
+`scripts/autonomous-bash-env.sh`, `scripts/autonomous-orchestrator-surface-bootstrap.sh`,
+`scripts/_invoke-system-git.sh`, and `scripts/_resolve-system-git.sh` remain reachable or held by
+protected test/config surfaces. In particular, the REWRITE-list
+`autonomous-orchestrator-interposer.test.ts` and the live
+`autonomous-orchestrator-boundary.test.ts` still execute or assert these files, while
+`agent-orchestrator.yaml.example` still configures the shim PATH/bootstrap chain and is outside this
+issue's allowed roots.
+
+This audit does **not** retire the shims and does not authorize operator PATH/profile cleanup yet.
+Keep the existing pack-local shim configuration until the owning predicate/test/config migration
+lands. At that point, the retirement change must add the final operator step: remove local
+PATH/profile references to the retired pack shims and use regular `ao` and `git` from PATH.
