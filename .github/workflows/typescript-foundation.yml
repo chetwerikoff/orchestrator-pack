@@ -2,72 +2,99 @@ name: TypeScript foundation
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  issue-821-reachability-diagnostic:
-    if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 reachability candidate diagnostic
+  runtime:
+    name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-821-retire-autonomous-surface
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --include=dev
-      - name: Apply candidate, run focused checks, and persist
-        shell: bash
-        run: |
-          set +e
-          rm -f issue-821-*.txt
-          node .github/scripts/issue-821-finalize.mjs
-          node scripts/reachability-purge.mjs --write
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
 
-          report=issue-821-reachability-candidate-report.txt
-          : > "$report"
-          overall=0
-          run_check() {
-            name="$1"
-            shift
-            tmp="$(mktemp)"
-            "$@" >"$tmp" 2>&1
-            status=$?
-            {
-              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
-              cat "$tmp"
-            } >> "$report"
-            rm -f "$tmp"
-            if (( status != 0 )); then overall=1; fi
-          }
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
 
-          run_check "reachability manifest verifier" node scripts/reachability-purge.mjs
-          run_check "reachability tests" npx vitest run scripts/reachability-purge.test.ts
-          run_check "scoped lookup tests" npx vitest run scripts/review-start-scoped-gh-json-capture.test.ts
-          run_check "tsconfig base" npx tsc --project tsconfig.base.json --noEmit
-
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f \
-            issue-821-full-scope-lane-diagnostic.txt \
-            issue-821-full-scope-diagnostic.txt \
-            issue-821-final-validation-report.txt \
-            issue-821-final-guard-report.txt \
-            issue-821-migrated-test-failure.txt \
-            issue-821-restored-suite-failure.txt \
-            issue-821-transform-output.txt \
-            .vitest-runtime-report-light.json \
-            scripts/vitest-heavy-topology.plan.json
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Persist issue 821 reachability candidate"
-          git push origin HEAD:agent/issue-821-retire-autonomous-surface
-          exit "$overall"
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth

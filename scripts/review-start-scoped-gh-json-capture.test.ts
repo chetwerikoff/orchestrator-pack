@@ -119,68 +119,6 @@ describe('review-start scoped gh JSON capture (#566)', () => {
         expect(result.transportFailure).toBe(false);
         expect(result.head).toBe(issue566Sha);
     });
-    it('AC3 positive-outcome: harmless stderr does not deny review-start for green uncovered ready head', () => {
-        const dir = mkdtempSync(path.join(tmpdir(), 'scoped-gh-566-ac3-'));
-        try {
-            const script = `
-        . ${psString(helperPath)}
-        $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
-        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
-        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'bashdb_stderr_valid_json'
-        $env:AO_REVIEW_START_SCOPED_GH_HEAD_SHA = ${psString(issue566Sha)}
-        function Invoke-GhOpenPrList {
-          param([string]$RepoRoot)
-          throw 'full open-PR list must not run on claimed review-start path'
-        }
-        function Get-AoReviewRuns { param([string]$Project) @() }
-        function Get-AoStatusSessions {
-          @(@{
-            name = 'opk-566'
-            role = 'worker'
-            prNumber = 565
-            status = 'ready_for_review'
-            reports = @(@{ reportState = 'ready_for_review'; reportedAt = '2026-07-01T00:00:00.000Z'; headRefOid = ${psString(issue566Sha)} })
-          })
-        }
-        function Get-GhChecksBundleByPr {
-          param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)
-          @{
-            ciChecksByPr = @{
-              '565' = @(
-                @{ name = 'Verify orchestrator-pack structure'; state = 'SUCCESS' },
-                @{ name = 'PR scope guard'; state = 'SUCCESS' },
-                @{ name = 'Run pack contract tests'; state = 'SUCCESS' },
-                @{ name = 'Self-architect lint'; state = 'SUCCESS' }
-              )
-            }
-            requiredCheckNamesByPr = @{
-              '565' = @(
-                'Verify orchestrator-pack structure',
-                'PR scope guard',
-                'Run pack contract tests',
-                'Self-architect lint'
-              )
-            }
-            requiredCheckLookupFailedByPr = @{ '565' = $false }
-          }
-        }
-        $result = Invoke-OrchestratorClaimedReviewRun -SessionId 'opk-566' -ReviewCommand 'echo review' -PrNumber 565 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -DryRun -AuditRoot ${psString(path.join(dir, 'audit'))} -LogWriter { param($m) }
-        [pscustomobject]@{
-          started = [bool]$result.started
-          reason = [string]$result.reason
-          deniedBeforeClaim = [bool]$result.deniedBeforeClaim
-        } | ConvertTo-Json -Compress
-      `;
-            const result = JSON.parse(runPwsh(script));
-            expect(result.deniedBeforeClaim).toBe(false);
-            expect(result.started).toBe(true);
-            expect(result.reason).toBe('dry_run');
-            expect(result.reason).not.toBe('head_resolution_failed');
-        }
-        finally {
-            rmSync(dir, { recursive: true, force: true });
-        }
-    });
     it('AC5 diagnostic matrix preserves infrastructure vs PR-state vs command failures', () => {
         const openWithStderr = evaluateOrchestratorTurnGate({
             prNumber: 565,
@@ -253,37 +191,6 @@ describe('review-start scoped gh JSON capture (#566)', () => {
         expect(result.reason).toMatch(/malformed_child_output|structured_output_polluted/);
         expect(result.reviewRunCount).toBe(0);
         expect(result.sessionCount).toBe(0);
-    });
-    it('AC4: pre-claim infrastructure denial does not acquire review-start claim', () => {
-        const dir = mkdtempSync(path.join(tmpdir(), 'scoped-gh-566-ac4-'));
-        try {
-            const script = `
-        . ${psString(helperPath)}
-        $env:AO_REVIEW_CLAIM_DIR = ${psString(path.join(dir, 'claims'))}
-        $env:AO_REVIEW_START_SCOPED_GH_COMMAND = ${psString(fakeGhPath)}
-        $env:AO_REVIEW_START_SCOPED_GH_SCENARIO = 'malformed_stdout'
-        function Get-AoReviewRuns { param([string]$Project) @() }
-        function Get-AoStatusSessions { return @() }
-        function Get-GhChecksBundleByPr {
-          param([string]$RepoRoot, [array]$OpenPrs, [scriptblock]$MergeRequiredNames, [string]$ProtectionLookupWarningTemplate)
-          @{ ciChecksByPr = @{}; requiredCheckNamesByPr = @{}; requiredCheckLookupFailedByPr = @{} }
-        }
-        $result = Invoke-OrchestratorClaimedReviewRun -SessionId 'opk-566' -ReviewCommand 'echo review' -PrNumber 565 -Project 'orchestrator-pack' -RepoRoot ${psString(repoRoot)} -DryRun -AuditRoot ${psString(path.join(dir, 'audit'))} -LogWriter { param($m) }
-        $claimFiles = @(Get-ChildItem -LiteralPath ${psString(path.join(dir, 'claims'))} -File -ErrorAction SilentlyContinue)
-        [pscustomobject]@{
-          deniedBeforeClaim = [bool]$result.deniedBeforeClaim
-          reason = [string]$result.reason
-          claimCount = $claimFiles.Count
-        } | ConvertTo-Json -Compress
-      `;
-            const result = JSON.parse(runPwsh(script));
-            expect(result.deniedBeforeClaim).toBe(true);
-            expect(result.reason).toMatch(/malformed_child_output|structured_output_polluted/);
-            expect(result.claimCount).toBe(0);
-        }
-        finally {
-            rmSync(dir, { recursive: true, force: true });
-        }
     });
     it('AC6 static guard: no workaround transports in scoped capture path', () => {
         const forbidden = /curl\s+api\.github\.com|gh api graphql|unset GH_WRAPPER_ACTIVE|\/tmp\/gh-rest-bin/;

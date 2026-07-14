@@ -37,6 +37,23 @@ const REQUIRED_RETIRED_SHIMS = [
   'scripts/_resolve-system-git.sh',
 ];
 
+// Issue #821 owns these deletions. They remain in the pinned #819 analysis graph
+// for auditability but are not attributed to #819's deletion formula.
+const ISSUE_821_EXTERNAL_DELETIONS = [
+  'scripts/_invoke-system-git.sh',
+  'scripts/_resolve-system-git.sh',
+  'scripts/ao',
+  'scripts/ao-autonomous-guard.ps1',
+  'scripts/autonomous-bash-env.sh',
+  'scripts/autonomous-orchestrator-surface-bootstrap.sh',
+  'scripts/check-worker-nudge-gate-adoption.ps1',
+  'scripts/git',
+  'scripts/git-autonomous-guard.ps1',
+  'scripts/git-real-binary',
+  'scripts/invoke-orchestrator-claimed-review-run.ps1',
+  'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
+];
+
 
 
 function normalizeRel(value) {
@@ -821,6 +838,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
   const currentTracked = await gitTrackedFiles(repoRoot);
   const currentTrackedSet = new Set(currentTracked);
   const deletedFromBase = tracked.filter((item) => !currentTrackedSet.has(item));
+  const externalPrerequisiteDeletionSet = new Set(ISSUE_821_EXTERNAL_DELETIONS);
   const retainedDeletedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
   const analysisTracked = [...new Set([...currentTracked, ...retainedDeletedNodes])].sort();
   const analysisTrackedSet = new Set(analysisTracked);
@@ -1010,7 +1028,9 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
   const deletableBackupCandidates = backupCandidates.filter((item) => !unsafeBackupCandidates.includes(item));
   const formulaCandidates = [...new Set([...zeroReachabilityCandidates, ...supersededCandidates, ...deletableBackupCandidates])].sort();
 
-  const deletedGovernedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
+  const deletedGovernedNodes = deletedFromBase
+    .filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item))
+    .filter((item) => !externalPrerequisiteDeletionSet.has(item));
   const deletedTests = deletedFromBase.filter(isTestFile);
   const formulaSet = new Set(formulaCandidates);
   const deletionManifest = deletedGovernedNodes.map((item) => {
@@ -1036,6 +1056,13 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     keepGuardList: KEEP_GUARD_TESTS.filter((item) => currentTrackedSet.has(item)),
     rewriteList: REWRITE_LIST_TESTS.filter((item) => currentTrackedSet.has(item)),
   };
+  const externalPrerequisiteDeletions = ISSUE_821_EXTERNAL_DELETIONS.map((externalPath) => ({
+    path: externalPath,
+    issue: 821,
+    trackedInBase: trackedSet.has(externalPath),
+    deletedInCurrentTree: trackedSet.has(externalPath) && !currentTrackedSet.has(externalPath),
+    evidence: 'Issue #821 owns this deletion; #819 retains the pinned-base node for audit but excludes it from its own deletion formula.',
+  }));
   const retiredShimBlockers = REQUIRED_RETIRED_SHIMS.map((shim) => ({
     path: shim,
     trackedInBase: trackedSet.has(shim),
@@ -1047,6 +1074,13 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
   }));
   const migrationNotesEntry = manifestMigrationNote(repoRoot);
   const completionBlockers = [
+    ...externalPrerequisiteDeletions
+      .filter((row) => row.trackedInBase && !row.deletedInCurrentTree)
+      .map((row) => ({
+        code: 'external-prerequisite-deletion-incomplete',
+        path: row.path,
+        evidence: 'Issue #821 is the owner of this deletion, but the current tree still tracks the path.',
+      })),
     // AC 9 (amended 2026-07-14): the shim cluster's live inbound edges make fail-safe KEEP the
     // required disposition, so only deleting a shim that still has live inbound trusted edges is
     // a violation.
@@ -1094,6 +1128,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     keepGuardList: protectedExisting.keepGuardList,
     rewriteList: protectedExisting.rewriteList,
     protectedTestsDeleted: deletedTests.filter((item) => protectedTests.includes(item)),
+    externalPrerequisiteDeletions,
     retiredShimBlockers,
     migrationNotesEntry,
     completionStatus: completionBlockers.length === 0 ? 'complete' : 'blocked',
