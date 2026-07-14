@@ -7,10 +7,6 @@
   ],
   "surfaces": [
     {
-      "id": "orchestrator_turn",
-      "path": "scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1"
-    },
-    {
       "id": "review-trigger-reconcile",
       "path": "scripts/review-trigger-reconcile.ps1"
     },
