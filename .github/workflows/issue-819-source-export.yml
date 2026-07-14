@@ -16,13 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Archive reviewed tree
+        with:
+          fetch-depth: 0
+      - name: Export full Git history
         shell: bash
-        run: git archive --format=zip --output=orchestrator-pack-source.zip HEAD
-      - name: Upload source snapshot
+        run: git bundle create orchestrator-pack.bundle --all
+      - name: Upload repository bundle
         uses: actions/upload-artifact@v4
         with:
-          name: issue-819-source
-          path: orchestrator-pack-source.zip
+          name: issue-819-git-bundle
+          path: orchestrator-pack.bundle
           retention-days: 1
           if-no-files-found: error
