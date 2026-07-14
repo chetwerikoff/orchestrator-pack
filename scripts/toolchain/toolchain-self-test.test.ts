@@ -134,6 +134,21 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('rejects default-import raw child-process calls', () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/default-import.ts', `
+      import cp from 'node:child_process';
+      cp.spawn('git', ['status']);
+    `);
+    const comparison = compareRawChildProcessBaseline(
+      discoverRawChildProcessCalls(root, () => false),
+      { version: 1, entries: [] },
+    );
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/default-import.ts', api: 'spawn' },
+    ]);
+  });
+
   it('turns the PowerShell growth guard red for direct and shared-helper additions', () => {
     const root = temporaryRoot();
     const empty: PowerShellBootBaseline = { version: 1, entries: [] };
@@ -181,6 +196,19 @@ describe('TypeScript foundation check self-tests', () => {
     const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
     expect(comparison.added).toMatchObject([
       { path: 'scripts/dynamic-import.test.ts', mechanisms: ['direct:spawn', 'direct:spawnSync'] },
+    ]);
+  });
+
+  it('turns the PowerShell growth guard red for default imports', () => {
+    const root = temporaryRoot();
+    const empty: PowerShellBootBaseline = { version: 1, entries: [] };
+    write(root, 'scripts/default-import.test.ts', `
+      import cp from 'node:child_process';
+      cp.spawnSync('pwsh', ['-NoProfile']);
+    `);
+    const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/default-import.test.ts', mechanisms: ['direct:spawnSync'] },
     ]);
   });
 

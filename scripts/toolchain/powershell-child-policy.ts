@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
-import { CHILD_PROCESS_MODULES, isChildProcessImport } from '#opk-toolchain/child-process-imports';
+import {
+  CHILD_PROCESS_MODULES,
+  isChildProcessImport,
+  recordChildProcessBindingName,
+  recordChildProcessImportClause,
+} from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const TEST_SUFFIXES = ['.test.ts', '.test.mts', '.test.cts', '.test.js', '.test.mjs', '.test.cjs'];
@@ -47,15 +52,7 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
       const module = literalText(statement.moduleSpecifier) ?? '';
       if (module.includes('_test-pwsh-helpers')) importsSharedPwshHelper = true;
       if (!CHILD_PROCESS_MODULES.has(module)) continue;
-      const bindings = statement.importClause?.namedBindings;
-      if (bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) {
-          const imported = element.propertyName?.text ?? element.name.text;
-          if (CHILD_APIS.has(imported)) named.set(element.name.text, imported);
-        }
-      } else if (bindings && ts.isNamespaceImport(bindings)) {
-        namespaces.add(bindings.name.text);
-      }
+      recordChildProcessImportClause(statement.importClause, CHILD_APIS, named, namespaces);
     }
 
     const visit = (node: ts.Node): void => {
@@ -70,16 +67,7 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
         if (constantValue !== undefined) stringConstants.set(declaration.name.text, constantValue);
       }
       if (isChildProcessImport(initializer)) {
-        if (ts.isIdentifier(declaration.name)) namespaces.add(declaration.name.text);
-        if (ts.isObjectBindingPattern(declaration.name)) {
-          for (const element of declaration.name.elements) {
-            const imported = element.propertyName && ts.isIdentifier(element.propertyName)
-              ? element.propertyName.text
-              : element.name.getText(sourceFile);
-            const local = element.name.getText(sourceFile);
-            if (CHILD_APIS.has(imported)) named.set(local, imported);
-          }
-        }
+        recordChildProcessBindingName(declaration.name, sourceFile, CHILD_APIS, named, namespaces);
       }
       ts.forEachChild(node, visit);
     };
