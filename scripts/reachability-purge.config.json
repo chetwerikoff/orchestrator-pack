@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 819,
+  "analysisMode": "fail-closed",
   "analysisBaseCommit": "cc209d15dfb88b81948430d223e46783112609b9",
   "knownBrokenSuspectEdges": [
     {
