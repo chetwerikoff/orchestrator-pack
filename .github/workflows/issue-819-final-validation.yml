@@ -1,6 +1,9 @@
 name: issue-819-final-validation
 
 on:
+  push:
+    branches:
+      - agent/issue-819-reachability-purge
   pull_request:
     branches:
       - main
@@ -9,6 +12,24 @@ permissions:
   contents: read
 
 jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Export full Git history
+        shell: bash
+        run: git bundle create orchestrator-pack-current.bundle --all
+      - name: Upload repository bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-819-current-git-bundle
+          path: orchestrator-pack-current.bundle
+          retention-days: 1
+          if-no-files-found: error
+
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -32,8 +53,8 @@ jobs:
       - name: Strict self-architect lint
         shell: pwsh
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef $env:PR_HEAD_SHA
 
       - name: Typecheck
