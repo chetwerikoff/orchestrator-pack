@@ -7,11 +7,24 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ts:smoke": "node --experimental-strip-types scripts/typescript-smoke.ts",
+    "check:node-major": "node --experimental-strip-types scripts/toolchain/check-node-major.ts",
+    "typecheck:foundation": "tsc -p tsconfig.json --noEmit",
+    "lint:foundation": "node --experimental-strip-types scripts/toolchain/check-ts-policy.ts",
+    "check:pwsh-test-growth": "node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
+    "test:foundation": "vitest run --config scripts/toolchain/vitest-foundation.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
     "typescript": "^5.8.3",
     "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "imports": {
+    "#opk-kernel/*": "./scripts/kernel/*.ts",
+    "#opk-toolchain/*": "./scripts/toolchain/*.ts"
   }
 }

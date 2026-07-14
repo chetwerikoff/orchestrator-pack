@@ -1,0 +1,115 @@
+import ts from 'typescript';
+
+export const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
+
+function moduleText(node: ts.Expression | undefined): string | undefined {
+  return node && ts.isStringLiteralLike(node) ? node.text : undefined;
+}
+
+function unwrapExpression(node: ts.Expression | undefined): ts.Expression | undefined {
+  let current = node;
+  while (current && (ts.isAwaitExpression(current) || ts.isParenthesizedExpression(current))) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isRequireCall(node: ts.Expression | undefined): node is ts.CallExpression {
+  return !!node
+    && ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === 'require';
+}
+
+function isImportCall(node: ts.Expression | undefined): node is ts.CallExpression {
+  return !!node
+    && ts.isCallExpression(node)
+    && node.expression.kind === ts.SyntaxKind.ImportKeyword;
+}
+
+export function isChildProcessImport(node: ts.Expression | undefined): boolean {
+  const expression = unwrapExpression(node);
+  return (isRequireCall(expression) || isImportCall(expression))
+    && CHILD_PROCESS_MODULES.has(moduleText(expression.arguments[0]) ?? '');
+}
+
+export function recordChildProcessImportClause(
+  importClause: ts.ImportClause | undefined,
+  allowedApis: ReadonlySet<string>,
+  named: Map<string, string>,
+  namespaces: Set<string>,
+): void {
+  if (!importClause) return;
+  if (importClause.name) namespaces.add(importClause.name.text);
+  const bindings = importClause.namedBindings;
+  if (bindings && ts.isNamedImports(bindings)) {
+    for (const element of bindings.elements) {
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (allowedApis.has(imported)) named.set(element.name.text, imported);
+    }
+    return;
+  }
+  if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+}
+
+export function recordChildProcessBindingName(
+  name: ts.BindingName,
+  sourceFile: ts.SourceFile,
+  allowedApis: ReadonlySet<string>,
+  named: Map<string, string>,
+  namespaces: Set<string>,
+): void {
+  if (ts.isIdentifier(name)) {
+    namespaces.add(name.text);
+    return;
+  }
+  if (!ts.isObjectBindingPattern(name)) return;
+  for (const element of name.elements) {
+    const imported = element.propertyName && ts.isIdentifier(element.propertyName)
+      ? element.propertyName.text
+      : element.name.getText(sourceFile);
+    const local = element.name.getText(sourceFile);
+    if (allowedApis.has(imported)) named.set(local, imported);
+  }
+}
+
+export function recordChildProcessThenBinding(
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  allowedApis: ReadonlySet<string>,
+  named: Map<string, string>,
+  namespaces: Set<string>,
+): void {
+  if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'then') return;
+  if (!isChildProcessImport(node.expression.expression)) return;
+  const callback = node.arguments[0];
+  if (!callback || (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))) return;
+  const parameter = callback.parameters[0];
+  if (!parameter) return;
+  recordChildProcessBindingName(parameter.name, sourceFile, allowedApis, named, namespaces);
+}
+
+export function recordChildProcessPropertyAlias(
+  name: ts.BindingName,
+  initializer: ts.Expression | undefined,
+  allowedApis: ReadonlySet<string>,
+  named: Map<string, string>,
+  namespaces: ReadonlySet<string>,
+): void {
+  if (ts.isObjectBindingPattern(name) && initializer && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+    for (const element of name.elements) {
+      if (!ts.isIdentifier(element.name)) continue;
+      const imported = element.propertyName && ts.isIdentifier(element.propertyName)
+        ? element.propertyName.text
+        : element.name.text;
+      if (allowedApis.has(imported)) named.set(element.name.text, imported);
+    }
+    return;
+  }
+  if (!ts.isIdentifier(name) || !initializer || !ts.isPropertyAccessExpression(initializer)) return;
+  const receiver = initializer.expression;
+  if (ts.isIdentifier(receiver) && !namespaces.has(receiver.text)) return;
+  if (!ts.isIdentifier(receiver) && !isChildProcessImport(receiver)) return;
+  const api = initializer.name.text;
+  if (allowedApis.has(api)) named.set(name.text, api);
+}

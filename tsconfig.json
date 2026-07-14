@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "scripts/typescript-smoke.ts",
+    "scripts/kernel/**/*.ts",
+    "scripts/toolchain/**/*.ts"
+  ],
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noUncheckedIndexedAccess": true,
+    "strict": true,
+    "noEmit": true
+  }
+}

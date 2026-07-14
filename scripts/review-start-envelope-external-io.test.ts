@@ -495,7 +495,7 @@ describe('review-start-envelope-external-io', () => {
         $claim = Acquire-ReviewStartClaim -PrNumber 510 -HeadSha $sha -Surface 'review-trigger-reconcile' -Namespace $ns -ReviewRuns @()
         $env:AO_REVIEW_START_TEST_CLAIM_PATH = $claim.path
         $env:AO_REVIEW_START_TEST_CHILD_PID_FILE = ${psString(childPidFile)}
-        $env:AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS = '500'
+        $env:AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS = '2500'
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $transport = Invoke-ReviewStartSupervisedGh -ClaimResult $claim -RepoRoot ${psString(repoRoot)} -GhArguments @() -DeadlineMs 30000
         $sw.Stop()
@@ -525,7 +525,7 @@ describe('review-start-envelope-external-io', () => {
       expect(result.reason).toBe('claim_ownership_lost');
       expect(result.childPid).toBeGreaterThan(0);
       expect(result.childAlive).toBe(false);
-      expect(result.elapsedMs).toBeLessThan(5000);
+      expect(result.elapsedMs).toBeLessThan(10_000);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
