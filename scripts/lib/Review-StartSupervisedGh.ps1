@@ -41,13 +41,31 @@ function Read-ReviewStartSupervisedGhProcessStreams {
     param(
         [System.Diagnostics.Process]$Process,
         [int]$WaitTimeoutMs,
-        [int]$ChildPid = 0
+        [int]$ChildPid = 0,
+        [hashtable]$ClaimResult = $null
     )
 
     $stdoutDrain = $Process.StandardOutput.ReadToEndAsync()
     $stderrDrain = $Process.StandardError.ReadToEndAsync()
-    $timedOut = -not $Process.WaitForExit([Math]::Max(1, $WaitTimeoutMs))
-    if ($timedOut) {
+    $timedOut = $false
+    $ownershipLost = $false
+    $remainingMs = [Math]::Max(1, $WaitTimeoutMs)
+    while (-not $Process.HasExited) {
+        if ($ClaimResult -and -not (Test-ReviewStartClaimOwnership -ClaimResult $ClaimResult)) {
+            $ownershipLost = $true
+            break
+        }
+        if ($remainingMs -le 0) {
+            $timedOut = $true
+            break
+        }
+        $sliceMs = [Math]::Min(100, $remainingMs)
+        if ($Process.WaitForExit($sliceMs)) {
+            break
+        }
+        $remainingMs -= $sliceMs
+    }
+    if ($ownershipLost -or $timedOut) {
         try { $Process.Kill($true) } catch { }
         try { $Process.WaitForExit(2000) | Out-Null } catch { }
         if ($ChildPid -gt 0) {
@@ -57,9 +75,10 @@ function Read-ReviewStartSupervisedGhProcessStreams {
     try { $stdoutDrain.Wait(5000) | Out-Null } catch { }
     try { $stderrDrain.Wait(5000) | Out-Null } catch { }
     return @{
-        Stdout   = [string]$stdoutDrain.Result
-        Stderr   = [string]$stderrDrain.Result
-        TimedOut = $timedOut
+        Stdout        = [string]$stdoutDrain.Result
+        Stderr        = [string]$stderrDrain.Result
+        TimedOut      = $timedOut
+        OwnershipLost = $ownershipLost
     }
 }
 
@@ -168,14 +187,20 @@ function Invoke-ReviewStartSupervisedGh {
         return @{ ok = $false; reason = [string]$pidUpdate.reason; failureClass = '' }
     }
 
-    $streams = Read-ReviewStartSupervisedGhProcessStreams -Process $proc -WaitTimeoutMs $resolvedDeadline -ChildPid $childPid
+    $streams = Read-ReviewStartSupervisedGhProcessStreams -Process $proc -WaitTimeoutMs $resolvedDeadline -ChildPid $childPid -ClaimResult $ClaimResult
     $timedOut = [bool]$streams.TimedOut
+    $ownershipLost = [bool]$streams.OwnershipLost
     $stderr = [string]$streams.Stderr
     $stdout = [string]$streams.Stdout
     $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { -1 }
 
-    $closed = Complete-ReviewStartClaimInfraPause -ClaimResult $ClaimResult -Stderr $stderr -TimedOut:$timedOut
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $ClaimResult)) {
+    $closed = if ($ownershipLost) {
+        @{ failureClass = '' }
+    }
+    else {
+        Complete-ReviewStartClaimInfraPause -ClaimResult $ClaimResult -Stderr $stderr -TimedOut:$timedOut
+    }
+    if ($ownershipLost -or -not (Test-ReviewStartClaimOwnership -ClaimResult $ClaimResult)) {
         Invoke-ReviewStartClaimOwnershipLossCleanup -ClaimResult $ClaimResult
         return @{
             ok           = $false
