@@ -1,0 +1,11 @@
+Restored minimal issue #821 test diffs.
+
+> lint:foundation
+> node --experimental-strip-types scripts/toolchain/check-ts-policy.ts --write-baseline
+
+Wrote raw child-process baseline.
+
+> check:pwsh-test-growth
+> node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts --write-baseline
+
+Wrote PowerShell child-test baseline.
