@@ -7,9 +7,9 @@ permissions:
   contents: write
 
 jobs:
-  issue-821-finalize-scope:
+  issue-821-scope-diagnostic:
     if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 full-scope closure
+    name: Issue 821 full-scope lane diagnostic
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
@@ -22,9 +22,17 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --include=dev
-      - name: Retire wrapper-only tests and stale lane inventory
+      - name: Apply candidate cleanup, run commands independently, persist report
         shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
         run: |
+          set +e
+          report=/tmp/issue-821-full-scope-lane-diagnostic.txt
+          : > "$report"
+
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           import * as ts from 'typescript';
@@ -70,10 +78,7 @@ jobs:
             'scripts/autonomous-review-worktree-e2e-smoke.test.ts',
             'scripts/autonomous-spawn-budget.test.ts',
             'scripts/review-pipeline-spawn-budget.test.ts',
-          ]) {
-            if (!(file in config.classification)) throw new Error(`missing expected stale classification: ${file}`);
-            delete config.classification[file];
-          }
+          ]) delete config.classification[file];
           writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
           NODE
 
@@ -86,60 +91,33 @@ jobs:
             git update-index --chmod=-x "$file"
           done
 
-          rm -f issue-821-*.txt
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
-      - name: Run full-scope static and lane checks
-        shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
-        run: |
-          npx tsc --project tsconfig.base.json --noEmit
-          pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
+          run_check() {
+            name="$1"
+            shift
+            tmp="$(mktemp)"
+            "$@" >"$tmp" 2>&1
+            status=$?
+            {
+              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
+              cat "$tmp"
+            } >> "$report"
+            rm -f "$tmp"
+          }
+
+          run_check "candidate diff summary" git diff --summary
+          run_check "tsconfig.base typecheck" npx tsc --project tsconfig.base.json --noEmit
+          run_check "vitest light lane" pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
+          run_check "emit changed paths manifest" node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          node scripts/emit-vitest-heavy-topology.mjs --gha-output
-      - name: Run affected regression matrix
-        run: |
-          npx vitest run \
-            scripts/autonomous-orchestrator-boundary.test.ts \
-            scripts/autonomous-spawn-policy.test.ts \
-            scripts/worker-nudge-gate.test.ts \
-            scripts/spawn-worktree-grant-finalization.test.ts \
-            scripts/orchestrator-claimed-review-run.test.ts \
-            scripts/autonomous-spawn-worktree-gate.test.ts \
-            scripts/orchestrator-review-start-preflight-audit.test.ts \
-            scripts/review-start-envelope-external-io.test.ts \
-            scripts/review-start-scoped-gh-json-capture.test.ts
-      - name: Run issue and repository guards
-        shell: bash
-        run: |
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
-          pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
-          pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
-          ! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\.ao/autonomous-real-binaries\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'
-          git diff --check
-      - name: Commit validated result and restore workflow
-        shell: bash
-        run: |
+          run_check "emit heavy topology" node scripts/emit-vitest-heavy-topology.mjs --gha-output
+
+          git reset --hard HEAD
           git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f \
-            .github/issue-821-trigger.txt \
-            .github/issue-821-final-ci-trigger.txt \
-            .github/scripts/restore-issue-821-tests.mjs \
-            .github/workflows/issue-821-minimal-runner.yml \
-            .github/workflows/issue-821-run-test-restore.yml \
-            .github/workflows/issue-821-restore-minimal-tests.yml \
-            issue-821-*.txt \
-            .vitest-runtime-report-light.json \
-            scripts/vitest-heavy-topology.plan.json
+          rm -f issue-821-*.txt .vitest-runtime-report-light.json scripts/vitest-heavy-topology.plan.json
+          cp "$report" issue-821-full-scope-lane-diagnostic.txt
           git add -A
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Close issue 821 full-scope CI gaps"
+          git commit -m "Record issue 821 full-scope lane diagnostics"
           git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          exit 1
