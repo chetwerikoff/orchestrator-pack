@@ -1,9 +1,13 @@
 import fs from 'node:fs';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { assertHarnessWritePathSafe, redirectHarnessWritePath } from './lib/vitest-live-store-harness.mjs';
+import {
+  assertHarnessWritePathSafe,
+  redirectHarnessWritePath,
+  liveStoreInventory,
+} from './lib/vitest-live-store-harness.mjs';
 
 const preloadInstalledKey = Symbol.for('opk.vitest.liveStorePreloadInstalled');
 
@@ -265,6 +269,33 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     'TMP',
     'XDG_STATE_HOME',
   ];
+  const nestedHarnessResetKeys = new Set([
+    'OPK_VITEST_HARNESS',
+    'OPK_VITEST_HARNESS_ROOT',
+    'OPK_VITEST_HARNESS_INVENTORY',
+    'OPK_TESTMODE_LEASE_ROOT',
+    ...explicitBypassKeys,
+    ...((liveStoreInventory.stores ?? []).flatMap((store) => store.envOverrides ?? [])),
+  ]);
+  const selfPreloadImportFlag = `--import=${pathToFileURL(fileURLToPath(import.meta.url)).href}`;
+  const stripSelfPreloadImport = (nodeOptions) => String(nodeOptions ?? '')
+    .split(/\s+/u)
+    .filter((token) => token && token !== selfPreloadImportFlag)
+    .join(' ');
+  const isNestedHarnessLaunch = (command, argv = []) => {
+    const commandBase = basename(String(command ?? '')).toLowerCase();
+    if (!commandBase.startsWith('node')) {
+      return false;
+    }
+    return argv.some((value) => {
+      const token = String(value ?? '');
+      return token === 'scripts/run-vitest-with-harness.mjs'
+        || token.endsWith('/scripts/run-vitest-with-harness.mjs')
+        || token.endsWith('\\scripts\\run-vitest-with-harness.mjs')
+        || token.endsWith('/run-vitest-with-harness.mjs')
+        || token.endsWith('\\run-vitest-with-harness.mjs');
+    });
+  };
 
   const hasExplicitHarnessBypass = (env) => {
     if (!env || env.OPK_VITEST_HARNESS !== '') return false;
@@ -324,6 +355,23 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     const mergedEnv = explicitEnv
       ? mergeHarnessChildEnv(explicitEnv)
       : mergeHarnessChildEnv(process.env);
+    if (isNestedHarnessLaunch(command, argv)) {
+      const nestedEnv = { ...mergedEnv };
+      for (const name of nestedHarnessResetKeys) {
+        delete nestedEnv[name];
+      }
+      const nodeOptions = stripSelfPreloadImport(nestedEnv.NODE_OPTIONS);
+      if (nodeOptions) nestedEnv.NODE_OPTIONS = nodeOptions;
+      else delete nestedEnv.NODE_OPTIONS;
+      return nestedEnv;
+    }
+    if (
+      explicitEnv
+      && Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_SESSION_ID')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_WORKER_SESSION_ID')
+    ) {
+      delete mergedEnv.AO_WORKER_SESSION_ID;
+    }
     if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
       && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
       mergedEnv.OPK_VITEST_PRODUCTION_HOME = resolveProductionHomeForChild(mergedEnv);
