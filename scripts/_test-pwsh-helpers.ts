@@ -33,6 +33,14 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
   const managedAoBaseDir = inheritedAoBaseDir || explicitAoBaseDir
     ? null
     : mkdtempSync(path.join(tmpdir(), 'opk-vitest-ao-base-'));
+  const scopedClaimDirEnv = {
+    AO_REVIEW_CLAIM_DIR: Object.prototype.hasOwnProperty.call(extraEnv, 'AO_REVIEW_CLAIM_DIR')
+      ? extraEnv.AO_REVIEW_CLAIM_DIR
+      : '',
+    AO_WORKER_NUDGE_CLAIM_DIR: Object.prototype.hasOwnProperty.call(extraEnv, 'AO_WORKER_NUDGE_CLAIM_DIR')
+      ? extraEnv.AO_WORKER_NUDGE_CLAIM_DIR
+      : '',
+  };
   const scopedGhHarnessEnv = {
     AO_REVIEW_START_SCOPED_GH_COMMAND: '',
     AO_REVIEW_START_SCOPED_GH_SCENARIO: '',
@@ -52,6 +60,7 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
         AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
         AO_OPERATOR_ESCALATION_INBOX: process.env.AO_OPERATOR_ESCALATION_INBOX ?? '',
         AO_ESCALATION_HEALTH_SPOOL: process.env.AO_ESCALATION_HEALTH_SPOOL ?? '',
+        ...scopedClaimDirEnv,
         ...scopedGhHarnessEnv,
         ...extraEnv,
       },
