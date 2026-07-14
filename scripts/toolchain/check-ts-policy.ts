@@ -1,13 +1,14 @@
-import { readFileSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
 import ts from 'typescript';
 import {
   compareRawChildProcessBaseline,
   discoverRawChildProcessCalls,
+  discoverRawChildProcessGrowth,
   makeRawChildProcessBaseline,
+  rawCallKey,
   type RawChildProcessBaseline,
 } from '#opk-toolchain/child-process-policy';
-import { isDirectExecution, writeVersionOneBaseline } from '#opk-toolchain/baseline-io';
+import { isDirectExecution, readJsonFile, writeVersionOneBaseline } from '#opk-toolchain/baseline-io';
 
 export interface PolicyViolation {
   readonly path: string;
@@ -115,23 +116,33 @@ export function loadTypeScriptProgram(repoRoot: string): ts.Program {
   return ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
 }
 
-export function lintTypeScriptFoundation(repoRoot: string): PolicyViolation[] {
+export async function lintTypeScriptFoundation(repoRoot: string): Promise<PolicyViolation[]> {
   const program = loadTypeScriptProgram(repoRoot);
   const checker = program.getTypeChecker();
   const violations = program.getSourceFiles()
     .filter((sourceFile) => isFoundationProductionPath(repoRoot, sourceFile.fileName))
     .flatMap((sourceFile) => promiseViolations(repoRoot, sourceFile, checker));
 
-  const baselinePath = resolve(repoRoot, 'scripts/toolchain/raw-child-process-baseline.json');
-  const baseline = JSON.parse(readFileSync(baselinePath, 'utf8')) as RawChildProcessBaseline;
+  const baseline = readJsonFile<RawChildProcessBaseline>(repoRoot, 'scripts/toolchain/raw-child-process-baseline.json');
   const comparison = compareRawChildProcessBaseline(discoverRawChildProcessCalls(repoRoot), baseline);
-  for (const call of comparison.added) {
+  const growth = await discoverRawChildProcessGrowth(repoRoot);
+  const growthKeys = new Set(growth.map((call) => rawCallKey(call)));
+  for (const call of growth) {
     violations.push({
       path: call.path,
       line: 1,
       column: 1,
       rule: 'raw-child-process',
       message: `New raw ${call.api} call (${call.fingerprint}) must use scripts/kernel/subprocess.ts.`,
+    });
+  }
+  for (const call of comparison.added.filter((entry) => !growthKeys.has(rawCallKey(entry)))) {
+    violations.push({
+      path: call.path,
+      line: 1,
+      column: 1,
+      rule: 'raw-child-process',
+      message: `Grandfathered raw ${call.api} call (${call.fingerprint}) is missing a baseline entry; restore or migrate it.`,
     });
   }
   for (const call of comparison.stale) {
@@ -158,7 +169,7 @@ if (isDirectExecution(import.meta.url, process.argv[1])) {
     writeRawChildProcessBaseline(repoRoot);
     process.stdout.write('Wrote raw child-process baseline.\n');
   } else {
-    const violations = lintTypeScriptFoundation(repoRoot);
+    const violations = await lintTypeScriptFoundation(repoRoot);
     if (violations.length > 0) {
       for (const violation of violations) {
         process.stderr.write(`${violation.path}:${violation.line}:${violation.column} ${violation.rule}: ${violation.message}\n`);

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcess } from '#opk-kernel/subprocess';
 import { checkNodeMajor } from '#opk-toolchain/check-node-major';
 import {
   compareRawChildProcessBaseline,
@@ -17,6 +18,7 @@ import {
   makePowerShellBootBaseline,
   type PowerShellBootBaseline,
 } from '#opk-toolchain/powershell-child-policy';
+import { checkPowerShellTestGrowth } from '#opk-toolchain/check-pwsh-test-growth';
 
 const temporaryRoots = new Set<string>();
 
@@ -30,6 +32,33 @@ function write(root: string, path: string, contents: string): void {
   const absolute = join(root, path);
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, contents);
+}
+
+async function git(root: string, ...args: string[]): Promise<string> {
+  const result = await runProcess({
+    command: 'git',
+    args,
+    cwd: root,
+    allowEmptyStdout: true,
+  });
+  if (!result.ok) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.error || result.outcome}`);
+  }
+  return result.stdout.trim();
+}
+
+function foundationTsconfig(): string {
+  return JSON.stringify({
+    include: ['scripts/**/*.ts'],
+    compilerOptions: {
+      target: 'ES2022',
+      module: 'NodeNext',
+      moduleResolution: 'NodeNext',
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+    },
+  });
 }
 
 afterEach(() => {
@@ -55,7 +84,7 @@ describe('TypeScript foundation check self-tests', () => {
     expect(diagnostics.some((diagnostic) => diagnostic.code === 2322)).toBe(true);
   });
 
-  it('turns lint red for floating and misused promises', () => {
+  it('turns lint red for floating and misused promises', async () => {
     const root = temporaryRoot();
     write(root, 'tsconfig.json', JSON.stringify({
       include: ['scripts/kernel/**/*.ts'],
@@ -74,7 +103,7 @@ describe('TypeScript foundation check self-tests', () => {
       [1].forEach(async () => { await work(); });
     `);
     write(root, 'scripts/toolchain/raw-child-process-baseline.json', JSON.stringify({ version: 1, entries: [] }));
-    const violations = lintTypeScriptFoundation(root);
+    const violations = await lintTypeScriptFoundation(root);
     expect(violations.map((violation) => violation.rule)).toContain('floating-promise');
     expect(violations.map((violation) => violation.rule)).toContain('misused-promise');
   });
@@ -207,6 +236,41 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('rejects raw child-process growth even when the PR updates the baseline in the same commit range', async () => {
+    const root = temporaryRoot();
+    write(root, 'tsconfig.json', foundationTsconfig());
+    write(root, 'scripts/toolchain/raw-child-process-baseline.json', JSON.stringify({ version: 1, entries: [] }));
+    await git(root, 'init');
+    await git(root, 'config', 'user.email', 'toolchain-self-test@example.com');
+    await git(root, 'config', 'user.name', 'Toolchain Self Test');
+    await git(root, 'add', '.');
+    await git(root, 'commit', '-m', 'base');
+    const baseSha = await git(root, 'rev-parse', 'HEAD');
+
+    write(root, 'scripts/raw-growth.ts', `import { spawn } from 'node:child_process';\nspawn('git', ['status']);\n`);
+    write(root, 'scripts/toolchain/raw-child-process-baseline.json', JSON.stringify(
+      makeRawChildProcessBaseline(discoverRawChildProcessCalls(root, () => false)),
+    ));
+    await git(root, 'add', '.');
+    await git(root, 'commit', '-m', 'head');
+
+    const previousBaseSha = process.env.GITHUB_BASE_SHA;
+    process.env.GITHUB_BASE_SHA = baseSha;
+    try {
+      const violations = await lintTypeScriptFoundation(root);
+      expect(violations).toMatchObject([
+        {
+          path: 'scripts/raw-growth.ts',
+          rule: 'raw-child-process',
+        },
+      ]);
+      expect(violations[0]?.message).toContain('must use scripts/kernel/subprocess.ts');
+    } finally {
+      if (previousBaseSha === undefined) delete process.env.GITHUB_BASE_SHA;
+      else process.env.GITHUB_BASE_SHA = previousBaseSha;
+    }
+  });
+
   it('turns the PowerShell growth guard red for direct and shared-helper additions', () => {
     const root = temporaryRoot();
     const empty: PowerShellBootBaseline = { version: 1, entries: [] };
@@ -298,6 +362,38 @@ describe('TypeScript foundation check self-tests', () => {
     expect(comparison.added).toMatchObject([
       { path: 'scripts/default-import.test.ts', mechanisms: ['direct:spawnSync'] },
     ]);
+  });
+
+  it('rejects PowerShell child-test growth even when the PR updates the baseline in the same commit range', async () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/toolchain/powershell-child-tests.json', JSON.stringify({ version: 1, entries: [] }));
+    await git(root, 'init');
+    await git(root, 'config', 'user.email', 'toolchain-self-test@example.com');
+    await git(root, 'config', 'user.name', 'Toolchain Self Test');
+    await git(root, 'add', '.');
+    await git(root, 'commit', '-m', 'base');
+    const baseSha = await git(root, 'rev-parse', 'HEAD');
+
+    write(root, 'scripts/pwsh-growth.test.ts', `
+      import { spawnSync } from 'node:child_process';
+      spawnSync('pwsh', ['-NoProfile']);
+    `);
+    write(root, 'scripts/toolchain/powershell-child-tests.json', JSON.stringify(
+      makePowerShellBootBaseline(discoverPowerShellBootTests(root)),
+    ));
+    await git(root, 'add', '.');
+    await git(root, 'commit', '-m', 'head');
+
+    const previousBaseSha = process.env.GITHUB_BASE_SHA;
+    process.env.GITHUB_BASE_SHA = baseSha;
+    try {
+      await expect(checkPowerShellTestGrowth(root)).resolves.toContain(
+        'scripts/pwsh-growth.test.ts: unapproved PowerShell child test (direct:spawnSync)',
+      );
+    } finally {
+      if (previousBaseSha === undefined) delete process.env.GITHUB_BASE_SHA;
+      else process.env.GITHUB_BASE_SHA = previousBaseSha;
+    }
   });
 
   it('requires stale PowerShell baseline entries to be removed instead of becoming free slots', () => {

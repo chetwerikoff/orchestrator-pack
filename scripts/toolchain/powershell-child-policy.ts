@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { extname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { extname, resolve } from 'node:path';
 import ts from 'typescript';
 import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause, recordChildProcessPropertyAlias, recordChildProcessThenBinding } from '#opk-toolchain/child-process-imports';
+import { listChangedFilesSinceBase, readGitFile, resolveComparisonBaseRef } from '#opk-toolchain/baseline-io';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const TEST_SUFFIXES = [
@@ -31,6 +32,11 @@ interface ChildBindings {
   readonly namespaces: ReadonlySet<string>;
   readonly importsSharedPwshHelper: boolean;
   readonly stringConstants: ReadonlyMap<string, string>;
+}
+
+interface SourceInput {
+  readonly path: string;
+  readonly source: string;
 }
 
 function literalText(node: ts.Expression | undefined): string | undefined {
@@ -115,17 +121,19 @@ function isTestFile(path: string): boolean {
   return TEST_SUFFIXES.some((suffix) => path.endsWith(suffix));
 }
 
-export function discoverPowerShellBootTests(repoRoot: string): PowerShellBootTest[] {
+function scriptKind(path: string): ts.ScriptKind {
+  return path.endsWith('.ts') || path.endsWith('.mts') || path.endsWith('.cts') ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+}
+
+function discoverPowerShellBootTestsInSources(sources: readonly SourceInput[]): PowerShellBootTest[] {
   const result: PowerShellBootTest[] = [];
-  for (const absolutePath of walkFiles(repoRoot, (path) => isTestFile(path) && ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'].includes(extname(path)))) {
-    const path = repoRelative(repoRoot, absolutePath);
-    const source = readFileSync(absolutePath, 'utf8');
+  for (const { path, source } of sources) {
     const sourceFile = ts.createSourceFile(
       path,
       source,
       ts.ScriptTarget.Latest,
       true,
-      path.endsWith('.ts') || path.endsWith('.mts') || path.endsWith('.cts') ? ts.ScriptKind.TS : ts.ScriptKind.JS,
+      scriptKind(path),
     );
     const bindings = analyzeImports(sourceFile);
     const mechanisms = new Set<string>();
@@ -143,6 +151,47 @@ export function discoverPowerShellBootTests(repoRoot: string): PowerShellBootTes
     }
   }
   return result.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export function discoverPowerShellBootTests(repoRoot: string): PowerShellBootTest[] {
+  const sources = [...walkFiles(repoRoot, (path) => isTestFile(path) && ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'].includes(extname(path)))]
+    .map((absolutePath) => ({
+      path: repoRelative(repoRoot, absolutePath),
+      source: readFileSync(absolutePath, 'utf8'),
+    }));
+  return discoverPowerShellBootTestsInSources(sources);
+}
+
+export async function discoverPowerShellBootTestGrowth(repoRoot: string): Promise<PowerShellBootTest[]> {
+  const baseRef = await resolveComparisonBaseRef(repoRoot);
+  if (!baseRef) return [];
+
+  const changedFiles = await listChangedFilesSinceBase(repoRoot, baseRef);
+  const actualSources: SourceInput[] = [];
+  const priorSources: SourceInput[] = [];
+
+  for (const entry of changedFiles) {
+    if (isTestFile(entry.path) && existsSync(resolve(repoRoot, entry.path))) {
+      actualSources.push({
+        path: entry.path,
+        source: readFileSync(resolve(repoRoot, entry.path), 'utf8'),
+      });
+    }
+
+    const priorPath = entry.previousPath ?? entry.path;
+    if (!isTestFile(priorPath)) continue;
+    const priorSource = await readGitFile(repoRoot, baseRef, priorPath);
+    if (priorSource === null) continue;
+    priorSources.push({ path: entry.path, source: priorSource });
+  }
+
+  const actual = discoverPowerShellBootTestsInSources(actualSources);
+  const prior = discoverPowerShellBootTestsInSources(priorSources);
+  const priorByPath = new Map(prior.map((entry) => [entry.path, new Set(entry.mechanisms)]));
+  return actual.filter((entry) => {
+    const priorMechanisms = priorByPath.get(entry.path);
+    return !priorMechanisms || entry.mechanisms.some((mechanism) => !priorMechanisms.has(mechanism));
+  });
 }
 
 export interface PowerShellBaselineComparison {

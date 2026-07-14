@@ -1,19 +1,23 @@
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   comparePowerShellBootBaseline,
+  discoverPowerShellBootTestGrowth,
   discoverPowerShellBootTests,
   makePowerShellBootBaseline,
   type PowerShellBootBaseline,
 } from '#opk-toolchain/powershell-child-policy';
-import { isDirectExecution, writeVersionOneBaseline } from '#opk-toolchain/baseline-io';
+import { isDirectExecution, readJsonFile, writeVersionOneBaseline } from '#opk-toolchain/baseline-io';
 
-export function checkPowerShellTestGrowth(repoRoot: string): string[] {
-  const baselinePath = resolve(repoRoot, 'scripts/toolchain/powershell-child-tests.json');
-  const baseline = JSON.parse(readFileSync(baselinePath, 'utf8')) as PowerShellBootBaseline;
+export async function checkPowerShellTestGrowth(repoRoot: string): Promise<string[]> {
+  const baseline = readJsonFile<PowerShellBootBaseline>(repoRoot, 'scripts/toolchain/powershell-child-tests.json');
   const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(repoRoot), baseline);
+  const growth = await discoverPowerShellBootTestGrowth(repoRoot);
+  const growthPaths = new Set(growth.map((entry) => entry.path));
   return [
-    ...comparison.added.map((entry) => `${entry.path}: unapproved PowerShell child test (${entry.mechanisms.join(', ')})`),
+    ...growth.map((entry) => `${entry.path}: unapproved PowerShell child test (${entry.mechanisms.join(', ')})`),
+    ...comparison.added
+      .filter((entry) => !growthPaths.has(entry.path))
+      .map((entry) => `${entry.path}: PowerShell child test is missing a baseline entry (${entry.mechanisms.join(', ')})`),
     ...comparison.stale.map((entry) => `${entry.path}: stale PowerShell child-test baseline entry`),
   ];
 }
@@ -30,7 +34,7 @@ if (isDirectExecution(import.meta.url, process.argv[1])) {
     writePowerShellTestBaseline(repoRoot);
     process.stdout.write('Wrote PowerShell child-test baseline.\n');
   } else {
-    const failures = checkPowerShellTestGrowth(repoRoot);
+    const failures = await checkPowerShellTestGrowth(repoRoot);
     if (failures.length > 0) {
       for (const failure of failures) process.stderr.write(`${failure}\n`);
       process.exitCode = 1;

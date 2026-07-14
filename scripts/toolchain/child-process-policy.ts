@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { extname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { extname, resolve } from 'node:path';
 import ts from 'typescript';
 import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause, recordChildProcessPropertyAlias, recordChildProcessThenBinding } from '#opk-toolchain/child-process-imports';
+import { listChangedFilesSinceBase, readGitFile, resolveComparisonBaseRef } from '#opk-toolchain/baseline-io';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const RAW_APIS = new Set([
@@ -37,6 +38,11 @@ export interface RawChildProcessBaseline {
 interface ImportBindings {
   readonly named: ReadonlyMap<string, string>;
   readonly namespaces: ReadonlySet<string>;
+}
+
+interface SourceInput {
+  readonly path: string;
+  readonly source: string;
 }
 
 function moduleText(node: ts.Expression | undefined): string | undefined {
@@ -87,24 +93,27 @@ function fingerprint(source: string): string {
   return createHash('sha256').update(source).digest('hex').slice(0, 20);
 }
 
-export function discoverRawChildProcessCalls(
-  repoRoot: string,
-  exempt: (path: string) => boolean = (path) => path === 'scripts/kernel/subprocess.ts'
-    || path === 'scripts/kernel/subprocess.test.ts',
+function defaultExempt(path: string): boolean {
+  return path === 'scripts/kernel/subprocess.ts' || path === 'scripts/kernel/subprocess.test.ts';
+}
+
+function scriptKind(path: string): ts.ScriptKind {
+  return path.endsWith('.ts') || path.endsWith('.mts') || path.endsWith('.cts') ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+}
+
+function discoverRawChildProcessCallsInSources(
+  sources: readonly SourceInput[],
+  exempt: (path: string) => boolean = defaultExempt,
 ): RawChildProcessCall[] {
   const discovered: Omit<RawChildProcessCall, 'ordinal'>[] = [];
-  for (const absolutePath of walkFiles(repoRoot, (path) => SOURCE_EXTENSIONS.has(extname(path)))) {
-    const path = repoRelative(repoRoot, absolutePath);
+  for (const { path, source } of sources) {
     if (exempt(path)) continue;
-    const source = readFileSync(absolutePath, 'utf8');
     const sourceFile = ts.createSourceFile(
       path,
       source,
       ts.ScriptTarget.Latest,
       true,
-      path.endsWith('.ts') || path.endsWith('.mts') || path.endsWith('.cts')
-        ? ts.ScriptKind.TS
-        : ts.ScriptKind.JS,
+      scriptKind(path),
     );
     const bindings = importBindings(sourceFile);
     const visit = (node: ts.Node): void => {
@@ -129,6 +138,50 @@ export function discoverRawChildProcessCalls(
       counts.set(key, ordinal);
       return { ...entry, ordinal };
     });
+}
+
+export function discoverRawChildProcessCalls(
+  repoRoot: string,
+  exempt: (path: string) => boolean = defaultExempt,
+): RawChildProcessCall[] {
+  const sources = [...walkFiles(repoRoot, (path) => SOURCE_EXTENSIONS.has(extname(path)))]
+    .map((absolutePath) => ({
+      path: repoRelative(repoRoot, absolutePath),
+      source: readFileSync(absolutePath, 'utf8'),
+    }));
+  return discoverRawChildProcessCallsInSources(sources, exempt);
+}
+
+export async function discoverRawChildProcessGrowth(
+  repoRoot: string,
+  exempt: (path: string) => boolean = defaultExempt,
+): Promise<RawChildProcessCall[]> {
+  const baseRef = await resolveComparisonBaseRef(repoRoot);
+  if (!baseRef) return [];
+
+  const changedFiles = await listChangedFilesSinceBase(repoRoot, baseRef);
+  const actualSources: SourceInput[] = [];
+  const priorSources: SourceInput[] = [];
+
+  for (const entry of changedFiles) {
+    if (SOURCE_EXTENSIONS.has(extname(entry.path)) && existsSync(resolve(repoRoot, entry.path))) {
+      actualSources.push({
+        path: entry.path,
+        source: readFileSync(resolve(repoRoot, entry.path), 'utf8'),
+      });
+    }
+
+    const priorPath = entry.previousPath ?? entry.path;
+    if (!SOURCE_EXTENSIONS.has(extname(priorPath))) continue;
+    const priorSource = await readGitFile(repoRoot, baseRef, priorPath);
+    if (priorSource === null) continue;
+    priorSources.push({ path: entry.path, source: priorSource });
+  }
+
+  const actual = discoverRawChildProcessCallsInSources(actualSources, exempt);
+  const prior = discoverRawChildProcessCallsInSources(priorSources, exempt);
+  const priorKeys = new Set(prior.map((entry) => rawCallKey(entry)));
+  return actual.filter((entry) => !priorKeys.has(rawCallKey(entry)));
 }
 
 export function rawCallKey(call: Pick<RawChildProcessCall, 'path' | 'api' | 'fingerprint' | 'ordinal'>): string {
