@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-07-14T13:56:04.950Z",
+  "dataChangedAt": "2026-07-14T14:03:53.892Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -188,7 +188,8 @@
     "tests/agents-md-relocation.test.ts": 45000,
     "tests/agents-md-size-budget.test.ts": 45000,
     "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000,
-    "scripts/pr-session-binding-cache.test.ts": 120000
+    "scripts/pr-session-binding-cache.test.ts": 120000,
+    "scripts/reachability-purge.test.ts": 7232
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -375,7 +376,8 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": "measured",
     "tests/agents-md-relocation.test.ts": "measured",
     "tests/agents-md-size-budget.test.ts": "measured",
-    "scripts/worker-status-store.test.ts": "measured"
+    "scripts/worker-status-store.test.ts": "measured",
+    "scripts/reachability-purge.test.ts": "measured"
   },
   "recentSamples": {},
   "fileChangedAt": {},
@@ -396,6 +398,7 @@
     "scripts/spawn-worktree-repository-identity-binding.test.ts": "4568f65e6b22e3c4e272691c4f718ad4f583fec288822026d08ec3a30179095b",
     "scripts/worker-nudge-gate.test.ts": "b2bd29d353d29213ebd2a9163c422a48042538b72a140909e2bbcf0c96cb92bc",
     "scripts/worker-recovery-spawn-argv.test.ts": "19bf372e1dc316b51d5e7805d4b02cdae5a30f67580c724b0766b5c43e9099d5",
-    "scripts/worktree-gate-claim-completion-seam.test.ts": "72968c8c731594b23f9b164235746245064f837e52844e8348c8999500338aac"
+    "scripts/worktree-gate-claim-completion-seam.test.ts": "72968c8c731594b23f9b164235746245064f837e52844e8348c8999500338aac",
+    "scripts/reachability-purge.test.ts": "30b7b1f9de188384624f12639b5f3f164c2abed06abc6766d4e00ab184015db2"
   }
 }
