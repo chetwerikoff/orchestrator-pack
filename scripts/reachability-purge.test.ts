@@ -120,7 +120,7 @@ describe('reachability-purge', () => {
   });
 
   it('records the completed #821 prerequisite deletions without attributing them to #819', () => {
-    expect(manifest.externalPrerequisiteDeletions).toHaveLength(13);
+    expect(manifest.externalPrerequisiteDeletions).toHaveLength(12);
     expect(manifest.externalPrerequisiteDeletions.every((row) => row.issue === 821)).toBe(true);
     expect(manifest.externalPrerequisiteDeletions.every((row) => row.trackedInBase && row.deletedInCurrentTree)).toBe(true);
     expect(manifest.externalPrerequisiteDeletions.every((row) => Boolean(row.path && row.evidence))).toBe(true);

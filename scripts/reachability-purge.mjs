@@ -52,7 +52,6 @@ const ISSUE_821_EXTERNAL_DELETIONS = [
   'scripts/git-real-binary',
   'scripts/invoke-orchestrator-claimed-review-run.ps1',
   'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
-  'scripts/lib/derive-gh-repo-from-checkout.mjs',
 ];
 
 

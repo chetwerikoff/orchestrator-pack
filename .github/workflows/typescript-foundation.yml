@@ -1,60 +1,100 @@
 name: TypeScript foundation
-on: [pull_request]
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  issue-821-report:
-    name: Issue 821 final lane report
+  runtime:
+    name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-821-retire-autonomous-surface
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --include=dev
-      - name: Run commands independently and persist
-        shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
-        run: |
-          set +e
-          node --input-type=module -e "import{readFileSync,writeFileSync}from'node:fs';let p='scripts/reachability-purge.mjs',s=readFileSync(p,'utf8');s=s.replace(\"  'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',\\n  'scripts/lib/derive-gh-repo-from-checkout.mjs',\\n];\",\"  'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',\\n];\");writeFileSync(p,s);p='scripts/reachability-purge.test.ts';s=readFileSync(p,'utf8').replace('toHaveLength(13)','toHaveLength(12)');writeFileSync(p,s);"
-          rm -f issue-821-*.txt
-          node scripts/reachability-purge.mjs --write
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
 
-          report=issue-821-final-lane-report.txt
-          : > "$report"
-          overall=0
-          run_check() {
-            name="$1"; shift
-            tmp="$(mktemp)"
-            "$@" >"$tmp" 2>&1
-            status=$?
-            { printf '\n===== %s (exit %s) =====\n' "$name" "$status"; cat "$tmp"; } >> "$report"
-            rm -f "$tmp"
-            if (( status != 0 )); then overall=1; fi
-          }
-          run_check "manifest verifier" node scripts/reachability-purge.mjs
-          run_check "focused reachability and scoped lookup" npx vitest run scripts/reachability-purge.test.ts scripts/review-start-scoped-gh-json-capture.test.ts
-          run_check "tsconfig base" npx tsc --project tsconfig.base.json --noEmit
-          run_check "light lane" pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
-          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          run_check "heavy topology" node scripts/emit-vitest-heavy-topology.mjs --gha-output
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
 
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f .vitest-runtime-report-light.json scripts/vitest-heavy-topology.plan.json
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Persist issue 821 final lane result"
-          git push origin HEAD:agent/issue-821-retire-autonomous-surface
-          exit "$overall"
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth
