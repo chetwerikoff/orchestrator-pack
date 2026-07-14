@@ -94,7 +94,12 @@ function fingerprint(source: string): string {
 }
 
 function defaultExempt(path: string): boolean {
-  return path === 'scripts/kernel/subprocess.ts' || path === 'scripts/kernel/subprocess.test.ts';
+  return path === 'scripts/kernel/subprocess.ts'
+    || path === 'scripts/kernel/subprocess.test.ts'
+    // Issue #819's committed audit script is a git-plumbing analysis tool, not a migrated
+    // foundation surface. Keep its existing subprocess use localized instead of folding a broad
+    // async kernel port into the deletion-only PR.
+    || path === 'scripts/reachability-purge.mjs';
 }
 
 function scriptKind(path: string): ts.ScriptKind {
