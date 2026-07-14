@@ -567,20 +567,18 @@ describe('Worker-NudgeClaim single-flight contract', () => {
 
   it('rejects ungated journaled send on autonomous surface', () => {
     const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-    const result = spawnSync(
-      'pwsh',
-      ['-NoProfile', '-File', journaled, 'opk-test', '-Source', 'test'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        input: 'hello worker',
-        env: {
-          ...process.env,
-          AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
-          AO_SESSION_ID: '1',
-        },
-      },
-    );
+    const script = `
+      $env:AO_JOURNALED_SEND_ASSUME_CONTRACT = '1'
+      $env:AO_SESSION_ID = '1'
+      'hello worker' | & pwsh -NoProfile -File ${psString(journaled)} 'opk-test' -Source 'test' 2>$null
+      [pscustomobject]@{ status = $LASTEXITCODE } | ConvertTo-Json -Compress
+    `;
+    const jsonLine = runPwsh(script)
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{'))
+      .pop();
+    const result = JSON.parse(jsonLine ?? '{}');
     expect(result.status).toBe(46);
   });
 

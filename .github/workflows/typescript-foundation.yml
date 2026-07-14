@@ -2,109 +2,99 @@ name: TypeScript foundation
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  issue-821-finalize:
-    if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 final migration validation
+  runtime:
+    name: TypeScript runtime (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Execute TypeScript without a build artifact
+        run: npm run ts:smoke
+
+  typecheck:
+    name: TypeScript strict typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Typecheck without emit
+        run: npm run typecheck:foundation
+
+  lint:
+    name: TypeScript policy lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-821-retire-autonomous-surface
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --include=dev
-      - name: Apply subprocess migration and baseline
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/worker-nudge-gate.test.ts')
-          text = path.read_text(encoding='utf-8')
-          old = """  it('rejects ungated journaled send on autonomous surface', () => {
-              const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-              const result = spawnSync(
-                'pwsh',
-                ['-NoProfile', '-File', journaled, 'opk-test', '-Source', 'test'],
-                {
-                  cwd: repoRoot,
-                  encoding: 'utf8',
-                  input: 'hello worker',
-                  env: {
-                    ...process.env,
-                    AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
-                    AO_SESSION_ID: '1',
-                  },
-                },
-              );
-              expect(result.status).toBe(46);
-            });"""
-          new = """  it('rejects ungated journaled send on autonomous surface', () => {
-              const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-              const script = `
-                $env:AO_JOURNALED_SEND_ASSUME_CONTRACT = '1'
-                $env:AO_SESSION_ID = '1'
-                'hello worker' | & pwsh -NoProfile -File ${psString(journaled)} 'opk-test' -Source 'test' 2>$null
-                [pscustomobject]@{ status = $LASTEXITCODE } | ConvertTo-Json -Compress
-              `;
-              const jsonLine = runPwsh(script)
-                .split('\\n')
-                .map((line) => line.trim())
-                .filter((line) => line.startsWith('{'))
-                .pop();
-              const result = JSON.parse(jsonLine ?? '{}');
-              expect(result.status).toBe(46);
-            });"""
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one raw ungated journaled-send test block, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
-          PY
-          rm -f issue-821-*.txt
-          npm run lint:foundation -- --write-baseline
-      - name: Run affected tests
-        run: |
-          npx vitest run \
-            scripts/autonomous-orchestrator-boundary.test.ts \
-            scripts/autonomous-spawn-policy.test.ts \
-            scripts/worker-nudge-gate.test.ts \
-            scripts/spawn-worktree-grant-finalization.test.ts \
-            scripts/orchestrator-claimed-review-run.test.ts \
-            scripts/autonomous-spawn-worktree-gate.test.ts \
-            scripts/orchestrator-review-start-preflight-audit.test.ts \
-            scripts/review-start-envelope-external-io.test.ts
-      - name: Run issue 821 guards
-        shell: bash
-        run: |
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
-          pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
-          pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
-          ! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\.ao/autonomous-real-binaries\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'
-          git diff --check
-      - name: Commit validated result and restore workflow
-        shell: bash
-        run: |
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f \
-            .github/issue-821-trigger.txt \
-            .github/scripts/restore-issue-821-tests.mjs \
-            .github/workflows/issue-821-minimal-runner.yml \
-            .github/workflows/issue-821-run-test-restore.yml \
-            .github/workflows/issue-821-restore-minimal-tests.yml \
-            issue-821-*.txt
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Migrate restored gate test subprocess"
-          git push origin HEAD:agent/issue-821-retire-autonomous-surface
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce Promise and subprocess policies
+        run: npm run lint:foundation
+
+  kernels:
+    name: TypeScript kernel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Run in-process foundation tests
+        run: npm run test:foundation
+
+  powershell-child-growth:
+    name: PowerShell child-test growth guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce committed PowerShell child-test baseline
+        run: npm run check:pwsh-test-growth
