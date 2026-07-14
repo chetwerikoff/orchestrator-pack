@@ -72,3 +72,19 @@ export function recordChildProcessBindingName(
     if (allowedApis.has(imported)) named.set(local, imported);
   }
 }
+
+export function recordChildProcessThenBinding(
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  allowedApis: ReadonlySet<string>,
+  named: Map<string, string>,
+  namespaces: Set<string>,
+): void {
+  if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'then') return;
+  if (!isChildProcessImport(node.expression.expression)) return;
+  const callback = node.arguments[0];
+  if (!callback || (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))) return;
+  const parameter = callback.parameters[0];
+  if (!parameter) return;
+  recordChildProcessBindingName(parameter.name, sourceFile, allowedApis, named, namespaces);
+}

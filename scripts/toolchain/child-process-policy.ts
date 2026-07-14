@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
-import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause } from '#opk-toolchain/child-process-imports';
+import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause, recordChildProcessThenBinding } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const RAW_APIS = new Set([
@@ -47,6 +47,9 @@ function importBindings(sourceFile: ts.SourceFile): ImportBindings {
   const named = new Map<string, string>();
   const namespaces = new Set<string>();
   const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      recordChildProcessThenBinding(node, sourceFile, RAW_APIS, named, namespaces);
+    }
     if (ts.isVariableDeclaration(node)) {
       const declaration = node;
       const initializer = declaration.initializer;

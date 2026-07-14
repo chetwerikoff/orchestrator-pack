@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
-import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause } from '#opk-toolchain/child-process-imports';
+import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause, recordChildProcessThenBinding } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const TEST_SUFFIXES = ['.test.ts', '.test.mts', '.test.cts', '.test.js', '.test.mjs', '.test.cjs'];
@@ -51,6 +51,9 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
     }
 
     const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        recordChildProcessThenBinding(node, sourceFile, CHILD_APIS, named, namespaces);
+      }
       if (!ts.isVariableDeclaration(node)) {
         ts.forEachChild(node, visit);
         return;

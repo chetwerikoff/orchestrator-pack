@@ -134,6 +134,26 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('rejects dynamic import raw child-process calls inside then callbacks', () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/dynamic-import-then.ts', `
+      import('node:child_process').then((cp) => {
+        cp.spawn('git', ['status']);
+      });
+      import('node:child_process').then(({ spawnSync }) => {
+        spawnSync('git', ['diff']);
+      });
+    `);
+    const comparison = compareRawChildProcessBaseline(
+      discoverRawChildProcessCalls(root, () => false),
+      { version: 1, entries: [] },
+    );
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/dynamic-import-then.ts', api: 'spawn' },
+      { path: 'scripts/dynamic-import-then.ts', api: 'spawnSync' },
+    ]);
+  });
+
   it('rejects default-import raw child-process calls', () => {
     const root = temporaryRoot();
     write(root, 'scripts/default-import.ts', `
@@ -196,6 +216,23 @@ describe('TypeScript foundation check self-tests', () => {
     const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
     expect(comparison.added).toMatchObject([
       { path: 'scripts/dynamic-import.test.ts', mechanisms: ['direct:spawn', 'direct:spawnSync'] },
+    ]);
+  });
+
+  it('turns the PowerShell growth guard red for dynamic import then callbacks', () => {
+    const root = temporaryRoot();
+    const empty: PowerShellBootBaseline = { version: 1, entries: [] };
+    write(root, 'scripts/dynamic-import-then.test.ts', `
+      import('node:child_process').then((cp) => {
+        cp.spawnSync('pwsh', ['-NoProfile']);
+      });
+      import('node:child_process').then(({ spawn }) => {
+        spawn('pwsh', ['-NoProfile']);
+      });
+    `);
+    const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/dynamic-import-then.test.ts', mechanisms: ['direct:spawn', 'direct:spawnSync'] },
     ]);
   });
 
