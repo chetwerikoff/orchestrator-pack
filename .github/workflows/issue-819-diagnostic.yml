@@ -1,0 +1,57 @@
+name: issue-819-diagnostic
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Capture failing gate logs
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          pwsh -NoLogo -NoProfile -File scripts/verify.ps1 > verify.log 2>&1
+          echo $? > verify.exit
+          pwsh -NoLogo -NoProfile -Command "./scripts/lint-self-architect.ps1 -Strict -BaseRef '$PR_BASE_SHA' -HeadRef '$PR_HEAD_SHA'" > self-architect.log 2>&1
+          echo $? > self-architect.exit
+          npx tsc --project tsconfig.base.json --noEmit > typecheck.log 2>&1
+          echo $? > typecheck.exit
+          printf 'verify=%s self_architect=%s typecheck=%s\n' "$(cat verify.exit)" "$(cat self-architect.exit)" "$(cat typecheck.exit)" | tee summary.txt
+          exit 0
+
+      - name: Upload diagnostic logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-819-diagnostic
+          path: |
+            verify.log
+            verify.exit
+            self-architect.log
+            self-architect.exit
+            typecheck.log
+            typecheck.exit
+            summary.txt
+          retention-days: 1
+          if-no-files-found: error
