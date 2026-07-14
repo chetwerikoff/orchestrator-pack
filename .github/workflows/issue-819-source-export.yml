@@ -32,37 +32,23 @@ jobs:
 
       - name: Materialize reviewed implementation
         shell: bash
+        env:
+          NOTE_B64: CgojIyBSZWFjaGFiaWxpdHkgcHVyZ2UgcHJlY29uZGl0aW9uIGF1ZGl0IChJc3N1ZSAjODE5KQoKVGhlIGNvbW1pdHRlZCByZWFjaGFiaWxpdHkgcHJvY2VkdXJlIGZvdW5kIHRoYXQgdGhlIHByb3Bvc2VkIGF1dG9ub21vdXMtc3VyZmFjZSBzaGltIHJldGlyZW1lbnQgaXMKbm90IHlldCBzYWZlIG9uIHRoZSBwaW5uZWQgYG1haW5gIHRyZWUuIGBzY3JpcHRzL2FvYCwgYHNjcmlwdHMvZ2l0YCwKYHNjcmlwdHMvYXV0b25vbW91cy1iYXNoLWVudi5zaGAsIGBzY3JpcHRzL2F1dG9ub21vdXMtb3JjaGVzdHJhdG9yLXN1cmZhY2UtYm9vdHN0cmFwLnNoYCwKYHNjcmlwdHMvX2ludm9rZS1zeXN0ZW0tZ2l0LnNoYCwgYW5kIGBzY3JpcHRzL19yZXNvbHZlLXN5c3RlbS1naXQuc2hgIHJlbWFpbiByZWFjaGFibGUgb3IgaGVsZCBieQpwcm90ZWN0ZWQgdGVzdC9jb25maWcgc3VyZmFjZXMuIEluIHBhcnRpY3VsYXIsIHRoZSBSRVdSSVRFLWxpc3QKYGF1dG9ub21vdXMtb3JjaGVzdHJhdG9yLWludGVycG9zZXIudGVzdC50c2AgYW5kIHRoZSBsaXZlCmBhdXRvbm9tb3VzLW9yY2hlc3RyYXRvci1ib3VuZGFyeS50ZXN0LnRzYCBzdGlsbCBleGVjdXRlIG9yIGFzc2VydCB0aGVzZSBmaWxlcywgd2hpbGUKYGFnZW50LW9yY2hlc3RyYXRvci55YW1sLmV4YW1wbGVgIHN0aWxsIGNvbmZpZ3VyZXMgdGhlIHNoaW0gUEFUSC9ib290c3RyYXAgY2hhaW4gYW5kIGlzIG91dHNpZGUgdGhpcwppc3N1ZSdzIGFsbG93ZWQgcm9vdHMuCgpUaGlzIGF1ZGl0IGRvZXMgKipub3QqKiByZXRpcmUgdGhlIHNoaW1zIGFuZCBkb2VzIG5vdCBhdXRob3JpemUgb3BlcmF0b3IgUEFUSC9wcm9maWxlIGNsZWFudXAgeWV0LgpLZWVwIHRoZSBleGlzdGluZyBwYWNrLWxvY2FsIHNoaW0gY29uZmlndXJhdGlvbiB1bnRpbCB0aGUgb3duaW5nIHByZWRpY2F0ZS90ZXN0L2NvbmZpZyBtaWdyYXRpb24KbGFuZHMuIEF0IHRoYXQgcG9pbnQsIHRoZSByZXRpcmVtZW50IGNoYW5nZSBtdXN0IGFkZCB0aGUgZmluYWwgb3BlcmF0b3Igc3RlcDogcmVtb3ZlIGxvY2FsClBBVEgvcHJvZmlsZSByZWZlcmVuY2VzIHRvIHRoZSByZXRpcmVkIHBhY2sgc2hpbXMgYW5kIHVzZSByZWd1bGFyIGBhb2AgYW5kIGBnaXRgIGZyb20gUEFUSC4K
         run: |
           set -euo pipefail
           base64 -d .github/issue-819-reachability-purge.mjs.gz.b64 | gzip -d > scripts/reachability-purge.mjs
           chmod +x scripts/reachability-purge.mjs
 
           python3 - <<'PY'
+          import base64
+          import os
           from pathlib import Path
 
           notes = Path('docs/migration_notes.md')
           heading = '## Reachability purge precondition audit (Issue #819)'
-          entry = '''
-
-## Reachability purge precondition audit (Issue #819)
-
-The committed reachability procedure found that the proposed autonomous-surface shim retirement is
-not yet safe on the pinned `main` tree. `scripts/ao`, `scripts/git`,
-`scripts/autonomous-bash-env.sh`, `scripts/autonomous-orchestrator-surface-bootstrap.sh`,
-`scripts/_invoke-system-git.sh`, and `scripts/_resolve-system-git.sh` remain reachable or held by
-protected test/config surfaces. In particular, the REWRITE-list
-`autonomous-orchestrator-interposer.test.ts` and the live
-`autonomous-orchestrator-boundary.test.ts` still execute or assert these files, while
-`agent-orchestrator.yaml.example` still configures the shim PATH/bootstrap chain and is outside this
-issue's allowed roots.
-
-This audit does **not** retire the shims and does not authorize operator PATH/profile cleanup yet.
-Keep the existing pack-local shim configuration until the owning predicate/test/config migration
-lands. At that point, the retirement change must add the final operator step: remove local
-PATH/profile references to the retired pack shims and use regular `ao` and `git` from PATH.
-'''
           text = notes.read_text(encoding='utf-8')
           if heading not in text:
+              entry = base64.b64decode(os.environ['NOTE_B64']).decode('utf-8')
               notes.write_text(text.rstrip() + entry, encoding='utf-8')
 
           lanes = Path('scripts/vitest-ci-lanes.config.json')
@@ -72,8 +58,7 @@ PATH/profile references to the retired pack shims and use regular `ao` and `git`
           if row not in text:
               if anchor not in text:
                   raise SystemExit('vitest lane anchor missing')
-              text = text.replace(anchor, row + anchor, 1)
-              lanes.write_text(text, encoding='utf-8')
+              lanes.write_text(text.replace(anchor, row + anchor, 1), encoding='utf-8')
           PY
 
           git rm --ignore-unmatch -- \
@@ -104,18 +89,13 @@ PATH/profile references to the retired pack shims and use regular `ao` and `git`
         run: |
           set -euo pipefail
           npm ci --include=dev --ignore-scripts
-          cat > vitest.issue-819.config.mjs <<'EOF'
-          import { defineConfig } from 'vitest/config';
-          export default defineConfig({
-            test: {
-              include: ['scripts/reachability-purge.test.ts'],
-              fileParallelism: false,
-              maxWorkers: 1,
-              testTimeout: 120000,
-              hookTimeout: 120000,
-            },
-          });
-          EOF
+          printf '%s\n' \
+            "import { defineConfig } from 'vitest/config';" \
+            "export default defineConfig({ test: {" \
+            "  include: ['scripts/reachability-purge.test.ts']," \
+            "  fileParallelism: false, maxWorkers: 1," \
+            "  testTimeout: 120000, hookTimeout: 120000," \
+            "} });" > vitest.issue-819.config.mjs
           npx vitest run --config vitest.issue-819.config.mjs
           rm vitest.issue-819.config.mjs
 
