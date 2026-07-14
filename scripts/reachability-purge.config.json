@@ -6,8 +6,14 @@
   "knownBrokenSuspectEdges": [
     {
       "source": "scripts/lib/WorkerStatusStore.ps1",
-      "line": 14,
-      "evidence": "Issue #819 records the #748/#765 WorkerStatusStore outage: an in-function dot-source did not make definitions visible to the cross-scope consumer."
+      "line": 74,
+      "evidence": "Issue #819 records the #748/#765 WorkerStatusStore outage: an in-function dot-source did not make definitions visible to the cross-scope consumer.",
+      "possibleTargets": [
+        "scripts/lib/Autonomous-GateCommon.ps1",
+        "scripts/lib/Gh-PrChecks.ps1",
+        "scripts/lib/Get-ReconcileChecksByPr.ps1",
+        "scripts/lib/Review-PostRunRetry.ps1"
+      ]
     }
   ],
   "knownGood": [

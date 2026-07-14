@@ -295,6 +295,33 @@ function resolvePowerShellExpression(repoRoot, trackedSet, sourceRel, expression
   return null;
 }
 
+function inferPowerShellPossibleTargets(repoRoot, trackedSet, sourceRel, expression, variables) {
+  const candidates = new Set();
+  const add = (value) => {
+    const target = resolveExistingPath(repoRoot, trackedSet, sourceRel, value);
+    if (target) candidates.add(target);
+  };
+
+  const expr = expression.trim();
+  for (const match of expr.matchAll(/['"]([^'"]+\.(?:ps1|mjs|js|cjs|ts|mts|cts|sh))['"]/gi)) {
+    const literal = normalizeRel(match[1]);
+    add(literal);
+    add(normalizeRel(path.posix.join(path.posix.dirname(sourceRel), literal)));
+    if (!literal.includes('/')) {
+      for (const tracked of trackedSet) {
+        if (path.posix.basename(tracked).toLowerCase() === literal.toLowerCase()) candidates.add(tracked);
+      }
+    }
+  }
+
+  for (const match of expr.matchAll(/\$([A-Za-z_][A-Za-z0-9_:]*)/g)) {
+    const value = variables.get(match[1].toLowerCase());
+    if (value) add(value);
+  }
+
+  return [...candidates].sort();
+}
+
 function powerShellAssignments(repoRoot, trackedSet, sourceRel, states) {
   const variables = new Map();
   for (const state of states) {
@@ -357,10 +384,14 @@ function parsePowerShell(repoRoot, trackedSet, sourceRel, text) {
     if (dot) {
       const target = resolvePowerShellExpression(repoRoot, trackedSet, sourceRel, dot[1], variables);
       if (state.inFunction) {
+        const possibleTargets = target
+          ? [target]
+          : inferPowerShellPossibleTargets(repoRoot, trackedSet, sourceRel, dot[1], variables);
         suspectEdges.push({
           source: sourceRel,
           line: state.lineNumber,
           target,
+          possibleTargets,
           expression: dot[1].trim(),
           consumerScope: 'unknown',
           disposition: sourceRel === 'scripts/lib/WorkerStatusStore.ps1' ? 'broken' : 'unknown',
@@ -678,7 +709,9 @@ function manifestMigrationNote(repoRoot) {
   const namesRetired = REQUIRED_RETIRED_SHIMS.every((item) => lower.includes(path.posix.basename(item).toLowerCase()));
   const pathCleanup = /remove[^\n]{0,160}(?:path|profile)|(?:path|profile)[^\n]{0,160}remove/i.test(text);
   const replacement = /regular[^\n]{0,120}\bao\b[^\n]{0,120}\bgit\b[^\n]{0,120}(?:on\s+path|path)/i.test(text);
-  return { namesRetired, pathCleanup, replacement, presentWithRequiredFields: namesRetired && pathCleanup && replacement };
+  const explicitlyNotAuthorized = /does\s+not\s+(?:retire|authorize)|not\s+yet\s+(?:safe|authorized)|keep\s+the\s+existing/i.test(text);
+  const authorized = namesRetired && pathCleanup && replacement && !explicitlyNotAuthorized;
+  return { namesRetired, pathCleanup, replacement, explicitlyNotAuthorized, authorized, presentWithRequiredFields: authorized };
 }
 
 function classifySupersededSurface(node, text, inboundTrustedEdges) {
@@ -814,8 +847,26 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
   const suspects = dedupe(suspectEdges).map((edge) => {
     const known = brokenByKey.get(`${edge.source}:${edge.line}`);
     if (!known) return edge;
-    return { ...edge, disposition: 'broken', consumerScope: 'cross-scope', evidence: known.evidence };
+    return {
+      ...edge,
+      disposition: 'broken',
+      consumerScope: 'cross-scope',
+      evidence: known.evidence,
+      possibleTargets: [...new Set([...(edge.possibleTargets ?? []), ...(known.possibleTargets ?? [])])].sort(),
+    };
   }).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
+  for (const edge of suspects) {
+    if (edge.target || (edge.possibleTargets ?? []).length === 0) continue;
+    unresolvedDynamicForms.push({
+      source: edge.source,
+      line: edge.line,
+      kind: 'in-function-dot-source-dynamic-target',
+      expression: edge.expression,
+      possibleTargets: edge.possibleTargets,
+      foldedIntoZeroReachability: false,
+      evidence: 'The in-function dot-source target is dynamic; every inferred possible target is held in addition to the explicit suspect-edge disposition.',
+    });
+  }
   let unresolved = dedupe(unresolvedDynamicForms).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
   const literalReferences = dedupe(references).sort((a, b) => edgeKey(a).localeCompare(edgeKey(b)));
 
@@ -879,7 +930,13 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
     if (!holds.has(target)) holds.set(target, new Set());
     holds.get(target).add(reason);
   };
-  for (const edge of suspects) if (edge.disposition !== 'works') hold(edge.target, `suspect-edge:${edge.source}:${edge.line}:${edge.disposition}`);
+  for (const edge of suspects) {
+    if (edge.disposition === 'works') continue;
+    hold(edge.target, `suspect-edge:${edge.source}:${edge.line}:${edge.disposition}`);
+    for (const target of edge.possibleTargets ?? []) {
+      hold(target, `suspect-edge-possible-target:${edge.source}:${edge.line}:${edge.disposition}`);
+    }
+  }
   for (const row of unresolved) for (const target of row.possibleTargets ?? []) hold(target, `unresolved-dynamic:${row.source}:${row.line}`);
   for (const item of config.knownGood ?? []) hold(item, 'binding:known-good');
 
@@ -944,6 +1001,30 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
     inboundTrustedEdges: trusted.filter((edge) => edge.target === shim),
     protectedTestReferences: literalReferences.filter((ref) => ref.target === shim && protectedTests.includes(ref.source)),
   }));
+  const auditHandoffPath = 'docs/investigations/MIGRATION-audit-handoff-2026-07-13.md';
+  const migrationNotesEntry = manifestMigrationNote(repoRoot);
+  const completionBlockers = [
+    ...(trackedSet.has(auditHandoffPath) ? [] : [{
+      code: 'missing-binding-audit-handoff',
+      path: auditHandoffPath,
+      evidence: 'Issue #819 makes this audit handoff the binding deletion seed, but it is absent from the pinned analysis tree.',
+    }]),
+    ...retiredShimBlockers.filter((row) => row.trackedInBase && !row.deletedInCurrentTree && (row.reachable || row.held)).map((row) => ({
+      code: 'required-retired-shim-still-live-or-held',
+      path: row.path,
+      evidence: 'The binding requires retirement, but the current graph or protected surfaces require fail-safe KEEP.',
+    })),
+    ...(!migrationNotesEntry.authorized ? [{
+      code: 'operator-adoption-not-authorized',
+      path: 'docs/migration_notes.md',
+      evidence: 'The migration note intentionally records that shim retirement and PATH/profile cleanup are not yet authorized.',
+    }] : []),
+    {
+      code: 'function-section-granularity-not-proven',
+      path: SCRIPT_REL,
+      evidence: 'The committed procedure proves whole-file deletion candidates only; superseded function/section removal remains held rather than claimed complete.',
+    },
+  ];
 
   return {
     schemaVersion: 1,
@@ -975,7 +1056,9 @@ export function buildManifest(repoRoot = repoRootFromScript()) {
     rewriteList: protectedExisting.rewriteList,
     protectedTestsDeleted: deletedTests.filter((item) => protectedTests.includes(item)),
     retiredShimBlockers,
-    migrationNotesEntry: manifestMigrationNote(repoRoot),
+    migrationNotesEntry,
+    completionStatus: completionBlockers.length === 0 ? 'complete' : 'blocked',
+    completionBlockers,
   };
 }
 
@@ -1016,6 +1099,11 @@ function main() {
   }
   if (manifest.suspectEdges.some((item) => !item.disposition || !item.evidence)) {
     process.stderr.write('suspect-edge disposition incomplete\n');
+    process.exitCode = 1;
+    return;
+  }
+  if (manifest.suspectEdges.some((item) => !item.target && (!item.possibleTargets || item.possibleTargets.length === 0))) {
+    process.stderr.write('dynamic suspect edge has no fail-closed possible-target hold\n');
     process.exitCode = 1;
     return;
   }

@@ -10,6 +10,8 @@ interface ReachabilityManifest {
   graphNodeCount: number;
   deletionManifest: Array<{ reason: string }>;
   suspectEdges: Array<{
+    target?: string | null;
+    possibleTargets?: string[];
     disposition?: string;
     evidence?: string;
     consumerScope?: string;
@@ -30,6 +32,9 @@ interface ReachabilityManifest {
     reachable: boolean;
     held: boolean;
   }>;
+  migrationNotesEntry: { authorized: boolean; presentWithRequiredFields: boolean };
+  completionStatus: 'complete' | 'blocked';
+  completionBlockers: Array<{ code: string; path: string; evidence: string }>;
 }
 
 const buildManifest = buildManifestRuntime as (repoRoot?: string) => ReachabilityManifest;
@@ -52,7 +57,13 @@ describe('reachability-purge', () => {
   it('every suspect edge has an explicit disposition with recorded evidence, and no cross-scope works row lacks proof beyond edge-fired evidence', () => {
     expect(manifest.suspectEdges.length).toBeGreaterThan(0);
     expect(manifest.suspectEdges.every((row) => Boolean(row.disposition && row.evidence))).toBe(true);
+    expect(manifest.suspectEdges.filter((row) => !row.target && (!row.possibleTargets || row.possibleTargets.length === 0))).toEqual([]);
     expect(manifest.suspectEdges.filter((row) => row.consumerScope === 'cross-scope' && row.disposition === 'works')).toEqual([]);
+    const held = new Set(manifest.heldNodes.map((row) => row.path));
+    for (const row of manifest.suspectEdges) {
+      if (row.disposition === 'works') continue;
+      for (const target of row.possibleTargets ?? []) expect(held.has(target)).toBe(true);
+    }
   });
 
   it('unresolved dynamic invocation forms are inventoried and held, not counted as zero-reachability', () => {
@@ -76,9 +87,14 @@ describe('reachability-purge', () => {
     expect(manifest.rewriteList.length).toBeGreaterThan(0);
   });
 
-  it('reports required shim-retirement blockers instead of treating live protected surfaces as dead', () => {
+  it('reports binding blockers instead of claiming the incompatible retirement is complete', () => {
     expect(manifest.retiredShimBlockers.length).toBe(6);
     expect(manifest.retiredShimBlockers.every((row) => row.trackedInBase && !row.deletedInCurrentTree)).toBe(true);
     expect(manifest.retiredShimBlockers.every((row) => row.reachable || row.held)).toBe(true);
+    expect(manifest.migrationNotesEntry.authorized).toBe(false);
+    expect(manifest.migrationNotesEntry.presentWithRequiredFields).toBe(false);
+    expect(manifest.completionStatus).toBe('blocked');
+    expect(manifest.completionBlockers.map((row) => row.code)).toContain('missing-binding-audit-handoff');
+    expect(manifest.completionBlockers.filter((row) => row.code === 'required-retired-shim-still-live-or-held')).toHaveLength(6);
   });
 });
