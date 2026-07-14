@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
-import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause, recordChildProcessThenBinding } from '#opk-toolchain/child-process-imports';
+import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause, recordChildProcessPropertyAlias, recordChildProcessThenBinding } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
-const TEST_SUFFIXES = ['.test.ts', '.test.mts', '.test.cts', '.test.js', '.test.mjs', '.test.cjs'];
+const TEST_SUFFIXES = [
+  '.test.ts', '.test.mts', '.test.cts', '.test.js', '.test.mjs', '.test.cjs',
+  '.spec.ts', '.spec.mts', '.spec.cts', '.spec.js', '.spec.mjs', '.spec.cjs',
+];
 const CHILD_APIS = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']);
 const PWSH_EXECUTABLE = /^(?:pwsh|powershell)(?:\.exe)?$/i;
 
@@ -64,6 +67,7 @@ function analyzeImports(sourceFile: ts.SourceFile): ChildBindings {
         const constantValue = literalText(initializer);
         if (constantValue !== undefined) stringConstants.set(declaration.name.text, constantValue);
       }
+      recordChildProcessPropertyAlias(declaration.name, initializer, CHILD_APIS, named, namespaces);
       if (isChildProcessImport(initializer)) {
         recordChildProcessBindingName(declaration.name, sourceFile, CHILD_APIS, named, namespaces);
       }

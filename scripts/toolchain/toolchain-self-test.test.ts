@@ -113,6 +113,21 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('rejects property alias raw child-process calls', () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/property-alias.ts', `
+      const spawn = require('node:child_process').spawn;
+      spawn('git', ['status']);
+    `);
+    const comparison = compareRawChildProcessBaseline(
+      discoverRawChildProcessCalls(root, () => false),
+      { version: 1, entries: [] },
+    );
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/property-alias.ts', api: 'spawn' },
+    ]);
+  });
+
   it('rejects dynamic import raw child-process calls for namespace and destructured bindings', () => {
     const root = temporaryRoot();
     write(root, 'scripts/dynamic-import.ts', `
@@ -198,6 +213,19 @@ describe('TypeScript foundation check self-tests', () => {
     const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
     expect(comparison.added).toMatchObject([
       { path: 'scripts/inline-require.test.ts', mechanisms: ['direct:spawnSync'] },
+    ]);
+  });
+
+  it('turns the PowerShell growth guard red for property aliases in spec files', () => {
+    const root = temporaryRoot();
+    const empty: PowerShellBootBaseline = { version: 1, entries: [] };
+    write(root, 'scripts/property-alias.spec.ts', `
+      const spawnSync = require('node:child_process').spawnSync;
+      spawnSync('pwsh', ['-NoProfile']);
+    `);
+    const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/property-alias.spec.ts', mechanisms: ['direct:spawnSync'] },
     ]);
   });
 

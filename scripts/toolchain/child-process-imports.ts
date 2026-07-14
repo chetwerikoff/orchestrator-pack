@@ -88,3 +88,18 @@ export function recordChildProcessThenBinding(
   if (!parameter) return;
   recordChildProcessBindingName(parameter.name, sourceFile, allowedApis, named, namespaces);
 }
+
+export function recordChildProcessPropertyAlias(
+  name: ts.BindingName,
+  initializer: ts.Expression | undefined,
+  allowedApis: ReadonlySet<string>,
+  named: Map<string, string>,
+  namespaces: ReadonlySet<string>,
+): void {
+  if (!ts.isIdentifier(name) || !initializer || !ts.isPropertyAccessExpression(initializer)) return;
+  const receiver = initializer.expression;
+  if (ts.isIdentifier(receiver) && !namespaces.has(receiver.text)) return;
+  if (!ts.isIdentifier(receiver) && !isChildProcessImport(receiver)) return;
+  const api = initializer.name.text;
+  if (allowedApis.has(api)) named.set(name.text, api);
+}
