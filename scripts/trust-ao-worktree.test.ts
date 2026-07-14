@@ -1,8 +1,8 @@
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { runProcessSync } from '#opk-kernel/subprocess';
 import { repoRoot } from './_test-pwsh-helpers.js';
 
 const stableTrustTempRoot = (() => {
@@ -34,9 +34,9 @@ function runTrustScript(home: string, args: string[]) {
     AO_MECHANICAL_TRANSPORT_TEMP: '',
     XDG_STATE_HOME: '',
   } satisfies Record<string, string>;
-  const result = spawnSync(
-    'pwsh',
-    [
+  const result = runProcessSync({
+    command: 'pwsh',
+    args: [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
@@ -44,14 +44,13 @@ function runTrustScript(home: string, args: string[]) {
       path.join(repoRoot, 'scripts/trust-ao-worktree.ps1'),
       ...args,
     ],
-    {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: trustEnv,
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error(`trust script failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: trustEnv,
+  });
+  if (!result.ok) {
+    const status = result.exitCode ?? 'null';
+    throw new Error(`trust script failed ${status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
   }
 }
 
