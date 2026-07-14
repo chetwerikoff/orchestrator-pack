@@ -96,6 +96,16 @@ export function recordChildProcessPropertyAlias(
   named: Map<string, string>,
   namespaces: ReadonlySet<string>,
 ): void {
+  if (ts.isObjectBindingPattern(name) && initializer && ts.isIdentifier(initializer) && namespaces.has(initializer.text)) {
+    for (const element of name.elements) {
+      if (!ts.isIdentifier(element.name)) continue;
+      const imported = element.propertyName && ts.isIdentifier(element.propertyName)
+        ? element.propertyName.text
+        : element.name.text;
+      if (allowedApis.has(imported)) named.set(element.name.text, imported);
+    }
+    return;
+  }
   if (!ts.isIdentifier(name) || !initializer || !ts.isPropertyAccessExpression(initializer)) return;
   const receiver = initializer.expression;
   if (ts.isIdentifier(receiver) && !namespaces.has(receiver.text)) return;

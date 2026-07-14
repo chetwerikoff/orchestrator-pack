@@ -50,8 +50,12 @@ jobs:
     name: TypeScript policy lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -80,8 +84,12 @@ jobs:
     name: PowerShell child-test growth guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

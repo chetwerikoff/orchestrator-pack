@@ -236,6 +236,22 @@ describe('TypeScript foundation check self-tests', () => {
     ]);
   });
 
+  it('rejects destructured namespace raw child-process aliases', () => {
+    const root = temporaryRoot();
+    write(root, 'scripts/namespace-destructure.ts', `
+      import * as cp from 'node:child_process';
+      const { spawn: run } = cp;
+      run('git', ['status']);
+    `);
+    const comparison = compareRawChildProcessBaseline(
+      discoverRawChildProcessCalls(root, () => false),
+      { version: 1, entries: [] },
+    );
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/namespace-destructure.ts', api: 'spawn' },
+    ]);
+  });
+
   it('rejects raw child-process growth even when the PR updates the baseline in the same commit range', async () => {
     const root = temporaryRoot();
     write(root, 'tsconfig.json', foundationTsconfig());
@@ -361,6 +377,20 @@ describe('TypeScript foundation check self-tests', () => {
     const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
     expect(comparison.added).toMatchObject([
       { path: 'scripts/default-import.test.ts', mechanisms: ['direct:spawnSync'] },
+    ]);
+  });
+
+  it('turns the PowerShell growth guard red for destructured namespace aliases', () => {
+    const root = temporaryRoot();
+    const empty: PowerShellBootBaseline = { version: 1, entries: [] };
+    write(root, 'scripts/namespace-destructure.test.ts', `
+      import * as cp from 'node:child_process';
+      const { spawnSync } = cp;
+      spawnSync('pwsh', ['-NoProfile']);
+    `);
+    const comparison = comparePowerShellBootBaseline(discoverPowerShellBootTests(root), empty);
+    expect(comparison.added).toMatchObject([
+      { path: 'scripts/namespace-destructure.test.ts', mechanisms: ['direct:spawnSync'] },
     ]);
   });
 
