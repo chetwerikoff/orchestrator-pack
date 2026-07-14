@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runProcess } from '#opk-kernel/subprocess';
 
 const SCRIPT_REL = 'scripts/reachability-purge.mjs';
 const MANIFEST_REL = 'scripts/reachability-purge.manifest.json';
@@ -48,17 +48,25 @@ function repoRootFromScript() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 }
 
-function git(repoRoot, args, options = {}) {
-  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024, ...options });
+async function git(repoRoot, args) {
+  const result = await runProcess({
+    command: 'git',
+    args,
+    cwd: repoRoot,
+    allowEmptyStdout: true,
+  });
+  if (result.ok) return result.stdout;
+  const details = [result.stderr, result.stdout, result.error].find((value) => typeof value === 'string' && value.trim());
+  throw new Error(details ? `git ${args.join(' ')} failed: ${details.trim()}` : `git ${args.join(' ')} failed`);
 }
 
-function gitTrackedFiles(repoRoot) {
-  const raw = git(repoRoot, ['ls-files', '-z']);
+async function gitTrackedFiles(repoRoot) {
+  const raw = await git(repoRoot, ['ls-files', '-z']);
   return raw.split('\0').filter(Boolean).map(normalizeRel).sort();
 }
 
-function gitTrackedFilesAt(repoRoot, ref) {
-  const raw = git(repoRoot, ['ls-tree', '-r', '--name-only', '-z', ref]);
+async function gitTrackedFilesAt(repoRoot, ref) {
+  const raw = await git(repoRoot, ['ls-tree', '-r', '--name-only', '-z', ref]);
   return raw.split('\0').filter(Boolean).map(normalizeRel).sort();
 }
 
@@ -70,38 +78,20 @@ function readText(repoRoot, rel) {
   }
 }
 
-function readTextAt(repoRoot, ref, rel) {
+async function readTextAt(repoRoot, ref, rel) {
   try {
-    return git(repoRoot, ['show', `${ref}:${rel}`]);
+    return await git(repoRoot, ['show', `${ref}:${rel}`]);
   } catch {
     return '';
   }
 }
 
-function readTextMapAt(repoRoot, ref, paths) {
+async function readTextMapAt(repoRoot, ref, paths) {
   const ordered = [...new Set(paths)].sort();
   if (ordered.length === 0) return new Map();
-  const input = ordered.map((rel) => `${ref}:${rel}\n`).join('');
-  const output = execFileSync('git', ['cat-file', '--batch'], {
-    cwd: repoRoot,
-    input,
-    encoding: null,
-    maxBuffer: 256 * 1024 * 1024,
-  });
   const result = new Map();
-  let offset = 0;
   for (const rel of ordered) {
-    const newline = output.indexOf(0x0a, offset);
-    if (newline < 0) throw new Error(`git cat-file batch truncated before ${rel}`);
-    const header = output.subarray(offset, newline).toString('utf8');
-    offset = newline + 1;
-    const match = header.match(/^[0-9a-f]+\s+blob\s+(\d+)$/i);
-    if (!match) throw new Error(`git cat-file could not read ${ref}:${rel}: ${header}`);
-    const size = Number(match[1]);
-    const body = output.subarray(offset, offset + size);
-    offset += size;
-    if (output[offset] === 0x0a) offset += 1;
-    result.set(rel, body.toString('utf8'));
+    result.set(rel, await readTextAt(repoRoot, ref, rel));
   }
   return result;
 }
@@ -112,7 +102,7 @@ function readTextMap(repoRoot, paths) {
   return result;
 }
 
-function loadConfig(repoRoot) {
+async function loadConfig(repoRoot) {
   const raw = readText(repoRoot, CONFIG_REL);
   if (!raw) throw new Error(`${CONFIG_REL} is missing`);
   const config = JSON.parse(raw);
@@ -120,10 +110,10 @@ function loadConfig(repoRoot) {
     throw new Error(`${CONFIG_REL} must pin issue ${ISSUE_NUMBER} and a full analysisBaseCommit SHA`);
   }
   try {
-    git(repoRoot, ['cat-file', '-e', `${config.analysisBaseCommit}^{commit}`]);
+    await git(repoRoot, ['cat-file', '-e', `${config.analysisBaseCommit}^{commit}`]);
   } catch {
-    git(repoRoot, ['fetch', '--no-tags', '--depth=1', 'origin', config.analysisBaseCommit], { stdio: ['ignore', 'pipe', 'pipe'] });
-    git(repoRoot, ['cat-file', '-e', `${config.analysisBaseCommit}^{commit}`]);
+    await git(repoRoot, ['fetch', '--no-tags', '--depth=1', 'origin', config.analysisBaseCommit]);
+    await git(repoRoot, ['cat-file', '-e', `${config.analysisBaseCommit}^{commit}`]);
   }
   return config;
 }
@@ -823,13 +813,13 @@ function configDrivenDynamicRows(repoRoot, tracked, trackedSet, readSource) {
   return rows;
 }
 
-export function buildManifest(repoRoot = repoRootFromScript()) {
-  const config = loadConfig(repoRoot);
+export async function buildManifest(repoRoot = repoRootFromScript()) {
+  const config = await loadConfig(repoRoot);
   const baseRef = config.analysisBaseCommit;
-  const baseSha = git(repoRoot, ['rev-parse', baseRef]).trim();
-  const tracked = gitTrackedFilesAt(repoRoot, baseRef);
+  const baseSha = (await git(repoRoot, ['rev-parse', baseRef])).trim();
+  const tracked = await gitTrackedFilesAt(repoRoot, baseRef);
   const trackedSet = new Set(tracked);
-  const currentTracked = gitTrackedFiles(repoRoot);
+  const currentTracked = await gitTrackedFiles(repoRoot);
   const currentTrackedSet = new Set(currentTracked);
   const deletedFromBase = tracked.filter((item) => !currentTrackedSet.has(item));
   const retainedDeletedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
@@ -1116,11 +1106,11 @@ function stableJson(value) {
   return `${JSON.stringify(value)}\n`;
 }
 
-function main() {
+async function main() {
   const repoRoot = repoRootFromScript();
   const args = new Set(process.argv.slice(2));
   const manifestPath = path.join(repoRoot, MANIFEST_REL);
-  const manifest = buildManifest(repoRoot);
+  const manifest = await buildManifest(repoRoot);
   const serialized = stableJson(manifest);
   if (args.has('--write')) {
     writeFileSync(manifestPath, serialized, 'utf8');
@@ -1170,4 +1160,9 @@ function main() {
   process.stdout.write('reachability purge manifest: PASS\n');
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

@@ -39,13 +39,13 @@ interface ReachabilityManifest {
   completionBlockers: Array<{ code: string; path: string; evidence: string }>;
 }
 
-const buildManifest = buildManifestRuntime as (repoRoot?: string) => ReachabilityManifest;
+const buildManifest = buildManifestRuntime as (repoRoot?: string) => Promise<ReachabilityManifest>;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = path.join(repoRoot, 'scripts', 'reachability-purge.manifest.json');
 let manifest: ReachabilityManifest;
 
-beforeAll(() => {
-  manifest = buildManifest(repoRoot);
+beforeAll(async () => {
+  manifest = await buildManifest(repoRoot);
 }, 120_000);
 
 describe('reachability-purge', () => {
@@ -85,13 +85,13 @@ describe('reachability-purge', () => {
     }
   });
 
-  it('fails closed when current tracked sources add a surviving reference to a deleted file', () => {
+  it('fails closed when current tracked sources add a surviving reference to a deleted file', async () => {
     const deletedPath = ['scripts', 'lib', ['Invoke-ContractEvidenceReverify', 'ps1'].join('.')].join('/');
     const agentsPath = path.join(repoRoot, 'AGENTS.md');
     const original = readFileSync(agentsPath, 'utf8');
     try {
       writeFileSync(agentsPath, `${original}\n${deletedPath}\n`, 'utf8');
-      const mutated = buildManifest(repoRoot);
+      const mutated = await buildManifest(repoRoot);
       expect(
         mutated.unresolvedDynamicForms.some(
           (row) =>
