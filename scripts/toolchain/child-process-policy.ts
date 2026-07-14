@@ -2,12 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
-import {
-  CHILD_PROCESS_MODULES,
-  isChildProcessImport,
-  recordChildProcessBindingName,
-  recordChildProcessImportClause,
-} from '#opk-toolchain/child-process-imports';
+import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const RAW_APIS = new Set([

@@ -1,12 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import ts from 'typescript';
-import {
-  CHILD_PROCESS_MODULES,
-  isChildProcessImport,
-  recordChildProcessBindingName,
-  recordChildProcessImportClause,
-} from '#opk-toolchain/child-process-imports';
+import { CHILD_PROCESS_MODULES, isChildProcessImport, recordChildProcessBindingName, recordChildProcessImportClause } from '#opk-toolchain/child-process-imports';
 import { repoRelative, walkFiles } from '#opk-toolchain/fs-utils';
 
 const TEST_SUFFIXES = ['.test.ts', '.test.mts', '.test.cts', '.test.js', '.test.mjs', '.test.cjs'];
