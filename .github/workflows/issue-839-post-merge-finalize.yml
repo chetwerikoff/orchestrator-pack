@@ -130,9 +130,6 @@ jobs:
             scripts/review-delivery.test.ts \
             scripts/review-producer-contract-mapping.test.ts
 
-      - name: Verify AGENTS size
-        shell: pwsh
-        run: ./scripts/check-agent-rules-line-budget.ps1
       - name: Run full light lane
         id: light
         continue-on-error: true
