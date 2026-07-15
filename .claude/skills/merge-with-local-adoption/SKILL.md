@@ -90,9 +90,7 @@ gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckR
 ```
 
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
-review blocking. Review signal: `scripts/ao-review.ps1 list <worker-session>` or
-`~/.ao/detached-pack-reviews/pr-<P>.json` — trust a `clean` verdict only when its
-`headSha` matches the current PR head; never merge on open/sent findings or a stale head.
+review blocking.
 
 ## Step 3b — Worker handoff when CI red / branch behind
 
