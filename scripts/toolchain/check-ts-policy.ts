@@ -25,7 +25,7 @@ function normalizedPath(root: string, path: string): string {
 function isFoundationProductionPath(root: string, fileName: string): boolean {
   const path = normalizedPath(root, fileName);
   return path === 'scripts/typescript-smoke.ts'
-    || (/^scripts\/(json-producers|kernel|toolchain)\/.*\.ts$/.test(path) && !path.endsWith('.test.ts'));
+    || (/^scripts\/(gate-runner|json-producers|kernel|toolchain)\/.*\.ts$/.test(path) && !path.endsWith('.test.ts'));
 }
 
 function isThenable(type: ts.Type, checker: ts.TypeChecker): boolean {

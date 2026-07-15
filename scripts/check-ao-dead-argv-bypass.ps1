@@ -37,7 +37,6 @@ $AllowlistedRelativePaths = @(
     'scripts/check-ao-cli-argv-shape.ps1',
     'scripts/check-ao-dead-argv-bypass.ps1',
     'scripts/check-ao-session-adapter-project-filter.ps1',
-    'scripts/check-ao-0-10-cli-capture-redaction.ps1',
     'scripts/check-contract-evidence-reverify.ps1',
     'scripts/generate-review-pipeline-spawn-captures.ts',
     'scripts/lib/Get-RtkMissedSavingsInventory.ps1',
