@@ -11,12 +11,19 @@ param(
     [string]$RepoRoot
 )
 
-$ErrorActionPreference = 'Continue'
-. (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
-$cli = Join-Path $PSScriptRoot 'json-producers/read-delegation-audit-stop.ts'
-$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
-if ($ArtifactPath) { $nodeArgs += @('--artifact-path', $ArtifactPath) }
-if ($RepoRoot) { $nodeArgs += @('--repo-root', $RepoRoot) }
-$stdin = [Console]::In.ReadToEnd()
-$stdin | & node @nodeArgs
-# Fail-open by contract: deliberately ignore the child exit status.
+$ErrorActionPreference = 'Stop'
+try {
+    . (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
+    $cli = Join-Path $PSScriptRoot 'json-producers/read-delegation-audit-stop.ts'
+    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+    if ($ArtifactPath) { $nodeArgs += @('--artifact-path', $ArtifactPath) }
+    if ($RepoRoot) { $nodeArgs += @('--repo-root', $RepoRoot) }
+    $stdin = [Console]::In.ReadToEnd()
+    $stdin | & node @nodeArgs
+}
+catch {
+    Write-Warning "read-delegation audit wrapper failed open: $($_.Exception.Message)"
+}
+
+# Fail-open by contract: deliberately ignore preparation, launch, and child failures.
+exit 0
