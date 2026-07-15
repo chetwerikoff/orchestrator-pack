@@ -1,0 +1,42 @@
+name: issue-839-verifier-summary
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  summary:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run verifier
+        id: verify
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/verify.ps1 *>&1 | Tee-Object -FilePath /tmp/verify.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          awk '/== Summary ==/{capture=1} capture' /tmp/verify.log >/tmp/summary.txt || true
+          {
+            echo '## Issue #839 current verifier summary'
+            echo '```text'
+            cat /tmp/summary.txt
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
