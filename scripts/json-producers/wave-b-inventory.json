@@ -16,19 +16,6 @@
   },
   "rows": [
     {
-      "path": "scripts/ao-review.ps1",
-      "sourceKind": "powershell-json-producer",
-      "taxonomy": "d",
-      "ownerWave": "wave-c",
-      "owningIssue": "migration-plan-pr6",
-      "disposition": "deferred",
-      "reason": "Invokes or coordinates GitHub/review/notification/nudge transport; deferred to Wave C / PR 6.",
-      "goldenStatus": "none",
-      "parityTargets": [],
-      "parityTests": [],
-      "entrypointMode": "unchanged"
-    },
-    {
       "path": "scripts/check-ao-cli-argv-shape.ps1",
       "sourceKind": "powershell-json-producer",
       "taxonomy": "a",
