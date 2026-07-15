@@ -1,4 +1,16 @@
-export declare function resolvePrHeadSha(repoRootOverride?: string): string;
+export interface SupervisorHeavyLaneRpcBindingInspection {
+  ok: boolean;
+  reason: string;
+  stalePaths: string[];
+  bindingMode?: string;
+  [key: string]: unknown;
+}
+
+export declare function listCurrentBindingScopePaths(repoRootOverride?: string): string[];
+
+export declare function inspectSupervisorHeavyLaneRpcBinding(
+  repoRootOverride?: string,
+): SupervisorHeavyLaneRpcBindingInspection;
 
 export declare function resolveExpectedCaptureSha(repoRootOverride?: string): string;
 
@@ -11,4 +23,4 @@ export declare function assertRpcMetadataCommitSha(
 
 export declare function validateSupervisorHeavyLaneRpcArtifacts(
   repoRootOverride?: string,
-): { passCount: number; head: string; expectedCaptureSha: string };
+): { passCount: number; expectedCaptureSha: string; bindingMode: string };

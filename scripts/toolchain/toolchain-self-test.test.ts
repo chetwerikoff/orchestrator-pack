@@ -34,6 +34,17 @@ function write(root: string, path: string, contents: string): void {
   writeFileSync(absolute, contents);
 }
 
+function writeMergeStableBaseResolverFixture(root: string): void {
+  write(root, 'scripts/lib/resolve-merge-stable-ci-base.mjs', `
+    const baseSha = process.env.GITHUB_BASE_SHA ?? process.env.PR_BASE_SHA ?? process.env.BASE_SHA;
+    if (!baseSha) {
+      console.error('[FAIL] fixture missing base sha');
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ baseSha }));
+  `);
+}
+
 async function git(root: string, ...args: string[]): Promise<string> {
   const result = await runProcess({
     command: 'git',
@@ -255,6 +266,7 @@ describe('TypeScript foundation check self-tests', () => {
   it('rejects raw child-process growth even when the PR updates the baseline in the same commit range', async () => {
     const root = temporaryRoot();
     write(root, 'tsconfig.json', foundationTsconfig());
+    writeMergeStableBaseResolverFixture(root);
     write(root, 'scripts/toolchain/raw-child-process-baseline.json', JSON.stringify({ version: 1, entries: [] }));
     await git(root, 'init');
     await git(root, 'config', 'user.email', 'toolchain-self-test@example.com');
@@ -396,6 +408,7 @@ describe('TypeScript foundation check self-tests', () => {
 
   it('rejects PowerShell child-test growth even when the PR updates the baseline in the same commit range', async () => {
     const root = temporaryRoot();
+    writeMergeStableBaseResolverFixture(root);
     write(root, 'scripts/toolchain/powershell-child-tests.json', JSON.stringify({ version: 1, entries: [] }));
     await git(root, 'init');
     await git(root, 'config', 'user.email', 'toolchain-self-test@example.com');
