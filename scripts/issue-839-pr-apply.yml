@@ -1,109 +1,133 @@
-name: issue-839-pr-apply
+name: issue-839-pr-apply-source
 
-on:
-  pull_request:
-    types: [synchronize, opened, reopened]
-    branches: [main]
-
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-
-jobs:
-  apply:
-    if: github.event.pull_request.number == 845
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: issue-839-pack-review-runner-v2
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Apply final cutover
-        shell: bash
-        run: |
-          set -euo pipefail
-          exec > >(tee /tmp/issue-839.log) 2>&1
+patch:
+  run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              file.write_text(text.replace(old, new), encoding='utf-8')
+
           yaml = Path('agent-orchestrator.yaml.example')
           text = yaml.read_text(encoding='utf-8')
           replacements = {
-            'The orchestrator and reconcile loops jump the gaps via ao-review run / Get-AoReviewRuns.': 'The orchestrator and reconcile loops invoke the pack review runner and read the Get-AoReviewRuns pack-store view from the pack-side run/status store; never ao spawn.',
-            'At review time: ao-review run <worker-session-id>  (scripts/ao-review.ps1 shim → POST .../reviews/trigger)': 'Manual trigger: node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>',
-            'Discover/idempotency: Get-AoReviewRuns fan-out (GET /api/v1/sessions/{id}/reviews) or ao-review list <session-id> --json.': 'Discover/idempotency: Get-AoReviewRuns pack-store view backed by the pack-side run/status store.',
+              'The orchestrator and reconcile loops jump the gaps via ao-review run / Get-AoReviewRuns.': 'The orchestrator and reconcile loops invoke the pack review runner and read the Get-AoReviewRuns pack-store view from the pack-side run/status store; never ao spawn.',
+              'At review time: ao-review run <worker-session-id>  (scripts/ao-review.ps1 shim → POST .../reviews/trigger)': 'Manual trigger: node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>',
+              'Discover/idempotency: Get-AoReviewRuns fan-out (GET /api/v1/sessions/{id}/reviews) or ao-review list <session-id> --json.': 'Discover/idempotency: Get-AoReviewRuns pack-store view backed by the pack-side run/status store.',
           }
           for old, new in replacements.items():
-            if old not in text:
-              raise SystemExit(f'YAML expected text missing: {old}')
-            text = text.replace(old, new)
-          text, count = re.subn(r'# AO 0\.10 review harness \(Issue #623\)[\s\S]*?# Operator adoption: docs/ao-0-10-review-harness-adoption\.md', '# Pack-owned review runner (Issue #839)\n# AO project config carries no daemon reviewer-harness wiring after adoption.\n# Manual and automatic triggers use scripts/pack-review-runner.ts; status reads use\n# the pack-side run/status store through the Get-AoReviewRuns pack-store view.\n# Operator cutover: docs/ao-0-10-review-harness-adoption.md', text, count=1)
-          if count != 1: raise SystemExit('YAML harness tail missing')
+              if old not in text:
+                  raise SystemExit(f'YAML expected text missing: {old}')
+              text = text.replace(old, new)
+          text, count = re.subn(
+              r'# AO 0\.10 review harness \(Issue #623\)[\s\S]*?# Operator adoption: docs/ao-0-10-review-harness-adoption\.md',
+              '# Pack-owned review runner (Issue #839)\n# AO project config carries no daemon reviewer-harness wiring after adoption.\n# Manual and automatic triggers use scripts/pack-review-runner.ts; status reads use\n# the pack-side run/status store through the Get-AoReviewRuns pack-store view.\n# Operator cutover: docs/ao-0-10-review-harness-adoption.md',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('YAML harness tail missing')
           for old, new in [
-            ('Get-AoReviewRuns fan-out', 'Get-AoReviewRuns pack-store view'),
-            ('ao-review list', 'Get-AoReviewRuns pack-store view'),
-            ('ao-review run', 'pack review runner'),
-            ('scripts/ao-review.ps1', 'scripts/pack-review-runner.ts'),
-            ('GET /api/v1/sessions/{id}/reviews', 'pack-side run/status store'),
-            ('GET /sessions/{id}/reviews', 'pack-side run/status store'),
-            ('/api/v1/sessions/{workerId}/reviews/trigger', 'pack review runner'),
-          ]: text = text.replace(old, new)
+              ('Get-AoReviewRuns fan-out', 'Get-AoReviewRuns pack-store view'),
+              ('ao-review list', 'Get-AoReviewRuns pack-store view'),
+              ('ao-review run', 'pack review runner'),
+              ('scripts/ao-review.ps1', 'scripts/pack-review-runner.ts'),
+              ('GET /api/v1/sessions/{id}/reviews', 'pack-side run/status store'),
+              ('GET /sessions/{id}/reviews', 'pack-side run/status store'),
+              ('/api/v1/sessions/{workerId}/reviews/trigger', 'pack review runner'),
+          ]:
+              text = text.replace(old, new)
           yaml.write_text(text, encoding='utf-8')
 
-          agents = Path('AGENTS.md')
-          text = agents.read_text(encoding='utf-8')
-          old = '''- **Trigger:** `ao-review run` via `scripts/ao-review.ps1`; discover via `Get-AoReviewRuns` or
-            `ao-review list --json`.
-          - Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
-            AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** — retired `ao review send` / `execute` are
-            **REMOVED**.
-          '''
-          new = '''- **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational
-            status comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the
-            authoritative verdict.
-          - Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
-            AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
-            are not fallback or dual-write paths.
-          '''
-          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines()) + '\n'
-          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
-          if old not in text: raise SystemExit('AGENTS review trigger block missing')
-          text = text.replace(old, new)
-          agents.write_text(text, encoding='utf-8')
+          replace_once(
+              'AGENTS.md',
+              """- **Trigger:** `ao-review run` via `scripts/ao-review.ps1`; discover via `Get-AoReviewRuns` or
+  `ao-review list --json`.
+- Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
+  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** — retired `ao review send` / `execute` are
+  **REMOVED**.
+""",
+              """- **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational
+  status comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the
+  authoritative verdict.
+- Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
+  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
+  are not fallback or dual-write paths.
+""",
+          )
+          replace_once(
+              'AGENTS.md',
+              """Inspect via `Get-AoReviewRuns` /
+`ao-review list --json`.
+""",
+              """Inspect via the `Get-AoReviewRuns` pack-store view and confirm the authoritative GitHub PR
+review is bound to the current head.
+""",
+          )
+          replace_once(
+              'AGENTS.md',
+              """Pack scripted review delivery is **stdout-first**: worker notification is sourced from the
+reviewer wrapper terminal JSON and the dispatch journal — not from daemon `GET /reviews`
+visibility. Best-effort `ao review submit`, `GET /reviews`, and `POST /reviews/trigger`
+telemetry runs after stdout capture; **on telemetry failure, skip silently — never post
+substitute notifications** that fabricate finding text from daemon state or pretend daemon
+delivery succeeded.
+""",
+              """Pack scripted review delivery is **stdout-first**: worker notification is sourced from the
+reviewer wrapper terminal JSON, the authoritative GitHub PR review, and the dispatch journal.
+The pack-side run/status store records operational state only. Daemon review HTTP and
+`ao review submit` are retired; never fabricate finding text from a compatibility store row.
+""",
+          )
 
           migration = Path('docs/migration_notes.md')
           text = migration.read_text(encoding='utf-8')
-          section = '''
-
-          ## Pack-owned review runner cutover (Issue #839)
-
-          After merge, clear the live AO project `reviewers` harness configuration, recycle the affected daemon project session, and remove the documented pre-cutover zombie reviewer sessions. Validate one manual and one automatic real-head run through `scripts/pack-review-runner.ts`; GitHub PR review is authoritative and the pack-side store is operational status only. Do not run daemon review endpoints or `ao review submit` in parallel. Full procedure: [`ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md).
-          '''
-          section = '\n'.join(line[10:] if line.startswith('          ') else line for line in section.splitlines())
           if '## Pack-owned review runner cutover (Issue #839)' not in text:
-            text = text.replace('# Migration notes\n', '# Migration notes\n' + section + '\n', 1)
+              section = """
+
+## Pack-owned review runner cutover (Issue #839)
+
+After merge, clear the live AO project `reviewers` harness configuration, recycle the affected daemon project session, and remove the documented pre-cutover zombie reviewer sessions. Validate one manual and one automatic real-head run through `scripts/pack-review-runner.ts`; GitHub PR review is authoritative and the pack-side store is operational status only. Do not run daemon review endpoints or `ao review submit` in parallel. Full procedure: [`ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md).
+"""
+              text = text.replace('# Migration notes\n', '# Migration notes\n' + section, 1)
           migration.write_text(text, encoding='utf-8')
 
           skill = Path('.claude/skills/merge-with-local-adoption/SKILL.md')
           text = skill.read_text(encoding='utf-8')
-          text, count = re.subn(r'- PR review is run by \*\*pack scripts\*\*[\s\S]*?scripts to record a verdict back to AO\)\.\n', '- PR review is run by the **pack-owned runner**, not by AO. Manual invocation is `node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>`; operational status comes from `scripts/pack-review-runner.ts list` or the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict; the pack-side run/status store is operational state only. Never use daemon review HTTP or `ao review submit` as a fallback or dual-write path.\n', text, count=1)
-          if count != 1: raise SystemExit('merge skill review block missing')
+          text, count = re.subn(
+              r'- PR review is run by \*\*pack scripts\*\*[\s\S]*?scripts to record a verdict back to AO\)\.\n',
+              '- PR review is run by the **pack-owned runner**, not by AO. Manual invocation is `node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>`; operational status comes from `scripts/pack-review-runner.ts list` or the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict; the pack-side run/status store is operational state only. Never use daemon review HTTP or `ao review submit` as a fallback or dual-write path.\n',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('merge skill review block missing')
           skill.write_text(text, encoding='utf-8')
 
           adapter = Path('scripts/lib/Invoke-AoReviewApi.ps1')
           text = adapter.read_text(encoding='utf-8')
-          text, count = re.subn(r'\nfunction Set-AoProjectReviewerHarness \{[\s\S]*?\n\}\n\nfunction Test-ReviewBeforeCleanupGate', '\nfunction Test-ReviewBeforeCleanupGate', text, count=1)
-          if count != 1: raise SystemExit('reviewer harness setter missing')
-          text, count = re.subn(r'\n    if \(\$null -ne \$ProjectConfigFixture -and -not \$FixturePayload\) \{[\s\S]*?\n    \}\n    if \(\$FixturePayload\) \{', '\n    if ($FixturePayload) {', text, count=1)
-          if count != 1: raise SystemExit('reviewer harness guard missing')
+          text, count = re.subn(
+              r'\nfunction Set-AoProjectReviewerHarness \{[\s\S]*?\n\}\n\nfunction Test-ReviewBeforeCleanupGate',
+              '\nfunction Test-ReviewBeforeCleanupGate',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('reviewer harness setter missing')
+          text, count = re.subn(
+              r'\n    if \(\$null -ne \$ProjectConfigFixture -and -not \$FixturePayload\) \{[\s\S]*?\n    \}\n    if \(\$FixturePayload\) \{',
+              '\n    if ($FixturePayload) {',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('reviewer harness guard missing')
           adapter.write_text(text, encoding='utf-8')
 
           bridge = Path('scripts/harness-review-bridge.test.ts')
@@ -113,38 +137,81 @@ jobs:
           text = text.replace("import { classifyReviewTriggerResponse } from '../docs/ao-0-10-review-api.mjs';\n", '')
           text = re.sub(r"const capturesDir = .*?;\n", '', text)
           text = re.sub(r"const reviewApiLib = .*?;\n", '', text)
-          for title in ['classifies unset reviewers before trigger', 'Invoke-AoReviewTriggerForWorker refuses trigger on misconfig fixture', 'ao-review trigger classify unchanged for capture payloads']:
-            text, count = re.subn(r"\n  it\('" + re.escape(title) + r"',[\s\S]*?\n  \}\);\n", '\n', text, count=1)
-            if count != 1: raise SystemExit(f'legacy harness test missing: {title}')
+          for title in [
+              'classifies unset reviewers before trigger',
+              'Invoke-AoReviewTriggerForWorker refuses trigger on misconfig fixture',
+              'ao-review trigger classify unchanged for capture payloads',
+          ]:
+              text, count = re.subn(r"\n  it\('" + re.escape(title) + r"',[\s\S]*?\n  \}\);\n", '\n', text, count=1)
+              if count != 1:
+                  raise SystemExit(f'legacy harness test missing: {title}')
           bridge.write_text(text, encoding='utf-8')
 
           pn = Path('scripts/harness-post-submit-pn-content-shape.test.ts')
-          text = pn.read_text(encoding='utf-8').replace("import { classifyReviewerHarnessAbort } from '../docs/harness-review-bridge.mjs';\n", '')
-          text, count = re.subn(r"\n  it\('pre-trigger reviewers-unset boundary stays delegated to #682 guard',[\s\S]*?\n  \}\);\n", '\n', text, count=1)
-          if count != 1: raise SystemExit('legacy content-shape harness test missing')
+          text = pn.read_text(encoding='utf-8')
+          text = text.replace("import { classifyReviewerHarnessAbort } from '../docs/harness-review-bridge.mjs';\n", '')
+          text, count = re.subn(
+              r"\n  it\('pre-trigger reviewers-unset boundary stays delegated to #682 guard',[\s\S]*?\n  \}\);\n",
+              '\n',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('legacy content-shape harness test missing')
           pn.write_text(text, encoding='utf-8')
+
+          runner = Path('scripts/pack-review-runner.ts')
+          text = runner.read_text(encoding='utf-8')
+          if 'fixtureReviewTimedOut?: boolean;' not in text:
+              text = text.replace('  fixtureReviewExitCode?: number;\n', '  fixtureReviewExitCode?: number;\n  fixtureReviewTimedOut?: boolean;\n', 1)
+              text = text.replace('  fixtureReviewExitCode?: number;\n}): Promise<ProcessResult> {', '  fixtureReviewExitCode?: number;\n  fixtureReviewTimedOut?: boolean;\n}): Promise<ProcessResult> {', 1)
+              marker = "  if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewStdout !== undefined) {\n"
+              if marker not in text:
+                  raise SystemExit('runner fixture marker missing')
+              text = text.replace(
+                  marker,
+                  "  if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewTimedOut) {\n    return { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false };\n  }\n\n" + marker,
+                  1,
+              )
+              text = text.replace(
+                  "if (process.env.OPK_VITEST_HARNESS === '1' && input.fixtureReviewStdout !== undefined) {",
+                  "if (process.env.OPK_VITEST_HARNESS === '1' && (input.fixtureReviewStdout !== undefined || input.fixtureReviewTimedOut === true)) {",
+                  1,
+              )
+              text = text.replace(
+                  '        fixtureReviewExitCode: input.fixtureReviewExitCode,\n',
+                  '        fixtureReviewExitCode: input.fixtureReviewExitCode,\n        fixtureReviewTimedOut: input.fixtureReviewTimedOut,\n',
+                  1,
+              )
+          runner.write_text(text, encoding='utf-8')
+
+          test = Path('scripts/ao-0-10-review-trigger.test.ts')
+          text = test.read_text(encoding='utf-8')
+          if 'records terminal timed_out status when the reviewer times out' not in text:
+              anchor = "  it('does not let a divergent reviewed-worktree runner/store override trusted control code', async () => {\n"
+              timeout_test = """  it('records terminal timed_out status when the reviewer times out', async () => {
+    const storeRoot = tempRoot('opk-review-timeout-');
+    process.env.OPK_VITEST_HARNESS = '1';
+    const result = await startPackReview({
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 839,
+      headSha: HEAD_A,
+      claimMode: 'preacquired',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureReviewTimedOut: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({
+      status: 'timed_out',
+      latestRunStatus: 'timed_out',
+      failureReason: 'reviewer_process_timeout',
+    });
+  });
+
+"""
+              if anchor not in text:
+                  raise SystemExit('timeout test insertion anchor missing')
+              text = text.replace(anchor, timeout_test + anchor, 1)
+          test.write_text(text, encoding='utf-8')
           PY
-
-          rm -f .github/workflows/finish-pr-845-once.yml .github/workflows/issue-839-pr-apply.yml
-          if grep -RInE 'scripts/ao-review\.ps1|/api/v1/sessions/.*/reviews(?:/trigger)?' agent-orchestrator.yaml.example AGENTS.md docs/ao-0-10-review-harness-adoption.md .claude/skills/merge-with-local-adoption/SKILL.md .cursor/skills/merge-with-local-adoption/SKILL.md; then exit 1; fi
-
-          npm run typecheck:foundation
-          npm run lint:foundation
-          pwsh -NoProfile -File scripts/check-review-trigger-reconcile.ps1
-          pwsh -NoProfile -File scripts/check-orchestrator-review-idempotency.ps1
-          pwsh -NoProfile -File scripts/check-orchestrator-review-head-coverage.ps1
-          npm test -- scripts/ao-0-10-review-trigger.test.ts scripts/review-handoff-wake-trigger.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-run-binding.test.ts scripts/scripted-review-confirmed-delivery-gate.test.ts scripts/harness-post-submit-pn-content-shape.test.ts scripts/harness-review-bridge.test.ts scripts/review-wake-trigger.test.ts
-
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m 'Complete issue 839 pack review cutover'
-          git push origin HEAD:issue-839-pack-review-runner-v2
-      - name: Report
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          { echo '## Issue #839 PR-triggered completion'; echo; echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; echo; echo '```text'; tail -c 40000 /tmp/issue-839.log 2>/dev/null || true; echo; echo '```'; } >/tmp/report.md
-          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/report.md
