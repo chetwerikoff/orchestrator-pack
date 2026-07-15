@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Probe full apply sequence
+      - name: Probe full apply and commit sequence
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -30,4 +30,9 @@ jobs:
             .github/workflows/issue-839-patch-probe.yml \
             scripts/issue-839-finalize-light.py
           node scripts/reachability-purge.mjs --write
-          git status --short
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit --no-verify -m 'Align light-lane contracts with pack review runner'
+          git show --stat --oneline --summary HEAD
