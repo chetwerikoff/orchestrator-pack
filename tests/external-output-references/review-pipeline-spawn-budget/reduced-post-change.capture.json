@@ -1,74 +1,38 @@
 {
   "version": "review-pipeline-spawn-capture/v1",
   "caseId": "reduced-post-change",
+  "measurementModel": "journal-rate-attribution",
   "captureProvenance": {
     "callerPath": "generate-review-pipeline-spawn-captures.ts",
-    "capturedAt": "2026-06-26T08:18:38.768Z",
+    "capturedAt": "2026-07-15T00:00:00.000Z",
     "profile": "reduced-post-change",
-    "method": "real-main-dry-run-tick",
+    "method": "deterministic-ao-0.10.2-direct-gate-fixture",
     "measurementModel": "journal-rate-attribution",
     "subprocessInvocationCount": 2
   },
   "window": {
-    "startedAtMs": 1782461917162,
-    "endedAtMs": 1782461977162,
+    "startedAtMs": 0,
+    "endedAtMs": 60000,
     "elapsedMs": 60000,
     "callerCadencePerMinute": 12
   },
   "events": [
     {
-      "atMs": 1782461917162,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 0,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461977162,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461977162,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461977162,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461977162,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461977162,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461977162,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461977162,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 60000,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     }
   ],
   "pointInTimePsSnapshot": {
-    "processCount": 3,
-    "capturedAtMs": 1782461977162,
-    "note": "point-in-time snapshot may miss short-lived burst"
-  },
-  "measurementModel": "journal-rate-attribution"
+    "processCount": 1,
+    "capturedAtMs": 60000,
+    "note": "supplementary point-in-time snapshot; journal-rate attribution is authoritative"
+  }
 }

@@ -1,1034 +1,206 @@
 {
   "version": "review-pipeline-spawn-capture/v1",
   "caseId": "storm-baseline",
+  "measurementModel": "journal-rate-attribution",
   "captureProvenance": {
     "callerPath": "generate-review-pipeline-spawn-captures.ts",
-    "capturedAt": "2026-06-26T08:18:37.162Z",
+    "capturedAt": "2026-07-15T00:00:00.000Z",
     "profile": "storm-baseline",
-    "method": "real-main-dry-run-tick",
+    "method": "deterministic-ao-0.10.2-direct-gate-fixture",
     "measurementModel": "journal-rate-attribution",
-    "subprocessInvocationCount": 96
+    "subprocessInvocationCount": 30
   },
   "window": {
-    "startedAtMs": 1782461839158,
-    "endedAtMs": 1782461916226,
-    "elapsedMs": 77068,
+    "startedAtMs": 0,
+    "endedAtMs": 60000,
+    "elapsedMs": 60000,
     "callerCadencePerMinute": 12
   },
   "events": [
     {
-      "atMs": 1782461839158,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 0,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461839998,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461840693,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461841380,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461842151,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461842883,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461843841,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 2069,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461844620,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461845397,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 4138,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461846207,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 6207,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 8276,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461846894,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461847550,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461848309,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461849370,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461850384,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461850384,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461850384,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461850384,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461850384,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461850384,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461850385,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 10345,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461851280,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461852081,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 12414,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461852809,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 14483,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 16552,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461853831,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461854520,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461855259,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461856094,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461856884,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 18621,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461857703,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461858538,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 20690,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461859195,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 22759,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 24828,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461859936,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461860682,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461861363,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461862046,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461862861,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 26897,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461863746,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461864520,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 28966,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461865198,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 31034,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 33103,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461865885,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461866622,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461867349,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461868088,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461868862,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 35172,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461869691,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461870456,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 37241,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461871148,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 39310,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 41379,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461871870,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461872529,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461873378,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461874289,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461875137,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 43448,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461876390,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461877114,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 45517,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461877855,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 47586,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 49655,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461878543,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461879181,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461879938,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461880737,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461881591,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461881591,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461881591,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461881591,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461881591,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461881591,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461881592,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 51724,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     },
     {
-      "atMs": 1782461882361,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461883231,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
+      "atMs": 53793,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461884143,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
+      "atMs": 55862,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
+      "childId": "llm-orchestrator-review-start"
+    },
+    {
+      "atMs": 57931,
+      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once",
       "sourceHint": "review-trigger-reconcile.ps1",
       "childId": "review-trigger-reconcile"
     },
     {
-      "atMs": 1782461884833,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461885601,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461886341,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461887044,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461888007,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461888901,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461889746,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461890549,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461891236,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461891969,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461892711,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461893444,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461894451,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461895492,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461896240,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461897371,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461898534,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461899319,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461900122,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461900916,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461901817,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461901817,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461901817,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461901817,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461901817,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461901817,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461901818,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461902751,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461903698,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461904536,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461905254,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461906087,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461906790,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461907518,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461908411,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461909347,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461910249,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/ready-head-triggers.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461910987,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reconcile/covered-clean.json",
-      "sourceHint": "review-trigger-reconcile.ps1",
-      "childId": "review-trigger-reconcile"
-    },
-    {
-      "atMs": 1782461911726,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/dedupe-covered.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461912374,
-      "commandLine": "pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -DryRun -Once -FixturePath tests/fixtures/review-trigger-reeval/wake-before-ready-then-ready.json",
-      "sourceHint": "review-trigger-reeval.ps1",
-      "childId": "review-trigger-reeval"
-    },
-    {
-      "atMs": 1782461913093,
-      "commandLine": "pwsh -NoProfile -File scripts/ci-green-wake-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/ci-green-wake-reconcile/pre-handoff-green.json",
-      "sourceHint": "ci-green-wake-reconcile.ps1",
-      "childId": "ci-green-wake-reconcile"
-    },
-    {
-      "atMs": 1782461913866,
-      "commandLine": "pwsh -NoProfile -File scripts/review-send-reconcile.ps1 -DryRun -Once -FixturePath tests/fixtures/review-send-reconcile/happy-needs-triage.json",
-      "sourceHint": "review-send-reconcile.ps1",
-      "childId": "review-send-reconcile"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "git config --get remote.origin.url",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "git log --since=60 seconds ago --format=%H",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "git branch --show-current",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "git status --short --branch",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "ao status --json --reports full",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "ao review list --json",
-      "sourceHint": "supervisor-child-tick",
-      "childId": "supervisor-child"
-    },
-    {
-      "atMs": 1782461915100,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
-      "childId": "llm-orchestrator-review-start"
-    },
-    {
-      "atMs": 1782461916226,
-      "commandLine": "pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 -PrNumber 318 -SessionId opk-75 -FixturePath tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json -DryRun",
-      "sourceHint": "invoke-orchestrator-claimed-review-run.ps1",
+      "atMs": 60000,
+      "commandLine": "pwsh -NoProfile -File scripts/ao-review.ps1 run opk-75",
+      "sourceHint": "ao-review.ps1",
       "childId": "llm-orchestrator-review-start"
     }
   ],
   "pointInTimePsSnapshot": {
     "processCount": 4,
-    "capturedAtMs": 1782461916226,
-    "note": "point-in-time snapshot may miss short-lived burst"
-  },
-  "measurementModel": "journal-rate-attribution"
+    "capturedAtMs": 60000,
+    "note": "supplementary point-in-time snapshot; journal-rate attribution is authoritative"
+  }
 }

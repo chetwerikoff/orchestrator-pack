@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
@@ -98,85 +98,3 @@ jobs:
         run: npm ci --include=dev
       - name: Enforce committed PowerShell child-test baseline
         run: npm run check:pwsh-test-growth
-
-  issue-821-finalize:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 final validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/issue-821-retire-autonomous-surface
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Install Pester
-        shell: pwsh
-        run: ./scripts/install-pester-ci.ps1
-      - name: Refresh direct-gate captures and policy baselines
-        shell: bash
-        run: |
-          npx tsx scripts/generate-review-pipeline-spawn-captures.ts
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
-      - name: Validate final tree
-        shell: bash
-        run: |
-          set +e
-          report=issue-821-final-validation-report.txt
-          : > "$report"
-          overall=0
-          run_check() {
-            name="$1"
-            shift
-            tmp="$(mktemp)"
-            "$@" >"$tmp" 2>&1
-            status=$?
-            {
-              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
-              tail -n 1200 "$tmp"
-            } >> "$report"
-            rm -f "$tmp"
-            if (( status != 0 )); then overall=1; fi
-          }
-          run_check "targeted vitest" npx vitest run \
-            scripts/autonomous-spawn-budget.test.ts \
-            scripts/review-pipeline-spawn-budget.test.ts \
-            scripts/orchestrator-message-registry.test.ts \
-            scripts/worker-recovery-spawn-argv.test.ts \
-            scripts/autonomous-orchestrator-boundary.test.ts \
-            scripts/autonomous-spawn-policy.test.ts \
-            scripts/worker-nudge-gate.test.ts \
-            scripts/spawn-worktree-grant-finalization.test.ts \
-            scripts/orchestrator-claimed-review-run.test.ts \
-            scripts/autonomous-spawn-worktree-gate.test.ts \
-            scripts/orchestrator-review-start-preflight-audit.test.ts \
-            scripts/review-start-envelope-external-io.test.ts
-          run_check "verify pack" pwsh -NoProfile -File scripts/verify.ps1
-          run_check "base typecheck" npx tsc --project tsconfig.base.json --noEmit
-          run_check "pester track" pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm
-          run_check "foundation lint" npm run lint:foundation
-          run_check "pwsh child growth" npm run check:pwsh-test-growth
-          run_check "active retired-reference scan" bash -lc "! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json|scripts/autonomous-orchestrator-surface-bootstrap\\.sh|scripts/autonomous-bash-env\\.sh|scripts/ao-autonomous-guard\\.ps1|scripts/git-autonomous-guard\\.ps1|scripts/git-real-binary|scripts/_invoke-system-git\\.sh|scripts/_resolve-system-git\\.sh|scripts/invoke-orchestrator-claimed-review-run\\.ps1|scripts/lib/Invoke-OrchestratorClaimedReviewRun\\.ps1|scripts/lib/autonomous-guard-fast-path\\.sh' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'"
-          run_check "diff check" git diff --check
-          echo "$overall" > /tmp/issue-821-final-status
-          if (( overall == 0 )); then rm -f "$report"; fi
-          exit 0
-      - name: Commit final tree
-        if: always()
-        shell: bash
-        run: |
-          git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -f .github/scripts/finalize-issue-821.py.gz.b64 issue-821-*.txt .vitest-runtime-report*.json
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if ! git diff --cached --quiet; then
-            git commit -m "Finalize issue 821 direct-gate migration"
-            git push origin HEAD:agent/issue-821-retire-autonomous-surface
-          fi
-          exit "$(cat /tmp/issue-821-final-status 2>/dev/null || echo 1)"
