@@ -29,6 +29,7 @@ async function gitCapture(repoRoot: string, args: readonly string[]): Promise<st
     command: 'git',
     args,
     cwd: repoRoot,
+    inheritParentEnv: true,
     allowEmptyStdout: true,
   });
   return result.ok ? result.stdout : null;
