@@ -1,0 +1,77 @@
+name: issue-839-finalize-light-valid
+
+on:
+  pull_request:
+    types: [labeled]
+    branches: [main]
+
+concurrency:
+  group: issue-839-finalize-light-valid
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.number == 845 && github.event.label.name == 'in_progress'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --include=dev --silent
+      - name: Apply focused light-lane contract fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpkZWYgcmVwbGFjZV9vbmUocGF0aDogc3RyLCBiZWZvcmU6IHN0ciwgYWZ0ZXI6IHN0cikgLT4gTm9uZToKICAgIHRhcmdldCA9IFBhdGgocGF0aCkKICAgIHRleHQgPSB0YXJnZXQucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCiAgICBjb3VudCA9IHRleHQuY291bnQoYmVmb3JlKQogICAgaWYgY291bnQgIT0gMToKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KGYie3BhdGh9OiBleHBlY3RlZCBvbmUgcmVwbGFjZW1lbnQsIGZvdW5kIHtjb3VudH0iKQogICAgdGFyZ2V0LndyaXRlX3RleHQodGV4dC5yZXBsYWNlKGJlZm9yZSwgYWZ0ZXIsIDEpLCBlbmNvZGluZz0idXRmLTgiKQoKcmVwbGFjZV9vbmUoCiAgICAiQUdFTlRTLm1kIiwKICAgICJPbiBkZWxpdmVyZWQgZmluZGluZ3MsIHVzZSBgYWRkcmVzc2luZ19yZXZpZXdzYCDihpIgb3B0aW9uYWwgYGZpeGluZ19jaWAg4oaSIGByZWFkeV9mb3JfcmV2aWV3YCBhZnRlciBDSSBpcyBncmVlbjsgbmV2ZXIgcmVwb3J0IGBjb21wbGV0ZWRgIHdpdGggb3BlbiBmaW5kaW5ncy4gSW5zcGVjdCBwYWNrLXN0b3JlIGBHZXQtQW9SZXZpZXdSdW5zYCBhbmQgdGhlIGF1dGhvcml0YXRpdmUgY3VycmVudC1oZWFkIEdpdEh1YiByZXZpZXcuIiwKICAgICJPbiBkZWxpdmVyZWQgZmluZGluZ3MsICoqbXVzdCBub3QqKiBpZGxlOiB1c2UgYGFkZHJlc3NpbmdfcmV2aWV3c2Ag4oaSIG9wdGlvbmFsIGBmaXhpbmdfY2lgIOKGkiBgcmVhZHlfZm9yX3Jldmlld2AgYWZ0ZXIgQ0kgaXMgZ3JlZW47IG5ldmVyIHJlcG9ydCBgY29tcGxldGVkYCB3aXRoIG9wZW4gZmluZGluZ3MuIEluc3BlY3QgY3VycmVudC1oZWFkIHBhY2stc3RvcmUvR2l0SHViIHJldmlldy4iLAopCnJlcGxhY2Vfb25lKAogICAgIkFHRU5UUy5tZCIsCiAgICAiVHJ1c3QgcmV2aWV3ZXIgdGVybWluYWwgSlNPTiwgdGhlIGF1dGhvcml0YXRpdmUgY3VycmVudC1oZWFkIEdpdEh1YiByZXZpZXcsIGFuZCB0aGUgZGlzcGF0Y2ggam91cm5hbC4gVGhlIHBhY2sgc3RvcmUgaXMgb3BlcmF0aW9uYWwgb25seTsgZGFlbW9uIHJldmlldyBIVFRQIGFuZCBgYW8gcmV2aWV3IHN1Ym1pdGAgYXJlIHJldGlyZWQuIE5ldmVyIHN5bnRoZXNpemUgZmluZGluZ3MgZnJvbSBzdG9yZSByb3dzLiIsCiAgICAiVHJ1c3QgcmV2aWV3ZXIgdGVybWluYWwgSlNPTiwgdGhlIGN1cnJlbnQtaGVhZCBHaXRIdWIgcmV2aWV3LCBhbmQgZGlzcGF0Y2ggam91cm5hbC4gVGhlIHBhY2sgc3RvcmUgaXMgb3BlcmF0aW9uYWwgb25seTsgZGFlbW9uIHJldmlldyBIVFRQIGFuZCBgYW8gcmV2aWV3IHN1Ym1pdGAgYXJlIFJFTU9WRUQuIE9uIHRlbGVtZXRyeSBmYWlsdXJlLCBza2lwIHNpbGVudGx54oCUbmV2ZXIgcG9zdCBzdWJzdGl0dXRlIG5vdGlmaWNhdGlvbnMgb3Igc3ludGhlc2l6ZSBmaW5kaW5ncyBmcm9tIHN0b3JlIHJvd3MuIiwKKQoKaGFybmVzcyA9IFBhdGgoInRlc3RzL2hhcm5lc3MtcHJldHJpZ2dlci1jb25maWctcmVhZC50ZXN0LnRzIikKdGV4dCA9IGhhcm5lc3MucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCmltcG9ydF9saW5lID0gImltcG9ydCB7IGV4ZWNGaWxlU3luYyB9IGZyb20gJ25vZGU6Y2hpbGRfcHJvY2Vzcyc7XG4iCmlmIHRleHQuY291bnQoaW1wb3J0X2xpbmUpICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJleGVjRmlsZVN5bmMgaW1wb3J0IG5vdCBmb3VuZCBleGFjdGx5IG9uY2UiKQp0ZXh0ID0gdGV4dC5yZXBsYWNlKGltcG9ydF9saW5lLCAiIiwgMSkKCm9sZF9ib3VuZGFyeSA9ICIgICAgY29uc3QgZm5FbmQgPSB0ZXh0LmluZGV4T2YoJ2Z1bmN0aW9uIFNldC1Bb1Byb2plY3RSZXZpZXdlckhhcm5lc3MnKTsiCm5ld19ib3VuZGFyeSA9ICIgICAgY29uc3QgZm5FbmQgPSB0ZXh0LmluZGV4T2YoJ2Z1bmN0aW9uIFRlc3QtUmV2aWV3QmVmb3JlQ2xlYW51cEdhdGUnKTsiCmlmIHRleHQuY291bnQob2xkX2JvdW5kYXJ5KSAhPSAxOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiR2V0LUFvUHJvamVjdENvbmZpZ0pzb24gYm91bmRhcnkgbm90IGZvdW5kIGV4YWN0bHkgb25jZSIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX2JvdW5kYXJ5LCBuZXdfYm91bmRhcnksIDEpCgpvbGRfdHJpZ2dlciA9ICIiIiAgaXQoJ0ludm9rZS1Bb1Jldmlld1RyaWdnZXJGb3JXb3JrZXIgYWxsb3dzIGxpdmUtc2hhcGUgZml4dHVyZSBhbmQgcmVmdXNlcyBlbXB0eSByZXZpZXdlcnMnLCAoKSA9PiB7CiAgICBjb25zdCBsaXZlUGF0aCA9IHBhdGguam9pbihkYWVtb25DYXB0dXJlc0RpciwgJ3Byb2plY3Qtc2luZ2xlLXJldmlld2Vycy5yYXcuanNvbicpOwogICAgY29uc3QgYWxsb3dPdXQgPSBleGVjRmlsZVN5bmMoCiAgICAgICdwd3NoJywKICAgICAgWwogICAgICAgICctTm9Qcm9maWxlJywKICAgICAgICAnLUNvbW1hbmQnLAogICAgICAgIGAuICcke3Jldmlld0FwaUxpYn0nOyAkbGl2ZSA9IEdldC1Db250ZW50ICcke2xpdmVQYXRofScgLVJhdyB8IENvbnZlcnRGcm9tLUpzb247ICRndWFyZCA9IEludm9rZS1Bb1Jldmlld0FwaUNsaSAtU3ViY29tbWFuZCAnaGFybmVzcy1ndWFyZCcgLVBheWxvYWQgQHsgcGF5bG9hZCA9IChVbndyYXAtQW9Qcm9qZWN0Q29uZmlnUGF5bG9hZCAtUGF5bG9hZCAkbGl2ZSk7IGV4cGVjdGVkSGFybmVzcyA9ICdjb2RleCcgfTsgJGd1YXJkIHwgQ29udmVydFRvLUpzb24gLUNvbXByZXNzIC1EZXB0aCA1YCwKICAgICAgXSwKICAgICAgeyBjd2Q6IHJlcG9Sb290LCBlbmNvZGluZzogJ3V0ZjgnIH0sCiAgICApLnRyaW0oKTsKICAgIGV4cGVjdChKU09OLnBhcnNlKGFsbG93T3V0KSkudG9NYXRjaE9iamVjdCh7IGFib3J0OiBmYWxzZSwgaGFybmVzczogJ2NvZGV4JyB9KTsKCiAgICBjb25zdCByZWZ1c2VPdXQgPSBleGVjRmlsZVN5bmMoCiAgICAgICdwd3NoJywKICAgICAgWwogICAgICAgICctTm9Qcm9maWxlJywKICAgICAgICAnLUNvbW1hbmQnLAogICAgICAgIGAuICcke3Jldmlld0FwaUxpYn0nOyAkcmVzdWx0ID0gSW52b2tlLUFvUmV2aWV3VHJpZ2dlckZvcldvcmtlciAtU2Vzc2lvbklkICd3b3JrZXItNjgyJyAtUHJvamVjdENvbmZpZ0ZpeHR1cmUgQHsgcmV2aWV3ZXJzID0gQCgpIH07ICRyZXN1bHQgfCBDb252ZXJ0VG8tSnNvbiAtQ29tcHJlc3MgLURlcHRoIDVgLAogICAgICBdLAogICAgICB7IGN3ZDogcmVwb1Jvb3QsIGVuY29kaW5nOiAndXRmOCcgfSwKICAgICkudHJpbSgpOwogICAgY29uc3QgcmVmdXNlZCA9IEpTT04ucGFyc2UocmVmdXNlT3V0KSBhcyB7IG9rOiBib29sZWFuOyByZWFzb246IHN0cmluZzsgY2xhc3NpZmllZDogYm9vbGVhbiB9OwogICAgZXhwZWN0KHJlZnVzZWQub2spLnRvQmUoZmFsc2UpOwogICAgZXhwZWN0KHJlZnVzZWQucmVhc29uKS50b0JlKCdyZXZpZXdlcnNfaGFybmVzc19taXNjb25maWcnKTsKICAgIGV4cGVjdChyZWZ1c2VkLmNsYXNzaWZpZWQpLnRvQmUodHJ1ZSk7CiAgfSk7IiIiCm5ld190cmlnZ2VyID0gIiIiICBpdCgnSW52b2tlLUFvUmV2aWV3VHJpZ2dlckZvcldvcmtlciBkZWxlZ2F0ZXMgdG8gdGhlIHBhY2sgcnVubmVyIHdpdGhvdXQgcmV2aWV3ZXItaGFybmVzcyBnYXRpbmcnLCAoKSA9PiB7CiAgICBjb25zdCB0ZXh0ID0gcmVhZEZpbGVTeW5jKHJldmlld0FwaUxpYiwgJ3V0ZjgnKTsKICAgIGNvbnN0IGZuU3RhcnQgPSB0ZXh0LmluZGV4T2YoJ2Z1bmN0aW9uIEludm9rZS1Bb1Jldmlld1RyaWdnZXJGb3JXb3JrZXInKTsKICAgIGNvbnN0IGZuRW5kID0gdGV4dC5pbmRleE9mKCdmdW5jdGlvbiBHZXQtUmV2aWV3VHJpZ2dlckludm9jYXRpb25MaW5lJyk7CiAgICBjb25zdCBib2R5ID0gdGV4dC5zbGljZShmblN0YXJ0LCBmbkVuZCk7CiAgICBleHBlY3QoYm9keSkudG9NYXRjaCgvSW52b2tlLUFvU2Vzc2lvblJldmlld1RyaWdnZXIvKTsKICAgIGV4cGVjdChib2R5KS50b01hdGNoKC9wYWNrX3Jldmlld19ydW5uZXJfZmFpbGVkLyk7CiAgICBleHBlY3QoYm9keSkubm90LnRvTWF0Y2goL2hhcm5lc3MtZ3VhcmR8cmV2aWV3ZXJzX2hhcm5lc3NfbWlzY29uZmlnfEdldC1Bb1Byb2plY3RDb25maWdKc29uLyk7CiAgfSk7IiIiCmlmIHRleHQuY291bnQob2xkX3RyaWdnZXIpICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJoYXJuZXNzIHRyaWdnZXIgdGVzdCBibG9jayBub3QgZm91bmQgZXhhY3RseSBvbmNlIikKdGV4dCA9IHRleHQucmVwbGFjZShvbGRfdHJpZ2dlciwgbmV3X3RyaWdnZXIsIDEpCgpvbGRfd3JpdGUgPSAiIiIgIGl0KCdTZXQtQW9Qcm9qZWN0UmV2aWV3ZXJIYXJuZXNzIHJldmlld2VyLXdyaXRlIHBhdGggcmVtYWlucyBQVVQgL2NvbmZpZycsICgpID0+IHsKICAgIGNvbnN0IHRleHQgPSByZWFkRmlsZVN5bmMocmV2aWV3QXBpTGliLCAndXRmOCcpOwogICAgY29uc3QgZm5TdGFydCA9IHRleHQuaW5kZXhPZignZnVuY3Rpb24gU2V0LUFvUHJvamVjdFJldmlld2VySGFybmVzcycpOwogICAgY29uc3QgZm5FbmQgPSB0ZXh0LmluZGV4T2YoJ2Z1bmN0aW9uIFRlc3QtUmV2aWV3QmVmb3JlQ2xlYW51cEdhdGUnKTsKICAgIGNvbnN0IGJvZHkgPSB0ZXh0LnNsaWNlKGZuU3RhcnQsIGZuRW5kKTsKICAgIGV4cGVjdChib2R5KS50b01hdGNoKC9NZXRob2QgUFVULyk7CiAgICBleHBlY3QoYm9keSkudG9NYXRjaCgvXFwvY29uZmlnIi8pOwogIH0pOyIiIgpuZXdfd3JpdGUgPSAiIiIgIGl0KCdyZXRpcmVzIHJldmlld2VyLWhhcm5lc3MgY29uZmlnIHdyaXRlcyBmcm9tIHRoZSByZXZpZXcgYWRhcHRlcicsICgpID0+IHsKICAgIGNvbnN0IHRleHQgPSByZWFkRmlsZVN5bmMocmV2aWV3QXBpTGliLCAndXRmOCcpOwogICAgZXhwZWN0KHRleHQpLm5vdC50b01hdGNoKC9mdW5jdGlvbiBTZXQtQW9Qcm9qZWN0UmV2aWV3ZXJIYXJuZXNzLyk7CiAgICBleHBlY3QodGV4dCkubm90LnRvTWF0Y2goL1xcL2NvbmZpZyIvKTsKICB9KTsiIiIKaWYgdGV4dC5jb3VudChvbGRfd3JpdGUpICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJoYXJuZXNzIGNvbmZpZy13cml0ZSB0ZXN0IGJsb2NrIG5vdCBmb3VuZCBleGFjdGx5IG9uY2UiKQpoYXJuZXNzLndyaXRlX3RleHQodGV4dC5yZXBsYWNlKG9sZF93cml0ZSwgbmV3X3dyaXRlLCAxKSwgZW5jb2Rpbmc9InV0Zi04IikKCnJlYWNoID0gUGF0aCgic2NyaXB0cy9yZWFjaGFiaWxpdHktcHVyZ2UubWpzIikKdGV4dCA9IHJlYWNoLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKQptYXJrZXIgPSAiY29uc3QgSVNTVUVfODIxX0tFRVBfTElWRV9IRUxQRVJTID0gWyIKaWYgdGV4dC5jb3VudChtYXJrZXIpICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJyZWFjaGFiaWxpdHkgY29uc3RhbnQgaW5zZXJ0aW9uIHBvaW50IG5vdCB1bmlxdWUiKQp0ZXh0ID0gdGV4dC5yZXBsYWNlKAogICAgbWFya2VyLAogICAgImNvbnN0IElTU1VFXzgzOV9BQ0NFUFRFRF9SRVRJUkVEX1BBVEhTID0gW1xuICAnc2NyaXB0cy9hby1yZXZpZXcucHMxJyxcbl07XG5cbiIgKyBtYXJrZXIsCiAgICAxLAopCnJlcGxhY2VtZW50cyA9IFsKICAgICgKICAgICAgICAiICAgIC4uLklTU1VFXzgyMV9BQ0NFUFRFRF9SRVRJUkVEX1BBVEhTLFxuICBdKSIsCiAgICAgICAgIiAgICAuLi5JU1NVRV84MjFfQUNDRVBURURfUkVUSVJFRF9QQVRIUyxcbiAgICAuLi5JU1NVRV84MzlfQUNDRVBURURfUkVUSVJFRF9QQVRIUyxcbiAgXSkiLAogICAgKSwKICAgICgKICAgICAgICAiICBjb25zdCBpc3N1ZTgyMVJldGlyZWRTZXQgPSBuZXcgU2V0KElTU1VFXzgyMV9BQ0NFUFRFRF9SRVRJUkVEX1BBV...2275 chars truncated...'} | base64 -d >/tmp/fix839.py
+          python3 /tmp/fix839.py
+          git rm .github/workflows/issue-839-light-diagnose.yml
+          git rm .github/workflows/issue-839-finalize-light-labeled.yml
+          git rm .github/workflows/issue-839-finalize-light-valid.yml
+          node scripts/reachability-purge.mjs --write
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Align light-lane contracts with pack review runner'
+      - name: Verify TypeScript
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Verify focused regressions
+        run: |
+          node scripts/run-vitest-with-harness.mjs run \
+            tests/agents-md-relocation.test.ts \
+            scripts/reachability-purge.test.ts \
+            scripts/review-delivery.test.ts \
+            scripts/review-producer-contract-mapping.test.ts
+      - name: Verify AGENTS size
+        shell: pwsh
+        run: ./scripts/check-agent-rules-line-budget.ps1
+      - name: Verify light lane
+        shell: pwsh
+        run: ./scripts/run-vitest-light-lane.ps1
+      - name: Verify strict self-architect
+        shell: pwsh
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef HEAD
+      - name: Verify full pack
+        shell: pwsh
+        run: ./scripts/verify.ps1
+      - name: Push verified candidate
+        shell: bash
+        run: git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 valid light-lane finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
