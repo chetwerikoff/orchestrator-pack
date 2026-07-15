@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: agent/issue-830-gate-runner-core-census
-      - name: Apply final patch and remove bootstrap transport
+      - name: Apply final patch and remove chunk transport
         shell: bash
         run: |
           set -euo pipefail
@@ -27,6 +27,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git am --3way /tmp/opk830.patch
-          git rm -r .opk830-bootstrap .github/workflows/opk830-bootstrap.yml
-          git commit -m 'chore: remove issue 830 bootstrap transport'
+          git rm -r .opk830-bootstrap
+          git commit -m 'chore: remove issue 830 chunk transport'
           git push origin HEAD:refs/heads/agent/issue-830-gate-runner-core-census
