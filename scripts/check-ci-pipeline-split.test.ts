@@ -40,6 +40,10 @@ import {
   validateTopologyPolicy,
 } from './lib/vitest-heavy-topology.mjs';
 import {
+  PRE_TOPOLOGY_MAX_FILES,
+  resolvePreTopologyMeasurementTargets,
+} from './lib/vitest-pre-topology-measurement.mjs';
+import {
   buildChangedPathManifest,
   normalizePrScopeMode,
   parseChangedPathManifest,
@@ -517,6 +521,24 @@ describe('heavy topology weight-input fail-closed (#695)', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('keeps pre-topology measurement bounded while admitting main plus PR unresolved weights', () => {
+    const unresolvedGuardWeights = [
+      { file: 'scripts/changed-a.test.ts', reason: 'stale-unassociated-weight' },
+      { file: 'scripts/changed-b.test.ts', reason: 'stale-unassociated-weight' },
+      ...Array.from({ length: 11 }, (_, index) => ({
+        file: `scripts/unrelated-${index}.test.ts`,
+        reason: 'missing-per-file-weight',
+      })),
+    ];
+    const targets = resolvePreTopologyMeasurementTargets(
+      { topology: { unresolvedGuardWeights } },
+    );
+
+    expect(unresolvedGuardWeights).toHaveLength(13);
+    expect(targets).toHaveLength(13);
+    expect(PRE_TOPOLOGY_MAX_FILES).toBeGreaterThanOrEqual(13);
   });
 
   it('flags unknown weights for unchanged discovered files when history omits them', () => {
