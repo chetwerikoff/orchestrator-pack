@@ -1,0 +1,153 @@
+
+===== PR scope guard (exit 1) =====
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: undefined,
+npm warn EBADENGINE   required: { node: '22.x' },
+npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+npm warn EBADENGINE }
+
+added 57 packages, and audited 63 packages in 1s
+
+18 packages are looking for funding
+  run `npm fund` for details
+
+1 low severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+[PASS] agent-orchestrator.yaml.example change waived: PR body contains exact waiver line
+scope guard failed: PR diff includes paths outside the committed declaration snapshot
+
+===== CI pipeline split (exit 1) =====
+file:///home/runner/work/orchestrator-pack/orchestrator-pack/scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs:51
+    throw new Error(`initial topology build failed: ${(initial.errors ?? []).join('; ')}`);
+          ^
+
+Error: initial topology build failed: stale classification entry (file missing from discovery): scripts/autonomous-orchestrator-interposer.test.ts; stale classification entry (file missing from discovery): scripts/autonomous-review-worktree-e2e-smoke.test.ts
+    at materializeOverlay (file:///home/runner/work/orchestrator-pack/orchestrator-pack/scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs:51:11)
+    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs:107:25
+    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
+    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+
+Node.js v20.20.2
+
+===== Vitest light lane (exit 1) =====
+stale classification entry (file missing from discovery): scripts/autonomous-orchestrator-interposer.test.ts stale classification entry (file missing from discovery): scripts/autonomous-review-worktree-e2e-smoke.test.ts
+
+===== Vitest heavy topology (exit 1) =====
+stale classification entry (file missing from discovery): scripts/autonomous-orchestrator-interposer.test.ts
+stale classification entry (file missing from discovery): scripts/autonomous-review-worktree-e2e-smoke.test.ts
+
+===== mode-only diff summary (exit 0) =====
+ delete mode 100644 docs/autonomous-real-binaries.example.json
+ create mode 100644 docs/declarations/821.issue-821-final-v9.json
+ mode change 100644 => 100755 plugins/ao-codex-pr-reviewer/bin/review.ts
+ mode change 100644 => 100755 plugins/ao-scope-guard/bin/agent-wrap.ts
+ mode change 100644 => 100755 plugins/ao-scope-guard/bin/scope-check.ts
+ mode change 100644 => 100755 plugins/ao-task-declaration/bin/declare.ts
+ mode change 100644 => 100755 plugins/ao-token-chain-ledger/bin/ledger.mjs
+ delete mode 100755 scripts/_invoke-system-git.sh
+ delete mode 100644 scripts/_resolve-system-git.sh
+ delete mode 100644 scripts/_test-autonomous-ao-stub-fixture.ts
+ delete mode 100644 scripts/_test-interposer-pack-fixture.ts
+ delete mode 100644 scripts/_test-spawn-budget-fixture.ts
+ delete mode 100755 scripts/ao
+ delete mode 100644 scripts/ao-autonomous-guard.ps1
+ delete mode 100644 scripts/autonomous-bash-env.sh
+ delete mode 100644 scripts/autonomous-orchestrator-interposer.test.ts
+ delete mode 100755 scripts/autonomous-orchestrator-surface-bootstrap.sh
+ delete mode 100644 scripts/autonomous-review-worktree-e2e-smoke.test.ts
+ delete mode 100644 scripts/check-worker-nudge-gate-adoption.ps1
+ delete mode 100755 scripts/git
+ delete mode 100644 scripts/git-autonomous-guard.ps1
+ delete mode 100755 scripts/git-real-binary
+ delete mode 100644 scripts/invoke-orchestrator-claimed-review-run.ps1
+ delete mode 100644 scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1
+ delete mode 100644 scripts/lib/autonomous-guard-fast-path.sh
+ delete mode 100644 tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json
+ delete mode 100644 tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json
+
+85	83	.github/workflows/typescript-foundation.yml
+11	32	agent-orchestrator.yaml.example
+0	2	docs/ao-spawn-shape.mjs
+34	25	docs/autonomous-gate-preflight.mjs
+8	120	docs/autonomous-orchestrator-boundary.mjs
+0	5	docs/autonomous-real-binaries.example.json
+3	63	docs/autonomous-review-start-capabilities.json
+24	6	docs/autonomous-shared-capabilities.json
+3	4	docs/autonomous-spawn-budget.json
+6	6	docs/autonomous-worker-nudge-capabilities.json
+26	0	docs/declarations/821.issue-821-final-v9.json
+6	4	docs/orchestrator-claimed-review-run.mjs
+1	1	docs/orchestrator-recovery-runbook.md
+6	7	docs/review-pipeline-spawn-budget-attribution.mjs
+1	1	docs/spawn-worktree-grant.mjs
+7	3	docs/worker-nudge-gate.mjs
+0	0	plugins/ao-codex-pr-reviewer/bin/review.ts
+0	0	plugins/ao-scope-guard/bin/agent-wrap.ts
+0	0	plugins/ao-scope-guard/bin/scope-check.ts
+0	0	plugins/ao-task-declaration/bin/declare.ts
+0	0	plugins/ao-token-chain-ledger/bin/ledger.mjs
+0	14	scripts/_invoke-system-git.sh
+0	109	scripts/_resolve-system-git.sh
+0	598	scripts/_test-autonomous-ao-stub-fixture.ts
+3	3	scripts/_test-git-fixture.ts
+0	332	scripts/_test-interposer-pack-fixture.ts
+0	212	scripts/_test-spawn-budget-fixture.ts
+29	65	scripts/_test-stub-pack-import-closure.test.ts
+0	110	scripts/ao
+0	67	scripts/ao-autonomous-guard.ps1
+0	567	scripts/autonomous-bash-env.sh
+636	1775	scripts/autonomous-orchestrator-boundary.test.ts
+0	832	scripts/autonomous-orchestrator-interposer.test.ts
+0	80	scripts/autonomous-orchestrator-surface-bootstrap.sh
+0	122	scripts/autonomous-review-worktree-e2e-smoke.test.ts
+52	318	scripts/autonomous-spawn-budget.test.ts
+208	352	scripts/autonomous-spawn-policy.test.ts
+7	59	scripts/autonomous-spawn-worktree-gate.test.ts
+1	4	scripts/check-ao-0-10-review-trigger.ps1
+15	4	scripts/check-autonomous-worker-nudge-capabilities-core.ps1
+0	5	scripts/check-command-runtime-bootstrap.ps1
+3	55	scripts/check-orchestrator-claimed-review-run.ps1
+0	10	scripts/check-review-cycle-cap.ps1
+0	61	scripts/check-worker-nudge-gate-adoption.ps1
+36	164	scripts/generate-review-pipeline-spawn-captures.ts
+1	188	scripts/gh-repo-resolve.test.ts
+0	58	scripts/git
+0	67	scripts/git-autonomous-guard.ps1
+0	21	scripts/git-real-binary
+0	73	scripts/invoke-orchestrator-claimed-review-run.ps1
+0	3	scripts/launch-argv-test-exclusions.manifest.json
+0	38	scripts/lib/Autonomous-SpawnWorktreeGate.ps1
+14	1	scripts/lib/Get-AutonomousCapabilityInventoryContext.ps1
+0	269	scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1
+3	21	scripts/lib/Invoke-PackSpawnBudgetGates.ps1
+3	374	scripts/lib/Orchestrator-AutonomousBoundary.ps1
+1	5	scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1
+1	1	scripts/lib/Orchestrator-AutonomousSpawnGate.ps1
+9	34	scripts/lib/Test-AutonomousCapabilityInventory.ps1
+0	196	scripts/lib/autonomous-guard-fast-path.sh
+248	603	scripts/orchestrator-claimed-review-run.test.ts
+0	2	scripts/orchestrator-message-audit-roots.manifest.json
+104	148	scripts/orchestrator-review-start-preflight-audit.test.ts
+2	2	scripts/review-pipeline-spawn-budget.test.ts
+413	530	scripts/review-start-envelope-external-io.test.ts
+0	4	scripts/review-start-envelope-ledger-starter-surfaces.json
+267	360	scripts/review-start-envelope-ledger.test.ts
+81	143	scripts/review-start-preflight-shield-denial-audit.test.ts
+145	258	scripts/review-start-scoped-gh-json-capture.test.ts
+3	3	scripts/spawn-worktree-grant-finalization.test.ts
+262	415	scripts/spawn-worktree-head-ref-oid-binding.test.ts
+1	1	scripts/spawn-worktree-repository-identity-binding.test.ts
+5	7	scripts/toolchain/powershell-child-tests.json
+1	111	scripts/toolchain/raw-child-process-baseline.json
+27	273	scripts/worker-nudge-gate.test.ts
+0	128	scripts/worker-recovery-spawn-argv.test.ts
+4	4	scripts/worktree-gate-claim-completion-seam.test.ts
+0	54	tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json
+0	56	tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json
+14	50	tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json
+94	922	tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json
