@@ -13,7 +13,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,27 +43,40 @@ jobs:
           set -o pipefail
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
           node scripts/emit-vitest-heavy-topology.mjs --gha-output 2>&1 | tee /tmp/issue-839-topology.log
+      - name: Capture Vitest light lane
+        id: light
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/run-vitest-light-lane.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-light.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Publish exact diagnostics
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFY: ${{ steps.verify.outcome }}
           TOPOLOGY: ${{ steps.topology.outcome }}
+          LIGHT: ${{ steps.light.outcome }}
         shell: bash
         run: |
           {
             echo '## Issue #839 final CI diagnosis'
             echo
-            echo "verify=$VERIFY topology=$TOPOLOGY"
+            echo "verify=$VERIFY topology=$TOPOLOGY light=$LIGHT"
             echo
             echo '### verify.ps1'
             echo '```text'
-            tail -c 24000 /tmp/issue-839-verify.log 2>/dev/null || true
+            tail -c 36000 /tmp/issue-839-verify.log 2>/dev/null || true
             echo '```'
             echo
             echo '### heavy topology'
             echo '```text'
             cat /tmp/issue-839-topology.log 2>/dev/null || true
             echo '```'
+            echo
+            echo '### Vitest light lane'
+            echo '```text'
+            tail -c 36000 /tmp/issue-839-light.log 2>/dev/null || true
+            echo '```'
           } >/tmp/issue-839-diagnosis.md
-          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/issue-839-diagnosis.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/issue-839-diagnosis.md
