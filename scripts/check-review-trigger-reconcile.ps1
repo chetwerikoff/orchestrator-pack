@@ -3,6 +3,7 @@
 .SYNOPSIS
   Regression guard: Issue #163/#839 pack-owned review-trigger reconciliation wiring and default cadence.
 #>
+# Connector-triggered completion validation.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $example = Join-Path $Root 'agent-orchestrator.yaml.example'
