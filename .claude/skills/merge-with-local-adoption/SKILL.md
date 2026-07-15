@@ -142,10 +142,6 @@ Stop without merging if:
 - `mergeable` is not `MERGEABLE` (offer `gh pr update-branch P` first if behind)
 - Required checks are failing or review is blocking
 
-Optional when AO review is in play: `ao review list orchestrator-pack --json` for
-the PR head — do not merge on open/sent findings or empty failed runs (see
-`AGENTS.md`).
-
 ---
 
 ## Step 3b — Worker handoff when CI or base sync is blocked
