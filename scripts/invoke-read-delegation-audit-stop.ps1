@@ -12,10 +12,11 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+. (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
 $cli = Join-Path $PSScriptRoot 'json-producers/read-delegation-audit-stop.ts'
-$args = @('--experimental-strip-types', $cli)
-if ($ArtifactPath) { $args += @('--artifact-path', $ArtifactPath) }
-if ($RepoRoot) { $args += @('--repo-root', $RepoRoot) }
+$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+if ($ArtifactPath) { $nodeArgs += @('--artifact-path', $ArtifactPath) }
+if ($RepoRoot) { $nodeArgs += @('--repo-root', $RepoRoot) }
 $stdin = [Console]::In.ReadToEnd()
-$stdin | & node @args
+$stdin | & node @nodeArgs
 # Fail-open by contract: deliberately ignore the child exit status.
