@@ -45,4 +45,4 @@ jobs:
             cat /tmp/base-typecheck.log
             echo '```'
           } >/tmp/base-typecheck-report.md
-          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/base-typecheck-report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/base-typecheck-report.md
