@@ -4,6 +4,7 @@ $Root = if ($args.Count -gt 0 -and $args[0]) { (Resolve-Path -LiteralPath $args[
 
 $registryCli = Join-Path $Root 'docs/orchestrator-message-registry.mjs'
 $mapPath = Join-Path $Root 'docs/orchestrator-message-map.md'
+$baseResolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.mjs'
 $failures = [System.Collections.Generic.List[string]]::new()
 
 if ($IsWindows -and -not $env:WSL_DISTRO_NAME) {
@@ -16,6 +17,9 @@ elseif ($PSVersionTable.PSEdition -eq 'Desktop') {
 if (-not (Test-Path -LiteralPath $registryCli -PathType Leaf)) {
     $failures.Add("missing registry cli: $registryCli")
 }
+if (-not (Test-Path -LiteralPath $baseResolver -PathType Leaf)) {
+    $failures.Add("missing merge-stable base resolver: $baseResolver")
+}
 
 if ($failures.Count -eq 0) {
     & node $registryCli audit $Root
@@ -23,20 +27,21 @@ if ($failures.Count -eq 0) {
         $failures.Add('registration audit failed (see node output above)')
     }
 
-    $baseRef = if ($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF) {
-        $env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF.Trim()
+    $candidateArgs = @()
+    if ($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF) {
+        $candidateArgs = @('--candidate', $env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF.Trim())
     }
-    elseif ($env:GITHUB_BASE_SHA) {
-        $env:GITHUB_BASE_SHA.Trim()
+    $baseRef = (& node $baseResolver --repo-root $Root @candidateArgs 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baseRef)) {
+        if ($baseRef) { Write-Host $baseRef }
+        $failures.Add('protected runtime diff check could not resolve a non-self comparison base')
     }
     else {
-        'origin/main'
-    }
-
-    $protectedRuntimeOut = & node $registryCli check-protected-runtime $Root $baseRef 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        if ($protectedRuntimeOut) { Write-Host $protectedRuntimeOut }
-        $failures.Add('protected runtime diff check failed (see node output above)')
+        $protectedRuntimeOut = & node $registryCli check-protected-runtime $Root $baseRef 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            if ($protectedRuntimeOut) { Write-Host $protectedRuntimeOut }
+            $failures.Add('protected runtime diff check failed (see node output above)')
+        }
     }
 
     $generated = (& node $registryCli generate-map $Root 2>&1 | Out-String)

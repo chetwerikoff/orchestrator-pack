@@ -2,78 +2,83 @@
 $ErrorActionPreference = 'Stop'
 $Root = if ($args.Count -gt 0 -and $args[0]) { (Resolve-Path -LiteralPath $args[0]).Path } else { Split-Path -Parent $PSScriptRoot }
 
-$requiredCommits = @{
-    '709' = '7ccf7396'
-    '711' = 'afa96f0d'
+$requiredSurfaces = @(
+    @{
+        Issue = '709'
+        Path = 'scripts/lib/Orchestrator-WakeSupervisorLease.ps1'
+        Markers = @(
+            'State-root singleton lease for wake supervisor fleet cardinality (Issue #709)',
+            'function Get-OrchestratorWakeSupervisorLeasePath',
+            "'supervisor.lock'"
+        )
+    },
+    @{
+        Issue = '711'
+        Path = 'scripts/lib/Orchestrator-FleetHygiene.ps1'
+        Markers = @(
+            'Fleet hygiene assertions H1–H7 (Issue #711)',
+            '$Script:FleetHygieneAssertionIds',
+            'function Get-FleetHygieneConfig'
+        )
+    }
+)
+
+function Get-TrackedTextAtRef {
+    param(
+        [Parameter(Mandatory = $true)][string]$Ref,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $output = (& git show "$Ref`:$Path" 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return $output
 }
 
-function Resolve-SequencingBaseRef {
-    $eventBaseSha = ''
-    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_EVENT_PATH) -and (Test-Path -LiteralPath $env:GITHUB_EVENT_PATH -PathType Leaf)) {
-        try {
-            $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json -Depth 20
-            if ($event.pull_request.base.sha) {
-                $eventBaseSha = [string]$event.pull_request.base.sha
-            }
-        }
-        catch {
-            $eventBaseSha = ''
+function Test-RequiredSurfaceAtRef {
+    param(
+        [Parameter(Mandatory = $true)][string]$Ref,
+        [Parameter(Mandatory = $true)][hashtable]$Surface
+    )
+    $text = Get-TrackedTextAtRef -Ref $Ref -Path $Surface.Path
+    if ($null -eq $text) {
+        return "#$($Surface.Issue): missing $($Surface.Path) at $Ref"
+    }
+    foreach ($marker in $Surface.Markers) {
+        if (-not $text.Contains($marker)) {
+            return "#$($Surface.Issue): $($Surface.Path) at $Ref lacks semantic prerequisite marker: $marker"
         }
     }
-
-    $candidates = @(
-        $env:BASE_SHA,
-        $env:GITHUB_BASE_SHA,
-        $env:PR_BASE_SHA,
-        $eventBaseSha,
-        'origin/main',
-        'refs/remotes/origin/main',
-        'main'
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-    foreach ($candidate in $candidates) {
-        $resolved = (& git rev-parse --verify --quiet $candidate 2>$null)
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($resolved)) {
-            return [string]$candidate
-        }
-    }
-
     return $null
 }
 
 Push-Location $Root
 try {
-    $baseRef = Resolve-SequencingBaseRef
-    if ([string]::IsNullOrWhiteSpace($baseRef)) {
-        Write-Host '[SKIP] side-process registry sequencing guard: unable to resolve base ref (tried BASE_SHA, GITHUB_BASE_SHA, PR_BASE_SHA, GITHUB_EVENT_PATH pull_request.base.sha, origin/main, refs/remotes/origin/main, main)'
-        exit 0
+    $resolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.mjs'
+    if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
+        throw "missing merge-stable base resolver: $resolver"
     }
 
-    $mergeBaseRaw = (& git merge-base HEAD $baseRef 2>$null)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mergeBaseRaw)) {
-        Write-Host "[SKIP] side-process registry sequencing guard: unable to resolve merge-base with $baseRef"
-        exit 0
+    $baseJson = (& node $resolver --repo-root $Root --json 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $baseJson
+        throw 'side-process registry sequencing guard could not resolve a non-self comparison base'
     }
-    $mergeBase = $mergeBaseRaw.Trim()
+    $base = $baseJson | ConvertFrom-Json
 
-    $missing = [System.Collections.Generic.List[string]]::new()
-    foreach ($issue in $requiredCommits.Keys) {
-        $commit = $requiredCommits[$issue]
-        & git merge-base --is-ancestor $commit $mergeBase
-        if ($LASTEXITCODE -ne 0) {
-            $missing.Add("#$issue@$commit")
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($surface in $requiredSurfaces) {
+        foreach ($ref in @([string]$base.baseSha, 'HEAD')) {
+            $failure = Test-RequiredSurfaceAtRef -Ref $ref -Surface $surface
+            if ($failure) { $failures.Add($failure) }
         }
     }
 
-    if ($missing.Count -gt 0) {
-        Write-Host "[FAIL] side-process registry sequencing guard: merge-base $mergeBase predates required registry prerequisites"
-        foreach ($entry in $missing) {
-            Write-Host "  - missing prerequisite $entry"
-        }
+    if ($failures.Count -gt 0) {
+        Write-Host '[FAIL] side-process registry sequencing guard: semantic prerequisites are absent or drifted'
+        foreach ($failure in $failures) { Write-Host "  - $failure" }
         exit 1
     }
 
-    Write-Host "[PASS] side-process registry sequencing guard: merge-base $mergeBase includes #709 and #711 prerequisite commits."
+    Write-Host "[PASS] side-process registry sequencing guard: #709/#711 semantic surfaces are present at base $($base.baseSha) and HEAD."
     exit 0
 }
 finally {
