@@ -1,5 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
+if (process.env.OPK_VITEST_HARNESS !== '1') {
+  throw new Error(
+    'OPK_VITEST_HARNESS is required. Run Vitest through `npm test` or a pack run-vitest lane wrapper.',
+  );
+}
+
 const ci = process.env.CI === 'true';
 const lightLane = process.env.VITEST_CI_LIGHT_LANE === '1';
 const lightMaxWorkers = Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '2');
@@ -7,7 +13,10 @@ const lightMaxWorkers = Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? '2');
 export default defineConfig({
   test: {
     globalSetup: ['scripts/vitest-global-setup.ts'],
-    setupFiles: ['scripts/vitest-testmode-fleet-progress.ts'],
+    setupFiles: [
+      'scripts/vitest-live-store-preload.mjs',
+      'scripts/vitest-testmode-fleet-progress.ts',
+    ],
     include: [
       'plugins/**/tests/**/*.test.ts',
       'scripts/**/*.test.ts',

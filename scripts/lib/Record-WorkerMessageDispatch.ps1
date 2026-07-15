@@ -21,9 +21,6 @@ function Get-WorkerMessageDispatchJournalPath {
         return $env:AO_WORKER_MESSAGE_DISPATCH_JOURNAL
     }
     $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
-    if (-not (Test-Path -LiteralPath $stateRoot)) {
-        New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
-    }
     return Join-Path $stateRoot 'worker-message-dispatch-journal.json'
 }
 

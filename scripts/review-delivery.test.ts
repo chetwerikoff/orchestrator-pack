@@ -429,9 +429,27 @@ describe('review delivery journal durable path', () => {
       $path = Get-WorkerMessageDispatchJournalPath
       @{ path = $path; underTemp = $path.StartsWith([System.IO.Path]::GetTempPath()) } | ConvertTo-Json -Compress
     `;
-    const result = JSON.parse(runPwsh(script));
-    expect(result.underTemp).toBe(false);
-    expect(result.path).toContain('orchestrator-pack-wake-supervisor');
+    const productionTmp = process.env.OPK_VITEST_PRODUCTION_TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '';
+    const productionHome = process.env.OPK_VITEST_PRODUCTION_HOME ?? process.env.HOME ?? '';
+    const productionXdgStateHome = process.env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME
+      ?? (productionHome ? path.join(productionHome, '.local', 'state') : '');
+    const parsed = JSON.parse(runPwsh(script, {
+      OPK_VITEST_HARNESS: '',
+      OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
+      OPK_VITEST_HARNESS_ROOT: '',
+      OPK_VITEST_HARNESS_INVENTORY: '',
+      AO_WORKER_MESSAGE_DISPATCH_JOURNAL: '',
+      AO_WAKE_SUPERVISOR_STATE_DIR: '',
+      ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
+      AO_SIDE_PROCESS_STATE_DIR: '',
+      HOME: productionHome,
+      XDG_STATE_HOME: productionXdgStateHome,
+      TMPDIR: productionTmp,
+      TEMP: productionTmp,
+      TMP: productionTmp,
+    }));
+    expect(parsed.underTemp).toBe(false);
+    expect(parsed.path).toContain('orchestrator-pack-wake-supervisor');
   });
 });
 

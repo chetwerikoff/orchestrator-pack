@@ -1,14 +1,30 @@
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { repoRoot } from './_test-pwsh-helpers.js';
+import { runProcessSync } from '#opk-kernel/subprocess';
+import { repoRoot, vitestHarnessBypassEnv } from './_test-vitest-harness-env.js';
+
+const stableTrustTempRoot = (() => {
+  const explicit = String(process.env.OPK_VITEST_PRODUCTION_TMP ?? '').trim();
+  if (explicit) {
+    return explicit;
+  }
+  return tmpdir();
+})();
 
 function runTrustScript(home: string, args: string[]) {
-  const result = spawnSync(
-    'pwsh',
-    [
+  const trustEnv = vitestHarnessBypassEnv({
+    HOME: home,
+    PATH: '/snap/bin:/usr/bin:/bin',
+    LANG: process.env.LANG ?? 'C.UTF-8',
+    LC_ALL: process.env.LC_ALL ?? '',
+    TZ: process.env.TZ ?? '',
+    XDG_STATE_HOME: '',
+  }) satisfies Record<string, string | undefined>;
+  const result = runProcessSync({
+    command: 'pwsh',
+    args: [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
@@ -16,18 +32,13 @@ function runTrustScript(home: string, args: string[]) {
       path.join(repoRoot, 'scripts/trust-ao-worktree.ps1'),
       ...args,
     ],
-    {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        HOME: home,
-        PATH: '/snap/bin:/usr/bin:/bin',
-      },
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error(`trust script failed ${result.status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: trustEnv,
+  });
+  if (!result.ok) {
+    const status = result.exitCode ?? 'null';
+    throw new Error(`trust script failed ${status}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
   }
 }
 
@@ -41,7 +52,7 @@ function readTrustedPayloads(home: string) {
 
 describe('trust-ao-worktree.ps1', () => {
   it('trusts AO 0.10+ worktrees under ~/.ao/data/worktrees by session id', () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'opk-trust-home-'));
+    const home = mkdtempSync(path.join(stableTrustTempRoot, 'opk-trust-home-'));
     try {
       const workspace = path.join(home, '.ao/data/worktrees/orchestrator-pack/orchestrator-pack-6');
       mkdirSync(workspace, { recursive: true });
@@ -57,7 +68,7 @@ describe('trust-ao-worktree.ps1', () => {
   });
 
   it('trusts both new and legacy worktree roots when asked to trust the root', () => {
-    const home = mkdtempSync(path.join(tmpdir(), 'opk-trust-home-'));
+    const home = mkdtempSync(path.join(stableTrustTempRoot, 'opk-trust-home-'));
     try {
       const newRoot = path.join(home, '.ao/data/worktrees/orchestrator-pack');
       const legacyRoot = path.join(home, '.agent-orchestrator/projects/orchestrator-pack/worktrees');

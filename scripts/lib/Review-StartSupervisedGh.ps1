@@ -6,6 +6,7 @@
 . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
+. (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')
 
 function Resolve-ReviewStartSupervisedGhCommand {
     $override = [string]$env:AO_REVIEW_START_SUPERVISED_GH_COMMAND
@@ -106,6 +107,7 @@ function Invoke-ReviewStartSupervisedGh {
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    Set-OpkVitestProcessStartInfoEnvironment -ProcessStartInfo $psi
     if ($RepoRoot -and (Test-Path -LiteralPath $RepoRoot)) {
         $psi.WorkingDirectory = $RepoRoot
     }

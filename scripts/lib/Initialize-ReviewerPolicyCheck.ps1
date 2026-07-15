@@ -75,7 +75,27 @@ function Invoke-ReviewerPolicyVitestSuite {
         }
     }
 
-    & npx vitest run $TestFile
+    if ($IsWindows -or $env:OS -eq 'Windows_NT' -or -not (Get-Command bash -ErrorAction SilentlyContinue)) {
+        & node (Join-Path $Root 'scripts/run-vitest-with-harness.mjs') 'run' $TestFile
+    }
+    else {
+        Push-Location $Root
+        try {
+            $minimalEnvArgs = @(
+                '-i',
+                "PATH=$env:PATH",
+                "HOME=$env:HOME",
+                "TMPDIR=$env:TMPDIR",
+                "TEMP=$env:TEMP",
+                "TMP=$env:TMP",
+                "OPK_REAL_PWSH=$env:OPK_REAL_PWSH"
+            )
+            & env @minimalEnvArgs bash '-lc' "node scripts/run-vitest-with-harness.mjs run '$TestFile'"
+        }
+        finally {
+            Pop-Location
+        }
+    }
     if ($LASTEXITCODE -ne 0) {
         $Failures.Add("$TestFile failed")
     }

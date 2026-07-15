@@ -19,7 +19,7 @@
       "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json"
     }
   ],
-  "captureCommitSha": "c05a1aed41a8b6392a9f1f9e83936dd6a760f6f4",
+  "captureCommitSha": "f5907d99ac5a27132a02d73a8a98fb29daba1326",
   "bindingMode": "scoped-tree-content-v1",
   "bindingScopePaths": [
     "scripts/check-supervisor-test-wait-inventory.ps1",

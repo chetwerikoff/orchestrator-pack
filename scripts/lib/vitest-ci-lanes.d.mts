@@ -24,6 +24,7 @@ export interface LanesConfig {
   heavyTopology: HeavyTopologyPolicy;
   heavyForkPoolMinRuntimeMs: number;
   heavyPerTestIsolate: string[];
+  heavyFileBatchIsolate: string[];
   classification: Record<string, string>;
 }
 
@@ -86,6 +87,7 @@ export declare function enumerateVitestFileTestTitles(filePath: string): string[
 export interface HeavyFileRunPlan {
   mode: 'file' | 'tests';
   pool: 'forks' | 'threads';
+  batchable?: boolean;
   tests?: string[];
 }
 export declare function resolveHeavyFileRunPlan(

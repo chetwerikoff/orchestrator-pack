@@ -1,10 +1,22 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { evaluateAttemptCeiling, evaluateReadinessEnvelopeWithPause, classifyInfraTransportFailure, createMonotonicClock, closeInfraPauseSegment, clearFirstAttemptOnCoveredHead, INFRA_TRANSPORT_FAILURE_CLASS } from '../docs/review-start-envelope-external-io.mjs';
-import { evaluateReclaimDecision, evaluateReadinessEnvelope, resolveClaimLifecycleConfig } from '../docs/review-start-claim-lifecycle.mjs';
+import {
+  evaluateAttemptCeiling,
+  evaluateReadinessEnvelopeWithPause,
+  classifyInfraTransportFailure,
+  createMonotonicClock,
+  closeInfraPauseSegment,
+  clearFirstAttemptOnCoveredHead,
+  INFRA_TRANSPORT_FAILURE_CLASS,
+} from '../docs/review-start-envelope-external-io.mjs';
+import {
+  evaluateReclaimDecision,
+  evaluateReadinessEnvelope,
+  resolveClaimLifecycleConfig,
+} from '../docs/review-start-claim-lifecycle.mjs';
+import { runProcessSync } from './kernel/subprocess.js';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 const fullSha = '943b6cefbc6071f785d99b0eaf745bd579644d85';
 const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
@@ -645,35 +657,37 @@ describe('review-start-envelope-external-io', () => {
           readinessStart = [int64]$retry.claim.readinessStartMonotonicMs
         } | ConvertTo-Json -Compress
       `;
-            const result = JSON.parse(runPwsh(script));
-            expect(result.acquired).toBe(true);
-            expect(result.recovered).toBe(false);
-            expect(result.firstAttempt).toBe(firstMono);
-            expect(result.readinessStart).toBe(laterMono);
-            const ceiling = evaluateAttemptCeiling({
-                claim: {
-                    prNumber: 510,
-                    headSha: fullSha,
-                    firstAttemptAtMonotonicMs: result.firstAttempt,
-                },
-                nowMonotonicMs: laterMono,
-                reviewRuns: [],
-                config,
-            });
-            expect(ceiling.exceeded).toBe(false);
-        }
-        finally {
-            rmSync(dir, { recursive: true, force: true });
-        }
+      const result = JSON.parse(runPwsh(script));
+      expect(result.acquired).toBe(true);
+      expect(result.recovered).toBe(false);
+      expect(result.firstAttempt).toBe(firstMono);
+      expect(result.readinessStart).toBe(laterMono);
+
+      const ceiling = evaluateAttemptCeiling({
+        claim: {
+          prNumber: 510,
+          headSha: fullSha,
+          firstAttemptAtMonotonicMs: result.firstAttempt,
+        },
+        nowMonotonicMs: laterMono,
+        reviewRuns: [],
+        config,
+      });
+      expect(ceiling.exceeded).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('hold-semantics-481-preserved', () => {
+    const result = runProcessSync({
+      command: process.execPath,
+      args: ['scripts/run-vitest-with-harness.mjs', 'run', 'review-start-claim-budget-semantics'],
+      cwd: repoRoot,
+      inheritParentEnv: true,
     });
-    it('hold-semantics-481-preserved', () => {
-        const result = spawnSync('npm', ['test', '--', 'review-start-claim-budget-semantics'], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-            shell: true,
-        });
-        expect(result.status).toBe(0);
-    });
+    expect(result.ok).toBe(true);
+  }, 60_000);
 });
 describe('review-start-envelope-external-io monotonic clock', () => {
     it('advances independently of wall clock', () => {

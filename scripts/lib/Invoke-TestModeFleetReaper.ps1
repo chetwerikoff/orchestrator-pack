@@ -385,10 +385,14 @@ function Invoke-TestModeFleetReaper {
         $candidatePids = @($candidateSet)
     }
     elseif ($ScopeMode -in @('teardown', 'observe', 'cleanup') -and $CurrentLeaseId) {
-        $candidatePids = @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots (Get-TestModeFleetLeaseScopedStateRoots -LeaseRecords $leaseRecords -LeaseId $CurrentLeaseId))
-        if ($candidatePids.Count -eq 0) {
-            $candidatePids = @(Get-TestModeFleetReaperCandidateProcesses)
+        $candidateSet = [System.Collections.Generic.HashSet[int]]::new()
+        foreach ($candidatePid in @(Get-TestModeFleetReaperCandidatesForStateRoots -StateRoots (Get-TestModeFleetLeaseScopedStateRoots -LeaseRecords $leaseRecords -LeaseId $CurrentLeaseId))) {
+            [void]$candidateSet.Add([int]$candidatePid)
         }
+        foreach ($candidatePid in @(Get-TestModeFleetReaperCandidateProcesses)) {
+            [void]$candidateSet.Add([int]$candidatePid)
+        }
+        $candidatePids = @($candidateSet)
     }
     else {
         $candidatePids = @(Get-TestModeFleetReaperCandidateProcesses)
