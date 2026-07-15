@@ -1,5 +1,7 @@
 #requires -Version 5.1
 
+. (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')
+
 function Get-SanctionedWorkerKillRecordPath {
     if ($env:AO_SANCTIONED_WORKER_KILL_RECORD_PATH) {
         return $env:AO_SANCTIONED_WORKER_KILL_RECORD_PATH
@@ -17,7 +19,8 @@ function Invoke-SanctionedWorkerKillRecordCli {
     param([string[]]$Arguments)
 
     $cli = Get-SanctionedWorkerKillRecordCliPath
-    $output = & node --experimental-strip-types $cli @Arguments 2>&1
+    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+    $output = & node @nodeArgs @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "sanctioned-worker-kill-record.ts exited $LASTEXITCODE`: $($output | Out-String)"
     }
