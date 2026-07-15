@@ -88,4 +88,29 @@ describe('check-graphify-no-installer guard (Issue #833 AC#1/AC#7)', () => {
       rmSync(scratchRoot, { recursive: true, force: true });
     }
   });
+
+  it('does not reject a normal path with an "install" path component (Issue #833 review finding)', async () => {
+    const libPath = join(repoRoot, 'scripts/graphify/lib/Resolve-GraphifyEnv.ps1');
+    const script = `
+      . '${libPath}'
+      try {
+        Invoke-GraphifyCommand -Subcommand 'extract' -Arguments @('/tmp/install/orchestrator-pack', '--code-only', '--out', '/tmp/install/orchestrator-pack-out')
+        Write-Output 'UNEXPECTED_SUCCESS'
+      } catch {
+        Write-Output "CAUGHT: $($_.Exception.Message)"
+      }
+    `;
+    const result = await runProcess({
+      command: 'pwsh',
+      args: ['-NoProfile', '-Command', script],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      allowEmptyStdout: true,
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    // No real graphify venv exists in this test environment, so the call must fail --
+    // but with "executable not found", never the install-family rejection message.
+    expect(output).not.toContain('looks like an install-family subcommand');
+    expect(output).toContain('graphify executable not found');
+  });
 });

@@ -62,7 +62,11 @@ function Invoke-GraphifyCommand {
         throw "Refusing to invoke graphify subcommand '$Subcommand' -- not in the allowed set ($($script:GraphifyAllowedSubcommands -join ', '))."
     }
     foreach ($arg in $Arguments) {
-        if ($arg -eq 'install' -or $arg -match '\binstall\b') {
+        # Exact-token match only: a normal repo/output path containing an "install" path
+        # component (e.g. /tmp/install/orchestrator-pack) must still pass through untouched.
+        # This only rejects 'install' passed as its own standalone argv element, matching how
+        # graphify's own CLI expects the install subcommand to appear.
+        if ($arg -eq 'install') {
             throw "Refusing to invoke graphify: argument '$arg' looks like an install-family subcommand. This mechanism must never run 'graphify install' or any '<platform> install' variant."
         }
     }

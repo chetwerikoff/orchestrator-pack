@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "21ceaa274855a172d71396d239d1e4b339245c6b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:a4d16452b98f6e57039c1ca5b0fa2afb83ced06c078bb58bf4735b360ac92ee0"
+    "active_scope_hash": "sha256:fae744334a9f105005bf764f609efddc485ba59ab3bff2af58af6c023c054dd6"
   },
   "declared_paths": [
     ".cursor/rules/graphify-graph-check.mdc",
@@ -17,7 +17,8 @@
     ".gitignore",
     "tests/agents-md-relocation.test.ts",
     "scripts/toolchain/raw-child-process-baseline.json",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/reachability-purge.manifest.json"
   ],
   "declared_globs": [
     "scripts/graphify/**"
@@ -25,14 +26,15 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:ac30d24aff270f8c83bb982355d206999378497500729f49a6730f131be4e814",
-      "new_active_scope_hash": "sha256:a4d16452b98f6e57039c1ca5b0fa2afb83ced06c078bb58bf4735b360ac92ee0",
+      "new_active_scope_hash": "sha256:fae744334a9f105005bf764f609efddc485ba59ab3bff2af58af6c023c054dd6",
       "changed": {
         "added": [
-          "scripts/vitest-ci-lanes.config.json"
+          "scripts/vitest-ci-lanes.config.json",
+          "scripts/reachability-purge.manifest.json"
         ],
         "removed": []
       },
-      "reason": "CI scope-guard requires vitest-ci-lanes.config.json to classify the two new test files into a lane",
+      "reason": "CI scope-guard requires vitest-ci-lanes.config.json to classify the two new test files into a lane; scripts/reachability-purge.manifest.json added because a new tracked file necessarily changes the whole-repo reachability graph scripts/reachability-purge.test.ts snapshots, and pack review reads this iteration (833.orchestrator-pack-129.json) rather than the superseding chain (833.orchestrator-pack-129-v2.json / -v3.json, which already declared this path and were independently confirmed correct against scripts/pr-scope-check.ts's resolveLatestCommittedSnapshot). This entry was appended to the existing single amendment record -- not a second amendment -- because plugins/_shared/lib/declaration_schema.ts caps amendments at one per iteration and the CLI's --amend already rejects a second call.",
       "actor": "orchestrator-pack-129",
       "timestamp": "2026-07-15T11:26:30.781Z",
       "applied": true
