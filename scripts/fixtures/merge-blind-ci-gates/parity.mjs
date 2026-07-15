@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import {
   copyFileSync,
   mkdtempSync,
@@ -11,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProcess } from '#opk-kernel/subprocess';
+import { promisify } from 'node:util';
 import { resolveMergeStableCiBase } from '../../lib/resolve-merge-stable-ci-base.mjs';
 import { inspectSupervisorHeavyLaneRpcBinding } from '../../lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs';
 
@@ -19,21 +20,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(process.argv[2] ?? join(__dirname, '..', '..', '..'));
 const HISTORICAL_PR_HEAD = '3a3a299cdcc0e00270b4fa2c785b98ac7fdb4992';
 const HISTORICAL_MAIN = '225187b7d3507a0872fc1bf435089a7e3aa0c1d7';
+const execFileAsync = promisify(execFile);
 
 async function run(command, args, options = {}) {
-  const result = await runProcess({
-    command,
-    args,
-    cwd: options.cwd,
-    env: options.env ?? process.env,
-    inheritParentEnv: true,
-    allowEmptyStdout: true,
-  });
-  return {
-    status: result.exitCode ?? (result.ok ? 0 : 1),
-    stdout: result.stdout,
-    stderr: result.stderr || result.error || '',
-  };
+  try {
+    const result = await execFileAsync(command, args, {
+      cwd: options.cwd,
+      env: { ...process.env, ...(options.env ?? {}) },
+      encoding: 'utf8',
+    });
+    return { status: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return {
+      status: typeof error === 'object' && error && 'code' in error ? Number(error.code) || 1 : 1,
+      stdout: typeof error === 'object' && error && 'stdout' in error ? String(error.stdout) : '',
+      stderr: typeof error === 'object' && error && 'stderr' in error ? String(error.stderr) : String(error),
+    };
+  }
 }
 
 async function git(cwd, args) {
@@ -103,8 +106,6 @@ function expectSameStatus(label, pr, push, expected) {
 async function prepareGateRepo() {
   const root = await initRepo('opk-823-gates-');
   copyFileSync(join(repoRoot, 'package.json'), join(root, 'package.json'));
-  mkdirSync(join(root, 'scripts/kernel'), { recursive: true });
-  copyFileSync(join(repoRoot, 'scripts/kernel/subprocess.ts'), join(root, 'scripts/kernel/subprocess.ts'));
   write(
     join(root, 'scripts/lib/Orchestrator-WakeSupervisorLease.ps1'),
     "# State-root singleton lease for wake supervisor fleet cardinality (Issue #709)\nfunction Get-OrchestratorWakeSupervisorLeasePath {}\n$lock = 'supervisor.lock'\n",
