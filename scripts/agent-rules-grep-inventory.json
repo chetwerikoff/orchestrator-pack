@@ -1,5 +1,5 @@
 {
   "version": "agents-md-grep-inventory/v1",
-  "description": "Retired — live-ref guard is check-agent-rules-grep-inventory.ps1 scanning tracked tree (Issue #678).",
+  "description": "Retired inventory shell — live-reference enforcement is owned by scripts/gate-runner/representative-gates.ts (Issue #830).",
   "consumers": []
 }
