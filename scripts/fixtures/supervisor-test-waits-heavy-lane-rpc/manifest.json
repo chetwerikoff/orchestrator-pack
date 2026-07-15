@@ -19,6 +19,37 @@
       "metadataFile": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json"
     }
   ],
-  "captureCommitSha": "511ae1749168b4a962b1381a048aef4c7b9573be",
-  "bindingMode": "scoped-tree-content-v1"
+  "captureCommitSha": "d6dcc9540698c7cfaea2ba505c4fd30512275a15",
+  "bindingMode": "scoped-tree-content-v1",
+  "bindingScopePaths": [
+    "scripts/check-supervisor-test-wait-inventory.ps1",
+    "scripts/check-supervisor-test-wait-inventory.test.ts",
+    "scripts/lib/bind-supervisor-heavy-lane-rpc-metadata.mjs",
+    "scripts/lib/supervisor-test-wait-inventory.mjs",
+    "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.d.mts",
+    "scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs",
+    "scripts/lib/vitest-ci-lanes.d.mts",
+    "scripts/lib/vitest-ci-lanes.mjs",
+    "scripts/orchestrator-wake-supervisor-empty-pid.test.ts",
+    "scripts/orchestrator-wake-supervisor-lifecycle.test.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-integration.shared.ts",
+    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts",
+    "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
+    "scripts/orchestrator-wake-supervisor-startup.test.ts",
+    "scripts/orchestrator-wake-supervisor-test-child.ps1",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/orchestrator-wake-supervisor.shared.ts",
+    "scripts/orchestrator-wake-supervisor.test.ts",
+    "scripts/supervisor-fault-boundary-child-entry-null.test.ts",
+    "scripts/supervisor-fault-boundary-deterministic-terminal.test.ts",
+    "scripts/supervisor-fault-boundary-escalate.test.ts",
+    "scripts/supervisor-fault-boundary-recovery-stop.test.ts",
+    "scripts/supervisor-fault-boundary-redirect-disposed.test.ts",
+    "scripts/supervisor-fault-boundary-status-entry.test.ts",
+    "scripts/supervisor-fault-boundary.shared.ts",
+    "scripts/supervisor-recovery.test-helpers.ts"
+  ]
 }
