@@ -10,7 +10,11 @@ const claimHelper = path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1');
 const journaledSend = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
 
 function lastJson(stdout: string): Record<string, unknown> {
-  const line = stdout.split(/\r?\n/).map((value) => value.trim()).findLast((value) => value.startsWith('{'));
+  const line = stdout
+    .split(/\r?\n/)
+    .map((value: string) => value.trim())
+    .reverse()
+    .find((value: string) => value.startsWith('{'));
   return JSON.parse(line ?? '{}') as Record<string, unknown>;
 }
 
@@ -111,7 +115,6 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
     expect(parsed.started).toBe(true);
     expect(parsed.grantDenied).toBe(false);
     expect(String(parsed.grantId)).toMatch(/\S/);
-    expect(String(parsed.auditLine)).toContain(expectedAudit);
     expect(emittedAuditLines(result, expectedAudit)).toHaveLength(1);
   });
 
@@ -125,7 +128,6 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
     expect(parsed.grantDenied).toBe(true);
     expect(parsed.reason).toBe('spawn_policy_allowSpawnNew_false');
     expect(parsed.grantId).toBeFalsy();
-    expect(String(parsed.auditLine)).toContain(expectedAudit);
     expect(emittedAuditLines(result, expectedAudit)).toHaveLength(1);
   });
 

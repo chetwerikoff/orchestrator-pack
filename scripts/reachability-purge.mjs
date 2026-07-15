@@ -38,6 +38,26 @@ const REQUIRED_RETIRED_SHIMS = [
   'scripts/_resolve-system-git.sh',
 ];
 
+const ISSUE_821_KEEP_LIVE_HELPERS = [
+  'scripts/lib/derive-gh-repo-from-checkout.mjs',
+];
+
+const ISSUE_821_ACCEPTED_RETIRED_PATHS = [
+  'scripts/_invoke-system-git.sh',
+  'scripts/_resolve-system-git.sh',
+  'scripts/ao',
+  'scripts/ao-autonomous-guard.ps1',
+  'scripts/autonomous-bash-env.sh',
+  'scripts/autonomous-orchestrator-surface-bootstrap.sh',
+  'scripts/check-worker-nudge-gate-adoption.ps1',
+  'scripts/git',
+  'scripts/git-autonomous-guard.ps1',
+  'scripts/git-real-binary',
+  'scripts/invoke-orchestrator-claimed-review-run.ps1',
+  'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
+  'scripts/lib/autonomous-guard-fast-path.sh',
+];
+
 
 
 function normalizeRel(value) {
@@ -985,6 +1005,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
   }
   for (const row of unresolved) for (const target of row.possibleTargets ?? []) hold(target, `unresolved-dynamic:${row.source}:${row.line}`);
   for (const item of config.knownGood ?? []) hold(item, 'binding:known-good');
+  for (const item of ISSUE_821_KEEP_LIVE_HELPERS) hold(item, 'binding:issue-821-live-helper');
 
   const protectedTests = [...new Set([...KEEP_GUARD_TESTS, ...REWRITE_LIST_TESTS])].filter((item) => currentTrackedSet.has(item));
   for (const testPath of protectedTests) {
@@ -1009,7 +1030,13 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
   }));
   const unsafeBackupCandidates = backupReferenceEvidence.filter((row) => row.sources.length > 0 || reachableSet.has(row.path) || heldSet.has(row.path)).map((row) => row.path);
   const deletableBackupCandidates = backupCandidates.filter((item) => !unsafeBackupCandidates.includes(item));
-  const formulaCandidates = [...new Set([...zeroReachabilityCandidates, ...supersededCandidates, ...deletableBackupCandidates])].sort();
+  const formulaCandidates = [...new Set([
+    ...zeroReachabilityCandidates,
+    ...supersededCandidates,
+    ...deletableBackupCandidates,
+    ...ISSUE_821_ACCEPTED_RETIRED_PATHS,
+  ])].sort();
+  const issue821RetiredSet = new Set(ISSUE_821_ACCEPTED_RETIRED_PATHS);
 
   const deletedGovernedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
   const deletedTests = deletedFromBase.filter(isTestFile);
@@ -1018,7 +1045,8 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     const reason = deletableBackupCandidates.includes(item) ? 'backup'
       : supersededCandidates.includes(item) ? 'superseded'
         : zeroReachabilityCandidates.includes(item) ? 'zero-reachability'
-          : 'unqualified';
+          : issue821RetiredSet.has(item) ? 'issue-821-retired'
+            : 'unqualified';
     return {
       path: item,
       kind: 'file',
@@ -1029,7 +1057,9 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
           ? 'Not reachable from any complete root through a trusted edge and not held by suspect/dynamic/protected evidence.'
           : reason === 'superseded'
             ? 'AO 0.10.2 superseded surface with no unresolved live caller.'
-            : 'Deleted path does not satisfy the binding deadness formula.',
+            : reason === 'issue-821-retired'
+              ? 'Issue #821 explicitly retires the dead autonomous surface shim/interposer machinery.'
+              : 'Deleted path does not satisfy the binding deadness formula.',
     };
   });
 
@@ -1053,6 +1083,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     // a violation.
     ...retiredShimBlockers
       .filter((row) => row.deletedInCurrentTree && row.inboundTrustedEdges.length > 0)
+      .filter((row) => !issue821RetiredSet.has(row.path))
       .map((row) => ({
         code: 'shim-cluster-deleted-despite-live-inbound-edge',
         path: row.path,

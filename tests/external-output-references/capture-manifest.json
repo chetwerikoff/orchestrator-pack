@@ -294,6 +294,30 @@
       "path": "captures/ao-review-run/waiting_update.raw.json",
       "contentHash": "sha256:197f6ac9ada374e31408c51e7e0acd18771f0655b8a19901e075a73e09ad1f32"
     },
+    "ao-session-id-role-injection/ao-session-id-orchestrator-role-present": {
+      "id": "ao-session-id-role-injection/ao-session-id-orchestrator-role-present",
+      "producer": "ao-session-id-role-injection",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-session-id-role-injection/ao-session-id-orchestrator-role-present.raw.json",
+      "contentHash": "sha256:68916333166c48839fd39f0cbeab5421904836ba941e11fb8f81729342891b2b"
+    },
+    "ao-session-id-role-injection/ao-session-id-review-role-absent": {
+      "id": "ao-session-id-role-injection/ao-session-id-review-role-absent",
+      "producer": "ao-session-id-role-injection",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-session-id-role-injection/ao-session-id-review-role-absent.raw.json",
+      "contentHash": "sha256:7e5dd1fc7b44e91d956fa33979c3aeb6e68db2f40b5fd98a916f53f05a393ae7"
+    },
+    "ao-session-id-role-injection/ao-session-id-worker-role-present": {
+      "id": "ao-session-id-role-injection/ao-session-id-worker-role-present",
+      "producer": "ao-session-id-role-injection",
+      "sourceCommand": null,
+      "kind": "structured",
+      "path": "captures/ao-session-id-role-injection/ao-session-id-worker-role-present.raw.json",
+      "contentHash": "sha256:d79e5515dd706ccb48ad12a869843705a2a507e40ba4142c56c0894f1ecfca7e"
+    },
     "ao-status-session/issue-with-pr-facet": {
       "id": "ao-status-session/issue-with-pr-facet",
       "producer": "ao",

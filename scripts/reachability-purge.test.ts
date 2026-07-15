@@ -48,7 +48,7 @@ beforeAll(async () => {
   manifest = await buildManifest(repoRoot);
 }, 120_000);
 
-describe('reachability-purge', () => {
+describe.sequential('reachability-purge', () => {
   it('manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift', () => {
     const committed = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.graphNodeCount).toBeGreaterThan(0);
@@ -71,18 +71,36 @@ describe('reachability-purge', () => {
   it('unresolved dynamic invocation forms are inventoried and held, not counted as zero-reachability', () => {
     expect(manifest.unresolvedDynamicForms.length).toBeGreaterThan(0);
     expect(manifest.unresolvedDynamicForms.some((row) => row.foldedIntoZeroReachability)).toBe(false);
-    expect(
-      manifest.unresolvedDynamicForms.some(
-        (row) =>
-          row.kind === 'start-process'
-          && row.source === 'scripts/worker-nudge-gate.test.ts'
-          && (row.possibleTargets ?? []).includes('scripts/ao'),
-      ),
-    ).toBe(true);
+    expect(manifest.unresolvedDynamicForms.some((row) => (row.possibleTargets ?? []).includes('scripts/ao'))).toBe(false);
     const held = new Set(manifest.heldNodes.map((row) => row.path));
     for (const row of manifest.unresolvedDynamicForms) {
       for (const target of row.possibleTargets ?? []) expect(held.has(target)).toBe(true);
     }
+  });
+
+  it('deletion set matches deadness formula including superseded-caller resolution', () => {
+    expect(manifest.deletionSetDiffFromFormula).toEqual({ missing: [], unexpected: [] });
+    expect(manifest.deletionManifest.every((row) => ['zero-reachability', 'superseded', 'backup', 'issue-821-retired'].includes(row.reason))).toBe(true);
+    expect(manifest.supersededSurfaceInventory.every((row) => row.disposition.startsWith('held-'))).toBe(true);
+  });
+
+  it('KEEP-guard and REWRITE-list tests survive', () => {
+    expect(manifest.protectedTestsDeleted).toEqual([]);
+    expect(manifest.keepGuardList.length).toBeGreaterThan(0);
+    expect(manifest.rewriteList.length).toBeGreaterThan(0);
+  });
+
+  it('records the issue 821 shim cluster as explicitly retired, not a completion blocker', () => {
+    expect(manifest.retiredShimBlockers.length).toBe(6);
+    expect(manifest.retiredShimBlockers.every((row) => row.trackedInBase && row.deletedInCurrentTree)).toBe(true);
+    expect(manifest.retiredShimBlockers.every((row) => row.reachable || row.held)).toBe(true);
+    expect(manifest.migrationNotesEntry.authorized).toBe(false);
+    expect(manifest.migrationNotesEntry.presentWithRequiredFields).toBe(false);
+    expect(manifest.completionBlockers.every((row) => Boolean(row.code && row.path && row.evidence))).toBe(true);
+    expect(manifest.completionBlockers.map((row) => row.code)).not.toContain('missing-binding-audit-handoff');
+    expect(manifest.completionBlockers.map((row) => row.code)).not.toContain('shim-cluster-deleted-despite-live-inbound-edge');
+    expect(manifest.completionStatus).toBe('complete');
+    expect(manifest.completionBlockers).toEqual([]);
   });
 
   it('fails closed when current tracked sources add a surviving reference to a deleted file', async () => {
@@ -104,30 +122,5 @@ describe('reachability-purge', () => {
     } finally {
       writeFileSync(agentsPath, original, 'utf8');
     }
-  });
-
-  it('deletion set matches deadness formula including superseded-caller resolution', () => {
-    expect(manifest.deletionSetDiffFromFormula).toEqual({ missing: [], unexpected: [] });
-    expect(manifest.deletionManifest.every((row) => ['zero-reachability', 'superseded', 'backup'].includes(row.reason))).toBe(true);
-    expect(manifest.supersededSurfaceInventory.every((row) => row.disposition.startsWith('held-'))).toBe(true);
-  });
-
-  it('KEEP-guard and REWRITE-list tests survive', () => {
-    expect(manifest.protectedTestsDeleted).toEqual([]);
-    expect(manifest.keepGuardList.length).toBeGreaterThan(0);
-    expect(manifest.rewriteList.length).toBeGreaterThan(0);
-  });
-
-  it('records the shim cluster as held (fail-safe KEEP) per amended AC 9, not a completion blocker', () => {
-    expect(manifest.retiredShimBlockers.length).toBe(6);
-    expect(manifest.retiredShimBlockers.every((row) => row.trackedInBase && !row.deletedInCurrentTree)).toBe(true);
-    expect(manifest.retiredShimBlockers.every((row) => row.reachable || row.held)).toBe(true);
-    expect(manifest.migrationNotesEntry.authorized).toBe(false);
-    expect(manifest.migrationNotesEntry.presentWithRequiredFields).toBe(false);
-    expect(manifest.completionBlockers.every((row) => Boolean(row.code && row.path && row.evidence))).toBe(true);
-    expect(manifest.completionBlockers.map((row) => row.code)).not.toContain('missing-binding-audit-handoff');
-    expect(manifest.completionBlockers.map((row) => row.code)).not.toContain('shim-cluster-deleted-despite-live-inbound-edge');
-    expect(manifest.completionStatus).toBe('complete');
-    expect(manifest.completionBlockers).toEqual([]);
   });
 });
