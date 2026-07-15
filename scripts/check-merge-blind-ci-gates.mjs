@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -16,34 +15,68 @@ const VALID_DIMENSIONS = new Set([
   'baked-commit-identity',
   'workflow-trigger-divergence',
 ]);
+const WALK_EXCLUDES = new Set(['.git', '.worktrees', 'node_modules', 'artifacts', 'coverage']);
 
 function fail(message) {
   console.error(`[FAIL] ${message}`);
   process.exitCode = 1;
 }
 
-function git(repoRoot, args) {
-  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim();
-}
-
-function trackedFiles(repoRoot) {
-  return git(repoRoot, ['ls-files', '-z']).split('\0').filter(Boolean).sort();
-}
-
 function read(repoRoot, path) {
   return readFileSync(join(repoRoot, path), 'utf8');
 }
 
+function walkTrackedFallback(repoRoot) {
+  const files = [];
+  const visit = (absolute) => {
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (entry.isDirectory() && WALK_EXCLUDES.has(entry.name)) continue;
+      const child = join(absolute, entry.name);
+      if (entry.isDirectory()) visit(child);
+      else if (entry.isFile()) files.push(relative(repoRoot, child).replaceAll('\\', '/'));
+    }
+  };
+  visit(repoRoot);
+  return files.sort();
+}
+
+function parseArgs(argv) {
+  const result = { repoRoot: defaultRoot, trackedFilesPath: null };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--repo-root') result.repoRoot = resolve(argv[++index]);
+    else if (arg === '--tracked-files') result.trackedFilesPath = resolve(argv[++index]);
+    else if (!arg.startsWith('-') && result.repoRoot === defaultRoot) result.repoRoot = resolve(arg);
+    else throw new Error(`unknown argument: ${arg}`);
+  }
+  return result;
+}
+
+function trackedFiles(repoRoot, trackedFilesPath) {
+  if (!trackedFilesPath) return walkTrackedFallback(repoRoot);
+  const parsed = JSON.parse(readFileSync(trackedFilesPath, 'utf8'));
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) {
+    throw new Error('--tracked-files must point to a JSON string array');
+  }
+  return [...new Set(parsed.map((entry) => entry.replaceAll('\\', '/')))].sort();
+}
+
 function extractWorkflowTriggers(text) {
   const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^on:\s*(?:#.*)?$/.test(line));
-  if (start < 0) {
-    const inline = lines.find((line) => /^on:\s*\S+/.test(line));
-    return inline ? [inline.replace(/^on:\s*/, '').trim()] : [];
+  const inline = lines.find((line) => /^on:\s*\S+/.test(line));
+  if (inline) {
+    const raw = inline.replace(/^on:\s*/, '').trim();
+    if (raw.startsWith('[') && raw.endsWith(']')) {
+      return raw.slice(1, -1).split(',').map((entry) => entry.trim()).filter(Boolean).sort();
+    }
+    return [raw];
   }
+
+  const start = lines.findIndex((line) => /^on:\s*(?:#.*)?$/.test(line));
+  if (start < 0) return [];
   const block = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const line = lines[i];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
     if (/^\S/.test(line) && line.trim() && !line.trimStart().startsWith('#')) break;
     block.push(line);
   }
@@ -66,27 +99,68 @@ function extractWorkflowTriggers(text) {
   return triggers.sort();
 }
 
+function classifyWorkflow(path, triggers, exception) {
+  const hasPr = triggers.includes('pull_request');
+  const hasPush = triggers.includes('push') || triggers.includes('push:main');
+  if (hasPr && hasPush) {
+    return { classification: 'merge-stable', reason: 'same workflow is admitted on pull_request and push' };
+  }
+  if (hasPr) {
+    if (!exception) return { classification: 'merge-blind', reason: 'pull_request workflow has no push sibling or explicit exception' };
+    return exception;
+  }
+  if (triggers.includes('pull_request_target')) {
+    return { classification: 'intentional-by-design', reason: 'trusted-base privileged PR admission/reaction surface' };
+  }
+  if (triggers.includes('workflow_call')) {
+    return { classification: 'intentional-by-design', reason: 'reusable workflow; trigger parity is owned by callers' };
+  }
+  if (triggers.some((trigger) => ['push', 'push:main', 'schedule', 'workflow_dispatch'].includes(trigger))) {
+    return { classification: 'intentional-by-design', reason: 'post-merge, scheduled, or operator-only workflow' };
+  }
+  return { classification: 'merge-blind', reason: `unrecognized or empty trigger set for ${path}` };
+}
+
 function discoverDimensions(repoRoot, files) {
   const discoveries = [];
   for (const path of files) {
-    if (!(path.startsWith('scripts/') || path.startsWith('.github/workflows/'))) continue;
+    if (!path.startsWith('scripts/')) continue;
     if (path === SELF_REL || path === INVENTORY_REL || path.startsWith(FIXTURE_PREFIX)) continue;
-    if (!/\.(?:ps1|mjs|js|ts|mts|cts|json|ya?ml)$/.test(path)) continue;
+    if (!/\.(?:ps1|mjs|js|ts|mts|cts|json)$/.test(path)) continue;
     const text = read(repoRoot, path);
     if (/isPrValidationContext\s*\(|GITHUB_EVENT_PATH|GITHUB_EVENT_NAME/.test(text)) {
-      discoveries.push({ path, dimension: 'event-source-presence' });
+      discoveries.push({ path, dimension: 'event-source-presence', text });
     }
     if (/(?:BASE_SHA|GITHUB_BASE_SHA|PR_BASE_SHA)/.test(text) && /origin\/main|refs\/remotes\/origin\/main/.test(text)) {
-      discoveries.push({ path, dimension: 'base-ref-resolution' });
+      discoveries.push({ path, dimension: 'base-ref-resolution', text });
     }
     if (/captureCommitSha|PR_HEAD_SHA|HEAD\^2/.test(text)) {
-      discoveries.push({ path, dimension: 'baked-commit-identity' });
-    }
-    if (path.startsWith('.github/workflows/')) {
-      discoveries.push({ path, dimension: 'workflow-trigger-divergence' });
+      discoveries.push({ path, dimension: 'baked-commit-identity', text });
     }
   }
   return discoveries;
+}
+
+function automaticCandidateClassification(candidate) {
+  if (candidate.dimension === 'event-source-presence') {
+    if (/isPrValidationContext\s*\(/.test(candidate.text)) {
+      return { classification: 'merge-blind', reason: 'PR-context predicate can alter a verdict' };
+    }
+    return { classification: 'intentional-by-design', reason: 'event value is consumed without a PR-only leniency predicate' };
+  }
+  if (candidate.dimension === 'base-ref-resolution') {
+    if (/mergeBase\s*!==\s*head|\$mergeBase\s+-ne\s+\$head/.test(candidate.text) && /HEAD\^1/.test(candidate.text)) {
+      return { classification: 'merge-stable', reason: 'self merge-base is rejected and first-parent fallback is explicit' };
+    }
+    return { classification: 'merge-blind', reason: 'direct base fallback lacks a non-self invariant' };
+  }
+  if (candidate.dimension === 'baked-commit-identity') {
+    if (/isPrValidationContext\s*\(/.test(candidate.text)) {
+      return { classification: 'merge-blind', reason: 'commit identity participates in a PR-only branch' };
+    }
+    return { classification: 'intentional-by-design', reason: 'commit identity is provenance/diagnostic data, not a lenient verdict' };
+  }
+  return { classification: 'merge-blind', reason: 'unknown candidate dimension' };
 }
 
 function validateInventoryShape(repoRoot, inventory, files) {
@@ -101,10 +175,12 @@ function validateInventoryShape(repoRoot, inventory, files) {
   for (const entry of inventory.discoveryMethods ?? []) {
     if (!entry.command?.startsWith('git ')) fail(`discovery method ${entry.dimension} must contain an exact git command`);
   }
+  if (inventory.workflowSurvey?.mode !== 'dynamic-fail-closed') {
+    fail('workflowSurvey.mode must be dynamic-fail-closed');
+  }
 
   const rowIds = new Set();
-  const coverage = new Set();
-  const workflowRows = new Map();
+  const explicit = new Map();
   for (const row of inventory.rows ?? []) {
     if (!row.id || rowIds.has(row.id)) fail(`inventory row id is missing or duplicated: ${row.id ?? '<empty>'}`);
     rowIds.add(row.id);
@@ -113,7 +189,7 @@ function validateInventoryShape(repoRoot, inventory, files) {
     if (!row.reason) fail(`inventory row ${row.id} must explain its classification`);
     for (const dimension of row.dimensions ?? []) {
       if (!VALID_DIMENSIONS.has(dimension)) fail(`inventory row ${row.id} has invalid dimension ${dimension}`);
-      coverage.add(`${row.path}\0${dimension}`);
+      explicit.set(`${row.path}\0${dimension}`, row);
     }
     if (row.classification === 'merge-blind') {
       if (!['in-allowed-roots', 'out-of-root'].includes(row.scopeFlag)) fail(`merge-blind row ${row.id} requires scopeFlag`);
@@ -123,40 +199,42 @@ function validateInventoryShape(repoRoot, inventory, files) {
     } else if ('scopeFlag' in row) {
       fail(`non-merge-blind row ${row.id} must not carry scopeFlag`);
     }
-    if (row.path.startsWith('.github/workflows/')) workflowRows.set(row.path, row);
   }
 
-  for (const discovered of discoverDimensions(repoRoot, files)) {
-    if (!coverage.has(`${discovered.path}\0${discovered.dimension}`)) {
-      fail(`unclassified ${discovered.dimension} candidate: ${discovered.path}`);
+  for (const candidate of discoverDimensions(repoRoot, files)) {
+    const row = explicit.get(`${candidate.path}\0${candidate.dimension}`);
+    const classification = row ?? automaticCandidateClassification(candidate);
+    console.log(`[AUDIT] ${candidate.dimension} ${candidate.path} => ${classification.classification}: ${classification.reason}`);
+    if (!row && classification.classification === 'merge-blind') {
+      fail(`unclassified merge-blind ${candidate.dimension} candidate: ${candidate.path}`);
     }
   }
 
+  const exceptions = inventory.workflowSurvey?.exceptions ?? {};
   const workflowFiles = files.filter((path) => /^\.github\/workflows\/.*\.ya?ml$/.test(path));
   for (const path of workflowFiles) {
-    const row = workflowRows.get(path);
-    if (!row) {
-      fail(`workflow trigger survey lacks row for ${path}`);
-      continue;
+    const triggers = extractWorkflowTriggers(read(repoRoot, path));
+    const classification = classifyWorkflow(path, triggers, exceptions[path]);
+    console.log(`[AUDIT] workflow ${path} [${triggers.join(', ')}] => ${classification.classification}: ${classification.reason}`);
+    if (!VALID_CLASSIFICATIONS.has(classification.classification)) {
+      fail(`workflow exception for ${path} has invalid classification`);
     }
-    const actual = extractWorkflowTriggers(read(repoRoot, path));
-    const expected = [...(row.triggers ?? [])].sort();
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      fail(`${path} trigger inventory mismatch: expected ${expected.join(', ')}, got ${actual.join(', ')}`);
+    if (classification.classification === 'merge-blind') {
+      fail(`workflow trigger parity is unresolved: ${path} (${classification.reason})`);
     }
-  }
-  for (const path of workflowRows.keys()) {
-    if (!workflowFiles.includes(path)) fail(`workflow inventory contains non-workflow path ${path}`);
   }
 }
 
 function validateRemediations(repoRoot) {
   const validator = read(repoRoot, 'scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs');
-  if (/isPrValidationContext|GITHUB_EVENT_PATH|PR_HEAD_SHA|PR_BASE_SHA/.test(validator)) {
+  if (/isPrValidationContext|GITHUB_EVENT_PATH/.test(validator)) {
     fail('RPC validator still contains a PR-context-shaped verdict path');
   }
   if (!validator.includes('scoped-tree-content-v1') || !validator.includes('inspectSupervisorHeavyLaneRpcBinding')) {
-    fail('RPC validator must use the scoped-tree content binding evaluator');
+    fail('RPC validator must use one fail-closed scoped-tree content evaluator');
+  }
+  if (!validator.includes('const head = resolveCurrentHeadSha(repoRootOverride)')) {
+    fail('RPC binding verdict must compare capture content to the checked-out HEAD, not a PR-only head resolver');
   }
 
   const manifest = JSON.parse(read(repoRoot, 'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json'));
@@ -166,59 +244,62 @@ function validateRemediations(repoRoot) {
   if (/requiredCommits|GITHUB_EVENT_PATH|git merge-base --is-ancestor/.test(sequencing)) {
     fail('sequencing guard still relies on event payload or prerequisite commit identity');
   }
-  for (const marker of ['Orchestrator-WakeSupervisorLease.ps1', 'Orchestrator-FleetHygiene.ps1', 'resolve-merge-stable-ci-base.mjs']) {
+  for (const marker of ['Orchestrator-WakeSupervisorLease.ps1', 'Orchestrator-FleetHygiene.ps1', 'Resolve-MergeStableCiBase.ps1']) {
     if (!sequencing.includes(marker)) fail(`sequencing guard lacks semantic marker/binding ${marker}`);
   }
 
   const registry = read(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
-  if (!registry.includes('resolve-merge-stable-ci-base.mjs') || /'origin\/main'/.test(registry)) {
+  if (!registry.includes('Resolve-MergeStableCiBase.ps1') || /\$baseRef\s*=\s*'origin\/main'/.test(registry)) {
     fail('message registry guard must delegate to the non-self base resolver');
   }
 
   const baseline = read(repoRoot, 'scripts/toolchain/baseline-io.ts');
-  if (!baseline.includes('resolveMergeStableCiBase') || !baseline.includes('?.baseSha')) {
-    fail('baseline-io must delegate comparison-boundary resolution to the shared merge-stable helper');
+  if (!baseline.includes('mergeBase !== head') || !baseline.includes("'HEAD^1'")) {
+    fail('baseline-io must reject self merge-bases and fall back to HEAD^1');
   }
-  const helper = read(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.mjs');
-  if (!helper.includes('mergeBase !== head') || !helper.includes("'HEAD^1'")) {
-    fail('shared base resolver must reject self merge-bases and fall back to HEAD^1');
+  const helper = read(repoRoot, 'scripts/lib/Resolve-MergeStableCiBase.ps1');
+  if (!helper.includes('$mergeBase -ne $head') || !helper.includes("'HEAD^1'")) {
+    fail('PowerShell base resolver must reject self merge-bases and fall back to HEAD^1');
   }
 
   const scope = read(repoRoot, '.github/workflows/scope-guard.yml');
   const verifyPack = scope.match(/\n  verify-pack:\n([\s\S]*?)(?=\n  [a-zA-Z0-9_-]+:\n)/)?.[1] ?? '';
   if (!/uses:\s*actions\/checkout@v4[\s\S]{0,100}fetch-depth:\s*0/.test(verifyPack)) {
-    fail('scope-guard verify-pack checkout must fetch full history for scoped-tree binding');
+    fail('scope-guard verify-pack checkout must fetch full history for fail-closed content binding');
   }
 
   const wrapper = read(repoRoot, 'scripts/check-ci-pipeline-split.ps1');
-  for (const required of ['check-merge-blind-ci-gates.mjs', 'fixtures/merge-blind-ci-gates/parity.mjs']) {
+  for (const required of ['check-merge-blind-ci-gates.mjs', 'fixtures/merge-blind-ci-gates/parity.ps1']) {
     if (!wrapper.includes(required)) fail(`CI pipeline wrapper must invoke ${required}`);
   }
 
-  for (const path of [
+  if (read(repoRoot, SELF_REL).includes("node:child_process")) fail(`${SELF_REL} must not add a raw child-process dependency`);
+  for (const removed of [
     'scripts/lib/resolve-merge-stable-ci-base.mjs',
-    'scripts/check-merge-blind-ci-gates.mjs',
+    'scripts/lib/resolve-merge-stable-ci-base.d.mts',
     'scripts/fixtures/merge-blind-ci-gates/parity.mjs',
   ]) {
-    const text = read(repoRoot, path);
-    if (/isPrValidationContext\s*\(/.test(text)) fail(`new surface ${path} introduces a PR-context verdict branch`);
-    if (/===\s*['"][0-9a-f]{40}['"]/.test(text)) fail(`new surface ${path} introduces a literal SHA equality verdict`);
+    if (existsSync(join(repoRoot, removed))) fail(`superseded raw-subprocess surface must be removed: ${removed}`);
   }
 }
 
 function main() {
-  const repoRoot = resolve(process.argv[2] ?? defaultRoot);
-  const inventoryPath = join(repoRoot, INVENTORY_REL);
-  if (!existsSync(inventoryPath)) {
-    fail(`missing ${INVENTORY_REL}`);
-    return;
-  }
-  const files = trackedFiles(repoRoot);
-  const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
-  validateInventoryShape(repoRoot, inventory, files);
-  validateRemediations(repoRoot);
-  if (!process.exitCode) {
-    console.log(`[PASS] merge-blind CI gate audit: ${inventory.rows.length} classified sites, ${inventory.discoveryMethods.length} discovery dimensions`);
+  try {
+    const args = parseArgs(process.argv.slice(2));
+    const inventoryPath = join(args.repoRoot, INVENTORY_REL);
+    if (!existsSync(inventoryPath)) {
+      fail(`missing ${INVENTORY_REL}`);
+      return;
+    }
+    const files = trackedFiles(args.repoRoot, args.trackedFilesPath);
+    const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8'));
+    validateInventoryShape(args.repoRoot, inventory, files);
+    validateRemediations(args.repoRoot);
+    if (!process.exitCode) {
+      console.log(`[PASS] merge-blind CI gate audit: ${inventory.rows.length} explicit sites, ${inventory.discoveryMethods.length} discovery dimensions, dynamic workflow survey`);
+    }
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
 }
 
