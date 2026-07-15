@@ -1,0 +1,5 @@
+{
+  "tool": "scripts/gate-runner/census-generator.ts",
+  "baseCommitSha": "b7394065b9ee1b046abb4cf29aff456df1935571",
+  "populationDigest": "427a91429a56f7236b67ea076f422263fc8ab31f76255e50c03383b910244ab1"
+}
