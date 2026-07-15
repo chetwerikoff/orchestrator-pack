@@ -16,8 +16,8 @@ const excluded = new Set([
   'plugins/ao-codex-pr-reviewer/bin/review.ts', 'plugins/ao-scope-guard/bin/agent-wrap.ts',
   'plugins/ao-scope-guard/bin/scope-check.ts', 'plugins/ao-task-declaration/bin/declare.ts',
   'plugins/ao-token-chain-ledger/bin/ledger.mjs', 'docs/autonomous-spawn-budget.json',
-  'docs/review-pipeline-spawn-budget-attribution.mjs', 'scripts/_test-spawn-budget-fixture.ts',
-  'scripts/autonomous-spawn-budget.test.ts', 'scripts/generate-review-pipeline-spawn-captures.ts',
+  'docs/review-pipeline-spawn-budget-attribution.mjs',
+  'scripts/generate-review-pipeline-spawn-captures.ts',
   'scripts/lib/Invoke-PackSpawnBudgetGates.ps1', 'scripts/review-pipeline-spawn-budget.test.ts',
   'scripts/vitest-ci-lanes.config.json',
   'tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json',
@@ -103,7 +103,7 @@ const write = (rel, text) => { const target = path.join(root, rel); mkdirSync(pa
   source = source.replace('# GitHub reads use the tracked scripts/gh REST wrapper.\n# GitHub reads use the tracked scripts/gh wrapper.\n', '# GitHub reads use the tracked scripts/gh REST wrapper.\n');
   write(rel, source);
 }
-const grep = spawnSync('git', ['grep', '-n', '-E', 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json', '--', ':!docs/issues_drafts/**', ':!docs/migration_notes.md', ':!docs/declarations/**', ':!docs/issue_queue_index.md', ':!scripts/reachability-purge.manifest.json', ':!.github/**'], { cwd: root, encoding: 'utf8' });
+const grep = spawnSync('git', ['grep', '-n', '-E', 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json', '--', ':!docs/issues_drafts/**', ':!docs/migration_notes.md', ':!docs/declarations/**', ':!docs/issue_queue_index.md', ':!scripts/reachability-purge.manifest.json', ':!tests/external-output-references/captures/spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561.raw.txt', ':!.github/**'], { cwd: root, encoding: 'utf8' });
 if (![0, 1].includes(grep.status ?? 2)) throw new Error(grep.stderr);
 if (grep.stdout.trim()) throw new Error(`retired references remain:\n${grep.stdout}`);
 console.log(JSON.stringify({ rebuiltFrom: 'origin/main', expected, retained: retained.length }, null, 2));
