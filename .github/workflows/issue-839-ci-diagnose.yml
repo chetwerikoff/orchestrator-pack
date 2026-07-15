@@ -1,0 +1,56 @@
+name: issue-839-ci-diagnose
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - id: foundation
+        continue-on-error: true
+        shell: bash
+        run: npm run test:foundation 2>&1 | tee /tmp/foundation.log
+      - id: pwsh_growth
+        continue-on-error: true
+        shell: bash
+        run: npm run check:pwsh-test-growth 2>&1 | tee /tmp/pwsh-growth.log
+      - name: Report diagnostics
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUNDATION: ${{ steps.foundation.outcome }}
+          PWSH_GROWTH: ${{ steps.pwsh_growth.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 final CI diagnosis'
+            echo
+            echo "foundation=$FOUNDATION pwsh-growth=$PWSH_GROWTH"
+            echo
+            echo '### test:foundation'
+            echo '```text'
+            tail -c 30000 /tmp/foundation.log
+            echo '```'
+            echo
+            echo '### check:pwsh-test-growth'
+            echo '```text'
+            tail -c 30000 /tmp/pwsh-growth.log
+            echo '```'
+          } >/tmp/report.md
+          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/report.md
