@@ -1,0 +1,80 @@
+name: issue-839-finalize
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Apply verified cutover patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk 'BEGIN{take=0} /python3 - <<.PY./{take=1; next} take && /^          PY$/{exit} take{sub(/^          /,""); print}' .github/workflows/issue-839-pr-apply.yml > /tmp/apply.py
+          python3 /tmp/apply.py
+      - name: Static verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck:foundation
+          npm run lint:foundation
+          pwsh -NoProfile -File scripts/check-review-trigger-reconcile.ps1
+          pwsh -NoProfile -File scripts/check-orchestrator-review-idempotency.ps1
+          pwsh -NoProfile -File scripts/check-orchestrator-review-head-coverage.ps1
+      - name: Isolated targeted regression files
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            scripts/ao-0-10-review-trigger.test.ts
+            scripts/review-handoff-wake-trigger.test.ts
+            scripts/review-start-claim.test.ts
+            scripts/review-start-claim-run-binding.test.ts
+            scripts/scripted-review-confirmed-delivery-gate.test.ts
+            scripts/harness-post-submit-pn-content-shape.test.ts
+            scripts/harness-review-bridge.test.ts
+            scripts/review-wake-trigger.test.ts
+          )
+          for file in "${files[@]}"; do
+            echo "=== $file ==="
+            node scripts/run-vitest-with-harness.mjs run "$file"
+          done
+      - name: Commit final scoped tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/finish-pr-845-once.yml \
+            .github/workflows/issue-839-pr-apply.yml \
+            .github/workflows/issue-839-test-diagnose.yml \
+            .github/workflows/issue-839-matrix-diagnose.yml \
+            .github/workflows/issue-839-finalize.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Complete pack-owned review runner cutover'
+          git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body 'Issue #839 finalized: cutover patch committed; TypeScript checks and three static gates passed; all eight targeted regression files passed in isolated processes; temporary workflows removed from the final tree.'
