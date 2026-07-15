@@ -192,7 +192,10 @@ function runVitestChild(entrypoint, args, env) {
 const reentryRoot = String(process.env.OPK_VITEST_REENTRY_HARNESS_ROOT ?? '').trim();
 const invocationRoot = reentryRoot ? resolve(reentryRoot) : createHarnessRoot();
 const ownsInvocationRoot = !reentryRoot;
-const guard = startParentLiveStoreGuard({ ...process.env });
+const isPreTopologyMeasurement = process.env.OPK_VITEST_PRE_TOPOLOGY_MEASUREMENT === '1';
+const guard = isPreTopologyMeasurement
+  ? { stop() {} }
+  : startParentLiveStoreGuard({ ...process.env });
 const childEnv = { ...process.env };
 let childStatus = 1;
 let childFailure = null;
