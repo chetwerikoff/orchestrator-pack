@@ -11,6 +11,7 @@
 
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')
 
 function Resolve-PackReviewTrustedRoot {
     $configured = if ($env:AO_TRUSTED_PACK_ROOT) {
@@ -83,7 +84,9 @@ function Invoke-PackReviewRunnerCli {
     $prior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $raw = $json | & node --disable-warning=ExperimentalWarning --experimental-strip-types $trusted.runner $Subcommand 2>&1
+        $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)
+        $nodeArgs += $Subcommand
+        $raw = $json | & node @nodeArgs 2>&1
         $exit = $LASTEXITCODE
     }
     finally {
@@ -341,5 +344,7 @@ function Invoke-AoReviewTriggerForWorker {
 function Get-ReviewTriggerInvocationLine {
     param([Parameter(Mandatory = $true)][string]$SessionId)
     $trusted = Resolve-PackReviewTrustedRoot
-    return "node --experimental-strip-types $($trusted.runner) start --session-id $SessionId --claim-mode preacquired"
+    $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)
+    $nodeArgs += @('start', '--session-id', $SessionId, '--claim-mode', 'preacquired')
+    return ('node ' + ($nodeArgs -join ' '))
 }
