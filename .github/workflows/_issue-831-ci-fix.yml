@@ -23,6 +23,12 @@ jobs:
         with:
           ref: agent/issue-831-json-producers-wave-b
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
       - name: Apply verified CI integration fixes
         shell: bash
         run: |
