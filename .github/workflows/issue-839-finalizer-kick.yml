@@ -1,0 +1,29 @@
+name: issue-839-finalizer-kick
+
+on:
+  pull_request:
+    types: [labeled]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  kick:
+    if: github.event.pull_request.number == 845 && github.event.label.name == 'in_progress'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+          fetch-depth: 0
+      - name: Trigger synchronize and delete this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/issue-839-finalizer-kick.yml
+          git commit -m 'Trigger Issue 839 light-lane finalizer'
+          git push origin HEAD:issue-839-pack-review-runner-v2
