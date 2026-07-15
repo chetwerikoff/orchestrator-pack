@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-baseline-estimates",
-  "dataChangedAt": "2026-07-15T05:34:23.164Z",
+  "dataChangedAt": "2026-07-15T05:52:52.556Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -406,7 +406,7 @@
   "contentSha": {
     "scripts/_test-stub-pack-import-closure.test.ts": "6d6515dc23bc75dcfe929b3a910ec21d9dfa94286e523b05c6eba294b9bd6662",
     "scripts/autonomous-orchestrator-boundary.test.ts": "6d2cddc9a08a2f5ca25e367f5f9492cb4bf764b4360f2bb6c923b14aec48d22b",
-    "scripts/autonomous-spawn-budget.test.ts": "8af25dc9d0ccf9a66a01c8c4b9a09123df3bfc6cd4f15bbcbf03979d3a884b5f",
+    "scripts/autonomous-spawn-budget.test.ts": "1c261432e84ab593cd981ccda44cbd5674e3045b19c3de0d8c78e2888909f5f9",
     "scripts/autonomous-spawn-policy.test.ts": "0ee7ae6e98fe1e832068932171bf45a1418b09b665564c3aeaa7a7d32ea8d483",
     "scripts/autonomous-spawn-worktree-gate.test.ts": "909e6bb471a9fe4a1f8fed03ce3bf765fb21d4cf544364fcd07d04fe2883bfae",
     "scripts/gh-repo-resolve.test.ts": "d04596977e382fcb32375371d83124e7bcd914d6092230236c6c7ad7824372f2",

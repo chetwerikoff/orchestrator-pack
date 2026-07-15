@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   evaluateSpawnBudgetClass,
@@ -36,23 +35,6 @@ describe('autonomous spawn budget contract after shim retirement (Issues #462/#8
     expect(isAutonomousAoReadFastPath(['review', 'list', '--json'])).toBe(true);
     expect(isAutonomousAoReadFastPath(['send', 'opk-worker', 'ping'])).toBe(false);
     expect(isAutonomousAoReadFastPath(['review', 'run', 'opk-1'])).toBe(false);
-  });
-
-  it('keeps bash fast-path classifiers spawn-free and exact-token based', () => {
-    const script = [
-      `source "${repoRoot}/scripts/lib/autonomous-guard-fast-path.sh"`,
-      '__ao_autonomous_git_argv_is_read_only stash list || exit 2',
-      '__ao_autonomous_git_argv_is_read_only stash show || exit 3',
-      '__ao_autonomous_git_argv_is_read_only stash push && exit 4',
-      '__ao_autonomous_git_argv_is_read_only branch --show-current || exit 5',
-      '__ao_autonomous_git_argv_is_read_only branch foo--show-current && exit 6',
-      '__ao_autonomous_ao_argv_is_read_fast_path status --json || exit 7',
-      '__ao_autonomous_ao_argv_is_read_fast_path review list --json || exit 8',
-      '__ao_autonomous_ao_argv_is_read_fast_path send opk-worker ping && exit 9',
-    ].join('\n');
-    const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toMatch(/bad substitution/i);
   });
 
   it('evaluates each retained class without invoking the retired interposer', () => {

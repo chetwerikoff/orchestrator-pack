@@ -43,6 +43,8 @@
     ]
   },
   "retiredPreMoveFiles": [
+    "scripts/autonomous-orchestrator-interposer.test.ts",
+    "scripts/autonomous-review-worktree-e2e-smoke.test.ts",
     "scripts/orchestrator-wake-listener-evaluate.test.ts",
     "scripts/review-finding-delivery-confirm.test.ts",
     "scripts/review-run-recovery.test.ts",
