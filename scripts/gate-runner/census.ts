@@ -5,14 +5,40 @@ import { failGate, passGate, type EvidenceObservation, type GateResult } from '.
 import { populationDigest } from './census-generator.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
-export const CENSUS_CLASSIFICATIONS = [
+export const LEGACY_CENSUS_CLASSIFICATIONS = [
   'ported-declarative',
   'ported-custom',
   'still-enforced-by-legacy',
   'retired-with-justification',
 ] as const;
 
+export const TERMINAL_CENSUS_CLASSIFICATIONS = [
+  'ported-declarative',
+  'ported-custom',
+  'retired-with-reason',
+  'deferred-to-named-wave',
+] as const;
+
+export const CENSUS_CLASSIFICATIONS = [
+  'ported-declarative',
+  'ported-custom',
+  'still-enforced-by-legacy',
+  'retired-with-justification',
+  'retired-with-reason',
+  'deferred-to-named-wave',
+] as const;
+
+export const DEFERRED_WAVES = [
+  'E1 lock/claim/recovery core',
+  'Wave C gh-transport',
+  'Wave D polling/send/tmux',
+  'E2 supervisors',
+  'PR 9 workflow sweep',
+  'PR 10 harness retirement',
+] as const;
+
 export type CensusClassification = (typeof CENSUS_CLASSIFICATIONS)[number];
+export type DeferredWave = (typeof DEFERRED_WAVES)[number];
 export const CENSUS_SOURCE_KINDS = ['check-script', 'verify-script-member', 'verify-inline', 'check-reusable-behavior'] as const;
 export type CensusSourceKind = (typeof CENSUS_SOURCE_KINDS)[number];
 
@@ -24,6 +50,7 @@ export interface CensusEntry {
   readonly classification: CensusClassification;
   readonly gateIds?: readonly string[];
   readonly legacyReference?: { readonly path: string; readonly marker: string };
+  readonly deferredWave?: DeferredWave;
   readonly retirementJustification?: {
     readonly reasonCode: string;
     readonly behavior: string;
@@ -32,9 +59,10 @@ export interface CensusEntry {
 }
 
 export interface GateCensus {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly issue: 830;
-  readonly wave: '3.a';
+  readonly wave: '3.a' | '3.b';
+  readonly migrationIssue?: 841;
   readonly baseCommitSha: string;
   readonly sourceHashes: Readonly<Record<string, string>>;
   readonly generation: {
@@ -53,6 +81,7 @@ const VALID_RETIREMENT_CODES = new Set([
   'unfalsifiable-surface',
   'non-proving-observation',
 ]);
+const VALID_DEFERRED_WAVES = new Set<string>(DEFERRED_WAVES);
 
 export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json';
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
@@ -71,6 +100,18 @@ export function loadCensus(repoRoot: string): GateCensus {
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function isPorted(entry: CensusEntry): boolean {
+  return entry.classification === 'ported-declarative' || entry.classification === 'ported-custom';
+}
+
+function isDeferred(entry: CensusEntry): boolean {
+  return entry.classification === 'still-enforced-by-legacy' || entry.classification === 'deferred-to-named-wave';
+}
+
+function isRetired(entry: CensusEntry): boolean {
+  return entry.classification === 'retired-with-justification' || entry.classification === 'retired-with-reason';
 }
 
 function currentCheckScripts(snapshot: SourceSnapshot): Set<string> {
@@ -103,9 +144,22 @@ export function discoverVerifyInlineIds(verify: string): Set<string> {
   return ids;
 }
 
+function validateHeader(census: GateCensus, failures: string[]): void {
+  if (census.issue !== 830) failures.push('census provenance must remain bound to issue 830');
+  if (census.version === 1) {
+    if (census.wave !== '3.a' || census.migrationIssue !== undefined) {
+      failures.push('schema v1 census must bind to issue 830 / wave 3.a');
+    }
+    return;
+  }
+  if (census.version !== 2 || census.wave !== '3.b' || census.migrationIssue !== 841) {
+    failures.push('schema v2 census must bind to migration issue 841 / wave 3.b while retaining issue 830 provenance');
+  }
+}
+
 export function validateCensusSchema(census: GateCensus): string[] {
   const failures: string[] = [];
-  if (census.version !== 1 || census.issue !== 830 || census.wave !== '3.a') failures.push('census header must bind to issue 830 / wave 3.a / schema version 1');
+  validateHeader(census, failures);
   if (census.populationCount !== census.entries.length) failures.push(`populationCount=${census.populationCount} does not match entries=${census.entries.length}`);
   const ids = new Set<string>();
   const classifiedCounts = new Map<CensusClassification, number>();
@@ -114,16 +168,33 @@ export function validateCensusSchema(census: GateCensus): string[] {
     ids.add(entry.id);
     if (!CENSUS_CLASSIFICATIONS.includes(entry.classification)) failures.push(`${entry.id}: invalid classification ${String(entry.classification)}`);
     classifiedCounts.set(entry.classification, (classifiedCounts.get(entry.classification) ?? 0) + 1);
-    if (entry.classification === 'still-enforced-by-legacy') {
-      if (!entry.legacyReference?.path || !entry.legacyReference.marker) failures.push(`${entry.id}: legacy row lacks a cited invocation`);
+
+    if (census.version === 1 && !LEGACY_CENSUS_CLASSIFICATIONS.includes(entry.classification as (typeof LEGACY_CENSUS_CLASSIFICATIONS)[number])) {
+      failures.push(`${entry.id}: schema v1 cannot use terminal Wave 3.b classification ${entry.classification}`);
     }
-    if (entry.classification === 'ported-declarative' || entry.classification === 'ported-custom') {
+    if (census.version === 2 && !TERMINAL_CENSUS_CLASSIFICATIONS.includes(entry.classification as (typeof TERMINAL_CENSUS_CLASSIFICATIONS)[number])) {
+      failures.push(`${entry.id}: schema v2 cannot retain provisional classification ${entry.classification}`);
+    }
+
+    if (isDeferred(entry)) {
+      if (!entry.legacyReference?.path || !entry.legacyReference.marker) failures.push(`${entry.id}: deferred row lacks a cited legacy invocation`);
+      if (entry.classification === 'deferred-to-named-wave') {
+        if (!entry.deferredWave || !VALID_DEFERRED_WAVES.has(entry.deferredWave)) failures.push(`${entry.id}: deferred row lacks a valid named sibling wave`);
+      } else if (entry.deferredWave !== undefined) {
+        failures.push(`${entry.id}: provisional legacy row must not claim a Wave 3.b deferral owner`);
+      }
+    } else if (entry.legacyReference) {
+      failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+    }
+
+    if (isPorted(entry)) {
       if (!entry.gateIds || entry.gateIds.length === 0) failures.push(`${entry.id}: ported row lacks gateIds`);
+    } else if (entry.gateIds && entry.gateIds.length > 0) {
+      failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
     }
-    if (entry.classification === 'retired-with-justification') {
+
+    if (isRetired(entry)) {
       const justification = entry.retirementJustification;
-      if (entry.gateIds && entry.gateIds.length > 0) failures.push(`${entry.id}: non-proving retired row cannot be admitted to the runner`);
-      if (entry.legacyReference) failures.push(`${entry.id}: retired row must not retain a legacy invocation`);
       if (!justification) {
         failures.push(`${entry.id}: retired row lacks justification`);
       } else {
@@ -134,6 +205,8 @@ export function validateCensusSchema(census: GateCensus): string[] {
           failures.push(`${entry.id}: retirement justification relies on caller absence instead of behavior`);
         }
       }
+    } else if (entry.retirementJustification) {
+      failures.push(`${entry.id}: non-retired row must not carry a retirement justification`);
     }
   }
   if (!/^[0-9a-f]{40}$/u.test(census.baseCommitSha)) failures.push('baseCommitSha must be a full lowercase Git SHA');
@@ -186,8 +259,9 @@ export function evaluateCensus(
   }
 
   for (const entry of census.entries) {
-    const ported = entry.classification === 'ported-declarative' || entry.classification === 'ported-custom';
-    const retired = entry.classification === 'retired-with-justification';
+    const ported = isPorted(entry);
+    const retired = isRetired(entry);
+    const deferred = isDeferred(entry);
     if (ported) {
       for (const gateId of entry.gateIds ?? []) {
         if (!registeredGateIds.has(gateId)) failures.push(`${entry.id}: registered gate missing: ${gateId}`);
@@ -197,17 +271,17 @@ export function evaluateCensus(
     if (entry.sourceKind === 'check-script') {
       const exists = currentScripts.has(entry.sourcePath);
       if ((ported || retired) && exists) failures.push(`${entry.id}: migrated/retired PowerShell gate still exists`);
-      if (entry.classification === 'still-enforced-by-legacy' && !exists) failures.push(`${entry.id}: deferred legacy gate was dropped`);
+      if (deferred && !exists) failures.push(`${entry.id}: deferred legacy gate was dropped`);
     }
 
     if (entry.sourceKind === 'verify-script-member') {
       const verify = snapshot.files.get('scripts/verify.ps1') ?? '';
       const present = verify.includes(entry.marker);
       if ((ported || retired) && present) failures.push(`${entry.id}: migrated/retired verify invocation still exists`);
-      if (entry.classification === 'still-enforced-by-legacy' && !present) failures.push(`${entry.id}: deferred verify invocation was dropped`);
+      if (deferred && !present) failures.push(`${entry.id}: deferred verify invocation was dropped`);
     }
 
-    if (entry.classification === 'still-enforced-by-legacy') {
+    if (deferred) {
       const reference = entry.legacyReference;
       if (!reference) continue;
       const text = snapshot.files.get(reference.path);
@@ -215,14 +289,22 @@ export function evaluateCensus(
     }
   }
 
+  const reusableRows = census.entries.filter((entry) => entry.sourceKind === 'check-reusable-behavior');
   const checkReusable = snapshot.files.get('scripts/check-reusable.ps1');
-  const allReusableRowsDeferred = census.entries
-    .filter((entry) => entry.sourceKind === 'check-reusable-behavior')
-    .every((entry) => entry.classification === 'still-enforced-by-legacy');
+  const allReusableRowsDeferred = reusableRows.length > 0 && reusableRows.every(isDeferred);
   if (allReusableRowsDeferred) {
     if (checkReusable === undefined) failures.push('scripts/check-reusable.ps1 is missing while its behaviors remain legacy-enforced');
-    else if (sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
+    else if (census.version === 1 && sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
       failures.push('scripts/check-reusable.ps1 behavior surface drifted without census reclassification');
+    }
+  } else {
+    for (const entry of reusableRows) {
+      const present = checkReusable?.includes(entry.marker) === true;
+      if (isDeferred(entry) && !present) failures.push(`${entry.id}: deferred check-reusable behavior was dropped`);
+      if (!isDeferred(entry) && present) failures.push(`${entry.id}: migrated/retired check-reusable behavior remains reachable`);
+    }
+    if (reusableRows.every((entry) => !isDeferred(entry)) && checkReusable !== undefined) {
+      failures.push('scripts/check-reusable.ps1 remains after every behavior was migrated or retired');
     }
   }
 
@@ -244,8 +326,8 @@ export function evaluateCensus(
   }
   for (const entry of baselineInlineRows) {
     const present = currentInlineIds.has(entry.id);
-    if (entry.classification === 'still-enforced-by-legacy' && !present) failures.push(`${entry.id}: deferred verify inline aggregation member was dropped`);
-    if (entry.classification !== 'still-enforced-by-legacy' && present) failures.push(`${entry.id}: migrated/retired verify inline aggregation member still exists`);
+    if (isDeferred(entry) && !present) failures.push(`${entry.id}: deferred verify inline aggregation member was dropped`);
+    if (!isDeferred(entry) && present) failures.push(`${entry.id}: migrated/retired verify inline aggregation member still exists`);
   }
 
   const dispatchMatches = verify.match(/scripts\/gate-runner\/runner\.ts/gu) ?? [];
