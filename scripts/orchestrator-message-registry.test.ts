@@ -31,6 +31,7 @@ import {
   validateOverlapOverride,
   validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
+import { runProcessSync } from '#opk-kernel/subprocess';
 import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -501,10 +502,13 @@ describe('orchestrator message registry (Issue #298)', () => {
   it(
     'runs check-orchestrator-message-registry.ps1 clean on the real tree',
     () => {
-      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
-        stdio: 'pipe',
+      const result = runProcessSync({
+        command: 'pwsh',
+        args: ['-NoProfile', '-File', checkScript, repoRoot],
+        cwd: repoRoot,
         env: realTreeCheckerEnv(),
       });
+      expect(result.ok).toBe(true);
     },
     360_000,
   );
@@ -566,10 +570,13 @@ describe('orchestrator message registry (Issue #298)', () => {
         );
       }
       expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
-      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
-        stdio: 'pipe',
+      const result = runProcessSync({
+        command: 'pwsh',
+        args: ['-NoProfile', '-File', checkScript, repoRoot],
+        cwd: repoRoot,
         env: cleanEnv,
       });
+      expect(result.ok).toBe(true);
     } finally {
       if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prevEvent;
