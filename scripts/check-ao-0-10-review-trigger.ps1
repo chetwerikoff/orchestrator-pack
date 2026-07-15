@@ -92,3 +92,4 @@ if ($mjs -notmatch 'ao\\s\+review\\s\+run') {
 }
 
 Write-Host '[PASS] pack-owned review runner + trigger loop wiring (Issues #623/#839)'
+exit 0
