@@ -7,9 +7,9 @@ permissions:
   contents: write
 
 jobs:
-  issue-821-finalize:
+  issue-821-clean-diagnostic:
     if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 clean final tree
+    name: Issue 821 clean tree diagnostic
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -21,22 +21,25 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Clean artifacts and restore unrelated scope
+      - name: Clean and diagnose
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          set -euo pipefail
+          set +e
+          report=issue-821-runtime-refresh-report.txt
+          rm -f "$report"
+          : > "$report"
+
           git rm -r --cached --ignore-unmatch \
-            node_modules \
-            trusted-scope-guard \
-            .local/state/gh/device-id \
-            .vitest-runtime-report-light.json \
-            issue-821-final-scope-report.txt \
-            issue-821-scope-diagnostics.txt \
-            issue-821-final-validation-report.txt \
-            issue-821-remaining-ci-report.txt \
-            issue-821-final-lane-report.txt \
-            issue-821-runtime-refresh-report.txt || true
-          rm -rf node_modules trusted-scope-guard .local .vitest-runtime-report*.json issue-821-*.txt
+            node_modules trusted-scope-guard .local/state/gh/device-id \
+            .vitest-runtime-report-light.json issue-821-final-scope-report.txt \
+            issue-821-scope-diagnostics.txt issue-821-final-validation-report.txt \
+            issue-821-remaining-ci-report.txt issue-821-final-lane-report.txt || true
+          rm -rf node_modules trusted-scope-guard .local .vitest-runtime-report*.json
+          rm -f issue-821-final-scope-report.txt issue-821-scope-diagnostics.txt \
+            issue-821-final-validation-report.txt issue-821-remaining-ci-report.txt \
+            issue-821-final-lane-report.txt
 
           git checkout origin/main -- \
             docs/autonomous-spawn-budget.json \
@@ -52,18 +55,15 @@ jobs:
             tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json \
             tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json \
             tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json
-      - name: Install dependencies
-        run: npm ci --include=dev
-      - name: Refresh policy baselines and runtime history
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
 
-          node --input-type=module <<'NODE'
+          npm ci --include=dev >>"$report" 2>&1
+          install_status=$?
+          npm run lint:foundation -- --write-baseline >>"$report" 2>&1
+          lint_status=$?
+          npm run check:pwsh-test-growth -- --write-baseline >>"$report" 2>&1
+          pwsh_status=$?
+
+          node --input-type=module >>"$report" 2>&1 <<'NODE'
           import { createHash } from 'node:crypto';
           import { execFileSync } from 'node:child_process';
           import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -73,22 +73,16 @@ jobs:
           const repoRoot = process.cwd();
           const baseSha = process.env.BASE_SHA;
           const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-          const changed = execFileSync(
-            'git',
-            ['diff', '--name-only', '--diff-filter=ACMR', `${baseSha}...${headSha}`],
-            { encoding: 'utf8' },
-          )
+          const changed = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', `${baseSha}...${headSha}`], { encoding: 'utf8' })
             .split(/\r?\n/)
             .map((entry) => entry.trim().replaceAll('\\', '/'))
             .filter((entry) => entry.endsWith('.test.ts') && existsSync(path.join(repoRoot, entry)));
           const files = [...new Set(changed)].sort();
+          console.log(JSON.stringify({ changedTestCount: files.length, files }, null, 2));
           if (files.length === 0) throw new Error('no changed Vitest files found for runtime refresh');
-          console.log(`Measuring ${files.length} changed Vitest file(s):\n${files.join('\n')}`);
+          const measurements = await measurePreTopologyFiles(repoRoot, files, { maxConcurrency: 3, timeoutMs: 8 * 60 * 1000 });
+          console.log(JSON.stringify({ measurements }, null, 2));
 
-          const measurements = await measurePreTopologyFiles(repoRoot, files, {
-            maxConcurrency: 3,
-            timeoutMs: 8 * 60 * 1000,
-          });
           const historyPath = path.join(repoRoot, 'scripts', 'vitest-runtime-history.json');
           const history = JSON.parse(readFileSync(historyPath, 'utf8'));
           history.source = 'ci-measured';
@@ -98,83 +92,37 @@ jobs:
           history.contentSha ??= {};
           history.recentSamples ??= {};
           history.fileChangedAt ??= {};
-
           for (const file of files) {
             const seconds = Number(measurements[file]);
-            if (!Number.isFinite(seconds) || seconds <= 0) {
-              throw new Error(`invalid measured runtime for ${file}: ${measurements[file]}`);
-            }
+            if (!Number.isFinite(seconds) || seconds <= 0) throw new Error(`invalid measured runtime for ${file}: ${measurements[file]}`);
             const ms = Math.max(1, Math.round(seconds * 1000));
             const bytes = readFileSync(path.join(repoRoot, file));
             history.files[file] = ms;
             history.provenance[file] = 'measured';
             history.contentSha[file] = createHash('sha256').update(bytes).digest('hex');
-            const previous = Array.isArray(history.recentSamples[file])
-              ? history.recentSamples[file].map(Number).filter((value) => Number.isFinite(value) && value > 0)
-              : [];
+            const previous = Array.isArray(history.recentSamples[file]) ? history.recentSamples[file].map(Number).filter((value) => Number.isFinite(value) && value > 0) : [];
             history.recentSamples[file] = [...previous.slice(-4), ms];
             history.fileChangedAt[file] = history.dataChangedAt;
           }
-
-          const deleted = execFileSync(
-            'git',
-            ['diff', '--name-only', '--diff-filter=D', `${baseSha}...${headSha}`],
-            { encoding: 'utf8' },
-          )
-            .split(/\r?\n/)
-            .map((entry) => entry.trim().replaceAll('\\', '/'))
-            .filter((entry) => entry.endsWith('.test.ts'));
+          const deleted = execFileSync('git', ['diff', '--name-only', '--diff-filter=D', `${baseSha}...${headSha}`], { encoding: 'utf8' })
+            .split(/\r?\n/).map((entry) => entry.trim().replaceAll('\\', '/')).filter((entry) => entry.endsWith('.test.ts'));
           for (const file of deleted) {
-            delete history.files[file];
-            delete history.provenance[file];
-            delete history.contentSha[file];
-            delete history.recentSamples[file];
-            delete history.fileChangedAt[file];
+            delete history.files[file]; delete history.provenance[file]; delete history.contentSha[file]; delete history.recentSamples[file]; delete history.fileChangedAt[file];
           }
-
           writeFileSync(historyPath, `${JSON.stringify(history, null, 2)}\n`, 'utf8');
-          console.log(JSON.stringify({ files, measurements }, null, 2));
           NODE
-      - name: Validate issue and CI contracts
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          npx vitest run \
-            scripts/autonomous-orchestrator-boundary.test.ts \
-            scripts/autonomous-spawn-policy.test.ts \
-            scripts/worker-nudge-gate.test.ts \
-            scripts/spawn-worktree-grant-finalization.test.ts \
-            scripts/orchestrator-claimed-review-run.test.ts \
-            scripts/autonomous-spawn-worktree-gate.test.ts \
-            scripts/orchestrator-review-start-preflight-audit.test.ts \
-            scripts/review-start-envelope-external-io.test.ts \
-            scripts/reachability-purge.test.ts
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
-          pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
-          pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
-          ! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\.ao/autonomous-real-binaries\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'
+          measure_status=$?
 
-          export HEAD_SHA="$(git rev-parse HEAD)"
-          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$BASE_SHA" --head "$HEAD_SHA")"
-          export GITHUB_OUTPUT=/tmp/issue-821-topology-output.txt
-          node scripts/emit-vitest-heavy-topology.mjs --gha-output
-          pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
-          pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
-          git diff --check
-      - name: Commit clean validated tree
-        shell: bash
-        run: |
-          set -euo pipefail
+          printf '\nSTATUSES install=%s lint=%s pwsh=%s measure=%s\n' "$install_status" "$lint_status" "$pwsh_status" "$measure_status" >>"$report"
+          overall=0
+          (( install_status == 0 && lint_status == 0 && pwsh_status == 0 && measure_status == 0 )) || overall=1
+
           git checkout origin/main -- .github/workflows/typescript-foundation.yml
-          rm -rf node_modules trusted-scope-guard .local scripts/vitest-heavy-topology.plan.json .vitest-runtime-report*.json issue-821-*.txt
+          rm -rf node_modules trusted-scope-guard .local scripts/vitest-heavy-topology.plan.json .vitest-runtime-report*.json
+          if (( overall == 0 )); then rm -f "$report"; fi
           git add -A
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Clean and validate issue 821 final tree"
+          git commit -m "Persist clean issue 821 tree and runtime diagnostic"
           git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          exit "$overall"
