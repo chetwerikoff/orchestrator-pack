@@ -6,6 +6,7 @@ export default defineConfig({
       'scripts/kernel/**/*.test.ts',
       'scripts/json-producers/**/*.test.ts',
       'scripts/toolchain/**/*.test.ts',
+      'scripts/gate-runner/**/*.test.ts',
     ],
     environment: 'node',
     fileParallelism: false,
