@@ -54,6 +54,7 @@ projects:
       agent: cursor
       agentConfig:
         permissions: permissionless
+        # GitHub inventory reads continue through the tracked scripts/gh wrapper (Issue #431).
     worker:
       agent: cursor
       agentConfig:

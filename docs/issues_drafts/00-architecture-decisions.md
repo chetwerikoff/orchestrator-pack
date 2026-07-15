@@ -848,7 +848,6 @@ diffs and final review judgment stays on the main reviewer.
    yield `ambiguous_spec`. Summary, mapping, direct inspection, and verdict bind
    to one PR head SHA and spec snapshot hash.
 
-
 ## W. Native AO CI-nudge suppression via operator-local `tmux` PATH shim
 
 Decision taken 2026-07-15, no tracked Issue yet (operator machine-local fix, not a pack

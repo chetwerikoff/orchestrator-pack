@@ -22,7 +22,6 @@
     "scripts/ci-failure-notification.ps1"
   ],
   "commandEntrypoints": [
-    "scripts/ao",
     "scripts/journaled-worker-send.ps1"
   ],
   "orchestratorRulesBindings": [
