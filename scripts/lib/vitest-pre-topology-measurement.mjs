@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseVitestReportFile } from './vitest-json-report.mjs';
 
-export const PRE_TOPOLOGY_MAX_FILES = 12;
+export const PRE_TOPOLOGY_MAX_FILES = 32;
 export const PRE_TOPOLOGY_MAX_CONCURRENCY = 3;
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
