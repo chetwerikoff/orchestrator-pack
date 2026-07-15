@@ -302,7 +302,6 @@ working only if AO ever switched to a raw control-socket protocol, which is self
 (the shim's audit log goes quiet while nudges resume reaching the pane).
 
 **Status: operator-machine-local only**, not a pack-owned/tracked artifact — no install
-script, no PR, no Issue. See
-[`docs/tmux-ci-nudge-shim-runbook.md`](tmux-ci-nudge-shim-runbook.md) for install/verify/
-rollback steps on a given host. Formalizing this for multi-operator distribution (mirroring
-the `cursor-agent` TUI shim, Issue #725) would need its own draft.
+script, no PR, no Issue. See `docs/issues_drafts/00-architecture-decisions.md` §W for
+install/verify/rollback steps on a given host. Formalizing this for multi-operator
+distribution (mirroring the `cursor-agent` TUI shim, Issue #725) would need its own draft.

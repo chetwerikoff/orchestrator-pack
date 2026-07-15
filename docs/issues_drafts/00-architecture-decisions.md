@@ -907,6 +907,20 @@ otherwise mutate AO's ledger for this class of fix.
    sessions are unaffected by that restart (tmux itself is a separate process).
 5. **Status: operator-machine-local only.** Lives at `~/.local/bin/tmux` on this
    operator's host, untracked, not a pack artifact — no install script, no PR, no Issue.
-   See [`docs/tmux-ci-nudge-shim-runbook.md`](tmux-ci-nudge-shim-runbook.md) for
-   install/verify/rollback. Formalizing this for multi-operator distribution (mirroring
-   the `cursor-agent` TUI shim pattern, Issue #725) would need its own draft.
+   Formalizing this for multi-operator distribution (mirroring the `cursor-agent` TUI shim
+   pattern, Issue #725) would need its own draft.
+6. **Install.** Copy the shim to `~/.local/bin/tmux`, `chmod +x`, confirm
+   `command -v tmux` resolves there (PATH already puts `~/.local/bin` ahead of
+   `/usr/bin`). Then restart the AO daemon (`ao stop && ao start`) — it resolves `tmux`'s
+   path once at process start, not per call, so a shim installed while the daemon is
+   already running has no effect until restart. Live tmux worker sessions are unaffected
+   by an AO daemon restart (tmux is a separate process the daemon merely talks to).
+7. **Verify.** `~/.local/bin/tmux -V` and `~/.local/bin/tmux list-sessions` must still
+   reach the real binary (passthrough sanity). Tail
+   `~/.local/state/tmux-ci-nudge-shim/log.jsonl` to watch drops as they happen. Confirm
+   the daemon's own `PATH` (via `/proc/<pid>/environ`) still lists `~/.local/bin` ahead of
+   `/usr/bin` after any restart. If the log stays empty across a real CI failure, the
+   daemon likely was not restarted after install (or something else reset its PATH).
+8. **Rollback.** `rm ~/.local/bin/tmux` then `ao stop && ao start`. No self-heal or
+   drift-repair loop (unlike the `cursor-agent` TUI shim) — nothing re-clobbers the file on
+   its own, so rollback is just deleting it plus a daemon restart.
