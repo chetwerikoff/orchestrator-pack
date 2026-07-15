@@ -24,9 +24,10 @@ jobs:
         with:
           ref: issue-839-pack-review-runner-v2
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - name: Set up Node 22 for repository tooling
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci --include=dev --silent
       - name: Apply source contract fixes
@@ -51,6 +52,11 @@ jobs:
           git add -A
           git diff --cached --check
           git commit --no-verify -m 'Align light-lane contracts with pack review runner'
+      - name: Set up Node 20 for compatibility verification
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
       - name: Verify TypeScript
         run: npx tsc --project tsconfig.base.json --noEmit
       - name: Verify focused regressions
@@ -82,4 +88,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 split light-lane finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 Node-split light-lane finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
