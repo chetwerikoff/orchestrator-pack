@@ -41,6 +41,8 @@ import {
 } from './lib/vitest-heavy-topology.mjs';
 import {
   PRE_TOPOLOGY_MAX_FILES,
+  PRE_TOPOLOGY_MEASUREMENT_ESTIMATES,
+  resolvePreTopologyMeasurementPlan,
   resolvePreTopologyMeasurementTargets,
 } from './lib/vitest-pre-topology-measurement.mjs';
 import {
@@ -539,6 +541,34 @@ describe('heavy topology weight-input fail-closed (#695)', () => {
     expect(unresolvedGuardWeights).toHaveLength(13);
     expect(targets).toHaveLength(13);
     expect(PRE_TOPOLOGY_MAX_FILES).toBeGreaterThanOrEqual(13);
+  });
+
+  it('estimates generated-manifest light tests instead of timing them inside pre-topology measurement', () => {
+    const result = {
+      lanesConfig: {
+        classification: {
+          'scripts/reachability-purge.test.ts': 'light',
+          'scripts/review-start-envelope-external-io.test.ts': 'heavy',
+        },
+      },
+      topology: {
+        unresolvedGuardWeights: [
+          { file: 'scripts/reachability-purge.test.ts', reason: 'missing-per-file-weight' },
+          { file: 'scripts/review-start-envelope-external-io.test.ts', reason: 'stale-unassociated-weight' },
+        ],
+      },
+    };
+
+    const plan = resolvePreTopologyMeasurementPlan(result);
+
+    expect(plan.allTargets).toEqual([
+      'scripts/reachability-purge.test.ts',
+      'scripts/review-start-envelope-external-io.test.ts',
+    ]);
+    expect(plan.targets).toEqual(['scripts/review-start-envelope-external-io.test.ts']);
+    expect(plan.measurements).toEqual({
+      'scripts/reachability-purge.test.ts': PRE_TOPOLOGY_MEASUREMENT_ESTIMATES['scripts/reachability-purge.test.ts'],
+    });
   });
 
   it('flags unknown weights for unchanged discovered files when history omits them', () => {

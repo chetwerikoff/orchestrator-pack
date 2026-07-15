@@ -47,7 +47,7 @@
     "className": "workflow/config",
     "reason": "workflow-or-config-change",
     "baseSha": "840e47752074a243ed9abeaea1d95f1bbf7dd2fe",
-    "headSha": "3bc6ade38d806ac2324c55f62afa1b1a61c45194",
+    "headSha": "ebc533b129334d1a2b92c6480563639becb8e22a",
     "changedEntries": [
       {
         "status": "A",
@@ -71,7 +71,7 @@
         "oldMode": "000000",
         "newMode": "100644",
         "oldSha": "0000000000000000000000000000000000000000",
-        "newSha": "1534aab620832b121b63c0a0df0ddb7aa3e4e552"
+        "newSha": "ade90fce6a14b61c50df75a70bfffc3f5700fb94"
       },
       {
         "status": "A",
@@ -290,6 +290,14 @@
         "newSha": "1f4687a1eedbe6c6827470f5c8055964fd8ac1b0"
       },
       {
+        "status": "A",
+        "path": "scripts/lib/vitest-pre-topology-measurement.d.mts",
+        "oldMode": "000000",
+        "newMode": "100644",
+        "oldSha": "0000000000000000000000000000000000000000",
+        "newSha": "e0e2f02eca8024873191edb269205e10327a5267"
+      },
+      {
         "status": "M",
         "path": "scripts/lib/vitest-pre-topology-measurement.mjs",
         "oldMode": "100644",
@@ -399,7 +407,7 @@
         "oldMode": "100644",
         "newMode": "100644",
         "oldSha": "69be85b863e8c33dfd84773f2a4050eaf9ac108f",
-        "newSha": "cef66287f91a3b6e911e2af63c6bd46338f8bcfb"
+        "newSha": "6a738bd9f09cdc1f8f61e4273289f9da87ab58cc"
       },
       {
         "status": "A",
@@ -426,7 +434,7 @@
         "newSha": "fa46684dfddab704e89ff09c3a4b37f2ff4a3d90"
       }
     ],
-    "changedEntryCount": 47,
+    "changedEntryCount": 48,
     "selectedHeavyFiles": [
       "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts",
       "plugins/ao-scope-guard/tests/agent_wrap.test.ts",

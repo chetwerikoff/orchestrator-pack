@@ -6,6 +6,13 @@ import { parseVitestReportFile } from './vitest-json-report.mjs';
 
 export const PRE_TOPOLOGY_MAX_FILES = 32;
 export const PRE_TOPOLOGY_MAX_CONCURRENCY = 3;
+export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
+  // This light-lane manifest self-test observes generated repository artifacts.
+  // The topology emitter rewrites scripts/vitest-heavy-topology.plan.json before
+  // measurement, so timing it inside the pre-topology pass can create manifest
+  // drift that the real light lane correctly owns.
+  'scripts/reachability-purge.test.ts': 120,
+});
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
 // bounded while fleet-sensitive measurements stay on one serialized lane.
@@ -36,6 +43,22 @@ export function resolvePreTopologyMeasurementTargets(result, options = {}) {
     );
   }
   return targets;
+}
+
+export function resolvePreTopologyMeasurementPlan(result, options = {}) {
+  const allTargets = resolvePreTopologyMeasurementTargets(result, options);
+  const classification = result?.config?.classification ?? result?.lanesConfig?.classification ?? {};
+  const measurements = {};
+  const targets = [];
+  for (const file of allTargets) {
+    const estimate = PRE_TOPOLOGY_MEASUREMENT_ESTIMATES[file];
+    if (classification[file] === 'light' && Number.isFinite(estimate) && estimate > 0) {
+      measurements[file] = estimate;
+      continue;
+    }
+    targets.push(file);
+  }
+  return { targets, measurements, allTargets };
 }
 
 function buildHarnessEnvironment(repoRoot, runRoot) {

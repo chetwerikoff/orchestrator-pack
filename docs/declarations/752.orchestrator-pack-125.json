@@ -55,6 +55,8 @@
     "scripts/trust-ao-worktree.test.ts",
     "scripts/reachability-purge.manifest.json",
     "scripts/check-ci-pipeline-split.test.ts",
+    "scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs",
+    "scripts/lint-self-architect.config.json",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/lib/vitest-pre-topology-measurement.d.mts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",

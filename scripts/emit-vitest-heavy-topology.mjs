@@ -13,7 +13,7 @@ import {
 import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
 import {
   measurePreTopologyFiles,
-  resolvePreTopologyMeasurementTargets,
+  resolvePreTopologyMeasurementPlan,
   shouldMeasurePreTopology,
 } from './lib/vitest-pre-topology-measurement.mjs';
 import {
@@ -67,18 +67,24 @@ const laneOptions = {
 let result = buildLanePlan(repoRoot, laneOptions);
 let diagnostic = null;
 if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
-  const targets = resolvePreTopologyMeasurementTargets(result, laneOptions);
+  const plan = resolvePreTopologyMeasurementPlan(result, laneOptions);
+  const { targets } = plan;
   if (targets.length > 0) {
     try {
       const measurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
-      result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements: measurements });
+      result = buildLanePlan(repoRoot, {
+        ...laneOptions,
+        preTopologyMeasurements: { ...plan.measurements, ...measurements },
+      });
     } catch (error) {
       diagnostic = {
-        targets,
+        targets: plan.allTargets,
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : null,
       };
     }
+  } else if (Object.keys(plan.measurements).length > 0) {
+    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements: plan.measurements });
   }
 }
 
