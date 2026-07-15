@@ -116,7 +116,7 @@ function defaultRepoRoot(): string {
 
 async function main(argv: readonly string[]): Promise<number> {
   const args = parseArguments(argv);
-  const repoRoot = argumentValue(args, 'repo-root') ?? defaultRepoRoot();
+  const repoRoot = argumentValue(args, 'repo-root') || defaultRepoRoot();
   const auditModule = join(repoRoot, 'docs', 'read-delegation-audit.mjs');
   if (!existsSync(auditModule)) {
     process.stderr.write(`WARNING: read-delegation audit module missing: ${auditModule}\n`);
