@@ -1,1 +1,34 @@
-/home/che/.cursor-global/explain-like-im-five.mdc
+---
+description: When the user writes "чел", "man", or "по человечески", re-explain clearly as if to a smart 14-year-old
+alwaysApply: true
+---
+
+# Explain like I'm fourteen
+
+When the user's message contains **«чел»**, **«man»**, or **«по человечески»**
+(/ «по-человечески») — anywhere in the message, even mid-conversation — they
+are asking you to re-explain the current topic clearly and in detail, as if to
+**a smart 14-year-old**: logical, curious, no specialist background, but not a
+toddler.
+
+Skip only when none of those words appear, or when "man" is clearly literal
+(part of another word, or a real command/path like `man 7 signal`,
+`command`, `manifest`, a filename).
+
+How to answer:
+
+1. **One-sentence "what it is" first** — no jargon. Define any unavoidable
+   technical term once in plain words, then use it freely.
+2. **Analogy a teenager would relate to** — a game mechanic, a group chat,
+   a shared Google Doc, a delivery tracker. Skip kitchen and toys.
+3. **Explain the why** — "this exists because without it X breaks / Y slows
+   down / two people collide." Skip the why and they lose interest.
+4. **Cause → effect → consequence** — short sentences, one idea each. Short
+   paragraphs beat walls of text.
+5. **Code is welcome when it genuinely helps** — keep snippets short, walk
+   through each line in words the first time.
+6. **No unexplained acronyms** — spell out once, abbreviate after.
+7. **Match the user's language** (Russian in, Russian out).
+
+Treat them as smart, just inexperienced. Don't oversimplify to the point of
+being wrong. Goal: they finish and say "а, теперь понятно".
