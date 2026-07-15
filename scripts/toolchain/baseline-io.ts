@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcess } from '#opk-kernel/subprocess';
+import { resolveMergeStableCiBase } from '../lib/resolve-merge-stable-ci-base.ts';
 
 export interface ChangedFileEntry {
   readonly path: string;
@@ -31,35 +32,12 @@ async function gitCapture(repoRoot: string, args: readonly string[]): Promise<st
     cwd: repoRoot,
     allowEmptyStdout: true,
   });
-  return result.ok ? result.stdout.trim() : null;
-}
-
-function uniqueCandidates(values: readonly (string | undefined)[]): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => !!value))];
+  return result.ok ? result.stdout : null;
 }
 
 /** Resolve the same non-self comparison boundary in PR and push contexts. */
 export async function resolveComparisonBaseRef(repoRoot: string): Promise<string | null> {
-  const head = await gitCapture(repoRoot, ['rev-parse', '--verify', 'HEAD^{commit}']);
-  if (!head) return null;
-
-  const candidates = uniqueCandidates([
-    process.env.BASE_SHA,
-    process.env.GITHUB_BASE_SHA,
-    process.env.PR_BASE_SHA,
-    'origin/main',
-    'refs/remotes/origin/main',
-    'main',
-  ]);
-  for (const candidate of candidates) {
-    const candidateCommit = await gitCapture(repoRoot, ['rev-parse', '--verify', `${candidate}^{commit}`]);
-    if (!candidateCommit) continue;
-    const mergeBase = await gitCapture(repoRoot, ['merge-base', 'HEAD', candidateCommit]);
-    if (mergeBase && mergeBase !== head) return mergeBase;
-  }
-
-  const firstParent = await gitCapture(repoRoot, ['rev-parse', '--verify', 'HEAD^1']);
-  return firstParent && firstParent !== head ? firstParent : null;
+  return (await resolveMergeStableCiBase(repoRoot))?.baseSha ?? null;
 }
 
 export async function readGitFile(repoRoot: string, ref: string, relativePath: string): Promise<string | null> {

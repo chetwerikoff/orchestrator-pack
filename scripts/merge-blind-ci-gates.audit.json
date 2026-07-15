@@ -24,17 +24,6 @@
       "command": "git ls-files '.github/workflows/*.yml' '.github/workflows/*.yaml' | sort"
     }
   ],
-  "workflowSurvey": {
-    "mode": "dynamic-fail-closed",
-    "rules": {
-      "pull_request+push": "merge-stable",
-      "pull_request-only": "merge-blind unless an explicit per-path exception exists",
-      "pull_request_target": "intentional-by-design trusted-base privileged surface",
-      "workflow_call": "intentional-by-design reusable surface",
-      "push/schedule/workflow_dispatch-only": "intentional-by-design post-merge, scheduled, or operator surface"
-    },
-    "exceptions": {}
-  },
   "rows": [
     {
       "id": "rpc-validator",
@@ -43,8 +32,8 @@
       "classification": "merge-blind",
       "scopeFlag": "in-allowed-roots",
       "reason": "The old resolver returned a lenient verdict when PR-only environment existed and capture objects were unavailable.",
-      "remediation": "Use one fail-closed capture-to-checked-out-HEAD content comparison. PR head discovery remains diagnostics only and cannot change pass/fail.",
-      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.ps1"
+      "remediation": "Use a single scoped-tree-content comparison path, require full history, and make event variables irrelevant to the verdict.",
+      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.mjs"
     },
     {
       "id": "rpc-manifest",
@@ -53,25 +42,25 @@
       "classification": "merge-blind",
       "scopeFlag": "in-allowed-roots",
       "reason": "captureCommitSha was interpreted as current commit identity in fallback paths.",
-      "remediation": "Declare bindingMode=scoped-tree-content-v1; the SHA identifies the source snapshot whose guarded content is compared to checked-out HEAD.",
-      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.ps1"
+      "remediation": "Declare bindingMode=scoped-tree-content-v1; the SHA now identifies the source snapshot whose scoped blobs are compared to the worktree.",
+      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.mjs"
     },
     {
       "id": "rpc-metadata-binder",
       "path": "scripts/lib/bind-supervisor-heavy-lane-rpc-metadata.mjs",
       "dimensions": ["baked-commit-identity"],
       "classification": "intentional-by-design",
-      "reason": "The explicit producer records artifact provenance and binding mode; it does not decide PR/main pass or fail."
+      "reason": "This is the explicit artifact producer. It records the source snapshot and scoped-content binding mode; it does not decide PR/main pass or fail."
     },
     {
       "id": "registry-sequencing",
       "path": "scripts/check-side-process-registry-709-711-sequencing.ps1",
-      "dimensions": ["base-ref-resolution"],
+      "dimensions": ["event-source-presence", "base-ref-resolution", "baked-commit-identity"],
       "classification": "merge-blind",
       "scopeFlag": "in-allowed-roots",
-      "reason": "PR context used pull_request.base.sha while push context could compare HEAD to origin/main=HEAD; short prerequisite commit IDs coupled the verdict to history identity.",
-      "remediation": "Resolve a non-self comparison base and verify #709/#711 semantic surfaces at that base and HEAD.",
-      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.ps1"
+      "reason": "PR context used pull_request.base.sha while push context could compare HEAD to origin/main=HEAD; short prerequisite commit IDs also coupled the verdict to history identity.",
+      "remediation": "Resolve a non-self merge-stable base and verify #709/#711 semantic surface markers at both that base and HEAD.",
+      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.mjs"
     },
     {
       "id": "message-registry-base",
@@ -80,8 +69,8 @@
       "classification": "merge-blind",
       "scopeFlag": "in-allowed-roots",
       "reason": "The push fallback could pass origin/main=HEAD to the protected-runtime diff and silently evaluate an empty range.",
-      "remediation": "Delegate base selection to the non-self resolver and fail closed when no prior boundary exists.",
-      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.ps1"
+      "remediation": "Delegate base selection to the non-self merge-stable resolver and fail closed when no prior boundary exists.",
+      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.mjs"
     },
     {
       "id": "typescript-baseline-io",
@@ -90,29 +79,136 @@
       "classification": "merge-blind",
       "scopeFlag": "in-allowed-roots",
       "reason": "The first resolvable candidate was accepted even when its merge-base was HEAD.",
-      "remediation": "Reject self merge-bases and fall back to HEAD^1, preserving a pre-change boundary in PR and push contexts.",
-      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.ps1"
+      "remediation": "Reject self merge-bases and fall back to HEAD^1, preserving the same pre-change boundary in PR and push contexts.",
+      "fixture": "scripts/fixtures/merge-blind-ci-gates/parity.mjs"
     },
     {
-      "id": "powershell-base-resolver",
+      "id": "shared-base-resolver",
+      "path": "scripts/lib/resolve-merge-stable-ci-base.ts",
+      "dimensions": ["base-ref-resolution"],
+      "classification": "merge-stable",
+      "reason": "All environment candidates flow through one rule: a merge-base equal to HEAD is rejected, then HEAD^1 is used as a context-neutral fallback."
+    },
+    {
+      "id": "legacy-powershell-base-resolver",
       "path": "scripts/lib/Resolve-MergeStableCiBase.ps1",
       "dimensions": ["base-ref-resolution"],
       "classification": "merge-stable",
-      "reason": "Every candidate is reduced to a merge-base, merge-base==HEAD is rejected, and HEAD^1 is the final context-neutral fallback."
+      "reason": "The legacy PowerShell helper uses the same non-self boundary rule: environment and fallback refs are reduced through merge-base, HEAD self-comparisons are rejected, and HEAD^1 is the final fallback."
     },
     {
       "id": "pipeline-core",
       "path": "scripts/check-ci-pipeline-split-core.ps1",
       "dimensions": ["baked-commit-identity"],
       "classification": "merge-stable",
-      "reason": "The core evaluates current-tree lane coverage, topology, and the fail-closed RPC content validator; IDs are provenance only."
+      "reason": "The core evaluates current-tree lane coverage, topology and the RPC validator; commit/run IDs are diagnostics and artifact provenance, not a lenient verdict branch."
     },
     {
       "id": "pipeline-wrapper",
       "path": "scripts/check-ci-pipeline-split.ps1",
-      "dimensions": [],
+      "dimensions": ["event-source-presence", "base-ref-resolution", "baked-commit-identity"],
       "classification": "merge-stable",
-      "reason": "The mandatory wrapper runs the dynamic audit and PR/push run-twice fixture before the existing topology wrapper/core."
+      "reason": "The mandatory wrapper runs the audit and run-twice parity fixture before delegating to the existing topology wrapper/core."
+    },
+    {
+      "id": "workflow-scope-guard",
+      "path": ".github/workflows/scope-guard.yml",
+      "dimensions": ["event-source-presence", "baked-commit-identity", "workflow-trigger-divergence"],
+      "classification": "merge-stable",
+      "reason": "It runs on pull_request and push/main. PR SHAs only scope changed-test planning; push evaluates FULL, and verify-pack fetches full history for content binding.",
+      "triggers": ["pull_request", "push:main"]
+    },
+    {
+      "id": "workflow-contract-evidence",
+      "path": ".github/workflows/contract-evidence-legacy-list-guard.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "intentional-by-design",
+      "reason": "A pull_request_target trusted-base admission guard has no post-merge action to perform; current-tree policy is independently exercised by scope-guard.",
+      "triggers": ["pull_request_target"]
+    },
+    {
+      "id": "workflow-runtime-delivery",
+      "path": ".github/workflows/vitest-runtime-history-delivery.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "intentional-by-design",
+      "reason": "This privileged workflow monitors and merges one named bot PR. A push/main sibling would have no pull request to authenticate or merge.",
+      "triggers": ["pull_request_target"]
+    },
+    {
+      "id": "workflow-runtime-refresh",
+      "path": ".github/workflows/vitest-runtime-history-refresh.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "intentional-by-design",
+      "reason": "Runtime history is a post-merge/scheduled measurement producer; PR-required correctness remains in scope-guard.",
+      "triggers": ["push:main", "schedule", "workflow_dispatch"]
+    },
+    {
+      "id": "workflow-wallclock-e2e",
+      "path": ".github/workflows/vitest-wallclock-e2e.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "intentional-by-design",
+      "reason": "Wall-clock acceptance is a post-merge/scheduled containment signal. PR lane membership is owned by scope-guard and the Vitest split.",
+      "triggers": ["push:main", "schedule", "workflow_dispatch"]
+    },
+    {
+      "id": "workflow-codex-review",
+      "path": ".github/workflows/codex-pr-review.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "intentional-by-design",
+      "reason": "Reusable workflow_call surface; the caller owns event membership.",
+      "triggers": ["workflow_call"]
+    },
+    {
+      "id": "workflow-harness-smoke",
+      "path": ".github/workflows/harness-pn-live-smoke.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "merge-stable",
+      "reason": "The same check is present on pull_request and push/main, with workflow_dispatch for operator runs.",
+      "triggers": ["pull_request", "push:main", "workflow_dispatch"]
+    },
+    {
+      "id": "workflow-read-delegation",
+      "path": ".github/workflows/read-delegation-audit.yml",
+      "dimensions": ["workflow-trigger-divergence"],
+      "classification": "merge-stable",
+      "reason": "The same policy check is present on pull_request and push/main.",
+      "triggers": ["pull_request", "push:main"]
+    },
+    {
+      "id": "autonomous-boundary-tests",
+      "path": "scripts/autonomous-orchestrator-boundary.test.ts",
+      "dimensions": ["event-source-presence"],
+      "classification": "intentional-by-design",
+      "reason": "Test fixture code mutates PR/base environment variables to prove autonomous boundary behavior; it is not a CI gate verdict path."
+    },
+    {
+      "id": "contract-evidence-reverify-ci-admission",
+      "path": "scripts/check-contract-evidence-reverify.ps1",
+      "dimensions": ["event-source-presence"],
+      "classification": "intentional-by-design",
+      "reason": "The GitHub Actions pull_request check is an admission guard for live producer re-verification; non-PR/local paths are fixture and operator modes, not a PR/main parity gate."
+    },
+    {
+      "id": "message-registry-tests",
+      "path": "scripts/orchestrator-message-registry.test.ts",
+      "dimensions": ["event-source-presence", "base-ref-resolution"],
+      "classification": "intentional-by-design",
+      "reason": "Tests explicitly simulate PR and push environment/base resolution cases for the message-registry guard; they do not decide CI pass/fail directly."
+    },
+    {
+      "id": "review-start-preflight-audit-provenance",
+      "path": "scripts/orchestrator-review-start-preflight.ps1",
+      "dimensions": ["baked-commit-identity"],
+      "classification": "merge-stable",
+      "reason": "Head SHA environment values are written only as refusal audit provenance after the gate has already failed; they are not equality predicates or leniency branches."
+    },
+    {
+      "id": "workflow-typescript-foundation",
+      "path": ".github/workflows/typescript-foundation.yml",
+      "dimensions": ["base-ref-resolution", "workflow-trigger-divergence"],
+      "classification": "merge-stable",
+      "reason": "Both event types run the foundation suite; baseline resolution now rejects origin/main=HEAD for push jobs.",
+      "triggers": ["pull_request", "push:main"]
     }
   ]
 }

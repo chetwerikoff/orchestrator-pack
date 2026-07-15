@@ -28,7 +28,7 @@ function Get-TrackedTextAtRef {
         [Parameter(Mandatory = $true)][string]$Ref,
         [Parameter(Mandatory = $true)][string]$Path
     )
-    $output = (& git -C $Root show "$Ref`:$Path" 2>$null | Out-String)
+    $output = (& git show "$Ref`:$Path" 2>$null | Out-String)
     if ($LASTEXITCODE -ne 0) { return $null }
     return $output
 }
@@ -50,26 +50,37 @@ function Test-RequiredSurfaceAtRef {
     return $null
 }
 
-$resolver = Join-Path $Root 'scripts/lib/Resolve-MergeStableCiBase.ps1'
-if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
-    throw "missing merge-stable base resolver: $resolver"
-}
-. $resolver
-$base = Resolve-MergeStableCiBase -RepoRoot $Root
-
-$failures = [System.Collections.Generic.List[string]]::new()
-foreach ($surface in $requiredSurfaces) {
-    foreach ($ref in @([string]$base.BaseSha, 'HEAD')) {
-        $failure = Test-RequiredSurfaceAtRef -Ref $ref -Surface $surface
-        if ($failure) { $failures.Add($failure) }
+Push-Location $Root
+try {
+    $resolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.ts'
+    if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
+        throw "missing merge-stable base resolver: $resolver"
     }
-}
 
-if ($failures.Count -gt 0) {
-    Write-Host '[FAIL] side-process registry sequencing guard: semantic prerequisites are absent or drifted'
-    foreach ($failure in $failures) { Write-Host "  - $failure" }
-    exit 1
-}
+    $baseJson = (& node --experimental-strip-types $resolver --repo-root $Root --json 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $baseJson
+        throw 'side-process registry sequencing guard could not resolve a non-self comparison base'
+    }
+    $base = $baseJson | ConvertFrom-Json
 
-Write-Host "[PASS] side-process registry sequencing guard: #709/#711 semantic surfaces are present at base $($base.BaseSha) and HEAD."
-exit 0
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($surface in $requiredSurfaces) {
+        foreach ($ref in @([string]$base.baseSha, 'HEAD')) {
+            $failure = Test-RequiredSurfaceAtRef -Ref $ref -Surface $surface
+            if ($failure) { $failures.Add($failure) }
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        Write-Host '[FAIL] side-process registry sequencing guard: semantic prerequisites are absent or drifted'
+        foreach ($failure in $failures) { Write-Host "  - $failure" }
+        exit 1
+    }
+
+    Write-Host "[PASS] side-process registry sequencing guard: #709/#711 semantic surfaces are present at base $($base.baseSha) and HEAD."
+    exit 0
+}
+finally {
+    Pop-Location
+}
