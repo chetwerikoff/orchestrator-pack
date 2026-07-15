@@ -1,0 +1,76 @@
+name: issue-832 post-merge finalize
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: issue-832-post-merge-finalize-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Reconcile Vitest classifications
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'scripts/vitest-ci-lanes.config.json';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          config.classification['scripts/graphify/check-graphify-no-installer.test.ts'] = 'light';
+          config.classification['scripts/graphify/query-graph.test.ts'] = 'light';
+          config.classification = Object.fromEntries(
+            Object.entries(config.classification).sort(([left], [right]) => left.localeCompare(right)),
+          );
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
+      - name: Generate final-tree reachability manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/_issue-832-merge-finalize.yml
+          node --no-warnings --loader ./scripts/toolchain/typescript-loader.mjs ./scripts/reachability-purge.mjs --write
+      - name: Run post-merge regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test -- \
+            scripts/reachability-purge.test.ts \
+            scripts/sanctioned-worker-kill-record.test.ts \
+            scripts/read-delegation-audit.test.ts \
+            scripts/graphify/check-graphify-no-installer.test.ts \
+            scripts/graphify/query-graph.test.ts
+      - name: Commit reconciled generated files
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git restore --staged .github/workflows/_issue-832-merge-finalize.yml
+          git restore .github/workflows/_issue-832-merge-finalize.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/vitest-ci-lanes.config.json scripts/reachability-purge.manifest.json
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No post-merge generated changes to commit.'
+            exit 0
+          fi
+          git commit -m 'fix: reconcile Wave B with merged Graphify surface'
+          git push origin "HEAD:${HEAD_REF}"
