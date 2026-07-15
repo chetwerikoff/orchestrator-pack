@@ -43,22 +43,23 @@ jobs:
             scripts/sanctioned-worker-kill-record.test.ts \
             scripts/read-delegation-audit.test.ts \
             2>&1 | tee "${RUNNER_TEMP}/issue-832-targeted-tests.log"
-      - name: Commit final generated artifacts
+      - name: Commit generated reachability manifest
         shell: bash
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
+          git restore --staged .github/workflows/_issue-832-light-diagnostic.yml
+          git restore .github/workflows/_issue-832-light-diagnostic.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add scripts/reachability-purge.manifest.json
-          git add -u .github/workflows/_issue-832-light-diagnostic.yml
           git diff --cached --check
           if git diff --cached --quiet; then
-            echo 'No final-tree artifact changes to commit.'
+            echo 'No reachability manifest changes to commit.'
             exit 0
           fi
-          git commit -m 'fix: finalize issue 832 generated artifacts'
+          git commit -m 'fix: regenerate reachability manifest for issue 832'
           git push origin "HEAD:${HEAD_REF}"
       - uses: actions/upload-artifact@v4
         if: always()
