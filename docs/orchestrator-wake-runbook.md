@@ -51,13 +51,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervis
 ## Read-only verification
 
 ```powershell
-pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
+node --experimental-strip-types scripts/gate-runner/runner.ts --repo-root . --json
 pwsh -NoProfile -File scripts/check-side-process-launch-contract.ps1
 pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
 ```
 
-The retirement guard checks the listener id, entrypoint filename, and lock name across registry,
-supervisor, inventory, escalation, and message surfaces. Its self-test exercises every retired
+The custom TypeScript retirement gate checks the listener id, entrypoint filename, and lock name across registry,
+supervisor, inventory, escalation, and message surfaces. The gate-runner self-test exercises every retired
 child across every binding surface.
 
 ## Recovery

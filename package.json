@@ -13,7 +13,8 @@
     "typecheck:foundation": "tsc -p tsconfig.json --noEmit",
     "lint:foundation": "node --experimental-strip-types scripts/toolchain/check-ts-policy.ts",
     "check:pwsh-test-growth": "node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
-    "test:foundation": "vitest run --config scripts/toolchain/vitest-foundation.config.ts"
+    "test:foundation": "vitest run --config scripts/toolchain/vitest-foundation.config.ts",
+    "gate-runner-selftest": "vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

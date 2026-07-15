@@ -126,7 +126,13 @@ export function findStaleRemovedEntrypointCalls(
   for (const row of removed) {
     const basename = row.path.split('/').pop() ?? row.path;
     for (const [callerPath, source] of Object.entries(callerSources)) {
-      if (callerPath === row.path) continue;
+      if (callerPath === row.path
+        || callerPath === INVENTORY_RELATIVE_PATH
+        || callerPath === 'scripts/reachability-purge.manifest.json'
+        || callerPath === 'scripts/gate-runner/representative-gates.ts'
+        || callerPath === 'scripts/gate-runner/goldens.test.ts'
+        || callerPath.startsWith('scripts/gate-runner/goldens/')
+        || callerPath.startsWith('scripts/gate-runner/census/')) continue;
       if (source.includes(row.path) || source.includes(basename)) {
         failures.push(`${callerPath}: stale invocation of removed entrypoint ${row.path}`);
       }

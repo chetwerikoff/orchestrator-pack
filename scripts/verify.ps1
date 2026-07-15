@@ -292,23 +292,31 @@ else {
 }
 
 Write-Host ''
-Write-Host '== orchestratorRules quote safety =='
-$rulesQuoteCheck = Join-Path $Root 'scripts/check-orchestrator-rules-quotes.ps1'
-if (Test-Path -LiteralPath $rulesQuoteCheck -PathType Leaf) {
-    & $rulesQuoteCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'PASS' 'completed'
+Write-Host '== TypeScript gate runner core (Issue #830 / Wave 3.a) =='
+$gateRunnerPath = Join-Path $Root 'scripts/gate-runner/runner.ts'
+$typeScriptCliHelper = Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ps1'
+if ((Test-Path -LiteralPath $gateRunnerPath -PathType Leaf) -and (Test-Path -LiteralPath $typeScriptCliHelper -PathType Leaf)) {
+    try {
+        . $typeScriptCliHelper
+        $gateRunnerNodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $gateRunnerPath)
+        & node @gateRunnerNodeArgs '--repo-root' $Root
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check 'gate-runner/core' 'PASS' 'completed'
+        }
+        else {
+            Write-Check 'gate-runner/core' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'TypeScript gate runner core failed (Issue #830)'
+        }
     }
-    else {
-        Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'orchestratorRules literal must not contain double-quote characters'
+    catch {
+        Write-Check 'gate-runner/core' 'FAIL' $_.Exception.Message
+        Add-Failure 'TypeScript gate runner core could not be dispatched (Issue #830)'
     }
 }
 else {
-    Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing orchestratorRules quote-safety check script'
+    Write-Check 'gate-runner/core' 'FAIL' 'runner or TypeScript CLI helper missing'
+    Add-Failure 'Missing TypeScript gate runner core or invocation helper (Issue #830)'
 }
-
 Write-Host ''
 Write-Host '== REVIEW_COMMAND preflight (Issue #60) =='
 $reviewPreflightCheck = Join-Path $Root 'scripts/check-review-command-preflight.ps1'
@@ -710,24 +718,6 @@ else {
     Write-Check 'scripts/check-review-producer-contract.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing AO 0.10 review producer data contract check script (Issue #626)'
 }
-Write-Host ''
-Write-Host '== vestigial fleet retirement guard (Issue #745) =='
-$vestigialFleetRetirementCheck = Join-Path $Root 'scripts/check-vestigial-fleet-children-retired.ps1'
-if (Test-Path -LiteralPath $vestigialFleetRetirementCheck -PathType Leaf) {
-    & $vestigialFleetRetirementCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-vestigial-fleet-children-retired.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-vestigial-fleet-children-retired.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'vestigial fleet retirement guard failed (Issue #745)'
-    }
-}
-else {
-    Write-Check 'scripts/check-vestigial-fleet-children-retired.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing vestigial fleet retirement guard (Issue #745)'
-}
-
 Write-Host '== AO 0.10 review vocabulary (Issue #625) =='
 $review010VocabularyCheck = Join-Path $Root 'scripts/check-review-010-vocabulary.ps1'
 if (Test-Path -LiteralPath $review010VocabularyCheck -PathType Leaf) {
@@ -1728,30 +1718,6 @@ if (Test-Path -LiteralPath $coworkerThresholdDriftCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing coworker delegation threshold drift check script (Issue #255)'
-}
-
-Write-Host ''
-Write-Host '== AGENTS.md delivery guards (Issue #678) =='
-foreach ($check in @(
-        @{ Path = 'scripts/check-agent-rules-line-budget.ps1'; Label = 'AGENTS.md size budget (Issue #678)' },
-        @{ Path = 'scripts/check-agent-rules-moved-content.ps1'; Label = 'AGENTS.md moved-content guard (Issue #678)' },
-        @{ Path = 'scripts/check-agent-rules-grep-inventory.ps1'; Label = 'AGENTS.md live-ref guard (Issue #678)' }
-    )) {
-    $scriptPath = Join-Path $Root $check.Path
-    if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
-        & $scriptPath
-        if ($LASTEXITCODE -eq 0) {
-            Write-Check $check.Path 'PASS' 'completed'
-        }
-        else {
-            Write-Check $check.Path 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure ($check.Label + ' failed')
-        }
-    }
-    else {
-        Write-Check $check.Path 'FAIL' 'missing'
-        Add-Failure ('Missing ' + $check.Label + ' script')
-    }
 }
 
 $reviewerContractMappingCheck = Join-Path $Root 'scripts/check-reviewer-contract-mapping.ps1'

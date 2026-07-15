@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { managedChildRoles as survivors } from './supervisor-recovery.test-helpers.js';
 
 const repoRoot = join(import.meta.dirname, '..');
-const guardPath = join(repoRoot, 'scripts', 'check-vestigial-fleet-children-retired.ps1');
 const launchContractPath = join(repoRoot, 'scripts', 'check-side-process-launch-contract.ps1');
 const survivorSmokePath = join(repoRoot, 'scripts', 'side-process-launch-contract.test.ts');
 const listenerEvidencePath = join(
@@ -22,30 +21,8 @@ const retired = [
   ['ci-failure-notification-reaction', 'ci-failure-notification-reaction.ps1', ''],
   ['listener', 'orchestrator-wake-listener.ps1', 'listener-side-effect.lock'],
 ] as const;
-type GuardResult = {
-  status: 'pass' | 'fail';
-  retiredChildIds?: string[];
-  listenerDisposition?: string;
-  expectedNegativeCases?: number;
-  negativeCases?: number;
-  cleanCases?: number;
-  failures?: unknown[];
-};
-
 function readJson(path: string) {
   return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-function runGuard(...args: string[]) {
-  return spawnSync('pwsh', ['-NoProfile', '-File', guardPath, ...args], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    timeout: 120_000,
-  });
-}
-
-function parseGuardJson(stdout: string): GuardResult {
-  return JSON.parse(stdout.trim()) as GuardResult;
 }
 
 describe('vestigial fleet retirement (Issue #745 PR-A + PR-B)', () => {
@@ -124,24 +101,4 @@ describe('vestigial fleet retirement (Issue #745 PR-A + PR-B)', () => {
     expect(evidence.finalBaseProbe.observationWindowSeconds).toBeGreaterThanOrEqual(60);
   });
 
-  it('reintroduction guard passes on the real clean tree', () => {
-    const result = runGuard('-RepoRoot', repoRoot, '-Json');
-    expect(result.status, result.stderr || result.stdout).toBe(0);
-    const payload = parseGuardJson(result.stdout);
-    expect(payload.status).toBe('pass');
-    expect(payload.listenerDisposition).toBe('retire');
-    expect(payload.retiredChildIds).toEqual(retired.map(([id]) => id));
-    expect(payload.failures).toEqual([]);
-  });
-
-  it('negative matrix covers every retired child across registry and binding surfaces', () => {
-    const result = runGuard('-SelfTest', '-Json');
-    expect(result.status, result.stderr || result.stdout).toBe(0);
-    const payload = parseGuardJson(result.stdout);
-    expect(payload.status).toBe('pass');
-    expect(payload.cleanCases).toBe(1);
-    expect(payload.expectedNegativeCases).toBe(60);
-    expect(payload.negativeCases).toBe(60);
-    expect(payload.failures).toEqual([]);
-  });
 });

@@ -73,12 +73,18 @@
       "taxonomy": "d",
       "ownerWave": "wave-a",
       "owningIssue": "#830",
-      "disposition": "deferred",
-      "reason": "Gate or CI-lane surface; Wave A owns its framework and entrypoint migration.",
-      "goldenStatus": "none",
-      "parityTargets": [],
-      "parityTests": [],
-      "entrypointMode": "unchanged"
+      "disposition": "migrated",
+      "reason": "Ported by Wave A / Issue #830 to a custom TypeScript gate using the JSON-contract kernel; the PowerShell entrypoint was deleted and pre-delete parity is retained as historical evidence.",
+      "goldenStatus": "historical",
+      "parityTargets": [
+        "scripts/gate-runner/goldens/pre-delete-captures.json"
+      ],
+      "parityTests": [
+        "scripts/gate-runner/goldens.test.ts",
+        "scripts/gate-runner/custom/vestigial-fleet-retirement.test.ts"
+      ],
+      "entrypointMode": "removed",
+      "migratedModule": "scripts/gate-runner/custom/vestigial-fleet-retirement.ts"
     },
     {
       "path": "scripts/check-worker-message-submit-reconcile.ps1",

@@ -110,7 +110,7 @@ Verify:
 
 ```powershell
 pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
-pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
+node --experimental-strip-types scripts/gate-runner/runner.ts --repo-root . --json
 ```
 
 Expect the nine-child registry roster and no listener/heartbeat process. Trust watcher should log
@@ -154,7 +154,7 @@ worker PR/report/CI state
 | Check | Command / signal | Pass |
 |-------|------------------|------|
 | Fleet status | `orchestrator-wake-supervisor.ps1 -Action Status` | Nine registry children healthy |
-| Listener retired | `check-vestigial-fleet-children-retired.ps1 -Json` | `status: pass` |
+| Listener retired | `node --experimental-strip-types scripts/gate-runner/runner.ts --repo-root . --json` | `status: pass` |
 | Orchestrator alive | `ao status` | Not `stuck` / `probe_failure` on orchestrator row |
 | Review started | `Get-AoReviewRuns` / `ao-review list <session> --json` | New run after worker `ready_for_review` |
 | Command correct | `latestRun.body` (failure detail) on failed runs | Names wrapper matching `PACK_REVIEWER` (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |

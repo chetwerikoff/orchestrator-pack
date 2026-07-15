@@ -1,0 +1,3126 @@
+{
+  "version": 1,
+  "issue": 830,
+  "wave": "3.a",
+  "baseCommitSha": "b7394065b9ee1b046abb4cf29aff456df1935571",
+  "sourceHashes": {
+    "scripts/verify.ps1": "6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9",
+    "scripts/check-reusable.ps1": "dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb"
+  },
+  "populationCount": 283,
+  "counts": {
+    "check-reusable-behavior": 9,
+    "check-script": 117,
+    "verify-inline": 59,
+    "verify-script-member": 98
+  },
+  "entries": [
+    {
+      "id": "check-reusable:allow-no-git",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "if ($AllowNoGit) { exit 0 }",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "if ($AllowNoGit) { exit 0 }"
+      }
+    },
+    {
+      "id": "check-reusable:allowed-path-patterns",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "$allowedPathPatterns",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "$allowedPathPatterns"
+      }
+    },
+    {
+      "id": "check-reusable:allowed-root-patterns",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "$allowedRootPatterns",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "$allowedRootPatterns"
+      }
+    },
+    {
+      "id": "check-reusable:exception-patterns",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "$exceptionPatterns",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "$exceptionPatterns"
+      }
+    },
+    {
+      "id": "check-reusable:forbidden-patterns",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "$forbiddenPatterns",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "$forbiddenPatterns"
+      }
+    },
+    {
+      "id": "check-reusable:git-command-presence",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "git not found; cannot inspect tracked files.",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "git not found; cannot inspect tracked files."
+      }
+    },
+    {
+      "id": "check-reusable:tracked-file-enumeration",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "ls-files",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "ls-files"
+      }
+    },
+    {
+      "id": "check-reusable:violation-aggregation",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "$Violations.Count -gt 0",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "$Violations.Count -gt 0"
+      }
+    },
+    {
+      "id": "check-reusable:worktree-detection",
+      "sourceKind": "check-reusable-behavior",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "rev-parse --is-inside-work-tree",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-reusable.ps1",
+        "marker": "rev-parse --is-inside-work-tree"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-agent-rules-grep-inventory.ps1",
+      "marker": "check-agent-rules-grep-inventory.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "agent-rules-live-reference"
+      ]
+    },
+    {
+      "id": "check-script:scripts/check-agent-rules-line-budget.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-agent-rules-line-budget.ps1",
+      "marker": "check-agent-rules-line-budget.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "agent-rules-size-budget"
+      ]
+    },
+    {
+      "id": "check-script:scripts/check-agent-rules-moved-content.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-agent-rules-moved-content.ps1",
+      "marker": "check-agent-rules-moved-content.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "agent-rules-moved-content"
+      ]
+    },
+    {
+      "id": "check-script:scripts/check-agents-report-contract.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-agents-report-contract.ps1",
+      "marker": "check-agents-report-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-agents-report-contract.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-0-10-cli-capture-redaction.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
+      "marker": "check-ao-0-10-cli-capture-redaction.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-0-10-cli-capture-redaction.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-0-10-review-trigger.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-0-10-review-trigger.ps1",
+      "marker": "check-ao-0-10-review-trigger.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-0-10-review-trigger.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-capture-redaction-selftest.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-capture-redaction-selftest.ps1",
+      "marker": "check-ao-capture-redaction-selftest.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-capture-redaction-selftest.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-cli-argv-shape.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-cli-argv-shape.ps1",
+      "marker": "check-ao-cli-argv-shape.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-cli-argv-shape.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-dead-argv-bypass.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-dead-argv-bypass.ps1",
+      "marker": "check-ao-dead-argv-bypass.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-dead-argv-bypass.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-operator-upgrade-preflight.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-operator-upgrade-preflight.ps1",
+      "marker": "check-ao-operator-upgrade-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "docs/ao-0-10-operator-upgrade-runbook.md",
+        "marker": "check-ao-operator-upgrade-preflight.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-send-transport-contract.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-send-transport-contract.ps1",
+      "marker": "check-ao-send-transport-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".claude/skills/merge-with-local-adoption/SKILL.md",
+        "marker": "check-ao-send-transport-contract.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-session-adapter-project-filter.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-session-adapter-project-filter.ps1",
+      "marker": "check-ao-session-adapter-project-filter.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-session-adapter-project-filter.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ao-spawn-shape.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ao-spawn-shape.ps1",
+      "marker": "check-ao-spawn-shape.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ao-spawn-shape.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-audit-retention-guarded-dotsource.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-audit-retention-guarded-dotsource.ps1",
+      "marker": "check-audit-retention-guarded-dotsource.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-audit-retention-guarded-dotsource.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-auto-review-pr-context.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-auto-review-pr-context.ps1",
+      "marker": "check-auto-review-pr-context.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-auto-review-pr-context.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-capabilities.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-capabilities.ps1",
+      "marker": "check-autonomous-capabilities.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-autonomous-orchestrator-boundary.ps1",
+        "marker": "check-autonomous-capabilities.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-orchestrator-boundary.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-orchestrator-boundary.ps1",
+      "marker": "check-autonomous-orchestrator-boundary.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-autonomous-orchestrator-boundary.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-respawn-policy.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-respawn-policy.ps1",
+      "marker": "check-autonomous-respawn-policy.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-autonomous-respawn-policy.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-review-start-capabilities.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-review-start-capabilities.ps1",
+      "marker": "check-autonomous-review-start-capabilities.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-autonomous-review-start-capabilities.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-spawn-budget.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-spawn-budget.ps1",
+      "marker": "check-autonomous-spawn-budget.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-autonomous-spawn-budget.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-spawn-policy.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-spawn-policy.ps1",
+      "marker": "check-autonomous-spawn-policy.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-autonomous-spawn-policy.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-worker-nudge-capabilities-core.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-worker-nudge-capabilities-core.ps1",
+      "marker": "check-autonomous-worker-nudge-capabilities-core.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-autonomous-worker-nudge-capabilities.ps1",
+        "marker": "check-autonomous-worker-nudge-capabilities-core.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-autonomous-worker-nudge-capabilities.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-autonomous-worker-nudge-capabilities.ps1",
+      "marker": "check-autonomous-worker-nudge-capabilities.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-autonomous-worker-nudge-capabilities.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-cheap-wins.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-cheap-wins.ps1",
+      "marker": "check-ci-cheap-wins.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/scope-guard.yml",
+        "marker": "check-ci-cheap-wins.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-failure-notification-adoption.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-failure-notification-adoption.ps1",
+      "marker": "check-ci-failure-notification-adoption.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-ao-dead-argv-bypass.ps1",
+        "marker": "check-ci-failure-notification-adoption.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-failure-notification-reconcile.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-failure-notification-reconcile.ps1",
+      "marker": "check-ci-failure-notification-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ci-failure-notification-reconcile.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-failure-notification.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-failure-notification.ps1",
+      "marker": "check-ci-failure-notification.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ci-failure-notification.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-green-wake-reconcile.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-green-wake-reconcile.ps1",
+      "marker": "check-ci-green-wake-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-ci-green-wake-reconcile.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-pipeline-split-core.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-pipeline-split-core.ps1",
+      "marker": "check-ci-pipeline-split-core.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-ci-pipeline-split.ps1",
+        "marker": "check-ci-pipeline-split-core.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-ci-pipeline-split.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-ci-pipeline-split.ps1",
+      "marker": "check-ci-pipeline-split.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/scope-guard.yml",
+        "marker": "check-ci-pipeline-split.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-command-runtime-bootstrap.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-command-runtime-bootstrap.ps1",
+      "marker": "check-command-runtime-bootstrap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-command-runtime-bootstrap.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-command-runtime-forbidden-workaround.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-command-runtime-forbidden-workaround.ps1",
+      "marker": "check-command-runtime-forbidden-workaround.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-command-runtime-forbidden-workaround.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-contract-evidence-reverify.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-contract-evidence-reverify.ps1",
+      "marker": "check-contract-evidence-reverify.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-contract-evidence-reverify.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-coworker-delegation-threshold-drift.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-coworker-delegation-threshold-drift.ps1",
+      "marker": "check-coworker-delegation-threshold-drift.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-coworker-delegation-threshold-drift.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-cursor-agent-tui-shim.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-cursor-agent-tui-shim.ps1",
+      "marker": "check-cursor-agent-tui-shim.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-cursor-agent-tui-shim.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-dead-worker-reconcile.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-dead-worker-reconcile.ps1",
+      "marker": "check-dead-worker-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-dead-worker-reconcile.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-draft-author-relocation-contract.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-draft-author-relocation-contract.ps1",
+      "marker": "check-draft-author-relocation-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-draft-author-relocation-contract.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-draft-discipline.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-draft-discipline.ps1",
+      "marker": "check-draft-discipline.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-draft-discipline.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-draft-text-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-draft-text-guard.ps1",
+      "marker": "check-draft-text-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-stage-completeness-guard.ps1",
+        "marker": "check-draft-text-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-external-output-shape-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-external-output-shape-guard.ps1",
+      "marker": "check-external-output-shape-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-external-output-shape-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-finding-ledger-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-finding-ledger-guard.ps1",
+      "marker": "check-finding-ledger-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/finding-ledger-guard.test.ts",
+        "marker": "check-finding-ledger-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-fleet-hygiene-sentinel.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-fleet-hygiene-sentinel.ps1",
+      "marker": "check-fleet-hygiene-sentinel.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-fleet-hygiene-sentinel.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-gh-governor-chokepoint-inventory.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-gh-governor-chokepoint-inventory.ps1",
+      "marker": "check-gh-governor-chokepoint-inventory.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-gh-governor-chokepoint-inventory.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-gh-inventory-static.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-gh-inventory-static.ps1",
+      "marker": "check-gh-inventory-static.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-gh-inventory-static.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-gh-wrapper.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-gh-wrapper.ps1",
+      "marker": "check-gh-wrapper.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-gh-wrapper.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-github-fleet-cache-bypass.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-github-fleet-cache-bypass.ps1",
+      "marker": "check-github-fleet-cache-bypass.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-github-fleet-cache-bypass.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-github-fleet-repo-tick-coverage.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-github-fleet-repo-tick-coverage.ps1",
+      "marker": "check-github-fleet-repo-tick-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-github-fleet-repo-tick-coverage.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-harness-post-submit-pn-content-shape.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-harness-post-submit-pn-content-shape.ps1",
+      "marker": "check-harness-post-submit-pn-content-shape.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-harness-post-submit-pn-content-shape.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-harness-post-submit-pn-live-smoke.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-harness-post-submit-pn-live-smoke.ps1",
+      "marker": "check-harness-post-submit-pn-live-smoke.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/harness-pn-live-smoke.yml",
+        "marker": "check-harness-post-submit-pn-live-smoke.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-harness-review-bridge.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-harness-review-bridge.ps1",
+      "marker": "check-harness-review-bridge.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-harness-review-bridge.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-launch-argv-inventory.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-launch-argv-inventory.ps1",
+      "marker": "check-launch-argv-inventory.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-launch-argv-inventory.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-launch-failure.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-launch-failure.ps1",
+      "marker": "check-launch-failure.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/check-orchestrator-launch-failure.ps1",
+        "marker": "check-launch-failure.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-merge-triage-gate.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-merge-triage-gate.ps1",
+      "marker": "check-merge-triage-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-merge-triage-gate.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-no-report-audit-bind.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-no-report-audit-bind.ps1",
+      "marker": "check-no-report-audit-bind.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-no-report-audit-bind.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-operator-adoption-example.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-operator-adoption-example.ps1",
+      "marker": "check-operator-adoption-example.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-operator-adoption-example.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-claimed-review-run.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-claimed-review-run.ps1",
+      "marker": "check-orchestrator-claimed-review-run.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-claimed-review-run.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-escalation-catalog.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-escalation-catalog.ps1",
+      "marker": "check-orchestrator-escalation-catalog.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-escalation-catalog.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-escalation-emitters.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-escalation-emitters.ps1",
+      "marker": "check-orchestrator-escalation-emitters.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-escalation-emitters.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-launch-failure.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-launch-failure.ps1",
+      "marker": "check-orchestrator-launch-failure.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-launch-failure.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-message-registry.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-message-registry.ps1",
+      "marker": "check-orchestrator-message-registry.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-message-registry.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-review-empty-trap.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-review-empty-trap.ps1",
+      "marker": "check-orchestrator-review-empty-trap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-review-empty-trap.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-review-head-coverage.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-review-head-coverage.ps1",
+      "marker": "check-orchestrator-review-head-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-review-head-coverage.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-review-head-ready.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-review-head-ready.ps1",
+      "marker": "check-orchestrator-review-head-ready.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-review-head-ready.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-review-idempotency.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-review-idempotency.ps1",
+      "marker": "check-orchestrator-review-idempotency.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-review-idempotency.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-rules-quotes.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-rules-quotes.ps1",
+      "marker": "check-orchestrator-rules-quotes.ps1",
+      "classification": "retired-with-justification",
+      "retirementJustification": {
+        "reasonCode": "dead-legacy-surface",
+        "behavior": "The guard only rejects double-quote characters inside the legacy-import-only orchestratorRules example; AO 0.10.2 worker policy is delivered from AGENTS.md and runtime side-process scripts do not consume this quoting constraint.",
+        "replacement": "No replacement gate is required; AGENTS.md delivery, executable side-process contracts, and their dedicated checks cover the live behavior."
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-wake-fyi-retired.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-wake-fyi-retired.ps1",
+      "marker": "check-orchestrator-wake-fyi-retired.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-wake-fyi-retired.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-wake-heartbeat-retired.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-wake-heartbeat-retired.ps1",
+      "marker": "check-orchestrator-wake-heartbeat-retired.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-wake-heartbeat-retired.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-orchestrator-wake-supervisor-gh-path.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-orchestrator-wake-supervisor-gh-path.ps1",
+      "marker": "check-orchestrator-wake-supervisor-gh-path.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-orchestrator-wake-supervisor-gh-path.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-pack-reviewer-persistent-env.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-pack-reviewer-persistent-env.ps1",
+      "marker": "check-pack-reviewer-persistent-env.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-pack-reviewer-persistent-env.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-pack-reviewer-selector.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-pack-reviewer-selector.ps1",
+      "marker": "check-pack-reviewer-selector.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-pack-reviewer-selector.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-powershell-pid-param-static.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-powershell-pid-param-static.ps1",
+      "marker": "check-powershell-pid-param-static.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-powershell-pid-param-static.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-pr-session-binding-cache-first.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-pr-session-binding-cache-first.ps1",
+      "marker": "check-pr-session-binding-cache-first.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-pr-session-binding-cache-first.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-read-delegation-audit-ci-gate.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-read-delegation-audit-ci-gate.ps1",
+      "marker": "check-read-delegation-audit-ci-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/read-delegation-audit.yml",
+        "marker": "check-read-delegation-audit-ci-gate.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-read-delegation-policy-consistency.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-read-delegation-policy-consistency.ps1",
+      "marker": "check-read-delegation-policy-consistency.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/read-delegation-audit.yml",
+        "marker": "check-read-delegation-policy-consistency.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-reusable.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-reusable.ps1",
+      "marker": "check-reusable.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-reusable.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-010-vocabulary.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-010-vocabulary.ps1",
+      "marker": "check-review-010-vocabulary.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-010-vocabulary.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-bulk-send-diagnose.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-bulk-send-diagnose.ps1",
+      "marker": "check-review-bulk-send-diagnose.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-bulk-send-diagnose.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-command-not-ao.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-command-not-ao.ps1",
+      "marker": "check-review-command-not-ao.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-command-not-ao.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-command-preflight.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-command-preflight.ps1",
+      "marker": "check-review-command-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-command-preflight.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-cycle-cap.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-cycle-cap.ps1",
+      "marker": "check-review-cycle-cap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-cycle-cap.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-delivery-no-visibility-poll.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-delivery-no-visibility-poll.ps1",
+      "marker": "check-review-delivery-no-visibility-poll.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-delivery-no-visibility-poll.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-head-ready-report-binding.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-head-ready-report-binding.ps1",
+      "marker": "check-review-head-ready-report-binding.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-head-ready-report-binding.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-pipeline-spawn-budget.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-pipeline-spawn-budget.ps1",
+      "marker": "check-review-pipeline-spawn-budget.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-pipeline-spawn-budget.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-producer-contract.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-producer-contract.ps1",
+      "marker": "check-review-producer-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-producer-contract.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-ready-report-state-seed.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-ready-report-state-seed.ps1",
+      "marker": "check-review-ready-report-state-seed.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-ready-report-state-seed.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-ready-stuck-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-ready-stuck-guard.ps1",
+      "marker": "check-review-ready-stuck-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-ready-stuck-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-send-reconcile.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-send-reconcile.ps1",
+      "marker": "check-review-send-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-send-reconcile.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-start-claim-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-start-claim-guard.ps1",
+      "marker": "check-review-start-claim-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/scope-guard.yml",
+        "marker": "check-review-start-claim-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-start-envelope-ledger-starter-surfaces.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-start-envelope-ledger-starter-surfaces.ps1",
+      "marker": "check-review-start-envelope-ledger-starter-surfaces.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-start-envelope-ledger-starter-surfaces.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-status-consumers.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-status-consumers.ps1",
+      "marker": "check-review-status-consumers.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-status-consumers.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-trigger-reconcile.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-trigger-reconcile.ps1",
+      "marker": "check-review-trigger-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-trigger-reconcile.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-trigger-reeval.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-trigger-reeval.ps1",
+      "marker": "check-review-trigger-reeval.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-trigger-reeval.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-wake-trigger.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-wake-trigger.ps1",
+      "marker": "check-review-wake-trigger.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-review-wake-trigger.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-reviewer-contract-mapping.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-reviewer-contract-mapping.ps1",
+      "marker": "check-reviewer-contract-mapping.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-reviewer-contract-mapping.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-reviewer-failure-evidence.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-reviewer-failure-evidence.ps1",
+      "marker": "check-reviewer-failure-evidence.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-reviewer-failure-evidence.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-reviewer-workspace-preflight.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-reviewer-workspace-preflight.ps1",
+      "marker": "check-reviewer-workspace-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-reviewer-workspace-preflight.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-rtk-passthrough-static.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-rtk-passthrough-static.ps1",
+      "marker": "check-rtk-passthrough-static.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-rtk-passthrough-static.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-run-pack-review-args.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-run-pack-review-args.ps1",
+      "marker": "check-run-pack-review-args.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-run-pack-review-args.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-scripted-review-confirmed-delivery-gate.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-scripted-review-confirmed-delivery-gate.ps1",
+      "marker": "check-scripted-review-confirmed-delivery-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-scripted-review-confirmed-delivery-gate.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-seed-snapshot-failure-bounded-read-economy.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-seed-snapshot-failure-bounded-read-economy.ps1",
+      "marker": "check-seed-snapshot-failure-bounded-read-economy.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-seed-snapshot-failure-bounded-read-economy.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-session-pr-binding-sole-path.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-session-pr-binding-sole-path.ps1",
+      "marker": "check-session-pr-binding-sole-path.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-session-pr-binding-sole-path.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-side-process-launch-contract.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-side-process-launch-contract.ps1",
+      "marker": "check-side-process-launch-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-side-process-launch-contract.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-side-process-registry-709-711-sequencing.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-side-process-registry-709-711-sequencing.ps1",
+      "marker": "check-side-process-registry-709-711-sequencing.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-side-process-registry-709-711-sequencing.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-side-process-state-coverage.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-side-process-state-coverage.ps1",
+      "marker": "check-side-process-state-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-side-process-state-coverage.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-skill-pointer-drift.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-skill-pointer-drift.ps1",
+      "marker": "check-skill-pointer-drift.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-skill-pointer-drift.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-stage-completeness-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-stage-completeness-guard.ps1",
+      "marker": "check-stage-completeness-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".claude/skills/create-issue-draft/SKILL.md",
+        "marker": "check-stage-completeness-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-supervisor-test-wait-inventory.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-supervisor-test-wait-inventory.ps1",
+      "marker": "check-supervisor-test-wait-inventory.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json",
+        "marker": "check-supervisor-test-wait-inventory.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-terminal-flood-detect.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-terminal-flood-detect.ps1",
+      "marker": "check-terminal-flood-detect.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-terminal-flood-detect.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-tier-calibration-consistency.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-tier-calibration-consistency.ps1",
+      "marker": "check-tier-calibration-consistency.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-tier-calibration-consistency.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-tier-gate-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-tier-gate-guard.ps1",
+      "marker": "check-tier-gate-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/draft-discipline.test.ts",
+        "marker": "check-tier-gate-guard.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-verify-runtime.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-verify-runtime.ps1",
+      "marker": "check-verify-runtime.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": ".github/workflows/scope-guard.yml",
+        "marker": "check-verify-runtime.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-vestigial-fleet-children-retired.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-vestigial-fleet-children-retired.ps1",
+      "marker": "check-vestigial-fleet-children-retired.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "vestigial-fleet-retirement"
+      ]
+    },
+    {
+      "id": "check-script:scripts/check-wake-supervisor-fleet-doc-coverage.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-wake-supervisor-fleet-doc-coverage.ps1",
+      "marker": "check-wake-supervisor-fleet-doc-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-wake-supervisor-fleet-doc-coverage.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-worker-launch-failure.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-worker-launch-failure.ps1",
+      "marker": "check-worker-launch-failure.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-worker-launch-failure.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-worker-message-submit-reconcile.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-worker-message-submit-reconcile.ps1",
+      "marker": "check-worker-message-submit-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-worker-message-submit-reconcile.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-worker-nudge-gate.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-worker-nudge-gate.ps1",
+      "marker": "check-worker-nudge-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-worker-nudge-gate.ps1"
+      }
+    },
+    {
+      "id": "check-script:scripts/check-worker-status-decision-reads.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-worker-status-decision-reads.ps1",
+      "marker": "check-worker-status-decision-reads.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "check-worker-status-decision-reads.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:ao",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "ao",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "ao"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:codex",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "codex",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "codex"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:cursor",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "cursor",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "cursor"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:gh",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "gh",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "gh"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:git",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "git",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "git"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:node",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "node",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "node"
+      }
+    },
+    {
+      "id": "verify-inline:command-version:npm",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "npm",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "npm"
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-codex-pr-reviewer/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md'",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md'"
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-scope-guard/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-scope-guard/README.md'",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "Test-ContractMarkers 'plugins/ao-scope-guard/README.md'"
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-task-declaration/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-task-declaration/README.md'",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "Test-ContractMarkers 'plugins/ao-task-declaration/README.md'"
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-token-chain-ledger/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md'",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md'"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:.gitattributes",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": ".gitattributes",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": ".gitattributes"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:.github/workflows/scope-guard.yml",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": ".github/workflows/scope-guard.yml",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": ".github/workflows/scope-guard.yml"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:.gitignore",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": ".gitignore",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": ".gitignore"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:AGENTS.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "AGENTS.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "AGENTS.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "README.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:agent-orchestrator.yaml.example",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "agent-orchestrator.yaml.example",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "agent-orchestrator.yaml.example"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/architecture.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/architecture.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "docs/architecture.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/github_issues_cursor_codex_setup.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/github_issues_cursor_codex_setup.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "docs/github_issues_cursor_codex_setup.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/migration_notes.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/migration_notes.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "docs/migration_notes.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/repository_policy.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/repository_policy.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "docs/repository_policy.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/README.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "plugins/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-codex-pr-reviewer/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-codex-pr-reviewer/README.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "plugins/ao-codex-pr-reviewer/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-scope-guard/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-scope-guard/README.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "plugins/ao-scope-guard/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-task-declaration/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-task-declaration/README.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "plugins/ao-task-declaration/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-token-chain-ledger/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-token-chain-ledger/README.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "plugins/ao-token-chain-ledger/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:prompts/self_architect_check.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "prompts/self_architect_check.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "prompts/self_architect_check.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/bootstrap.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/bootstrap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/bootstrap.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/check-reusable.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-reusable.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-reusable.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/install-git-hooks.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/install-git-hooks.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/install-git-hooks.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/lint-self-architect.config.json",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/lint-self-architect.config.json",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/lint-self-architect.config.json"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/lint-self-architect.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/lint-self-architect.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/lint-self-architect.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/verify.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/verify.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/verify.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:contract-evidence/manifest-integrity",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "contract-evidence/manifest-integrity",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "contract-evidence/manifest-integrity"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:draft-discipline/surfaces",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "draft-discipline/surfaces",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "draft-discipline/surfaces"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:gh auth status",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "gh auth status",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "gh auth status"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:operator-adoption/missing-pairing",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "operator-adoption/missing-pairing",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "operator-adoption/missing-pairing"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:operator-adoption/paired-migration-notes",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "operator-adoption/paired-migration-notes",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "operator-adoption/paired-migration-notes"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:operator-adoption/skip-no-example",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "operator-adoption/skip-no-example",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "operator-adoption/skip-no-example"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:operator-adoption/waiver-line",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "operator-adoption/waiver-line",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "operator-adoption/waiver-line"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:prompts/*.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "prompts/*.md",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "prompts/*.md"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:scripts/check-ci-job-timeouts.mjs",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ci-job-timeouts.mjs",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ci-job-timeouts.mjs"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:scripts/invoke-pack-review-strict-gate.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/invoke-pack-review-strict-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/invoke-pack-review-strict-gate.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:scripts/orchestrator-command-runtime-preflight.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/orchestrator-command-runtime-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/orchestrator-command-runtime-preflight.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:scripts/orchestrator-review-start-preflight.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/orchestrator-review-start-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/orchestrator-review-start-preflight.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:scripts/worker-nudge-gate-preflight.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/worker-nudge-gate-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/worker-nudge-gate-preflight.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:strict review gate scripts",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "strict review gate scripts",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "strict review gate scripts"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/ao-spawn-shape-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/ao-spawn-shape-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/ao-spawn-shape-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/autonomous-interposer-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/autonomous-interposer-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/autonomous-interposer-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/autonomous-spawn-budget-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/autonomous-spawn-budget-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/autonomous-spawn-budget-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/autonomous-spawn-policy-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/autonomous-spawn-policy-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/autonomous-spawn-policy-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/autonomous-spawn-worktree-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/autonomous-spawn-worktree-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/autonomous-spawn-worktree-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/contract-evidence-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/contract-evidence-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/contract-evidence-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/cursor-agent-tui-shim-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/cursor-agent-tui-shim-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/cursor-agent-tui-shim-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/gh-wrapper-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/gh-wrapper-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/gh-wrapper-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/github-fleet-cache-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/github-fleet-cache-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/github-fleet-cache-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/review-pipeline-spawn-budget-vitest",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/review-pipeline-spawn-budget-vitest",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/review-pipeline-spawn-budget-vitest"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:verify-runtime/test-backed-smoke",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "verify-runtime/test-backed-smoke",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "verify-runtime/test-backed-smoke"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:worker-launch-failure/quote-dense-body",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "worker-launch-failure/quote-dense-body",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "worker-launch-failure/quote-dense-body"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-agent-rules-grep-inventory.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "agent-rules-live-reference"
+      ]
+    },
+    {
+      "id": "verify-script:scripts/check-agent-rules-line-budget.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-agent-rules-line-budget.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "agent-rules-size-budget"
+      ]
+    },
+    {
+      "id": "verify-script:scripts/check-agent-rules-moved-content.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-agent-rules-moved-content.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "agent-rules-moved-content"
+      ]
+    },
+    {
+      "id": "verify-script:scripts/check-agents-report-contract.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-agents-report-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-agents-report-contract.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-0-10-cli-capture-redaction.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-0-10-cli-capture-redaction.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-0-10-review-trigger.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-0-10-review-trigger.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-0-10-review-trigger.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-capture-redaction-selftest.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-capture-redaction-selftest.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-capture-redaction-selftest.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-cli-argv-shape.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-cli-argv-shape.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-cli-argv-shape.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-dead-argv-bypass.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-dead-argv-bypass.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-dead-argv-bypass.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-session-adapter-project-filter.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-session-adapter-project-filter.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-session-adapter-project-filter.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ao-spawn-shape.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ao-spawn-shape.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ao-spawn-shape.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-audit-retention-guarded-dotsource.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-audit-retention-guarded-dotsource.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-audit-retention-guarded-dotsource.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-auto-review-pr-context.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-auto-review-pr-context.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-auto-review-pr-context.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-autonomous-orchestrator-boundary.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-autonomous-orchestrator-boundary.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-autonomous-orchestrator-boundary.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-autonomous-respawn-policy.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-autonomous-respawn-policy.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-autonomous-respawn-policy.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-autonomous-review-start-capabilities.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-autonomous-review-start-capabilities.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-autonomous-review-start-capabilities.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-autonomous-spawn-budget.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-autonomous-spawn-budget.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-autonomous-spawn-budget.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-autonomous-spawn-policy.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-autonomous-spawn-policy.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-autonomous-spawn-policy.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-autonomous-worker-nudge-capabilities.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-autonomous-worker-nudge-capabilities.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-autonomous-worker-nudge-capabilities.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ci-failure-notification-reconcile.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ci-failure-notification-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ci-failure-notification-reconcile.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ci-failure-notification.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ci-failure-notification.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ci-failure-notification.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-ci-green-wake-reconcile.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-ci-green-wake-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-ci-green-wake-reconcile.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-command-runtime-bootstrap.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-command-runtime-bootstrap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-command-runtime-bootstrap.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-command-runtime-forbidden-workaround.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-command-runtime-forbidden-workaround.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-command-runtime-forbidden-workaround.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-contract-evidence-reverify.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-contract-evidence-reverify.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-contract-evidence-reverify.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-coworker-delegation-threshold-drift.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-coworker-delegation-threshold-drift.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-coworker-delegation-threshold-drift.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-cursor-agent-tui-shim.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-cursor-agent-tui-shim.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-cursor-agent-tui-shim.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-dead-worker-reconcile.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-dead-worker-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-dead-worker-reconcile.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-draft-author-relocation-contract.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-draft-author-relocation-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-draft-author-relocation-contract.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-draft-discipline.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-draft-discipline.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-draft-discipline.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-external-output-shape-guard.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-external-output-shape-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-external-output-shape-guard.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-fleet-hygiene-sentinel.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-fleet-hygiene-sentinel.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-fleet-hygiene-sentinel.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-gh-governor-chokepoint-inventory.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-gh-governor-chokepoint-inventory.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-gh-governor-chokepoint-inventory.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-gh-inventory-static.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-gh-inventory-static.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-gh-inventory-static.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-gh-wrapper.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-gh-wrapper.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-gh-wrapper.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-github-fleet-cache-bypass.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-github-fleet-cache-bypass.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-github-fleet-cache-bypass.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-github-fleet-repo-tick-coverage.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-github-fleet-repo-tick-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-github-fleet-repo-tick-coverage.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-harness-post-submit-pn-content-shape.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-harness-post-submit-pn-content-shape.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-harness-post-submit-pn-content-shape.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-harness-review-bridge.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-harness-review-bridge.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-harness-review-bridge.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-launch-argv-inventory.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-launch-argv-inventory.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-launch-argv-inventory.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-merge-triage-gate.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-merge-triage-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-merge-triage-gate.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-no-report-audit-bind.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-no-report-audit-bind.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-no-report-audit-bind.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-operator-adoption-example.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-operator-adoption-example.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-operator-adoption-example.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-claimed-review-run.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-claimed-review-run.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-claimed-review-run.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-escalation-catalog.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-escalation-catalog.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-escalation-catalog.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-escalation-emitters.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-escalation-emitters.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-escalation-emitters.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-launch-failure.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-launch-failure.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-launch-failure.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-message-registry.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-message-registry.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-message-registry.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-review-empty-trap.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-review-empty-trap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-review-empty-trap.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-review-head-coverage.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-review-head-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-review-head-coverage.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-review-head-ready.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-review-head-ready.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-review-head-ready.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-review-idempotency.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-review-idempotency.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-review-idempotency.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-rules-quotes.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-rules-quotes.ps1",
+      "classification": "retired-with-justification",
+      "retirementJustification": {
+        "reasonCode": "dead-legacy-surface",
+        "behavior": "The guard only rejects double-quote characters inside the legacy-import-only orchestratorRules example; AO 0.10.2 worker policy is delivered from AGENTS.md and runtime side-process scripts do not consume this quoting constraint.",
+        "replacement": "No replacement gate is required; AGENTS.md delivery, executable side-process contracts, and their dedicated checks cover the live behavior."
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-wake-fyi-retired.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-wake-fyi-retired.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-wake-fyi-retired.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-wake-heartbeat-retired.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-wake-heartbeat-retired.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-wake-heartbeat-retired.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-orchestrator-wake-supervisor-gh-path.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-orchestrator-wake-supervisor-gh-path.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-orchestrator-wake-supervisor-gh-path.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-pack-reviewer-persistent-env.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-pack-reviewer-persistent-env.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-pack-reviewer-persistent-env.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-pack-reviewer-selector.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-pack-reviewer-selector.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-pack-reviewer-selector.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-powershell-pid-param-static.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-powershell-pid-param-static.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-powershell-pid-param-static.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-pr-session-binding-cache-first.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-pr-session-binding-cache-first.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-pr-session-binding-cache-first.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-reusable.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-reusable.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-reusable.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-010-vocabulary.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-010-vocabulary.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-010-vocabulary.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-bulk-send-diagnose.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-bulk-send-diagnose.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-bulk-send-diagnose.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-command-not-ao.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-command-not-ao.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-command-not-ao.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-command-preflight.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-command-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-command-preflight.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-cycle-cap.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-cycle-cap.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-cycle-cap.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-delivery-no-visibility-poll.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-delivery-no-visibility-poll.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-delivery-no-visibility-poll.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-head-ready-report-binding.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-head-ready-report-binding.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-head-ready-report-binding.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-pipeline-spawn-budget.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-pipeline-spawn-budget.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-pipeline-spawn-budget.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-producer-contract.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-producer-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-producer-contract.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-ready-report-state-seed.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-ready-report-state-seed.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-ready-report-state-seed.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-ready-stuck-guard.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-ready-stuck-guard.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-ready-stuck-guard.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-send-reconcile.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-send-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-send-reconcile.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-start-envelope-ledger-starter-surfaces.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-start-envelope-ledger-starter-surfaces.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-start-envelope-ledger-starter-surfaces.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-status-consumers.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-status-consumers.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-status-consumers.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-trigger-reconcile.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-trigger-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-trigger-reconcile.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-trigger-reeval.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-trigger-reeval.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-trigger-reeval.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-wake-trigger.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-wake-trigger.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-review-wake-trigger.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-reviewer-contract-mapping.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-reviewer-contract-mapping.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-reviewer-contract-mapping.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-reviewer-failure-evidence.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-reviewer-failure-evidence.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-reviewer-failure-evidence.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-reviewer-workspace-preflight.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-reviewer-workspace-preflight.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-reviewer-workspace-preflight.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-rtk-passthrough-static.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-rtk-passthrough-static.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-rtk-passthrough-static.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-run-pack-review-args.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-run-pack-review-args.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-run-pack-review-args.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-scripted-review-confirmed-delivery-gate.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-scripted-review-confirmed-delivery-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-scripted-review-confirmed-delivery-gate.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-seed-snapshot-failure-bounded-read-economy.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-seed-snapshot-failure-bounded-read-economy.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-seed-snapshot-failure-bounded-read-economy.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-session-pr-binding-sole-path.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-session-pr-binding-sole-path.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-session-pr-binding-sole-path.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-side-process-launch-contract.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-side-process-launch-contract.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-side-process-launch-contract.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-side-process-registry-709-711-sequencing.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-side-process-registry-709-711-sequencing.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-side-process-registry-709-711-sequencing.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-side-process-state-coverage.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-side-process-state-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-side-process-state-coverage.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-skill-pointer-drift.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-skill-pointer-drift.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-skill-pointer-drift.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-terminal-flood-detect.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-terminal-flood-detect.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-terminal-flood-detect.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-tier-calibration-consistency.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-tier-calibration-consistency.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-tier-calibration-consistency.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-vestigial-fleet-children-retired.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-vestigial-fleet-children-retired.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "vestigial-fleet-retirement"
+      ]
+    },
+    {
+      "id": "verify-script:scripts/check-wake-supervisor-fleet-doc-coverage.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-wake-supervisor-fleet-doc-coverage.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-wake-supervisor-fleet-doc-coverage.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-worker-launch-failure.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-worker-launch-failure.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-worker-launch-failure.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-worker-message-submit-reconcile.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-worker-message-submit-reconcile.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-worker-message-submit-reconcile.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-worker-nudge-gate.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-worker-nudge-gate.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-worker-nudge-gate.ps1"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-worker-status-decision-reads.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-worker-status-decision-reads.ps1",
+      "classification": "still-enforced-by-legacy",
+      "legacyReference": {
+        "path": "scripts/verify.ps1",
+        "marker": "scripts/check-worker-status-decision-reads.ps1"
+      }
+    }
+  ]
+}

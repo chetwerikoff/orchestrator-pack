@@ -998,8 +998,7 @@ argv and the orchestrator session fails at launch with `error: unknown option
    merging into live `agent-orchestrator.yaml`.
 3. Restart AO after merge: `ao stop` then `ao start`.
 
-Regression guard: `scripts/check-orchestrator-rules-quotes.ps1` (also run from
-`scripts/verify.ps1`).
+Issue #830 retires the quote-only `orchestratorRules` guard because this block is legacy-import reference material, not an executable AO 0.10.2 policy surface. Live behavior remains covered by AGENTS.md delivery and script-owned review gates.
 
 ### AO local review preflight and failed runs (Issue #60)
 
@@ -1054,8 +1053,7 @@ custom `[PROMPT]` as mutually exclusive. The pack wrapper scopes via prompt text
 spawns (operator `~/.codex/config.toml`, e.g. `[windows] sandbox = unelevated`).
 Otherwise Codex may return an empty review without inspecting the diff.
 
-Regression guards: `scripts/check-review-command-preflight.ps1`,
-`scripts/check-orchestrator-rules-quotes.ps1` (via `scripts/verify.ps1`).
+Regression guard: `scripts/check-review-command-preflight.ps1`. The former quote-only `orchestratorRules` guard was retired by Issue #830 as non-proving legacy-reference validation.
 
 ### Respawn-induced review disarray (Issue #98)
 

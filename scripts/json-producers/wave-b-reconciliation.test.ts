@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
@@ -16,14 +16,19 @@ const repoRoot = resolve('.');
 function realInput(): ReconciliationInput {
   const inventory = loadWaveBInventory(repoRoot);
   const modules = discoverPortedProducerModules(repoRoot);
-  const paths = new Set(inventory.rows.flatMap((row) => [row.path, row.migratedModule, ...row.parityTargets, ...row.parityTests].filter(Boolean) as string[]));
+  const paths = new Set(inventory.rows
+    .flatMap((row) => [row.path, row.migratedModule, ...row.parityTargets, ...row.parityTests].filter(Boolean) as string[])
+    .filter((path) => existsSync(resolve(repoRoot, path))));
   const fileSources = Object.fromEntries(
     [...new Set([...inventory.rows.map((row) => row.path), ...modules])]
+      .filter((path) => existsSync(resolve(repoRoot, path)))
       .map((path) => [path, readFileSync(resolve(repoRoot, path), 'utf8')]),
   );
   return {
     inventory,
-    discoveredPowerShellProducers: inventory.rows.filter((row) => row.sourceKind === 'powershell-json-producer').map((row) => row.path),
+    discoveredPowerShellProducers: inventory.rows
+      .filter((row) => row.sourceKind === 'powershell-json-producer' && row.entrypointMode !== 'removed')
+      .map((row) => row.path),
     discoveredPortedModules: modules,
     fileSources,
     existingPaths: paths,
@@ -44,7 +49,7 @@ describe('Wave B producer inventory reconciliation', () => {
 
   test('fails when a discovered PowerShell producer is missing', () => {
     const input = realInput();
-    const missing = input.inventory.rows.find((row) => row.sourceKind === 'powershell-json-producer')!;
+    const missing = input.inventory.rows.find((row) => row.sourceKind === 'powershell-json-producer' && row.entrypointMode !== 'removed')!;
     const inventory = mutateInventory(input.inventory, input.inventory.rows.filter((row) => row.path !== missing.path));
     expect(reconcileWaveBInventory({ ...input, inventory })).toContain(`${missing.path}: reachable JSON-producing PowerShell script is absent from inventory`);
   });

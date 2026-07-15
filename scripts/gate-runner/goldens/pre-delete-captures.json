@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "issue": 830,
+  "baseCommitSha": "b7394065b9ee1b046abb4cf29aff456df1935571",
+  "captures": [
+    {
+      "gateId": "agent-rules-live-reference",
+      "legacyScript": "scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceBlobSha": "31951d82cc22bb34d88c50e422052116fc6cbb3f",
+      "case": "pre-change-real-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agent-rules-grep-inventory.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] live references to retired agent_rules.md:\n - .cursor/rules/github-rest-over-graphql.mdc references retired agent_rules.md\n",
+      "artifacts": [],
+      "parityDisposition": "known false positive: generated global Cursor hint is superseded by pack policy and explicitly excluded by the TypeScript port"
+    },
+    {
+      "gateId": "agent-rules-live-reference",
+      "legacyScript": "scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceBlobSha": "31951d82cc22bb34d88c50e422052116fc6cbb3f",
+      "case": "clean-fixture",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agent-rules-grep-inventory.ps1",
+        "-RepoRoot",
+        "<fixture>"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] no live normative references to agent_rules.md\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-live-reference",
+      "legacyScript": "scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceBlobSha": "31951d82cc22bb34d88c50e422052116fc6cbb3f",
+      "case": "forbidden-reference",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agent-rules-grep-inventory.ps1",
+        "-RepoRoot",
+        "<fixture>"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] live references to retired agent_rules.md:\n - README.md references retired agent_rules.md\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-size-budget",
+      "legacyScript": "scripts/check-agent-rules-line-budget.ps1",
+      "sourceBlobSha": "4f8723a3e15763aec5f0a2fb795636eccc7e54ee",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agent-rules-line-budget.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] AGENTS.md size budget (450 lines, 28418 bytes)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-moved-content",
+      "legacyScript": "scripts/check-agent-rules-moved-content.ps1",
+      "sourceBlobSha": "d79be79cb0895f9a6c8ce0f49817333afa575901",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agent-rules-moved-content.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] AGENTS.md moved-content guard (split layout and stable titles)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "vestigial-fleet-retirement",
+      "legacyScript": "scripts/check-vestigial-fleet-children-retired.ps1",
+      "sourceBlobSha": "348c1993c7090355072f9a9428c274fe0154be24",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-vestigial-fleet-children-retired.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 0,
+      "stdout": "vestigial fleet retirement guard: PASS\n",
+      "artifacts": []
+    }
+  ]
+}

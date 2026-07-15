@@ -82,7 +82,7 @@ The authoritative fleet checks are:
 
 ```powershell
 pwsh -NoProfile -File scripts/check-side-process-launch-contract.ps1
-pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
+node --experimental-strip-types scripts/gate-runner/runner.ts --repo-root . --json
 pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
 ```
 
