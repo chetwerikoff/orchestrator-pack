@@ -9,7 +9,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { runProcess, type ProcessResult } from './kernel/subprocess.js';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -22,7 +22,7 @@ import {
   updatePackReviewRun,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
-} from './lib/pack-review-run-store.ts';
+} from './lib/pack-review-run-store.js';
 
 interface StartInput {
   projectId?: string;
