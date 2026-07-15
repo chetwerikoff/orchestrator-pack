@@ -1,0 +1,10 @@
+{
+  "sourceCommand": "gh api repos/chetwerikoff/orchestrator-pack/pulls/751 --jq '{number: .number, mergeable: .mergeable, mergeable_state: .mergeable_state, head: {sha: .head.sha}, base: {ref: .base.ref}}'",
+  "toolVersion": "gh 2.x",
+  "capturedAt": "2026-07-12T05:45:52.000Z",
+  "context": "REST pulls/{n} mergeable/mergeable_state field shape for scripts/vitest-runtime-history-delivery.mjs evaluateDeliveryState (draft 270 / Issue #731 follow-up). Grounds that GitHub emits mergeable (boolean) and mergeable_state (string enum) on this endpoint in production.",
+  "scrubLog": [
+    "PR #751 is a real, currently-open pack PR at capture time; only number/mergeable/mergeable_state/head.sha/base.ref were retained, all non-sensitive.",
+    "OPEN ITEM (flagged for architect): no currently-open PR in this repo has mergeable_state == 'dirty' at authoring time, so the specific self-heal trigger value this draft targets has no live capture. mergeable_state == 'dirty' is a GitHub-documented enum value (https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request); draft 270's positive-outcome fixture for the dirty/self-heal branch must be marked provenance: sample-backed (not capture-backed) until a live 'dirty' sample is captured opportunistically."
+  ]
+}
