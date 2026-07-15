@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -22,6 +23,12 @@ type Obj = Record<string, unknown>;
 type Binding = { sessionId: string; prNumber: number; headSha?: string | null; repoSlug?: string; issueNumber?: number | null };
 type Finding = { title?: string; body?: string; filePath?: string };
 type Verdict = { verdict: 'clean' | 'findings'; findingCount: number; findings: Finding[] };
+type ClaimLease = {
+  acquired: boolean;
+  reason: string;
+  directory: string;
+  release: (action: 'run_started' | 'failure', reviewRuns: PackReviewRunRecord[], detail?: string) => Promise<void>;
+};
 
 const RUNNER = 'scripts/pack-review-runner.ts';
 const REVIEWER = 'scripts/invoke-pack-review.ps1';
@@ -120,18 +127,87 @@ async function target(input: StartPackReviewInput, trustedRoot: string) {
   return { prNumber, headSha, sessionId, issueNumber: binding?.issueNumber ? Number(binding.issueNumber) : undefined, repoSlug: slug, sourceRepoRoot };
 }
 
-function jsonLine(output: string, label: string): Obj {
-  for (const line of output.trim().split(/\r?\n/).reverse()) {
-    try { const value = JSON.parse(line) as unknown; if (value && typeof value === 'object' && !Array.isArray(value)) return value as Obj; } catch { /* next */ }
+const CLAIM_LEASE_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+. $env:PACK_REVIEW_CLAIM_LIB
+$runsRaw = Get-Content -LiteralPath $env:PACK_REVIEW_CLAIM_RUNS -Raw -Encoding UTF8
+$runsParsed = if ($runsRaw.Trim()) { $runsRaw | ConvertFrom-Json } else { @() }
+$runs = @($runsParsed)
+$claim = Acquire-ReviewStartClaim -PrNumber ([int]$env:PACK_REVIEW_CLAIM_PR) -HeadSha $env:PACK_REVIEW_CLAIM_HEAD -Surface $env:PACK_REVIEW_CLAIM_SURFACE -ReviewRuns $runs -ProjectId $env:PACK_REVIEW_CLAIM_PROJECT -StartReason $env:PACK_REVIEW_CLAIM_REASON
+($claim | ConvertTo-Json -Depth 30 -Compress) | Set-Content -LiteralPath $env:PACK_REVIEW_CLAIM_RESULT -Encoding UTF8
+if (-not $claim.acquired) { exit 3 }
+New-Item -ItemType File -Path $env:PACK_REVIEW_CLAIM_READY -Force | Out-Null
+while (-not (Test-Path -LiteralPath $env:PACK_REVIEW_CLAIM_RELEASE -PathType Leaf)) {
+  try { Get-Process -Id ([int]$env:PACK_REVIEW_CLAIM_PARENT_PID) -ErrorAction Stop | Out-Null } catch { exit 4 }
+  Start-Sleep -Milliseconds 200
+}
+$release = Get-Content -LiteralPath $env:PACK_REVIEW_CLAIM_RELEASE -Raw -Encoding UTF8 | ConvertFrom-Json
+$releaseRuns = @($release.reviewRuns)
+if ([string]$release.action -eq 'run_started') {
+  $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $releaseRuns
+} else {
+  $complete = Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $releaseRuns -Failure ([string]$release.detail)
+}
+($complete | ConvertTo-Json -Depth 30 -Compress) | Set-Content -LiteralPath $env:PACK_REVIEW_CLAIM_COMPLETE -Encoding UTF8
+if (-not $complete.ok) { exit 5 }
+`;
+
+async function waitForFile(path: string, processPromise: Promise<ProcessResult>, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    const settled = await Promise.race([
+      processPromise.then((result) => ({ process: result })),
+      new Promise<{ tick: true }>((resolveTick) => setTimeout(() => resolveTick({ tick: true }), 50)),
+    ]);
+    if ('process' in settled) throw new Error(`review claim helper exited before readiness: ${str(settled.process.stderr || settled.process.stdout || settled.process.error)}`);
+    if (Date.now() >= deadline) throw new Error('review claim helper readiness timed out');
   }
-  throw new Error(`${label} produced no JSON object`);
 }
 
-async function claim(action: 'acquire' | 'complete' | 'release', options: { trustedRoot: string; claimPath: string; projectId: string; prNumber: number; headSha: string; surface: string; reason: string; claim?: Obj; reviewRuns: PackReviewRunRecord[]; failure?: string }): Promise<Obj> {
-  const payload = Buffer.from(JSON.stringify({ action, ...options, trustedRoot: undefined, claimPath: undefined }), 'utf8').toString('base64');
-  const script = "$ErrorActionPreference='Stop';$i=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PACK_REVIEW_CLAIM_PAYLOAD))|ConvertFrom-Json;. $env:PACK_REVIEW_CLAIM_LIB;$r=@($i.reviewRuns);if($i.action-eq'acquire'){$o=Acquire-ReviewStartClaim -PrNumber ([int]$i.prNumber) -HeadSha ([string]$i.headSha) -Surface ([string]$i.surface) -ReviewRuns $r -ProjectId ([string]$i.projectId) -StartReason ([string]$i.reason)}else{$c=@{};$i.claim.PSObject.Properties|%{$c[$_.Name]=$_.Value};if($i.action-eq'complete'){$o=Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $c -ReviewRuns $r}else{$o=Release-ReviewStartClaimAfterRunFailure -ClaimResult $c -ReviewRuns $r -Failure ([string]$i.failure)}};$o|ConvertTo-Json -Depth 40 -Compress";
-  const result = await runProcess({ command: 'pwsh', args: ['-NoProfile', '-Command', script], cwd: options.trustedRoot, inheritParentEnv: true, env: { PACK_REVIEW_CLAIM_LIB: options.claimPath, PACK_REVIEW_CLAIM_PAYLOAD: payload }, timeoutMs: 30_000 });
-  return jsonLine(await required(result, `review claim ${action}`), `review claim ${action}`);
+async function acquireClaimLease(options: { trustedRoot: string; claimPath: string; projectId: string; storeRoot: string; prNumber: number; headSha: string; surface: string; reason: string }): Promise<ClaimLease> {
+  const directory = join(options.storeRoot, 'claim-leases', `claim-${randomUUID()}`);
+  mkdirSync(directory, { recursive: true });
+  const runsFile = join(directory, 'runs.json');
+  const resultFile = join(directory, 'claim.json');
+  const readyFile = join(directory, 'ready');
+  const releaseFile = join(directory, 'release.json');
+  const completeFile = join(directory, 'complete.json');
+  writeFileSync(runsFile, `${JSON.stringify(listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot }))}\n`, 'utf8');
+  const helperPromise = runProcess({
+    command: 'pwsh', args: ['-NoProfile', '-Command', CLAIM_LEASE_SCRIPT], cwd: options.trustedRoot,
+    inheritParentEnv: true, allowEmptyStdout: true,
+    env: {
+      PACK_REVIEW_CLAIM_LIB: options.claimPath, PACK_REVIEW_CLAIM_RUNS: runsFile,
+      PACK_REVIEW_CLAIM_RESULT: resultFile, PACK_REVIEW_CLAIM_READY: readyFile,
+      PACK_REVIEW_CLAIM_RELEASE: releaseFile, PACK_REVIEW_CLAIM_COMPLETE: completeFile,
+      PACK_REVIEW_CLAIM_PARENT_PID: String(process.pid), PACK_REVIEW_CLAIM_PR: String(options.prNumber),
+      PACK_REVIEW_CLAIM_HEAD: options.headSha, PACK_REVIEW_CLAIM_PROJECT: options.projectId,
+      PACK_REVIEW_CLAIM_SURFACE: options.surface, PACK_REVIEW_CLAIM_REASON: options.reason,
+    },
+  });
+  try {
+    await waitForFile(resultFile, helperPromise);
+    const claim = JSON.parse(readFileSync(resultFile, 'utf8')) as { acquired?: boolean; reason?: string };
+    if (!claim.acquired) {
+      await helperPromise;
+      return { acquired: false, reason: str(claim.reason) || 'claimed', directory, release: async () => undefined };
+    }
+    await waitForFile(readyFile, helperPromise);
+    return {
+      acquired: true, reason: 'acquired', directory,
+      release: async (action, reviewRuns, detail = '') => {
+        writeFileSync(releaseFile, `${JSON.stringify({ action, reviewRuns, detail })}\n`, 'utf8');
+        const helper = await helperPromise;
+        if (!helper.ok) throw new Error(`review claim helper completion failed: ${str(helper.stderr || helper.stdout || helper.error)}`);
+        if (!existsSync(completeFile)) throw new Error('review claim helper wrote no completion result');
+        const completion = JSON.parse(readFileSync(completeFile, 'utf8')) as { ok?: boolean; reason?: string };
+        if (!completion.ok) throw new Error(`review claim completion failed: ${str(completion.reason) || 'unknown'}`);
+      },
+    };
+  } catch (error) {
+    if (!existsSync(releaseFile)) writeFileSync(releaseFile, `${JSON.stringify({ action: 'failure', reviewRuns: [], detail: errorText(error) })}\n`, 'utf8');
+    throw error;
+  }
 }
 
 function verdict(stdout: string): Verdict {
@@ -197,15 +273,18 @@ export async function startPackReview(input: StartPackReviewInput): Promise<Obj>
   const timeout = positive(input.timeoutSeconds ?? TIMEOUT, 'timeoutSeconds') ?? TIMEOUT;
   const targetInfo = await target(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
-  let claimResult: Obj | undefined; let run: PackReviewRunRecord | undefined; let targetRoot = ''; let terminal = false;
+  let claimLease: ClaimLease | undefined; let run: PackReviewRunRecord | undefined; let targetRoot = ''; let terminal = false;
   try {
     if ((input.claimMode ?? 'acquire') === 'acquire') {
-      claimResult = await claim('acquire', { trustedRoot: trusted.trustedPackRoot, claimPath: trusted.claimPath, projectId, prNumber: targetInfo.prNumber, headSha: targetInfo.headSha, surface: str(input.surface) || 'pack-review-runner-manual', reason: str(input.startReason) || 'manual', reviewRuns: listPackReviewRuns({ projectId, storeRoot }) });
-      if (!claimResult.acquired) return { ok: false, created: false, reused: true, reason: str(claimResult.reason) || 'claimed', httpStatus: 200 };
+      claimLease = await acquireClaimLease({ trustedRoot: trusted.trustedPackRoot, claimPath: trusted.claimPath, projectId, storeRoot, prNumber: targetInfo.prNumber, headSha: targetInfo.headSha, surface: str(input.surface) || 'pack-review-runner-manual', reason: str(input.startReason) || 'manual' });
+      if (!claimLease.acquired) return { ok: false, created: false, reused: true, reason: claimLease.reason, httpStatus: 200 };
     }
     const created = createPackReviewRun({ projectId, storeRoot, prNumber: targetInfo.prNumber, headSha: targetInfo.headSha, linkedSessionId: targetInfo.sessionId, startReason: str(input.startReason) || ((input.claimMode ?? 'acquire') === 'preacquired' ? 'automatic' : 'manual'), surface: str(input.surface) || 'pack-review-runner', trustedPackRoot: trusted.trustedPackRoot, sourceRepoRoot: targetInfo.sourceRepoRoot });
     run = created.run;
-    if (created.reused) return { ok: true, created: false, reused: true, reason: created.reason, runId: run.id, status: run.status, httpStatus: 200 };
+    if (created.reused) {
+      if (claimLease?.acquired) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
+      return { ok: true, created: false, reused: true, reason: created.reason, runId: run.id, status: run.status, httpStatus: 200 };
+    }
     updatePackReviewRun(run.id, { status: 'preparing', latestRunStatus: 'preparing', runnerPid: process.pid }, { projectId, storeRoot });
     if (process.env.OPK_VITEST_HARNESS === '1' && input.fixtureReviewStdout !== undefined) { targetRoot = join(packReviewWorktreesDir(storeRoot), run.id); mkdirSync(targetRoot, { recursive: true }); }
     else targetRoot = await worktree(targetInfo.sourceRepoRoot, storeRoot, run.id, targetInfo.headSha);
@@ -222,13 +301,16 @@ export async function startPackReview(input: StartPackReviewInput): Promise<Obj>
     const posted = await postReview({ root: targetInfo.sourceRepoRoot, slug: targetInfo.repoSlug, pr: targetInfo.prNumber, sha: targetInfo.headSha, run, value, fixtureId: input.fixtureGithubReviewId });
     const status: PackReviewRunStatus = value.verdict === 'clean' && value.findingCount === 0 ? 'up_to_date' : 'changes_requested';
     setPackReviewRunTerminal(run.id, status, { exitCode: 0, githubReviewId: posted.id, githubReviewUrl: posted.url }, { projectId, storeRoot }); terminal = true;
-    if (claimResult) await claim('complete', { trustedRoot: trusted.trustedPackRoot, claimPath: trusted.claimPath, projectId, prNumber: targetInfo.prNumber, headSha: targetInfo.headSha, surface: '', reason: '', claim: claimResult, reviewRuns: listPackReviewRuns({ projectId, storeRoot }) });
+    if (claimLease?.acquired) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
     return { ok: true, created: true, reused: false, reason: 'completed', runId: run.id, status, httpStatus: 201, githubReviewId: posted.id, githubReviewUrl: posted.url };
   } catch (error) {
     if (run && !terminal) { try { setPackReviewRunTerminal(run.id, 'failed', { exitCode: 1, failureReason: errorText(error) }, { projectId, storeRoot }); } catch { /* primary error wins */ } }
-    if (claimResult?.acquired) { try { await claim('release', { trustedRoot: trusted.trustedPackRoot, claimPath: trusted.claimPath, projectId, prNumber: targetInfo.prNumber, headSha: targetInfo.headSha, surface: '', reason: '', claim: claimResult, reviewRuns: listPackReviewRuns({ projectId, storeRoot }), failure: errorText(error) }); } catch { /* stale recovery remains */ } }
+    if (claimLease?.acquired) { try { await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), errorText(error)); } catch { /* stale recovery remains */ } }
     return { ok: false, created: Boolean(run), reused: false, reason: errorText(error), runId: run?.id ?? '', status: run ? getPackReviewRun(run.id, { projectId, storeRoot })?.status : undefined, httpStatus: 500 };
-  } finally { if (targetRoot) await removeWorktree(targetInfo.sourceRepoRoot, targetRoot); }
+  } finally {
+    if (targetRoot) await removeWorktree(targetInfo.sourceRepoRoot, targetRoot);
+    if (claimLease) rmSync(claimLease.directory, { recursive: true, force: true });
+  }
 }
 
 const usage = () => ['Pack-owned review runner (Issue #839)', '', 'Manual trigger:', '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex>', '  node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>', '', 'Status:', '  node --experimental-strip-types scripts/pack-review-runner.ts list [--project-id orchestrator-pack]'].join('\n');
