@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Pack spawn-budget gate implementations (Issues #462 / #480 / #821).
+  Pack spawn-budget gate implementations (Issues #462 / #480).
 #>
 
 . (Join-Path $PSScriptRoot 'Initialize-PackGateCheck.ps1')
@@ -17,8 +17,9 @@ function Invoke-AutonomousSpawnBudgetGate {
         $requiredPaths = @(
             'docs/autonomous-spawn-budget.json',
             'docs/autonomous-spawn-budget.mjs',
-            'docs/autonomous-orchestrator-boundary.mjs',
-            'scripts/autonomous-spawn-budget.test.ts'
+            'scripts/lib/autonomous-guard-fast-path.sh',
+            'scripts/autonomous-spawn-budget.test.ts',
+            'scripts/_test-spawn-budget-fixture.ts'
         )
 
         foreach ($relative in $requiredPaths) {
@@ -26,6 +27,21 @@ function Invoke-AutonomousSpawnBudgetGate {
             if (-not (Test-Path -LiteralPath $full)) {
                 $Violations.Add("missing $relative")
             }
+        }
+
+        $gitShim = Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/git') -Raw
+        $aoShim = Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/ao') -Raw
+        if ($gitShim -notmatch 'autonomous-guard-fast-path\.sh') {
+            $Violations.Add('scripts/git must source autonomous-guard-fast-path.sh')
+        }
+        if ($aoShim -notmatch 'autonomous-guard-fast-path\.sh') {
+            $Violations.Add('scripts/ao must source autonomous-guard-fast-path.sh')
+        }
+        if ($gitShim -notmatch '__ao_autonomous_git_argv_is_read_only') {
+            $Violations.Add('scripts/git must use read-only git fast path helper')
+        }
+        if ($aoShim -notmatch '__ao_autonomous_ao_argv_is_read_fast_path') {
+            $Violations.Add('scripts/ao must use read-only ao fast path helper')
         }
 
         $budgetCli = Join-Path $RepoRoot 'docs/autonomous-spawn-budget.mjs'
@@ -60,6 +76,8 @@ function Invoke-ReviewPipelineSpawnBudgetGate {
             'scripts/review-pipeline-spawn-budget.test.ts',
             'scripts/review-start-repeat-classifier.test.ts',
             'scripts/generate-review-pipeline-spawn-captures.ts',
+            'tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json',
+            'tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json',
             'tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json',
             'tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json'
         )

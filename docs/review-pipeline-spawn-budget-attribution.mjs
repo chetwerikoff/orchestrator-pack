@@ -23,9 +23,9 @@ const SUPERVISOR_CHILD_PATTERNS = [
   /orchestrator-wake-supervisor\.ps1/i,
 ];
 const LLM_REVIEW_START_PATTERNS = [
-  /ao-review(?:\.ps1)?\s+run\b/i,
-  /Invoke-AoReviewTriggerForWorker/i,
-  /\/reviews\/trigger\b/i,
+  /invoke-orchestrator-claimed-review-run\.ps1/i,
+  /\bao\s+review\s+run\b/i,
+  /Invoke-OrchestratorClaimedReviewRun/i,
 ];
 const WORKER_TEST_PATTERNS = [
   /\bvitest\b/i,
@@ -36,10 +36,11 @@ const WORKER_TEST_PATTERNS = [
   /\bnpx\s+vitest\b/i,
 ];
 const AUTONOMOUS_GUARD_PATTERNS = [
-  /^in-process-gate:/i,
+  /ao-autonomous-guard\.ps1/i,
+  /git-autonomous-guard\.ps1/i,
+  /^pwsh-guard:/i,
+  /autonomous-guard-fast-path/i,
   /Orchestrator-AutonomousSpawnGate/i,
-  /Orchestrator-AutonomousReviewStartGate/i,
-  /Worker-AutonomousNudgeGate/i,
 ];
 const SUPERVISOR_READ_PATTERNS = [
   /^git\s+(config|log|branch|status)\b/i,

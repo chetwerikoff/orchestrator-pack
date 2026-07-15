@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -7,7 +7,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { buildManifest as buildManifestRuntime } from './reachability-purge.mjs';
 
 interface ReachabilityManifest {
-  issue?: number;
   graphNodeCount: number;
   deletionManifest: Array<{ reason: string }>;
   suspectEdges: Array<{
@@ -30,7 +29,6 @@ interface ReachabilityManifest {
   keepGuardList: string[];
   rewriteList: string[];
   retiredShimBlockers: Array<{
-    path?: string;
     trackedInBase: boolean;
     deletedInCurrentTree: boolean;
     reachable: boolean;
@@ -45,41 +43,17 @@ const buildManifest = buildManifestRuntime as (repoRoot?: string) => Promise<Rea
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = path.join(repoRoot, 'scripts', 'reachability-purge.manifest.json');
 let manifest: ReachabilityManifest;
-let generatedManifest: ReachabilityManifest;
-let committedManifest: ReachabilityManifest;
-let issue821PrerequisiteComplete = false;
 
 beforeAll(async () => {
-  committedManifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ReachabilityManifest;
-  issue821PrerequisiteComplete =
-    committedManifest.retiredShimBlockers.length > 0 &&
-    committedManifest.retiredShimBlockers.every(
-      (row) => Boolean(row.path) && !existsSync(path.join(repoRoot, row.path!)),
-    );
-  generatedManifest = await buildManifest(repoRoot);
-  // Issue #819's manifest is a frozen pre-#821 reachability record. Once #821
-  // removes its held shim prerequisites, the historical #819 assertions must
-  // continue to validate that committed record rather than re-attributing the
-  // later deletion to #819. Live fail-closed behavior is still exercised below
-  // by direct buildManifest calls against the current tree.
-  manifest = issue821PrerequisiteComplete ? committedManifest : generatedManifest;
+  manifest = await buildManifest(repoRoot);
 }, 120_000);
 
 describe('reachability-purge', () => {
-  it('reproduces the #819 manifest before its prerequisite lands and freezes it afterward as historical evidence', () => {
-    expect(committedManifest.issue).toBe(819);
-    expect(committedManifest.graphNodeCount).toBeGreaterThan(0);
-    expect(committedManifest.deletionManifest.length).toBeGreaterThan(0);
-    if (issue821PrerequisiteComplete) {
-      expect(generatedManifest).not.toEqual(committedManifest);
-      expect(
-        committedManifest.retiredShimBlockers.every(
-          (row) => Boolean(row.path) && !existsSync(path.join(repoRoot, row.path!)),
-        ),
-      ).toBe(true);
-    } else {
-      expect(generatedManifest).toEqual(committedManifest);
-    }
+  it('manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift', () => {
+    const committed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(manifest.graphNodeCount).toBeGreaterThan(0);
+    expect(manifest.deletionManifest.length).toBeGreaterThan(0);
+    expect(manifest).toEqual(committed);
   });
 
   it('every suspect edge has an explicit disposition with recorded evidence, and no cross-scope works row lacks proof beyond edge-fired evidence', () => {

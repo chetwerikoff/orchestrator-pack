@@ -1,0 +1,67 @@
+
+added 57 packages, and audited 63 packages in 1s
+
+18 packages are looking for funding
+  run `npm fund` for details
+
+1 low severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> lint:foundation
+> node --experimental-strip-types scripts/toolchain/check-ts-policy.ts --write-baseline
+
+Wrote raw child-process baseline.
+
+> check:pwsh-test-growth
+> node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts --write-baseline
+
+Wrote PowerShell child-test baseline.
+{
+  "changedTestCount": 20,
+  "files": [
+    "scripts/_test-stub-pack-import-closure.test.ts",
+    "scripts/autonomous-orchestrator-boundary.test.ts",
+    "scripts/autonomous-spawn-budget.test.ts",
+    "scripts/autonomous-spawn-policy.test.ts",
+    "scripts/autonomous-spawn-worktree-gate.test.ts",
+    "scripts/gh-repo-resolve.test.ts",
+    "scripts/orchestrator-claimed-review-run.test.ts",
+    "scripts/orchestrator-review-start-preflight-audit.test.ts",
+    "scripts/reachability-purge.test.ts",
+    "scripts/review-pipeline-spawn-budget.test.ts",
+    "scripts/review-start-envelope-external-io.test.ts",
+    "scripts/review-start-envelope-ledger.test.ts",
+    "scripts/review-start-preflight-shield-denial-audit.test.ts",
+    "scripts/review-start-scoped-gh-json-capture.test.ts",
+    "scripts/spawn-worktree-grant-finalization.test.ts",
+    "scripts/spawn-worktree-head-ref-oid-binding.test.ts",
+    "scripts/spawn-worktree-repository-identity-binding.test.ts",
+    "scripts/worker-nudge-gate.test.ts",
+    "scripts/worker-recovery-spawn-argv.test.ts",
+    "scripts/worktree-gate-claim-completion-seam.test.ts"
+  ]
+}
+file:///home/runner/work/orchestrator-pack/orchestrator-pack/scripts/lib/vitest-pre-topology-measurement.mjs:139
+        return reject(new Error(`pre-topology measurement tests failed (exit ${status}, signal ${signal ?? 'none'}) for: ${file}\n${output}`));
+                      ^
+
+Error: pre-topology measurement tests failed (exit 1, signal none) for: scripts/reachability-purge.test.ts
+> test
+> vitest run scripts/reachability-purge.test.ts --reporter=json --outputFile=/tmp/opk-pre-topology-5qRYj5/run-09/vitest-pre-topology.json
+
+JSON report written to /tmp/opk-pre-topology-5qRYj5/run-09/vitest-pre-topology.json
+
+
+{"failures":[{"fullName":"reachability-purge manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift","failureMessages":["AssertionError: expected { schemaVersion: 1, issue: 819, …(27) } to deeply equal { schemaVersion: 1, issue: 819, …(27) }\n    at /home/runner/work/orchestrator-pack/orchestrator-pack/scripts/reachability-purge.test.ts:56:22\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"]},{"fullName":"reachability-purge unresolved dynamic invocation forms are inventoried and held, not counted as zero-reachability","failureMessages":["AssertionError: expected false to be true // Object.is equality\n    at /home/runner/work/orchestrator-pack/orchestrator-pack/scripts/reachability-purge.test.ts:81:7\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"]},{"fullName":"reachability-purge deletion set matches deadness formula including superseded-caller resolution","failureMessages":["AssertionError: expected { …(2) } to deeply equal { missing: [], unexpected: [] }\n    at /home/runner/work/orchestrator-pack/orchestrator-pack/scripts/reachability-purge.test.ts:110:49\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"]},{"fullName":"reachability-purge records the shim cluster as held (fail-safe KEEP) per amended AC 9, not a completion blocker","failureMessages":["AssertionError: expected false to be true // Object.is equality\n    at /home/runner/work/orchestrator-pack/orchestrator-pack/scripts/reachability-purge.test.ts:123:105\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/runner/work/orchestrator-pack/orchestrator-pack/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"]}]}
+    at ChildProcess.<anonymous> (file:///home/runner/work/orchestrator-pack/orchestrator-pack/scripts/lib/vitest-pre-topology-measurement.mjs:139:23)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1101:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:304:5)
+
+Node.js v22.23.1
+
+STATUSES install=0 lint=0 pwsh=0 measure=1

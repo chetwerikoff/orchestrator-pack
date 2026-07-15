@@ -1,16 +1,17 @@
 {
   "version": "autonomous-spawn-budget/v1",
   "boundaryModule": "docs/autonomous-orchestrator-boundary.mjs",
+  "legacyPerCommandPwshGuardSpawns": 1,
   "classes": {
     "noop-shell": {
       "id": "noop-shell",
-      "label": "Load-bearing A: direct shell builtin/no-op under an AO session",
+      "label": "Load-bearing A: shell builtin/no-op under BASH_ENV",
       "maxHelperGrowthPerCommand": 0,
       "fixtureCommandCounts": [5, 100]
     },
     "git-ao-read": {
       "id": "git-ao-read",
-      "label": "Load-bearing B: direct read-only git/AO inventory",
+      "label": "Load-bearing B: guarded read-only git/ao inventory",
       "maxPwshGuardSpawnsPerCommand": 0,
       "mandatoryCommands": [
         ["git", "config", "--get", "remote.origin.url"],
@@ -24,7 +25,7 @@
     },
     "denied-actions": {
       "id": "denied-actions",
-      "label": "Load-bearing C: fail-closed mutating git and denied AO actions",
+      "label": "Load-bearing C: fail-closed mutating git and denied ao",
       "maxPwshGuardSpawnsPerDeniedCommand": 1,
       "commands": [
         {
