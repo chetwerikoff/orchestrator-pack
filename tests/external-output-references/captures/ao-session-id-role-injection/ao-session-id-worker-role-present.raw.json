@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "ao-session-env-capture/v1",
+  "role": "worker",
+  "capturedAtUtc": "2026-07-14T04:38:28Z",
+  "env": {
+    "AO_SESSION_ID": "<redacted-non-empty>"
+  },
+  "assertions": {
+    "aoSessionIdPresent": true
+  }
+}
