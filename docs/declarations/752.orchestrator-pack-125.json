@@ -18,6 +18,7 @@
     "scripts/_test-pwsh-helpers.ts",
     "scripts/check-vitest-live-store-isolation.mjs",
     "scripts/escalation-state-test-isolation.test.ts",
+    "scripts/emit-vitest-heavy-topology.mjs",
     "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
     "scripts/lib/OpkVitestStoreIsolation.ps1",
     "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
