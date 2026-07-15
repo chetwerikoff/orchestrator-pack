@@ -3,7 +3,7 @@
  * Resolve the real gh binary — identity-based terminality (Issue #442).
  * Delegates only to native gh executables, never shell/node wrapper shims.
  */
-import { closeSync, existsSync, openSync, readFileSync, readSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -86,18 +86,6 @@ export function isNativeGhExecutable(path) {
   }
 }
 
-function readAutonomousConfig() {
-  const configPath = join(PACK_ROOT, '.ao', 'autonomous-real-binaries.json');
-  if (!existsSync(configPath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
 /**
  * @param {string} candidate
  * @param {string} wrapperRealPath
@@ -150,14 +138,6 @@ function acceptNativeCandidate(candidate, wrapperRealPath, stats) {
  */
 export function resolveRealGhBinary(wrapperRealPath = resolve(WRAPPER_PATH)) {
   const stats = { nonNativeCount: 0 };
-
-  const config = readAutonomousConfig();
-  if (config?.gh) {
-    const fromConfig = resolvePathCandidate(config.gh, wrapperRealPath);
-    if (fromConfig) {
-      return fromConfig;
-    }
-  }
 
   const envBinary = process.env.GH_REAL_BINARY;
   if (envBinary && envBinary !== 'gh') {
