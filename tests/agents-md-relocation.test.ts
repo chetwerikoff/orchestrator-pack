@@ -49,7 +49,7 @@ describe('agent rules live-reference gate', () => {
         const full = path.join(dir, entry.name);
         const rel = path.relative(repoRoot, full).split(path.sep).join('/');
         if (entry.isDirectory()) {
-          if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.ao') continue;
+          if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.ao' || entry.name === '.graphify') continue;
           walk(full);
           continue;
         }
@@ -71,6 +71,6 @@ describe('agent rules live-reference gate', () => {
 function readdirSafe(dir: string) {
   return readdirSync(dir, { withFileTypes: true }).filter((entry) => {
     if (!entry.isDirectory()) return true;
-    return entry.name !== '.git' && entry.name !== 'node_modules';
+    return entry.name !== '.git' && entry.name !== 'node_modules' && entry.name !== '.graphify';
   });
 }

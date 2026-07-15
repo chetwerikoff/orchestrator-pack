@@ -309,3 +309,35 @@ working only if AO ever switched to a raw control-socket protocol, which is self
 script, no PR, no Issue. See `docs/issues_drafts/00-architecture-decisions.md` §W for
 install/verify/rollback steps on a given host. Formalizing this for multi-operator
 distribution (mirroring the `cursor-agent` TUI shim, Issue #725) would need its own draft.
+
+### Graphify structural code graph adoption (code-only build/refresh/query, 2026-07-15)
+
+Adopted the third-party tool Graphify (PyPI `graphifyy`, upstream `safishamsi/graphify`, MIT
+license) as a worker-facing, opt-in structural code graph for this repo (Issue #833) — call/import
+relationships, hub files, community/domain clusters, import cycles — via its free, local,
+deterministic tree-sitter AST extraction path only. This is the pack's first Python runtime
+dependency; previously only PowerShell and Node/TypeScript.
+
+Graphify's own installer (`graphify install` / `graphify <platform> install`) writes
+unconditionally into `CLAUDE.md`, `AGENTS.md`, or `.cursor/rules/**` depending on platform —
+independently re-verified live against the packaged installer output in a scratch directory during
+implementation, confirming the exact per-platform write targets the issue's constraint was
+grounded in. The pack therefore never invokes the installer family; `scripts/graphify/lib/Resolve-GraphifyEnv.ps1`
+is the single point that shells out to the real `graphify` executable and hard-restricts the
+allowed subcommand set to `extract`/`update`, with `scripts/graphify/check-graphify-no-installer.ps1`
+guarding this statically in CI-independent tests. The guidance text in `AGENTS.md` and the new
+`.cursor/rules/graphify-graph-check.mdc` is architect-authored prose, deliberately distinct in
+tone from Graphify's own packaged section (which reads as a near-mandatory directive; this repo's
+version states the practice as recommended, not required).
+
+The isolated Python environment lives at `.graphify/venv` (gitignored), bootstrapped from a
+committed, fully-resolved `pip freeze` lock (`scripts/graphify/requirements.lock.txt`, 30 pinned
+packages) via `pip install --no-deps`, never the operator's global Python. The built graph itself
+is an untracked working artifact under `.graphify/graph/` — not a committed snapshot — matching
+this doc's existing preference (see `docs/declarations/**` machine-generated-diff-noise precedent)
+for keeping regenerable, low-value-diff machine output out of git history. Nothing here is wired
+into CI, a required status check, or worker session/report status transitions; build, refresh, and
+query are each a plain foreground, on-demand invocation with no new background process.
+
+**Status: pack-owned, tracked, and opt-in** — see `scripts/graphify/README.md` for usage and
+`docs/migration_notes.md` for the one-time per-machine bootstrap step.

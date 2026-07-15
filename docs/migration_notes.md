@@ -2511,3 +2511,23 @@ This audit does **not** retire the shims and does not authorize operator PATH/pr
 Keep the existing pack-local shim configuration until the owning predicate/test/config migration
 lands. At that point, the retirement change must add the final operator step: remove local
 PATH/profile references to the retired pack shims and use regular `ao` and `git` from PATH.
+
+## Graphify code-graph tooling: first Python runtime dependency (Issue #833)
+
+This PR adds the pack's first Python runtime dependency: a wrapper around the third-party
+`graphify` CLI (PyPI `graphifyy`) used to build/refresh/query an optional structural code graph
+for this repo. Entirely opt-in — nothing in CI or worker lifecycle depends on it.
+
+1. Once per machine, run `pwsh scripts/graphify/bootstrap.ps1` from the repo root. This creates an
+   isolated Python virtual environment at `.graphify/venv` (gitignored, never the machine's global
+   Python) and installs exactly the packages pinned in `scripts/graphify/requirements.lock.txt`
+   (`graphifyy` plus its 29 transitive dependencies) via `pip install --no-deps`.
+2. Confirm what was installed with `.graphify/venv/bin/python -m pip freeze` (or the equivalent
+   `Scripts\python.exe` path on Windows) and compare against the committed lock file.
+3. No `agent-orchestrator.yaml` change, `ao stop`/`ao start` cycle, or `orchestratorRules` change
+   is required — this capability is not wired into orchestrator reactions.
+4. Requires Python >=3.10 on PATH as `python3` (or `python`). If neither is present, install
+   Python 3.10+ first; the bootstrap script fails closed with a clear message rather than falling
+   back to a different interpreter.
+
+See `scripts/graphify/README.md` for build/refresh/query usage once bootstrapped.
