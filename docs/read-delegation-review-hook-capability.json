@@ -1,7 +1,7 @@
 {
   "kind": "read-delegation-review-hook-capability.v1",
   "schemaVersion": 1,
-  "description": "Scrubbed capability record for issue #264. World (a): bounded dry-run capture of the tracked pack-review entrypoint reached the no-publish terminal stage and emitted no read-delegation audit work-unit event; positive-control ordinary stop-hook payload emitted an audit event under the same wrapper. Values are redacted; hashes/fingerprints are machine-checkable. Issue #831 refreshed only the migrated wrapper hash and fingerprint; the observed capability branch and capture evidence are unchanged.",
+  "description": "Scrubbed capability record for issue #264. World (a): bounded dry-run capture of the tracked pack-review entrypoint reached the no-publish terminal stage and emitted no read-delegation audit work-unit event; positive-control ordinary stop-hook payload emitted an audit event under the same wrapper. Values are redacted; hashes/fingerprints are machine-checkable. Issue #831 refreshed only the migrated wrapper hash and fingerprint, including follow-up fail-open hardening; the observed capability branch and capture evidence are unchanged.",
   "derivation": "scripts/fixtures/read-delegation-audit/review-hook-capture-world-a.json",
   "surfaces": {
     "cursor": {
@@ -26,12 +26,12 @@
       },
       "hookWiringFingerprint": {
         "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
-        "wrapperHash": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141",
+        "wrapperHash": "76197d7d293e1b6f4bad8915b1e33937cfc6839a5e0c0a243380b277291cba4a",
         "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
       },
       "codeHashes": {
         "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
-        "scripts/invoke-read-delegation-audit-stop.ps1": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141"
+        "scripts/invoke-read-delegation-audit-stop.ps1": "76197d7d293e1b6f4bad8915b1e33937cfc6839a5e0c0a243380b277291cba4a"
       }
     },
     "claude": {
@@ -56,12 +56,12 @@
       },
       "hookWiringFingerprint": {
         "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
-        "wrapperHash": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141",
+        "wrapperHash": "76197d7d293e1b6f4bad8915b1e33937cfc6839a5e0c0a243380b277291cba4a",
         "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
       },
       "codeHashes": {
         "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
-        "scripts/invoke-read-delegation-audit-stop.ps1": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141"
+        "scripts/invoke-read-delegation-audit-stop.ps1": "76197d7d293e1b6f4bad8915b1e33937cfc6839a5e0c0a243380b277291cba4a"
       }
     }
   }
