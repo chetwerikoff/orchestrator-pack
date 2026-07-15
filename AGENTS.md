@@ -348,14 +348,14 @@ Forbidden: silent disengagement while PR lacks hand-off for current head.
 
 #### Review feedback and AO review response
 
-On delivered findings, use `addressing_reviews` → optional `fixing_ci` → `ready_for_review` after CI is green; never report `completed` with open findings. Inspect pack-store `Get-AoReviewRuns` and the authoritative current-head GitHub review.
+On delivered findings, **must not** idle: use `addressing_reviews` → optional `fixing_ci` → `ready_for_review` after CI is green; never report `completed` with open findings. Inspect current-head pack-store/GitHub review.
 
 Script-owned orchestrator review starters and predicates:
 [`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
 
 #### Review delivery telemetry (Issue #718)
 
-Trust reviewer terminal JSON, the authoritative current-head GitHub review, and the dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are retired. Never synthesize findings from store rows.
+Trust reviewer terminal JSON, the current-head GitHub review, and dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are REMOVED. On telemetry failure, skip silently—never post substitute notifications or synthesize findings from store rows.
 **Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
 #### Review-cycle cap (Issue #646)
 

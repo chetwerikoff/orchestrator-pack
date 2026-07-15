@@ -80,7 +80,7 @@ describe.sequential('reachability-purge', () => {
 
   it('deletion set matches deadness formula including superseded-caller resolution', () => {
     expect(manifest.deletionSetDiffFromFormula).toEqual({ missing: [], unexpected: [] });
-    expect(manifest.deletionManifest.every((row) => ['zero-reachability', 'superseded', 'backup', 'issue-821-retired'].includes(row.reason))).toBe(true);
+    expect(manifest.deletionManifest.every((row) => ['zero-reachability', 'superseded', 'backup', 'issue-821-retired', 'issue-839-retired'].includes(row.reason))).toBe(true);
     expect(manifest.supersededSurfaceInventory.every((row) => row.disposition.startsWith('held-'))).toBe(true);
   });
 

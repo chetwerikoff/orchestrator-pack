@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +26,7 @@ describe('harness pre-trigger project-config read (Issue #682)', () => {
   it('Get-AoProjectConfigJson reads GET /api/v1/projects/{id} not /config', () => {
     const text = readFileSync(reviewApiLib, 'utf8');
     const fnStart = text.indexOf('function Get-AoProjectConfigJson');
-    const fnEnd = text.indexOf('function Set-AoProjectReviewerHarness');
+    const fnEnd = text.indexOf('function Test-ReviewBeforeCleanupGate');
     const body = text.slice(fnStart, fnEnd);
     expect(body).toMatch(/\/api\/v1\/projects\/\$\(\[uri\]::EscapeDataString\(\$ProjectId\)\)"/);
     expect(body).not.toMatch(/\/config"/);
@@ -56,32 +55,14 @@ describe('harness pre-trigger project-config read (Issue #682)', () => {
     expect(classifyReviewerHarnessAbort(legacy, 'codex').abort).toBe(false);
   });
 
-  it('Invoke-AoReviewTriggerForWorker allows live-shape fixture and refuses empty reviewers', () => {
-    const livePath = path.join(daemonCapturesDir, 'project-single-reviewers.raw.json');
-    const allowOut = execFileSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-Command',
-        `. '${reviewApiLib}'; $live = Get-Content '${livePath}' -Raw | ConvertFrom-Json; $guard = Invoke-AoReviewApiCli -Subcommand 'harness-guard' -Payload @{ payload = (Unwrap-AoProjectConfigPayload -Payload $live); expectedHarness = 'codex' }; $guard | ConvertTo-Json -Compress -Depth 5`,
-      ],
-      { cwd: repoRoot, encoding: 'utf8' },
-    ).trim();
-    expect(JSON.parse(allowOut)).toMatchObject({ abort: false, harness: 'codex' });
-
-    const refuseOut = execFileSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-Command',
-        `. '${reviewApiLib}'; $result = Invoke-AoReviewTriggerForWorker -SessionId 'worker-682' -ProjectConfigFixture @{ reviewers = @() }; $result | ConvertTo-Json -Compress -Depth 5`,
-      ],
-      { cwd: repoRoot, encoding: 'utf8' },
-    ).trim();
-    const refused = JSON.parse(refuseOut) as { ok: boolean; reason: string; classified: boolean };
-    expect(refused.ok).toBe(false);
-    expect(refused.reason).toBe('reviewers_harness_misconfig');
-    expect(refused.classified).toBe(true);
+  it('Invoke-AoReviewTriggerForWorker delegates to the pack runner without reviewer-harness gating', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    const fnStart = text.indexOf('function Invoke-AoReviewTriggerForWorker');
+    const fnEnd = text.indexOf('function Get-ReviewTriggerInvocationLine');
+    const body = text.slice(fnStart, fnEnd);
+    expect(body).toMatch(/Invoke-AoSessionReviewTrigger/);
+    expect(body).toMatch(/pack_review_runner_failed/);
+    expect(body).not.toMatch(/harness-guard|reviewers_harness_misconfig|Get-AoProjectConfigJson/);
   });
 
   it('GET /config 405 capture binds METHOD_NOT_ALLOWED selector', () => {
@@ -89,12 +70,9 @@ describe('harness pre-trigger project-config read (Issue #682)', () => {
     expect(body.code).toBe('METHOD_NOT_ALLOWED');
   });
 
-  it('Set-AoProjectReviewerHarness reviewer-write path remains PUT /config', () => {
+  it('retires reviewer-harness config writes from the review adapter', () => {
     const text = readFileSync(reviewApiLib, 'utf8');
-    const fnStart = text.indexOf('function Set-AoProjectReviewerHarness');
-    const fnEnd = text.indexOf('function Test-ReviewBeforeCleanupGate');
-    const body = text.slice(fnStart, fnEnd);
-    expect(body).toMatch(/Method PUT/);
-    expect(body).toMatch(/\/config"/);
+    expect(text).not.toMatch(/function Set-AoProjectReviewerHarness/);
+    expect(text).not.toMatch(/\/config"/);
   });
 });
