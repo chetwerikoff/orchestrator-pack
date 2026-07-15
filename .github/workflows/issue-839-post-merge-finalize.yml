@@ -121,62 +121,64 @@ jobs:
       - name: Verify PowerShell child baseline
         run: npm run check:pwsh-test-growth
       - name: Verify foundation tests
-        id: foundation_tests
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run test:foundation 2>&1 | tee /tmp/issue-839-foundation-tests.log
-      - name: Publish foundation test failure
-        if: steps.foundation_tests.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          tail -n 200 /tmp/issue-839-foundation-tests.log >/tmp/issue-839-foundation-tests-tail.log
-          {
-            echo '## Issue #839 foundation test failure'
-            echo '```text'
-            cat /tmp/issue-839-foundation-tests-tail.log
-            echo '```'
-          } >/tmp/report.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
-          exit 1
-
+        run: npm run test:foundation
       - name: Run focused regressions
-        id: focused
-        continue-on-error: true
-        shell: bash
         run: |
-          set -o pipefail
           node scripts/run-vitest-with-harness.mjs run \
             tests/agents-md-relocation.test.ts \
             scripts/reachability-purge.test.ts \
             scripts/review-delivery.test.ts \
-            scripts/review-producer-contract-mapping.test.ts 2>&1 | tee /tmp/issue-839-focused.log
-      - name: Publish focused failure
-        if: steps.focused.outcome == 'failure'
+            scripts/review-producer-contract-mapping.test.ts
+
+      - name: Verify AGENTS size
+        shell: pwsh
+        run: ./scripts/check-agent-rules-line-budget.ps1
+      - name: Run full light lane
+        id: light
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/run-vitest-light-lane.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-light.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish light lane failure
+        if: steps.light.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          tail -n 160 /tmp/issue-839-focused.log >/tmp/issue-839-focused-tail.log
+          node - <<'NODE' >/tmp/issue-839-light-failures.txt
+          const fs = require('node:fs');
+          const path = '.vitest-runtime-report-light.json';
+          let count = 0;
+          if (fs.existsSync(path)) {
+            const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+            for (const file of report.testResults ?? []) {
+              for (const test of file.assertionResults ?? []) {
+                if (test.status !== 'failed') continue;
+                count += 1;
+                console.log(`FILE: ${file.name}`);
+                console.log(`TEST: ${test.fullName}`);
+                for (const message of test.failureMessages ?? []) console.log(message);
+                console.log('---');
+              }
+            }
+          }
+          if (count === 0) {
+            const text = fs.existsSync('/tmp/issue-839-light.log')
+              ? fs.readFileSync('/tmp/issue-839-light.log', 'utf8')
+              : 'light lane log missing';
+            console.log(text.split(/\r?\n/).slice(-160).join('\n'));
+          }
+          NODE
           {
-            echo '## Issue #839 focused regression failure'
+            echo '## Issue #839 light lane failure'
             echo '```text'
-            cat /tmp/issue-839-focused-tail.log
+            cat /tmp/issue-839-light-failures.txt
             echo '```'
           } >/tmp/report.md
           gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
           exit 1
 
-      - name: Verify AGENTS and full light lane
-        shell: pwsh
-        run: |
-          ./scripts/check-agent-rules-line-budget.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/run-vitest-light-lane.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify full pack and Pester
         shell: pwsh
         run: |
@@ -191,7 +193,7 @@ jobs:
         shell: bash
         run: git push origin HEAD:issue-839-pack-review-runner-v2
       - name: Report other failure
-        if: failure() && steps.foundation_tests.outcome != 'failure' && steps.focused.outcome != 'failure'
+        if: failure() && steps.light.outcome != 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
