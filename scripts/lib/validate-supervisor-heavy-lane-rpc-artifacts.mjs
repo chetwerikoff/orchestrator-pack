@@ -12,7 +12,7 @@ const repoRoot = join(__dirname, '..', '..');
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
 const CONTENT_BINDING_MODE = 'scoped-tree-content-v1';
 const RPC_ARTIFACT_BINDING_SCOPE_RE =
-  /^scripts\/(orchestrator-wake-supervisor|supervisor-fault-boundary|supervisor-recovery\.test-helpers|lib\/supervisor-test-wait-inventory|lib\/validate-supervisor-heavy-lane-rpc-artifacts|lib\/bind-supervisor-heavy-lane-rpc-metadata|lib\/vitest-ci-lanes|check-supervisor-test-wait-inventory|vitest-runtime-history\.json)/;
+  /^scripts\/(orchestrator-wake-supervisor|supervisor-fault-boundary|supervisor-recovery\.test-helpers|lib\/supervisor-test-wait-inventory|lib\/validate-supervisor-heavy-lane-rpc-artifacts|lib\/bind-supervisor-heavy-lane-rpc-metadata|lib\/vitest-ci-lanes|check-supervisor-test-wait-inventory)/;
 
 function commitObjectExists(commitSha, repoRootOverride) {
   if (!commitSha || !FULL_SHA_RE.test(commitSha)) return false;
