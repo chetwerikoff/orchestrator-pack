@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcessSync } from '#opk-kernel/subprocess';
-import { repoRoot } from './_test-pwsh-helpers.js';
+import { repoRoot, vitestHarnessBypassEnv } from './_test-pwsh-helpers.js';
 
 const stableTrustTempRoot = (() => {
   const explicit = String(process.env.OPK_VITEST_PRODUCTION_TMP ?? '').trim();
@@ -14,26 +14,14 @@ const stableTrustTempRoot = (() => {
 })();
 
 function runTrustScript(home: string, args: string[]) {
-  const trustEnv = {
+  const trustEnv = vitestHarnessBypassEnv({
     HOME: home,
     PATH: '/snap/bin:/usr/bin:/bin',
     LANG: process.env.LANG ?? 'C.UTF-8',
     LC_ALL: process.env.LC_ALL ?? '',
     TZ: process.env.TZ ?? '',
-    OPK_VITEST_HARNESS: '',
-    OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
-    OPK_VITEST_HARNESS_ROOT: '',
-    OPK_VITEST_HARNESS_INVENTORY: '',
-    AO_ORCHESTRATOR_ESCALATION_STATE: '',
-    AO_OPERATOR_ESCALATION_INBOX: '',
-    AO_ESCALATION_HEALTH_SPOOL: '',
-    AO_WAKE_SUPERVISOR_STATE_DIR: '',
-    ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
-    AO_SIDE_PROCESS_STATE_DIR: '',
-    AO_BASE_DIR: '',
-    AO_MECHANICAL_TRANSPORT_TEMP: '',
     XDG_STATE_HOME: '',
-  } satisfies Record<string, string>;
+  }) satisfies Record<string, string | undefined>;
   const result = runProcessSync({
     command: 'pwsh',
     args: [

@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   assertSupportedHost,
@@ -32,9 +31,9 @@ import {
   validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
 import { runProcessSync } from '#opk-kernel/subprocess';
+import { repoRoot, vitestHarnessBypassEnv } from './_test-pwsh-helpers.js';
 import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-registry');
 const checkScript = path.join(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
 
@@ -101,27 +100,15 @@ function realTreeCheckerEnv(overrides: NodeJS.ProcessEnv = {}) {
   const productionTmp = process.env.OPK_VITEST_PRODUCTION_TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '';
   const productionXdgStateHome = process.env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME
     ?? (productionHome ? path.join(productionHome, '.local', 'state') : '');
-  return {
+  return vitestHarnessBypassEnv({
     ...process.env,
     ...overrides,
-    OPK_VITEST_HARNESS: '',
-    OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
-    OPK_VITEST_HARNESS_ROOT: '',
-    OPK_VITEST_HARNESS_INVENTORY: '',
-    AO_ORCHESTRATOR_ESCALATION_STATE: '',
-    AO_OPERATOR_ESCALATION_INBOX: '',
-    AO_ESCALATION_HEALTH_SPOOL: '',
-    AO_WAKE_SUPERVISOR_STATE_DIR: '',
-    ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
-    AO_SIDE_PROCESS_STATE_DIR: '',
-    AO_BASE_DIR: '',
-    AO_MECHANICAL_TRANSPORT_TEMP: '',
     HOME: productionHome,
     XDG_STATE_HOME: productionXdgStateHome,
     TMPDIR: productionTmp,
     TEMP: productionTmp,
     TMP: productionTmp,
-  };
+  });
 }
 
 describe('orchestrator message registry (Issue #298)', () => {
