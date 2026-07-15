@@ -1,4 +1,4 @@
-name: issue-839-base-typecheck-diagnose
+name: issue-839-final-type-fix
 
 on:
   pull_request:
@@ -6,47 +6,108 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
 
+concurrency:
+  group: issue-839-final-type-fix-845
+  cancel-in-progress: true
+
 jobs:
-  diagnose:
+  fix-and-verify:
     if: github.event.pull_request.number == 845
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-      - name: Install dependencies quietly
-        shell: bash
-        run: npm ci --include=dev --silent >/dev/null 2>&1
-      - name: Capture full-pack typecheck
-        id: typecheck
-        continue-on-error: true
+      - name: Install dependencies
+        run: npm ci --include=dev --silent
+      - name: Add runtime bridges and switch imports
         shell: bash
         run: |
-          set -o pipefail
-          npx tsc --project tsconfig.base.json --noEmit 2>&1 | tee /tmp/base-typecheck.log
-      - name: Publish compiler output
-        if: always()
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              'scripts/pack-review-runner.ts': [
+                  ("from './kernel/subprocess.ts';", "from './kernel/subprocess.js';"),
+                  ("from './lib/pack-review-run-store.ts';", "from './lib/pack-review-run-store.js';"),
+              ],
+              'scripts/ao-0-10-review-trigger.test.ts': [
+                  ("from './lib/pack-review-run-store.ts';", "from './lib/pack-review-run-store.js';"),
+                  ("from './pack-review-runner.ts';", "from './pack-review-runner.js';"),
+              ],
+          }
+          for filename, pairs in replacements.items():
+              path = Path(filename)
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if text.count(old) != 1:
+                      raise SystemExit(f'{filename}: expected exactly one {old!r}')
+                  text = text.replace(old, new)
+              path.write_text(text, encoding='utf-8')
+
+          bridges = {
+              'scripts/kernel/subprocess.js': "export * from './subprocess.ts';\n",
+              'scripts/lib/pack-review-run-store.js': "export * from './pack-review-run-store.ts';\n",
+              'scripts/pack-review-runner.js': "export * from './pack-review-runner.ts';\n",
+          }
+          for filename, content in bridges.items():
+              path = Path(filename)
+              if path.exists():
+                  raise SystemExit(f'{filename}: bridge already exists unexpectedly')
+              path.write_text(content, encoding='utf-8')
+          PY
+      - name: Full-pack TypeScript typecheck
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Foundation TypeScript checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck:foundation
+          npm run lint:foundation
+      - name: Review contract gates
+        shell: pwsh
+        run: |
+          ./scripts/check-review-trigger-reconcile.ps1
+          ./scripts/check-orchestrator-review-idempotency.ps1
+          ./scripts/check-orchestrator-review-head-coverage.ps1
+      - name: Runner regression through runtime bridges
+        run: node scripts/run-vitest-with-harness.mjs run scripts/ao-0-10-review-trigger.test.ts
+      - name: Full TypeScript foundation suite
+        run: npm run test:foundation
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/issue-839-base-typecheck-diagnose.yml
+
+          for path in \
+            plugins/ao-codex-pr-reviewer/bin/review.ts \
+            plugins/ao-scope-guard/bin/agent-wrap.ts \
+            plugins/ao-scope-guard/bin/scope-check.ts \
+            plugins/ao-task-declaration/bin/declare.ts \
+            plugins/ao-token-chain-ledger/bin/ledger.mjs; do
+            chmod 0644 "$path"
+            git update-index --chmod=-x "$path"
+          done
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Make pack review runner imports full-pack typecheckable'
+          git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report failure
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.typecheck.outcome }}
-        shell: bash
-        run: |
-          {
-            echo '## Issue #839 tsconfig.base diagnosis'
-            echo
-            echo "outcome=$OUTCOME"
-            echo '```text'
-            cat /tmp/base-typecheck.log
-            echo '```'
-          } >/tmp/base-typecheck-report.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/base-typecheck-report.md
-      - name: Preserve failure result
-        if: steps.typecheck.outcome != 'success'
-        run: exit 1
+        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body "Issue #839 final type-fix failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
