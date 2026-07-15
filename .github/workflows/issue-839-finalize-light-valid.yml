@@ -29,18 +29,23 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci --include=dev --silent
-      - name: Apply focused light-lane contract fixes
+      - name: Apply source contract fixes
+        run: python3 scripts/issue-839-finalize-light.py
+      - name: Remove temporary diagnostics
         shell: bash
         run: |
-          set -euo pipefail
-          python3 scripts/issue-839-finalize-light.py
           git rm --ignore-unmatch \
             .github/workflows/issue-839-light-diagnose.yml \
             .github/workflows/issue-839-finalize-light-labeled.yml \
             .github/workflows/issue-839-finalize-light-valid.yml \
             .github/workflows/issue-839-patch-probe.yml \
             scripts/issue-839-finalize-light.py
-          node scripts/reachability-purge.mjs --write
+      - name: Regenerate reachability manifest
+        run: node scripts/reachability-purge.mjs --write
+      - name: Commit candidate
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
@@ -77,4 +82,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 file-backed light-lane finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 split light-lane finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
