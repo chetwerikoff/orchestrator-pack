@@ -71,6 +71,7 @@
     "scripts/events-optional-consumer-signal-recovery.test.ts": "light",
     "scripts/external-output-shape-guard.test.ts": "light",
     "scripts/finding-ledger-guard.test.ts": "light",
+    "scripts/gate-runner/census-generator.test.ts": "light",
     "scripts/gate-runner/census.test.ts": "light",
     "scripts/gate-runner/contracts.test.ts": "light",
     "scripts/gate-runner/custom/ao-capture-redaction.test.ts": "light",
