@@ -1,5 +1,5 @@
 name: issue-839-finalize
-# Single active task workflow; removes itself after the verified commit.
+# Single active task workflow; connector removes it after the verified commit.
 
 on:
   pull_request:
@@ -44,11 +44,7 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck:foundation
       - name: TypeScript policy lint
-        id: lint
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run lint:foundation 2>&1 | tee /tmp/issue-839-lint.log
+        run: npm run lint:foundation
       - name: Review reconcile gate
         shell: pwsh
         run: ./scripts/check-review-trigger-reconcile.ps1
@@ -80,7 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f scripts/issue-839-pr-apply.yml .github/workflows/issue-839-finalize.yml
+          rm -f scripts/issue-839-pr-apply.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
@@ -90,20 +86,4 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body 'Issue #839 finalized: cutover patch committed; TypeScript checks and three static gates passed; all eight targeted regression files passed in isolated processes; temporary workflows removed from the final tree.'
-      - name: Report failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          {
-            echo '## Issue #839 finalize failure'
-            echo
-            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo
-            echo '```text'
-            cat /tmp/issue-839-lint.log 2>/dev/null || echo 'lint log was not produced; failure occurred before lint'
-            echo '```'
-          } >/tmp/issue-839-failure.md
-          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/issue-839-failure.md
+        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body 'Issue #839 finalized: cutover patch committed; TypeScript checks and three static gates passed; all eight targeted regression files passed in isolated processes. Connector cleanup removes the temporary finalizer next.'
