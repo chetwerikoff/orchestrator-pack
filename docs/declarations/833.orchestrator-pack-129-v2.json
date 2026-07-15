@@ -23,5 +23,18 @@
   "declared_globs": [
     "scripts/graphify/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:fae744334a9f105005bf764f609efddc485ba59ab3bff2af58af6c023c054dd6",
+      "new_active_scope_hash": "sha256:fae744334a9f105005bf764f609efddc485ba59ab3bff2af58af6c023c054dd6",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Reviewer scope check appears to resolve against this snapshot without following the supersedes chain to v3; add reachability-purge.manifest.json here too",
+      "actor": "orchestrator-pack-129",
+      "timestamp": "2026-07-15T13:04:22.013Z",
+      "applied": true
+    }
+  ]
 }
