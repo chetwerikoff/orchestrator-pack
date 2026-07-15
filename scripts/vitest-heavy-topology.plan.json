@@ -1,42 +1,33 @@
 {
-  "issue": 695,
-  "heavyShardCount": 8,
-  "heavyShardIndices": [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8
-  ],
+  "heavyShardCount": 1,
   "heavyShardMatrix": [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
-    8
+    1
   ],
-  "fallbackClassification": "derived",
-  "targetShardSeconds": 900,
-  "heavyLaneTotalWeightSeconds": 7030,
-  "underProvisioned": false,
-  "rawDerivedCount": 8,
-  "weightInputReason": null,
-  "policy": {
-    "targetShardSeconds": 900,
-    "minShardCount": 1,
-    "maxShardCount": 14,
-    "fallbackHeavyShardCount": 7
-  },
-  "parity": {
-    "count": 8,
-    "matrixLength": 8
-  },
-  "oversizedOffenders": [],
-  "unresolvedGuardWeights": []
+  "fallbackClassification": "pre-topology-measurement-failed",
+  "discovered": [],
+  "fullDiscovered": [],
+  "heavyFiles": [],
+  "lightFiles": [],
+  "postMergeWallclockFiles": [],
+  "parkedFiles": [],
+  "heavyShards": [
+    {
+      "shard": 1,
+      "files": [],
+      "totalRuntimeMs": 0
+    }
+  ],
+  "measurementDiagnostic": {
+    "targets": [
+      "scripts/kernel/json-contract.test.ts",
+      "scripts/kernel/subprocess.test.ts",
+      "scripts/protected-signal-receipt.test.ts",
+      "scripts/reachability-purge.test.ts",
+      "scripts/toolchain/toolchain-self-test.test.ts",
+      "scripts/vestigial-fleet-retirement-pr-b.test.ts",
+      "scripts/vestigial-fleet-retirement.test.ts"
+    ],
+    "message": "pre-topology measurement tests failed (exit 1, signal none) for: scripts/reachability-purge.test.ts\n> test\n> node scripts/run-vitest-with-harness.mjs run scripts/reachability-purge.test.ts --reporter=json --outputFile=/tmp/opk-pre-topology-OOYxXa/run-04/vitest-pre-topology.json\n\nJSON report written to /tmp/opk-pre-topology-OOYxXa/run-04/vitest-pre-topology.json\n\nOPK vitest child exited status=1\n\n{\"failures\":[{\"fullName\":\"reachability-purge manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift\",\"failureMessages\":[\"AssertionError: expected { schemaVersion: 1, issue: 819, …(27) } to deeply equal { schemaVersion: 1, issue: 819, …(27) }\\n    at /home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/scripts/reachability-purge.test.ts:56:22\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\\n    at new Promise (<anonymous>)\\n    at runWithCancel (file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\\n    at new Promise (<anonymous>)\\n    at runWithTimeout (file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64\"]}]}",
+    "stack": "Error: pre-topology measurement tests failed (exit 1, signal none) for: scripts/reachability-purge.test.ts\n> test\n> node scripts/run-vitest-with-harness.mjs run scripts/reachability-purge.test.ts --reporter=json --outputFile=/tmp/opk-pre-topology-OOYxXa/run-04/vitest-pre-topology.json\n\nJSON report written to /tmp/opk-pre-topology-OOYxXa/run-04/vitest-pre-topology.json\n\nOPK vitest child exited status=1\n\n{\"failures\":[{\"fullName\":\"reachability-purge manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift\",\"failureMessages\":[\"AssertionError: expected { schemaVersion: 1, issue: 819, …(27) } to deeply equal { schemaVersion: 1, issue: 819, …(27) }\\n    at /home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/scripts/reachability-purge.test.ts:56:22\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\\n    at new Promise (<anonymous>)\\n    at runWithCancel (file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\\n    at new Promise (<anonymous>)\\n    at runWithTimeout (file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\\n    at file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64\"]}]}\n    at ChildProcess.<anonymous> (file:///home/che/.ao/data/worktrees/orchestrator-pack/orchestrator-pack-126/scripts/lib/vitest-pre-topology-measurement.mjs:139:23)\n    at ChildProcess.emit (node:events:519:28)\n    at maybeClose (node:internal/child_process:1101:16)\n    at ChildProcess._handle.onexit (node:internal/child_process:304:5)"
+  }
 }

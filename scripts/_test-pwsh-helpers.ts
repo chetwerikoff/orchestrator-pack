@@ -25,7 +25,20 @@ export function functionBody(source: string, name: string): string {
 
 export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
   const bypassHarness = extraEnv.OPK_VITEST_HARNESS === '';
-  const inheritedAoBaseDir = process.env.AO_BASE_DIR;
+  const harnessAoBaseDir = process.env.OPK_VITEST_HARNESS_AO_BASE_DIR;
+  const harnessRoot = process.env.OPK_VITEST_HARNESS_ROOT;
+  const isHarnessOwnedAoBase = process.env.AO_BASE_DIR === harnessAoBaseDir
+    || (
+      process.env.OPK_VITEST_HARNESS === '1'
+      && Boolean(harnessRoot)
+      && Boolean(process.env.AO_BASE_DIR)
+      && path.resolve(process.env.AO_BASE_DIR ?? '').startsWith(`${path.resolve(harnessRoot ?? '')}${path.sep}`)
+    );
+  const inheritedAoBaseDir = isHarnessOwnedAoBase
+    ? undefined
+    : process.env.AO_BASE_DIR;
+  const harnessMechanicalTransport = process.env.AO_MECHANICAL_TRANSPORT_TEMP
+    || (harnessRoot ? path.join(harnessRoot, 'transport') : '');
   const explicitAoBaseDir = extraEnv.AO_BASE_DIR;
   if (!bypassHarness && (process.env.OPK_VITEST_HARNESS !== '1' || !process.env.AO_ORCHESTRATOR_ESCALATION_STATE)) {
     applyOpkVitestHarnessEscalationEnv();
@@ -62,6 +75,7 @@ export function runPwsh(script: string, extraEnv: Record<string, string> = {}) {
         AO_ORCHESTRATOR_ESCALATION_STATE: process.env.AO_ORCHESTRATOR_ESCALATION_STATE ?? '',
         AO_OPERATOR_ESCALATION_INBOX: process.env.AO_OPERATOR_ESCALATION_INBOX ?? '',
         AO_ESCALATION_HEALTH_SPOOL: process.env.AO_ESCALATION_HEALTH_SPOOL ?? '',
+        AO_MECHANICAL_TRANSPORT_TEMP: harnessMechanicalTransport,
         ...scopedClaimDirEnv,
         ...scopedGhHarnessEnv,
         ...extraEnv,

@@ -345,6 +345,7 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
     OPK_VITEST_HARNESS: '1',
     OPK_VITEST_HARNESS_ROOT: root,
     OPK_VITEST_HARNESS_INVENTORY: inventoryPath,
+    OPK_VITEST_HARNESS_AO_BASE_DIR: aoBase,
     OPK_VITEST_PRODUCTION_WAKE_ROOT: productionWakeRoot,
     XDG_STATE_HOME: state,
     TMPDIR: isolatedTmp,

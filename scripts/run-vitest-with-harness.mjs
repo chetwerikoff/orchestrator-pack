@@ -46,6 +46,9 @@ else {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 64;
   }
+  if (process.exitCode === undefined && process.env.OPK_VITEST_PWSH_PREFLIGHT_ONLY === '1') {
+    process.exitCode = 0;
+  }
   if (process.exitCode === undefined) {
     const child = spawn(real, argv, {
       env: process.env,
@@ -106,7 +109,11 @@ else {
     writeFileSync(join(binDir, 'pwsh.cmd'), `@echo off\r\n"${process.execPath}" "${shimModule}" %*\r\n`, 'utf8');
   } else {
     const shim = join(binDir, 'pwsh');
-    writeFileSync(shim, `#!/usr/bin/env sh\nexec "${process.execPath}" "${shimModule}" "$@"\n`, 'utf8');
+    writeFileSync(
+      shim,
+      `#!/usr/bin/env sh\nOPK_VITEST_PWSH_PREFLIGHT_ONLY=1 "${process.execPath}" "${shimModule}" "$@" || exit $?\nexec "$OPK_REAL_PWSH" "$@"\n`,
+      'utf8',
+    );
     chmodSync(shim, 0o700);
   }
   env.OPK_REAL_PWSH = realPwsh;

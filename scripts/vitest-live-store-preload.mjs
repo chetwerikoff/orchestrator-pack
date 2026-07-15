@@ -240,9 +240,37 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
   ]);
 
   const harnessSnapshotEnv = { ...process.env };
+  const derivedHarnessKeys = new Set([
+    'AO_BASE_DIR',
+    'AO_CI_GREEN_WAKE_RECONCILE_STATE',
+    'AO_DEAD_WORKER_RECONCILE_STATE',
+    'AO_ORCHESTRATOR_ESCALATION_STATE',
+    'AO_OPERATOR_ESCALATION_INBOX',
+    'AO_ESCALATION_HEALTH_SPOOL',
+    'AO_PR_SESSION_BINDING_CACHE',
+    'AO_REPORT_STATE_SEED_STATE',
+    'AO_REVIEW_CLAIM_DIR',
+    'AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE',
+    'AO_REVIEW_TRIGGER_RECONCILE_STATE',
+    'AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE',
+    'AO_SIDE_PROCESS_STATE_DIR',
+    'AO_WAKE_DEDUP_STATE',
+    'AO_WAKE_LISTENER_SIDE_EFFECT_LOCK',
+    'AO_WORKER_MESSAGE_ADOPTION_STATE',
+    'AO_WORKER_MESSAGE_DISPATCH_JOURNAL',
+    'AO_WORKER_MESSAGE_SUBMIT_STATE',
+    'AO_WORKER_NUDGE_CLAIM_DIR',
+    'AO_WORKER_REPORT_STORE',
+    'AO_WORKER_STATUS_STORE',
+  ]);
+  const harnessOwnedAoBase = String(
+    harnessSnapshotEnv.OPK_VITEST_HARNESS_AO_BASE_DIR
+    || harnessSnapshotEnv.AO_BASE_DIR
+    || '',
+  ).trim();
   const stableHarnessKeys = new Set([
     ...Object.keys(harnessSnapshotEnv).filter((name) =>
-      name.startsWith('AO_')
+      (name.startsWith('AO_') && !derivedHarnessKeys.has(name))
       || name.startsWith('OPK_VITEST_')
       || explicitChildPassthroughKeys.has(name),
     ),
@@ -306,6 +334,39 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     harnessSnapshotEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT
     || '',
   ).trim();
+  let childAoBaseSequence = 0;
+  const createChildAoBase = () => {
+    const root = inheritedHarnessRoot();
+    const prefixRoot = root || String(harnessSnapshotEnv.TMPDIR || harnessSnapshotEnv.TEMP || harnessSnapshotEnv.TMP || '').trim();
+    if (prefixRoot) {
+      try {
+        fs.mkdirSync(prefixRoot, { recursive: true, mode: 0o700 });
+        return fs.mkdtempSync(join(prefixRoot, 'ao-child-base-'));
+      } catch {
+        // Fall through to a deterministic in-harness path when mkdtemp is unavailable.
+      }
+    }
+    childAoBaseSequence += 1;
+    return join(process.cwd(), '.opk-vitest-ao-child-base', `${process.pid}-${childAoBaseSequence}`);
+  };
+
+  const isHarnessOwnedValue = (name, value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return false;
+    if (name === 'AO_BASE_DIR') return Boolean(harnessOwnedAoBase) && text === harnessOwnedAoBase;
+    if (derivedHarnessKeys.has(name)) return text === String(harnessSnapshotEnv[name] ?? '').trim();
+    return false;
+  };
+
+  const stripHarnessOwnedDerivedEnv = (env) => {
+    const stripped = { ...(env ?? {}) };
+    for (const name of derivedHarnessKeys) {
+      if (Object.prototype.hasOwnProperty.call(stripped, name) && isHarnessOwnedValue(name, stripped[name])) {
+        delete stripped[name];
+      }
+    }
+    return stripped;
+  };
 
   const hasExplicitHarnessBypass = (env) => {
     if (!env || env.OPK_VITEST_HARNESS !== '') return false;
@@ -339,7 +400,7 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
 
   const mergeHarnessChildEnv = (targetEnv) => {
     const mergedEnv = {
-      ...restoreStableHarnessEnv(targetEnv ?? {}),
+      ...restoreStableHarnessEnv(stripHarnessOwnedDerivedEnv(targetEnv ?? {})),
     };
     for (const [name, value] of Object.entries(harnessSnapshotEnv)) {
       if (!name || value == null) {
@@ -413,6 +474,11 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
           mergedEnv[key] = inheritedValue;
         }
       }
+    }
+    const hasExplicitTestAoBase = Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'AO_BASE_DIR')
+      && !isHarnessOwnedValue('AO_BASE_DIR', explicitEnv.AO_BASE_DIR);
+    if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'AO_BASE_DIR') && !hasExplicitTestAoBase) {
+      mergedEnv.AO_BASE_DIR = createChildAoBase();
     }
     if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
       && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
