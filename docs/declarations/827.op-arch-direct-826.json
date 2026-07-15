@@ -1,0 +1,31 @@
+{
+  "issue_number": 827,
+  "iteration_id": "op-arch-direct-826",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-15T06:01:28.443Z",
+  "baseline": {
+    "commit_sha": "b491a90e73a50d3dd99aa47e459ea6e281b5f22a",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:ebed0fcdd545fd7bc175d7b4a4ba28b5a489f564871de52e04a294740b137830"
+  },
+  "declared_paths": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/rules/ascii-diagrams.mdc",
+    ".cursor/rules/explain-like-im-five.mdc",
+    ".cursor/rules/github-rest-over-graphql.mdc",
+    ".cursor/rules/kb-consult.mdc",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    ".gitignore",
+    "CLAUDE.md",
+    "docs/ao-send-transport-contract.txt",
+    "docs/architecture.md",
+    "docs/issue_queue_index.md",
+    "scripts/pack-worker-report.ps1",
+    "tests/external-output-references/capture-manifest.json",
+    "tests/external-output-references/captures/gh-pr-open/pulls-mergeable-state.provenance.json",
+    "tests/external-output-references/captures/gh-pr-open/pulls-mergeable-state.raw.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
