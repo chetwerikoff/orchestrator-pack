@@ -1,9 +1,15 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { psString, repoRoot } from './_test-pwsh-helpers.js';
+import { runProcess, type ProcessResult } from '#opk-kernel/subprocess';
+
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function psString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
 
 const recoveryPs1 = path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1');
 const claimHelper = path.join(repoRoot, 'scripts/lib/Worker-NudgeClaim.ps1');
@@ -25,7 +31,18 @@ function emittedAuditLines(result: { stdout: string; stderr: string }, expected:
     .filter((line) => line !== '' && !line.startsWith('{') && line.includes(expected));
 }
 
-function runRecovery(policy: string) {
+async function runPwshScript(root: string, script: string): Promise<ProcessResult> {
+  return runProcess({
+    command: 'pwsh',
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    cwd: repoRoot,
+    encoding: 'utf8',
+    inheritParentEnv: true,
+    env: { AO_BASE_DIR: root, OPK_VITEST_HARNESS: '1' },
+  });
+}
+
+async function runRecovery(policy: string): Promise<ProcessResult> {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-821-recovery-'));
   try {
     const script = `
@@ -47,11 +64,7 @@ function runRecovery(policy: string) {
         grantId = $grantId
       } | ConvertTo-Json -Compress
     `;
-    return spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: { ...process.env, AO_BASE_DIR: root, OPK_VITEST_HARNESS: '1' },
-    });
+    return await runPwshScript(root, script);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -64,7 +77,7 @@ function writeAoStub(root: string): string {
   return target;
 }
 
-function runNudge(gated: boolean) {
+async function runNudge(gated: boolean): Promise<{ result: ProcessResult; root: string; journal: string; probe: string }> {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-821-nudge-'));
   const claimDir = path.join(root, 'claims');
   const journal = path.join(root, 'dispatch-journal.json');
@@ -93,11 +106,7 @@ function runNudge(gated: boolean) {
         probeExists = Test-Path -LiteralPath ${psString(probe)}
       } | ConvertTo-Json -Compress
     `;
-    const result = spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: { ...process.env, AO_BASE_DIR: root, OPK_VITEST_HARNESS: '1' },
-    });
+    const result = await runPwshScript(root, script);
     return { result, root, journal, probe };
   } catch (error) {
     rmSync(root, { recursive: true, force: true });
@@ -106,9 +115,9 @@ function runNudge(gated: boolean) {
 }
 
 describe('issue 821 AO_SESSION_ID gate migration', () => {
-  it('admits permitted recovery spawn, seats one grant, and emits one allow audit line', () => {
-    const result = runRecovery("@{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }");
-    expect(result.status).toBe(0);
+  it('admits permitted recovery spawn, seats one grant, and emits one allow audit line', async () => {
+    const result = await runRecovery("@{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }");
+    expect(result.exitCode).toBe(0);
     const parsed = lastJson(result.stdout);
     const expectedAudit = 'autonomous spawn policy allow: action=spawn-new';
     expect(parsed.active).toBe(true);
@@ -118,9 +127,9 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
     expect(emittedAuditLines(result, expectedAudit)).toHaveLength(1);
   });
 
-  it('denies disabled recovery spawn without a partial grant and emits one deny audit line', () => {
-    const result = runRecovery("@{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$false; allowClaimPrResume=$true }");
-    expect(result.status).toBe(0);
+  it('denies disabled recovery spawn without a partial grant and emits one deny audit line', async () => {
+    const result = await runRecovery("@{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$false; allowClaimPrResume=$true }");
+    expect(result.exitCode).toBe(0);
     const parsed = lastJson(result.stdout);
     const expectedAudit = 'autonomous spawn policy deny: action=spawn-new reason=spawn_policy_allowSpawnNew_false';
     expect(parsed.active).toBe(true);
@@ -131,10 +140,10 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
     expect(emittedAuditLines(result, expectedAudit)).toHaveLength(1);
   });
 
-  it('admits a claimed journaled nudge through AO 0.10.2 send argv', () => {
-    const state = runNudge(true);
+  it('admits a claimed journaled nudge through AO 0.10.2 send argv', async () => {
+    const state = await runNudge(true);
     try {
-      expect(state.result.status).toBe(0);
+      expect(state.result.exitCode).toBe(0);
       const parsed = lastJson(state.result.stdout);
       expect(parsed.exitCode).toBe(0);
       expect(parsed.journalExists).toBe(true);
@@ -147,10 +156,10 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
     }
   });
 
-  it('denies an ungated journaled nudge without consuming claim state or creating dispatch state', () => {
-    const state = runNudge(false);
+  it('denies an ungated journaled nudge without consuming claim state or creating dispatch state', async () => {
+    const state = await runNudge(false);
     try {
-      expect(state.result.status).toBe(0);
+      expect(state.result.exitCode).toBe(0);
       const parsed = lastJson(state.result.stdout);
       expect(parsed.exitCode).toBe(46);
       expect(parsed.claimUnchanged).toBe(true);
