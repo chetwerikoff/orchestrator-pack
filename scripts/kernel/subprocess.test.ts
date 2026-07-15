@@ -257,6 +257,16 @@ describe('sanctioned subprocess kernel', () => {
     expect(JSON.parse(result.stdout)).toEqual(values);
   });
 
+  it('delivers explicit stdin bytes without a shell', async () => {
+    const result = await runProcess({
+      command: process.execPath,
+      args: nodeArgs('process.stdin.pipe(process.stdout)'),
+      input: Buffer.from('hello\nworld', 'utf8'),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toBe('hello\nworld');
+  });
+
   it('does not treat empty stdout as success unless explicitly allowed', async () => {
     const denied = await runProcess({ command: process.execPath, args: nodeArgs('process.exit(0)') });
     expect(denied).toMatchObject({ outcome: 'exit', exitCode: 0, ok: false, stdout: '' });

@@ -1,0 +1,74 @@
+{
+  "generatedAt": "2026-01-01T00:00:00.1230000Z",
+  "discover": {
+    "sessions_scanned": 3,
+    "total_commands": 9,
+    "since_days": 30,
+    "supported": [
+      {
+        "command": "grep -R \"café|茶\" scripts",
+        "count": 4,
+        "estimated_savings_tokens": 120
+      },
+      {
+        "command": "git log --oneline",
+        "count": 2,
+        "estimated_savings_tokens": 60
+      }
+    ],
+    "unsupported": [
+      {
+        "base_command": "ao",
+        "example": "ao status --json",
+        "count": 3
+      }
+    ]
+  },
+  "inventoryRows": [
+    {
+      "CommandShape": "grep -R \"café|茶\" scripts",
+      "OccurrenceCount": 4,
+      "EstimatedMissedTokens": 120,
+      "PassthroughMatch": false,
+      "PassthroughPattern": "",
+      "RiskTier": "low",
+      "SensitivityExactnessOverride": false,
+      "RecommendedAction": "low-risk capture candidate (guidance + optional passthrough review when not in §R.3 family)",
+      "FieldPreservationTestRequired": false,
+      "DiscoverBucket": "supported"
+    },
+    {
+      "CommandShape": "git log --oneline",
+      "OccurrenceCount": 2,
+      "EstimatedMissedTokens": 60,
+      "PassthroughMatch": true,
+      "PassthroughPattern": "git log",
+      "RiskTier": "medium",
+      "SensitivityExactnessOverride": false,
+      "RecommendedAction": "inventory + guidance only (no passthrough change without §6-class gate)",
+      "FieldPreservationTestRequired": true,
+      "DiscoverBucket": "supported"
+    },
+    {
+      "CommandShape": "ao",
+      "OccurrenceCount": 3,
+      "EstimatedMissedTokens": null,
+      "PassthroughMatch": true,
+      "PassthroughPattern": "ao ",
+      "RiskTier": "high",
+      "SensitivityExactnessOverride": false,
+      "RecommendedAction": "permanently-raw or §6-gated JSON inspection only (never blanket ao removal)",
+      "FieldPreservationTestRequired": true,
+      "DiscoverBucket": "unsupported"
+    }
+  ],
+  "killGate": {
+    "MaterialityPercent": 15,
+    "LowRiskQuantifiedMissedTokens": 120,
+    "HighRiskAoInvocationCount": 3,
+    "HighRiskAoTokensPerInvocation": 250,
+    "HighRiskAoEstimatedMissedTokens": 750,
+    "HighRiskSharePercent": 86.2,
+    "Decision": "go"
+  }
+}

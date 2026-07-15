@@ -1,0 +1,33 @@
+{
+  "generatedAtMs": 1767225600123,
+  "killSwitchActive": false,
+  "siblingReady": true,
+  "workers": [
+    {
+      "sessionId": "worker-unicode",
+      "derivedStatus": "ready_for_review",
+      "decisionStatus": "ready_for_review",
+      "freshnessAgeMs": 1123,
+      "winningSource": "report_store",
+      "stale": false,
+      "degradedReason": "",
+      "diagnostics": [
+        "unicode café 茶"
+      ],
+      "killSwitchActive": false,
+      "siblingReadinessOk": true
+    },
+    {
+      "sessionId": "orch-main",
+      "derivedStatus": "pr_open",
+      "decisionStatus": "pr_open",
+      "freshnessAgeMs": 2123,
+      "winningSource": "github_pr",
+      "stale": false,
+      "degradedReason": "",
+      "diagnostics": [],
+      "killSwitchActive": false,
+      "siblingReadinessOk": true
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "workerList": {
+    "data": [
+      {
+        "id": "worker-unicode",
+        "role": "worker",
+        "status": "running",
+        "projectId": "orchestrator-pack",
+        "isTerminated": false
+      },
+      {
+        "id": "other-project",
+        "role": "worker",
+        "status": "running",
+        "projectId": "elsewhere",
+        "isTerminated": false
+      }
+    ]
+  },
+  "orchestratorList": {
+    "data": [
+      {
+        "name": "orch-main",
+        "role": "orchestrator",
+        "status": "running",
+        "project": "orchestrator-pack",
+        "isTerminated": false
+      }
+    ]
+  }
+}

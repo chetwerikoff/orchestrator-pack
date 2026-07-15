@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessByStdio, type SpawnSyncReturns } from 'node:child_process';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import { constants as osConstants } from 'node:os';
 
 export type ProcessOutcome =
@@ -25,6 +25,7 @@ export interface ProcessResult {
 export interface RunProcessOptions {
   readonly command: string;
   readonly args?: readonly string[];
+  readonly input?: string | Uint8Array;
   readonly cwd?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
   readonly inheritParentEnv?: boolean;
@@ -140,7 +141,7 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
     : minimalEnvironment(options.env);
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
-  let child: ChildProcessByStdio<null, Readable, Readable>;
+  let child: ChildProcessByStdio<Writable, Readable, Readable>;
 
   try {
     child = spawn(options.command, [...(options.args ?? [])], {
@@ -149,7 +150,7 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
       shell: false,
       detached: process.platform !== 'win32',
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (error) {
     return {
@@ -222,6 +223,12 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
 
   child.stdout.on('data', (chunk: Buffer) => consume(stdout, options.onStdoutChunk, chunk));
   child.stderr.on('data', (chunk: Buffer) => consume(stderr, options.onStderrChunk, chunk));
+
+  if (options.input === undefined) {
+    child.stdin.end();
+  } else {
+    child.stdin.end(options.input);
+  }
 
   const timeout = options.timeoutMs === undefined
     ? undefined

@@ -20,6 +20,8 @@ export interface CaptureManifestEntry {
   readonly path: string;
   readonly contentHash: string;
   readonly exitStatus?: number;
+  readonly status?: 'historical';
+  readonly retiredSurface?: string;
 }
 
 export interface CaptureManifest {
@@ -53,7 +55,7 @@ function captureEntry(value: unknown, path: string): CaptureManifestEntry {
     record,
     path,
     ['id', 'producer', 'sourceCommand', 'kind', 'path', 'contentHash'],
-    ['exitStatus'],
+    ['exitStatus', 'status', 'retiredSurface'],
   );
   const entry: CaptureManifestEntry = {
     id: expectString(record.id, propertyPath(path, 'id')),
@@ -65,9 +67,22 @@ function captureEntry(value: unknown, path: string): CaptureManifestEntry {
     ...(record.exitStatus === undefined
       ? {}
       : { exitStatus: expectInteger(record.exitStatus, propertyPath(path, 'exitStatus')) }),
+    ...(record.status === undefined
+      ? {}
+      : {
+          status: record.status === 'historical'
+            ? 'historical'
+            : fail(propertyPath(path, 'status'), 'expected "historical"'),
+        }),
+    ...(record.retiredSurface === undefined
+      ? {}
+      : { retiredSurface: expectString(record.retiredSurface, propertyPath(path, 'retiredSurface')) }),
   };
   if (!entry.contentHash.startsWith('sha256:')) {
     fail(propertyPath(path, 'contentHash'), 'expected a sha256: content hash');
+  }
+  if ((entry.status === 'historical') !== Boolean(entry.retiredSurface)) {
+    fail(path, 'historical status and retiredSurface must be present together');
   }
   return entry;
 }

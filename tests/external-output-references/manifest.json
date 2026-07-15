@@ -5,7 +5,9 @@
     "ao-worker-report": {
       "source": "ao report / ao acknowledge",
       "variantDir": "variants/ao-worker-report",
-      "variantFromField": "reportState"
+      "variantFromField": "reportState",
+      "status": "historical",
+      "retiredSurface": "ao-report-removed"
     },
     "gh-pr-open": {
       "source": "gh pr list --state open --json number,headRefOid,baseRefName (headCommittedAt derived)",
@@ -20,17 +22,26 @@
     "ao-review-run": {
       "source": "ao review list <project> --json",
       "variantDir": "variants/ao-review-run",
-      "variantFromField": "status"
+      "variantFromField": "status",
+      "status": "historical",
+      "retiredSurface": "ao-review-list-project-removed"
     },
     "ao-status-session": {
       "source": "ao status --json --reports full (session row from data[])",
       "variantDir": "variants/ao-status-session",
-      "defaultVariant": "working-no-runtime"
+      "defaultVariant": "working-no-runtime",
+      "status": "historical",
+      "retiredSurface": "ao-status-reports-flag-removed"
     },
     "ao-0-10-cli": {
       "source": "AO 0.10 daemon health, session ls, orchestrator ls, session get",
       "variantDir": "variants/ao-0-10-cli",
-      "defaultVariant": "daemon-status"
+      "defaultVariant": "daemon-status",
+      "historicalVariants": [
+        "events-list-removed",
+        "report-removed",
+        "status-reports-flag-removed"
+      ]
     },
     "ao-0-10-daemon": {
       "source": "AO 0.10 daemon HTTP fan-out: GET /api/v1/sessions, /projects, per-session /reviews",
