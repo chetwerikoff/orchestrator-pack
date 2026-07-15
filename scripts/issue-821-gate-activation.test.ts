@@ -14,6 +14,13 @@ function lastJson(stdout: string): Record<string, unknown> {
   return JSON.parse(line ?? '{}') as Record<string, unknown>;
 }
 
+function emittedAuditLines(result: { stdout: string; stderr: string }, expected: string): string[] {
+  return `${result.stdout}\n${result.stderr}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('{') && line.includes(expected));
+}
+
 function runRecovery(policy: string) {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-821-recovery-'));
   try {
@@ -99,25 +106,27 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
     const result = runRecovery("@{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }");
     expect(result.status).toBe(0);
     const parsed = lastJson(result.stdout);
+    const expectedAudit = 'autonomous spawn policy allow: action=spawn-new';
     expect(parsed.active).toBe(true);
     expect(parsed.started).toBe(true);
     expect(parsed.grantDenied).toBe(false);
     expect(String(parsed.grantId)).toMatch(/\S/);
-    const lines = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).filter((line) => line.includes('autonomous spawn policy allow: action=spawn-new'));
-    expect(lines).toHaveLength(1);
+    expect(String(parsed.auditLine)).toContain(expectedAudit);
+    expect(emittedAuditLines(result, expectedAudit)).toHaveLength(1);
   });
 
   it('denies disabled recovery spawn without a partial grant and emits one deny audit line', () => {
     const result = runRecovery("@{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$false; allowClaimPrResume=$true }");
     expect(result.status).toBe(0);
     const parsed = lastJson(result.stdout);
+    const expectedAudit = 'autonomous spawn policy deny: action=spawn-new reason=spawn_policy_allowSpawnNew_false';
     expect(parsed.active).toBe(true);
     expect(parsed.started).toBe(false);
     expect(parsed.grantDenied).toBe(true);
     expect(parsed.reason).toBe('spawn_policy_allowSpawnNew_false');
     expect(parsed.grantId).toBeFalsy();
-    const lines = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).filter((line) => line.includes('autonomous spawn policy deny: action=spawn-new reason=spawn_policy_allowSpawnNew_false'));
-    expect(lines).toHaveLength(1);
+    expect(String(parsed.auditLine)).toContain(expectedAudit);
+    expect(emittedAuditLines(result, expectedAudit)).toHaveLength(1);
   });
 
   it('admits a claimed journaled nudge through AO 0.10.2 send argv', () => {
@@ -128,7 +137,8 @@ describe('issue 821 AO_SESSION_ID gate migration', () => {
       expect(parsed.exitCode).toBe(0);
       expect(parsed.journalExists).toBe(true);
       expect(parsed.probeExists).toBe(true);
-      expect(readFileSync(state.probe, 'utf8')).toContain('send --message issue 821 payload --session opk-821');
+      const argv = readFileSync(state.probe, 'utf8').replace(/\s+/g, ' ').trim();
+      expect(argv).toContain('send --message issue 821 payload --session opk-821');
       expect(`${state.result.stdout}\n${state.result.stderr}`).not.toMatch(/autonomous surface requires gated claim token/);
     } finally {
       rmSync(state.root, { recursive: true, force: true });
