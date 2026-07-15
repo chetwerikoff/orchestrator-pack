@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveHeavyLaneFingerprint } from './vitest-ci-lanes.mjs';
+import { listCurrentBindingScopePaths } from './validate-supervisor-heavy-lane-rpc-artifacts.mjs';
 import { cliFail, loadJsonFile } from './cli-guard-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -22,6 +23,7 @@ export function bindSupervisorHeavyLaneRpcMetadata(headSha = currentHeadSha(), r
   manifest.bindingMode = CONTENT_BINDING_MODE;
   manifest.captureCommitSha = headSha;
   manifest.heavyLaneFingerprint = heavyLaneFingerprint;
+  manifest.bindingScopePaths = listCurrentBindingScopePaths(repoRootOverride);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
   for (const pass of manifest.passes ?? []) {
@@ -31,7 +33,13 @@ export function bindSupervisorHeavyLaneRpcMetadata(headSha = currentHeadSha(), r
     meta.heavyLaneFingerprint = heavyLaneFingerprint;
     writeFileSync(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
   }
-  return { headSha, passCount: manifest.passes?.length ?? 0, heavyLaneFingerprint, bindingMode: CONTENT_BINDING_MODE };
+  return {
+    headSha,
+    passCount: manifest.passes?.length ?? 0,
+    heavyLaneFingerprint,
+    bindingMode: CONTENT_BINDING_MODE,
+    bindingScopePathCount: manifest.bindingScopePaths.length,
+  };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

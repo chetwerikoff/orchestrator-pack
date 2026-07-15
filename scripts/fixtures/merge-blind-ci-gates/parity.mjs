@@ -14,7 +14,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveMergeStableCiBase } from '../../lib/resolve-merge-stable-ci-base.mjs';
-import { inspectSupervisorHeavyLaneRpcBinding } from '../../lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs';
+import {
+  inspectSupervisorHeavyLaneRpcBinding,
+  listCurrentBindingScopePaths,
+} from '../../lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(process.argv[2] ?? join(__dirname, '..', '..', '..'));
@@ -215,6 +218,7 @@ async function verifyRpcBindingParity() {
   const manifestPath = join(root, 'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.captureCommitSha = capture;
+  manifest.bindingScopePaths = listCurrentBindingScopePaths(root);
   write(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
   await commitAll(root, 'bind metadata to capture');
   write(join(root, 'unrelated.txt'), 'merge identity changes, scope does not\n');

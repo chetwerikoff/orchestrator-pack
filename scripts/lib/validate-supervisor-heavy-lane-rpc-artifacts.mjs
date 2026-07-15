@@ -27,28 +27,43 @@ function commitObjectExists(commitSha, repoRootOverride) {
   }
 }
 
-function splitNullList(value) {
-  return value.toString('utf8').split('\0').map((item) => item.trim()).filter(Boolean);
-}
-
-function listBindingScopePaths(repoRootOverride, captureSha) {
+export function listCurrentBindingScopePaths(repoRootOverride = repoRoot) {
   const paths = new Set();
-  const current = execFileSync('git', ['ls-files', '-z'], {
+  const current = execFileSync('git', ['ls-files'], {
     cwd: repoRootOverride,
+    encoding: 'utf8',
   });
-  for (const path of splitNullList(current)) {
-    if (RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) paths.add(path);
-  }
-  const captured = execFileSync('git', ['ls-tree', '-r', '--name-only', '-z', captureSha], {
-    cwd: repoRootOverride,
-  });
-  for (const path of splitNullList(captured)) {
+  for (const path of current.split('\n').map((line) => line.trim()).filter(Boolean)) {
     if (RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) paths.add(path);
   }
   return [...paths].sort();
 }
 
-function compareBindingScopeToCapture(repoRootOverride, captureSha) {
+function resolveCapturedBindingScopePaths(manifest) {
+  if (!Array.isArray(manifest.bindingScopePaths)) {
+    return { ok: false, reason: 'RPC manifest missing bindingScopePaths; refresh heavy-lane RPC artifacts' };
+  }
+  const paths = [];
+  for (const path of manifest.bindingScopePaths) {
+    if (typeof path !== 'string' || !RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) {
+      return { ok: false, reason: `RPC manifest contains invalid bindingScopePaths entry: ${String(path)}` };
+    }
+    paths.push(path);
+  }
+  const unique = [...new Set(paths)].sort();
+  if (unique.length === 0) {
+    return { ok: false, reason: 'RPC manifest bindingScopePaths resolved to zero tracked paths' };
+  }
+  return { ok: true, paths: unique };
+}
+
+function listBindingScopePaths(repoRootOverride, capturedPaths) {
+  const paths = new Set(capturedPaths);
+  for (const path of listCurrentBindingScopePaths(repoRootOverride)) paths.add(path);
+  return [...paths].sort();
+}
+
+function compareBindingScopeToCapture(repoRootOverride, captureSha, capturedPaths) {
   if (!commitObjectExists(captureSha, repoRootOverride)) {
     return {
       ok: false,
@@ -57,7 +72,7 @@ function compareBindingScopeToCapture(repoRootOverride, captureSha) {
     };
   }
 
-  const paths = listBindingScopePaths(repoRootOverride, captureSha);
+  const paths = listBindingScopePaths(repoRootOverride, capturedPaths);
   if (paths.length === 0) {
     return { ok: false, reason: 'RPC binding scope resolved to zero tracked paths', stalePaths: [] };
   }
@@ -107,7 +122,9 @@ export function inspectSupervisorHeavyLaneRpcBinding(repoRootOverride = repoRoot
       stalePaths: [],
     };
   }
-  const comparison = compareBindingScopeToCapture(repoRootOverride, capture);
+  const capturedPaths = resolveCapturedBindingScopePaths(manifest);
+  if (!capturedPaths.ok) return { ok: false, reason: capturedPaths.reason, stalePaths: [] };
+  const comparison = compareBindingScopeToCapture(repoRootOverride, capture, capturedPaths.paths);
   return { ...comparison, captureCommitSha: capture, bindingMode: manifest.bindingMode };
 }
 
