@@ -1,0 +1,187 @@
+name: issue-839-finalize-light-labeled
+
+on:
+  pull_request:
+    types: [labeled]
+    branches: [main]
+
+concurrency:
+  group: issue-839-finalize-light-labeled
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.number == 845 && github.event.label.name == 'in_progress'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --include=dev --silent
+      - name: Apply focused light-lane contract fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_one(path: str, before: str, after: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(before)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              target.write_text(text.replace(before, after, 1), encoding='utf-8')
+
+          replace_one(
+              'AGENTS.md',
+              'On delivered findings, use `addressing_reviews` → optional `fixing_ci` → `ready_for_review` after CI is green; never report `completed` with open findings. Inspect pack-store `Get-AoReviewRuns` and the authoritative current-head GitHub review.',
+              'On delivered findings, **must not** idle: use `addressing_reviews` → optional `fixing_ci` → `ready_for_review` after CI is green; never report `completed` with open findings. Inspect current-head pack-store/GitHub review.',
+          )
+          replace_one(
+              'AGENTS.md',
+              'Trust reviewer terminal JSON, the authoritative current-head GitHub review, and the dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are retired. Never synthesize findings from store rows.',
+              'Trust reviewer terminal JSON, the current-head GitHub review, and dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are REMOVED. On telemetry failure, skip silently—never post substitute notifications or synthesize findings from store rows.',
+          )
+
+          harness = Path('tests/harness-pretrigger-config-read.test.ts')
+          text = harness.read_text(encoding='utf-8')
+          if "import { execFileSync } from 'node:child_process';\n" not in text:
+              raise SystemExit('execFileSync import not found')
+          text = text.replace("import { execFileSync } from 'node:child_process';\n", '', 1)
+          replace_from = "    const fnEnd = text.indexOf('function Set-AoProjectReviewerHarness');"
+          replace_to = "    const fnEnd = text.indexOf('function Test-ReviewBeforeCleanupGate');"
+          if text.count(replace_from) != 1:
+              raise SystemExit('Get-AoProjectConfigJson boundary not found exactly once')
+          text = text.replace(replace_from, replace_to, 1)
+          old_trigger = '''  it('Invoke-AoReviewTriggerForWorker allows live-shape fixture and refuses empty reviewers', () => {
+    const livePath = path.join(daemonCapturesDir, 'project-single-reviewers.raw.json');
+    const allowOut = execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `. '${reviewApiLib}'; $live = Get-Content '${livePath}' -Raw | ConvertFrom-Json; $guard = Invoke-AoReviewApiCli -Subcommand 'harness-guard' -Payload @{ payload = (Unwrap-AoProjectConfigPayload -Payload $live); expectedHarness = 'codex' }; $guard | ConvertTo-Json -Compress -Depth 5`,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim();
+    expect(JSON.parse(allowOut)).toMatchObject({ abort: false, harness: 'codex' });
+
+    const refuseOut = execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `. '${reviewApiLib}'; $result = Invoke-AoReviewTriggerForWorker -SessionId 'worker-682' -ProjectConfigFixture @{ reviewers = @() }; $result | ConvertTo-Json -Compress -Depth 5`,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim();
+    const refused = JSON.parse(refuseOut) as { ok: boolean; reason: string; classified: boolean };
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toBe('reviewers_harness_misconfig');
+    expect(refused.classified).toBe(true);
+  });'''
+          new_trigger = '''  it('Invoke-AoReviewTriggerForWorker delegates to the pack runner without reviewer-harness gating', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    const fnStart = text.indexOf('function Invoke-AoReviewTriggerForWorker');
+    const fnEnd = text.indexOf('function Get-ReviewTriggerInvocationLine');
+    const body = text.slice(fnStart, fnEnd);
+    expect(body).toMatch(/Invoke-AoSessionReviewTrigger/);
+    expect(body).toMatch(/pack_review_runner_failed/);
+    expect(body).not.toMatch(/harness-guard|reviewers_harness_misconfig|Get-AoProjectConfigJson/);
+  });'''
+          if text.count(old_trigger) != 1:
+              raise SystemExit('harness trigger test block not found exactly once')
+          text = text.replace(old_trigger, new_trigger, 1)
+          old_write = '''  it('Set-AoProjectReviewerHarness reviewer-write path remains PUT /config', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    const fnStart = text.indexOf('function Set-AoProjectReviewerHarness');
+    const fnEnd = text.indexOf('function Test-ReviewBeforeCleanupGate');
+    const body = text.slice(fnStart, fnEnd);
+    expect(body).toMatch(/Method PUT/);
+    expect(body).toMatch(/\/config"/);
+  });'''
+          new_write = '''  it('retires reviewer-harness config writes from the review adapter', () => {
+    const text = readFileSync(reviewApiLib, 'utf8');
+    expect(text).not.toMatch(/function Set-AoProjectReviewerHarness/);
+    expect(text).not.toMatch(/\/config"/);
+  });'''
+          if text.count(old_write) != 1:
+              raise SystemExit('harness config-write test block not found exactly once')
+          harness.write_text(text.replace(old_write, new_write, 1), encoding='utf-8')
+
+          reach = Path('scripts/reachability-purge.mjs')
+          text = reach.read_text(encoding='utf-8')
+          marker = "const ISSUE_821_KEEP_LIVE_HELPERS = ["
+          if text.count(marker) != 1:
+              raise SystemExit('reachability constant insertion point not unique')
+          text = text.replace(marker, "const ISSUE_839_ACCEPTED_RETIRED_PATHS = [\n  'scripts/ao-review.ps1',\n];\n\n" + marker, 1)
+          replacements = [
+              ('    ...ISSUE_821_ACCEPTED_RETIRED_PATHS,\n  ])', '    ...ISSUE_821_ACCEPTED_RETIRED_PATHS,\n    ...ISSUE_839_ACCEPTED_RETIRED_PATHS,\n  ])'),
+              ('  const issue821RetiredSet = new Set(ISSUE_821_ACCEPTED_RETIRED_PATHS);', '  const issue821RetiredSet = new Set(ISSUE_821_ACCEPTED_RETIRED_PATHS);\n  const issue839RetiredSet = new Set(ISSUE_839_ACCEPTED_RETIRED_PATHS);'),
+              ("          : issue821RetiredSet.has(item) ? 'issue-821-retired'\n            : 'unqualified';", "          : issue821RetiredSet.has(item) ? 'issue-821-retired'\n            : issue839RetiredSet.has(item) ? 'issue-839-retired'\n              : 'unqualified';"),
+              ("             : reason === 'issue-821-retired'\n               ? 'Issue #821 explicitly retires the dead autonomous surface shim/interposer machinery.'\n               : 'Deleted path does not satisfy the binding deadness formula.',", "             : reason === 'issue-821-retired'\n               ? 'Issue #821 explicitly retires the dead autonomous surface shim/interposer machinery.'\n               : reason === 'issue-839-retired'\n                 ? 'Issue #839 explicitly retires the daemon-era ao-review shim after pack-runner cutover.'\n                 : 'Deleted path does not satisfy the binding deadness formula.',"),
+              ('      .filter((row) => !issue821RetiredSet.has(row.path))', '      .filter((row) => !issue821RetiredSet.has(row.path) && !issue839RetiredSet.has(row.path))'),
+          ]
+          for before, after in replacements:
+              if text.count(before) != 1:
+                  raise SystemExit(f'reachability replacement not unique: {before[:60]}')
+              text = text.replace(before, after, 1)
+          reach.write_text(text, encoding='utf-8')
+
+          replace_one(
+              'scripts/reachability-purge.test.ts',
+              "['zero-reachability', 'superseded', 'backup', 'issue-821-retired']",
+              "['zero-reachability', 'superseded', 'backup', 'issue-821-retired', 'issue-839-retired']",
+          )
+          PY
+          git rm .github/workflows/issue-839-light-diagnose.yml
+          git rm .github/workflows/issue-839-finalize-light-labeled.yml
+          node scripts/reachability-purge.mjs --write
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Align light-lane contracts with pack review runner'
+      - name: Verify TypeScript
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Verify focused regressions
+        run: |
+          node scripts/run-vitest-with-harness.mjs run \
+            tests/agents-md-relocation.test.ts \
+            scripts/reachability-purge.test.ts \
+            scripts/review-delivery.test.ts \
+            scripts/review-producer-contract-mapping.test.ts
+      - name: Verify AGENTS size
+        shell: pwsh
+        run: ./scripts/check-agent-rules-line-budget.ps1
+      - name: Verify light lane
+        shell: pwsh
+        run: ./scripts/run-vitest-light-lane.ps1
+      - name: Verify strict self-architect
+        shell: pwsh
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef HEAD
+      - name: Verify full pack
+        shell: pwsh
+        run: ./scripts/verify.ps1
+      - name: Push verified candidate
+        shell: bash
+        run: git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 labeled light-lane finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
