@@ -1,3 +1,4 @@
+// CI is pinned to Node 20, so migrated TypeScript entrypoints need a local loader fallback.
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
