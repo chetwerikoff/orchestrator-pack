@@ -5,70 +5,10 @@
   "sharedCapabilitiesPath": "docs/autonomous-shared-capabilities.json",
   "capabilities": [
     {
-      "id": "invoke-orchestrator-claimed-review-run",
+      "id": "review-start-claim-atomic",
       "classification": "gated",
-      "surface": "shell",
-      "path": "scripts/invoke-orchestrator-claimed-review-run.ps1"
-    },
-    {
-      "id": "ao-review-run-raw",
-      "classification": "unavailable",
-      "surface": "shell",
-      "path": "ao review run"
-    },
-    {
-      "id": "ao-spawn-raw",
-      "classification": "unavailable",
-      "surface": "shell",
-      "path": "ao spawn"
-    },
-    {
-      "id": "ao-spawn-claim-pr",
-      "classification": "unavailable",
-      "surface": "shell",
-      "path": "ao spawn --claim-pr"
-    },
-    {
-      "id": "git-mutating-direct",
-      "classification": "unavailable",
-      "surface": "shell",
-      "path": "git branch|checkout|switch|worktree|reset|stash|push|fetch|commit|merge|rebase|pull|tag|cherry-pick|revert|alias"
-    },
-    {
-      "id": "git-read-only",
-      "classification": "gated",
-      "surface": "shell",
-      "path": "git status|log|rev-parse|diff|show"
-    },
-    {
-      "id": "git-sanctioned-child",
-      "classification": "gated",
-      "surface": "process-parent",
-      "path": "enumerated-pack-review-preflight-paths"
-    },
-    {
-      "id": "git-autonomous-guard",
-      "classification": "gated",
-      "surface": "shell",
-      "path": "scripts/git-autonomous-guard.ps1"
-    },
-    {
-      "id": "git-shim",
-      "classification": "gated",
-      "surface": "shell",
-      "path": "scripts/git"
-    },
-    {
-      "id": "autonomous-real-binaries-config",
-      "classification": "gated",
-      "surface": "operator-config",
-      "path": ".ao/autonomous-real-binaries.json"
-    },
-    {
-      "id": "turn-visible-real-binary-env",
-      "classification": "unavailable",
-      "surface": "env",
-      "path": "AO_REAL_BINARY|GIT_REAL_BINARY|GIT_SYSTEM_BINARY"
+      "surface": "in-process",
+      "path": "scripts/lib/Review-StartClaim.ps1"
     },
     {
       "id": "invoke-manual-review-run",

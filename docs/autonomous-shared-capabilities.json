@@ -1,16 +1,34 @@
 {
   "capabilities": [
     {
-      "id": "ao-autonomous-guard",
+      "id": "autonomous-session-id",
       "classification": "gated",
-      "surface": "shell",
-      "path": "scripts/ao-autonomous-guard.ps1"
+      "surface": "process-env",
+      "path": "AO_SESSION_ID"
     },
     {
-      "id": "ao-shim",
+      "id": "autonomous-spawn-gate",
       "classification": "gated",
-      "surface": "shell",
-      "path": "scripts/ao"
+      "surface": "in-process",
+      "path": "scripts/lib/Orchestrator-AutonomousSpawnGate.ps1"
+    },
+    {
+      "id": "autonomous-review-start-gate",
+      "classification": "gated",
+      "surface": "in-process",
+      "path": "scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1"
+    },
+    {
+      "id": "autonomous-worker-nudge-gate",
+      "classification": "gated",
+      "surface": "in-process",
+      "path": "scripts/lib/Worker-AutonomousNudgeGate.ps1"
+    },
+    {
+      "id": "autonomous-git-boundary",
+      "classification": "gated",
+      "surface": "in-process",
+      "path": "scripts/lib/Orchestrator-AutonomousBoundary.ps1"
     }
   ]
 }

@@ -1,6 +1,7 @@
 #requires -Version 5.1
 <#
-  Wiring guard for orchestrator claimed review-start gate (Issue #318) and spawn/git boundary (#324).
+  Scoped PR lookup regression guard (Issue #557), retained after Issue #821 retired
+  the process-boundary wrapper wiring that previously shared this file.
 #>
 [CmdletBinding()]
 param(
@@ -14,61 +15,8 @@ if (-not $RepoRoot) {
 }
 $RepoRoot = Resolve-PackGateRepoRoot -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
 
-$yaml = Join-Path $RepoRoot 'agent-orchestrator.yaml.example'
-$rules = Get-Content -LiteralPath $yaml -Raw
-$requiredPhrases = @(
-    'invoke-orchestrator-claimed-review-run.ps1',
-    'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE',
-    'autonomous-real-binaries.json',
-    'orchestrator-claimed-review-run/v1',
-    'autonomous-orchestrator-boundary/v1',
-    'scripts/ao',
-    'scripts/git'
-)
-$missing = @($requiredPhrases | Where-Object { $rules -notmatch [regex]::Escape($_) })
-if ($missing.Count -gt 0) {
-    Write-Host ("agent-orchestrator.yaml.example missing orchestrator gate phrases: {0}" -f ($missing -join ', '))
-    exit 1
-}
-
-if ($rules -match '(?m)^\s*AO_REAL_BINARY:\s*') {
-    Write-Host 'agent-orchestrator.yaml.example must not set turn-visible AO_REAL_BINARY (use .ao/autonomous-real-binaries.json)'
-    exit 1
-}
-if ($rules -match '(?m)^\s*GIT_REAL_BINARY:\s*') {
-    Write-Host 'agent-orchestrator.yaml.example must not set turn-visible GIT_REAL_BINARY (use .ao/autonomous-real-binaries.json)'
-    exit 1
-}
-if ($rules -notmatch 'PATH:\s*/.*/orchestrator-pack/scripts:') {
-    Write-Host 'agent-orchestrator.yaml.example must prepend pack scripts/ to orchestrator PATH'
-    exit 1
-}
-
-$paths = @(
-    'scripts/invoke-orchestrator-claimed-review-run.ps1',
-    'scripts/ao-autonomous-guard.ps1',
-    'scripts/git-autonomous-guard.ps1',
-    'scripts/ao',
-    'scripts/git',
-    'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1',
-    'scripts/lib/Orchestrator-AutonomousBoundary.ps1',
-    'docs/orchestrator-claimed-review-run.mjs',
-    'docs/review-start-claim-run-binding.mjs',
-    'scripts/lib/Review-StartClaimRunBinding.ps1',
-    'docs/autonomous-orchestrator-boundary.mjs',
-    'docs/autonomous-review-start-capabilities.json',
-    'docs/autonomous-real-binaries.example.json'
-)
-foreach ($rel in $paths) {
-    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $rel))) {
-        Write-Host "missing required gate artifact: $rel"
-        exit 1
-    }
-}
-
 $snapshotPath = Join-Path $RepoRoot 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1'
 $snapshotText = Get-Content -LiteralPath $snapshotPath -Raw
-# Static regression guard (Issue #557): known-PR snapshot must not call full open-PR list.
 if ($snapshotText -match '(?<!ForNumbers)Invoke-GhOpenPrList\b') {
     Write-Host 'Get-ClaimedReviewStartSnapshot must not call full Invoke-GhOpenPrList when PrNumber is known (#557)'
     exit 1
@@ -82,5 +30,5 @@ if ($snapshotText -notmatch 'Invoke-ReviewStartScopedGhPrView|Invoke-GhOpenPrLis
     exit 1
 }
 
-Write-Host '[PASS] orchestrator claimed review-start gate wiring'
+Write-Host '[PASS] scoped claimed-review PR lookup regression'
 exit 0

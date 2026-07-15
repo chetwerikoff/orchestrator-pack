@@ -139,20 +139,7 @@ function Release-AutonomousClaimPrResumeMutex {
 }
 
 function Get-AutonomousGateResolvedAoCommand {
-    $packRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
-    $realAo = 'ao'
-    $configPath = Join-Path $packRoot '.ao' 'autonomous-real-binaries.json'
-    if (Test-Path -LiteralPath $configPath) {
-        try {
-            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-            $configured = [string]$config.ao
-            if ($configured -and $configured -ne 'ao' -and (Test-Path -LiteralPath $configured)) {
-                $realAo = (Resolve-Path -LiteralPath $configured).Path
-            }
-        }
-        catch { }
-    }
-    return $realAo
+    return 'ao'
 }
 
 function Invoke-AutonomousGateResolvedAoCliJson {

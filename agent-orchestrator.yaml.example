@@ -54,25 +54,8 @@ projects:
       agent: cursor
       agentConfig:
         permissions: permissionless
-        env:
-          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: "1"
-          # Out-of-band real-binary resolution (gitignored). Copy docs/autonomous-real-binaries.example.json
-          # to .ao/autonomous-real-binaries.json with pack scripts/git-real-binary + gitSystemBinary host path
-          # — never point git at /usr/bin/git directly and never expose AO_REAL_BINARY/GIT_REAL_BINARY.
-          # Prepend pack scripts/ so orchestrator turns resolve `ao`, `git`, and `gh` to
-          # scripts/ao + scripts/git + scripts/gh (always-REST inventory reads for gh; Issue #431).
-          # Keep /usr/bin and /bin after scripts/ so shim shebangs (#!/usr/bin/env bash) and helpers
-          # (pwsh, python3, dirname, readlink) resolve; BASH_ENV bootstrap prepends scripts/,
-          # maps live AO_TMUX_NAME *orchestrator* when agentConfig.env does not reach tmux,
-          # and sources scripts/autonomous-bash-env.sh for bash-turn absolute-git interposition.
-          # Do not set POSIXLY_CORRECT or SHELLOPTS=posix here — bash disables BASH_ENV when either is active.
-          BASH_ENV: /home/you/projects/orchestrator-pack/scripts/autonomous-orchestrator-surface-bootstrap.sh
-          # Optional explicit slug for pack gh reads (--repo / GH_REPO beat git-derived slug).
-          # When unset, surface bootstrap exports GH_REPO from the checkout origin (Issue #599).
-          # GH_REPO: chetwerikoff/orchestrator-pack
-          PATH: /home/you/projects/orchestrator-pack/scripts:/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
-          # Optional shared GitHub API governor (Issue #585). Off by default until participation probe passes.
-          # GH_GOVERNOR_ENABLED: "1"
+        # GitHub inventory reads continue through the tracked scripts/gh REST wrapper.
+        # GitHub inventory reads continue through the tracked scripts/gh wrapper (Issue #431).
     worker:
       agent: cursor
       agentConfig:
@@ -403,24 +386,20 @@ projects:
       ROUTINE REVIEW TRIGGER (script-owned — operator reference prose; NOT an LLM turn
       checklist on AO 0.10). Routine review rounds are started by side-process scripts
       named above — the LLM orchestrator turn does not start or drive them. The block
-      below documents legacy import / operator reference only. Historical claimed entry
-      point (non-routine — not the 0.10 default path):
-        pwsh -NoProfile -File scripts/invoke-orchestrator-claimed-review-run.ps1 `
-          -SessionId <worker-session-id> -PrNumber <pr-number> [-EventHeadSha <wake-or-report-sha>]
-      Process-boundary enforcement (fail-closed): autonomous orchestrator sessions set
-      AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1, resolve real ao/git out-of-band via
-      .ao/autonomous-real-binaries.json (never turn-visible AO_REAL_BINARY/GIT_REAL_BINARY),
-      and prepend pack scripts/ to PATH so `ao`, `git`, and `gh` resolve to pack shims (deny spawn and
-      direct tree-mutating git; #318 review-run gate + #324 spawn/git boundary);
-      only the claimed entry point may launch review runs. Gate capability markers:
-      orchestrator-claimed-review-run/v1 and autonomous-orchestrator-boundary/v1.
+      below documents legacy import / operator reference only.
+      IN-PROCESS AUTONOMOUS GATES (Issue #821): AO 0.10.2 injects a non-empty
+      AO_SESSION_ID into orchestrator and worker sessions. Shared spawn, review-start,
+      worker-nudge, and git policy gates activate from presence of that identifier.
+      The sampled review role, operator shells, and CI have no AO_SESSION_ID and remain
+      outside those in-process gates. PATH shims, real-binary indirection, and the
+      claimed-run shell wrapper are retired; direct ao/git shell invocation is not a
+      process-boundary enforcement surface.
       Command-runtime bootstrap (refuses command turns when tools/PATH are incomplete):
+      capability marker: command-runtime-bootstrap/v1
       pwsh -NoProfile -File scripts/orchestrator-command-runtime-preflight.ps1
-      (command-runtime-bootstrap/v1; also invoked from autonomous-orchestrator-surface-bootstrap.sh).
       Recovery-boundary: command-runtime failures route to Issue #522/#527 — no ad hoc cleanup here.
       Preflight (refuses autonomous starts when stale): pwsh -NoProfile -File
       scripts/orchestrator-review-start-preflight.ps1. Side-effect-safe live probe after
-      ao stop / ao start: invoke-orchestrator-claimed-review-run.ps1 -Probe -DryRun (sentinel
       PR 999999 — must record covered-head denial, not merely head-resolution refusal).
       Manual operator override (outside autonomous surface): scripts/invoke-manual-review-run.ps1
       (emits advisory warning on covered/pending heads; does not acquire the autonomous gate).

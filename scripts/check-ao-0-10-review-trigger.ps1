@@ -7,8 +7,6 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
 
-. (Join-Path $PSScriptRoot 'lib/Assert-RequiredPaths.ps1')
-
 $required = @(
     'scripts/ao-review.ps1',
     'scripts/lib/Invoke-AoReviewApi.ps1',
@@ -24,8 +22,7 @@ Assert-RequiredPathsExist -Paths @($required | ForEach-Object { Join-Path $Root 
 $triggerScripts = @(
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
     'scripts/review-trigger-reconcile.ps1',
-    'scripts/lib/Invoke-ReviewTriggerReeval.ps1',
-    'scripts/lib/Invoke-OrchestratorClaimedReviewRun.ps1'
+    'scripts/lib/Invoke-ReviewTriggerReeval.ps1'
 )
 
 foreach ($rel in $triggerScripts) {

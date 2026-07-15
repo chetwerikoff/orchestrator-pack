@@ -36,11 +36,6 @@ foreach ($rel in $paths) {
     }
 }
 
-$bootstrap = Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/autonomous-orchestrator-surface-bootstrap.sh') -Raw
-if ($bootstrap -notmatch 'command-runtime-bootstrap\.mjs') {
-    Write-Host 'autonomous-orchestrator-surface-bootstrap.sh missing command-runtime preflight hook'
-    exit 1
-}
 
 $ghShim = Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/gh') -Raw
 if ($ghShim -notmatch '#530/#531') {

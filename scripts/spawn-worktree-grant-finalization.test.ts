@@ -7,6 +7,7 @@ import {
   SPAWN_WORKTREE_GRANT_MAX_FINALIZATION_ATTEMPTS,
   buildSpawnWorktreeGrantRecord,
   classifySpawnWorktreeGrantFailureDiagnosis,
+  evaluateBoundaryEscapeSignal,
   evaluateSpawnWorktreeGrantConsume,
   evaluateSpawnWorktreeGrantFinalize,
   evaluateSpawnWorktreePathDurable,
@@ -50,7 +51,7 @@ describe('spawn worktree grant finalization (#567)', () => {
     const output = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
@@ -329,14 +330,40 @@ describe('spawn worktree grant finalization (#567)', () => {
     expect(diagnosis.reason).toBe('grant_already_consumed');
     const manualSurface = runPwsh(`
       . ${psString(path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1'))}
-      Remove-Item Env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -ErrorAction SilentlyContinue
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = ''
+      Remove-Item Env:AO_SESSION_ID -ErrorAction SilentlyContinue
+      $env:AO_SESSION_ID = ''
       $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','567') -FixtureMode
       [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason } | ConvertTo-Json -Compress
     `);
     const parsed = JSON.parse(manualSurface);
     expect(parsed.denied).toBe(false);
     expect(parsed.reason).toBe('manual_surface');
+  });
+
+  it('treats daemon AO_SESSION_ID values as armed boundary surface', () => {
+    const packScriptsDir = path.join(repoRoot, 'scripts');
+    const liveSession = evaluateBoundaryEscapeSignal({
+      packScriptsDir,
+      env: {
+        AO_TMUX_NAME: 'orchestrator-pack',
+        AO_SESSION_ID: 'orchestrator-pack-128',
+        __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: '1',
+        PATH: [packScriptsDir, '/usr/bin'].join(':'),
+      },
+    });
+    expect(liveSession).toEqual({ detected: false, reason: 'no_escape_signal', signals: [] });
+
+    const missingSession = evaluateBoundaryEscapeSignal({
+      packScriptsDir,
+      env: {
+        AO_TMUX_NAME: 'orchestrator-pack',
+        AO_SESSION_ID: '',
+        __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: '1',
+        PATH: [packScriptsDir, '/usr/bin'].join(':'),
+      },
+    });
+    expect(missingSession.detected).toBe(true);
+    expect(missingSession.signals).toContain('surface_unset_after_bootstrap');
   });
 
   it('diagnostics separate auth from grant finalization when GitHub reads succeeded', () => {

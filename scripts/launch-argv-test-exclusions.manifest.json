@@ -24,10 +24,7 @@
   "dedicatedTestHelperModules": [
     "scripts/_test-pwsh-helpers.ts",
     "scripts/_test-git-fixture.ts",
-    "scripts/_test-autonomous-ao-stub-fixture.ts",
-    "scripts/_test-spawn-budget-fixture.ts",
     "scripts/_test-spawn-worktree-fixture.ts",
-    "scripts/_test-interposer-pack-fixture.ts",
     "scripts/_test-stub-pack-import-closure.ts",
     "scripts/_review-ready-seed-fixture-test-helpers.ts",
     "scripts/testmode-fleet-harness.ts",

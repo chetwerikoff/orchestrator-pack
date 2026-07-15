@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "external-output-capture-manifest/v1",
+  "issue": 821,
+  "producer": "AO 0.10.2 daemon-spawned session process environment",
+  "captures": [
+    {
+      "id": "ao-session-id-orchestrator-role-present",
+      "raw": "ao-session-id-orchestrator-role-present.raw.json",
+      "rawSha256": "68916333166c48839fd39f0cbeab5421904836ba941e11fb8f81729342891b2b",
+      "provenance": "ao-session-id-orchestrator-role-present.provenance.json",
+      "provenanceSha256": "591ebb8596dcc8e830587eb10fa42307f980df2bf70e532631327997a62ab520",
+      "selector": "$.env.AO_SESSION_ID",
+      "expected": {
+        "kind": "non-empty-string"
+      }
+    },
+    {
+      "id": "ao-session-id-worker-role-present",
+      "raw": "ao-session-id-worker-role-present.raw.json",
+      "rawSha256": "d79e5515dd706ccb48ad12a869843705a2a507e40ba4142c56c0894f1ecfca7e",
+      "provenance": "ao-session-id-worker-role-present.provenance.json",
+      "provenanceSha256": "a6c57c9ac75a71dadeef10909417acf306b917cb56c80589e980b8264bbe241f",
+      "selector": "$.env.AO_SESSION_ID",
+      "expected": {
+        "kind": "non-empty-string"
+      }
+    },
+    {
+      "id": "ao-session-id-review-role-absent",
+      "raw": "ao-session-id-review-role-absent.raw.json",
+      "rawSha256": "7e5dd1fc7b44e91d956fa33979c3aeb6e68db2f40b5fd98a916f53f05a393ae7",
+      "provenance": "ao-session-id-review-role-absent.provenance.json",
+      "provenanceSha256": "41cbc46305335c3d22203879a23917b4c040d4d3fc74cbc65714835ab1d3779f",
+      "selector": "$.env.AO_SESSION_ID",
+      "expected": {
+        "kind": "absent"
+      }
+    }
+  ]
+}

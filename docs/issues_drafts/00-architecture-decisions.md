@@ -848,7 +848,6 @@ diffs and final review judgment stays on the main reviewer.
    yield `ambiguous_spec`. Summary, mapping, direct inspection, and verdict bind
    to one PR head SHA and spec snapshot hash.
 
-
 ## W. Native AO CI-nudge suppression via operator-local `tmux` PATH shim
 
 Decision taken 2026-07-15, no tracked Issue yet (operator machine-local fix, not a pack
@@ -924,3 +923,10 @@ otherwise mutate AO's ledger for this class of fix.
 8. **Rollback.** `rm ~/.local/bin/tmux` then `ao stop && ao start`. No self-heal or
    drift-repair loop (unlike the `cursor-agent` TUI shim) — nothing re-clobbers the file on
    its own, so rollback is just deleting it plus a daemon restart.
+
+## X. Issue #821 — AO 0.10.2 in-process gate activation and boundary retirement
+
+- In-process spawn, review-start, worker-nudge, and git-boundary gates activate when the daemon-provided session identifier is present.
+- Orchestrator and worker roles carry that identifier; the sampled review role, operator shells, and CI do not, so those contexts remain outside the in-process gate.
+- The obsolete command interposition and real-binary indirection layer is retired. Direct command invocation is no longer a process-boundary enforcement surface; callers that require policy enforcement must enter through the surviving in-process gates.
+- The scoped PR lookup regression from Issue #557 remains independently guarded.

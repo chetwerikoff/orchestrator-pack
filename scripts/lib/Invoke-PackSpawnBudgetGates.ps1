@@ -17,9 +17,7 @@ function Invoke-AutonomousSpawnBudgetGate {
         $requiredPaths = @(
             'docs/autonomous-spawn-budget.json',
             'docs/autonomous-spawn-budget.mjs',
-            'scripts/lib/autonomous-guard-fast-path.sh',
-            'scripts/autonomous-spawn-budget.test.ts',
-            'scripts/_test-spawn-budget-fixture.ts'
+            'scripts/autonomous-spawn-budget.test.ts'
         )
 
         foreach ($relative in $requiredPaths) {
@@ -27,21 +25,6 @@ function Invoke-AutonomousSpawnBudgetGate {
             if (-not (Test-Path -LiteralPath $full)) {
                 $Violations.Add("missing $relative")
             }
-        }
-
-        $gitShim = Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/git') -Raw
-        $aoShim = Get-Content -LiteralPath (Join-Path $RepoRoot 'scripts/ao') -Raw
-        if ($gitShim -notmatch 'autonomous-guard-fast-path\.sh') {
-            $Violations.Add('scripts/git must source autonomous-guard-fast-path.sh')
-        }
-        if ($aoShim -notmatch 'autonomous-guard-fast-path\.sh') {
-            $Violations.Add('scripts/ao must source autonomous-guard-fast-path.sh')
-        }
-        if ($gitShim -notmatch '__ao_autonomous_git_argv_is_read_only') {
-            $Violations.Add('scripts/git must use read-only git fast path helper')
-        }
-        if ($aoShim -notmatch '__ao_autonomous_ao_argv_is_read_fast_path') {
-            $Violations.Add('scripts/ao must use read-only ao fast path helper')
         }
 
         $budgetCli = Join-Path $RepoRoot 'docs/autonomous-spawn-budget.mjs'

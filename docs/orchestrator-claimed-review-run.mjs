@@ -38,7 +38,7 @@ export const ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION =
   'orchestrator-claimed-review-run/v1';
 export const ATOMIC_REVIEW_START_CLAIM_CAPABILITY = 'review-start-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
-export const AUTONOMOUS_SURFACE_ENV = 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE';
+export const AUTONOMOUS_SURFACE_ENV = 'AO_SESSION_ID';
 export const CLAIMED_REVIEW_RUN_BYPASS_ENV = 'AO_CLAIMED_REVIEW_RUN_BYPASS';
 
 
@@ -564,9 +564,11 @@ export function evaluateGatePreflight(input) {
   return evaluateAutonomousGatePreflight(input, {
     expectedGateVersion: ORCHESTRATOR_CLAIMED_REVIEW_RUN_GATE_VERSION,
     atomicClaimCapability: ATOMIC_REVIEW_START_CLAIM_CAPABILITY,
-    rawCapabilityId: 'ao-review-run-raw',
-    rawNotUnavailableReason: 'raw_review_run_not_unavailable',
-    extraRequiredUnavailable: ['ao-spawn-raw', 'git-mutating-direct', 'turn-visible-real-binary-env'],
+    requiredCapabilities: [
+      { id: 'autonomous-session-id', classification: 'gated' },
+      { id: 'autonomous-review-start-gate', classification: 'gated' },
+      { id: 'review-start-claim-atomic', classification: 'gated' },
+    ],
   });
 }
 

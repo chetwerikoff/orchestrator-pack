@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  Process-boundary helpers for autonomous orchestrator spawn/git gate (Issue #324).
+  In-process autonomous spawn/git policy helpers (Issues #324/#821).
 #>
 
 . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
@@ -8,384 +8,21 @@
 . (Join-Path $PSScriptRoot 'Autonomous-SpawnWorktreeGate.ps1')
 . (Join-Path $PSScriptRoot 'Autonomous-WorkerRecoveryGate.ps1')
 
-$Script:AutonomousRealBinariesConfigName = 'autonomous-real-binaries.json'
 $Script:AutonomousBoundaryExitCode = 93
-$Script:TurnVisibleRealBinaryEnvVars = @('AO_REAL_BINARY', 'GIT_REAL_BINARY')
 $Script:SanctionedGitPreflightPatterns = @(
     'reviewer-workspace-preflight.ps1',
     'orchestrator-worktree-preflight.ps1'
 )
 $Script:WorkerRecoveryParentPattern = 'invoke-worker-recovery.ps1'
-$Script:ClaimedReviewRunInvokerPattern = 'Invoke-OrchestratorClaimedReviewRun.ps1'
-$Script:SanctionedGitParentPatterns = @(
-    $Script:SanctionedGitPreflightPatterns
-    $Script:ClaimedReviewRunInvokerPattern
-)
+$Script:SanctionedGitParentPatterns = @($Script:SanctionedGitPreflightPatterns)
 $Script:SanctionedGitParentMaxDepth = 2
 
 function Get-PackRootFromBoundaryLib {
     return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
 }
 
-function Get-AutonomousRealBinariesConfigPath {
-    param([string]$PackRoot = '')
-    if (-not $PackRoot) {
-        $PackRoot = Get-PackRootFromBoundaryLib
-    }
-    return Join-Path $PackRoot '.ao' $Script:AutonomousRealBinariesConfigName
-}
-
-function Get-AutonomousRealBinariesConfig {
-    param([string]$PackRoot = '')
-    $configPath = Get-AutonomousRealBinariesConfigPath -PackRoot $PackRoot
-    if (-not (Test-Path -LiteralPath $configPath)) {
-        return $null
-    }
-    try {
-        return (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json)
-    }
-    catch {
-        return $null
-    }
-}
-
-$Script:AutonomousExplicitAoMisconfigurationWarningEmitted = $false
-$Script:AutonomousExplicitAoConfigExampleDoc = 'docs/autonomous-real-binaries.example.json'
-
-function Test-AutonomousLiteralPathIsExecutable {
-    param([string]$CandidatePath)
-
-    if (-not (Test-Path -LiteralPath $CandidatePath)) { return $false }
-    if ($IsWindows) { return $true }
-    try {
-        $mode = [System.IO.File]::GetUnixFileMode($CandidatePath)
-        $executeMask = [System.IO.UnixFileMode]::UserExecute -bor [System.IO.UnixFileMode]::GroupExecute -bor [System.IO.UnixFileMode]::OtherExecute
-        return [bool]($mode -band $executeMask)
-    }
-    catch {
-        return $false
-    }
-}
-
-function Test-AutonomousConfiguredAoPointerUsable {
-    param(
-        [string]$ConfiguredPath,
-        [string]$PackRoot = ''
-    )
-
-    if (-not $ConfiguredPath -or $ConfiguredPath -eq 'ao') { return $false }
-    if (Test-Path -LiteralPath $ConfiguredPath) {
-        if (-not (Test-AutonomousLiteralPathIsExecutable -CandidatePath $ConfiguredPath)) {
-            return $false
-        }
-        $resolved = (Resolve-Path -LiteralPath $ConfiguredPath).Path
-        return -not (Test-IsPackAoShimPathForBoundary -CandidatePath $resolved -PackRoot $PackRoot)
-    }
-    $cmd = Get-Command $ConfiguredPath -ErrorAction SilentlyContinue
-    if ($cmd -and -not (Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source -PackRoot $PackRoot)) {
-        return $true
-    }
-    return $false
-}
-
-function Write-AutonomousExplicitAoConfigMisconfigurationWarning {
-    param(
-        [ValidateSet('broken-pointer', 'invalid-json')]
-        [string]$Reason,
-        [string]$ConfigPath,
-        [string]$ConfiguredPath = ''
-    )
-
-    if ($Script:AutonomousExplicitAoMisconfigurationWarningEmitted) { return }
-    $Script:AutonomousExplicitAoMisconfigurationWarningEmitted = $true
-    $exampleDoc = $Script:AutonomousExplicitAoConfigExampleDoc
-    if ($Reason -eq 'invalid-json') {
-        [Console]::Error.WriteLine("autonomous real-binary config: invalid JSON (config: $ConfigPath; see $exampleDoc)")
-        return
-    }
-    [Console]::Error.WriteLine("autonomous real-binary config: explicit ao pointer missing or not executable: $ConfiguredPath (config: $ConfigPath; see $exampleDoc)")
-}
-
-function Invoke-AutonomousExplicitAoConfigSurfacePolicy {
-    param([string]$PackRoot = '')
-
-    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) { return }
-    $configPath = Get-AutonomousRealBinariesConfigPath -PackRoot $PackRoot
-    if (-not (Test-Path -LiteralPath $configPath)) { return }
-    try {
-        $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-        $configuredAo = [string]$config.ao
-        if ($configuredAo -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configuredAo -PackRoot $PackRoot)) {
-            Write-AutonomousExplicitAoConfigMisconfigurationWarning -Reason 'broken-pointer' -ConfigPath $configPath -ConfiguredPath $configuredAo
-        }
-    }
-    catch {
-        Write-AutonomousExplicitAoConfigMisconfigurationWarning -Reason 'invalid-json' -ConfigPath $configPath
-    }
-}
-
-function Test-TurnVisibleRealBinaryBypassPresent {
-    foreach ($name in $Script:TurnVisibleRealBinaryEnvVars) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if ($value) {
-            return $true
-        }
-    }
-    return $false
-}
-
-function Get-PackGitRealBinaryPath {
-    param([string]$PackRoot = '')
-
-    if (-not $PackRoot) {
-        $PackRoot = Get-PackRootFromBoundaryLib
-    }
-    return (Join-Path (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path 'git-real-binary')
-}
-
-function Test-IsPackGitShimPath {
-    param(
-        [string]$CandidatePath,
-        [string]$PackRoot = ''
-    )
-
-    if (-not $CandidatePath) { return $false }
-    if ($CandidatePath -like '*git-autonomous-guard.ps1') { return $true }
-    if (-not $PackRoot) {
-        $PackRoot = Get-PackRootFromBoundaryLib
-    }
-    $packScripts = (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path
-    try {
-        $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
-    }
-    catch {
-        return $false
-    }
-    return $resolved -eq (Join-Path $packScripts 'git')
-}
-
-function Test-IsPackGitRealBinaryPath {
-    param(
-        [string]$CandidatePath,
-        [string]$PackRoot = ''
-    )
-
-    if (-not $CandidatePath) { return $false }
-    if ($CandidatePath -like '*git-real-binary*') {
-        return $true
-    }
-    try {
-        $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
-    }
-    catch {
-        return $false
-    }
-    return $resolved -eq (Get-PackGitRealBinaryPath -PackRoot $PackRoot)
-}
-
-function Test-IsKnownSystemGitBinaryPath {
-    param([string]$CandidatePath)
-
-    if (-not $CandidatePath) { return $false }
-    $leaf = Split-Path -Leaf $CandidatePath
-    if ($leaf -ne 'git') { return $false }
-    $normalized = ($CandidatePath -replace '\\', '/')
-    return $normalized -match '^(?i)(/usr/bin/|/bin/|/usr/local/bin/)'
-}
-
-function Test-IsPackAoShimPathForBoundary {
-    param(
-        [string]$CandidatePath,
-        [string]$PackRoot = ''
-    )
-
-    if (-not $CandidatePath) { return $false }
-    if ($CandidatePath -like '*ao-autonomous-guard.ps1') { return $true }
-    if (-not $PackRoot) {
-        $PackRoot = Get-PackRootFromBoundaryLib
-    }
-    $packScripts = (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path
-    try {
-        $resolved = (Get-Item -LiteralPath $CandidatePath -ErrorAction Stop).FullName
-    }
-    catch {
-        return $false
-    }
-    return $resolved -eq (Join-Path $packScripts 'ao')
-}
-
-function Resolve-AutonomousRealBinaryPath {
-    param(
-        [ValidateSet('ao', 'git')]
-        [string]$BinaryName,
-        [string]$PackRoot = ''
-    )
-
-    if (-not $PackRoot) {
-        $PackRoot = Get-PackRootFromBoundaryLib
-    }
-    if ($BinaryName -eq 'ao') {
-        Invoke-AutonomousExplicitAoConfigSurfacePolicy -PackRoot $PackRoot
-    }
-    $packScripts = (Resolve-Path -LiteralPath (Join-Path $PackRoot 'scripts')).Path
-    $config = Get-AutonomousRealBinariesConfig -PackRoot $PackRoot
-    if ($config) {
-        $configured = [string]$config.$BinaryName
-        if ($configured) {
-            if ($BinaryName -eq 'ao' -and -not (Test-AutonomousConfiguredAoPointerUsable -ConfiguredPath $configured -PackRoot $PackRoot)) {
-                # Broken explicit ao (including literal "ao"); surface policy warned — fall through.
-            }
-            elseif ($configured -ne $BinaryName) {
-                if (Test-Path -LiteralPath $configured) {
-                    $resolved = (Resolve-Path -LiteralPath $configured).Path
-                    $isShim = if ($BinaryName -eq 'ao') {
-                        Test-IsPackAoShimPathForBoundary -CandidatePath $resolved -PackRoot $PackRoot
-                    }
-                    else {
-                        Test-IsPackGitShimPath -CandidatePath $resolved -PackRoot $PackRoot
-                    }
-                    if (-not $isShim) {
-                        return $resolved
-                    }
-                }
-                $cmd = Get-Command $configured -ErrorAction SilentlyContinue
-                if ($cmd) {
-                    $isShim = if ($BinaryName -eq 'ao') {
-                        Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source -PackRoot $PackRoot
-                    }
-                    else {
-                        Test-IsPackGitShimPath -CandidatePath $cmd.Source -PackRoot $PackRoot
-                    }
-                    if (-not $isShim) {
-                        return $cmd.Source
-                    }
-                }
-            }
-        }
-    }
-
-    foreach ($dir in ($env:PATH -split [IO.Path]::PathSeparator)) {
-        if (-not $dir -or $dir -eq $packScripts) { continue }
-        $candidate = Join-Path $dir $BinaryName
-        if (-not (Test-Path -LiteralPath $candidate)) { continue }
-        $isShim = if ($BinaryName -eq 'ao') {
-            Test-IsPackAoShimPathForBoundary -CandidatePath $candidate -PackRoot $PackRoot
-        }
-        else {
-            Test-IsPackGitShimPath -CandidatePath $candidate -PackRoot $PackRoot
-        }
-        if ($isShim) { continue }
-        return (Get-Item -LiteralPath $candidate).FullName
-    }
-
-    if ($BinaryName -eq 'ao') {
-        foreach ($fallback in @(
-                (Join-Path $HOME '.local/bin/ao'),
-                (Join-Path $HOME '.npm-global/bin/ao'),
-                (Join-Path $HOME '.ao/bin/ao')
-            )) {
-            if (Test-Path -LiteralPath $fallback) {
-                return (Resolve-Path -LiteralPath $fallback).Path
-            }
-        }
-    }
-
-    $cmd = Get-Command $BinaryName -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $isShim = if ($BinaryName -eq 'ao') {
-            Test-IsPackAoShimPathForBoundary -CandidatePath $cmd.Source -PackRoot $PackRoot
-        }
-        else {
-            Test-IsPackGitShimPath -CandidatePath $cmd.Source -PackRoot $PackRoot
-        }
-        if (-not $isShim) {
-            return $cmd.Source
-        }
-    }
-    return $BinaryName
-}
-
 function Test-OrchestratorAutonomousSurfaceActiveForBoundary {
-    return [string]$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE -eq '1'
-}
-
-function Resolve-RealAoExecutable {
-    param([string]$PackRoot = '')
-
-    if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
-        return Resolve-AutonomousRealBinaryPath -BinaryName 'ao' -PackRoot $PackRoot
-    }
-
-    if ($env:AO_REAL_BINARY -and $env:AO_REAL_BINARY -ne 'ao') {
-        if (Test-Path -LiteralPath $env:AO_REAL_BINARY -ErrorAction SilentlyContinue) {
-            $resolved = (Resolve-Path -LiteralPath $env:AO_REAL_BINARY).Path
-            if (-not (Test-IsPackAoShimPathForBoundary -CandidatePath $resolved -PackRoot $PackRoot)) { return $resolved }
-        }
-        $configured = Get-Command $env:AO_REAL_BINARY -ErrorAction SilentlyContinue
-        if ($configured -and -not (Test-IsPackAoShimPathForBoundary -CandidatePath $configured.Source -PackRoot $PackRoot)) {
-            return $configured.Source
-        }
-    }
-
-    return Resolve-AutonomousRealBinaryPath -BinaryName 'ao' -PackRoot $PackRoot
-}
-
-function Resolve-SystemGitExecutable {
-    param([string]$PackRoot = '')
-
-    if (-not $PackRoot) {
-        $PackRoot = Get-PackRootFromBoundaryLib
-    }
-    $config = Get-AutonomousRealBinariesConfig -PackRoot $PackRoot
-    if ($config) {
-        $systemBinary = [string]$config.gitSystemBinary
-        if ($systemBinary -and (Test-Path -LiteralPath $systemBinary)) {
-            $resolved = (Resolve-Path -LiteralPath $systemBinary).Path
-            if (-not (Test-IsPackGitShimPath -CandidatePath $resolved -PackRoot $PackRoot) -and -not (Test-IsPackGitRealBinaryPath -CandidatePath $resolved -PackRoot $PackRoot)) {
-                return $resolved
-            }
-        }
-        $configured = [string]$config.git
-        if ($configured -and $configured -ne 'git' -and (Test-Path -LiteralPath $configured)) {
-            $resolved = (Resolve-Path -LiteralPath $configured).Path
-            if (-not (Test-IsPackGitShimPath -CandidatePath $resolved -PackRoot $PackRoot) -and -not (Test-IsPackGitRealBinaryPath -CandidatePath $resolved -PackRoot $PackRoot)) {
-                return $resolved
-            }
-        }
-    }
-
-    if (-not (Test-OrchestratorAutonomousSurfaceActiveForBoundary)) {
-        if ($env:GIT_SYSTEM_BINARY -and (Test-Path -LiteralPath $env:GIT_SYSTEM_BINARY -ErrorAction SilentlyContinue)) {
-            return (Resolve-Path -LiteralPath $env:GIT_SYSTEM_BINARY).Path
-        }
-    }
-
-    foreach ($candidate in @('/usr/bin/git', '/bin/git', '/usr/local/bin/git')) {
-        if (Test-Path -LiteralPath $candidate) {
-            return (Resolve-Path -LiteralPath $candidate).Path
-        }
-    }
-
-    $cmd = Get-Command git -ErrorAction SilentlyContinue
-    if ($cmd -and -not (Test-IsPackGitShimPath -CandidatePath $cmd.Source -PackRoot $PackRoot) -and -not (Test-IsPackGitRealBinaryPath -CandidatePath $cmd.Source -PackRoot $PackRoot)) {
-        return $cmd.Source
-    }
-    return 'git'
-}
-
-function Resolve-RealGitExecutable {
-    if (Test-OrchestratorAutonomousSurfaceActiveForBoundary) {
-        return Get-PackGitRealBinaryPath
-    }
-
-    if ($env:GIT_REAL_BINARY -and $env:GIT_REAL_BINARY -ne 'git') {
-        if (Test-Path -LiteralPath $env:GIT_REAL_BINARY -ErrorAction SilentlyContinue) {
-            $resolved = (Resolve-Path -LiteralPath $env:GIT_REAL_BINARY).Path
-            if (-not (Test-IsPackGitShimPath -CandidatePath $resolved -PackRoot $PackRoot)) { return $resolved }
-        }
-    }
-
-    return Resolve-AutonomousRealBinaryPath -BinaryName 'git'
+    return -not [string]::IsNullOrEmpty([string]$env:AO_SESSION_ID)
 }
 
 function Get-LinuxParentProcessId {
@@ -477,11 +114,6 @@ function Test-ProcessCommandLineIsSanctionedPreflightParent {
     return Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $CommandLine -SanctionedPatterns $Script:SanctionedGitPreflightPatterns
 }
 
-function Test-ProcessCommandLineIsInvokeOrchestratorClaimedReviewRun {
-    param([string]$CommandLine)
-
-    return Test-ProcessCommandLineIsSanctionedGitParent -CommandLine $CommandLine -SanctionedPatterns @($Script:ClaimedReviewRunInvokerPattern)
-}
 
 function Test-ProcessCommandLineContainsUnquotedShellCompoundOperator {
     param([string]$Segment)
@@ -572,9 +204,6 @@ function Get-AutonomousGitSanctionedProvenanceClass {
 
     for ($i = 0; $i -lt $depthLimit; $i++) {
         $cmd = $chain[$i]
-        if (Test-ProcessCommandLineIsInvokeOrchestratorClaimedReviewRun -CommandLine $cmd) {
-            return 'claimed_review_run'
-        }
         if (Test-ProcessCommandLineIsAoReviewRunGitWorktreeSetup -CommandLine $cmd) {
             return 'review_run_worktree_command'
         }

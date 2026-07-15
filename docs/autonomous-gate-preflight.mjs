@@ -16,8 +16,9 @@ export function toArray(value) {
  * @param {object} config
  * @param {string} config.expectedGateVersion
  * @param {string} config.atomicClaimCapability
- * @param {string} config.rawCapabilityId
- * @param {string} config.rawNotUnavailableReason
+ * @param {Array<{ id: string, classification: string, reason?: string }>} [config.requiredCapabilities]
+ * @param {string} [config.rawCapabilityId]
+ * @param {string} [config.rawNotUnavailableReason]
  * @param {string[]} [config.extraRequiredUnavailable]
  */
 export function evaluateAutonomousGatePreflight(input, config) {
@@ -48,31 +49,35 @@ export function evaluateAutonomousGatePreflight(input, config) {
       };
     }
   }
-  const raw = toArray(input.liveCapabilities).find((row) => row.id === config.rawCapabilityId);
-  if (!raw) {
-    return {
-      ok: false,
-      reason: `${config.rawCapabilityId}_missing`,
-      auditShape: 'preflight_refusal',
-      markerState: config.rawCapabilityId,
-    };
-  }
-  if (String(raw.classification).toLowerCase() !== 'unavailable') {
-    return {
-      ok: false,
-      reason: config.rawNotUnavailableReason,
-      auditShape: 'preflight_refusal',
-      markerState: config.rawCapabilityId,
-    };
-  }
-  for (const requiredUnavailable of config.extraRequiredUnavailable ?? []) {
-    const row = toArray(input.liveCapabilities).find((cap) => cap.id === requiredUnavailable);
-    if (!row || String(row.classification).toLowerCase() !== 'unavailable') {
+  const requiredCapabilities = config.requiredCapabilities ?? [
+    ...(config.rawCapabilityId
+      ? [{
+          id: config.rawCapabilityId,
+          classification: 'unavailable',
+          reason: config.rawNotUnavailableReason,
+        }]
+      : []),
+    ...(config.extraRequiredUnavailable ?? []).map((id) => ({
+      id,
+      classification: 'unavailable',
+    })),
+  ];
+  for (const required of requiredCapabilities) {
+    const row = toArray(input.liveCapabilities).find((capability) => capability.id === required.id);
+    if (!row) {
       return {
         ok: false,
-        reason: `${requiredUnavailable}_not_unavailable`,
+        reason: `${required.id}_missing`,
         auditShape: 'preflight_refusal',
-        markerState: requiredUnavailable,
+        markerState: required.id,
+      };
+    }
+    if (String(row.classification).toLowerCase() !== String(required.classification).toLowerCase()) {
+      return {
+        ok: false,
+        reason: required.reason ?? `${required.id}_not_${required.classification}`,
+        auditShape: 'preflight_refusal',
+        markerState: required.id,
       };
     }
   }
@@ -109,7 +114,11 @@ export function validateCapabilityInventory(input) {
 export function loadAutonomousCapabilitiesInventory(inventoryPath, defaultRelativePath) {
   const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const resolved = inventoryPath ?? path.join(repoRoot, defaultRelativePath);
-  return JSON.parse(readFileSync(resolved, 'utf8'));
+  const inventory = JSON.parse(readFileSync(resolved, 'utf8'));
+  if (!inventory?.sharedCapabilitiesPath) return inventory;
+  const sharedPath = path.join(repoRoot, String(inventory.sharedCapabilitiesPath));
+  const shared = JSON.parse(readFileSync(sharedPath, 'utf8'));
+  return mergeAutonomousCapabilitiesInventory(inventory, shared);
 }
 
 /**

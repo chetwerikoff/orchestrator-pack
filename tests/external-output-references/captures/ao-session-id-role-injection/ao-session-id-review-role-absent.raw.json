@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "ao-session-env-capture/v1",
+  "role": "review",
+  "capturedAtUtc": "2026-07-14T04:38:28Z",
+  "env": {},
+  "assertions": {
+    "aoSessionIdPresent": false
+  }
+}

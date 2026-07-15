@@ -23,7 +23,7 @@ export { validateCapabilityInventory };
 export const WORKER_NUDGE_GATE_VERSION = 'worker-nudge-gate/v1';
 export const ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY = 'worker-nudge-claim-atomic/v1';
 export const ORCHESTRATOR_TURN_SURFACE = 'orchestrator-turn';
-export const AUTONOMOUS_SURFACE_ENV = 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE';
+export const AUTONOMOUS_SURFACE_ENV = 'AO_SESSION_ID';
 export const JOURNALED_SEND_INTERNAL_ENV = 'AO_JOURNALED_SEND_INTERNAL';
 export const JOURNALED_SEND_INTERNAL_CAPABILITY = 'journaled-worker-send-internal/v1';
 export const OPERATOR_ESCALATION_PREFIX = '[worker-nudge-gate] ESCALATION:';
@@ -1361,8 +1361,12 @@ export function evaluatePreflight(input) {
   return evaluateAutonomousGatePreflight(input, {
     expectedGateVersion: WORKER_NUDGE_GATE_VERSION,
     atomicClaimCapability: ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY,
-    rawCapabilityId: 'ao-worker-send-raw',
-    rawNotUnavailableReason: 'raw_worker_send_not_unavailable',
+    requiredCapabilities: [
+      { id: 'autonomous-session-id', classification: 'gated' },
+      { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+      { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+      { id: 'journaled-worker-send-gated', classification: 'gated' },
+    ],
   });
 }
 

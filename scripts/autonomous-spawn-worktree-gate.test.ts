@@ -5,7 +5,6 @@ import { spawnSync, spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildSpawnWorktreeGrantRecord,
-  evaluateBoundaryEscapeSignal,
   evaluateSpawnWorktreeGrantConsume,
   parseGitSpawnWorktreeAddArgv,
   parseSpawnTargetFromArgv,
@@ -16,7 +15,6 @@ import {
 } from '../docs/spawn-worktree-grant.mjs';
 import { evaluateRecoverySpawnRoute } from '../docs/worker-recovery.mjs';
 import { evaluateAutonomousGitBoundary } from '../docs/autonomous-orchestrator-boundary.mjs';
-import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 import { repoRoot, runPwsh, psString } from './_test-pwsh-helpers.js';
 import { withTempGitRepo, resolveTrustedSystemGit } from './_test-git-fixture.js';
 import { execFileSync } from 'node:child_process';
@@ -27,12 +25,10 @@ import {
   resolveSpawnDefaultBranchBaseRef,
   rewriteGitWorktreeAddCommitArgv,
 } from '../docs/spawn-worktree-git-ref.mjs';
-import { autonomousBashEnv } from './_test-git-fixture.js';
 
 const boundaryLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousBoundary.ps1');
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
 const spawnWorktreeGatePath = path.join(repoRoot, 'scripts/lib/Autonomous-SpawnWorktreeGate.ps1');
-const gitGuardPath = path.join(repoRoot, 'scripts/git-autonomous-guard.ps1');
 
 function repoHeadOid(root: string) {
   return execFileSync(resolveTrustedSystemGit(), ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().toLowerCase();
@@ -53,7 +49,7 @@ function buildGrantForRepo(root: string, input: Record<string, unknown>) {
 function runSpawnGitDenied(argv: string[], extraEnv: Record<string, string> = {}) {
   const output = runPwsh(`
     . ${psString(boundaryLibPath)}
-    $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+    $env:AO_SESSION_ID = '1'
     $verdict = Test-AutonomousGitDenied -Argv @(${argv.map((part) => psString(part)).join(',')})
     [pscustomobject]@{ denied = [bool]$verdict.denied; reason = [string]$verdict.reason } | ConvertTo-Json -Compress
   `, extraEnv);
@@ -81,7 +77,7 @@ describe('spawn worktree grant (#470)', () => {
     const mint = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
@@ -121,7 +117,7 @@ describe('spawn worktree grant (#470)', () => {
 
     const output = runPwsh(`
       . ${psString(spawnGateLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','--claim-pr','999991') -FixtureMode -FixturePolicy @{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }
@@ -152,7 +148,7 @@ describe('spawn worktree grant (#470)', () => {
     const output = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $built = Invoke-SpawnWorktreeGrantCli -Subcommand 'buildGrant' -Payload @{
@@ -213,7 +209,7 @@ describe('spawn worktree grant (#470)', () => {
     const probeScript = (target: string) => `
       . ${psString(spawnWorktreeGatePath)}
       . ${psString(boundaryLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = ${psString(projectId)}
       $env:AO_SPAWN_WORKTREE_GRANT_ID = ${psString(grantId)}
@@ -277,7 +273,7 @@ describe('spawn worktree grant (#470)', () => {
     tempRoots.push(aoBase);
     const output = runPwsh(`
       . ${psString(spawnWorktreeGatePath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_BASE_DIR = ${psString(aoBase)}
       $env:AO_PROJECT_ID = 'orchestrator-pack'
       $holder = @{ pid = $PID; host = 'test'; processGuid = 'a'; surface = 'test'; acquiredAtUtc = '2026-01-01T00:00:00Z' }
@@ -314,54 +310,6 @@ describe('spawn worktree grant (#470)', () => {
     });
     expect(verdict.ok).toBe(false);
     expect(verdict.reason).toBe('path_escape');
-  });
-
-  it('boundary escape audit detects surface unset after bootstrap', () => {
-    const signal = evaluateBoundaryEscapeSignal({
-      env: {
-        AO_TMUX_NAME: 'op-orchestrator',
-        __AO_AUTONOMOUS_SURFACE_BOOTSTRAP: '1',
-        AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '',
-        PATH: '/usr/bin:/bin',
-      },
-      packScriptsDir: '/repo/scripts',
-    });
-    expect(signal.detected).toBe(true);
-    expect(signal.reason).toBe('surface_and_path_cooperative');
-    expect(signal.signals).toContain('surface_unset_after_bootstrap');
-    expect(signal.signals).toContain('pack_scripts_missing_from_path');
-  });
-
-  it('guard integration: allowed spawn sets grant env for downstream git', () => {
-    withAoSpawnProbeStub(({ probeFile, pack }) => {
-      const isolatedGuardPath = path.join(pack.scriptsDir, 'ao-autonomous-guard.ps1');
-      const result = spawnSync(
-        'pwsh',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', isolatedGuardPath,
-          'spawn', '--project', 'orchestrator-pack', '--name', 'Gate probe', '--issue', '470', '--prompt', 'Spawn gate fixture prompt'],
-        {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          env: autonomousSpawnFixtureProbeEnv({ AO_SPAWN_PROBE_FILE: probeFile }),
-        },
-      );
-      expect(result.status).toBe(0);
-      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous spawn worktree grant mint/i);
-    });
-  });
-
-  it('unsanctioned mutating git still denied on autonomous surface', () => {
-    const gitDeny = spawnSync(
-      'pwsh',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', gitGuardPath, 'branch', '-m', 'blocked'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: autonomousBashEnv(),
-      },
-    );
-    expect(gitDeny.status).toBe(93);
-    expect(gitDeny.stderr).toMatch(/autonomous tree-mutating git denied/i);
   });
 
   it('mjs git boundary honors spawn grant allow flag', () => {
@@ -525,7 +473,7 @@ describe('spawn worktree grant (#470)', () => {
   it('denies prompt-only spawn-new without derivable issue target (#652)', () => {
     const output = runPwsh(`
       . ${psString(spawnGateLibPath)}
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $spawn = Test-AutonomousSpawnDenied -Argv @('spawn','--prompt','fixture holder prompt') -FixtureMode -FixturePolicy @{ version='autonomous-spawn-policy/v1'; allowSpawnNew=$true; allowClaimPrResume=$true }
       [pscustomobject]@{ denied = [bool]$spawn.denied; reason = [string]$spawn.reason; grantId = [string]$env:AO_SPAWN_WORKTREE_GRANT_ID } | ConvertTo-Json -Compress
     `);

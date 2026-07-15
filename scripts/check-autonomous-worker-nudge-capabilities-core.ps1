@@ -1,6 +1,6 @@
 #requires -Version 5.1
 <#
-  CI drift guard for autonomous worker nudge capability inventory (Issue #384).
+  CI drift guard for autonomous worker nudge capability inventory (Issue #384 / #821).
 #>
 [CmdletBinding()]
 param(
@@ -27,9 +27,20 @@ foreach ($row in @($inventory.capabilities)) {
     }
 }
 
-$raw = $inventory.capabilities | Where-Object { $_.id -eq 'ao-worker-send-raw' } | Select-Object -First 1
-if (-not $raw -or [string]$raw.classification -ne 'unavailable') {
-    $violations.Add('ao-worker-send-raw must be unavailable')
+$requiredGatedIds = @(
+    'worker-nudge-claim-atomic',
+    'invoke-gated-worker-nudge',
+    'journaled-worker-send-gated',
+    'worker-nudge-gate-preflight'
+)
+foreach ($requiredId in $requiredGatedIds) {
+    $row = @($inventory.capabilities | Where-Object { [string]$_.id -eq $requiredId }) | Select-Object -First 1
+    if (-not $row -or [string]$row.classification -ne 'gated') {
+        $violations.Add("required gated capability missing: $requiredId")
+    }
+}
+if (@($inventory.capabilities | Where-Object { [string]$_.id -eq 'ao-worker-send-raw' }).Count -gt 0) {
+    $violations.Add('retired ao-worker-send-raw capability must not remain in the live inventory')
 }
 
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')

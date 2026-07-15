@@ -535,15 +535,19 @@ function Invoke-WorkerRecoverySpawn {
     $argv = @($built.argv)
 
     $gate = Test-AutonomousSpawnDenied -Argv $argv -PackRoot $PackRoot -FixturePolicy $SpawnPolicy -FixtureMode:$FixtureMode
+    $auditLine = [string]$gate.auditLine
+    if ($auditLine) {
+        Write-Host $auditLine
+    }
     if ($gate.denied) {
-        return @{ ok = $false; started = $false; reason = [string]$gate.reason; grantDenied = $true }
+        return @{ ok = $false; started = $false; reason = [string]$gate.reason; grantDenied = $true; auditLine = $auditLine }
     }
 
     if ($DryRun) {
-        return @{ ok = $true; started = $true; reason = 'spawn_started_dry_run'; grantDenied = $false }
+        return @{ ok = $true; started = $true; reason = 'spawn_started_dry_run'; grantDenied = $false; auditLine = $auditLine }
     }
     if ($FixtureMode) {
-        return @{ ok = $true; started = $true; reason = 'spawn_started_fixture'; grantDenied = $false }
+        return @{ ok = $true; started = $true; reason = 'spawn_started_fixture'; grantDenied = $false; auditLine = $auditLine }
     }
 
     Push-Location -LiteralPath $PackRoot

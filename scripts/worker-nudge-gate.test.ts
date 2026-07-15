@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,7 +8,6 @@ import {
   useIsolatedPrSessionBindingCache,
 } from './_test-pr-session-binding-cache-fixture.js';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
-import { AO_SEND_0102_HELP } from './_ao-send-0102-test-fixture.js';
 import {
   ATOMIC_WORKER_NUDGE_CLAIM_CAPABILITY,
   WORKER_NUDGE_GATE_VERSION,
@@ -57,80 +56,6 @@ function withClaimStoreEnv(dir: string, script: string) {
       if ($prevClaimDir) { $env:AO_WORKER_NUDGE_CLAIM_DIR = $prevClaimDir } else { Remove-Item Env:AO_WORKER_NUDGE_CLAIM_DIR -ErrorAction SilentlyContinue }
     }
   `;
-}
-function writeDownstreamAoStub(dir: string): string {
-  const stub = path.join(dir, 'ao-downstream');
-  writeFileSync(
-    stub,
-    `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "\${1:-}" == "send" && "\${2:-}" == "--help" ]]; then
-  cat <<'AO_SEND_HELP_EOF'
-${AO_SEND_0102_HELP}
-AO_SEND_HELP_EOF
-  exit 0
-fi
-if [[ "\${1:-}" == "send" ]]; then
-  message=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      send) shift ;;
-      --message) message="$2"; shift 2 ;;
-      --session) shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  exit 0
-fi
-printf 'unhandled:%s\\n' "$*" >&2
-exit 99
-`,
-  );
-  chmodSync(stub, 0o755);
-  return stub;
-}
-
-function withAutonomousRealBinariesConfig(downstreamAo: string): { cleanup: () => void } {
-  const aoDir = path.join(repoRoot, '.ao');
-  const configPath = path.join(aoDir, 'autonomous-real-binaries.json');
-  const prior = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
-  mkdirSync(aoDir, { recursive: true });
-  writeFileSync(
-    configPath,
-    `${JSON.stringify(
-      {
-        ao: downstreamAo,
-        git: path.join(repoRoot, 'scripts/git-real-binary'),
-        gitSystemBinary: '/usr/bin/git',
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  return {
-    cleanup: () => {
-      if (prior === null) {
-        rmSync(configPath, { force: true });
-      } else {
-        writeFileSync(configPath, prior);
-      }
-    },
-  };
-}
-
-function autonomousProductionChainEnv(aoBaseDir: string): NodeJS.ProcessEnv {
-  const scriptsDir = path.join(repoRoot, 'scripts');
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-    AO_TMUX_NAME: 'opk-orchestrator',
-    PATH: `${scriptsDir}:${process.env.PATH ?? ''}`,
-    AO_BASE_DIR: aoBaseDir,
-  };
-  delete env.AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE;
-  delete env.AO_JOURNALED_SEND_ASSUME_CONTRACT;
-  delete env.AO_REAL_BINARY;
-  return env;
 }
 
 
@@ -534,25 +459,29 @@ describe('worker nudge gate (#384)', () => {
   });
 
 
-  it('preflight fails closed when raw send capability is missing from live inventory', () => {
+  it('preflight fails closed when the daemon session capability is missing', () => {
     const result = evaluatePreflight({
       loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
       atomicClaimPresent: true,
       liveCapabilities: [
-        { id: 'invoke-gated-worker-nudge', classification: 'gated' },
+        { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+        { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+        { id: 'journaled-worker-send-gated', classification: 'gated' },
       ],
     });
     expect(result.ok).toBe(false);
-    expect(result.reason).toBe('ao-worker-send-raw_missing');
+    expect(result.reason).toBe('autonomous-session-id_missing');
   });
 
-  it('preflight passes with gated inventory', () => {
+  it('preflight passes with the AO 0.10.2 in-process capability inventory', () => {
     const result = evaluatePreflight({
       loadedGateVersion: WORKER_NUDGE_GATE_VERSION,
       atomicClaimPresent: true,
       liveCapabilities: [
-        { id: 'invoke-gated-worker-nudge', classification: 'gated' },
-        { id: 'ao-worker-send-raw', classification: 'unavailable' },
+        { id: 'autonomous-session-id', classification: 'gated' },
+        { id: 'autonomous-worker-nudge-gate', classification: 'gated' },
+        { id: 'worker-nudge-claim-atomic', classification: 'gated' },
+        { id: 'journaled-worker-send-gated', classification: 'gated' },
       ],
     });
     expect(result.ok).toBe(true);
@@ -638,32 +567,19 @@ describe('Worker-NudgeClaim single-flight contract', () => {
 
   it('rejects ungated journaled send on autonomous surface', () => {
     const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-    const result = spawnSync(
-      'pwsh',
-      ['-NoProfile', '-File', journaled, 'opk-test', '-Source', 'test'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        input: 'hello worker',
-        env: {
-          ...process.env,
-          AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
-          AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1',
-        },
-      },
-    );
+    const script = `
+      $env:AO_JOURNALED_SEND_ASSUME_CONTRACT = '1'
+      $env:AO_SESSION_ID = '1'
+      'hello worker' | & pwsh -NoProfile -File ${psString(journaled)} 'opk-test' -Source 'test' 2>$null
+      [pscustomobject]@{ status = $LASTEXITCODE } | ConvertTo-Json -Compress
+    `;
+    const jsonLine = runPwsh(script)
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{'))
+      .pop();
+    const result = JSON.parse(jsonLine ?? '{}');
     expect(result.status).toBe(46);
-  });
-
-  it('ao shim denies raw worker send on autonomous surface', () => {
-    const aoShim = path.join(repoRoot, 'scripts/ao');
-    const result = spawnSync('bash', [aoShim, 'send', 'opk-worker', 'ping'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1' },
-    });
-    expect(result.status).toBe(93);
-    expect(result.stderr).toMatch(/autonomous worker nudges paused/i);
   });
 
   it('autonomous guard allows registered journaled transport internal capability', () => {
@@ -677,7 +593,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       if (-not $registered.ok) { throw $registered.reason }
       $childParts = @(
         '$env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE = ''1''' ,
-        '$env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = ''1''' ,
+        '$env:AO_SESSION_ID = ''1''' ,
         ('$env:AO_JOURNALED_SEND_INTERNAL = ''' + $registered.capability + ''''),
         ('. ' + $guard),
         '$deny = Test-AutonomousRawWorkerSendDenied -Argv @(''send'',''opk-worker'',''ping'')',
@@ -693,7 +609,7 @@ describe('Worker-NudgeClaim single-flight contract', () => {
   it('rejects forged AO_JOURNALED_SEND_INTERNAL bypass', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
     const script = `
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_JOURNALED_SEND_INTERNAL = '1'
       . ${psString(guard)}
       $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
@@ -788,101 +704,12 @@ describe('Worker-NudgeClaim single-flight contract', () => {
     expect(result.trusted).toBe(true);
   });
 
-  it('production chain help probe: journaled-worker-send DryRun preflight through real scripts/ao', () => {
-    const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-'));
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-'));
-    const downstreamAo = writeDownstreamAoStub(stubDir);
-    const config = withAutonomousRealBinariesConfig(downstreamAo);
-    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-    try {
-      const result = spawnSync(
-        'pwsh',
-        ['-NoProfile', '-File', journaled, 'opk-2', '-Source', 'diagnostic', '-DryRun'],
-        {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          input: 'probe',
-          env: autonomousProductionChainEnv(aoBaseDir),
-        },
-      );
-      expect(result.status).toBe(0);
-      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --message\/--session contract is unavailable/i);
-      expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
-    } finally {
-      config.cleanup();
-      rmSync(aoBaseDir, { recursive: true, force: true });
-      rmSync(stubDir, { recursive: true, force: true });
-    }
-  });
-
-  it('production chain delivery: gated journaled send through real scripts/ao and guard', () => {
-    const claimDir = tempClaimDir();
-    const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-'));
-    const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-'));
-    const downstreamAo = writeDownstreamAoStub(stubDir);
-    const config = withAutonomousRealBinariesConfig(downstreamAo);
-    const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-    try {
-      const script = withClaimStoreEnv(
-        claimDir,
-        `
-        . ${psString(helperPath)}
-        $claim = Acquire-WorkerNudgeClaim -PrNumber 428 -CycleKey 'run:issue-428' -IntentClass 'review-findings' -WorkerTarget 'opk-1:gen1' -SessionId 'opk-1' -Surface 'test'
-        if (-not $claim.acquired) { throw "acquire failed: $($claim.reason)" }
-        $token = New-WorkerNudgeClaimToken -ClaimResult $claim
-        'hello worker' | pwsh -NoProfile -File ${psString(journaled)} 'opk-1' -ClaimToken $token -GatedNudge -Source 'test'
-        [pscustomobject]@{ exitCode = $LASTEXITCODE } | ConvertTo-Json -Compress
-      `,
-      );
-      const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: autonomousProductionChainEnv(aoBaseDir),
-      });
-      const jsonLine = `${result.stdout}${result.stderr}`
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith('{'))
-        .pop();
-      const parsed = JSON.parse(jsonLine ?? '{}');
-      expect(parsed.exitCode).toBe(0);
-      expect(`${result.stderr}${result.stdout}`).not.toMatch(/autonomous_raw_worker_send_denied/i);
-      expect(`${result.stderr}${result.stdout}`).not.toMatch(/ao send --message\/--session contract is unavailable/i);
-    } finally {
-      config.cleanup();
-      rmSync(claimDir, { recursive: true, force: true });
-      rmSync(aoBaseDir, { recursive: true, force: true });
-      rmSync(stubDir, { recursive: true, force: true });
-    }
-  });
-
   describe('internal capability deny', () => {
-    it('raw ao send on autonomous surface is internal capability deny exit 93', () => {
-      const aoShim = path.join(repoRoot, 'scripts/ao');
-      const result = spawnSync('bash', [aoShim, 'send', 'opk-worker', 'ping'], {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
-      });
-      expect(result.status).toBe(93);
-      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
-    });
-
-    it('raw ao send --help without capability is internal capability deny exit 93', () => {
-      const aoShim = path.join(repoRoot, 'scripts/ao');
-      const result = spawnSync('bash', [aoShim, 'send', '--help'], {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: { ...process.env, AO_AUTONOMOUS_ORCHESTRATOR_SURFACE: '1', PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}` },
-      });
-      expect(result.status).toBe(93);
-      expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
-    });
 
     it('forged unregistered internal capability token is internal capability deny exit 93', () => {
       const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
       const script = `
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $env:AO_JOURNALED_SEND_INTERNAL = 'journaled-worker-send-internal/v1:0123456789abcdef'
         . ${psString(guard)}
         $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')
@@ -891,47 +718,6 @@ describe('Worker-NudgeClaim single-flight contract', () => {
       const result = JSON.parse(runPwsh(script));
       expect(result.denied).toBe(true);
       expect(result.reason).toBe('autonomous_raw_worker_send_denied');
-    });
-
-    it('TTL-expired internal capability token is internal capability deny exit 93', () => {
-      const capabilityLib = path.join(repoRoot, 'scripts/lib/Journaled-WorkerSendInternalCapability.ps1');
-      const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-expired-'));
-      const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-expired-'));
-      const downstreamAo = writeDownstreamAoStub(stubDir);
-      const config = withAutonomousRealBinariesConfig(downstreamAo);
-      const script = `
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-        $env:AO_BASE_DIR = ${psString(aoBaseDir)}
-        $env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE = '1'
-        . ${psString(capabilityLib)}
-        $registered = Register-JournaledWorkerSendInternalCapability
-        if (-not $registered.ok) { throw $registered.reason }
-        $nonce = ($registered.capability -split ':',2)[1]
-        $capPath = Join-Path (Get-JournaledWorkerSendInternalCapabilityDir) "$nonce.json"
-        $record = Get-Content -LiteralPath $capPath -Raw | ConvertFrom-Json
-        $record.expiresAtUtc = ([datetime]::UtcNow.AddMinutes(-5)).ToString('o')
-        ($record | ConvertTo-Json -Compress -Depth 6) | Set-Content -LiteralPath $capPath -Encoding UTF8
-        Remove-Item Env:AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE -ErrorAction SilentlyContinue
-        $env:AO_JOURNALED_SEND_INTERNAL = $registered.capability
-        & bash ${psString(path.join(repoRoot, 'scripts/ao'))} send opk-worker ping
-        exit $LASTEXITCODE
-      `;
-      try {
-        const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            PATH: `${path.join(repoRoot, 'scripts')}:${process.env.PATH ?? ''}`,
-          },
-        });
-        expect(result.status).toBe(93);
-        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
-      } finally {
-        config.cleanup();
-        rmSync(aoBaseDir, { recursive: true, force: true });
-        rmSync(stubDir, { recursive: true, force: true });
-      }
     });
 
     it('replayed internal capability nonce is internal capability deny exit 93', () => {
@@ -957,44 +743,12 @@ describe('Worker-NudgeClaim single-flight contract', () => {
         rmSync(aoBaseDir, { recursive: true, force: true });
       }
     });
-
-    it('sibling ao send --file with live unconsumed token is internal capability deny exit 93', () => {
-      const aoBaseDir = mkdtempSync(path.join(tmpdir(), 'journaled-cap-sibling-'));
-      const stubDir = mkdtempSync(path.join(tmpdir(), 'ao-downstream-sibling-'));
-      const downstreamAo = writeDownstreamAoStub(stubDir);
-      const payloadFile = path.join(stubDir, 'payload.txt');
-      writeFileSync(payloadFile, 'leaked sibling probe');
-      const journaled = path.join(repoRoot, 'scripts/journaled-worker-send.ps1');
-      const config = withAutonomousRealBinariesConfig(downstreamAo);
-      const script = `
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
-        $env:AO_BASE_DIR = ${psString(aoBaseDir)}
-        $env:AO_TMUX_NAME = 'opk-orchestrator'
-        $env:PATH = ${psString(path.join(repoRoot, 'scripts'))} + ':' + $env:PATH
-        $cap = pwsh -NoProfile -File ${psString(journaled)} opk-2 -RegisterCapabilityOnly
-        $sibling = Start-Process -FilePath 'bash' -ArgumentList @(${psString(path.join(repoRoot, 'scripts/ao'))}, 'send', 'opk-worker', '--file', ${psString(payloadFile)}) -PassThru -Wait -NoNewWindow -Environment @{ AO_AUTONOMOUS_ORCHESTRATOR_SURFACE='1'; AO_JOURNALED_SEND_INTERNAL=$cap; AO_BASE_DIR=${psString(aoBaseDir)}; PATH=$env:PATH }
-        exit $sibling.ExitCode
-      `;
-      try {
-        const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
-          cwd: repoRoot,
-          encoding: 'utf8',
-          env: autonomousProductionChainEnv(aoBaseDir),
-        });
-        expect(result.status).toBe(93);
-        expect(`${result.stderr}${result.stdout}`).toMatch(/autonomous_raw_worker_send_denied|autonomous worker nudges paused/i);
-      } finally {
-        config.cleanup();
-        rmSync(aoBaseDir, { recursive: true, force: true });
-        rmSync(stubDir, { recursive: true, force: true });
-      }
-    });
   });
 
   it('rejects well-formed but unregistered journaled internal capability tokens', () => {
     const guard = path.join(repoRoot, 'scripts/lib/Worker-AutonomousNudgeGate.ps1');
     const script = `
-      $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+      $env:AO_SESSION_ID = '1'
       $env:AO_JOURNALED_SEND_INTERNAL = 'journaled-worker-send-internal/v1:0123456789abcdef'
       . ${psString(guard)}
       $deny = Test-AutonomousRawWorkerSendDenied -Argv @('send','opk-worker','ping')

@@ -1,0 +1,42 @@
+{
+  "issue_number": 821,
+  "iteration_id": "issue-821-final-v9",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-14T14:09:48.456Z",
+  "baseline": {
+    "commit_sha": "13b1a6e69f6482e008a850728219b17234361f60",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:bd5cf57573ee82a469d9e26132ebe9bef397c792c9b2e00545dfb1459f41c70a"
+  },
+  "declared_paths": [
+    "agent-orchestrator.yaml.example"
+  ],
+  "declared_globs": [
+    "docs/ao-spawn-shape.mjs",
+    "docs/autonomous-*",
+    "docs/orchestrator-claimed-review-run.mjs",
+    "docs/orchestrator-recovery-runbook.md",
+    "docs/spawn-worktree-grant.mjs",
+    "docs/worker-nudge-gate.mjs",
+    "docs/issues_drafts/00-architecture-decisions.md",
+    "scripts/**",
+    "tests/external-output-references/review-pipeline-spawn-budget/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:0d983ec2b72decf234e6a552fda7997cd177a0991cce89c1369007fe6e19be05",
+      "new_active_scope_hash": "sha256:bd5cf57573ee82a469d9e26132ebe9bef397c792c9b2e00545dfb1459f41c70a",
+      "changed": {
+        "added": [
+          "tests/external-output-references/review-pipeline-spawn-budget/**"
+        ],
+        "removed": []
+      },
+      "reason": "Include the deterministic spawn-budget capture evidence migrated by issue #821.",
+      "actor": "chatgpt-github",
+      "timestamp": "2026-07-15T01:34:02.564807Z",
+      "applied": true
+    }
+  ]
+}

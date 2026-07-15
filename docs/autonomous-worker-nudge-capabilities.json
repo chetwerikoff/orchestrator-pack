@@ -5,6 +5,12 @@
   "sharedCapabilitiesPath": "docs/autonomous-shared-capabilities.json",
   "capabilities": [
     {
+      "id": "worker-nudge-claim-atomic",
+      "classification": "gated",
+      "surface": "in-process",
+      "path": "scripts/lib/Worker-NudgeClaim.ps1"
+    },
+    {
       "id": "invoke-gated-worker-nudge",
       "classification": "gated",
       "surface": "shell",
@@ -15,12 +21,6 @@
       "classification": "gated",
       "surface": "shell",
       "path": "scripts/journaled-worker-send.ps1"
-    },
-    {
-      "id": "ao-worker-send-raw",
-      "classification": "unavailable",
-      "surface": "shell",
-      "path": "ao send"
     },
     {
       "id": "worker-nudge-gate-preflight",

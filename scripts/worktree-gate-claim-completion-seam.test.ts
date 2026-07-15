@@ -22,7 +22,7 @@ describe('worktree gate claim completion seam (#454)', () => {
     const target = path.join(workspaces, 'opk-rev-454-happy');
     try {
       const result = runSeamFixture(`
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $env:AO_BASE_DIR = ${psString(aoBase)}
         $env:AO_PROJECT_ID = ${psString(projectId)}
         . ${psString(claimLibPath)}
@@ -102,7 +102,7 @@ describe('worktree gate claim completion seam (#454)', () => {
     const targetSecond = path.join(workspaces, 'opk-rev-454-replay-2');
     try {
       const result = runSeamFixture(`
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $env:AO_BASE_DIR = ${psString(aoBase)}
         $env:AO_PROJECT_ID = ${psString(projectId)}
         . ${psString(claimLibPath)}
@@ -120,7 +120,7 @@ describe('worktree gate claim completion seam (#454)', () => {
         $targetFirst = ${psString(targetFirst)}
         $contendedJob = Start-Job -ScriptBlock {
           param($boundary, $target, $head, $aoBase, $projectId)
-          $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+          $env:AO_SESSION_ID = '1'
           $env:AO_BASE_DIR = $aoBase
           $env:AO_PROJECT_ID = $projectId
           . $boundary
@@ -162,7 +162,7 @@ describe('worktree gate claim completion seam (#454)', () => {
     const target = path.join(workspaces, 'opk-rev-454-dead');
     try {
       const result = runSeamFixture(`
-        $env:AO_AUTONOMOUS_ORCHESTRATOR_SURFACE = '1'
+        $env:AO_SESSION_ID = '1'
         $env:AO_BASE_DIR = ${psString(aoBase)}
         $env:AO_PROJECT_ID = ${psString(projectId)}
         . ${psString(claimLibPath)}

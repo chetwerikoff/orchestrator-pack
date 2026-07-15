@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "external-output-provenance/v1",
+  "producer": "AO 0.10.2 daemon-spawned session process environment",
+  "sourceIssue": 821,
+  "sourceSection": "Binding surface / semantic broadening",
+  "captureMethod": "authoring-time live role process-environment probe",
+  "capturedAtUtc": "2026-07-14T04:38:28Z",
+  "role": "review",
+  "redaction": "The concrete session identifier is intentionally replaced with <redacted-non-empty>. Presence/absence is the bound datum.",
+  "reproducedByImplementationPr": false
+}
