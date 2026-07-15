@@ -1,0 +1,53 @@
+---
+description: Before proposing any solution/fix/recommendation, consult the wiki then synto knowledge base and summarize findings first
+alwaysApply: true
+---
+<!-- generated from ~/agent-rules/*.md — do not hand-edit; re-run the generator to resync -->
+
+# Knowledge-base consult before proposing a solution (global)
+
+Operating principle: **for any request that calls for a solution, consult the
+local knowledge base before you answer.** When a prompt asks you to fix, build,
+choose, design, or recommend — anything where your reply proposes a course of
+action — search the knowledge base first and ground the proposal in what you
+find. This is a default, not an occasional step.
+
+**When it applies (the trigger).** Any request whose answer is a *solution,
+fix, recommendation, decision, or design* — e.g. "fix this bug", "how do I do
+X", "what should I use", "design Y", "why is this failing and how do I resolve
+it". It is keyed on the *shape of the expected answer* (a proposed action), not
+on the exact words used.
+
+**When to run the search (the timing).** *After* you understand the problem —
+and for a bug, *after* you have identified the root cause — but *before* you
+propose the solution. Diagnose first, then consult the base, then answer. Do
+not propose a fix and search afterward; the search must inform the proposal.
+
+**Order — wiki, then synto.**
+1. Search the **`wiki`** MCP server first (its `search` tool) for material
+   bearing on the problem and the candidate solution.
+2. Then search **`synto`** (its `search_articles` / `search_source_segments`
+   tools; use `answer_question` only when you need a synthesized answer and
+   accept that it triggers LLM calls / cost).
+3. For `wiki.search`, prefer a query fan-out via `queries[]` with 2-4
+   reformulations, not a single query. Mix the author's exact term, a plain
+   language task description, and RU/EN synonyms; if recall is weak, add the
+   original term spelling.
+4. After search returns its top hits, read 2-3 full notes/articles with
+   `wiki.read` / `synto.read_article` before proposing a solution. Do not rely
+   on snippets alone.
+5. **Summarize** in one or two lines what the base contributes that is relevant
+   to the solution — citing what you found — then give your answer informed by
+   it.
+
+**When the base has nothing.** If neither `wiki` nor `synto` returns anything
+relevant, say so in one line and proceed with your own reasoning. Absence of KB
+material is never a reason to stall or to skip answering.
+
+**When to skip entirely.** Pure state or action prompts that imply no proposed
+solution — "what's the git status", "run the tests", "show me file X", "list
+the open PRs". Answer these directly with no KB search.
+
+This is a prompt-level obligation (you see the rule and follow it), not a hard
+hook. The knowledge base is `wiki` + `synto`; both are wired as MCP servers in
+Claude, Codex, and Cursor.

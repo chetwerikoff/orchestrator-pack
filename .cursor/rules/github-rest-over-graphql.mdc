@@ -1,0 +1,45 @@
+---
+description: Prefer GitHub REST over GraphQL for reads; forbid gh api graphql when REST serves the datum
+alwaysApply: true
+---
+<!-- generated from ~/agent-rules/*.md — do not hand-edit; re-run the generator to resync -->
+
+# GitHub reads: prefer REST over GraphQL (global)
+
+Operating principle: **serve GitHub read/metadata needs from REST endpoints,
+not GraphQL.** GraphQL shares a separate, easy-to-exhaust rate-limit bucket;
+REST is the default transport unless no REST equivalent exists.
+
+**Default transport.**
+- Use `gh api <REST path>` — absolute REST path, e.g.
+  `gh api repos/OWNER/REPO/pulls/123` or
+  `gh api repos/OWNER/REPO/issues/42` — not `gh api graphql`.
+- Prefer documented REST resources from
+  [GitHub REST API](https://docs.github.com/en/rest) over hand-written GraphQL
+  queries.
+- When a high-level `gh` subcommand exists and project tooling routes it to
+  REST, use that canonical form instead of inventing a one-off query.
+
+**Forbidden when REST can serve the datum.**
+- `gh api graphql` and inline GraphQL query strings.
+- Raw `curl` (or similar) to `api.github.com` for reads that have a documented
+  REST equivalent.
+- Throwaway temporary `gh` shims whose only purpose is to bypass a REST-first
+  path.
+
+**When GraphQL quota is exhausted.** Do not improvise GraphQL, curl, or shims.
+Switch to the REST endpoint for the same datum (or the project's REST-routed
+`gh` form). If the needed argv shape is uncovered, **report** it for inventory
+extension — do not paper over the gap with GraphQL.
+
+**When REST has no equivalent.** Rare APIs exposed only via GraphQL, or writes
+that `gh` documents as GraphQL-backed — use native `gh` and note the gap. Still
+do not hand-roll raw `curl` when `gh api` can carry the call.
+
+**orchestrator-pack override.** In this repository, the stricter **`gh` wrapper
+transport** section in `prompts/agent_rules.md` supersedes this hint: every
+GitHub read goes through pack `scripts/gh` on PATH and inventory-listed
+canonical forms. Follow that section when working here.
+
+This is a prompt-level obligation (you see the rule and follow it), not a hard
+hook.
