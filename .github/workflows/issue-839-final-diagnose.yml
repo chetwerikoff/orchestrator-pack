@@ -1,4 +1,4 @@
-name: issue-839-final-diagnose
+name: issue-839-finalize-node20
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
 
@@ -15,112 +15,107 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  fix-and-verify:
     if: github.event.pull_request.number == 845
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: issue-839-pack-review-runner-v2
           fetch-depth: 0
-      - name: Capture verifier
-        id: verify
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          ./scripts/verify.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-verify.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Publish verifier output
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.verify.outcome }}
+      - name: Apply Node-version-aware review adapter fix
         shell: bash
         run: |
-          {
-            echo '## Issue #839 verify.ps1 diagnosis'
-            echo
-            echo "outcome=$OUTCOME"
-            echo '```text'
-            tail -c 50000 /tmp/issue-839-verify.log 2>/dev/null || true
-            echo '```'
-          } >/tmp/report.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
 
-  topology:
-    if: github.event.pull_request.number == 845
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+          adapter_path = Path('scripts/lib/Invoke-AoReviewApi.ps1')
+          text = adapter_path.read_text(encoding='utf-8')
+
+          old = ". (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')\n"
+          new = old + ". (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')\n"
+          if text.count(old) != 1 or "Invoke-TypeScriptCli.ps1" in text:
+              raise SystemExit('unexpected TypeScript CLI helper import state')
+          text = text.replace(old, new)
+
+          old = "        $raw = $json | & node --disable-warning=ExperimentalWarning --experimental-strip-types $trusted.runner $Subcommand 2>&1"
+          new = "        $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)\n        $nodeArgs += $Subcommand\n        $raw = $json | & node @nodeArgs 2>&1"
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one direct Node 22-only runner invocation')
+          text = text.replace(old, new)
+
+          old = '    return "node --experimental-strip-types $($trusted.runner) start --session-id $SessionId --claim-mode preacquired"'
+          new = "    $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)\n    $nodeArgs += @('start', '--session-id', $SessionId, '--claim-mode', 'preacquired')\n    return ('node ' + ($nodeArgs -join ' '))"
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one Node 22-only diagnostic invocation line')
+          text = text.replace(old, new)
+          adapter_path.write_text(text, encoding='utf-8')
+
+          test_path = Path('scripts/ao-0-10-review-trigger.test.ts')
+          test = test_path.read_text(encoding='utf-8')
+          anchor = "    expect(adapter).not.toMatch(/Invoke-AoSessionReviewTrigger\\s+-SessionId.*BaseUrl/);\n"
+          addition = (
+              anchor
+              + "    expect(adapter).toContain('Invoke-TypeScriptCli.ps1');\n"
+              + "    expect(adapter).toContain('Get-OpkTypeScriptNodeArguments');\n"
+              + "    expect(adapter).not.toMatch(/& node[^\\r\\n]*--experimental-strip-types/);\n"
+          )
+          if test.count(anchor) != 1 or "expect(adapter).toContain('Invoke-TypeScriptCli.ps1')" in test:
+              raise SystemExit('unexpected adapter runtime regression assertion state')
+          test_path.write_text(test.replace(anchor, addition), encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/issue-839-final-diagnose.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/lib/Invoke-AoReviewApi.ps1 scripts/ao-0-10-review-trigger.test.ts .github/workflows/issue-839-final-diagnose.yml
+          git commit -m 'Use shared Node 20 TypeScript loader for review adapter'
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - run: npm ci --include=dev --silent
-      - name: Capture heavy topology planner
-        id: topology
-        continue-on-error: true
+      - name: Install dependencies
+        run: npm ci --include=dev --silent
+      - name: Full-pack and foundation TypeScript checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx tsc --project tsconfig.base.json --noEmit
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run test:foundation
+          npm run check:pwsh-test-growth
+      - name: Review contract gates
+        shell: pwsh
+        run: |
+          ./scripts/check-review-trigger-reconcile.ps1
+          ./scripts/check-orchestrator-review-idempotency.ps1
+          ./scripts/check-orchestrator-review-head-coverage.ps1
+      - name: Targeted review adapter regression on Node 20
+        shell: bash
+        run: node scripts/run-vitest-with-harness.mjs run scripts/ao-0-10-review-trigger.test.ts
+      - name: Plan heavy topology from candidate commit
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -o pipefail
-          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          node scripts/emit-vitest-heavy-topology.mjs --gha-output 2>&1 | tee /tmp/issue-839-topology.log
-      - name: Publish topology output
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.topology.outcome }}
-        shell: bash
-        run: |
-          {
-            echo '## Issue #839 heavy-topology diagnosis'
-            echo
-            echo "outcome=$OUTCOME"
-            echo '```text'
-            cat /tmp/issue-839-topology.log 2>/dev/null || true
-            echo '```'
-          } >/tmp/report.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/report.md
-
-  light:
-    if: github.event.pull_request.number == 845
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci --include=dev --silent
-      - name: Capture Vitest light lane
-        id: light
-        continue-on-error: true
+          set -euo pipefail
+          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head HEAD)"
+          node scripts/emit-vitest-heavy-topology.mjs --gha-output
+      - name: Run Vitest light lane
         shell: pwsh
-        run: |
-          ./scripts/run-vitest-light-lane.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-light.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Publish light-lane output
-        if: always()
+        run: ./scripts/run-vitest-light-lane.ps1
+      - name: Run read-only pack verifier
+        shell: pwsh
+        run: ./scripts/verify.ps1
+      - name: Push verified candidate
+        shell: bash
+        run: git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report failure
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.light.outcome }}
         shell: bash
-        run: |
-          {
-            echo '## Issue #839 Vitest light-lane diagnosis'
-            echo
-            echo "outcome=$OUTCOME"
-            echo '```text'
-            tail -c 50000 /tmp/issue-839-light.log 2>/dev/null || true
-            echo '```'
-          } >/tmp/report.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983741292 --field body=@/tmp/report.md
+        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body "Issue #839 Node 20 finalization failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
