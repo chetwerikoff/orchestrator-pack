@@ -155,6 +155,8 @@ config. `ao` control, `git diff`, and `gh pr checks` stay verbatim per §R passt
 Architecture: §R.7 in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
+**Codebase structure graph:** [`scripts/graphify/`](scripts/graphify/README.md) is a code-only, no-LLM structural graph (hubs/clusters/cycles), not CI-gated; checking it for "how does X relate to Y" questions and refreshing after a material change is **recommended, not required** -- fall back to grepping when it's missing, stale, or unneeded.
+
 ## Verification
 
 Before finishing work, run:

@@ -75,3 +75,8 @@ Thumbs.db
 # artifacts, not committed history.
 docs/investigations/
 docs/issues_drafts/.review/
+
+# Graphify code-graph working state (Issue #833): the isolated Python venv
+# and the built graph output. Neither is committed -- see
+# scripts/graphify/README.md for how to rebuild both on demand.
+.graphify/
