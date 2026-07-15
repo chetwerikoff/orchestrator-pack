@@ -7,9 +7,9 @@ permissions:
   contents: write
 
 jobs:
-  issue-821-runtime-refresh:
+  issue-821-finalize:
     if: github.head_ref == 'agent/issue-821-retire-autonomous-surface'
-    name: Issue 821 runtime-history refresh
+    name: Issue 821 clean final tree
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -21,9 +21,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Remove prior diagnostic artifacts
+      - name: Clean artifacts and restore unrelated scope
         shell: bash
         run: |
+          set -euo pipefail
           git rm -r --cached --ignore-unmatch \
             node_modules \
             trusted-scope-guard \
@@ -33,15 +34,35 @@ jobs:
             issue-821-scope-diagnostics.txt \
             issue-821-final-validation-report.txt \
             issue-821-remaining-ci-report.txt \
-            issue-821-final-lane-report.txt || true
+            issue-821-final-lane-report.txt \
+            issue-821-runtime-refresh-report.txt || true
           rm -rf node_modules trusted-scope-guard .local .vitest-runtime-report*.json issue-821-*.txt
+
+          git checkout origin/main -- \
+            docs/autonomous-spawn-budget.json \
+            docs/review-pipeline-spawn-budget-attribution.mjs \
+            scripts/_test-spawn-budget-fixture.ts \
+            scripts/autonomous-spawn-budget.test.ts \
+            scripts/generate-review-pipeline-spawn-captures.ts \
+            scripts/lib/Invoke-PackSpawnBudgetGates.ps1 \
+            scripts/reachability-purge.test.ts \
+            scripts/review-pipeline-spawn-budget.test.ts \
+            scripts/vitest-ci-lanes.config.json \
+            tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-covered-clean.json \
+            tests/external-output-references/review-pipeline-spawn-budget/capture-wrapped-positive-uncovered-ready.json \
+            tests/external-output-references/review-pipeline-spawn-budget/reduced-post-change.capture.json \
+            tests/external-output-references/review-pipeline-spawn-budget/storm-baseline.capture.json
       - name: Install dependencies
         run: npm ci --include=dev
-      - name: Measure changed Vitest files and refresh history
+      - name: Refresh policy baselines and runtime history
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          set -euo pipefail
+          npm run lint:foundation -- --write-baseline
+          npm run check:pwsh-test-growth -- --write-baseline
+
           node --input-type=module <<'NODE'
           import { createHash } from 'node:crypto';
           import { execFileSync } from 'node:child_process';
@@ -114,30 +135,46 @@ jobs:
           writeFileSync(historyPath, `${JSON.stringify(history, null, 2)}\n`, 'utf8');
           console.log(JSON.stringify({ files, measurements }, null, 2));
           NODE
-      - name: Validate refreshed topology and historical fence
+      - name: Validate issue and CI contracts
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          npx vitest run scripts/reachability-purge.test.ts
-          npm run lint:foundation -- --write-baseline
-          npm run check:pwsh-test-growth -- --write-baseline
+          set -euo pipefail
+          npx vitest run \
+            scripts/autonomous-orchestrator-boundary.test.ts \
+            scripts/autonomous-spawn-policy.test.ts \
+            scripts/worker-nudge-gate.test.ts \
+            scripts/spawn-worktree-grant-finalization.test.ts \
+            scripts/orchestrator-claimed-review-run.test.ts \
+            scripts/autonomous-spawn-worktree-gate.test.ts \
+            scripts/orchestrator-review-start-preflight-audit.test.ts \
+            scripts/review-start-envelope-external-io.test.ts \
+            scripts/reachability-purge.test.ts
+          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
+          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
+          pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
+          pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run check:pwsh-test-growth
+          ! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\.ao/autonomous-real-binaries\.json' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'
+
           export HEAD_SHA="$(git rev-parse HEAD)"
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$BASE_SHA" --head "$HEAD_SHA")"
           export GITHUB_OUTPUT=/tmp/issue-821-topology-output.txt
           node scripts/emit-vitest-heavy-topology.mjs --gha-output
           pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1
           pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
           git diff --check
-      - name: Commit refreshed final tree
+      - name: Commit clean validated tree
         shell: bash
         run: |
+          set -euo pipefail
           git checkout origin/main -- .github/workflows/typescript-foundation.yml
           rm -rf node_modules trusted-scope-guard .local scripts/vitest-heavy-topology.plan.json .vitest-runtime-report*.json issue-821-*.txt
           git add -A
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Refresh issue 821 Vitest runtime history"
+          git commit -m "Clean and validate issue 821 final tree"
           git push origin HEAD:agent/issue-821-retire-autonomous-surface
