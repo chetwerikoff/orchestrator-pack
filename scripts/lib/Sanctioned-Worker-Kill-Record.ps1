@@ -8,31 +8,27 @@ function Get-SanctionedWorkerKillRecordPath {
     return Join-Path $root 'docs/state/sanctioned-worker-kills.json'
 }
 
+function Get-SanctionedWorkerKillRecordCliPath {
+    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    return Join-Path $root 'scripts/json-producers/sanctioned-worker-kill-record.ts'
+}
+
+function Invoke-SanctionedWorkerKillRecordCli {
+    param([string[]]$Arguments)
+
+    $cli = Get-SanctionedWorkerKillRecordCliPath
+    $output = & node --experimental-strip-types $cli @Arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "sanctioned-worker-kill-record.ts exited $LASTEXITCODE`: $($output | Out-String)"
+    }
+    return (($output | Out-String).Trim() | ConvertFrom-Json)
+}
+
 function Read-SanctionedWorkerKillSurface {
     param([string]$Path = '')
 
     if (-not $Path) { $Path = Get-SanctionedWorkerKillRecordPath }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        return [pscustomobject]@{
-            healthy = $false
-            reason = 'sanctioned_kill_record_surface_absent'
-            records = @()
-        }
-    }
-    try {
-        $raw = Get-Content -LiteralPath $Path -Raw
-        $parsed = if ($raw.Trim()) { $raw | ConvertFrom-Json } else { @() }
-        $records = if ($parsed.PSObject.Properties.Name -contains 'records') { @($parsed.records) } else { @($parsed) }
-        return [pscustomobject]@{ healthy = $true; records = @($records) }
-    }
-    catch {
-        return [pscustomobject]@{
-            healthy = $false
-            reason = 'sanctioned_kill_record_unreadable'
-            detail = $_.Exception.Message
-            records = @()
-        }
-    }
+    return Invoke-SanctionedWorkerKillRecordCli -Arguments @('read', '--path', $Path)
 }
 
 function Add-SanctionedWorkerKillRecord {
@@ -46,30 +42,12 @@ function Add-SanctionedWorkerKillRecord {
     )
 
     if (-not $Path) { $Path = Get-SanctionedWorkerKillRecordPath }
-    if ($TimestampMs -le 0) { $TimestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-    $surface = Read-SanctionedWorkerKillSurface -Path $Path
-    if (-not $surface.healthy) {
-        if ($surface.reason -eq 'sanctioned_kill_record_surface_absent') {
-            $records = @()
-        }
-        else {
-            throw ($surface.detail ?? $surface.reason)
-        }
-    }
-    else {
-        $records = @($surface.records)
-    }
-    $records += [pscustomobject]@{
-        sessionId = $SessionId
-        issueNumber = $IssueNumber
-        prNumber = $PrNumber
-        killKind = $KillKind
-        timestampMs = $TimestampMs
-    }
-    $parent = Split-Path -Parent $Path
-    if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    [pscustomobject]@{ records = @($records) } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding utf8
-    return [pscustomobject]@{ healthy = $true; records = @($records) }
+    return Invoke-SanctionedWorkerKillRecordCli -Arguments @(
+        'add', '--path', $Path,
+        '--session-id', $SessionId,
+        '--issue-number', [string]$IssueNumber,
+        '--pr-number', [string]$PrNumber,
+        '--kill-kind', $KillKind,
+        '--timestamp-ms', [string]$TimestampMs
+    )
 }

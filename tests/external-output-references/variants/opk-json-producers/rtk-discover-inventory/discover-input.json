@@ -1,0 +1,24 @@
+{
+  "sessions_scanned": 3,
+  "total_commands": 9,
+  "since_days": 30,
+  "supported": [
+    {
+      "command": "grep -R \"café|茶\" scripts",
+      "count": 4,
+      "estimated_savings_tokens": 120
+    },
+    {
+      "command": "git log --oneline",
+      "count": 2,
+      "estimated_savings_tokens": 60
+    }
+  ],
+  "unsupported": [
+    {
+      "base_command": "ao",
+      "example": "ao status --json",
+      "count": 3
+    }
+  ]
+}

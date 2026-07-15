@@ -1,0 +1,1 @@
+{"kind":"audit_error","surface":"claude","eventId":"hook-error:20260101000000","emittedAtMs":1767225600123,"message":"audit module exited 1: boom"}

@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: [
       'scripts/kernel/**/*.test.ts',
+      'scripts/json-producers/**/*.test.ts',
       'scripts/toolchain/**/*.test.ts',
     ],
     environment: 'node',

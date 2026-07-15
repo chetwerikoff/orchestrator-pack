@@ -1,0 +1,11 @@
+{
+  "records": [
+    {
+      "sessionId": "opk-831-worker",
+      "issueNumber": 831,
+      "prNumber": 832,
+      "killKind": "manual",
+      "timestampMs": 1784102400000
+    }
+  ]
+}

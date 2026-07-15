@@ -3,6 +3,7 @@
   "include": [
     "scripts/typescript-smoke.ts",
     "scripts/kernel/**/*.ts",
+    "scripts/json-producers/**/*.ts",
     "scripts/toolchain/**/*.ts"
   ],
   "compilerOptions": {

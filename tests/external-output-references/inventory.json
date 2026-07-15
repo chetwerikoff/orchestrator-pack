@@ -5,17 +5,23 @@
     {
       "glob": "tests/fixtures/terminal-flood-detect/*.json",
       "owner": "orchestrator-pack",
-      "followUp": "Anchor when terminal-flood fixtures model ao events output (#223 follow-up)"
+      "followUp": "Anchor when terminal-flood fixtures model ao events output (#223 follow-up)",
+      "status": "historical",
+      "retiredSurface": "ao-events-removed"
     },
     {
       "glob": "tests/fixtures/review-bulk-send-diagnose/*.json",
       "owner": "orchestrator-pack",
-      "followUp": "Anchor when bulk-send diagnose fixtures model ao review list output (#223 follow-up)"
+      "followUp": "Anchor when bulk-send diagnose fixtures model ao review list output (#223 follow-up)",
+      "status": "historical",
+      "retiredSurface": "ao-review-list-project-removed"
     },
     {
       "glob": "scripts/fixtures/review-bulk-send-diagnose/*.json",
       "owner": "orchestrator-pack",
-      "followUp": "Anchor when bulk-send diagnose script fixtures model ao review list output (#223 follow-up)"
+      "followUp": "Anchor when bulk-send diagnose script fixtures model ao review list output (#223 follow-up)",
+      "status": "historical",
+      "retiredSurface": "ao-review-list-project-removed"
     }
   ]
 }

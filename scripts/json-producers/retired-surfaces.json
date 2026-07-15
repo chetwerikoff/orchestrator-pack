@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "surfaces": [
+    {
+      "id": "ao-events-removed",
+      "sourceCommandPattern": "\\bao events(?:\\s|$)",
+      "reason": "AO 0.10 removed the events CLI surface; event-shaped captures are historical evidence only.",
+      "owningReference": "docs/issues_drafts/212-ao-010-review-pipeline-vocabulary-migration.md"
+    },
+    {
+      "id": "ao-report-removed",
+      "sourceCommandPattern": "\\bao (?:report|acknowledge)(?:\\s|$)",
+      "reason": "AO 0.10 removed report and acknowledge verbs in favor of the pack report store.",
+      "owningReference": "docs/issues_drafts/212-ao-010-review-pipeline-vocabulary-migration.md"
+    },
+    {
+      "id": "ao-status-reports-flag-removed",
+      "sourceCommandPattern": "\\bao status\\b[^\\n]*--reports(?:\\s|$)",
+      "reason": "AO 0.10 status no longer exposes the reports flag; report data is sourced separately.",
+      "owningReference": "docs/issues_drafts/204-review-status-consumers-report-full-json-reader.md"
+    },
+    {
+      "id": "ao-review-list-project-removed",
+      "sourceCommandPattern": "\\bao review list(?:\\s|$)",
+      "reason": "Project-wide ao review list is retired; current review data comes from per-session review API fan-out.",
+      "owningReference": "docs/issues_drafts/212-ao-010-review-pipeline-vocabulary-migration.md"
+    }
+  ],
+  "knownDefectiveGoldens": []
+}

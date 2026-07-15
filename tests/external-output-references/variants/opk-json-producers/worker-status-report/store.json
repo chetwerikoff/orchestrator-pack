@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "lastUpdatedMs": 1767225599000,
+  "generation": 2,
+  "repoTickGeneration": 1,
+  "records": {
+    "worker-unicode": {
+      "sessionId": "worker-unicode",
+      "status": "ready_for_review",
+      "derivedStatus": "ready_for_review",
+      "winningSource": "report_store",
+      "diagnostics": ["unicode café 茶"],
+      "lastUpdatedMs": 1767225599000,
+      "freshnessMs": 900000,
+      "generationVector": {
+        "repoTickGeneration": 1
+      }
+    },
+    "orch-main": {
+      "sessionId": "orch-main",
+      "status": "pr_open",
+      "derivedStatus": "pr_open",
+      "winningSource": "github_pr",
+      "diagnostics": [],
+      "lastUpdatedMs": 1767225598000,
+      "freshnessMs": 900000,
+      "generationVector": {
+        "repoTickGeneration": 1
+      }
+    }
+  }
+}
