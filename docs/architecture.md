@@ -266,3 +266,46 @@ failed-owned with visible operator escalation.
 This closes the dominant reaction-first duplicate path. It deliberately does not close the
 reverse ordering where the orchestrator sends before AO's unconditional built-in `ci-failed`
 reaction, because the daemon reaction cannot consult repo-side state.
+
+### Native AO CI-nudge suppression (operator-local `tmux` shim, 2026-07-15)
+
+AO 0.10.2's daemon (closed-source; no source, no CLI/config toggle) pastes its own
+unconditional CI-failure nudge directly into the worker's tmux pane whenever a PR check
+turns red, independent of the pack's own predicate above. It has three problems the pack
+cannot fix at the daemon: it fires regardless of whether the worker is already mid-fix for
+that exact failure (dedup is per `{PR, check, head SHA}` only —
+`pr.last_nudge_signature` — with no notion of worker busy-state); the paired `Enter` that
+is supposed to submit the pasted text is unreliable for at least the Codex/cursor-agent
+worker harness, leaving an unconsumed bracket-pasted draft sitting in the pane input (same
+failure class as §H decisions 4/5, `#216`/`#293`, whose submit-only-Enter narrow exception
+is scoped only to review-finding pastes, not this channel); and the content is a raw log
+tail with no diagnosis. Draft `#755` (`docs/issues_drafts/269-ci-red-delivery-watchdog.md`)
+already commits this channel to read-only/no-disable-hooks — the pack must not write to
+`pr.last_nudge_signature` or otherwise mutate AO's own ledger.
+
+The daemon's tmux adapter (`internal/adapters/runtime/tmux.execRunner.Run`,
+confirmed from the binary's own embedded Go symbol table) shells out to the real `tmux`
+CLI rather than talking to a control socket, and the daemon process's `PATH` places
+`~/.local/bin` ahead of `/usr/bin`. An operator-local shim at `~/.local/bin/tmux`
+therefore sees every `tmux` invocation the daemon makes: it pattern-matches literal
+`send-keys -l` payloads against the fixed AO nudge string
+(`"CI is failing on your PR. Review the output below and push a fix."`), drops only
+that exact call plus the immediately-following paired `Enter` to the same target (a
+short-lived per-target marker prevents a bare `Enter` firing into whatever the worker is
+mid-typing once the nudge text itself never lands), and passes every other invocation
+(session lifecycle, review-finding pastes, ordinary worker key sends) straight through to
+the real binary unchanged.
+
+This is deliberately **not** a binary patch to the AO daemon: a byte patch cannot survive
+an update by construction (dpkg overwrites `/usr/lib/agent-orchestrator` in place; the
+self-updating copy under `~/.local/lib/agent-orchestrator-<version>` is a new file in a new
+version-numbered directory) and risks corrupting the binary's GC/stack metadata. The PATH
+shim survives updates instead, because it depends only on AO continuing to invoke the
+external `tmux` CLI — a far more stable contract than any internal offset. It would stop
+working only if AO ever switched to a raw control-socket protocol, which is self-detecting
+(the shim's audit log goes quiet while nudges resume reaching the pane).
+
+**Status: operator-machine-local only**, not a pack-owned/tracked artifact — no install
+script, no PR, no Issue. See `docs/issues_drafts/00-architecture-decisions.md` §W for
+install/verify/rollback steps on a given host. Formalizing this for multi-operator
+distribution (mirroring the `cursor-agent` TUI shim, Issue #725) would need its own draft.
