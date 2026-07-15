@@ -130,15 +130,11 @@ if ($workflow -notmatch 'if:\s*\$\{\{\s*vars\.PACK_HARNESS_PN_SMOKE_SESSION') {
 }
 
 $adoption = Get-Content -LiteralPath (Join-Path $Root 'docs/ao-0-10-review-harness-adoption.md') -Raw
-foreach ($marker in @(
-        'Pack-owned review runner adoption',
-        'GitHub PR review is the authoritative verdict record',
-        'Do not use daemon review endpoints or `ao review submit`'
-    )) {
-    if ($adoption -notmatch [regex]::Escape($marker)) {
-        Write-Host "review-runner adoption guide missing marker: $marker"
-        exit 1
-    }
+if ($adoption -notmatch 'Pack-owned review runner adoption' -or
+    $adoption -notmatch 'GitHub PR review is the authoritative verdict record' -or
+    $adoption -notmatch 'Do not use daemon review endpoints') {
+    Write-Host 'review-runner adoption guide is missing the pack-owned verdict or no-daemon contract'
+    exit 1
 }
 
 $fixtureText = Get-Content -LiteralPath (Join-Path $Root 'tests/fixtures/harness-post-submit-pn/matrix.json') -Raw

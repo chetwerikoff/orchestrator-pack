@@ -348,22 +348,14 @@ Forbidden: silent disengagement while PR lacks hand-off for current head.
 
 #### Review feedback and AO review response
 
-On `changes-requested` / `ci-failed`: smallest scoped fix; escalate contradictory feedback with
-evidence. On delivered findings: **must not** idle — use `addressing_reviews` → optional
-`fixing_ci` → `ready_for_review` when CI green. Use underscore state names with
-`pack-worker-report --state <state>`. Do **not** run `pack-worker-report --state completed` while
-open/delivered findings exist. Inspect via the `Get-AoReviewRuns` pack-store view and confirm the authoritative GitHub PR
-review is bound to the current head.
+On delivered findings, use `addressing_reviews` → optional `fixing_ci` → `ready_for_review` after CI is green; never report `completed` with open findings. Inspect pack-store `Get-AoReviewRuns` and the authoritative current-head GitHub review.
 
 Script-owned orchestrator review starters and predicates:
 [`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
 
 #### Review delivery telemetry (Issue #718)
 
-Pack scripted review delivery is **stdout-first**: worker notification is sourced from the
-reviewer wrapper terminal JSON, the authoritative GitHub PR review, and the dispatch journal.
-The pack-side run/status store records operational state only. Daemon review HTTP and
-`ao review submit` are retired; never fabricate finding text from a compatibility store row.
+Trust reviewer terminal JSON, the authoritative current-head GitHub review, and the dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are retired. Never synthesize findings from store rows.
 **Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
 #### Review-cycle cap (Issue #646)
 
