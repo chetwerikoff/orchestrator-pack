@@ -204,7 +204,9 @@ async function verifyPowerShellGateParity(gateRepo) {
 async function verifyRpcBindingParity() {
   const root = await initRepo('opk-823-rpc-');
   const scopePath = join(root, 'scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs');
+  const retainedScopePath = join(root, 'scripts/lib/vitest-ci-lanes.mjs');
   write(scopePath, '// stable binding-scope payload\n');
+  write(retainedScopePath, '// retained binding-scope payload\n');
   write(
     join(root, 'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json'),
     JSON.stringify({ bindingMode: 'scoped-tree-content-v1', captureCommitSha: '0'.repeat(40) }, null, 2) + '\n',
@@ -223,6 +225,15 @@ async function verifyRpcBindingParity() {
   assert.equal(pr.ok, true, pr.reason);
   assert.equal(push.ok, true, push.reason);
   assert.equal(pr.captureCommitSha, push.captureCommitSha);
+
+  rmSync(scopePath);
+  await commitAll(root, 'delete scoped RPC validator file');
+  const prDeleted = await withProcessEnv(contextEnv('pr', capture), () => inspectSupervisorHeavyLaneRpcBinding(root));
+  const pushDeleted = await withProcessEnv(contextEnv('push'), () => inspectSupervisorHeavyLaneRpcBinding(root));
+  assert.equal(prDeleted.ok, false, 'PR context must reject deleted RPC binding-scope file');
+  assert.equal(pushDeleted.ok, false, 'push context must reject deleted RPC binding-scope file');
+  assert.deepEqual(prDeleted.stalePaths, ['scripts/lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs']);
+  assert.deepEqual(prDeleted.stalePaths, pushDeleted.stalePaths);
 
   write(scopePath, '// genuine binding-scope drift\n');
   await commitAll(root, 'genuine RPC scope drift');

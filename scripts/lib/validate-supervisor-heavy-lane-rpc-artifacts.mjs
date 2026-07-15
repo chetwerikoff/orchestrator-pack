@@ -33,11 +33,16 @@ function splitNullList(value) {
 
 function listBindingScopePaths(repoRootOverride, captureSha) {
   const paths = new Set();
-  const current = execFileSync('git', ['ls-files'], {
+  const current = execFileSync('git', ['ls-files', '-z'], {
     cwd: repoRootOverride,
-    encoding: 'utf8',
   });
-  for (const path of current.split('\n').map((line) => line.trim()).filter(Boolean)) {
+  for (const path of splitNullList(current)) {
+    if (RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) paths.add(path);
+  }
+  const captured = execFileSync('git', ['ls-tree', '-r', '--name-only', '-z', captureSha], {
+    cwd: repoRootOverride,
+  });
+  for (const path of splitNullList(captured)) {
     if (RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) paths.add(path);
   }
   return [...paths].sort();
