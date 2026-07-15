@@ -82,13 +82,6 @@ function compareBindingScopeToCapture(repoRootOverride, captureSha) {
   return { ok: true, reason: 'binding-scope tree content matches capture', stalePaths: [] };
 }
 
-function resolveCurrentHeadSha(repoRootOverride) {
-  return execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
-    cwd: repoRootOverride,
-    encoding: 'utf8',
-  }).trim();
-}
-
 export function inspectSupervisorHeavyLaneRpcBinding(repoRootOverride = repoRoot) {
   const manifestPath = join(
     repoRootOverride,
@@ -136,7 +129,6 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json',
   );
   const manifest = loadJsonFile(manifestPath);
-  const head = resolveCurrentHeadSha(repoRootOverride);
   const expectedCaptureSha = resolveExpectedCaptureSha(repoRootOverride);
   const expectedHeavyLaneFingerprint = resolveHeavyLaneFingerprint(repoRootOverride);
   const passes = manifest.passes ?? [];
@@ -181,7 +173,7 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     if (hits.length > 0) cliFail(`${pass.id}: RPC timeout signature detected: ${hits.join('; ')}`);
   }
 
-  return { passCount: passes.length, head, expectedCaptureSha, bindingMode: manifest.bindingMode };
+  return { passCount: passes.length, expectedCaptureSha, bindingMode: manifest.bindingMode };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
