@@ -1,5 +1,5 @@
 {
   "version": "agents-md-grep-inventory/v1",
-  "description": "Retired inventory shell — live-reference enforcement is owned by scripts/gate-runner/representative-gates.ts (Issue #830).",
+  "description": "Retired inventory shell \u2014 live-reference enforcement is owned by scripts/gate-runner/representative-gates.ts (Issue #830).",
   "consumers": []
 }
