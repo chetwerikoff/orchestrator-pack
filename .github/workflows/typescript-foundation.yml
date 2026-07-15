@@ -28,7 +28,17 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -o pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const file = 'scripts/apply-issue-821-final-fixes.mjs';
+          let source = readFileSync(file, 'utf8');
+          const needle = "':!scripts/reachability-purge.manifest.json', ':!tests/external-output-references/captures/spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561.raw.txt', ':!.github/**'";
+          const replacement = "':!scripts/reachability-purge.manifest.json', ':!scripts/_resolve-pwsh.sh', ':!scripts/_test-spawn-budget-fixture.ts', ':!scripts/autonomous-spawn-budget.test.ts', ':!tests/external-output-references/captures/spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561.raw.txt', ':!.github/**'";
+          if (!source.includes(needle)) throw new Error('final rebuild scan marker changed');
+          writeFileSync(file, source.replace(needle, replacement), 'utf8');
+          NODE
           node scripts/apply-issue-821-final-fixes.mjs 2>&1 | tee "$RUNNER_TEMP/issue-821-rebuild.log"
+          node scripts/apply-issue-821-residual-fixes.mjs 2>&1 | tee -a "$RUNNER_TEMP/issue-821-rebuild.log"
       - name: Upload rebuild diagnostic
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,6 +59,7 @@ jobs:
           npx vitest run \
             scripts/issue-821-gate-activation.test.ts \
             scripts/autonomous-orchestrator-boundary.test.ts \
+            scripts/autonomous-spawn-budget.test.ts \
             scripts/autonomous-spawn-policy.test.ts \
             scripts/worker-recovery-spawn-argv.test.ts \
             scripts/worker-nudge-gate.test.ts \
@@ -56,7 +67,8 @@ jobs:
             scripts/orchestrator-claimed-review-run.test.ts \
             scripts/autonomous-spawn-worktree-gate.test.ts \
             scripts/orchestrator-review-start-preflight-audit.test.ts \
-            scripts/review-start-envelope-external-io.test.ts
+            scripts/review-start-envelope-external-io.test.ts \
+            scripts/reachability-purge.test.ts
           pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
           pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
           pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
