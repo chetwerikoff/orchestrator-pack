@@ -201,6 +201,27 @@ function resolveHarnessScopedPath(baseRoot, candidate, sourceRoot) {
   return normalizeCase(resolve(baseRoot, relative(sourceRoot, candidate)));
 }
 
+function unclassifiedLiveRootRedirects(env, harnessRoot) {
+  const seen = new Set();
+  const redirects = [];
+  const add = (id, template) => {
+    if (template === '${HOME}') return;
+    if (template === '${TMP}') return;
+    const rootPath = canonicalizeStorePath(expandInventoryTemplate(template, env));
+    if (!rootPath || seen.has(rootPath)) return;
+    seen.add(rootPath);
+    const safeId = String(id || createHash('sha256').update(template, 'utf8').digest('hex').slice(0, 16))
+      .replace(/[^A-Za-z0-9._-]/g, '-');
+    redirects.push({
+      rootPath,
+      harnessPath: join(harnessRoot, 'unclassified-live-root', safeId),
+    });
+  };
+  for (const root of liveStoreInventory.liveRoots ?? []) add(root.id, root.defaultTemplate);
+  for (const store of liveStoreInventory.stores ?? []) add(store.id, store.liveRoot);
+  return redirects;
+}
+
 export function redirectHarnessWritePath(candidate, env = process.env) {
   if (env[OPK_VITEST_HARNESS_MARKER] !== '1') return '';
   const canonical = canonicalizeStorePath(candidate);
@@ -240,6 +261,12 @@ export function redirectHarnessWritePath(candidate, env = process.env) {
     const harnessPath = canonicalizeStorePath(env[root.harnessEnv] || join(harnessRoot, root.kind === 'directory' ? root.id : ''));
     if (rootPath && harnessPath && pathIsSameOrWithin(canonical, rootPath)) {
       return resolveHarnessScopedPath(harnessPath, canonical, rootPath);
+    }
+  }
+
+  for (const fallback of unclassifiedLiveRootRedirects(env, harnessRoot)) {
+    if (pathIsSameOrWithin(canonical, fallback.rootPath)) {
+      return resolveHarnessScopedPath(fallback.harnessPath, canonical, fallback.rootPath);
     }
   }
   return '';

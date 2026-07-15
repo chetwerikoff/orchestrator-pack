@@ -259,6 +259,14 @@ try {
     if (!String(harnessEnv[name] ?? '').trim()) fail(`harness did not establish ${name}`);
   }
 
+  const unclassifiedLiveRootTarget = join(harnessEnv.AO_BASE_DIR, 'future-live-store.db');
+  const unclassifiedRedirect = redirectHarnessWritePath(unclassifiedLiveRootTarget, harnessEnv);
+  if (!unclassifiedRedirect) {
+    fail('un-inventoried live-root write did not fail closed into the harness');
+  } else if (!unclassifiedRedirect.startsWith(harnessRootA)) {
+    fail('un-inventoried live-root write escaped the harness root');
+  }
+
   const preload = join(repoRoot, 'scripts', 'vitest-live-store-preload.mjs');
   const nodeCases = [
     ['sync', liveWorkerStatus, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(liveWorkerStatus)}, 'red');`],
@@ -320,6 +328,28 @@ try {
   }
   if (!readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8').includes('OPK_VITEST_HARNESS is required')) {
     fail('raw Vitest invocation is not fail-closed');
+  }
+  const bareVitestEnv = { ...process.env };
+  delete bareVitestEnv.OPK_VITEST_HARNESS;
+  const bareVitest = runProcessSync({
+    command: process.execPath,
+    args: [
+      join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'),
+      '--config',
+      join(repoRoot, 'vitest.config.ts'),
+      '--run',
+      'scripts/__opk_no_such_test__.test.ts',
+    ],
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: bareVitestEnv,
+    inheritParentEnv: false,
+  });
+  if (bareVitest.exitCode === 0) {
+    fail('raw Vitest invocation without the harness unexpectedly succeeded');
+  }
+  if (!`${bareVitest.stdout}\n${bareVitest.stderr}`.includes('OPK_VITEST_HARNESS is required')) {
+    fail('raw Vitest invocation without the harness did not fail closed with the harness diagnostic');
   }
 } finally {
   for (const root of cleanupRoots) {
