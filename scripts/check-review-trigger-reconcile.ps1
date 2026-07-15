@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: Issue #163 review-trigger reconciliation wiring and default cadence.
+  Regression guard: review-trigger reconciliation and pack-runner contract.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -14,7 +14,6 @@ if (-not (Test-Path -LiteralPath $reconcileScript -PathType Leaf)) {
     Write-Host 'Missing scripts/review-trigger-reconcile.ps1'
     exit 1
 }
-
 if (-not (Test-Path -LiteralPath $reconcileMjs -PathType Leaf)) {
     Write-Host 'Missing docs/review-trigger-reconcile.mjs'
     exit 1
@@ -26,15 +25,17 @@ $required = @(
     'Issue #195',
     'review-trigger-reconcile.ps1',
     'gh pr list --state open',
-    'Get-AoReviewRuns',
+    'PACK-OWNED REVIEW RUNNER',
+    'scripts/pack-review-runner.ts',
+    'pack review run store',
+    'zero daemon session-reviews HTTP',
     'gh pr checks',
     'never ao spawn',
     'AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES'
 )
-
 $missing = @($required | Where-Object { $text -notlike "*$_*" })
 if ($missing.Count -gt 0) {
-    Write-Host ("agent-orchestrator.yaml.example missing reconciliation phrases: {0}" -f ($missing -join ', '))
+    Write-Host ("agent-orchestrator.yaml.example missing pack-runner reconciliation phrases: {0}" -f ($missing -join ', '))
     exit 1
 }
 
@@ -43,7 +44,6 @@ if ($mjs -notmatch 'DEFAULT_RECONCILE_INTERVAL_MS = 10 \* 60 \* 1000') {
     Write-Host 'docs/review-trigger-reconcile.mjs must default to 10-minute interval'
     exit 1
 }
-
 if ($mjs -notmatch "from '\./review-head-ready\.mjs'") {
     Write-Host 'docs/review-trigger-reconcile.mjs must import review-head-ready.mjs (Issue #195)'
     exit 1
@@ -54,13 +54,16 @@ if ($reconcilePs1 -notmatch 'Test-ReconcileReactionConfigDefer') {
     Write-Host 'scripts/review-trigger-reconcile.ps1 must defer when reaction config is unavailable (Issue #402)'
     exit 1
 }
-
 if ($reconcilePs1 -notmatch 'Resolve-OperatorOrchestratorYamlPath') {
     Write-Host 'scripts/review-trigger-reconcile.ps1 must resolve operator YAML from AO runtime binding (Issue #402)'
     exit 1
 }
 if ($reconcilePs1 -match "Join-Path \$PackRoot 'agent-orchestrator\.yaml\.example'") {
     Write-Host 'scripts/review-trigger-reconcile.ps1 must not fall back to agent-orchestrator.yaml.example for runtime config (Issue #402)'
+    exit 1
+}
+if ($reconcilePs1 -notmatch 'Invoke-AoReviewTriggerForWorker') {
+    Write-Host 'scripts/review-trigger-reconcile.ps1 must use the shared pack-runner adapter'
     exit 1
 }
 
@@ -87,5 +90,5 @@ if ($dmts -notmatch 'PlanReconcileInput[\s\S]{0,240}sessionDetailsById') {
     exit 1
 }
 
-Write-Host '[PASS] review-trigger reconciliation entrypoint and example wiring (Issue #163)'
+Write-Host '[PASS] review-trigger reconciliation and pack-runner wiring (Issue #839)'
 exit 0
