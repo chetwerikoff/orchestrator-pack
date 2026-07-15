@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate:
@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-831-json-producers-wave-b
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -25,9 +28,16 @@ jobs:
           set -euo pipefail
           rm -f .github/workflows/_issue-832-reachability-refresh.yml
           node scripts/reachability-purge.mjs --write
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-832-reachability-manifest
-          path: scripts/reachability-purge.manifest.json
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit generated manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/reachability-purge.manifest.json
+          if git diff --cached --quiet; then
+            echo 'reachability manifest already current'
+            exit 0
+          fi
+          git commit -m 'test: refresh reachability manifest for audit wrapper regression'
+          git push origin HEAD:agent/issue-831-json-producers-wave-b
