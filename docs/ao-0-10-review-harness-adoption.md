@@ -1,142 +1,158 @@
-# AO 0.10 review harness and trigger adoption (Issue #623)
+# Pack-owned review runner adoption (Issue #839)
 
-Operator steps to re-enable pack-driven code review on AO **0.10.x** after merge.
-This complements [`ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrade-runbook.md).
+Operator steps for moving orchestrator-pack review invocation and run/status reads off the AO daemon on AO **0.10.x**.
+This supersedes the daemon reviewer-harness procedure originally documented for Issue #623 and complements
+[`ao-0-10-operator-upgrade-runbook.md`](ao-0-10-operator-upgrade-runbook.md).
 
-## Prerequisite
+## Prerequisites
 
-- AO **0.10.x** daemon running (`ao status --json` shows `ready`).
-- Issue **#589** spawn shape adopted.
-- Pack PR for **#623** merged and pulled in the operator checkout.
+- Pull the merged Issue #839 change into the trusted operator checkout.
+- Node and PowerShell versions required by the repository verification suite are available.
+- `PACK_REVIEWER` selects `codex` or `claude`; reviewer identity, model selection, prompt, and `[Pn]` contract remain owned by `scripts/invoke-pack-review.ps1`.
+- The GitHub credential used by the runner belongs to a reviewer/bot identity distinct from the PR author. GitHub rejects self-approval and self-request-changes reviews.
 
-## 1. Configure reviewer harness (project config API)
+## 1. Clear daemon reviewer-harness wiring
 
-AO 0.10 selects the reviewer agent via typed `ProjectConfig.reviewers` — not
-`REVIEW_COMMAND` / `--command` on `ao review run` (removed).
+The pack runner starts the reviewer process directly. AO no longer owns review spawn or review run/status rows for this project.
+Clear or omit the live project's `reviewers` key with the same full-config mechanism used for other AO project config changes.
+Do not submit a partial config payload that unintentionally erases unrelated keys.
 
-**Important (2026-07-07 incident):** use the raw project GET endpoint to verify
-`reviewers`; `ao project get` hides `reviewers`, and `GET …/projects/{id}/config`
-may be unavailable on some builds. Prefer:
-
-```bash
-curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/projects/orchestrator-pack" \
-  | jq '.config.reviewers // .reviewers'
-```
-
-Set harness with a **full config replace** only when you intend to overwrite the
-entire project config. Partial `ao project set-config` JSON can clobber unrelated
-keys (including `reviewers`):
+Inspect the live project first:
 
 ```bash
-ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'
+ao project get orchestrator-pack --json
 ```
 
-Verify:
+Re-apply the complete intended project config with `reviewers` omitted or empty. The exact empty-state payload is AO-build dependent,
+so verify the result rather than assuming the command succeeded semantically:
 
 ```bash
-curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/projects/orchestrator-pack/config" | jq '.reviewers'
+ao project set-config orchestrator-pack --config-json '<complete config with reviewers omitted or empty>'
+ao project get orchestrator-pack --json
 ```
 
-Expect `[{"harness":"codex"}]` (or your chosen harness: `claude-code` | `codex` | `opencode`).
+The verification result must show no active reviewer harness for `orchestrator-pack`.
 
-Fixture shape: `tests/external-output-references/captures/ao-0-10-review-api/project-config.raw.json`.
+## 2. Restart AO and recycle affected sessions
 
-## 2. Trigger loop (pack-owned)
+Restart/recycle AO according to the standard config-change procedure; do not assume a live daemon reloads project config automatically.
+Recycle long-lived worker/orchestrator sessions when their tracked `AGENTS.md` or checkout content must change.
 
-The engine does **not** auto-trigger review. Pack sidecars call:
+Pre-cutover daemon reviewer sessions are not consulted by the new claim/status logic. Remove the known one-time remnants:
 
-```http
-POST /api/v1/sessions/{workerId}/reviews/trigger
+```bash
+ao session kill 109
+ao session kill 124
+# Also kill the stuck #835 fallback session identified in the live AO inventory.
 ```
 
-Rebound entrypoints (after #623):
+The existing dead-session reconciliation path may be used instead. This is operator hygiene, not a new recurring review reaper.
 
-- `scripts/lib/Invoke-ReviewWakeTrigger.ps1` (wake listener)
+## 3. Pack runner and status store
+
+Control plane:
+
+- `scripts/pack-review-runner.ts` — TypeScript/Node review runner.
+- `scripts/lib/pack-review-run-store.ts` — durable pack-owned operational run/status store.
+- `scripts/lib/Review-StartClaim.ps1` — existing authoritative atomic per-(PR, full head SHA) claim primitive.
+- `scripts/lib/Invoke-AoReviewApi.ps1` — compatibility adapter for existing PowerShell consumers; it does not call daemon review trigger/list HTTP.
+- `scripts/invoke-pack-review.ps1` — trusted reviewer selector/entrypoint, resolved from the trusted pack checkout rather than the reviewed worktree.
+
+GitHub PR review is the sole durable verdict record. The local pack store contains operational run existence, status, claim ownership,
+logs, and staleness evidence; it is not a competing verdict source.
+
+Default state root:
+
+```text
+~/.orchestrator-pack/review-runs/orchestrator-pack
+```
+
+Overrides:
+
+- `ORCHESTRATOR_PACK_STATE_ROOT`
+- `PACK_REVIEW_RUN_STORE_ROOT`
+- `PACK_REVIEW_RUN_STALE_MINUTES` (safe floor enforced)
+
+## 4. Manual trigger and status
+
+Manual and automatic paths use the same runner and the same `Review-StartClaim.ps1` authority.
+
+Explicit PR/head:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts start \
+  --pr-number <PR> --head-sha <full-40-hex-head-SHA>
+```
+
+Session-bound trigger through the durable session/PR binding cache:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts start \
+  --session-id <worker-session-id>
+```
+
+Read operational status:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts list \
+  --project-id orchestrator-pack
+```
+
+The runner verifies the open PR's live head, creates an isolated exact-head worktree, invokes the trusted reviewer script,
+posts the GitHub PR review, writes terminal status, and removes the worktree. It never calls or waits on `ao review submit`.
+
+## 5. Automatic trigger paths
+
+The existing automatic surfaces remain PowerShell orchestration/glue and acquire the existing shared claim before calling the runner:
+
+- `scripts/lib/Invoke-ReviewWakeTrigger.ps1`
 - `scripts/review-trigger-reconcile.ps1`
 - `scripts/review-trigger-reeval.ps1`
 
-Anti-corruption shim for incremental script migration:
+They invoke the shared TypeScript runner through `Invoke-AoReviewTriggerForWorker` with the claim already acquired.
+No separate manual-only shim exists; `scripts/ao-review.ps1` is retired.
 
-```powershell
-pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>
-```
-
-`ao-review send` and `ao-review execute` exit **non-zero** with `REMOVED` — delivery is automatic on `submit`.
-
-## 3. Review-before-cleanup (lifecycle invariant)
-
-Do **not** terminate a worker session or remove its worktree while
-`GET /api/v1/sessions/{workerId}/reviews` shows `latestRun.status=running` for the
-worker's current PR head.
-
-Pack enforcement (Issue #623):
-
-- `scripts/lib/Worker-Recovery.ps1` refuses `git worktree remove` when the gate blocks.
-- Wait until the run reaches `complete`, `failed`, `delivered`, or is reaped per **#624**
-  (`scripts/review-stuck-run-reaper.ps1` — supervised detection + recovery when
-  upstream fail-stale surface exists; see
-  [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md#stuck-review-run-ao-010)).
-
-Manual probe:
-
-```bash
-curl -fsS "http://127.0.0.1:$(ao status --json | jq -r .port)/api/v1/sessions/<workerId>/reviews" | jq '.reviews[].latestRun.status'
-```
-
-## 4. Start / verify wake-supervisor children
-
-After harness config, restart sidecars so they pick up the trigger path:
+Start or recycle the supervisor children after adoption:
 
 ```powershell
 pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1
 pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
 ```
 
-## 5. Smoke proof (operator terminal)
+## 6. Review-before-cleanup and disappeared runners
 
-1. Ensure one worker PR is review-ready (#195 predicate) and the orchestrator LLM session is **idle** (no turn driving review).
-2. Trigger script-side: `pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once` (or completion wake via wake-listener on a ready head).
-3. Confirm HTTP 201/200 and a `running` / `queued` latestRun via `ao-review list <session> --json`.
-4. Manual operator fallback remains: `pwsh -NoProfile -File scripts/ao-review.ps1 run <worker-session-id>`.
+`Worker-Recovery.ps1` continues to use `Assert-ReviewBeforeCleanupGate`, but the gate reads pack-store rows rather than daemon session reviews.
+Do not remove a worktree or recover a worker while a fresh pack run covers the current PR head.
 
-Do **not** edit live `agent-orchestrator.yaml` from automation — harness adoption is operator-only.
+Self-reported reviewer failure/timeout writes terminal `failed` / `timed_out`. If the runner or host disappears before it can report,
+the existing staleness window makes the row consumer-visible as failed (`runner_disappeared_stale`) and allows the existing stale-claim
+recovery path to re-arm the key. No always-on review watchdog is added.
 
-## 6. Unified harness path — post-submit structured [Pn] enforcement (Issues #658/#683)
+Corrupt, duplicate-active, or ambiguous records fail closed: a new review is not started and the operator receives an observable error.
 
-After AO auto-submits a codex harness review, the pack validates the same
-`latestRun.body` snapshot already read by the #669 delivery poll loop. Valid
-content is mapper JSON with `[P0]`–`[P3]` finding titles or the #663 clean terminal
-verdict (`verdict: clean`, `findingCount: 0`, `findings: []`).
+## 7. Smoke proof
 
-Smoke proof: trigger a harness review, then confirm `latestRun.body` contains
-structured JSON — not prose `Finding:` / `BLOCKING:` headings, empty content, or
-`LGTM`. Invalid complete/delivered content is rejected; delivered invalid content
-is superseded by the bounded re-trigger path, while running rows remain covered by
-the #624 stale-run path.
+Use a real open PR whose current head satisfies the shared head-ready predicate.
 
-### Kill-switch (rollback)
+1. Run one manual trigger and confirm exactly one runner starts.
+2. Run `review-trigger-reconcile.ps1 -Once` for an eligible automatic trigger and confirm it invokes the same runner.
+3. Confirm a GitHub PR review is posted for the exact head.
+4. Confirm the pack store reaches `up_to_date`, `changes_requested`, `failed`, or `timed_out` rather than remaining `running` indefinitely.
+5. Confirm the inventoried review scripts produce zero requests to `/api/v1/sessions/*/reviews` and `/reviews/trigger`.
+6. Confirm a second near-simultaneous manual/automatic attempt on the same PR/head observes the existing claim/run and starts no second reviewer process.
 
-Set `PACK_HARNESS_PN_CONTENT_SHAPE_DISABLED=1` only as a fail-closed emergency
-switch. The post-submit gate escalates and does not accept prose. Complete review
-manually:
+The independent Reviews-board dashboard daemon client is intentionally outside this migration. Once daemon reviewer-harness wiring is removed,
+that dashboard may show its documented empty/error state until a separate follow-up re-plumbs or retires it.
 
-```powershell
-pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
-```
+## Rollback
 
-Then operator submits via the normal AO path. Do not rely on warn-only skip — the
-content-shape gate must fail closed.
-
-### Unset reviewers trap
-
-When `reviewers` is missing, AO defaults to `claude-code`. Pack trigger entry refuses
-batch trigger until `reviewers:[{harness:codex}]` is configured (classified abort).
+A Git revert restores the prior daemon seam in repository code. If rolling back, re-apply the previous complete AO project config deliberately
+and restart AO. Do not leave both daemon reviewer spawn and the pack runner active: a parallel path breaks idempotency and can double-post reviews.
 
 ## Related
 
-- Issue **#623** — harness + trigger loop
-- Issue **#658** — harness bridge + [Pn] structured submit contract
-- Issue **#624** — stuck `running` review-run reaper
-- Issue **#619** — session identity readers
-- Issues **#213–#215** — review producer contract and board consumers
-- [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md) — legacy `PACK_REVIEWER` context (0.9 path)
+- Issue **#839** — pack-owned review runner and status store
+- Issue **#719** — pack-owned session/PR binding cache precedent
+- Issue **#718** — stdout-first confirmed delivery transport retained unchanged
+- Issue **#658/#663** — trusted reviewer identity, prompt, model selection, structured findings, and clean verdict
+- Issue **#746/#748** — worker liveness/status and one-time zombie cleanup support
