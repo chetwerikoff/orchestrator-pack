@@ -70,12 +70,12 @@ jobs:
 
           check_path = Path('scripts/check-harness-post-submit-pn-content-shape.ps1')
           check = check_path.read_text(encoding='utf-8')
-          adoption_pattern = re.compile(
-              r"\$adoption = Get-Content -LiteralPath \(Join-Path \$Root '
-              r"docs/ao-0-10-review-harness-adoption\.md'\) -Raw\n"
-              r"foreach \(\$marker in @\(.*?\n\}\n\n\$fixtureText =",
-              re.S,
-          )
+          start_marker = "$adoption = Get-Content -LiteralPath (Join-Path $Root 'docs/ao-0-10-review-harness-adoption.md') -Raw"
+          end_marker = '$fixtureText ='
+          start = check.find(start_marker)
+          end = check.find(end_marker, start + len(start_marker))
+          if start < 0 or end < 0:
+              raise SystemExit('expected adoption marker block boundaries')
           adoption = """$adoption = Get-Content -LiteralPath (Join-Path $Root 'docs/ao-0-10-review-harness-adoption.md') -Raw
           if ($adoption -notmatch 'Pack-owned review runner adoption' -or
               $adoption -notmatch 'GitHub PR review is the authoritative verdict record' -or
@@ -85,9 +85,7 @@ jobs:
           }
 
           $fixtureText ="""
-          check, count = adoption_pattern.subn(adoption, check, count=1)
-          if count != 1:
-              raise SystemExit('expected exactly one duplicated adoption marker block')
+          check = check[:start] + adoption + check[end + len(end_marker):]
           check_path.write_text(check, encoding='utf-8')
           PY
 
@@ -121,4 +119,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body="Issue #839 policy finalization failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body "Issue #839 policy finalization failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
