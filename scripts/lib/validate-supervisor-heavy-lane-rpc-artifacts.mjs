@@ -14,85 +14,130 @@ const CONTENT_BINDING_MODE = 'scoped-tree-content-v1';
 const RPC_ARTIFACT_BINDING_SCOPE_RE =
   /^scripts\/(orchestrator-wake-supervisor|supervisor-fault-boundary|supervisor-recovery\.test-helpers|lib\/supervisor-test-wait-inventory|lib\/validate-supervisor-heavy-lane-rpc-artifacts|lib\/bind-supervisor-heavy-lane-rpc-metadata|lib\/vitest-ci-lanes|check-supervisor-test-wait-inventory|vitest-runtime-history\.json)/;
 
-function gitText(repoRootOverride, args, { allowFailure = false } = {}) {
+function commitObjectExists(commitSha, repoRootOverride) {
+  if (!commitSha || !FULL_SHA_RE.test(commitSha)) {
+    return false;
+  }
   try {
-    return execFileSync('git', args, {
+    execFileSync('git', ['cat-file', '-e', `${commitSha}^{commit}`], {
       cwd: repoRootOverride,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    if (allowFailure) return null;
-    throw error;
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
-function gitBuffer(repoRootOverride, args) {
+function listBindingScopePaths(repoRootOverride) {
+  return execFileSync('git', ['ls-files'], {
+    cwd: repoRootOverride,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((path) => path && RPC_ARTIFACT_BINDING_SCOPE_RE.test(path));
+}
+
+function bindingScopeMatchesCaptureWorktree(repoRootOverride, captureSha) {
+  if (!commitObjectExists(captureSha, repoRootOverride)) {
+    return null;
+  }
+  for (const path of listBindingScopePaths(repoRootOverride)) {
+    let atCapture;
+    try {
+      atCapture = execFileSync('git', ['show', `${captureSha}:${path}`], {
+        cwd: repoRootOverride,
+      });
+    } catch {
+      return false;
+    }
+    const worktreePath = join(repoRootOverride, path);
+    if (!existsSync(worktreePath)) return false;
+    const worktree = readFileSync(worktreePath);
+    if (!atCapture.equals(worktree)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveCurrentHeadSha(repoRootOverride = repoRoot) {
+  return execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: repoRootOverride,
+    encoding: 'utf8',
+  }).trim();
+}
+
+function resolvePrHeadSha(repoRootOverride = repoRoot) {
+  for (const candidate of [
+    process.env.SUPERVISOR_RPC_BIND_HEAD,
+    process.env.PR_HEAD_SHA,
+    process.env.AO_PR_HEAD_SHA,
+  ]) {
+    if (candidate && FULL_SHA_RE.test(candidate)) {
+      return candidate;
+    }
+  }
+
   try {
-    return execFileSync('git', args, {
+    const secondParent = execFileSync('git', ['rev-parse', 'HEAD^2'], {
       cwd: repoRootOverride,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (FULL_SHA_RE.test(secondParent)) {
+      return secondParent;
+    }
+  } catch {
+    try {
+      const subject = execFileSync('git', ['log', '-1', '--pretty=%s', 'HEAD'], {
+        cwd: repoRootOverride,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      const match = subject.match(/^Merge ([0-9a-f]{40}) into [0-9a-f]{40}$/);
+      if (match && FULL_SHA_RE.test(match[1])) {
+        return match[1];
+      }
+    } catch {
+      // diagnostic provenance only
+    }
+  }
+
+  return resolveCurrentHeadSha(repoRootOverride);
+}
+
+function pathsChangedInCommit(commitSha, repoRootOverride) {
+  return execFileSync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', commitSha], {
+    cwd: repoRootOverride,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function bindingScopePathsChangedSince(repoRootOverride, fromSha, toSha) {
+  const changed = execFileSync('git', ['diff', '--name-only', fromSha, toSha], {
+    cwd: repoRootOverride,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return changed.filter((path) => RPC_ARTIFACT_BINDING_SCOPE_RE.test(path));
+}
+
+function resolveMetadataParentForDiagnostics(head, repoRootOverride) {
+  try {
+    return execFileSync('git', ['rev-parse', `${head}^`], {
+      cwd: repoRootOverride,
+      encoding: 'utf8',
+    }).trim();
   } catch {
     return null;
   }
-}
-
-function commitObjectExists(commitSha, repoRootOverride) {
-  if (!commitSha || !FULL_SHA_RE.test(commitSha)) return false;
-  return gitText(repoRootOverride, ['cat-file', '-e', `${commitSha}^{commit}`], { allowFailure: true }) !== null;
-}
-
-function splitNullList(value) {
-  return value.toString('utf8').split('\0').map((item) => item.trim()).filter(Boolean);
-}
-
-function listBindingScopePaths(repoRootOverride, captureSha) {
-  const paths = new Set();
-  const current = gitBuffer(repoRootOverride, ['ls-files', '-z']);
-  if (current) {
-    for (const path of splitNullList(current)) {
-      if (RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) paths.add(path);
-    }
-  }
-  const captured = gitBuffer(repoRootOverride, ['ls-tree', '-r', '--name-only', '-z', captureSha]);
-  if (captured) {
-    for (const path of splitNullList(captured)) {
-      if (RPC_ARTIFACT_BINDING_SCOPE_RE.test(path)) paths.add(path);
-    }
-  }
-  return [...paths].sort();
-}
-
-function compareBindingScopeToCapture(repoRootOverride, captureSha) {
-  if (!commitObjectExists(captureSha, repoRootOverride)) {
-    return {
-      ok: false,
-      reason: `capture commit ${captureSha} is unavailable; CI must fetch full history before validating RPC artifacts`,
-      stalePaths: [],
-    };
-  }
-
-  const paths = listBindingScopePaths(repoRootOverride, captureSha);
-  if (paths.length === 0) {
-    return { ok: false, reason: 'RPC binding scope resolved to zero tracked paths', stalePaths: [] };
-  }
-
-  const stalePaths = [];
-  for (const path of paths) {
-    const captured = gitBuffer(repoRootOverride, ['show', `${captureSha}:${path}`]);
-    const currentPath = join(repoRootOverride, path);
-    const current = existsSync(currentPath) ? readFileSync(currentPath) : null;
-    if (!captured || !current || !captured.equals(current)) stalePaths.push(path);
-  }
-  if (stalePaths.length > 0) {
-    return {
-      ok: false,
-      reason: `binding-scope content drifted since capture ${captureSha}: ${stalePaths.join(', ')}`,
-      stalePaths,
-    };
-  }
-  return { ok: true, reason: 'binding-scope tree content matches capture', stalePaths: [] };
 }
 
 export function inspectSupervisorHeavyLaneRpcBinding(repoRootOverride = repoRoot) {
@@ -115,8 +160,42 @@ export function inspectSupervisorHeavyLaneRpcBinding(repoRootOverride = repoRoot
       stalePaths: [],
     };
   }
-  const comparison = compareBindingScopeToCapture(repoRootOverride, capture);
-  return { ...comparison, captureCommitSha: capture, bindingMode: manifest.bindingMode };
+  if (!commitObjectExists(capture, repoRootOverride)) {
+    return {
+      ok: false,
+      reason: `capture commit ${capture} is unavailable; fetch full history before validating RPC artifacts`,
+      stalePaths: [],
+    };
+  }
+
+  const head = resolveCurrentHeadSha(repoRootOverride);
+  const stalePaths = bindingScopePathsChangedSince(repoRootOverride, capture, head);
+  const worktreeMatch = bindingScopeMatchesCaptureWorktree(repoRootOverride, capture);
+  const diagnosticPrHead = resolvePrHeadSha(repoRootOverride);
+  const diagnosticParent = resolveMetadataParentForDiagnostics(head, repoRootOverride);
+  const diagnosticHeadPaths = pathsChangedInCommit(head, repoRootOverride);
+
+  if (stalePaths.length > 0 || worktreeMatch !== true) {
+    return {
+      ok: false,
+      reason: `binding-scope content drifted since capture ${capture}: ${stalePaths.join(', ') || 'worktree mismatch'}`,
+      stalePaths,
+      captureCommitSha: capture,
+      diagnosticPrHead,
+      diagnosticParent,
+      diagnosticHeadPaths,
+    };
+  }
+  return {
+    ok: true,
+    reason: 'binding-scope tree content matches capture',
+    stalePaths: [],
+    captureCommitSha: capture,
+    bindingMode: manifest.bindingMode,
+    diagnosticPrHead,
+    diagnosticParent,
+    diagnosticHeadPaths,
+  };
 }
 
 export function resolveExpectedCaptureSha(repoRootOverride = repoRoot) {
@@ -142,8 +221,9 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     'scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json',
   );
   const manifest = loadJsonFile(manifestPath);
-  const head = gitText(repoRootOverride, ['rev-parse', '--verify', 'HEAD^{commit}']);
-  const expectedCaptureSha = resolveExpectedCaptureSha(repoRootOverride);
+  const binding = inspectSupervisorHeavyLaneRpcBinding(repoRootOverride);
+  if (!binding.ok) cliFail(binding.reason);
+  const expectedCaptureSha = binding.captureCommitSha;
   const expectedHeavyLaneFingerprint = resolveHeavyLaneFingerprint(repoRootOverride);
   const passes = manifest.passes ?? [];
 
@@ -187,7 +267,7 @@ export function validateSupervisorHeavyLaneRpcArtifacts(repoRootOverride = repoR
     if (hits.length > 0) cliFail(`${pass.id}: RPC timeout signature detected: ${hits.join('; ')}`);
   }
 
-  return { passCount: passes.length, head, expectedCaptureSha, bindingMode: manifest.bindingMode };
+  return { passCount: passes.length, expectedCaptureSha, bindingMode: manifest.bindingMode };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
