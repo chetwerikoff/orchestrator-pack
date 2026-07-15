@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-baseline-estimates",
-  "dataChangedAt": "2026-07-15T05:52:52.556Z",
+  "dataChangedAt": "2026-07-15T06:20:49.872Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -421,7 +421,7 @@
     "scripts/review-start-envelope-ledger.test.ts": "c6b997e0c5c5e86d33cac375240e13adf245a309cd4736ed39f16e0a532978a9",
     "scripts/review-start-preflight-shield-denial-audit.test.ts": "b9dfa2c5f26cd443492672a5fcb400fa2e036494ee716a53c836c8fcefa88a28",
     "scripts/review-start-scoped-gh-json-capture.test.ts": "f5d70fb349a60cfaa0784fc206ad51d647e84530d689352705f68bc5b8cf4187",
-    "scripts/spawn-worktree-grant-finalization.test.ts": "134de84fac2839d880061b9747e4bf6b0033d88bfecc9e49b6b472dcd49026d9",
+    "scripts/spawn-worktree-grant-finalization.test.ts": "4f300d244dc510d2871c90f4546e148d1285502437d7c75388e0b8c91daa03e0",
     "scripts/spawn-worktree-head-ref-oid-binding.test.ts": "d27450adf3e2b4208769fc131ab4b2dabbf3ff20c1463eef9b60058b20e0fe13",
     "scripts/spawn-worktree-repository-identity-binding.test.ts": "4568f65e6b22e3c4e272691c4f718ad4f583fec288822026d08ec3a30179095b",
     "scripts/toolchain/toolchain-self-test.test.ts": "d2081fd72ca3c03deae787693b68011fd78ed9f2984a99d000a57845a011e89c",
