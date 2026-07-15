@@ -95,6 +95,34 @@ function subprocessEnvWithoutGithubActions() {
   return env;
 }
 
+function realTreeCheckerEnv(overrides: NodeJS.ProcessEnv = {}) {
+  const productionHome = process.env.OPK_VITEST_PRODUCTION_HOME ?? process.env.HOME ?? '';
+  const productionTmp = process.env.OPK_VITEST_PRODUCTION_TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '';
+  const productionXdgStateHome = process.env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME
+    ?? (productionHome ? path.join(productionHome, '.local', 'state') : '');
+  return {
+    ...process.env,
+    ...overrides,
+    OPK_VITEST_HARNESS: '',
+    OPK_VITEST_SKIP_CHILD_ENV_MERGE: '1',
+    OPK_VITEST_HARNESS_ROOT: '',
+    OPK_VITEST_HARNESS_INVENTORY: '',
+    AO_ORCHESTRATOR_ESCALATION_STATE: '',
+    AO_OPERATOR_ESCALATION_INBOX: '',
+    AO_ESCALATION_HEALTH_SPOOL: '',
+    AO_WAKE_SUPERVISOR_STATE_DIR: '',
+    ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: '',
+    AO_SIDE_PROCESS_STATE_DIR: '',
+    AO_BASE_DIR: '',
+    AO_MECHANICAL_TRANSPORT_TEMP: '',
+    HOME: productionHome,
+    XDG_STATE_HOME: productionXdgStateHome,
+    TMPDIR: productionTmp,
+    TEMP: productionTmp,
+    TMP: productionTmp,
+  };
+}
+
 describe('orchestrator message registry (Issue #298)', () => {
   it('passes registration audit on the real pack tree', () => {
     const result = auditRegistration(repoRoot);
@@ -473,7 +501,10 @@ describe('orchestrator message registry (Issue #298)', () => {
   it(
     'runs check-orchestrator-message-registry.ps1 clean on the real tree',
     () => {
-      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
+      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
+        stdio: 'pipe',
+        env: realTreeCheckerEnv(),
+      });
     },
     360_000,
   );
@@ -506,11 +537,10 @@ describe('orchestrator message registry (Issue #298)', () => {
       delete process.env.GITHUB_EVENT_PATH;
     }
     delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
-    const cleanEnv = {
-      ...process.env,
+    const cleanEnv = realTreeCheckerEnv({
       ORCHESTRATOR_MESSAGE_LINKED_ISSUES: undefined,
       ...(scrubbedEventPath ? { GITHUB_EVENT_PATH: scrubbedEventPath } : { GITHUB_EVENT_PATH: undefined }),
-    };
+    });
     try {
       if (scrubbedEventPath) {
         expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);

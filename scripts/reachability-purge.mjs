@@ -73,6 +73,7 @@ async function git(repoRoot, args) {
     command: 'git',
     args,
     cwd: repoRoot,
+    inheritParentEnv: true,
     allowEmptyStdout: true,
   });
   if (result.ok) return result.stdout;
