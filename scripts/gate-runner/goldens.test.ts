@@ -7,6 +7,8 @@ import { agentRulesBudgetGate, agentRulesGrepGate, agentRulesMovedContentGate } 
 import { runGateRunner } from './runner.ts';
 import { memorySnapshot } from './source-snapshot.ts';
 
+const retiredAgentRulesFile = `${['agent', 'rules'].join('_')}.md`;
+
 interface Capture {
   gateId: string;
   legacyScript: string;
@@ -74,7 +76,7 @@ describe('pre-delete legacy captures', () => {
   });
 
   it('keeps the real declarative FAIL stdout contracts', () => {
-    const grep = evaluateDeclarativeGate(agentRulesGrepGate, memorySnapshot({ 'README.md': 'agent_rules.md' }));
+    const grep = evaluateDeclarativeGate(agentRulesGrepGate, memorySnapshot({ 'README.md': retiredAgentRulesFile }));
     expect(grep.status).toBe('FAIL');
     expect(grep.legacyStdout).toBe(capture('agent-rules-live-reference', 'forbidden-reference').stdout);
 

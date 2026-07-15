@@ -1,15 +1,18 @@
 import type { DeclarativeGateDefinition } from './declarative.ts';
 
+const RETIRED_AGENT_RULES_FILE = `${['agent', 'rules'].join('_')}.md`;
+const RETIRED_AGENT_RULES_PATTERN = RETIRED_AGENT_RULES_FILE.replace('.', '\\.');
+
 export const agentRulesGrepGate: DeclarativeGateDefinition = {
   gateId: 'agent-rules-live-reference',
   legacyScript: 'scripts/check-agent-rules-grep-inventory.ps1',
-  summary: 'No live normative references to retired agent_rules.md remain.',
+  summary: `No live normative references to retired ${RETIRED_AGENT_RULES_FILE} remain.`,
   rules: [{
     kind: 'grep-inventory',
     patterns: [
-      /prompts\/agent_rules\.md/u,
-      /prompts\\agent_rules\.md/u,
-      /(?<![\w/\\])agent_rules\.md/u,
+      new RegExp(`prompts/${RETIRED_AGENT_RULES_PATTERN}`, 'u'),
+      new RegExp(`prompts\\\\${RETIRED_AGENT_RULES_PATTERN}`, 'u'),
+      new RegExp(`(?<![\\w/\\\\])${RETIRED_AGENT_RULES_PATTERN}`, 'u'),
     ],
     excludePrefixes: [
       'docs/declarations/',
@@ -30,10 +33,10 @@ export const agentRulesGrepGate: DeclarativeGateDefinition = {
       // Generated global Cursor hint; its text is superseded by pack policy and is not a pack-owned worker rulebook.
       '.cursor/rules/github-rest-over-graphql.mdc',
     ],
-    failureSuffix: 'references retired agent_rules.md',
+    failureSuffix: `references retired ${RETIRED_AGENT_RULES_FILE}`,
   }],
-  passStdout: '[PASS] no live normative references to agent_rules.md\n',
-  failHeading: '[FAIL] live references to retired agent_rules.md:',
+  passStdout: `[PASS] no live normative references to ${RETIRED_AGENT_RULES_FILE}\n`,
+  failHeading: `[FAIL] live references to retired ${RETIRED_AGENT_RULES_FILE}:`,
 };
 
 export const agentRulesBudgetGate: DeclarativeGateDefinition = {

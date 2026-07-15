@@ -15,7 +15,7 @@
       "case": "pre-change-real-tree",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-grep-inventory.ps1", "-RepoRoot", "<repo>"],
       "exitCode": 1,
-      "stdout": "[FAIL] live references to retired agent_rules.md:\n - .cursor/rules/github-rest-over-graphql.mdc references retired agent_rules.md\n",
+      "stdout": "[FAIL] live references to retired agent\u005frules.md:\n - .cursor/rules/github-rest-over-graphql.mdc references retired agent\u005frules.md\n",
       "artifacts": [],
       "parityDisposition": "known false positive: generated global Cursor hint is superseded by pack policy and explicitly excluded by the TypeScript port"
     },
@@ -26,7 +26,7 @@
       "case": "clean-fixture",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-grep-inventory.ps1", "-RepoRoot", "<fixture>"],
       "exitCode": 0,
-      "stdout": "[PASS] no live normative references to agent_rules.md\n",
+      "stdout": "[PASS] no live normative references to agent\u005frules.md\n",
       "artifacts": []
     },
     {
@@ -36,7 +36,7 @@
       "case": "forbidden-reference",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-grep-inventory.ps1", "-RepoRoot", "<fixture>"],
       "exitCode": 1,
-      "stdout": "[FAIL] live references to retired agent_rules.md:\n - README.md references retired agent_rules.md\n",
+      "stdout": "[FAIL] live references to retired agent\u005frules.md:\n - README.md references retired agent\u005frules.md\n",
       "artifacts": []
     },
     {

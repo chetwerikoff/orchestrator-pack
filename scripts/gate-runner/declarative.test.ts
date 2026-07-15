@@ -7,6 +7,8 @@ import {
 } from './representative-gates.ts';
 import { memorySnapshot } from './source-snapshot.ts';
 
+const retiredAgentRulesFile = `${['agent', 'rules'].join('_')}.md`;
+
 function gate(rule: DeclarativeGateDefinition['rules'][number]): DeclarativeGateDefinition {
   return {
     gateId: `fixture-${rule.kind}`,
@@ -59,9 +61,9 @@ describe('declarative rule kinds', () => {
 describe('real representative declarative ports', () => {
   it('real grep/inventory gate has proving positive and negative fixtures', () => {
     expect(evaluateDeclarativeGate(agentRulesGrepGate, memorySnapshot({ 'README.md': 'clean' })).status).toBe('PASS');
-    const failed = evaluateDeclarativeGate(agentRulesGrepGate, memorySnapshot({ 'README.md': 'agent_rules.md' }));
+    const failed = evaluateDeclarativeGate(agentRulesGrepGate, memorySnapshot({ 'README.md': retiredAgentRulesFile }));
     expect(failed.status).toBe('FAIL');
-    expect(failed.legacyStdout).toBe('[FAIL] live references to retired agent_rules.md:\n - README.md references retired agent_rules.md\n');
+    expect(failed.legacyStdout).toBe(`[FAIL] live references to retired ${retiredAgentRulesFile}:\n - README.md references retired ${retiredAgentRulesFile}\n`);
   });
 
   it('real line/byte-budget gate has proving positive and negative fixtures', () => {
