@@ -10,11 +10,47 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: issue-839-final-diagnose-845
+  cancel-in-progress: true
+
 jobs:
-  diagnose:
+  verify:
     if: github.event.pull_request.number == 845
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture verifier
+        id: verify
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/verify.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-verify.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish verifier output
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.verify.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 verify.ps1 diagnosis'
+            echo
+            echo "outcome=$OUTCOME"
+            echo '```text'
+            tail -c 50000 /tmp/issue-839-verify.log 2>/dev/null || true
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+
+  topology:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,15 +59,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Install dependencies
-        run: npm ci --include=dev --silent
-      - name: Capture verifier
-        id: verify
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          ./scripts/verify.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-verify.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm ci --include=dev --silent
       - name: Capture heavy topology planner
         id: topology
         continue-on-error: true
@@ -43,6 +71,36 @@ jobs:
           set -o pipefail
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
           node scripts/emit-vitest-heavy-topology.mjs --gha-output 2>&1 | tee /tmp/issue-839-topology.log
+      - name: Publish topology output
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.topology.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 heavy-topology diagnosis'
+            echo
+            echo "outcome=$OUTCOME"
+            echo '```text'
+            cat /tmp/issue-839-topology.log 2>/dev/null || true
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/report.md
+
+  light:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --include=dev --silent
       - name: Capture Vitest light lane
         id: light
         continue-on-error: true
@@ -50,43 +108,19 @@ jobs:
         run: |
           ./scripts/run-vitest-light-lane.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-light.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Upload diagnostic logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-839-final-diagnostics
-          path: |
-            /tmp/issue-839-verify.log
-            /tmp/issue-839-topology.log
-            /tmp/issue-839-light.log
-          if-no-files-found: warn
-      - name: Publish exact diagnostics
+      - name: Publish light-lane output
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          VERIFY: ${{ steps.verify.outcome }}
-          TOPOLOGY: ${{ steps.topology.outcome }}
-          LIGHT: ${{ steps.light.outcome }}
+          OUTCOME: ${{ steps.light.outcome }}
         shell: bash
         run: |
           {
-            echo '## Issue #839 final CI diagnosis'
+            echo '## Issue #839 Vitest light-lane diagnosis'
             echo
-            echo "verify=$VERIFY topology=$TOPOLOGY light=$LIGHT"
-            echo
-            echo '### verify.ps1'
+            echo "outcome=$OUTCOME"
             echo '```text'
-            tail -c 36000 /tmp/issue-839-verify.log 2>/dev/null || true
+            tail -c 50000 /tmp/issue-839-light.log 2>/dev/null || true
             echo '```'
-            echo
-            echo '### heavy topology'
-            echo '```text'
-            cat /tmp/issue-839-topology.log 2>/dev/null || true
-            echo '```'
-            echo
-            echo '### Vitest light lane'
-            echo '```text'
-            tail -c 36000 /tmp/issue-839-light.log 2>/dev/null || true
-            echo '```'
-          } >/tmp/issue-839-diagnosis.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/issue-839-diagnosis.md
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983741292 --field body=@/tmp/report.md
