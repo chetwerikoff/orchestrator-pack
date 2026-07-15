@@ -26,12 +26,12 @@
       },
       "hookWiringFingerprint": {
         "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
-        "wrapperHash": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d",
+        "wrapperHash": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141",
         "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
       },
       "codeHashes": {
         "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
-        "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
+        "scripts/invoke-read-delegation-audit-stop.ps1": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141"
       }
     },
     "claude": {
@@ -56,12 +56,12 @@
       },
       "hookWiringFingerprint": {
         "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
-        "wrapperHash": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d",
+        "wrapperHash": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141",
         "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
       },
       "codeHashes": {
         "docs/read-delegation-audit.mjs": "81bede4200962804c35c5cb0ac3d17fef3911bc1180d1905066d102c05b64592",
-        "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
+        "scripts/invoke-read-delegation-audit-stop.ps1": "f495d1de46bedcb2a96b436cecd6f19ea2c94c18941066ce67833e2868916141"
       }
     }
   }
