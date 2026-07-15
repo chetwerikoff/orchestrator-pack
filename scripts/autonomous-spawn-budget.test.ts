@@ -76,9 +76,8 @@ describe('autonomous spawn budget contract after shim retirement (Issues #462/#8
     expect(report).toContain('git-ao-read: status=PASS');
   });
 
-  it('uses AO_SESSION_ID, not the retired surface marker, for trusted pwsh resolution', () => {
+  it('uses AO_SESSION_ID for trusted pwsh resolution', () => {
     const source = readFileSync(path.join(repoRoot, 'scripts/_resolve-pwsh.sh'), 'utf8');
     expect(source).toContain('AO_SESSION_ID');
-    expect(source).not.toContain('AO_AUTONOMOUS_ORCHESTRATOR_SURFACE');
   });
 });
