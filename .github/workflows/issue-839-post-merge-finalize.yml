@@ -37,6 +37,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch origin main
+
           python3 - <<'PY'
           from pathlib import Path
           path = Path('AGENTS.md')
@@ -49,6 +50,7 @@ jobs:
               text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
           PY
+
           git show origin/main:scripts/reachability-purge.test.ts > scripts/reachability-purge.test.ts
           python3 - <<'PY'
           from pathlib import Path
@@ -60,17 +62,62 @@ jobs:
               raise SystemExit(f'reachability reason marker count={text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
+
+          git show origin/main:scripts/toolchain/powershell-child-tests.json > scripts/toolchain/powershell-child-tests.json
+          git show origin/main:scripts/toolchain/raw-child-process-baseline.json > scripts/toolchain/raw-child-process-baseline.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('scripts/toolchain/powershell-child-tests.json')
+          doc = json.loads(path.read_text(encoding='utf-8'))
+          rows = doc.get('entries')
+          if not isinstance(rows, list):
+              raise SystemExit('powershell-child-tests.json: entries array missing')
+          filtered = [row for row in rows if row.get('path') != 'scripts/harness-review-bridge.test.ts']
+          if len(rows) - len(filtered) != 1:
+              raise SystemExit(f'powershell-child baseline removal count={len(rows) - len(filtered)}')
+          doc['entries'] = filtered
+          path.write_text(json.dumps(doc, separators=(',', ':')) + '\n', encoding='utf-8')
+
+          path = Path('scripts/toolchain/raw-child-process-baseline.json')
+          doc = json.loads(path.read_text(encoding='utf-8'))
+          rows = doc.get('entries')
+          if not isinstance(rows, list):
+              raise SystemExit('raw-child-process-baseline.json: entries array missing')
+          filtered = [
+              row for row in rows
+              if not (
+                  row.get('path') == 'scripts/harness-review-bridge.test.ts'
+                  and row.get('api') == 'execFileSync'
+                  and row.get('fingerprint') == 'b4b9ea0960343b046042'
+              )
+          ]
+          if len(rows) - len(filtered) != 1:
+              raise SystemExit(f'raw-child baseline removal count={len(rows) - len(filtered)}')
+          doc['entries'] = filtered
+          path.write_text(json.dumps(doc, separators=(',', ':')) + '\n', encoding='utf-8')
+          PY
+
           git rm .github/workflows/issue-839-post-merge-finalize.yml
-          git add AGENTS.md scripts/reachability-purge.test.ts
+          git add \
+            AGENTS.md \
+            scripts/reachability-purge.test.ts \
+            scripts/toolchain/powershell-child-tests.json \
+            scripts/toolchain/raw-child-process-baseline.json
           git commit -m 'Resolve current-main policy overlaps for issue 839'
-      - name: Verify base TypeScript contracts
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx tsc --project tsconfig.base.json --noEmit
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run test:foundation
+
+      - name: Verify repository TypeScript
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Verify foundation typecheck
+        run: npm run typecheck:foundation
+      - name: Verify foundation policy lint
+        run: npm run lint:foundation
+      - name: Verify PowerShell child baseline
+        run: npm run check:pwsh-test-growth
+      - name: Verify foundation tests
+        run: npm run test:foundation
+
       - name: Run focused regressions
         id: focused
         continue-on-error: true
@@ -95,8 +142,9 @@ jobs:
             cat /tmp/issue-839-focused-tail.log
             echo '```'
           } >/tmp/report.md
-          gh api --method POST repos/chetwerikoff/orchestrator-pack/issues/845/comments --field body=@/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
           exit 1
+
       - name: Verify AGENTS and full light lane
         shell: pwsh
         run: |
