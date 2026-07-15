@@ -55,24 +55,33 @@ jobs:
           npm run check:pwsh-test-growth -- --write-baseline
       - name: Run issue 821 contract tests
         run: |
-          set -euo pipefail
-          npx vitest run \
-            scripts/issue-821-gate-activation.test.ts \
-            scripts/autonomous-orchestrator-boundary.test.ts \
-            scripts/autonomous-spawn-budget.test.ts \
-            scripts/autonomous-spawn-policy.test.ts \
-            scripts/worker-recovery-spawn-argv.test.ts \
-            scripts/worker-nudge-gate.test.ts \
-            scripts/spawn-worktree-grant-finalization.test.ts \
-            scripts/orchestrator-claimed-review-run.test.ts \
-            scripts/autonomous-spawn-worktree-gate.test.ts \
-            scripts/orchestrator-review-start-preflight-audit.test.ts \
-            scripts/review-start-envelope-external-io.test.ts \
-            scripts/reachability-purge.test.ts
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
-          pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
-          pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
-          pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
+          set -o pipefail
+          {
+            npx vitest run \
+              scripts/issue-821-gate-activation.test.ts \
+              scripts/autonomous-orchestrator-boundary.test.ts \
+              scripts/autonomous-spawn-budget.test.ts \
+              scripts/autonomous-spawn-policy.test.ts \
+              scripts/worker-recovery-spawn-argv.test.ts \
+              scripts/worker-nudge-gate.test.ts \
+              scripts/spawn-worktree-grant-finalization.test.ts \
+              scripts/orchestrator-claimed-review-run.test.ts \
+              scripts/autonomous-spawn-worktree-gate.test.ts \
+              scripts/orchestrator-review-start-preflight-audit.test.ts \
+              scripts/review-start-envelope-external-io.test.ts \
+              scripts/reachability-purge.test.ts
+            pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -ReviewStart
+            pwsh -NoProfile -File scripts/check-autonomous-capabilities.ps1 -Boundary
+            pwsh -NoProfile -File scripts/check-orchestrator-claimed-review-run.ps1
+            pwsh -NoProfile -File scripts/check-command-runtime-bootstrap.ps1
+          } 2>&1 | tee "$RUNNER_TEMP/issue-821-contract.log"
+      - name: Upload contract diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-821-contract-log-${{ github.run_id }}
+          path: ${{ runner.temp }}/issue-821-contract.log
+          if-no-files-found: warn
       - name: Refresh changed-test runtime history
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
