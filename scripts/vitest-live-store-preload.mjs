@@ -262,6 +262,7 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     'AO_WORKER_NUDGE_CLAIM_DIR',
     'AO_WORKER_REPORT_STORE',
     'AO_WORKER_STATUS_STORE',
+    'AO_MECHANICAL_TRANSPORT_TEMP',
   ]);
   const harnessOwnedAoBase = String(
     harnessSnapshotEnv.OPK_VITEST_HARNESS_AO_BASE_DIR
@@ -280,6 +281,7 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     'OPK_REAL_AO_BINARY',
     'GIT_REAL_BINARY',
     'GIT_SYSTEM_BINARY',
+    'AO_MECHANICAL_TRANSPORT_TEMP',
   ]);
   const explicitBypassKeys = [
     'OPK_VITEST_HARNESS_ROOT',
@@ -358,6 +360,14 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     return false;
   };
 
+  const isHarnessAoBaseScopedValue = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text || !harnessOwnedAoBase) return false;
+    const candidate = canonicalizeFast(text);
+    const root = canonicalizeFast(harnessOwnedAoBase);
+    return Boolean(candidate && root && pathIsSameOrWithin(candidate, root));
+  };
+
   const stripHarnessOwnedDerivedEnv = (env) => {
     const stripped = { ...(env ?? {}) };
     for (const name of derivedHarnessKeys) {
@@ -426,6 +436,19 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     const mergedEnv = explicitEnv
       ? mergeHarnessChildEnv(explicitEnv)
       : mergeHarnessChildEnv(process.env);
+    const hasExplicitTestAoBase = Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'AO_BASE_DIR')
+      && !isHarnessOwnedValue('AO_BASE_DIR', explicitEnv.AO_BASE_DIR);
+    if (hasExplicitTestAoBase) {
+      for (const name of derivedHarnessKeys) {
+        if (
+          Object.prototype.hasOwnProperty.call(mergedEnv, name)
+          && name !== 'AO_BASE_DIR'
+          && isHarnessAoBaseScopedValue(mergedEnv[name])
+        ) {
+          delete mergedEnv[name];
+        }
+      }
+    }
     if (isNestedHarnessLaunch(command, argv)) {
       const nestedEnv = { ...mergedEnv };
       for (const name of nestedHarnessResetKeys) {
@@ -475,8 +498,6 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
         }
       }
     }
-    const hasExplicitTestAoBase = Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'AO_BASE_DIR')
-      && !isHarnessOwnedValue('AO_BASE_DIR', explicitEnv.AO_BASE_DIR);
     if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'AO_BASE_DIR') && !hasExplicitTestAoBase) {
       mergedEnv.AO_BASE_DIR = createChildAoBase();
     }
