@@ -4,6 +4,8 @@
   Establish pack-owned Vitest marker and isolate every inventoried live-default store (Issues #664, #752).
 #>
 
+. (Join-Path $PSScriptRoot 'OpkVitestStoreIsolation.ps1')
+
 function Get-OrchestratorEscalationSharedDefaultStatePath {
     return Join-Path ([System.IO.Path]::GetTempPath()) 'orchestrator-escalation-state.json'
 }
@@ -155,7 +157,6 @@ function Set-OpkVitestHarnessEnv {
     $env:AO_WAKE_DEDUP_STATE = Join-Path $stateDir 'orchestrator-wake-dedup.json'
     $env:AO_WAKE_LISTENER_SIDE_EFFECT_LOCK = Join-Path $stateDir 'orchestrator-wake-listener-side-effect.lock'
     $env:AO_WORKER_MESSAGE_ADOPTION_STATE = Join-Path $stateDir 'orchestrator-worker-message-send-adoption.json'
-    . (Join-Path $PSScriptRoot 'OpkVitestStoreIsolation.ps1')
     Enable-OpkVitestStoreIsolation
 
     return @{
