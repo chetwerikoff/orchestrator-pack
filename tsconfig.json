@@ -3,7 +3,8 @@
   "include": [
     "scripts/typescript-smoke.ts",
     "scripts/kernel/**/*.ts",
-    "scripts/toolchain/**/*.ts"
+    "scripts/toolchain/**/*.ts",
+    "scripts/gate-runner/**/*.ts"
   ],
   "compilerOptions": {
     "allowImportingTsExtensions": true,
