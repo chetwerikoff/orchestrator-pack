@@ -1,9 +1,13 @@
-name: issue-832 light diagnostic
+name: issue-832 failing-job diagnostic
 
 on:
   pull_request:
     branches:
       - main
+
+concurrency:
+  group: issue-832-diagnostic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,33 +16,43 @@ permissions:
 jobs:
   diagnostic:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Download light-lane job log
+      - name: Download failing job logs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl -fsSL \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/87369166897/logs" \
-            -o "${RUNNER_TEMP}/light-job.raw"
-          if unzip -t "${RUNNER_TEMP}/light-job.raw" >/dev/null 2>&1; then
-            unzip -p "${RUNNER_TEMP}/light-job.raw" > "${RUNNER_TEMP}/light-job.log"
-          else
-            cp "${RUNNER_TEMP}/light-job.raw" "${RUNNER_TEMP}/light-job.log"
-          fi
-          {
-            echo '=== failure-focused lines ==='
-            grep -nEi '(fail|failed|failure|error|exception|assertion|expected|received|test files|tests )' "${RUNNER_TEMP}/light-job.log" || true
-            echo '=== final 600 lines ==='
-            tail -n 600 "${RUNNER_TEMP}/light-job.log"
-          } > "${RUNNER_TEMP}/light-diagnostic.txt"
+          declare -A JOBS=(
+            [cheap-wins]=87371499155
+            [vitest-light]=87371532021
+            [vitest-heavy-1]=87372055243
+          )
+          for name in "${!JOBS[@]}"; do
+            raw="${RUNNER_TEMP}/${name}.raw"
+            log="${RUNNER_TEMP}/${name}.log"
+            curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${JOBS[$name]}/logs" \
+              -o "$raw"
+            if unzip -t "$raw" >/dev/null 2>&1; then
+              unzip -p "$raw" > "$log"
+            else
+              cp "$raw" "$log"
+            fi
+            {
+              echo '=== failure-focused lines ==='
+              grep -nEi '(fail|failed|failure|error|exception|assertion|expected|received|test files|tests |##\[error\])' "$log" || true
+              echo '=== final 800 lines ==='
+              tail -n 800 "$log"
+            } > "${RUNNER_TEMP}/${name}-diagnostic.txt"
+          done
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-832-light-diagnostic
-          path: ${{ runner.temp }}/light-diagnostic.txt
+          name: issue-832-failing-job-diagnostics
+          path: ${{ runner.temp }}/*-diagnostic.txt
           retention-days: 1
           if-no-files-found: error
