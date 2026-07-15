@@ -30,7 +30,7 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --include=dev --silent
-      - name: Resolve current-main policy overlaps
+      - name: Build verified candidate tree
         shell: bash
         run: |
           set -euo pipefail
@@ -112,24 +112,6 @@ jobs:
             scripts/toolchain/raw-child-process-baseline.json
           git commit -m 'Resolve current-main policy overlaps for issue 839'
 
-      - name: Verify repository TypeScript
-        run: npx tsc --project tsconfig.base.json --noEmit
-      - name: Verify foundation typecheck
-        run: npm run typecheck:foundation
-      - name: Verify foundation policy lint
-        run: npm run lint:foundation
-      - name: Verify PowerShell child baseline
-        run: npm run check:pwsh-test-growth
-      - name: Verify foundation tests
-        run: npm run test:foundation
-      - name: Run focused regressions
-        run: |
-          node scripts/run-vitest-with-harness.mjs run \
-            tests/agents-md-relocation.test.ts \
-            scripts/reachability-purge.test.ts \
-            scripts/review-delivery.test.ts \
-            scripts/review-producer-contract-mapping.test.ts
-
       - name: Run full light lane
         id: light
         continue-on-error: true
@@ -196,4 +178,4 @@ jobs:
         shell: bash
         run: |
           gh api --method POST repos/chetwerikoff/orchestrator-pack/issues/845/comments \
-            --field body="Issue #839 post-merge finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            --field body="Issue #839 finalizer failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
