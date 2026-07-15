@@ -45,12 +45,7 @@ try {
     $output = & npm test -- @fileArgs --reporter=default --reporter=json --outputFile=$RuntimeReportPath 2>&1
     $exitCode = $LASTEXITCODE
     $text = ($output | Out-String)
-    if ($exitCode -ne 0) {
-        Write-Host (($output | Select-Object -Last 500) | Out-String)
-    }
-    else {
-        Write-Host '[PASS] Vitest light test process completed; diagnostic branch suppresses full output'
-    }
+    Write-Host $text
 
     if ($text -match '(?is)onTaskUpdate.*(?:RPC|timeout)|vitest-worker.*onTaskUpdate|STACK_TRACE_ERROR') {
         Write-Host '[FAIL] Vitest worker RPC flake signature detected in light lane'
