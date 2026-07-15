@@ -16,12 +16,12 @@ import {
   listPackReviewRuns,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
-} from './lib/pack-review-run-store.ts';
+} from './lib/pack-review-run-store.js';
 import {
   resolveBindingFromCache,
   resolveTrustedRunnerPaths,
   startPackReview,
-} from './pack-review-runner.ts';
+} from './pack-review-runner.js';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempRoots: string[] = [];
