@@ -292,23 +292,31 @@ else {
 }
 
 Write-Host ''
-Write-Host '== orchestratorRules quote safety =='
-$rulesQuoteCheck = Join-Path $Root 'scripts/check-orchestrator-rules-quotes.ps1'
-if (Test-Path -LiteralPath $rulesQuoteCheck -PathType Leaf) {
-    & $rulesQuoteCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'PASS' 'completed'
+Write-Host '== TypeScript gate runner core (Issue #830 / Wave 3.a) =='
+$gateRunnerPath = Join-Path $Root 'scripts/gate-runner/runner.ts'
+$typeScriptCliHelper = Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ps1'
+if ((Test-Path -LiteralPath $gateRunnerPath -PathType Leaf) -and (Test-Path -LiteralPath $typeScriptCliHelper -PathType Leaf)) {
+    try {
+        . $typeScriptCliHelper
+        $gateRunnerNodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $gateRunnerPath)
+        & node @gateRunnerNodeArgs '--repo-root' $Root
+        if ($LASTEXITCODE -eq 0) {
+            Write-Check 'gate-runner/core' 'PASS' 'completed'
+        }
+        else {
+            Write-Check 'gate-runner/core' 'FAIL' "exit=$LASTEXITCODE"
+            Add-Failure 'TypeScript gate runner core failed (Issue #830)'
+        }
     }
-    else {
-        Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'orchestratorRules literal must not contain double-quote characters'
+    catch {
+        Write-Check 'gate-runner/core' 'FAIL' $_.Exception.Message
+        Add-Failure 'TypeScript gate runner core could not be dispatched (Issue #830)'
     }
 }
 else {
-    Write-Check 'scripts/check-orchestrator-rules-quotes.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing orchestratorRules quote-safety check script'
+    Write-Check 'gate-runner/core' 'FAIL' 'runner or TypeScript CLI helper missing'
+    Add-Failure 'Missing TypeScript gate runner core or invocation helper (Issue #830)'
 }
-
 Write-Host ''
 Write-Host '== REVIEW_COMMAND preflight (Issue #60) =='
 $reviewPreflightCheck = Join-Path $Root 'scripts/check-review-command-preflight.ps1'
@@ -1619,36 +1627,6 @@ else {
     Add-Failure 'Missing AO 0.10 argv-shape guard (Issue #619)'
 }
 
-$aoCaptureRedactionCheck = Join-Path $Root 'scripts/check-ao-0-10-cli-capture-redaction.ps1'
-if (Test-Path -LiteralPath $aoCaptureRedactionCheck -PathType Leaf) {
-    & $aoCaptureRedactionCheck
-    if ($LASTEXITCODE -ne 0) {
-        Write-Check 'scripts/check-ao-0-10-cli-capture-redaction.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'AO 0.10 capture redaction gate failed (Issue #619/#637)'
-    }
-    else {
-        $aoCaptureRedactionSelfTest = Join-Path $Root 'scripts/check-ao-capture-redaction-selftest.ps1'
-        if (Test-Path -LiteralPath $aoCaptureRedactionSelfTest -PathType Leaf) {
-            & $aoCaptureRedactionSelfTest
-            if ($LASTEXITCODE -ne 0) {
-                Write-Check 'scripts/check-ao-capture-redaction-selftest.ps1' 'FAIL' "self-test exit=$LASTEXITCODE"
-                Add-Failure 'AO capture redaction self-test failed (Issue #637)'
-            }
-            else {
-                Write-Check 'scripts/check-ao-0-10-cli-capture-redaction.ps1' 'PASS' 'completed'
-            }
-        }
-        else {
-            Write-Check 'scripts/check-ao-capture-redaction-selftest.ps1' 'FAIL' 'missing'
-            Add-Failure 'Missing AO capture redaction self-test (Issue #637)'
-        }
-    }
-}
-else {
-    Write-Check 'scripts/check-ao-0-10-cli-capture-redaction.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing AO 0.10 capture redaction gate (Issue #619/#637)'
-}
-
 foreach ($check in @(
         @{ Path = 'scripts/check-ao-dead-argv-bypass.ps1'; Label = 'dead-argv bypass scan (Issue #619)' },
         @{ Path = 'scripts/check-ao-session-adapter-project-filter.ps1'; Label = 'session adapter project filter (Issue #619)' }
@@ -1728,30 +1706,6 @@ if (Test-Path -LiteralPath $coworkerThresholdDriftCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing coworker delegation threshold drift check script (Issue #255)'
-}
-
-Write-Host ''
-Write-Host '== AGENTS.md delivery guards (Issue #678) =='
-foreach ($check in @(
-        @{ Path = 'scripts/check-agent-rules-line-budget.ps1'; Label = 'AGENTS.md size budget (Issue #678)' },
-        @{ Path = 'scripts/check-agent-rules-moved-content.ps1'; Label = 'AGENTS.md moved-content guard (Issue #678)' },
-        @{ Path = 'scripts/check-agent-rules-grep-inventory.ps1'; Label = 'AGENTS.md live-ref guard (Issue #678)' }
-    )) {
-    $scriptPath = Join-Path $Root $check.Path
-    if (Test-Path -LiteralPath $scriptPath -PathType Leaf) {
-        & $scriptPath
-        if ($LASTEXITCODE -eq 0) {
-            Write-Check $check.Path 'PASS' 'completed'
-        }
-        else {
-            Write-Check $check.Path 'FAIL' "exit=$LASTEXITCODE"
-            Add-Failure ($check.Label + ' failed')
-        }
-    }
-    else {
-        Write-Check $check.Path 'FAIL' 'missing'
-        Add-Failure ('Missing ' + $check.Label + ' script')
-    }
 }
 
 $reviewerContractMappingCheck = Join-Path $Root 'scripts/check-reviewer-contract-mapping.ps1'
