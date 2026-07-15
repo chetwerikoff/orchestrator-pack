@@ -301,6 +301,11 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
     || harnessSnapshotEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
     || '',
   ).trim();
+  const inheritedHarnessRoot = () => String(harnessSnapshotEnv.OPK_VITEST_HARNESS_ROOT ?? '').trim();
+  const inheritedProductionWakeRoot = () => String(
+    harnessSnapshotEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT
+    || '',
+  ).trim();
 
   const hasExplicitHarnessBypass = (env) => {
     if (!env || env.OPK_VITEST_HARNESS !== '') return false;
@@ -365,12 +370,19 @@ if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) 
       for (const name of nestedHarnessResetKeys) {
         delete nestedEnv[name];
       }
+      const harnessRoot = inheritedHarnessRoot();
+      if (harnessRoot) {
+        nestedEnv.OPK_VITEST_REENTRY_HARNESS_ROOT = harnessRoot;
+      }
       const wakeRoot = inheritedHarnessWakeRoot();
       if (wakeRoot) {
-        nestedEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT = wakeRoot;
         nestedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
         nestedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
         nestedEnv.AO_SIDE_PROCESS_STATE_DIR = wakeRoot;
+      }
+      const productionWakeRoot = inheritedProductionWakeRoot();
+      if (productionWakeRoot) {
+        nestedEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT = productionWakeRoot;
       }
       const nodeOptions = stripSelfPreloadImport(nestedEnv.NODE_OPTIONS);
       if (nodeOptions) nestedEnv.NODE_OPTIONS = nodeOptions;

@@ -295,6 +295,9 @@ function ensurePrivateDirectory(path) {
 
 export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
   const hasExplicitProductionWakeRoot = String(env.OPK_VITEST_PRODUCTION_WAKE_ROOT ?? '').trim() !== '';
+  const productionWakeRoot = hasExplicitProductionWakeRoot
+    ? env.OPK_VITEST_PRODUCTION_WAKE_ROOT
+    : resolveProductionWakeRoot(env);
   env.OPK_VITEST_PRODUCTION_HOME ||= env.HOME || homedir();
   if (!Object.prototype.hasOwnProperty.call(env, 'OPK_VITEST_PRODUCTION_XDG_STATE_HOME')) {
     env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME = env.XDG_STATE_HOME || '';
@@ -342,9 +345,7 @@ export function applyOpkVitestHarnessEnv(rootDir, env = process.env) {
     OPK_VITEST_HARNESS: '1',
     OPK_VITEST_HARNESS_ROOT: root,
     OPK_VITEST_HARNESS_INVENTORY: inventoryPath,
-    OPK_VITEST_PRODUCTION_WAKE_ROOT: hasExplicitProductionWakeRoot
-      ? env.OPK_VITEST_PRODUCTION_WAKE_ROOT
-      : wake,
+    OPK_VITEST_PRODUCTION_WAKE_ROOT: productionWakeRoot,
     XDG_STATE_HOME: state,
     TMPDIR: isolatedTmp,
     TEMP: isolatedTmp,

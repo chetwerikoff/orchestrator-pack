@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcess } from './kernel/subprocess.mjs';
 import {
@@ -189,7 +189,9 @@ function runVitestChild(entrypoint, args, env) {
   }).then((result) => result.exitCode ?? signalExitCode(result.signal));
 }
 
-const invocationRoot = createHarnessRoot();
+const reentryRoot = String(process.env.OPK_VITEST_REENTRY_HARNESS_ROOT ?? '').trim();
+const invocationRoot = reentryRoot ? resolve(reentryRoot) : createHarnessRoot();
+const ownsInvocationRoot = !reentryRoot;
 const guard = startParentLiveStoreGuard({ ...process.env });
 const childEnv = { ...process.env };
 let childStatus = 1;
@@ -221,7 +223,7 @@ try {
     console.error(error instanceof Error ? error.message : String(error));
   }
   try {
-    cleanupHarnessRoot(invocationRoot);
+    if (ownsInvocationRoot) cleanupHarnessRoot(invocationRoot);
   } catch (error) {
     console.error(`OPK harness cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
     guardFailure ??= error;

@@ -48,7 +48,6 @@ function buildHarnessEnvironment(repoRoot, runRoot) {
   return {
     ...env,
     CI: 'true',
-    OPK_VITEST_HARNESS: '1',
     OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
     OPK_TESTMODE_LEASE_ROOT: leaseDir,
     AO_ORCHESTRATOR_ESCALATION_STATE: join(runRoot, 'escalation-state.json'),

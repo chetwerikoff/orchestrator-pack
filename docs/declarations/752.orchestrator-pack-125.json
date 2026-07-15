@@ -1,0 +1,70 @@
+{
+  "issue_number": 752,
+  "iteration_id": "orchestrator-pack-125",
+  "iteration_id_source": "ao_session",
+  "supersedes": "chatgpt-issue-752z-rollover",
+  "created_at": "2026-07-15T02:04:12.968Z",
+  "baseline": {
+    "commit_sha": "52c87f8d2668960dce561fc66110b5e85e9e92b0",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7f46497a5f29d6e7f2f711beeb0c468d96455eb71233fa85ac75687c22063105"
+  },
+  "declared_paths": [
+    "docs/vitest-live-store-audit.md",
+    "package.json",
+    "scripts/_test-pwsh-helpers.ts",
+    "scripts/check-vitest-live-store-isolation.mjs",
+    "scripts/escalation-state-test-isolation.test.ts",
+    "scripts/lib/Initialize-ReviewerPolicyCheck.ps1",
+    "scripts/lib/OpkVitestStoreIsolation.ps1",
+    "scripts/lib/Set-OpkVitestHarnessEnv.ps1",
+    "scripts/lib/vitest-live-store-harness.d.mts",
+    "scripts/lib/vitest-live-store-harness.mjs",
+    "scripts/lib/vitest-live-store-parent-guard.mjs",
+    "scripts/run-vitest-with-harness.mjs",
+    "scripts/test-harness-escalation-env.ts",
+    "scripts/vestigial-fleet-retirement.test.ts",
+    "scripts/vitest-global-setup.ts",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/vitest-live-store-preload.mjs",
+    "scripts/review-delivery.test.ts",
+    "vitest.config.ts",
+    "scripts/lib/Gh-PrChecks.ps1",
+    "scripts/lib/Review-StartSupervisedGh.ps1",
+    "scripts/lib/Review-FailureEvidence.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/OpkVitestChildProcessEnv.ps1",
+    "scripts/lib/reverify-sandbox.ts",
+    "scripts/lib/Invoke-TestModeFleetReaper.ps1",
+    "scripts/vitest-heavy-topology.plan.json",
+    "scripts/kernel/subprocess.mjs",
+    "scripts/kernel/subprocess.ts",
+    "scripts/orchestrator-review-start-preflight-audit.test.ts",
+    "scripts/review-start-envelope-external-io.test.ts",
+    "scripts/toolchain/child-process-policy.ts",
+    "scripts/toolchain/raw-child-process-baseline.json",
+    "scripts/_test-autonomous-ao-stub-fixture.ts",
+    "scripts/trust-ao-worktree.test.ts",
+    "scripts/reachability-purge.manifest.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/Record-WorkerMessageDispatch.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f67533019e5bea415ba511479b1cc64cfe27a9e735199312e0347771970bad4d",
+      "new_active_scope_hash": "sha256:7f46497a5f29d6e7f2f711beeb0c468d96455eb71233fa85ac75687c22063105",
+      "changed": {
+        "added": [
+          "scripts/lib/vitest-pre-topology-measurement.mjs",
+          "scripts/lib/Record-WorkerMessageDispatch.ps1"
+        ],
+        "removed": []
+      },
+      "reason": "Add the pre-topology measurement helper after the nested harness re-entry fix required changing how topology diagnostics launch harnessed child tests, and include the worker-message dispatch path resolver needed to remove the wake-store creation side effect exposed by the production-env bypass test.",
+      "actor": "orchestrator-pack-125",
+      "timestamp": "2026-07-15T02:04:12.968Z",
+      "applied": true
+    }
+  ]
+}
