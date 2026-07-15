@@ -36,8 +36,9 @@ describe('query-graph (Issue #833 AC#3)', () => {
     const result = findCycle(graph, 'review-cycle-cap.mjs');
     expect(result.found).toBe(true);
     expect(result.onCycle).toBe(true);
-    expect(result.cycleMembers.length).toBeGreaterThan(1);
-    expect(result.cycleMembers.some((f: string) => f.endsWith('review-cycle-cap.mjs'))).toBe(true);
+    const cycleMembers = result.cycleMembers ?? [];
+    expect(cycleMembers.length).toBeGreaterThan(1);
+    expect(cycleMembers.some((f: string) => f.endsWith('review-cycle-cap.mjs'))).toBe(true);
   });
 
   it('does not re-run extraction -- pure read over the already-built graph.json', () => {
