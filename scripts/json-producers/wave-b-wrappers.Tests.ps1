@@ -71,6 +71,33 @@ Describe 'Wave B PowerShell compatibility wrappers' {
         ($actual | ConvertTo-Json -Depth 20 -Compress) | Should -Be ($expected | ConvertTo-Json -Depth 20 -Compress)
     }
 
+    It 'resolves the read-delegation audit module from a non-repo working directory' {
+        $temp = New-WaveBTempDirectory
+        $artifactPath = Join-Path $temp 'read-delegation-audit.jsonl'
+        $wrapper = Join-Path $script:RepoRoot 'scripts/invoke-read-delegation-audit-stop.ps1'
+        $payload = @{
+            surface = 'claude'
+            eventId = 'evt-non-root-cwd'
+            nowMs = 1767225600123
+        } | ConvertTo-Json -Compress
+        try {
+            Push-Location $temp
+            try {
+                $payload | & $wrapper -ArtifactPath $artifactPath
+                $LASTEXITCODE | Should -Be 0
+            }
+            finally {
+                Pop-Location
+            }
+
+            Test-Path -LiteralPath $artifactPath | Should -BeTrue
+            $records = @(Get-Content -LiteralPath $artifactPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $records.Count | Should -Be 1
+            $records[0].kind | Should -Be 'missing_window'
+        }
+        finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
     It 'keeps the read-delegation Stop hook fail-open when its module is absent' {
         $temp = New-WaveBTempDirectory
         try {
