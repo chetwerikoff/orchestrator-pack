@@ -1,4 +1,5 @@
 name: issue-839-finalize
+# Single active task workflow; removes itself after the verified commit.
 
 on:
   pull_request:
