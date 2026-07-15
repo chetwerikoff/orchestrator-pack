@@ -35,11 +35,11 @@ describe('review-pipeline spawn budget (Issue #480)', () => {
     expect(attributeSpawnSourceClass('pwsh -File scripts/review-trigger-reconcile.ps1 -DryRun')).toBe(
       'supervisor-child',
     );
-    expect(attributeSpawnSourceClass('pwsh -File scripts/invoke-orchestrator-claimed-review-run.ps1')).toBe(
+    expect(attributeSpawnSourceClass('pwsh -File scripts/ao-review.ps1 run opk-75')).toBe(
       'llm-orchestrator-review-start',
     );
     expect(attributeSpawnSourceClass('git status --short --branch')).toBe('supervisor-child');
-    expect(attributeSpawnSourceClass('pwsh-guard:scripts/ao')).toBe('autonomous-guard');
+    expect(attributeSpawnSourceClass('in-process-gate:Orchestrator-AutonomousSpawnGate')).toBe('autonomous-guard');
     expect(attributeSpawnSourceClass('npx vitest run scripts/foo.test.ts')).toBe('worker-test-suite');
   });
 

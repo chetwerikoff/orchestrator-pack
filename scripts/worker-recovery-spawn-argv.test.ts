@@ -22,7 +22,6 @@ import {
   type BuildRecoverySpawnArgvResult,
   type DeriveRecoverySpawnDisplayNameResult,
 } from './lib/worker-recovery-spawn-argv.mjs';
-import { autonomousSpawnFixtureProbeEnv, withAoSpawnProbeStub } from './_test-autonomous-ao-stub-fixture.js';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const recoveryPs1 = path.join(repoRoot, 'scripts/lib/Worker-Recovery.ps1');

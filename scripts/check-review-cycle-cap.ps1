@@ -68,12 +68,6 @@ if ($capMjs -notmatch 'if \(!prState\.tierFrozen\)') {
     exit 1
 }
 
-if ($claimedRunPs -notmatch 'Get-ReviewCycleCapIssueBody') {
-    exit 1
-}
-if ($claimedRunPs -notmatch 'issueBody') {
-    exit 1
-}
 
 $reconcilePs = Get-Content -LiteralPath (Join-Path $Root 'scripts/review-trigger-reconcile.ps1') -Raw
 if ($reconcilePs -notmatch 'Get-ReviewCycleCapIssueBodiesByPr') {
