@@ -74,8 +74,12 @@ jobs:
           rows = doc.get('entries')
           if not isinstance(rows, list):
               raise SystemExit('powershell-child-tests.json: entries array missing')
-          filtered = [row for row in rows if row.get('path') != 'scripts/harness-review-bridge.test.ts']
-          if len(rows) - len(filtered) != 1:
+          stale_paths = {
+              'scripts/harness-review-bridge.test.ts',
+              'tests/harness-pretrigger-config-read.test.ts',
+          }
+          filtered = [row for row in rows if row.get('path') not in stale_paths]
+          if len(rows) - len(filtered) != 2:
               raise SystemExit(f'powershell-child baseline removal count={len(rows) - len(filtered)}')
           doc['entries'] = filtered
           path.write_text(json.dumps(doc, separators=(',', ':')) + '\n', encoding='utf-8')
@@ -85,15 +89,16 @@ jobs:
           rows = doc.get('entries')
           if not isinstance(rows, list):
               raise SystemExit('raw-child-process-baseline.json: entries array missing')
+          stale = {
+              ('scripts/harness-review-bridge.test.ts', 'execFileSync', 'b4b9ea0960343b046042'),
+              ('tests/harness-pretrigger-config-read.test.ts', 'execFileSync', '8565aaf3afe4b6c82770'),
+              ('tests/harness-pretrigger-config-read.test.ts', 'execFileSync', '5b5ff4cdb460a3994dcd'),
+          }
           filtered = [
               row for row in rows
-              if not (
-                  row.get('path') == 'scripts/harness-review-bridge.test.ts'
-                  and row.get('api') == 'execFileSync'
-                  and row.get('fingerprint') == 'b4b9ea0960343b046042'
-              )
+              if (row.get('path'), row.get('api'), row.get('fingerprint')) not in stale
           ]
-          if len(rows) - len(filtered) != 1:
+          if len(rows) - len(filtered) != 3:
               raise SystemExit(f'raw-child baseline removal count={len(rows) - len(filtered)}')
           doc['entries'] = filtered
           path.write_text(json.dumps(doc, separators=(',', ':')) + '\n', encoding='utf-8')
