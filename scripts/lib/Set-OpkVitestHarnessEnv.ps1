@@ -92,6 +92,7 @@ function Get-OpkVitestProductionWakeRoot {
 function Set-OpkVitestHarnessEnv {
     param([string]$RootDir = '')
 
+    $hasExplicitProductionWakeRoot = -not [string]::IsNullOrWhiteSpace($env:OPK_VITEST_PRODUCTION_WAKE_ROOT)
     if (-not $RootDir) {
         Remove-StaleOpkVitestHarnessRoots
         $RootDir = Join-Path ([System.IO.Path]::GetTempPath()) ('opk-vitest-' + [guid]::NewGuid().ToString('n'))
@@ -109,10 +110,6 @@ function Set-OpkVitestHarnessEnv {
     if (-not $env:OPK_VITEST_PRODUCTION_AO_BASE) {
         $env:OPK_VITEST_PRODUCTION_AO_BASE = if ($env:AO_BASE_DIR) { $env:AO_BASE_DIR.Trim() } else { Join-Path $env:OPK_VITEST_PRODUCTION_HOME '.agent-orchestrator' }
     }
-    if (-not $env:OPK_VITEST_PRODUCTION_WAKE_ROOT) {
-        $env:OPK_VITEST_PRODUCTION_WAKE_ROOT = Get-OpkVitestProductionWakeRoot
-    }
-
     $wakeDir = Join-Path $RootDir 'wake'
     $stateDir = Join-Path $RootDir 'state'
     $tmpDir = Join-Path $RootDir 'tmp'
@@ -130,6 +127,9 @@ function Set-OpkVitestHarnessEnv {
     $env:OPK_VITEST_HARNESS = '1'
     $env:OPK_VITEST_HARNESS_ROOT = $RootDir
     $env:OPK_VITEST_HARNESS_INVENTORY = Join-Path (Split-Path -Parent $PSScriptRoot) 'vitest-live-store-inventory.json'
+    if (-not $hasExplicitProductionWakeRoot) {
+        $env:OPK_VITEST_PRODUCTION_WAKE_ROOT = $wakeDir
+    }
     $env:OPK_TESTMODE_LEASE_ROOT = Join-Path $stateDir 'testmode-fleet-leases'
     $env:XDG_STATE_HOME = $stateDir
     $env:TMPDIR = $tmpDir
