@@ -17,12 +17,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
 $cli = Join-Path $PSScriptRoot 'json-producers/worker-status-report.ts'
-$args = @('--experimental-strip-types', $cli, '--project', $Project)
-if ($RepoSlug) { $args += @('--repo-slug', $RepoSlug) }
-if ($Json) { $args += '--json' }
-if ($SessionListsFixture) { $args += @('--session-lists-fixture', $SessionListsFixture) }
-if ($StorePath) { $args += @('--store-path', $StorePath) }
-if ($NowMs -gt 0) { $args += @('--now-ms', [string]$NowMs) }
-& node @args
+$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+$nodeArgs += @('--project', $Project)
+if ($RepoSlug) { $nodeArgs += @('--repo-slug', $RepoSlug) }
+if ($Json) { $nodeArgs += '--json' }
+if ($SessionListsFixture) { $nodeArgs += @('--session-lists-fixture', $SessionListsFixture) }
+if ($StorePath) { $nodeArgs += @('--store-path', $StorePath) }
+if ($NowMs -gt 0) { $nodeArgs += @('--now-ms', [string]$NowMs) }
+& node @nodeArgs
 if ($LASTEXITCODE -ne 0) { throw "worker-status-report.ts exited $LASTEXITCODE" }
