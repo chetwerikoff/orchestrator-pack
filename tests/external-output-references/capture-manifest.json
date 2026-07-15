@@ -502,6 +502,14 @@
       "path": "captures/gh-pr-open/pulls-merge-fields.raw.json",
       "contentHash": "sha256:99332a727941f1a1493f075f24241626e5c9bb4a4f3d7909775c243976a421fb"
     },
+    "gh-pr-open/pulls-mergeable-state": {
+      "id": "gh-pr-open/pulls-mergeable-state",
+      "producer": "gh",
+      "sourceCommand": "gh api repos/chetwerikoff/orchestrator-pack/pulls/751 --jq '{number: .number, mergeable: .mergeable, mergeable_state: .mergeable_state, head: {sha: .head.sha}, base: {ref: .base.ref}}'",
+      "kind": "structured",
+      "path": "captures/gh-pr-open/pulls-mergeable-state.raw.json",
+      "contentHash": "sha256:c0c2c9663462ac8343335487bd82e9eea7b18c58a9e109fe8c8b96a9f0d62083"
+    },
     "spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561": {
       "id": "spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561",
       "producer": "spawn-worktree-branch-operand-binding",

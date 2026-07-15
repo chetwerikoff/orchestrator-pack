@@ -15,13 +15,15 @@ paraphrase the full policy in this file. Fan-out surfaces: §S in
 
 ## Review wiring
 
-Local Codex PR review **is active**. AO runs it via `ao review run`, `send`,
-`list`, and `execute`; orchestration lives in `orchestratorRules` in
-`agent-orchestrator.yaml`. See [`README.md`](README.md#local-codex-review-active),
-[`AGENTS.md`](AGENTS.md), and
-[`docs/architecture.md`](docs/architecture.md#review-paths). On AO 0.9.x, a
-`reviewer:` YAML block is silently ignored (no schema error) — use
-`orchestratorRules` and the `ao review` CLI instead.
+Local Codex PR review **is active** and **pack-owned** — not driven by AO's CLI or YAML
+reactions. On AO 0.10.2 the loop is workspace-visible prompts plus **side-process scripts**
+supervised by `scripts/orchestrator-wake-supervisor.ps1`. Trigger/discover via the pack
+wrapper `scripts/ao-review.ps1` (`run`/`list`, backed directly by AO's HTTP API) — the real
+`ao review` CLI subcommand has only `submit` (records an already-computed verdict back to
+AO; `send`/`execute`/`list` are removed on AO 0.10.2). `orchestratorRules` in
+`agent-orchestrator.yaml` is **legacy-import-only** on AO 0.10.2 and does not drive live
+orchestration. See [`AGENTS.md`](AGENTS.md) (§ Review / CI / Handoff worker contract) and
+[`docs/architecture.md`](docs/architecture.md#review-paths).
 
 ## Role
 
@@ -109,7 +111,8 @@ what gets built, in what order, with what boundaries. The planner
 4. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
 5. **`agent-orchestrator.yaml`** (local, gitignored) — current AO wiring.
 6. **`AGENTS.md`** — universal worker/agent rules (Cursor + Codex workers).
-7. **`ao review list`** + `code-reviews/findings/` — freshest reviewer signal.
+7. **`scripts/ao-review.ps1 list`** (pack wrapper; `ao review` CLI is submit-only) +
+   `code-reviews/findings/` — freshest reviewer signal.
 
 ## Planner freedom (non-negotiable)
 
