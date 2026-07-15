@@ -4,11 +4,9 @@
   Run the CI pipeline-split guard with merge-context parity checks and a bounded same-run topology overlay.
 
 .DESCRIPTION
-  Issue #823's audit and run-twice fixture execute before the topology wrapper so a
-  PR-only leniency branch or self-referential push base cannot silently reappear.
-  The committed runtime-history artifact remains untouched. The topology wrapper
-  measures stale changed Vitest files, materializes an ephemeral overlay, invokes
-  the original guard core, and restores the artifact byte-for-byte in finally.
+  Issue #823's fail-closed audit and run-twice fixture execute before the topology
+  wrapper so PR-only leniency or self-referential push bases cannot reappear. The
+  committed runtime-history artifact remains untouched.
 #>
 [CmdletBinding()]
 param(
@@ -24,7 +22,7 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $wrapper = Join-Path $PSScriptRoot 'lib/ci-pipeline-split-pre-topology-wrapper.mjs'
 $core = Join-Path $PSScriptRoot 'check-ci-pipeline-split-core.ps1'
 $audit = Join-Path $PSScriptRoot 'check-merge-blind-ci-gates.mjs'
-$parityFixture = Join-Path $PSScriptRoot 'fixtures/merge-blind-ci-gates/parity.mjs'
+$parityFixture = Join-Path $PSScriptRoot 'fixtures/merge-blind-ci-gates/parity.ps1'
 
 foreach ($required in @($wrapper, $core, $audit, $parityFixture)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -32,10 +30,20 @@ foreach ($required in @($wrapper, $core, $audit, $parityFixture)) {
     }
 }
 
-& node $audit $RepoRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$trackedFilesPath = Join-Path ([IO.Path]::GetTempPath()) ("opk-823-tracked-{0}.json" -f [guid]::NewGuid().ToString('N'))
+try {
+    $trackedFiles = @(& git -C $RepoRoot ls-files)
+    if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed while preparing merge-blind audit input' }
+    [IO.File]::WriteAllText($trackedFilesPath, ($trackedFiles | ConvertTo-Json -Compress))
 
-& node $parityFixture $RepoRoot
+    & node $audit --repo-root $RepoRoot --tracked-files $trackedFilesPath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+finally {
+    Remove-Item -LiteralPath $trackedFilesPath -Force -ErrorAction SilentlyContinue
+}
+
+& pwsh -NoProfile -File $parityFixture -RepoRoot $RepoRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $argsList = @(
