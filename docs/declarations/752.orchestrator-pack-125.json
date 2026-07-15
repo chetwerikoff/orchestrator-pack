@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "52c87f8d2668960dce561fc66110b5e85e9e92b0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:129514ff35804faacbd129c0735d45f162685286ce1aee1fcce225df3ac92dc3"
+    "active_scope_hash": "sha256:4de0a3c9ceae5792ec5b7fba4aa6046e6883e98d97a27cd50affb9e3bc0a6d2a"
   },
   "declared_paths": [
     "docs/vitest-live-store-audit.md",
@@ -66,24 +66,28 @@
     "scripts/lib/vitest-pre-topology-measurement.d.mts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/Record-WorkerMessageDispatch.ps1",
+    "scripts/_test-vitest-harness-env.ts",
     "scripts/orchestrator-message-registry.test.ts",
-    "scripts/reachability-purge.mjs"
+    "scripts/reachability-purge.mjs",
+    "scripts/toolchain/powershell-child-tests.json"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:f67533019e5bea415ba511479b1cc64cfe27a9e735199312e0347771970bad4d",
-      "new_active_scope_hash": "sha256:129514ff35804faacbd129c0735d45f162685286ce1aee1fcce225df3ac92dc3",
+      "new_active_scope_hash": "sha256:4de0a3c9ceae5792ec5b7fba4aa6046e6883e98d97a27cd50affb9e3bc0a6d2a",
       "changed": {
         "added": [
           "scripts/lib/vitest-pre-topology-measurement.mjs",
           "scripts/lib/Record-WorkerMessageDispatch.ps1",
+          "scripts/_test-vitest-harness-env.ts",
           "scripts/orchestrator-message-registry.test.ts",
-          "scripts/reachability-purge.mjs"
+          "scripts/reachability-purge.mjs",
+          "scripts/toolchain/powershell-child-tests.json"
         ],
         "removed": []
       },
-      "reason": "Add the pre-topology measurement helper after the nested harness re-entry fix required changing how topology diagnostics launch harnessed child tests, include the worker-message dispatch path resolver needed to remove the wake-store creation side effect exposed by the production-env bypass test, and include the registry real-tree checker plus reachability generator paths touched while clearing rebased CI.",
+      "reason": "Add the pre-topology measurement helper after the nested harness re-entry fix required changing how topology diagnostics launch harnessed child tests, include the worker-message dispatch path resolver needed to remove the wake-store creation side effect exposed by the production-env bypass test, and include the registry real-tree checker, neutral Vitest harness bypass helper, PowerShell child-test baseline cleanup, plus reachability generator paths touched while clearing rebased CI.",
       "actor": "orchestrator-pack-125",
       "timestamp": "2026-07-15T02:04:12.968Z",
       "applied": true
