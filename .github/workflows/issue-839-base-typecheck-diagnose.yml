@@ -1,48 +1,26 @@
 name: issue-839-base-typecheck-diagnose
 
 on:
-  push:
-    branches:
-      - issue-839-pack-review-runner-v2
+  pull_request:
+    types: [synchronize]
+    branches: [main]
 
 permissions:
-  pull-requests: write
-  issues: write
   contents: read
 
 jobs:
   diagnose:
+    if: github.event.pull_request.number == 845
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: issue-839-pack-review-runner-v2
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - run: npm ci --include=dev
-      - name: Capture tsconfig.base typecheck
-        id: typecheck
-        continue-on-error: true
+      - name: Install dependencies quietly
         shell: bash
-        run: |
-          set -o pipefail
-          npx tsc --project tsconfig.base.json --noEmit 2>&1 | tee /tmp/base-typecheck.log
-      - name: Report
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.typecheck.outcome }}
-        shell: bash
-        run: |
-          {
-            echo '## Issue #839 tsconfig.base diagnosis'
-            echo
-            echo "outcome=$OUTCOME"
-            echo '```text'
-            cat /tmp/base-typecheck.log
-            echo '```'
-          } >/tmp/base-typecheck-report.md
-          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/base-typecheck-report.md
+        run: npm ci --include=dev --silent >/dev/null 2>&1
+      - name: Type-check full pack sources
+        run: npx tsc --project tsconfig.base.json --noEmit
