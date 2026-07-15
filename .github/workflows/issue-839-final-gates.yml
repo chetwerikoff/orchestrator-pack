@@ -1,0 +1,91 @@
+name: issue-839-final-gates
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  gates:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run three review contract gates
+        id: gates
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $files = @(
+            'scripts/check-ao-0-10-review-trigger.ps1',
+            'scripts/check-harness-review-bridge.ps1',
+            'scripts/check-harness-post-submit-pn-content-shape.ps1'
+          )
+          $failed = $false
+          foreach ($file in $files) {
+            "=== $file ===" | Tee-Object -FilePath /tmp/issue-839-gates.log -Append
+            & pwsh -NoProfile -File $file *>&1 | Tee-Object -FilePath /tmp/issue-839-gates.log -Append
+            "exit=$LASTEXITCODE" | Tee-Object -FilePath /tmp/issue-839-gates.log -Append
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) { exit 1 }
+      - name: Publish gate output
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.gates.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 contract-gate diagnosis'
+            echo
+            echo "outcome=$OUTCOME"
+            echo '```text'
+            cat /tmp/issue-839-gates.log 2>/dev/null || true
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+
+  architect:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run strict self-architect lint
+        id: lint
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef $env:PR_HEAD_SHA *>&1 | Tee-Object -FilePath /tmp/issue-839-architect.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish architect output
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.lint.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 self-architect diagnosis'
+            echo
+            echo "outcome=$OUTCOME"
+            echo '```text'
+            cat /tmp/issue-839-architect.log 2>/dev/null || true
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983741292 --field body=@/tmp/report.md
