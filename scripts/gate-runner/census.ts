@@ -183,8 +183,9 @@ export function validateCensusSchema(census: GateCensus): string[] {
       } else if (entry.deferredWave !== undefined) {
         failures.push(`${entry.id}: provisional legacy row must not claim a Wave 3.b deferral owner`);
       }
-    } else if (entry.legacyReference) {
-      failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+    } else {
+      if (entry.legacyReference) failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+      if (entry.deferredWave !== undefined) failures.push(`${entry.id}: non-deferred row must not claim a deferral owner`);
     }
 
     if (isPorted(entry)) {
