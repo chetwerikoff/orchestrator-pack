@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "52c87f8d2668960dce561fc66110b5e85e9e92b0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:7f46497a5f29d6e7f2f711beeb0c468d96455eb71233fa85ac75687c22063105"
+    "active_scope_hash": "sha256:129514ff35804faacbd129c0735d45f162685286ce1aee1fcce225df3ac92dc3"
   },
   "declared_paths": [
     "docs/vitest-live-store-audit.md",
@@ -65,21 +65,25 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/lib/vitest-pre-topology-measurement.d.mts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/lib/Record-WorkerMessageDispatch.ps1"
+    "scripts/lib/Record-WorkerMessageDispatch.ps1",
+    "scripts/orchestrator-message-registry.test.ts",
+    "scripts/reachability-purge.mjs"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:f67533019e5bea415ba511479b1cc64cfe27a9e735199312e0347771970bad4d",
-      "new_active_scope_hash": "sha256:7f46497a5f29d6e7f2f711beeb0c468d96455eb71233fa85ac75687c22063105",
+      "new_active_scope_hash": "sha256:129514ff35804faacbd129c0735d45f162685286ce1aee1fcce225df3ac92dc3",
       "changed": {
         "added": [
           "scripts/lib/vitest-pre-topology-measurement.mjs",
-          "scripts/lib/Record-WorkerMessageDispatch.ps1"
+          "scripts/lib/Record-WorkerMessageDispatch.ps1",
+          "scripts/orchestrator-message-registry.test.ts",
+          "scripts/reachability-purge.mjs"
         ],
         "removed": []
       },
-      "reason": "Add the pre-topology measurement helper after the nested harness re-entry fix required changing how topology diagnostics launch harnessed child tests, and include the worker-message dispatch path resolver needed to remove the wake-store creation side effect exposed by the production-env bypass test.",
+      "reason": "Add the pre-topology measurement helper after the nested harness re-entry fix required changing how topology diagnostics launch harnessed child tests, include the worker-message dispatch path resolver needed to remove the wake-store creation side effect exposed by the production-env bypass test, and include the registry real-tree checker plus reachability generator paths touched while clearing rebased CI.",
       "actor": "orchestrator-pack-125",
       "timestamp": "2026-07-15T02:04:12.968Z",
       "applied": true
