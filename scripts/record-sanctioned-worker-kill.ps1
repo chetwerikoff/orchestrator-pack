@@ -10,15 +10,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
 $cli = Join-Path $PSScriptRoot 'json-producers/sanctioned-worker-kill-record.ts'
-$args = @(
-    '--experimental-strip-types', $cli, 'add',
+$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+$nodeArgs += @(
+    'add',
     '--session-id', $SessionId,
     '--issue-number', [string]$IssueNumber,
     '--pr-number', [string]$PrNumber,
     '--kill-kind', $KillKind,
     '--timestamp-ms', [string]$TimestampMs
 )
-if ($Path) { $args += @('--path', $Path) }
-& node @args
+if ($Path) { $nodeArgs += @('--path', $Path) }
+& node @nodeArgs
 if ($LASTEXITCODE -ne 0) { throw "sanctioned-worker-kill-record.ts exited $LASTEXITCODE" }
