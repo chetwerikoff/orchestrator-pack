@@ -66,3 +66,12 @@ Thumbs.db
 # Claude Code session state (keep skills, ignore everything else).
 .claude/*
 !.claude/skills/
+
+# Operator-local scratch: stray captures, backups, session state.
+# Not synced to git; kept out of the working tree's tracked diff on purpose.
+.local/
+
+# Investigation reports and draft-review audit trails are local working
+# artifacts, not committed history.
+docs/investigations/
+docs/issues_drafts/.review/

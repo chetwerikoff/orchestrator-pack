@@ -20,11 +20,12 @@ The draft filename prefix and the GitHub Issue number are **different schemes** 
 resolve mappings via [`issue_queue_index.md`](issue_queue_index.md) and read live
 state with `gh issue view`, never from draft-file presence alone.
 
-Local Codex PR review **is active**. AO drives it via `ao review run`, `send`,
-`list`, and `execute`; orchestration lives in `orchestratorRules` in
-`agent-orchestrator.yaml`. See [`README.md`](../README.md#local-codex-review-active),
-[`AGENTS.md`](../AGENTS.md), and
-[`docs/github_issues_cursor_codex_setup.md`](github_issues_cursor_codex_setup.md).
+Local Codex PR review **is active** and **pack-owned**: it is launched by pack
+scripts (`scripts/invoke-pack-review.ps1` under
+`scripts/orchestrator-wake-supervisor.ps1`), with trigger/discovery via the pack
+wrapper `scripts/ao-review.ps1` — not by AO's CLI or YAML reactions. See
+[Review paths](#review-paths) and
+[`script-owned-review-pipeline.md`](script-owned-review-pipeline.md).
 
 ## Layout
 
@@ -74,11 +75,12 @@ AO restart alone is not required for worker rule delivery.
 - worktree isolation and native worker rule pickup via tracked `AGENTS.md`;
 - safe reactions that do not auto-merge.
 
-Local Codex review is wired through `orchestratorRules` and the `ao review` CLI
-(see [Review paths](#review-paths)). The upstream AO schema supports
-`orchestrator` and `worker` role overrides. On AO 0.9.x there is no `reviewer:`
-YAML role that AO reads — adding `reviewer:` parses without error but is
-silently ignored; never patch AO core to add reviewer routing.
+Local Codex review is **script-owned** (see [Review paths](#review-paths));
+reviewer harness selection on AO 0.10 lives in typed `ProjectConfig.reviewers`
+([`ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md)),
+not in YAML — a `reviewer:` YAML block is silently ignored. The upstream AO
+schema supports `orchestrator` and `worker` role overrides; never patch AO core
+to add reviewer routing.
 
 ### Prompt layer
 
@@ -116,16 +118,18 @@ the shared #195/#352 readiness predicate and started via the #267/#308 claim and
 #332 per-cycle gate. `merge.ready` completion wakes remain a separate fast path
 (Issue #207). The 10-minute reconcile backstop is unchanged.
 
-The primary review path is AO's **active** local Codex review flow. AO drives
-it through `ao review run`, `send`, `list`, and `execute`; orchestration and the
-autonomous loop live in `orchestratorRules` in `agent-orchestrator.yaml`.
-Discover current runs with `ao review list <project>` and the AO dashboard.
-Local Codex review writes findings to the dashboard and can feed blocking
-feedback back to Cursor workers through AO reactions such as
-`changes-requested -> send-to-agent`.
-
-On AO 0.9.x, a `reviewer:` YAML block is silently ignored — wire review through
-`orchestratorRules` and `ao review`, not a `reviewer:` key.
+The primary review path is **pack-owned** local Codex review — not AO's CLI or YAML
+reactions. On AO 0.10.2 the loop is workspace-visible prompts plus side-process scripts
+supervised by `scripts/orchestrator-wake-supervisor.ps1`; trigger/discover via the pack
+wrapper `scripts/ao-review.ps1` (`run`/`list`, backed directly by AO's HTTP API
+`/api/v1/sessions/{id}/reviews`). The real `ao review` CLI subcommand has only `submit`
+(records an already-computed verdict back to AO for tracking; `send`/`execute`/`list` are
+removed on AO 0.10.2). Local Codex review findings are delivered to Cursor/Codex workers
+through pack-side scripted delivery (`scripts/review-finding-delivery-confirm.ps1` and the
+reconcile backstops below), not AO reactions — `orchestratorRules` in
+`agent-orchestrator.yaml` is **legacy-import-only** on AO 0.10.2 and does not drive live
+orchestration. The AO Reviews dashboard board was removed in 0.10.2 (no cross-session
+reviews screen).
 
 The periodic `review-trigger-reconcile` backstop still requires
 `ready_for_review` on the current head while a worker is actively working

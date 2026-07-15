@@ -1,0 +1,29 @@
+---
+description: Draw diagrams as plain ASCII art, never as mermaid blocks
+alwaysApply: true
+---
+
+# Diagrams: ASCII art only
+
+When a diagram clarifies a flow, architecture, or sequence, draw it as plain
+ASCII art inside an ordinary fenced code block. Do **NOT** use a ```mermaid
+fence — this terminal environment does not render mermaid reliably (it flashes
+the diagram, then collapses it back to raw source, and the Ctrl+O toggle does
+not help).
+
+Rules:
+
+- Use a plain triple-backtick fence (no language, or `text`). Never ```mermaid.
+- Draw nodes and edges with ASCII characters: `[Box]`, `-->`, `|`, `v`, `+---+`.
+- Keep labels short and in English; long or Cyrillic labels wrap badly.
+- Keep it compact; prefer left-to-right or top-down. Split large flows.
+- One diagram per concept.
+
+Example:
+
+```
+[PR] --> [review] --> [worker fixes] --> [merge]
+                |
+                v
+           [findings]
+```

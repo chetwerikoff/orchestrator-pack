@@ -1,5 +1,5 @@
 # Captured ao send transport contract (Issue #373 / Issue #640)
-capturedAt=2026-07-06T17:57:00.0000000+00:00
+capturedAt=2026-07-14T00:33:53.8646621+00:00
 aoPath=ao
 
 Send a message to a running agent session
