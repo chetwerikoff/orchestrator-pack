@@ -4,7 +4,7 @@ $Root = if ($args.Count -gt 0 -and $args[0]) { (Resolve-Path -LiteralPath $args[
 
 $registryCli = Join-Path $Root 'docs/orchestrator-message-registry.mjs'
 $mapPath = Join-Path $Root 'docs/orchestrator-message-map.md'
-$baseResolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.mjs'
+$baseResolver = Join-Path $Root 'scripts/lib/Resolve-MergeStableCiBase.ps1'
 $failures = [System.Collections.Generic.List[string]]::new()
 
 if ($IsWindows -and -not $env:WSL_DISTRO_NAME) {
@@ -22,26 +22,27 @@ if (-not (Test-Path -LiteralPath $baseResolver -PathType Leaf)) {
 }
 
 if ($failures.Count -eq 0) {
+    . $baseResolver
+
     & node $registryCli audit $Root
     if ($LASTEXITCODE -ne 0) {
         $failures.Add('registration audit failed (see node output above)')
     }
 
-    $candidateArgs = @()
-    if ($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF) {
-        $candidateArgs = @('--candidate', $env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF.Trim())
-    }
-    $baseRef = (& node $baseResolver --repo-root $Root @candidateArgs 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baseRef)) {
-        if ($baseRef) { Write-Host $baseRef }
-        $failures.Add('protected runtime diff check could not resolve a non-self comparison base')
-    }
-    else {
-        $protectedRuntimeOut = & node $registryCli check-protected-runtime $Root $baseRef 2>&1
+    try {
+        $candidateRefs = @()
+        if ($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF) {
+            $candidateRefs = @($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF.Trim())
+        }
+        $base = Resolve-MergeStableCiBase -RepoRoot $Root -CandidateRefs $candidateRefs
+        $protectedRuntimeOut = & node $registryCli check-protected-runtime $Root $base.BaseSha 2>&1
         if ($LASTEXITCODE -ne 0) {
             if ($protectedRuntimeOut) { Write-Host $protectedRuntimeOut }
             $failures.Add('protected runtime diff check failed (see node output above)')
         }
+    }
+    catch {
+        $failures.Add("protected runtime diff check could not resolve a non-self comparison base: $($_.Exception.Message)")
     }
 
     $generated = (& node $registryCli generate-map $Root 2>&1 | Out-String)
