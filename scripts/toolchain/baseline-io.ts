@@ -41,6 +41,7 @@ export async function resolveComparisonBaseRef(repoRoot: string): Promise<string
     command: 'node',
     args: ['--experimental-strip-types', resolver, '--repo-root', repoRoot, '--json'],
     cwd: repoRoot,
+    inheritParentEnv: true,
     allowEmptyStdout: false,
   });
   if (!result.ok) return null;
