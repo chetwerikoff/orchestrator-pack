@@ -1,9 +1,8 @@
 name: issue-839-merge-main-finalize
 
 on:
-  pull_request:
-    types: [labeled]
-    branches: [main]
+  push:
+    branches: [issue-839-pack-review-runner-v2]
 
 concurrency:
   group: issue-839-merge-main-finalize
@@ -16,7 +15,6 @@ permissions:
 
 jobs:
   finalize:
-    if: github.event.pull_request.number == 845 && github.event.label.name == 'in_progress'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
