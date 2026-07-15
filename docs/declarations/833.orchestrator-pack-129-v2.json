@@ -1,0 +1,27 @@
+{
+  "issue_number": 833,
+  "iteration_id": "orchestrator-pack-129-v2",
+  "iteration_id_source": "ao_session",
+  "supersedes": "orchestrator-pack-129",
+  "created_at": "2026-07-15T11:34:06.558Z",
+  "baseline": {
+    "commit_sha": "6f8ec43da8329309a5bf9a78e6cf6784fb35256d",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:fae744334a9f105005bf764f609efddc485ba59ab3bff2af58af6c023c054dd6"
+  },
+  "declared_paths": [
+    ".cursor/rules/graphify-graph-check.mdc",
+    "AGENTS.md",
+    "docs/architecture.md",
+    "docs/migration_notes.md",
+    ".gitignore",
+    "tests/agents-md-relocation.test.ts",
+    "scripts/toolchain/raw-child-process-baseline.json",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/reachability-purge.manifest.json"
+  ],
+  "declared_globs": [
+    "scripts/graphify/**"
+  ],
+  "amendments": []
+}
