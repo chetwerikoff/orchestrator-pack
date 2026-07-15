@@ -1,5 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +9,6 @@ import {
   assertNoBoardFieldEmission,
   assertTrustedPackRootExecution,
   classifyHarnessBridgeFailure,
-  classifyReviewerHarnessAbort,
   containsProseSubmitMarkers,
   evaluateHarnessKillSwitch,
   evaluateNestedReviewBudget,
@@ -19,19 +17,17 @@ import {
   resolveHarnessExecutionSurfaces,
   validateMapperSubmitPayload,
 } from '../docs/harness-review-bridge.mjs';
-import { classifyReviewTriggerResponse } from '../docs/ao-0-10-review-api.mjs';
 import {
   HARNESS_BRIDGE_KILL_SWITCH,
   buildHarnessSubmitPayload,
   resolveHarnessTrustedPaths,
   runHarnessReviewBridge,
 } from './harness-review-bridge.js';
+import { resolveTrustedRunnerPaths } from './pack-review-runner.js';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureDir = path.join(repoRoot, 'plugins/ao-codex-pr-reviewer/tests/fixtures');
 const harnessFixtures = path.join(repoRoot, 'tests/fixtures/harness-review-bridge');
-const capturesDir = path.join(repoRoot, 'tests/external-output-references/captures/ao-0-10-review-api');
-const reviewApiLib = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
 const SCOPED_ISSUE_NUMBER = 9;
 const tempRoots: string[] = [];
 const oldEnv = { ...process.env };
@@ -51,7 +47,7 @@ function readFixture(name: string): string {
   return readFileSync(path.join(fixtureDir, name), 'utf8');
 }
 
-describe('AO 0.10 harness review bridge (Issue #658)', () => {
+describe('pack review harness bridge (Issue #658 / #839)', () => {
   it('guards trusted pack prompt, bridge, and mapper paths statically', () => {
     const paths = resolveHarnessTrustedPaths(repoRoot);
     expect(paths.prompt.endsWith('prompts/codex_review_prompt.md')).toBe(true);
@@ -68,6 +64,21 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
     };
     const result = assertTrustedPackRootExecution(shadowed, workerRoot);
     expect(result.ok).toBe(false);
+  });
+
+  it('binds the invoked reviewer to the same trusted root as the pack runner', () => {
+    const trusted = resolveTrustedRunnerPaths();
+    expect(trusted.trustedPackRoot).toBe(path.resolve(repoRoot));
+    expect(trusted.reviewerPath).toBe(path.join(path.resolve(repoRoot), 'scripts/invoke-pack-review.ps1'));
+    expect(existsSync(trusted.reviewerPath)).toBe(true);
+  });
+
+  it('keeps the PowerShell review seam as pack-runner/store glue without daemon review HTTP', () => {
+    const adapter = readFileSync(path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1'), 'utf8');
+    expect(adapter).toContain('scripts/pack-review-runner.ts');
+    expect(adapter).toContain("Subcommand 'start'");
+    expect(adapter).toContain("Subcommand 'list'");
+    expect(adapter).not.toMatch(/\/api\/v1\/sessions\/.*\/reviews(?:\/trigger)?/);
   });
 
   it('submits mapper-normalized [Pn] structured findings', () => {
@@ -171,38 +182,7 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
     expect(source.match(/\bexecuteReview\(/g)).toHaveLength(1);
   });
 
-  it('classifies unset reviewers before trigger', () => {
-    const guard = classifyReviewerHarnessAbort({}, 'codex');
-    expect(guard.abort).toBe(true);
-    expect(guard.reason).toBe('reviewers_harness_misconfig');
-  });
-
-  it('Invoke-AoReviewTriggerForWorker refuses trigger on misconfig fixture', () => {
-    const out = execFileSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-Command',
-        `. '${reviewApiLib}'; $fixture = @{ reviewers = @() }; $result = Invoke-AoReviewTriggerForWorker -SessionId 'worker-1' -ProjectConfigFixture $fixture; $result | ConvertTo-Json -Compress -Depth 5`,
-      ],
-      { cwd: repoRoot, encoding: 'utf8' },
-    ).trim();
-    const result = JSON.parse(out) as { ok: boolean; reason: string; classified: boolean };
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('reviewers_harness_misconfig');
-    expect(result.classified).toBe(true);
-  });
-
-  it('ao-review trigger classify unchanged for capture payloads', () => {
-    const created = JSON.parse(readFileSync(path.join(capturesDir, 'trigger-created.raw.json'), 'utf8'));
-    expect(classifyReviewTriggerResponse(created, 201)).toMatchObject({
-      ok: true,
-      created: true,
-      reused: false,
-    });
-  });
-
-  it('failure-class matrix covers binding-table rows', () => {
+  it('failure-class matrix covers bridge failures without treating daemon trigger/list as a contract', () => {
     for (const failureClass of [
       'reviewers_harness_misconfig',
       'contradictory_review_output',
@@ -254,6 +234,7 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
     });
     expect(validateMapperSubmitPayload(payload).ok).toBe(true);
   });
+
   it('maps mapper validation failures to stable harness failure classes', () => {
     const cases: Array<[string, string]> = [
       ['', 'empty_mapper_output'],
