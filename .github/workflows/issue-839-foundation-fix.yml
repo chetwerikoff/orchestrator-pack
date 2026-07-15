@@ -29,18 +29,35 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --include=dev
-      - name: Remove stale PowerShell child-test baseline entry
+      - name: Remove retired shim inventory and baseline entries
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import json
           from pathlib import Path
-          path = Path('scripts/toolchain/powershell-child-tests.json')
-          text = path.read_text(encoding='utf-8')
-          stale = '    {"path":"scripts/harness-review-bridge.test.ts","justification":"Pre-existing PowerShell child test at the Issue #800 baseline (direct:execFileSync); preserve until that test is migrated in a later PR."},\n'
-          if text.count(stale) != 1:
+
+          baseline_path = Path('scripts/toolchain/powershell-child-tests.json')
+          baseline = json.loads(baseline_path.read_text(encoding='utf-8'))
+          before = len(baseline['entries'])
+          baseline['entries'] = [
+              entry for entry in baseline['entries']
+              if entry.get('path') != 'scripts/harness-review-bridge.test.ts'
+          ]
+          if before - len(baseline['entries']) != 1:
               raise SystemExit('expected exactly one stale harness-review-bridge PowerShell baseline entry')
-          path.write_text(text.replace(stale, ''), encoding='utf-8')
+          baseline_path.write_text(json.dumps(baseline, indent=2) + '\n', encoding='utf-8')
+
+          inventory_path = Path('scripts/json-producers/wave-b-inventory.json')
+          inventory = json.loads(inventory_path.read_text(encoding='utf-8'))
+          before = len(inventory['rows'])
+          inventory['rows'] = [
+              row for row in inventory['rows']
+              if row.get('path') != 'scripts/ao-review.ps1'
+          ]
+          if before - len(inventory['rows']) != 1:
+              raise SystemExit('expected exactly one retired scripts/ao-review.ps1 inventory row')
+          inventory_path.write_text(json.dumps(inventory, indent=2) + '\n', encoding='utf-8')
           PY
       - name: Verify PowerShell child-test baseline
         id: pwsh_guard
@@ -54,16 +71,16 @@ jobs:
         run: |
           set -o pipefail
           npm run test:foundation -- --reporter=verbose 2>&1 | tee /tmp/foundation.log
-      - name: Commit verified baseline fix
+      - name: Commit verified inventory and baseline fix
         if: steps.pwsh_guard.outcome == 'success' && steps.foundation.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/workflows/issue-839-foundation-fix.yml
+          rm -f .github/workflows/issue-839-foundation-fix.yml .github/workflows/issue-839-ci-diagnose.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m 'Update PowerShell child-test baseline for review cutover'
+          git commit -m 'Retire ao-review inventory and test baselines'
           git push origin HEAD:issue-839-pack-review-runner-v2
       - name: Report diagnostic result
         if: always()
@@ -81,7 +98,7 @@ jobs:
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
             if [[ "$PWSH_GUARD" == success && "$FOUNDATION" == success ]]; then
-              echo 'Baseline fix committed and temporary workflow removed.'
+              echo 'Retired shim inventory and baseline fixes committed; temporary workflows removed.'
             else
               echo '```text'
               echo '===== PowerShell growth guard ====='
