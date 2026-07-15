@@ -17,16 +17,26 @@ jobs:
         with:
           fetch-depth: 0
           ref: agent/issue-830-gate-runner-core-census
-      - name: Apply final patch and remove chunk transport
+      - name: Reconstruct and verify patch
         shell: bash
         run: |
           set -euo pipefail
           cat .opk830-bootstrap/chunk-* | base64 --decode > /tmp/opk830.patch.gz
           printf '%s  %s\n' '7a8ae716b6aec351811d7522647d028ed2da1a56c94d2e7555a2e7c87b71af9a' '/tmp/opk830.patch.gz' | sha256sum -c -
           gzip --decompress --stdout /tmp/opk830.patch.gz > /tmp/opk830.patch
+      - name: Apply final patch
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git am --3way /tmp/opk830.patch
+      - name: Remove chunk transport
+        shell: bash
+        run: |
+          set -euo pipefail
           git rm -r .opk830-bootstrap
           git commit -m 'chore: remove issue 830 chunk transport'
-          git push origin HEAD:refs/heads/agent/issue-830-gate-runner-core-census
+      - name: Push final branch
+        shell: bash
+        run: git push origin HEAD:refs/heads/agent/issue-830-gate-runner-core-census
