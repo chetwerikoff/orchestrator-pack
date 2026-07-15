@@ -24,7 +24,7 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Collect targeted diagnostics
+      - name: Collect runner diagnostics
         shell: bash
         run: |
           set +e
@@ -42,17 +42,13 @@ jobs:
             } >>"$log" 2>&1
           }
 
-          run_check "HEAD and changed files" bash -lc 'git rev-parse HEAD; git diff --name-status origin/main...HEAD'
-          run_check "TypeScript typecheck" npm run typecheck
-          run_check "Targeted review runner test" npx vitest run scripts/ao-0-10-review-trigger.test.ts --reporter=verbose
-          run_check "review trigger static gate" pwsh -NoProfile -File scripts/check-review-trigger-reconcile.ps1
-          run_check "review idempotency static gate" pwsh -NoProfile -File scripts/check-orchestrator-review-idempotency.ps1
-          run_check "review head coverage static gate" pwsh -NoProfile -File scripts/check-orchestrator-review-head-coverage.ps1
-          run_check "focused retired-path inventory" bash -lc 'grep -RInE "scripts/ao-review\\.ps1|/api/v1/sessions/.*/reviews|ao review submit|reviewers.*harness" -- scripts/lib/Invoke-AoReviewApi.ps1 scripts/review-trigger-reconcile.ps1 agent-orchestrator.yaml.example docs/ao-0-10-review-harness-adoption.md .claude/skills/merge-with-local-adoption/SKILL.md .cursor/skills/merge-with-local-adoption/SKILL.md 2>/dev/null | head -n 160'
-          run_check "issue 839 declaration inventory" bash -lc 'ls -la docs/declarations/839.*.json 2>&1 || true'
+          run_check "Foundation typecheck" npm run typecheck:foundation
+          run_check "Foundation policy lint" npm run lint:foundation
+          run_check "Targeted review runner test" npm test -- scripts/ao-0-10-review-trigger.test.ts --reporter=verbose
+          run_check "Foundation test suite" npm run test:foundation -- --reporter=verbose
 
           {
-            echo "## PR #845 focused diagnostic"
+            echo "## PR #845 runner diagnostic"
             echo
             echo '```text'
             cat "$log"
