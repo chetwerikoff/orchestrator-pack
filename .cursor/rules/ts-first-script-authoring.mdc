@@ -1,0 +1,12 @@
+---
+description: TS-first script authoring and PowerShell freeze during the migration
+alwaysApply: true
+---
+
+# TS-first script authoring (Issue #837)
+
+- Author every **net-new script file** under `scripts/**` in **TypeScript/Node**.
+- PowerShell is frozen during the migration. Add a net-new `.ps1` only when the task spec contains an explicit written justification for why TypeScript/Node is unsuitable for that specific file.
+- This applies only to new files. Existing `.ps1` files and migration-defined wrappers/shims are owned by Waves A and B (Issues #830 and #831); do not infer a mandate to hand-port, rename, or delete them.
+
+Canonical worker rule: [`AGENTS.md`](../../AGENTS.md), **Migration Principle → TS-first**. Sunset decision: [`docs/architecture.md`](../../docs/architecture.md), **TS-first script authoring freeze**.

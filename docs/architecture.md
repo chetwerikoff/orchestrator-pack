@@ -62,6 +62,26 @@ native pickup for Cursor and Codex workers. There is no `agentRulesFile` injecti
 AO 0.10.2. After merge, **recycle live worker AO sessions** so worktrees pick up the new file;
 AO restart alone is not required for worker rule delivery.
 
+### TS-first script authoring freeze (Issue #837)
+
+Decision adopted 2026-07-15: every **net-new script file** under `scripts/**` defaults to
+**TypeScript/Node**, and PowerShell is frozen for the duration of the PowerShell→TypeScript
+migration. A net-new `.ps1` is an exception only when the task specification gives an explicit
+written justification for why TypeScript/Node is unsuitable for that specific file. This records
+the forward-looking rule that was missing when PR #835 added six new `.ps1` files while migration
+waves were deleting existing PowerShell.
+
+The scope is net-new files only. Existing `.ps1` files, plus migration wrappers or shims, remain
+owned by Wave A (Issue #830), Wave B (Issue #831), and their child PRs; this decision does not
+authorize opportunistic hand-porting, renaming, or deletion. It adds worker/planner guidance only,
+not a runtime or CI diff guard.
+
+The freeze does not expire implicitly. Review it only when **both** migration waves and their child
+PRs are closed as completed/merged **and** `git ls-files 'scripts/*.ps1' 'scripts/**/*.ps1'` reports
+no tracked PowerShell scripts. The named follow-up task **“Lift or relax the PowerShell authoring
+freeze after migration completion”** must then remove or relax the rule in `AGENTS.md`, the Cursor
+rule, and this decision record. Until that follow-up lands, the freeze remains binding.
+
 ### Config layer
 
 `agent-orchestrator.yaml.example` demonstrates stock AO settings:
