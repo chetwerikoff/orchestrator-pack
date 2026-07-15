@@ -63,3 +63,4 @@ if (-not (Test-Path -LiteralPath $postSubmitCheck -PathType Leaf)) {
 }
 
 Write-Host '[PASS] trusted harness mapper and pack-runner priority-tag contract'
+exit 0
