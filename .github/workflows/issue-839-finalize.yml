@@ -31,6 +31,15 @@ jobs:
           set -euo pipefail
           awk 'BEGIN{take=0} /python3 - <<.PY./{take=1; next} take && /^          PY$/{exit} take{sub(/^          /,""); print}' .github/workflows/issue-839-pr-apply.yml > /tmp/apply.py
           python3 /tmp/apply.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/toolchain/raw-child-process-baseline.json')
+          text = path.read_text(encoding='utf-8')
+          stale = '    {"path":"scripts/harness-review-bridge.test.ts","api":"execFileSync","fingerprint":"b4b9ea0960343b046042","ordinal":1,"justification":"Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."},\n'
+          if text.count(stale) != 1:
+              raise SystemExit('expected exactly one stale harness-review-bridge raw-process baseline entry')
+          path.write_text(text.replace(stale, ''), encoding='utf-8')
+          PY
       - name: TypeScript typecheck
         run: npm run typecheck:foundation
       - name: TypeScript policy lint
