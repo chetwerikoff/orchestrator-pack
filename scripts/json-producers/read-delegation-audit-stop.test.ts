@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMPACT_JSON_NO_NEWLINE, COMPACT_JSON_WITH_NEWLINE, serializeGenericJsonArtifact, validateJsonValue } from '#opk-kernel/json-artifact';
-import { buildReadDelegationAuditHealth, normalizeReadDelegationStopPayload } from './read-delegation-audit-stop.ts';
+import { buildReadDelegationAuditHealth, normalizeReadDelegationStopPayload } from './read-delegation-audit-stop.js';
 
 const root = join(import.meta.dirname, '..', '..', 'tests/external-output-references/variants/opk-json-producers/read-delegation-audit-stop');
 const options = { artifactPath: '/tmp/audit.jsonl', homeDirectory: '/home/opk', env: { PACK_REVIEWER: 'codex', REVIEW_COMMAND: '' }, wrapperHash: 'a'.repeat(64) };

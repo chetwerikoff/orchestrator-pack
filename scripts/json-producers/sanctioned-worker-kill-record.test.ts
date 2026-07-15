@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   appendSanctionedWorkerKillRecord,
   readSanctionedWorkerKillSurface,
-} from './sanctioned-worker-kill-record.ts';
+} from './sanctioned-worker-kill-record.js';
 
 const repoRoot = process.cwd();
 const golden = readFileSync(

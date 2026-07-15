@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readWorkerStatusStoreFile } from '../lib/worker-status-store.mjs';
 import { serializeJsonArtifact } from '#opk-kernel/json-artifact';
-import { buildWorkerStatusReport, mergeAoStatusSessionRows, parseAoPrefixedJson, WORKER_STATUS_REPORT_CONTRACT } from './worker-status-report.ts';
+import { buildWorkerStatusReport, mergeAoStatusSessionRows, parseAoPrefixedJson, WORKER_STATUS_REPORT_CONTRACT } from './worker-status-report.js';
 
 const root = join(import.meta.dirname, '..', '..', 'tests/external-output-references/variants/opk-json-producers/worker-status-report');
 const lists = JSON.parse(readFileSync(join(root, 'session-lists.json'), 'utf8')) as { workerList: unknown; orchestratorList: unknown };

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseCaptureManifest } from '#opk-kernel/artifact-contracts';
-import { checkGoldenHygiene } from './golden-hygiene.ts';
+import { checkGoldenHygiene } from './golden-hygiene.js';
 
 const repoRoot = join(import.meta.dirname, '..', '..');
 

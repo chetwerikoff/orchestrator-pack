@@ -19,7 +19,7 @@ import {
   integerArgument,
   isDirectExecution,
   parseArguments,
-} from './cli.ts';
+} from './cli.js';
 
 interface AnyRow { readonly [key: string]: unknown }
 

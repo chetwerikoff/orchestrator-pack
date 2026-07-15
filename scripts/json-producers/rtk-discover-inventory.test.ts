@@ -7,7 +7,7 @@ import {
   loadRtkPassthroughPatterns,
   normalizeRtkDiscover,
   RTK_INVENTORY_ARTIFACT_CONTRACT,
-} from './rtk-discover-inventory.ts';
+} from './rtk-discover-inventory.js';
 import { serializeJsonArtifact, validateJsonValue } from '#opk-kernel/json-artifact';
 
 const repoRoot = join(import.meta.dirname, '..', '..');
