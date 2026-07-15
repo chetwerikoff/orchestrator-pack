@@ -108,11 +108,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-830-gate-framework-core-census
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Apply final implementation and remove bootstrap surfaces
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           cat scripts/gate-runner/.issue-830-patch-part-* \
             | base64 --decode \
             | gzip --decompress \
@@ -120,9 +120,10 @@ jobs:
           printf '%s  %s\n' 'a5f7f8587007386351a50a0c07f10c35a5dba1b12c2bba29e535881d1ef39c66' '/tmp/issue-830-final.patch' | sha256sum --check
           git apply --index --whitespace=nowarn /tmp/issue-830-final.patch
           rm scripts/gate-runner/.issue-830-patch-part-*
-          git fetch origin main
+          git fetch --depth=1 origin main:refs/remotes/origin/main
           git checkout origin/main -- .github/workflows/typescript-foundation.yml
           git add -A
+          git status --short
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Add Wave A gate framework core and census'
