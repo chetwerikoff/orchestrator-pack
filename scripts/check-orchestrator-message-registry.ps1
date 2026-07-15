@@ -4,7 +4,7 @@ $Root = if ($args.Count -gt 0 -and $args[0]) { (Resolve-Path -LiteralPath $args[
 
 $registryCli = Join-Path $Root 'docs/orchestrator-message-registry.mjs'
 $mapPath = Join-Path $Root 'docs/orchestrator-message-map.md'
-$baseResolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.ts'
+$baseResolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.mjs'
 $failures = [System.Collections.Generic.List[string]]::new()
 
 if ($IsWindows -and -not $env:WSL_DISTRO_NAME) {
@@ -31,7 +31,7 @@ if ($failures.Count -eq 0) {
     if ($env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF) {
         $candidateArgs = @('--candidate', $env:ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF.Trim())
     }
-    $baseRef = (& node --experimental-strip-types $baseResolver --repo-root $Root @candidateArgs 2>&1 | Out-String).Trim()
+    $baseRef = (& node $baseResolver --repo-root $Root @candidateArgs 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baseRef)) {
         if ($baseRef) { Write-Host $baseRef }
         $failures.Add('protected runtime diff check could not resolve a non-self comparison base')

@@ -84,7 +84,7 @@
     },
     {
       "id": "shared-base-resolver",
-      "path": "scripts/lib/resolve-merge-stable-ci-base.ts",
+      "path": "scripts/lib/resolve-merge-stable-ci-base.mjs",
       "dimensions": ["base-ref-resolution"],
       "classification": "merge-stable",
       "reason": "All environment candidates flow through one rule: a merge-base equal to HEAD is rejected, then HEAD^1 is used as a context-neutral fallback."

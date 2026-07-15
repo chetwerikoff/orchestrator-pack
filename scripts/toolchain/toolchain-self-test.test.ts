@@ -35,7 +35,7 @@ function write(root: string, path: string, contents: string): void {
 }
 
 function writeMergeStableBaseResolverFixture(root: string): void {
-  write(root, 'scripts/lib/resolve-merge-stable-ci-base.ts', `
+  write(root, 'scripts/lib/resolve-merge-stable-ci-base.mjs', `
     const baseSha = process.env.GITHUB_BASE_SHA ?? process.env.PR_BASE_SHA ?? process.env.BASE_SHA;
     if (!baseSha) {
       console.error('[FAIL] fixture missing base sha');

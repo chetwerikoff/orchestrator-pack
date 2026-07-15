@@ -52,12 +52,12 @@ function Test-RequiredSurfaceAtRef {
 
 Push-Location $Root
 try {
-    $resolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.ts'
+    $resolver = Join-Path $Root 'scripts/lib/resolve-merge-stable-ci-base.mjs'
     if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) {
         throw "missing merge-stable base resolver: $resolver"
     }
 
-    $baseJson = (& node --experimental-strip-types $resolver --repo-root $Root --json 2>&1 | Out-String)
+    $baseJson = (& node $resolver --repo-root $Root --json 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
         Write-Host $baseJson
         throw 'side-process registry sequencing guard could not resolve a non-self comparison base'

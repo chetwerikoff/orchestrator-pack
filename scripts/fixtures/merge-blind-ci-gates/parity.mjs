@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '#opk-kernel/subprocess';
-import { resolveMergeStableCiBase } from '../../lib/resolve-merge-stable-ci-base.ts';
+import { resolveMergeStableCiBase } from '../../lib/resolve-merge-stable-ci-base.mjs';
 import { inspectSupervisorHeavyLaneRpcBinding } from '../../lib/validate-supervisor-heavy-lane-rpc-artifacts.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -114,8 +114,8 @@ async function prepareGateRepo() {
     "# Fleet hygiene assertions H1–H7 (Issue #711)\n$Script:FleetHygieneAssertionIds = @('H1')\nfunction Get-FleetHygieneConfig {}\n",
   );
   copyFileSync(
-    join(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.ts'),
-    join(root, 'scripts/lib/resolve-merge-stable-ci-base.ts'),
+    join(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.mjs'),
+    join(root, 'scripts/lib/resolve-merge-stable-ci-base.mjs'),
   );
   write(join(root, 'protected.txt'), 'stable\n');
   write(

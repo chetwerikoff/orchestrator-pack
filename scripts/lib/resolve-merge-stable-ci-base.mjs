@@ -6,14 +6,7 @@ import { runProcess } from '#opk-kernel/subprocess';
 const ENV_KEYS = ['BASE_SHA', 'GITHUB_BASE_SHA', 'PR_BASE_SHA'];
 const FALLBACK_REFS = ['origin/main', 'refs/remotes/origin/main', 'main'];
 
-export interface MergeStableCiBase {
-  readonly baseRef: string;
-  readonly baseSha: string;
-  readonly headSha: string;
-  readonly source: 'merge-base' | 'first-parent';
-}
-
-async function git(repoRoot: string, args: readonly string[], allowFailure = false): Promise<string | null> {
+async function git(repoRoot, args, allowFailure = false) {
   const result = await runProcess({
     command: 'git',
     args,
@@ -26,8 +19,8 @@ async function git(repoRoot: string, args: readonly string[], allowFailure = fal
   throw new Error(`git ${args.join(' ')} failed: ${detail}`);
 }
 
-function unique(values: readonly (string | undefined)[]): string[] {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
+function unique(values) {
+  return [...new Set(values.map((value) => value?.trim()).filter(Boolean))];
 }
 
 /**
@@ -36,10 +29,7 @@ function unique(values: readonly (string | undefined)[]): string[] {
  * origin/main normally points at HEAD, which would otherwise turn the gate into an
  * empty/self comparison. The first parent is the context-neutral final fallback.
  */
-export async function resolveMergeStableCiBase(
-  repoRoot: string,
-  explicitCandidates: readonly string[] = [],
-): Promise<MergeStableCiBase | null> {
+export async function resolveMergeStableCiBase(repoRoot, explicitCandidates = []) {
   const root = resolve(repoRoot);
   const head = await git(root, ['rev-parse', '--verify', 'HEAD^{commit}'], true);
   if (!head) return null;
@@ -65,8 +55,8 @@ export async function resolveMergeStableCiBase(
   return null;
 }
 
-function parseArgs(argv: readonly string[]): { repoRoot: string; candidates: string[]; json: boolean } {
-  const result = { repoRoot: process.cwd(), candidates: [] as string[], json: false };
+function parseArgs(argv) {
+  const result = { repoRoot: process.cwd(), candidates: [], json: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--repo-root') result.repoRoot = argv[++index] ?? result.repoRoot;

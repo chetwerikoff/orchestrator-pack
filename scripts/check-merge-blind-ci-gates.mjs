@@ -177,20 +177,20 @@ function validateRemediations(repoRoot) {
   if (/requiredCommits|GITHUB_EVENT_PATH|git merge-base --is-ancestor/.test(sequencing)) {
     fail('sequencing guard still relies on event payload or prerequisite commit identity');
   }
-  for (const marker of ['Orchestrator-WakeSupervisorLease.ps1', 'Orchestrator-FleetHygiene.ps1', 'resolve-merge-stable-ci-base.ts']) {
+  for (const marker of ['Orchestrator-WakeSupervisorLease.ps1', 'Orchestrator-FleetHygiene.ps1', 'resolve-merge-stable-ci-base.mjs']) {
     if (!sequencing.includes(marker)) fail(`sequencing guard lacks semantic marker/binding ${marker}`);
   }
 
   const registry = read(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
-  if (!registry.includes('resolve-merge-stable-ci-base.ts') || /'origin\/main'/.test(registry)) {
+  if (!registry.includes('resolve-merge-stable-ci-base.mjs') || /'origin\/main'/.test(registry)) {
     fail('message registry guard must delegate to the non-self base resolver');
   }
 
   const baseline = read(repoRoot, 'scripts/toolchain/baseline-io.ts');
-  if (!baseline.includes('resolve-merge-stable-ci-base.ts') || !baseline.includes("'--json'")) {
+  if (!baseline.includes('resolve-merge-stable-ci-base.mjs') || !baseline.includes("'--json'")) {
     fail('baseline-io must delegate comparison-boundary resolution to the shared merge-stable helper');
   }
-  const helper = read(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.ts');
+  const helper = read(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.mjs');
   if (!helper.includes('mergeBase !== head') || !helper.includes("'HEAD^1'")) {
     fail('shared base resolver must reject self merge-bases and fall back to HEAD^1');
   }
@@ -207,7 +207,7 @@ function validateRemediations(repoRoot) {
   }
 
   for (const path of [
-    'scripts/lib/resolve-merge-stable-ci-base.ts',
+    'scripts/lib/resolve-merge-stable-ci-base.mjs',
     'scripts/check-merge-blind-ci-gates.mjs',
     'scripts/fixtures/merge-blind-ci-gates/parity.mjs',
   ]) {

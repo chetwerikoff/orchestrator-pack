@@ -36,10 +36,10 @@ async function gitCapture(repoRoot: string, args: readonly string[]): Promise<st
 
 /** Resolve the same non-self comparison boundary in PR and push contexts. */
 export async function resolveComparisonBaseRef(repoRoot: string): Promise<string | null> {
-  const resolver = resolve(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.ts');
+  const resolver = resolve(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.mjs');
   const result = await runProcess({
     command: 'node',
-    args: ['--experimental-strip-types', resolver, '--repo-root', repoRoot, '--json'],
+    args: [resolver, '--repo-root', repoRoot, '--json'],
     cwd: repoRoot,
     inheritParentEnv: true,
     allowEmptyStdout: false,

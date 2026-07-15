@@ -35,7 +35,7 @@ foreach ($required in @($wrapper, $core, $audit, $parityFixture)) {
 & node $audit $RepoRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& node --experimental-strip-types $parityFixture $RepoRoot
+& node $parityFixture $RepoRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $argsList = @(
