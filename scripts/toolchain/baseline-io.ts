@@ -2,9 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcess } from '#opk-kernel/subprocess';
-
-const BASE_REF_ENV_KEYS = ['BASE_SHA', 'GITHUB_BASE_SHA', 'PR_BASE_SHA'] as const;
-const BASE_REF_FALLBACKS = ['origin/main', 'refs/remotes/origin/main', 'main'] as const;
+import { resolveMergeStableCiBase } from '../lib/resolve-merge-stable-ci-base.mjs';
 
 export interface ChangedFileEntry {
   readonly path: string;
@@ -37,18 +35,9 @@ async function gitCapture(repoRoot: string, args: readonly string[]): Promise<st
   return result.ok ? result.stdout : null;
 }
 
+/** Resolve the same non-self comparison boundary in PR and push contexts. */
 export async function resolveComparisonBaseRef(repoRoot: string): Promise<string | null> {
-  const candidates = [
-    ...BASE_REF_ENV_KEYS
-      .map((name) => process.env[name]?.trim())
-      .filter((value): value is string => Boolean(value)),
-    ...BASE_REF_FALLBACKS,
-  ];
-  for (const candidate of candidates) {
-    const mergeBase = (await gitCapture(repoRoot, ['merge-base', 'HEAD', candidate]))?.trim();
-    if (mergeBase) return mergeBase;
-  }
-  return null;
+  return resolveMergeStableCiBase(repoRoot)?.baseSha ?? null;
 }
 
 export async function readGitFile(repoRoot: string, ref: string, relativePath: string): Promise<string | null> {
