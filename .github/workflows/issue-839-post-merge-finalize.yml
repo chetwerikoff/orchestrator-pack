@@ -63,7 +63,7 @@ jobs:
           git rm .github/workflows/issue-839-post-merge-finalize.yml
           git add AGENTS.md scripts/reachability-purge.test.ts
           git commit -m 'Resolve current-main policy overlaps for issue 839'
-      - name: Verify focused regressions
+      - name: Verify base TypeScript contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -71,11 +71,32 @@ jobs:
           npm run typecheck:foundation
           npm run lint:foundation
           npm run test:foundation
+      - name: Run focused regressions
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
           node scripts/run-vitest-with-harness.mjs run \
             tests/agents-md-relocation.test.ts \
             scripts/reachability-purge.test.ts \
             scripts/review-delivery.test.ts \
-            scripts/review-producer-contract-mapping.test.ts
+            scripts/review-producer-contract-mapping.test.ts 2>&1 | tee /tmp/issue-839-focused.log
+      - name: Publish focused failure
+        if: steps.focused.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tail -n 160 /tmp/issue-839-focused.log >/tmp/issue-839-focused-tail.log
+          {
+            echo '## Issue #839 focused regression failure'
+            echo '```text'
+            cat /tmp/issue-839-focused-tail.log
+            echo '```'
+          } >/tmp/report.md
+          gh api --method POST repos/chetwerikoff/orchestrator-pack/issues/845/comments --field body=@/tmp/report.md
+          exit 1
       - name: Verify AGENTS and full light lane
         shell: pwsh
         run: |
@@ -96,8 +117,8 @@ jobs:
       - name: Push verified candidate
         shell: bash
         run: git push origin HEAD:issue-839-pack-review-runner-v2
-      - name: Report failure
-        if: failure()
+      - name: Report other failure
+        if: failure() && steps.focused.outcome != 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
