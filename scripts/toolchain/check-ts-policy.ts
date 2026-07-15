@@ -25,8 +25,6 @@ function normalizedPath(root: string, path: string): string {
 function isFoundationProductionPath(root: string, fileName: string): boolean {
   const path = normalizedPath(root, fileName);
   return path === 'scripts/typescript-smoke.ts'
-    || path === 'scripts/pack-review-runner.ts'
-    || path === 'scripts/lib/pack-review-run-store.ts'
     || (/^scripts\/(json-producers|kernel|toolchain)\/.*\.ts$/.test(path) && !path.endsWith('.test.ts'));
 }
 
@@ -111,7 +109,7 @@ export function loadTypeScriptProgram(repoRoot: string): ts.Program {
   if (read.error) {
     throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
   }
-  const parsed = ts.parseJsonConfigFileContent(ts.sys.readFile(configPath) ? read.config : {}, ts.sys, repoRoot, undefined, configPath);
+  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, repoRoot, undefined, configPath);
   if (parsed.errors.length > 0) {
     throw new Error(parsed.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'));
   }

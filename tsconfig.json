@@ -3,9 +3,7 @@
   "include": [
     "scripts/typescript-smoke.ts",
     "scripts/kernel/**/*.ts",
-    "scripts/toolchain/**/*.ts",
-    "scripts/pack-review-runner.ts",
-    "scripts/lib/pack-review-run-store.ts"
+    "scripts/toolchain/**/*.ts"
   ],
   "compilerOptions": {
     "allowImportingTsExtensions": true,
