@@ -84,6 +84,8 @@
     "scripts/github-fleet-governor.test.ts": "heavy",
     "scripts/github-fleet-repo-tick-snapshot.test.ts": "heavy",
     "scripts/github-fleet-shared-read-model.test.ts": "heavy",
+    "scripts/graphify/check-graphify-no-installer.test.ts": "light",
+    "scripts/graphify/query-graph.test.ts": "light",
     "scripts/guard-direct-edit.test.ts": "light",
     "scripts/harness-post-submit-pn-content-shape.test.ts": "light",
     "scripts/harness-review-bridge.test.ts": "light",
