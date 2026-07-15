@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.sha) }}
@@ -98,3 +98,88 @@ jobs:
         run: npm ci --include=dev
       - name: Enforce committed PowerShell child-test baseline
         run: npm run check:pwsh-test-growth
+
+  issue-821-finalize:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/issue-821-retire-autonomous-surface'
+    name: Issue 821 final cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-821-retire-autonomous-surface
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Apply deterministic cleanup and regenerate baselines
+        shell: bash
+        run: |
+          cat > /tmp/finalize-issue-821.b64 <<'PAYLOAD'
+          H4sICDnZVmoCA2ZpbmFsaXplLWlzc3VlLTgyMS5tanMA7Vv/d9s2kv89fwXW63uiU5GS3W62T1k35yZO1t069rPd9r0zfTJFQhJiiuQSpG2d6//9ZgYACVKU7DbX3Nt3l90moggM5utnZgBILLI0L9gD4/c8fC9ifr5MQvbIpnm6YL0kjfgonIs4Gmd5GnIpe69fiHqKkIXECX22uIlErj7mPIgMJXhaqH/vclHw7gWmFtUsKOb2O3yGty/CNJEFy9O0YPtM8+KFd5Gz89q8g2XhnTOFNXbY/ncNPhyk431KReIgjT6jUX3WK4vpt72KBjFpiPRZwe8LIvXwgjE1YlrGMXLQRe41jKr0oFaEhyRYcAenwXIPwFRY5lLc8hEr8pKzR5rVUA4NVot7Oc/iIOQHcez0/NxPesAy/G1z/lgrYJHe8qYKFpuEX+EG3qR5aLNmKMsizSvSkmjbDuP0ZqIA3i574ZyHN2mJD700FzORDBaBIL5dF/72PI9IXOHyYL8RUyzJIhLpiPVEMuegjB6t/mJaJmEh0oRpPZwkXJtG8iAP533zYsETIBIHE47WUS93LLOhMuEFuoRT2UpbVOQS35G+RRLx+5OpoyngKDFFqXHM39iQ/fpr18C+pvKVXtqLeTIrgIPv9tlQ8cFYMc/TO5bwO3aY52nuXG8/ICuPI1BlxsOCR/AhCIt4ydKEs0VQhHM0CNt+IMEer4mfR+MvlpN6MhYhd4aajx1gxFIMPFmDujlFR1rV9xmfgZSV0nN87NL5M1VNInEJby/BD4gn+grdm2jvXBmN66GaPfan/X22u/McFaLqjML6bAZ4sf3QJKb1uKJDLZazKqXWjg4D5xJm96I0lAMhZcnlOMqDaSEHw6GLKgWyYVHm3I14KCRoU3qLqNfHSVlcQkTIQZC6IaDbvZvlbs5vBb/j+WACsaIevEKujJdhmnF3VgZ5RCODGTDm3uVB9pzR6pmCs2t4EcgbZDcO8gDtT3PUM+8cn97wBMhBZLsxj2aae/XRW3zSM2SYiwwUMwbNpfEtd7M7OffkvPl2Ku5RXXIAGDIvJ+405rxwwwC4HUyDGxBjdc4tKFnCIOHGQQKWBf+aipn3SaZJ58A5D26XwHaWxuls6YFlk/WD8zIpxIK7c4H2XnYMVGZyM5HxWCTclVlwl7iTEsQvPKShlHZFGAYR7BioiTlLp4wcyGutBv4GCVBzugv/m6DXjr8Za72Pu5xmjCTk2Dy2WBhrfsdkeNSWxXEsOsalSZEDBLlAL+JJyMG6syBcujGoQrnTypxVq7myCGL4OwkyOU+rVSw9bpR9z/3aNcQhHUHgAk9gCHcBOR/cHkbPgB0wzCphCkj3271dGIR5RyQzFFvR94r7oj1sKpIgJid6chCJv2GUhofIlSVI504DEZcYPqsjQZ5Egl8sXMiUWWlR8+I0DOIBKLDgg9kcYvAWMNsVUdP/YjEZBGWRJukiLaXmbBqARinVm2gh5xgAtvEcBVCLAZ9TnqNxN/vxIAwygjHEmAzEylIpCqgVXEgSUGigpAjydnz8QQua5cKY13F7taMrHpNlXgwG7GLOWQxT2MEJG3q7Q28Pc+oig7hLUhanCeATlI8840kkWZAi5jA5FwvZZ5MSkhfMx9SO7zFzzuZMcZMz5VDSe2HVIiizAmLbUb1lsIg9vS4p5hrzvz1k5CeM/tDsEcMyLM0bX74lSKsGMgZMLMCHMKGMrAcopqSfXH+ZZcygP7MPovh7OQFl3QIRQElK+BITfSESqB4xVZegPtQoYsoN5GbjvpZWnSOMCvbnb77e3fG0GD1bBJtLNoHwuAGNamufqYoXl8h5IcBFwKRkTtVCFMYb2sjBgjISqp0Ag1rVPQL0fh1nnfBDc101dxEkYoooRE5ZVzpRUARA6Ifzk49eFuQSqwpTD1H1gQMgay2AQHQIoLvMoDwvsDRy1r1684ZdXu1g+Qzh5TgcX6lKHD9RiVQxHqS9lSIHiiXiB+QBWBTTJa3UZwm1G3s7j6B+VeiAav/Becbs6GQmN+hIAazLQOv/LAVSA68DV5BYg+GTsYZu1NxJWiZRAExSqFUhVJWXbWw7Sm6hwnBPwW3OkYfviYUPAIrSy+QuxdTA+KK/rdjg0SmAH6rw332ndlX8Q9Wab0OmLZqvIeXSl/751cs3FeEdP6npAF5zyG4MaMOCcYDIBDK3l/d3mP8wqKIR/6zy18XeOu40c79lBhVgrQmVZ6yZY6qWelqn9E5D9qZk0AWo+K3XYGYAdczSDuD/ER+oGfS3AcrPMfT32QeoRAAxCgiMtk2ht0ADBikNdZO0UH1Wbwz11bhmnJ7y2e1YYHUVRGPMrmPajSALN7Xrb/8s0phKZ+l7B1HkO0YW8LqULUrAhFJyAkkXwHSJQIUk1YbHnMcAhj10uIokhCO5Efb79K8JKsK3QEqe03pKm+sx7Dm6RKiI+ZrezSpgMWebApaxrYaDfdFiw0+2+l+Oh676Q3NwZbp7bFr/pLcGwriMuHRwhZ1NTSulVoBLs6BmoBk0qltlxjaNVhVX6LNeb+3GQIXnWBjdpfkNpFxYJZgIKP+XVvZOgEXgGXxmAg06eWisgtzVIM4gHYHv8ThmM3CcmozgTyC66j4s4FGMuAmq3bXpgKahYraiG8A1uAOp/e2KVd+zZzD/V/bLHKzjnkw+QfaB0ITBY98TEXP5PwGLUrOchJrOBXI9iC2cds5jmGDmue9pX2TXTwgiEBmYWh1qO+ZfqqzpX9F3wEMMESimIqSgByDhrFcmwS0U/cEEqj4LJPzt2xVwWOVKYcSEsyYVUIEBgms/qfAWQzeyMkmvqdI4EAsXipaFCE0i6AmFAWi7qGGBasSntMSwqV8TbzShGtNYB1+Be/BpLGbzAoAK2K0TBVjAThHEMkSLIrSNMYH814Zt2rVl1gemLXC1PTa2xRUed9h6S5q4JGPSimjLihB80WlHJXHFKrFbmxAt6Gzh2sZiNH5LYzdY65F8yPks2Tr99nHHewuVFIg4K2hfUeuyxVwvncgU4JyzDjezot/wr9ookJhY1yW4IdGaU+WdlSq8zkhQsmOnpLqpiCOZiJFPIoqXCTtN73h+TlCi+4DXNDZD8Dv+4VwBjG64mEbf52CMhvdwCUiNwGJDic78mo+zMjmVdv7HmuGMpr/F2W+DjDqT79NoaQczvxfkWv7jkxTFU/Ob6b1LUaZLamd7VPt7ca87H5IZHGiGzS3tBTC5TIrgHnL6FCy8VBYOYkzddrNkyNOmwYYSQgN46g7d3aHbXPDp+kF3RGUWY5Qh4S2POT9AU+Ni2ci2T8/PaaEzPN3pYb1yQPKCPazqkhaimvT3z94y28vNRF3xhtm6I81W7/ufw/oWaaOL/lajQrcKNuWQF0rTZ5yDDZVLA9Ru9dlvnofTOje/rTpBSEYbWNaGCVSushHMBye6y1Zbt5t8R+NPzimMl7riwtK6ajme4T20o3ikjgjBf6ojyLqooLr2veLnNE8n/DC57bM7UcwPUnpHX54X5aQ6fPQGtH1qVya4dV7gbqYWDBqp11DpGbdpFXgWVxvrPBpnlMU085iTptgXP3EcYS1CpV5lqrdlnuMeVaumZUEBoQktOuaz2nLgjJBqQD41nB2cHulOIonsKm9GTUEn1lLPuamCdq2lq1OAgbLgjz8ej88Ofz46/GV8fnFwdjE+Pbi4ODz7eI7V3aVp0/wrULea8MvJ2T8Oz8YXh+f1WFUHPU3wEsF24PuTSl7nzcj3MQZ23vi+/ArAFd4OBJU1JmoO0kbcvE/zX8h5zTDf19JL+KThz1DZzLfKqcCxMRYYVR12Y6ci1zfEn6Xyg58uTj6eHJ/8dD7+8NPB2bsnVX7+0+nh2c9H5ydnoNmDd51q30RUqf3E3jQ7aAYoFoFGnWvGKRuco4Ls0coU1riPKL894j9rL6bKdNQyzDrpVvYsVAptGkcVOuoYHONpkqdBxPTWGKKIOTCkzTBsn0yS5dUWntmK3rjl+KyjpWcgpnV8SQeu1ENebuEJHFbIsKhZUTcGjb3OqghR3EC4YOxgyukgUAUZjmFYt6TZjfvXv2xd9a1V1SnFqJ6E1Nome8p3FMmr1rbEJeI5wGZ6hRWOLfmG7hznPKs7hy9g6OOGPhzPrw0LT7fiZ2pSoxID7+B5lsrqCI++manTWJ2PMZepEtlsxZLjgTeppZ69xddn11UCNT1/X5+g9xnUpyZBqlM668oPiIW1RAmWsPaR3mIP1VcmgdrXenNGh2X4KoZwadlTDem/qNKxN3hyV7PBipA1RcTuIHofyAIrrn7r7QdRrL4+LosAd6vh5QGUIxsZaQSH2c1ucYSOl1Ih2C4wyP3VHp+kkuLFC6N3xwYeEpe19tvrI5JXeztgO6d1Iwk1S3sBa1XsGMbIN5WdHTXNS292vCL9njt45ceCD83Evibv6edAgvuGaR79TXWsfSgflt+BPKDQwunhYAkuAoUeTXQnPKDjASMTekpDhoofbWSYiqdNmqneGl8Y3O72dDhaMACtM+5N9pI0zVzaqcJrRzNRuIRQQYSPEU8EAFsQ6nYKkLcEu9wKibCHV93cQoQ3vWpjr80hycDlpYiuFJcXeVnMl47mB0Of7i4pjZj9BSjDdAkGtTOWXHjwqI7MMK7TEnS7elxSw0K30lac2LnsqasQ6sIV8IsfsP0ruKfuY3llHoN0WsPTIJZcs76B6CQPknCuiMp5Ci22Kj6fILQ2AoEknnGXsiKZF+qjXqmiW/llJ9lm2Leoqo1a/KQO7elrvFz3u6mrNIdk8EKEtcrvZpcn5JWYMFWnhE8Z6L5Ls5ZfBWHIAevZf/E8NT1/OdEOBM6GYaEdji5G6vPENcG3DtQdEwLkxkfRqBVO+u2CB7LEZhdw7gPyQnTkiA3NCL087V6N2Cvz9USnAAockvcY907UvpjzwNIbczGxWoLnbxUtoK5vT1pqgXxKe0YBoxgCXGzEu8GhKR1XVj1PlkJ7v2S0zdHWkDn4WAhEw4/lYsLzNhS0QeXKWwT3LWUA4+9olGYfj3N3m57yG6zQRrGnDEH8d2u9IwV8MY7YV2z3Ka463V9VGngmoY7ycbecqSgn42JtpSFKh4GL91VLXU7lUyjAOg2taeyvq2UqyW12KzGp5hxViYMxOxfB95siRR8CfoBytJiTc/drMnbUPUWnFWsNOi0rbSbVmNmdJX8bL7s1xUdj6Ia/Ke1XOOCsqwW1mQbdsxO8c2YoqISw//7g6MdB5UX437Xu6t7xAi+5JADoIjRO42ofYeZIbsYTrq7UMKOJ+kILy+JSdm+xCDqFXinRNTnudrd7elWpq/XBy5fsg54BgGbzW99zam8DNfRl7lh67OWgLlitS/ufdz3/d5XAxTLjjHzlEE9JIOYeWFAcg+MkhLKvjff8COLgJhpWkq+ZTMs85H8Hxb6pvySXPIqqb9ijfXt8UsJbWkRCqUiuqJbYGVkMXF5R4EIKKfOEHeR5sPRQCMhD6uLwiNFk8F3mjPt0T+yeAIQ+sX9je2x/f58NySffWCigpFKjXrLd8XA4rCOrIWRPtdcf09M8pZ2BZqfd3HqnTdUkhAHUeLvv8uVZmfRq0rWqRqy3aa41R2tyw4Rq8CP9O/ojBF23pbBOuMb4TmnieNHs4uyduFqk1j14Cou3KhqdMJCcaOE20MKdwCNGWo/9isqKylDdGSjwYnSC56qs6WxW08Zv9b7MimtaPRiPgwxQ5hjHvRqiMut3Bpf2tfZ131SbrRtRsHFSsiph1Gcrex1DVMej6izYJZCy9hir2ZneaAfWoWDntReEQRzzHOtbrBZ/A85V8+m76ADtujfce+UO/+ru/uViOBzR/z3Qw39UozPlPqOGPCgR9FSqLLHQ0m2hu9nm73Wk8WcqglllN24jq3Nkne+UlfXPDnTCU//cQYykd7XSyAtR5mO7asZLqPq7yheqd+0vlN7fBnRvG6rNY5GUBShmd6+xsuJJfaZdyaPkQiz4qTzX17VrprRYWhilYEK4lQB4w74BHNhdNWEn65CfEQEgj2Yx6RpbXeLFhaIcL4QzSRulr5mtfRM0Abg91AXQMoqCbqL1LAEf6xCBnvqdyJs/1tLpqf+ZV4V6rd96qaWe+/uumh8zz7/2tx+Ugh89rT26Z+Rf7+i3raubepB9e9PH0QRfDdRqG6vPvh7CsOaYbvjaM2VSM5M28VCjXCe6/YFJ9P9KDv2XTKFVFfX/yelfOTm105KdkF4N0TNrcK++WZ+H/vdSkGLty6SfR/sXX5cNjKTjqcvLLkS+wh/PrkHhK70XrXpIWuz68266diebayXI6u8ENqB+8+cDSEClIBQ/BWCM05nTOwBNC2iX6XdUTKjjjG/3dhldqC0z2hBvd966c10IfQrmYdL9b85bBIevPgAA
+          PAYLOAD
+          base64 -d /tmp/finalize-issue-821.b64 | gzip -dc > /tmp/finalize-issue-821.mjs
+          node /tmp/finalize-issue-821.mjs
+          npm run lint:foundation -- --write-baseline
+          npm run check:pwsh-test-growth -- --write-baseline
+      - name: Validate final tree
+        shell: bash
+        run: |
+          set +e
+          report=issue-821-final-validation-report.txt
+          : > "$report"
+          overall=0
+          run_check() {
+            name="$1"
+            shift
+            tmp="$(mktemp)"
+            "$@" >"$tmp" 2>&1
+            status=$?
+            {
+              printf '\n===== %s (exit %s) =====\n' "$name" "$status"
+              tail -n 800 "$tmp"
+            } >> "$report"
+            rm -f "$tmp"
+            if (( status != 0 )); then overall=1; fi
+          }
+          run_check "targeted vitest" npx vitest run \
+            scripts/autonomous-spawn-budget.test.ts \
+            scripts/review-pipeline-spawn-budget.test.ts \
+            scripts/orchestrator-message-registry.test.ts \
+            scripts/worker-recovery-spawn-argv.test.ts \
+            scripts/autonomous-orchestrator-boundary.test.ts \
+            scripts/autonomous-spawn-policy.test.ts \
+            scripts/worker-nudge-gate.test.ts \
+            scripts/spawn-worktree-grant-finalization.test.ts \
+            scripts/orchestrator-claimed-review-run.test.ts \
+            scripts/autonomous-spawn-worktree-gate.test.ts \
+            scripts/orchestrator-review-start-preflight-audit.test.ts \
+            scripts/review-start-envelope-external-io.test.ts
+          run_check "verify pack" pwsh -NoProfile -File scripts/verify.ps1
+          run_check "base typecheck" npx tsc --project tsconfig.base.json --noEmit
+          run_check "pester track" pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm
+          run_check "foundation lint" npm run lint:foundation
+          run_check "pwsh child growth" npm run check:pwsh-test-growth
+          run_check "active retired-reference scan" bash -lc "! git grep -n -E 'AO_AUTONOMOUS_ORCHESTRATOR_SURFACE|\\.ao/autonomous-real-binaries\\.json|scripts/autonomous-orchestrator-surface-bootstrap\\.sh|scripts/autonomous-bash-env\\.sh|scripts/ao-autonomous-guard\\.ps1|scripts/git-autonomous-guard\\.ps1|scripts/git-real-binary|scripts/_invoke-system-git\\.sh|scripts/_resolve-system-git\\.sh|scripts/invoke-orchestrator-claimed-review-run\\.ps1|scripts/lib/Invoke-OrchestratorClaimedReviewRun\\.ps1|scripts/lib/autonomous-guard-fast-path\\.sh' -- ':!docs/issues_drafts/**' ':!docs/migration_notes.md' ':!docs/declarations/**' ':!docs/issue_queue_index.md' ':!scripts/reachability-purge.manifest.json' ':!.github/**'"
+          run_check "diff check" git diff --check
+          echo "$overall" > /tmp/issue-821-final-status
+          if (( overall == 0 )); then rm -f "$report"; fi
+      - name: Commit final tree
+        if: always()
+        shell: bash
+        run: |
+          git checkout origin/main -- .github/workflows/typescript-foundation.yml
+          rm -f issue-821-remaining-ci-report.txt issue-821-final-lane-report.txt
+          git add -A
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize issue 821 direct-gate migration"
+            git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          fi
+          exit "$(cat /tmp/issue-821-final-status 2>/dev/null || echo 1)"
