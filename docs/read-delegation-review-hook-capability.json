@@ -1,7 +1,7 @@
 {
   "kind": "read-delegation-review-hook-capability.v1",
   "schemaVersion": 1,
-  "description": "Scrubbed capability record for issue #264. World (a): bounded dry-run capture of the tracked pack-review entrypoint reached the no-publish terminal stage and emitted no read-delegation audit work-unit event; positive-control ordinary stop-hook payload emitted an audit event under the same wrapper. Values are redacted; hashes/fingerprints are machine-checkable.",
+  "description": "Scrubbed capability record for issue #264. World (a): bounded dry-run capture of the tracked pack-review entrypoint reached the no-publish terminal stage and emitted no read-delegation audit work-unit event; positive-control ordinary stop-hook payload emitted an audit event under the same wrapper. Values are redacted; hashes/fingerprints are machine-checkable. Issue #831 refreshed only the migrated wrapper hash and fingerprint; the observed capability branch and capture evidence are unchanged.",
   "derivation": "scripts/fixtures/read-delegation-audit/review-hook-capture-world-a.json",
   "surfaces": {
     "cursor": {
