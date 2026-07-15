@@ -79,6 +79,18 @@ jobs:
         run: npm ci --include=dev
       - name: Run in-process foundation tests
         run: npm run test:foundation
+      - name: Create temporary issue 830 source archive
+        if: always()
+        shell: bash
+        run: git archive --format=zip --output=orchestrator-pack-source.zip HEAD
+      - name: Upload temporary issue 830 source archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-830-source-export
+          path: orchestrator-pack-source.zip
+          if-no-files-found: error
+          retention-days: 1
 
   powershell-child-growth:
     name: PowerShell child-test growth guard
