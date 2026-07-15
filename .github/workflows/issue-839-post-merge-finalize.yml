@@ -2,7 +2,7 @@ name: issue-839-post-merge-finalize
 
 on:
   pull_request:
-    types: [synchronize]
+    types: [synchronize, labeled]
     branches: [main]
 
 concurrency:
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   finalize:
-    if: github.event.pull_request.number == 845
+    if: github.event.pull_request.number == 845 && (github.event.action == 'synchronize' || github.event.label.name == 'in_progress')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
