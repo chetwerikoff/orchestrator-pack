@@ -92,6 +92,9 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
   const heavyPerTestIsolate = Array.isArray(raw.heavyPerTestIsolate)
     ? raw.heavyPerTestIsolate.map((entry) => String(entry).replace(/\\/g, '/'))
     : [];
+  const heavyFileBatchIsolate = Array.isArray(raw.heavyFileBatchIsolate)
+    ? raw.heavyFileBatchIsolate.map((entry) => String(entry).replace(/\\/g, '/'))
+    : [];
   const parkedWallclockE2e =
     raw.parkedWallclockE2e && typeof raw.parkedWallclockE2e === 'object' && !Array.isArray(raw.parkedWallclockE2e)
       ? {
@@ -108,6 +111,7 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
     heavyTopology: topologyPolicy,
     heavyForkPoolMinRuntimeMs,
     heavyPerTestIsolate,
+    heavyFileBatchIsolate,
     classification,
     parkedWallclockE2e,
   };
@@ -284,7 +288,11 @@ export function resolveHeavyFileRunPlan(file, config, runtimeHistory, repoRoot) 
       tests: enumerateVitestFileTestTitles(absolute),
     };
   }
-  return { mode: 'file', pool };
+  return {
+    mode: 'file',
+    pool,
+    batchable: !config.heavyFileBatchIsolate.includes(file),
+  };
 }
 
 /**

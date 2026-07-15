@@ -45,7 +45,7 @@ export function buildHeavyInvocationUnits(filePlans) {
       pool,
       testPattern: null,
       label: file,
-      batchable: true,
+      batchable: plan.batchable !== false,
     });
   }
   return units;
@@ -76,6 +76,12 @@ export function groupHeavyInvocationUnits(units, options = {}) {
       flushOpenFileBatch();
       const size = Math.min(isolateTestBatchSize, DEFAULT_ISOLATE_TEST_BATCH_SIZE);
       batches.push(materializeBatch({ pool: unit.pool, members: [unit], maxSize: size }));
+      continue;
+    }
+
+    if (unit.batchable === false) {
+      flushOpenFileBatch();
+      batches.push(materializeBatch({ pool: unit.pool, members: [unit], maxSize: 1 }));
       continue;
     }
 

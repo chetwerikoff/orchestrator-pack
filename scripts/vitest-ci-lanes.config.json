@@ -6,6 +6,12 @@
   "heavyPerTestIsolate": [
     "scripts/autonomous-orchestrator-boundary.test.ts"
   ],
+  "heavyFileBatchIsolate": [
+    "scripts/gh-repo-resolve.test.ts",
+    "scripts/github-fleet-repo-tick-snapshot.test.ts",
+    "scripts/orchestrator-fleet-hygiene-sentinel.test.ts",
+    "scripts/reverify-e2e-fixture-session.test.ts"
+  ],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
     "plugins/_shared/tests/git_fixture.test.ts": "light",

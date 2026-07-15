@@ -12,7 +12,7 @@ import {
 } from './vitest-heavy-topology.mjs';
 import {
   measurePreTopologyFiles,
-  resolvePreTopologyMeasurementTargets,
+  resolvePreTopologyMeasurementPlan,
   shouldMeasurePreTopology,
 } from './vitest-pre-topology-measurement.mjs';
 
@@ -53,11 +53,14 @@ async function materializeOverlay(repoRoot, originalText) {
   if (!shouldMeasurePreTopology(repoRoot)) {
     return null;
   }
-  const targets = resolvePreTopologyMeasurementTargets(initial);
+  const plan = resolvePreTopologyMeasurementPlan(initial);
+  const { targets } = plan;
   if (targets.length === 0) {
-    return null;
+    if (Object.keys(plan.measurements).length === 0) return null;
   }
-  const measurements = await measurePreTopologyFiles(repoRoot, targets);
+  const measurements = targets.length > 0
+    ? { ...plan.measurements, ...await measurePreTopologyFiles(repoRoot, targets) }
+    : plan.measurements;
   const artifact = JSON.parse(originalText);
   artifact.files = artifact.files && typeof artifact.files === 'object' ? artifact.files : {};
   artifact.provenance = artifact.provenance && typeof artifact.provenance === 'object'
@@ -66,7 +69,7 @@ async function materializeOverlay(repoRoot, originalText) {
   artifact.contentSha = artifact.contentSha && typeof artifact.contentSha === 'object'
     ? artifact.contentSha
     : {};
-  for (const file of targets) {
+  for (const file of plan.allTargets) {
     const contentSha = computeFileContentSha(repoRoot, file);
     if (!contentSha) {
       throw new Error(`cannot bind same-run measurement to missing file: ${file}`);
@@ -77,7 +80,7 @@ async function materializeOverlay(repoRoot, originalText) {
   }
   return {
     text: `${JSON.stringify(artifact, null, 2)}\n`,
-    targets,
+    targets: plan.allTargets,
   };
 }
 

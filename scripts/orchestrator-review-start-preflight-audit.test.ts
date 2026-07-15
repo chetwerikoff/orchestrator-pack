@@ -95,10 +95,20 @@ Get-Content -LiteralPath $result.path -Raw
     it('fails closed under test context when AO_BASE_DIR is not isolated', () => {
         const script = `
 . '${auditLib}'
+$env:VITEST = '1'
+$env:VITEST_WORKER_ID = 'guard-check'
+$env:NODE_ENV = 'test'
+if (Test-Path Env:AO_BASE_DIR) { Remove-Item Env:AO_BASE_DIR }
 Get-OrchestratorReviewStartAuditRoot -ProjectId 'orchestrator-pack'
 `;
-        const env = { ...process.env, VITEST_WORKER_ID: 'guard-check' } as Record<string, string>;
-        delete env.AO_BASE_DIR;
+        const env = {
+            PATH: process.env.PATH ?? '',
+            HOME: process.env.HOME ?? '',
+            TMPDIR: process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '',
+            TEMP: process.env.TEMP ?? process.env.TMPDIR ?? process.env.TMP ?? '',
+            TMP: process.env.TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? '',
+            OPK_REAL_PWSH: process.env.OPK_REAL_PWSH ?? 'pwsh',
+        } as Record<string, string>;
         const result = spawnSync('pwsh', ['-NoProfile', '-Command', script], {
             cwd: repoRoot,
             encoding: 'utf8',

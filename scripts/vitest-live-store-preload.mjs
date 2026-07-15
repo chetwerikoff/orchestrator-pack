@@ -1,0 +1,618 @@
+import fs from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  assertHarnessWritePathSafe,
+  redirectHarnessWritePath,
+  liveStoreInventory,
+} from './lib/vitest-live-store-harness.mjs';
+
+const preloadInstalledKey = Symbol.for('opk.vitest.liveStorePreloadInstalled');
+
+if (process.env.OPK_VITEST_HARNESS === '1' && !globalThis[preloadInstalledKey]) {
+  globalThis[preloadInstalledKey] = true;
+  const asPathText = (candidate) => {
+    if (candidate instanceof URL) return fileURLToPath(candidate);
+    if (Buffer.isBuffer(candidate)) return candidate.toString();
+    return typeof candidate === 'string' ? candidate : '';
+  };
+
+  const canonicalizeFast = (candidate) => {
+    const text = asPathText(candidate).trim();
+    if (!text) return '';
+    const absolute = isAbsolute(text) ? resolve(text) : resolve(process.cwd(), text);
+    let cursor = absolute;
+    const suffix = [];
+    while (true) {
+      try {
+        let canonical = fs.realpathSync.native(cursor);
+        for (const part of suffix) canonical = join(canonical, part);
+        return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+      } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') return '';
+        const parent = dirname(cursor);
+        if (parent === cursor) {
+          return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+        }
+        suffix.unshift(cursor.slice(parent.length).replace(/^[/\\]+/, ''));
+        cursor = parent;
+      }
+    }
+  };
+
+  const pathIsSameOrWithin = (candidate, root) => {
+    const rel = relative(root, candidate);
+    return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+  };
+
+  const harnessRoot = canonicalizeFast(process.env.OPK_VITEST_HARNESS_ROOT);
+  const remapPath = (candidate, operation) => {
+    // Most test writes are already redirected below the per-invocation root.
+    // Resolve the nearest existing ancestor once so a symlink inside that root
+    // cannot hide a destination outside it, then skip the full 30-store catalog.
+    const canonical = canonicalizeFast(candidate);
+    if (canonical && harnessRoot && pathIsSameOrWithin(canonical, harnessRoot)) return candidate;
+    const redirected = redirectHarnessWritePath(candidate);
+    if (redirected) return redirected;
+    assertHarnessWritePathSafe(candidate, operation);
+    return candidate;
+  };
+
+  const wrapSyncPath = (name, index = 0, shouldGuard = () => true) => {
+    const original = fs[name];
+    if (typeof original !== 'function') return;
+    fs[name] = function opkVitestGuardedFsSyncCall(...args) {
+      if (shouldGuard(args)) {
+        args[index] = remapPath(args[index], `fs.${name}`);
+      }
+      return original.apply(this, args);
+    };
+  };
+
+  const wrapCallbackPath = (name, index = 0, shouldGuard = () => true) => {
+    const original = fs[name];
+    if (typeof original !== 'function') return;
+    fs[name] = function opkVitestGuardedFsCallbackCall(...args) {
+      if (shouldGuard(args)) {
+        args[index] = remapPath(args[index], `fs.${name}`);
+      }
+      return original.apply(this, args);
+    };
+  };
+
+  const writeOpenFlags = (flags) => {
+    if (typeof flags === 'number') {
+      const access = flags & 3;
+      return access === 1
+        || access === 2
+        || Boolean(flags & fs.constants.O_CREATE)
+        || Boolean(flags & fs.constants.O_TRUNC)
+        || Boolean(flags & fs.constants.O_APPEND);
+    }
+    return /[wax+]/i.test(String(flags ?? 'r'));
+  };
+
+  for (const name of [
+    'writeFileSync',
+    'appendFileSync',
+    'truncateSync',
+    'unlinkSync',
+    'rmSync',
+    'rmdirSync',
+    'mkdirSync',
+    'chmodSync',
+    'chownSync',
+    'utimesSync',
+  ]) {
+    wrapSyncPath(name);
+  }
+  wrapSyncPath('copyFileSync', 1);
+  wrapSyncPath('linkSync', 1);
+  wrapSyncPath('symlinkSync', 1);
+  wrapSyncPath('openSync', 0, (args) => writeOpenFlags(args[1]));
+  wrapSyncPath('createWriteStream');
+
+  const nativeRenameSync = fs.renameSync;
+  fs.renameSync = function opkVitestGuardedRenameSync(source, destination, ...rest) {
+    const nextSource = remapPath(source, 'fs.renameSync.source');
+    const nextDestination = remapPath(destination, 'fs.renameSync.destination');
+    return nativeRenameSync.call(this, nextSource, nextDestination, ...rest);
+  };
+
+  for (const name of [
+    'writeFile',
+    'appendFile',
+    'truncate',
+    'unlink',
+    'rm',
+    'rmdir',
+    'mkdir',
+    'chmod',
+    'chown',
+    'utimes',
+  ]) {
+    wrapCallbackPath(name);
+  }
+  wrapCallbackPath('copyFile', 1);
+  wrapCallbackPath('link', 1);
+  wrapCallbackPath('symlink', 1);
+  wrapCallbackPath('open', 0, (args) => writeOpenFlags(args[1]));
+
+  if (typeof fs.rename === 'function') {
+    const nativeRename = fs.rename;
+    fs.rename = function opkVitestGuardedRename(source, destination, ...rest) {
+      const nextSource = remapPath(source, 'fs.rename.source');
+      const nextDestination = remapPath(destination, 'fs.rename.destination');
+      return nativeRename.call(this, nextSource, nextDestination, ...rest);
+    };
+  }
+
+  const promises = fs.promises;
+  const wrapPromisePath = (name, index = 0, shouldGuard = () => true) => {
+    const original = promises?.[name];
+    if (typeof original !== 'function') return;
+    promises[name] = async function opkVitestGuardedFsPromise(...args) {
+      if (shouldGuard(args)) {
+        args[index] = remapPath(args[index], `fs.promises.${name}`);
+      }
+      return original.apply(this, args);
+    };
+  };
+
+  for (const name of [
+    'writeFile',
+    'appendFile',
+    'truncate',
+    'unlink',
+    'rm',
+    'rmdir',
+    'mkdir',
+    'chmod',
+    'chown',
+    'utimes',
+  ]) {
+    wrapPromisePath(name);
+  }
+  wrapPromisePath('copyFile', 1);
+  wrapPromisePath('link', 1);
+  wrapPromisePath('symlink', 1);
+
+  if (typeof promises?.rename === 'function') {
+    const nativePromiseRename = promises.rename.bind(promises);
+    promises.rename = async (source, destination) => {
+      return nativePromiseRename(
+        remapPath(source, 'fs.promises.rename.source'),
+        remapPath(destination, 'fs.promises.rename.destination'),
+      );
+    };
+  }
+  if (typeof promises?.open === 'function') {
+    const nativePromiseOpen = promises.open.bind(promises);
+    promises.open = async (path, flags, ...rest) => {
+      if (writeOpenFlags(flags)) {
+        path = remapPath(path, 'fs.promises.open');
+      }
+      return nativePromiseOpen(path, flags, ...rest);
+    };
+  }
+
+  const resolveProductionHomeForChild = (env) => {
+    const explicitHome = String(env.HOME ?? '').trim();
+    if (String(env.OPK_VITEST_PRODUCTION_HOME ?? '').trim()) {
+      return env.OPK_VITEST_PRODUCTION_HOME;
+    }
+    return explicitHome;
+  };
+
+  const resolveProductionTmpForChild = (env) => {
+    if (String(env.OPK_VITEST_PRODUCTION_TMP ?? '').trim()) {
+      return env.OPK_VITEST_PRODUCTION_TMP;
+    }
+    return env.TMPDIR || env.TEMP || env.TMP || '';
+  };
+
+  const getPowerShellSwitchValue = (argv, switchName) => {
+    const values = Array.isArray(argv) ? argv.map((value) => String(value)) : [];
+    for (let index = 0; index < values.length; index += 1) {
+      const token = values[index];
+      if (token === switchName) {
+        const next = values[index + 1];
+        if (next && !next.startsWith('-')) return next;
+        return 'true';
+      }
+      if (token.startsWith(`${switchName}=`) && token.length > switchName.length + 1) {
+        return token.slice(switchName.length + 1);
+      }
+    }
+    return '';
+  };
+
+  const explicitChildPassthroughKeys = new Set([
+    'HOME',
+    'USERPROFILE',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'XDG_STATE_HOME',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+  ]);
+
+  const harnessSnapshotEnv = { ...process.env };
+  const derivedHarnessKeys = new Set([
+    'AO_BASE_DIR',
+    'AO_CI_GREEN_WAKE_RECONCILE_STATE',
+    'AO_DEAD_WORKER_RECONCILE_STATE',
+    'AO_ORCHESTRATOR_ESCALATION_STATE',
+    'AO_OPERATOR_ESCALATION_INBOX',
+    'AO_ESCALATION_HEALTH_SPOOL',
+    'AO_PR_SESSION_BINDING_CACHE',
+    'AO_REPORT_STATE_SEED_STATE',
+    'AO_REVIEW_CLAIM_DIR',
+    'AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE',
+    'AO_REVIEW_TRIGGER_RECONCILE_STATE',
+    'AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE',
+    'AO_SIDE_PROCESS_STATE_DIR',
+    'AO_WAKE_DEDUP_STATE',
+    'AO_WAKE_LISTENER_SIDE_EFFECT_LOCK',
+    'AO_WORKER_MESSAGE_ADOPTION_STATE',
+    'AO_WORKER_MESSAGE_DISPATCH_JOURNAL',
+    'AO_WORKER_MESSAGE_SUBMIT_STATE',
+    'AO_WORKER_NUDGE_CLAIM_DIR',
+    'AO_WORKER_REPORT_STORE',
+    'AO_WORKER_STATUS_STORE',
+    'AO_MECHANICAL_TRANSPORT_TEMP',
+  ]);
+  const harnessOwnedAoBase = String(
+    harnessSnapshotEnv.OPK_VITEST_HARNESS_AO_BASE_DIR
+    || harnessSnapshotEnv.AO_BASE_DIR
+    || '',
+  ).trim();
+  const stableHarnessKeys = new Set([
+    ...Object.keys(harnessSnapshotEnv).filter((name) =>
+      (name.startsWith('AO_') && !derivedHarnessKeys.has(name))
+      || name.startsWith('OPK_VITEST_')
+      || explicitChildPassthroughKeys.has(name),
+    ),
+    'PATH',
+    'OPK_REAL_PWSH',
+    'OPK_REAL_AO',
+    'OPK_REAL_AO_BINARY',
+    'GIT_REAL_BINARY',
+    'GIT_SYSTEM_BINARY',
+    'AO_MECHANICAL_TRANSPORT_TEMP',
+  ]);
+  const explicitBypassKeys = [
+    'OPK_VITEST_HARNESS_ROOT',
+    'OPK_VITEST_HARNESS_INVENTORY',
+    'AO_ORCHESTRATOR_ESCALATION_STATE',
+    'AO_OPERATOR_ESCALATION_INBOX',
+    'AO_ESCALATION_HEALTH_SPOOL',
+    'AO_WAKE_SUPERVISOR_STATE_DIR',
+    'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+    'AO_SIDE_PROCESS_STATE_DIR',
+    'AO_BASE_DIR',
+    'AO_MECHANICAL_TRANSPORT_TEMP',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'XDG_STATE_HOME',
+  ];
+  const nestedHarnessResetKeys = new Set([
+    'OPK_VITEST_HARNESS',
+    'OPK_VITEST_HARNESS_ROOT',
+    'OPK_VITEST_HARNESS_INVENTORY',
+    'OPK_TESTMODE_LEASE_ROOT',
+    ...explicitBypassKeys,
+    ...((liveStoreInventory.stores ?? []).flatMap((store) => store.envOverrides ?? [])),
+  ]);
+  const selfPreloadImportFlag = `--import=${pathToFileURL(fileURLToPath(import.meta.url)).href}`;
+  const stripSelfPreloadImport = (nodeOptions) => String(nodeOptions ?? '')
+    .split(/\s+/u)
+    .filter((token) => token && token !== selfPreloadImportFlag)
+    .join(' ');
+  const isNestedHarnessLaunch = (command, argv = []) => {
+    const commandBase = basename(String(command ?? '')).toLowerCase();
+    if (!commandBase.startsWith('node')) {
+      return false;
+    }
+    return argv.some((value) => {
+      const token = String(value ?? '');
+      return token === 'scripts/run-vitest-with-harness.mjs'
+        || token.endsWith('/scripts/run-vitest-with-harness.mjs')
+        || token.endsWith('\\scripts\\run-vitest-with-harness.mjs')
+        || token.endsWith('/run-vitest-with-harness.mjs')
+        || token.endsWith('\\run-vitest-with-harness.mjs');
+    });
+  };
+  const inheritedHarnessWakeRoot = () => String(
+    harnessSnapshotEnv.AO_WAKE_SUPERVISOR_STATE_DIR
+    || harnessSnapshotEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
+    || '',
+  ).trim();
+  const inheritedHarnessRoot = () => String(harnessSnapshotEnv.OPK_VITEST_HARNESS_ROOT ?? '').trim();
+  const inheritedProductionWakeRoot = () => String(
+    harnessSnapshotEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT
+    || '',
+  ).trim();
+  let childAoBaseSequence = 0;
+  const createChildAoBase = () => {
+    const root = inheritedHarnessRoot();
+    const prefixRoot = root || String(harnessSnapshotEnv.TMPDIR || harnessSnapshotEnv.TEMP || harnessSnapshotEnv.TMP || '').trim();
+    if (prefixRoot) {
+      try {
+        fs.mkdirSync(prefixRoot, { recursive: true, mode: 0o700 });
+        return fs.mkdtempSync(join(prefixRoot, 'ao-child-base-'));
+      } catch {
+        // Fall through to a deterministic in-harness path when mkdtemp is unavailable.
+      }
+    }
+    childAoBaseSequence += 1;
+    return join(process.cwd(), '.opk-vitest-ao-child-base', `${process.pid}-${childAoBaseSequence}`);
+  };
+
+  const isHarnessOwnedValue = (name, value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return false;
+    if (name === 'AO_BASE_DIR') return Boolean(harnessOwnedAoBase) && text === harnessOwnedAoBase;
+    if (derivedHarnessKeys.has(name)) return text === String(harnessSnapshotEnv[name] ?? '').trim();
+    return false;
+  };
+
+  const isHarnessAoBaseScopedValue = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text || !harnessOwnedAoBase) return false;
+    const candidate = canonicalizeFast(text);
+    const root = canonicalizeFast(harnessOwnedAoBase);
+    return Boolean(candidate && root && pathIsSameOrWithin(candidate, root));
+  };
+
+  const stripHarnessOwnedDerivedEnv = (env) => {
+    const stripped = { ...(env ?? {}) };
+    for (const name of derivedHarnessKeys) {
+      if (Object.prototype.hasOwnProperty.call(stripped, name) && isHarnessOwnedValue(name, stripped[name])) {
+        delete stripped[name];
+      }
+    }
+    return stripped;
+  };
+
+  const hasExplicitHarnessBypass = (env) => {
+    if (!env || env.OPK_VITEST_HARNESS !== '') return false;
+    if (env.OPK_VITEST_SKIP_CHILD_ENV_MERGE === '1') return true;
+    return explicitBypassKeys.some((name) =>
+      Object.prototype.hasOwnProperty.call(env, name) && String(env[name] ?? '') === '',
+    );
+  };
+
+  const restoreStableHarnessEnv = (env) => {
+    if (!env || env.OPK_VITEST_HARNESS !== '' || hasExplicitHarnessBypass(env)) {
+      return env;
+    }
+    const restored = { ...env };
+    for (const name of stableHarnessKeys) {
+      const snapshotValue = harnessSnapshotEnv[name];
+      if (snapshotValue == null || snapshotValue === '') {
+        continue;
+      }
+      const currentValue = restored[name];
+      if (name === 'OPK_VITEST_HARNESS') {
+        restored[name] = snapshotValue;
+        continue;
+      }
+      if (currentValue == null || currentValue === '') {
+        restored[name] = snapshotValue;
+      }
+    }
+    return restored;
+  };
+
+  const mergeHarnessChildEnv = (targetEnv) => {
+    const mergedEnv = {
+      ...restoreStableHarnessEnv(stripHarnessOwnedDerivedEnv(targetEnv ?? {})),
+    };
+    for (const [name, value] of Object.entries(harnessSnapshotEnv)) {
+      if (!name || value == null) {
+        continue;
+      }
+      if (stableHarnessKeys.has(name)) {
+        if (!Object.prototype.hasOwnProperty.call(mergedEnv, name)) {
+          mergedEnv[name] = value;
+        }
+      }
+    }
+    return mergedEnv;
+  };
+
+  const normalizeChildEnv = (command, explicitEnv, argv = []) => {
+    if (explicitEnv?.OPK_VITEST_SKIP_CHILD_ENV_MERGE === '1') {
+      const passthroughEnv = {
+        ...(explicitEnv ?? {}),
+      };
+      delete passthroughEnv.OPK_VITEST_SKIP_CHILD_ENV_MERGE;
+      return passthroughEnv;
+    }
+    const mergedEnv = explicitEnv
+      ? mergeHarnessChildEnv(explicitEnv)
+      : mergeHarnessChildEnv(process.env);
+    const hasExplicitTestAoBase = Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'AO_BASE_DIR')
+      && !isHarnessOwnedValue('AO_BASE_DIR', explicitEnv.AO_BASE_DIR);
+    if (hasExplicitTestAoBase) {
+      for (const name of derivedHarnessKeys) {
+        if (
+          Object.prototype.hasOwnProperty.call(mergedEnv, name)
+          && name !== 'AO_BASE_DIR'
+          && isHarnessAoBaseScopedValue(mergedEnv[name])
+        ) {
+          delete mergedEnv[name];
+        }
+      }
+    }
+    if (isNestedHarnessLaunch(command, argv)) {
+      const nestedEnv = { ...mergedEnv };
+      for (const name of nestedHarnessResetKeys) {
+        delete nestedEnv[name];
+      }
+      const harnessRoot = inheritedHarnessRoot();
+      if (harnessRoot) {
+        nestedEnv.OPK_VITEST_REENTRY_HARNESS_ROOT = harnessRoot;
+      }
+      const wakeRoot = inheritedHarnessWakeRoot();
+      if (wakeRoot) {
+        nestedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
+        nestedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = wakeRoot;
+        nestedEnv.AO_SIDE_PROCESS_STATE_DIR = wakeRoot;
+      }
+      const productionWakeRoot = inheritedProductionWakeRoot();
+      if (productionWakeRoot) {
+        nestedEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT = productionWakeRoot;
+      }
+      const nodeOptions = stripSelfPreloadImport(nestedEnv.NODE_OPTIONS);
+      if (nodeOptions) nestedEnv.NODE_OPTIONS = nodeOptions;
+      else delete nestedEnv.NODE_OPTIONS;
+      return nestedEnv;
+    }
+    if (
+      explicitEnv
+      && Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_SESSION_ID')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_WORKER_SESSION_ID')
+    ) {
+      delete mergedEnv.AO_WORKER_SESSION_ID;
+    }
+    if (mergedEnv.OPK_VITEST_HARNESS === '1' && explicitEnv) {
+      for (const key of [
+        'AO_SIDE_PROCESS_STATE_DIR',
+        'AO_WAKE_SUPERVISOR_STATE_DIR',
+        'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR',
+      ]) {
+        if (!Object.prototype.hasOwnProperty.call(explicitEnv, key)) {
+          continue;
+        }
+        if (String(explicitEnv[key] ?? '').trim() !== '') {
+          continue;
+        }
+        const inheritedValue = String(harnessSnapshotEnv[key] ?? '').trim();
+        if (inheritedValue) {
+          mergedEnv[key] = inheritedValue;
+        }
+      }
+    }
+    if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'AO_BASE_DIR') && !hasExplicitTestAoBase) {
+      mergedEnv.AO_BASE_DIR = createChildAoBase();
+    }
+    if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'HOME')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_HOME')) {
+      mergedEnv.OPK_VITEST_PRODUCTION_HOME = resolveProductionHomeForChild(mergedEnv);
+    }
+    if ((explicitEnv && (
+      Object.prototype.hasOwnProperty.call(explicitEnv, 'TMPDIR')
+      || Object.prototype.hasOwnProperty.call(explicitEnv, 'TEMP')
+      || Object.prototype.hasOwnProperty.call(explicitEnv, 'TMP')
+    )) && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_TMP')) {
+      const productionTmp = resolveProductionTmpForChild(mergedEnv);
+      if (String(productionTmp).trim()) {
+        mergedEnv.OPK_VITEST_PRODUCTION_TMP = productionTmp;
+      }
+    }
+    if (explicitEnv && Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_BASE_DIR')
+      && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_AO_BASE')) {
+      const explicitAoBase = String(mergedEnv.AO_BASE_DIR ?? '').trim();
+      if (explicitAoBase) {
+        mergedEnv.OPK_VITEST_PRODUCTION_AO_BASE = explicitAoBase;
+      }
+    }
+    const explicitWake = String(
+      mergedEnv.AO_WAKE_SUPERVISOR_STATE_DIR
+      || mergedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
+      || '',
+    ).trim();
+    if (explicitEnv && (
+      Object.prototype.hasOwnProperty.call(explicitEnv, 'AO_WAKE_SUPERVISOR_STATE_DIR')
+      || Object.prototype.hasOwnProperty.call(explicitEnv, 'ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR')
+    ) && !Object.prototype.hasOwnProperty.call(explicitEnv, 'OPK_VITEST_PRODUCTION_WAKE_ROOT')
+      && explicitWake) {
+      mergedEnv.OPK_VITEST_PRODUCTION_WAKE_ROOT = explicitWake;
+    }
+    const commandBase = basename(String(command ?? '')).toLowerCase();
+    const explicitStateDir = getPowerShellSwitchValue(argv, '-StateDir');
+    if ((commandBase === 'pwsh' || commandBase === 'pwsh.exe' || commandBase === 'powershell' || commandBase === 'powershell.exe')
+      && explicitStateDir) {
+      mergedEnv.AO_SIDE_PROCESS_STATE_DIR = explicitStateDir;
+      mergedEnv.AO_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
+      mergedEnv.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = explicitStateDir;
+    }
+    if (commandBase === 'ao' || commandBase === 'ao.cmd' || commandBase === 'ao.exe' || commandBase === 'ao.bat') {
+      const productionHome = String(harnessSnapshotEnv.OPK_VITEST_PRODUCTION_HOME ?? '').trim();
+      if (productionHome && !Object.prototype.hasOwnProperty.call(explicitEnv ?? {}, 'HOME')) {
+        mergedEnv.HOME = productionHome;
+      }
+    }
+    return mergedEnv;
+  };
+
+  const wrapChildOptions = (command, args, optionsIndex) => {
+    const nextArgs = [...args];
+    const options = nextArgs[optionsIndex];
+    const argv = Array.isArray(nextArgs[0]) ? nextArgs[0] : [];
+    if (options && typeof options === 'object' && !Array.isArray(options)) {
+      nextArgs[optionsIndex] = {
+        ...options,
+        env: normalizeChildEnv(command, options.env, argv),
+      };
+      return nextArgs;
+    }
+    const normalizedOptions = {
+      env: normalizeChildEnv(command, undefined, argv),
+    };
+    if (optionsIndex <= nextArgs.length) {
+      nextArgs.splice(optionsIndex, 0, normalizedOptions);
+    } else {
+      nextArgs[optionsIndex] = normalizedOptions;
+    }
+    return nextArgs;
+  };
+
+  const nativeSpawn = childProcess.spawn;
+  childProcess.spawn = function opkVitestGuardedSpawn(command, ...args) {
+    return nativeSpawn.call(this, command, ...wrapChildOptions(command, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  const nativeSpawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = function opkVitestGuardedSpawnSync(command, ...args) {
+    return nativeSpawnSync.call(this, command, ...wrapChildOptions(command, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  const nativeExecFile = childProcess.execFile;
+  childProcess.execFile = function opkVitestGuardedExecFile(file, ...args) {
+    return nativeExecFile.call(this, file, ...wrapChildOptions(file, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  const nativeExecFileSync = childProcess.execFileSync;
+  childProcess.execFileSync = function opkVitestGuardedExecFileSync(file, ...args) {
+    return nativeExecFileSync.call(this, file, ...wrapChildOptions(file, args, Array.isArray(args[0]) ? 1 : 0));
+  };
+
+  if (typeof childProcess.exec === 'function') {
+    const nativeExec = childProcess.exec;
+    childProcess.exec = function opkVitestGuardedExec(command, ...args) {
+      return nativeExec.call(this, command, ...wrapChildOptions(command, args, 0));
+    };
+  }
+
+  if (typeof childProcess.execSync === 'function') {
+    const nativeExecSync = childProcess.execSync;
+    childProcess.execSync = function opkVitestGuardedExecSync(command, ...args) {
+      return nativeExecSync.call(this, command, ...wrapChildOptions(command, args, 0));
+    };
+  }
+
+  if (typeof childProcess.fork === 'function') {
+    const nativeFork = childProcess.fork;
+    childProcess.fork = function opkVitestGuardedFork(modulePath, ...args) {
+      return nativeFork.call(this, modulePath, ...wrapChildOptions(modulePath, args, Array.isArray(args[0]) ? 1 : 0));
+    };
+  }
+
+  syncBuiltinESMExports();
+}

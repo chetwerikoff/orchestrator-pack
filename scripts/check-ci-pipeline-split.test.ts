@@ -24,6 +24,10 @@ import {
   validateClassification,
 } from './lib/vitest-ci-lanes.mjs';
 import {
+  buildHeavyInvocationUnits,
+  groupHeavyInvocationUnits,
+} from './lib/vitest-heavy-batching.mjs';
+import {
   artifactRequiresFreshnessProvenance,
   buildHeavyTopology,
   clampHeavyShardCount,
@@ -35,6 +39,12 @@ import {
   resolveGuardWeightSeconds,
   validateTopologyPolicy,
 } from './lib/vitest-heavy-topology.mjs';
+import {
+  PRE_TOPOLOGY_MAX_FILES,
+  PRE_TOPOLOGY_MEASUREMENT_ESTIMATES,
+  resolvePreTopologyMeasurementPlan,
+  resolvePreTopologyMeasurementTargets,
+} from './lib/vitest-pre-topology-measurement.mjs';
 import {
   buildChangedPathManifest,
   normalizePrScopeMode,
@@ -216,6 +226,34 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     }
     expect(plan.pool).toBe('forks');
     expect(plan.tests?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('keeps configured heavy files out of multi-file batches', () => {
+    const config = loadLanesConfig(repoRoot);
+    const runtimeHistory = loadRuntimeHistory(repoRoot);
+    const plan = resolveHeavyFileRunPlan(
+      'scripts/gh-repo-resolve.test.ts',
+      config,
+      runtimeHistory,
+      repoRoot,
+    );
+    expect(plan).toMatchObject({
+      mode: 'file',
+      batchable: false,
+    });
+
+    const units = buildHeavyInvocationUnits([
+      { file: 'scripts/first.test.ts', mode: 'file', pool: plan.pool },
+      { file: 'scripts/gh-repo-resolve.test.ts', mode: 'file', pool: plan.pool, batchable: false },
+      { file: 'scripts/last.test.ts', mode: 'file', pool: plan.pool },
+    ]);
+    const batches = groupHeavyInvocationUnits(units, { nonIsolateFileBatchSize: 4 });
+
+    expect(batches.map((batch) => batch.files)).toEqual([
+      ['scripts/first.test.ts'],
+      ['scripts/gh-repo-resolve.test.ts'],
+      ['scripts/last.test.ts'],
+    ]);
   });
 
   it('detects worker-RPC flake signatures in log text', () => {
@@ -485,6 +523,52 @@ describe('heavy topology weight-input fail-closed (#695)', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('keeps pre-topology measurement bounded while admitting main plus PR unresolved weights', () => {
+    const unresolvedGuardWeights = [
+      { file: 'scripts/changed-a.test.ts', reason: 'stale-unassociated-weight' },
+      { file: 'scripts/changed-b.test.ts', reason: 'stale-unassociated-weight' },
+      ...Array.from({ length: 11 }, (_, index) => ({
+        file: `scripts/unrelated-${index}.test.ts`,
+        reason: 'missing-per-file-weight',
+      })),
+    ];
+    const targets = resolvePreTopologyMeasurementTargets(
+      { topology: { unresolvedGuardWeights } },
+    );
+
+    expect(unresolvedGuardWeights).toHaveLength(13);
+    expect(targets).toHaveLength(13);
+    expect(PRE_TOPOLOGY_MAX_FILES).toBeGreaterThanOrEqual(13);
+  });
+
+  it('estimates generated-manifest light tests instead of timing them inside pre-topology measurement', () => {
+    const result = {
+      lanesConfig: {
+        classification: {
+          'scripts/reachability-purge.test.ts': 'light',
+          'scripts/review-start-envelope-external-io.test.ts': 'heavy',
+        },
+      },
+      topology: {
+        unresolvedGuardWeights: [
+          { file: 'scripts/reachability-purge.test.ts', reason: 'missing-per-file-weight' },
+          { file: 'scripts/review-start-envelope-external-io.test.ts', reason: 'stale-unassociated-weight' },
+        ],
+      },
+    };
+
+    const plan = resolvePreTopologyMeasurementPlan(result);
+
+    expect(plan.allTargets).toEqual([
+      'scripts/reachability-purge.test.ts',
+      'scripts/review-start-envelope-external-io.test.ts',
+    ]);
+    expect(plan.targets).toEqual(['scripts/review-start-envelope-external-io.test.ts']);
+    expect(plan.measurements).toEqual({
+      'scripts/reachability-purge.test.ts': PRE_TOPOLOGY_MEASUREMENT_ESTIMATES['scripts/reachability-purge.test.ts'],
+    });
   });
 
   it('flags unknown weights for unchanged discovered files when history omits them', () => {

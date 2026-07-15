@@ -12,6 +12,7 @@ export type HeavyFilePlan = {
   file: string;
   mode: 'file' | 'tests';
   pool: string;
+  batchable?: boolean;
   tests?: string[];
 };
 

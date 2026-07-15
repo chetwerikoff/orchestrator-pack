@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   assertSupportedHost,
@@ -31,9 +30,10 @@ import {
   validateOverlapOverride,
   validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
+import { runProcessSync } from '#opk-kernel/subprocess';
+import { repoRoot, vitestHarnessBypassEnv } from './_test-vitest-harness-env.js';
 import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-registry');
 const checkScript = path.join(repoRoot, 'scripts/check-orchestrator-message-registry.ps1');
 
@@ -93,6 +93,22 @@ function subprocessEnvWithoutGithubActions() {
   delete env.PR_BASE_SHA;
   delete env.ORCHESTRATOR_MESSAGE_REGISTRY_BASE_REF;
   return env;
+}
+
+function realTreeCheckerEnv(overrides: NodeJS.ProcessEnv = {}) {
+  const productionHome = process.env.OPK_VITEST_PRODUCTION_HOME ?? process.env.HOME ?? '';
+  const productionTmp = process.env.OPK_VITEST_PRODUCTION_TMP ?? process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? '';
+  const productionXdgStateHome = process.env.OPK_VITEST_PRODUCTION_XDG_STATE_HOME
+    ?? (productionHome ? path.join(productionHome, '.local', 'state') : '');
+  return vitestHarnessBypassEnv({
+    ...process.env,
+    ...overrides,
+    HOME: productionHome,
+    XDG_STATE_HOME: productionXdgStateHome,
+    TMPDIR: productionTmp,
+    TEMP: productionTmp,
+    TMP: productionTmp,
+  });
 }
 
 describe('orchestrator message registry (Issue #298)', () => {
@@ -473,7 +489,13 @@ describe('orchestrator message registry (Issue #298)', () => {
   it(
     'runs check-orchestrator-message-registry.ps1 clean on the real tree',
     () => {
-      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], { stdio: 'pipe' });
+      const result = runProcessSync({
+        command: 'pwsh',
+        args: ['-NoProfile', '-File', checkScript, repoRoot],
+        cwd: repoRoot,
+        env: realTreeCheckerEnv(),
+      });
+      expect(result.ok).toBe(true);
     },
     360_000,
   );
@@ -506,11 +528,10 @@ describe('orchestrator message registry (Issue #298)', () => {
       delete process.env.GITHUB_EVENT_PATH;
     }
     delete process.env.ORCHESTRATOR_MESSAGE_LINKED_ISSUES;
-    const cleanEnv = {
-      ...process.env,
+    const cleanEnv = realTreeCheckerEnv({
       ORCHESTRATOR_MESSAGE_LINKED_ISSUES: undefined,
       ...(scrubbedEventPath ? { GITHUB_EVENT_PATH: scrubbedEventPath } : { GITHUB_EVENT_PATH: undefined }),
-    };
+    });
     try {
       if (scrubbedEventPath) {
         expect(resolveLinkedIssueNumbers(repoRoot)).toEqual([]);
@@ -536,10 +557,13 @@ describe('orchestrator message registry (Issue #298)', () => {
         );
       }
       expect(checkProtectedRuntimeForRepo(repoRoot, 'origin/main').ok).toBe(true);
-      execFileSync('pwsh', ['-NoProfile', '-File', checkScript, repoRoot], {
-        stdio: 'pipe',
+      const result = runProcessSync({
+        command: 'pwsh',
+        args: ['-NoProfile', '-File', checkScript, repoRoot],
+        cwd: repoRoot,
         env: cleanEnv,
       });
+      expect(result.ok).toBe(true);
     } finally {
       if (prevEvent === undefined) delete process.env.GITHUB_EVENT_PATH;
       else process.env.GITHUB_EVENT_PATH = prevEvent;

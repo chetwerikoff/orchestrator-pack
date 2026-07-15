@@ -15,6 +15,7 @@
     ".ao/**",
     "docs/declarations/**",
     "node_modules/**",
+    "scripts/vitest-heavy-topology.plan.json",
     "scripts/contract-evidence-validator.mjs",
     "scripts/contract-evidence-validator.d.mts"
   ],

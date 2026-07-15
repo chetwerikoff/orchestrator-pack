@@ -155,12 +155,23 @@ try {
             }
 
             $baselineInvocationCount++
+            $batchable = $true
+            if ($null -ne $runPlan.batchable) {
+                $batchable = [bool]$runPlan.batchable
+            }
             $member = [pscustomobject]@{
                 kind        = 'file'
                 file        = [string]$file
                 pool        = $pool
                 label       = [string]$file
                 testPattern = $null
+            }
+            if (-not $batchable) {
+                Add-OpenHeavyShardBatch -Invocations $invocations -Members $openMembers -Pool $openPool
+                $openMembers = @()
+                $openPool = $null
+                $invocations.Add((New-HeavyShardBatch -Members @($member) -Pool $pool)) | Out-Null
+                continue
             }
             if ($openMembers.Count -eq 0) {
                 $openPool = $pool
