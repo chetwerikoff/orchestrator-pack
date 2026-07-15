@@ -25,12 +25,16 @@ jobs:
       - id: foundation
         continue-on-error: true
         shell: bash
-        run: npm run test:foundation 2>&1 | tee /tmp/foundation.log
+        run: |
+          set -o pipefail
+          npm run test:foundation 2>&1 | tee /tmp/foundation.log
       - id: pwsh_growth
         continue-on-error: true
         shell: bash
-        run: npm run check:pwsh-test-growth 2>&1 | tee /tmp/pwsh-growth.log
-      - name: Report diagnostics
+        run: |
+          set -o pipefail
+          npm run check:pwsh-test-growth 2>&1 | tee /tmp/pwsh-growth.log
+      - name: Publish concise diagnostics
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,18 +43,18 @@ jobs:
         shell: bash
         run: |
           {
-            echo '## Issue #839 final CI diagnosis'
+            echo '## Issue #839 exact final CI diagnosis'
             echo
             echo "foundation=$FOUNDATION pwsh-growth=$PWSH_GROWTH"
             echo
-            echo '### test:foundation'
+            echo '### foundation tail'
             echo '```text'
-            tail -c 30000 /tmp/foundation.log
+            tail -c 12000 /tmp/foundation.log
             echo '```'
             echo
-            echo '### check:pwsh-test-growth'
+            echo '### pwsh-growth tail'
             echo '```text'
-            tail -c 30000 /tmp/pwsh-growth.log
+            tail -c 12000 /tmp/pwsh-growth.log
             echo '```'
           } >/tmp/report.md
-          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/report.md
