@@ -1,9 +1,9 @@
 name: issue-839-final-diagnose
 
 on:
-  push:
-    branches:
-      - issue-839-pack-review-runner-v2
+  pull_request:
+    types: [synchronize]
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,12 +12,12 @@ permissions:
 
 jobs:
   diagnose:
+    if: github.event.pull_request.number == 845
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: issue-839-pack-review-runner-v2
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -37,8 +37,8 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          PR_BASE_SHA: b7394065b9ee1b046abb4cf29aff456df1935571
-          PR_HEAD_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -o pipefail
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
@@ -50,6 +50,16 @@ jobs:
         run: |
           ./scripts/run-vitest-light-lane.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-light.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-839-final-diagnostics
+          path: |
+            /tmp/issue-839-verify.log
+            /tmp/issue-839-topology.log
+            /tmp/issue-839-light.log
+          if-no-files-found: warn
       - name: Publish exact diagnostics
         if: always()
         env:
