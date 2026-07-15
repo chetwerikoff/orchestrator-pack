@@ -28,6 +28,15 @@ describe('frozen gate population census', () => {
     expect(validateCensusSchema(altered).join('\n')).toContain('populationCount');
   });
 
+  it('fails when check-reusable changes while all of its behaviors remain legacy-enforced', () => {
+    const census = loadCensus(repoRoot);
+    const snapshot = captureSourceSnapshot(repoRoot);
+    const files = Object.fromEntries(snapshot.files);
+    files['scripts/check-reusable.ps1'] = `${files['scripts/check-reusable.ps1'] ?? ''}\n# hidden behavior\n`;
+    const result = evaluateCensus(census, memorySnapshot(files), registered);
+    expect(result.details?.join('\n')).toContain('check-reusable.ps1 behavior surface drifted without census reclassification');
+  });
+
   it('fails when a deferred legacy invocation disappears', () => {
     const census = clone(loadCensus(repoRoot));
     const row = census.entries.find((entry) => entry.classification === 'still-enforced-by-legacy' && entry.legacyReference?.path === 'scripts/check-reusable.ps1');
@@ -55,6 +64,11 @@ describe('frozen gate population census', () => {
     expect(validateCensusSchema({ ...census, entries }).join('\n')).toContain('caller absence');
   });
 
+
+  it('fails when generated population provenance or digest drifts', () => {
+    const census = clone(loadCensus(repoRoot));
+    expect(validateCensusSchema({ ...census, generation: { ...census.generation, populationDigest: '0'.repeat(64) } }).join('\n')).toContain('generated population digest drift');
+  });
 
   it('fails when the frozen baseline commit or source hashes drift', () => {
     const census = clone(loadCensus(repoRoot));

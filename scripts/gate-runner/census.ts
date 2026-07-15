@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { failGate, passGate, type EvidenceObservation, type GateResult } from './contracts.ts';
+import { populationDigest } from './census-generator.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
 export const CENSUS_CLASSIFICATIONS = [
@@ -35,6 +37,11 @@ export interface GateCensus {
   readonly wave: '3.a';
   readonly baseCommitSha: string;
   readonly sourceHashes: Readonly<Record<string, string>>;
+  readonly generation: {
+    readonly tool: 'scripts/gate-runner/census-generator.ts';
+    readonly baseCommitSha: string;
+    readonly populationDigest: string;
+  };
   readonly populationCount: number;
   readonly counts: Readonly<Record<string, number>>;
   readonly entries: readonly CensusEntry[];
@@ -48,6 +55,7 @@ const VALID_RETIREMENT_CODES = new Set([
 ]);
 
 export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json';
+export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
 const EXPECTED_SOURCE_HASHES = {
@@ -56,7 +64,13 @@ const EXPECTED_SOURCE_HASHES = {
 } as const;
 
 export function loadCensus(repoRoot: string): GateCensus {
-  return JSON.parse(readFileSync(resolve(repoRoot, CENSUS_PATH), 'utf8')) as GateCensus;
+  const census = JSON.parse(readFileSync(resolve(repoRoot, CENSUS_PATH), 'utf8')) as Omit<GateCensus, 'generation'>;
+  const generation = JSON.parse(readFileSync(resolve(repoRoot, CENSUS_GENERATION_PATH), 'utf8')) as GateCensus['generation'];
+  return { ...census, generation };
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
 function currentCheckScripts(snapshot: SourceSnapshot): Set<string> {
@@ -124,6 +138,10 @@ export function validateCensusSchema(census: GateCensus): string[] {
   }
   if (!/^[0-9a-f]{40}$/u.test(census.baseCommitSha)) failures.push('baseCommitSha must be a full lowercase Git SHA');
   if (census.baseCommitSha !== EXPECTED_BASE_COMMIT) failures.push(`census baseline must remain bound to pre-change commit ${EXPECTED_BASE_COMMIT}`);
+  if (census.generation?.tool !== 'scripts/gate-runner/census-generator.ts') failures.push('census generation tool provenance is missing or invalid');
+  if (census.generation?.baseCommitSha !== census.baseCommitSha) failures.push('census generation provenance is not bound to the frozen pre-change commit');
+  const digest = populationDigest(census.entries);
+  if (census.generation?.populationDigest !== digest) failures.push(`generated population digest drift: committed=${census.generation?.populationDigest ?? '<missing>'} actual=${digest}`);
   for (const [path, hash] of Object.entries(census.sourceHashes)) {
     if (!path || !/^[0-9a-f]{64}$/u.test(hash)) failures.push(`invalid frozen source hash for ${path || '<empty>'}`);
   }
@@ -194,6 +212,17 @@ export function evaluateCensus(
       if (!reference) continue;
       const text = snapshot.files.get(reference.path);
       if (text === undefined || !text.includes(reference.marker)) failures.push(`${entry.id}: cited legacy invocation is no longer wired at ${reference.path}`);
+    }
+  }
+
+  const checkReusable = snapshot.files.get('scripts/check-reusable.ps1');
+  const allReusableRowsDeferred = census.entries
+    .filter((entry) => entry.sourceKind === 'check-reusable-behavior')
+    .every((entry) => entry.classification === 'still-enforced-by-legacy');
+  if (allReusableRowsDeferred) {
+    if (checkReusable === undefined) failures.push('scripts/check-reusable.ps1 is missing while its behaviors remain legacy-enforced');
+    else if (sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
+      failures.push('scripts/check-reusable.ps1 behavior surface drifted without census reclassification');
     }
   }
 
