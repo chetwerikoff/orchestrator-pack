@@ -69,7 +69,7 @@ projects:
 
       REVIEW DRIVING — AO 0.10 does not auto-trigger Codex review on PR open.
       Live procedure: AGENTS.md + side-process scripts (orchestratorRules below is legacy-import reference only).
-      The orchestrator and reconcile loops jump the gaps via ao-review run / Get-AoReviewRuns.
+      The orchestrator and reconcile loops invoke the pack review runner and read the Get-AoReviewRuns pack-store view from the pack-side run/status store; never ao spawn.
 
       Always invoke review through the pack wrapper (Issue #9 / NO_FINDINGS contract).
       Never run review without the pack REVIEW_COMMAND wrapper — built-in Codex
@@ -84,9 +84,9 @@ projects:
         pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
 
       RUNTIME INVOCATION (shell only — do NOT embed --command in orchestratorRules):
-        At review time: ao-review run <worker-session-id>  (scripts/ao-review.ps1 shim → POST .../reviews/trigger)
+        Manual trigger: node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>
         REVIEW_COMMAND is configured in project review settings / operator shell — not re-pasted here.
-        Discover/idempotency: Get-AoReviewRuns fan-out (GET /api/v1/sessions/{id}/reviews) or ao-review list <session-id> --json.
+        Discover/idempotency: Get-AoReviewRuns pack-store view backed by the pack-side run/status store.
         Do not add double-quote characters inside this orchestratorRules literal.
 
       COMMAND DISCIPLINE — non-negotiable at shell time:
@@ -241,7 +241,7 @@ projects:
 
       MERGED PR — REVIEW LOOP TERMINAL (Issue #54). On EVERY orchestrator turn,
       BEFORE autonomous review-loop reads below, for each PR that has entries in
-      Get-AoReviewRuns fan-out or an open worker session with a PR ref:
+      Get-AoReviewRuns pack-store view or an open worker session with a PR ref:
         Verify that PR merge state on GitHub (e.g. gh pr view <n> --json state,mergedAt).
         Key off the linked PR merge state, NOT solely ao status session merged or
         terminated — merge cleanup may kill the worker session while code-reviews/
@@ -262,7 +262,7 @@ projects:
         Treat all AO-local review runs for that PR as historical, not queue work.
         MUST NOT re-trigger delivery for any run linked to that PR (including prNumber-less
         runs resolved via linked session above).
-        MUST NOT ao-review run for a new round on that PR.
+        MUST NOT pack review runner for a new round on that PR.
         MUST NOT ao send ping, ao session kill, or ao spawn --claim-pr for review-loop
         purposes on that PR.
         MUST NOT treat changes_requested or up_to_date runs for that PR as blocking
@@ -280,11 +280,11 @@ projects:
       review or loop. On every orchestrator turn after CI failure discipline above,
       while any open PR has an active review path, read these BEFORE any other planning
       work:
-        Get-AoReviewRuns fan-out (or ao-review list per session)
+        Get-AoReviewRuns pack-store view (or Get-AoReviewRuns pack-store view per session)
         ao status --json --reports full
         ao events list --json
 
-      REVIEW RUN STATUSES (AO 0.10 — normalized from Get-AoReviewRuns / GET /sessions/{id}/reviews):
+      REVIEW RUN STATUSES (AO 0.10 — normalized from Get-AoReviewRuns / pack-side run/status store):
         changes_requested (undelivered) — run finished; deliveredAt is null (operator/diagnostic only on 0.10).
           AO auto-delivers on submit; do not ao-review send (REMOVED). Use review-finding-delivery-confirm.ps1 (#171).
         changes_requested (delivered) — deliveredAt set, deliveredFindingCount > 0; findings with worker.
@@ -292,7 +292,7 @@ projects:
           condition fires (findings already delivered — do not re-trigger send).
         up_to_date — findingCount: 0 for that run's target SHA (clean / NO_FINDINGS).
         queued / preparing / running — review in flight; poll on next tick.
-        outdated — superseded by a newer worker commit; trigger ao-review run when head ready.
+        outdated — superseded by a newer worker commit; trigger pack review runner when head ready.
         failed / cancelled — inspect latestRun.body (failure detail) from Get-AoReviewRuns;
           NEVER treat as up_to_date when findingCount is 0; NEVER report or infer Codex review
           passed when status is failed or cancelled; notify human or retry once after reading failure detail.
@@ -305,14 +305,14 @@ projects:
       pattern-match finding body prose (NO_FINDINGS contract).
 
       SCRIPT-OWNED ROUTINE REVIEW (Issue #625 — operator reference). On AO 0.10 the LLM
-      orchestrator turn does NOT start or drive routine ao-review run rounds. Covered-head,
+      orchestrator turn does NOT start or drive routine pack review runner rounds. Covered-head,
       head-ready, and claim procedures belong to review-trigger-reconcile.ps1,
       review-trigger-reeval.ps1, and orchestrator-wake-listener.ps1. Exception-only LLM
       handling (contested protected finding E7, escalation wakes): issue #641 — pointer only.
-      Manual operator ao-review run remains outside the automated claim.
+      Manual operator pack review runner remains outside the automated claim.
 
       REVIEW RUN IDEMPOTENCY (Issue #98, widened Issue #189 — additive to EMPTY REVIEW TRAP).
-      Before calling ao-review run for a worker session, read Get-AoReviewRuns and the
+      Before calling pack review runner for a worker session, read Get-AoReviewRuns and the
       current PR head sha (from gh pr view or the worker PR ref). A head SHA is covered —
       do not spawn a new run — when any run matches the SAME prNumber linkage AND the EXACT
       normalized head SHA (targetSha, case-insensitive) and is in-flight (queued, preparing,
@@ -330,7 +330,7 @@ projects:
 
       AUTOMATED REVIEW-START CLAIM (Issue #267, closes the #189/#207/#235 concurrent
       window). Every automated starter surface must acquire the shared machine-local
-      review-start claim keyed by (prNumber, full normalized head SHA) before ao-review run:
+      review-start claim keyed by (prNumber, full normalized head SHA) before pack review runner:
       review-trigger-reconcile.ps1, orchestrator-wake-listener.ps1, review-trigger-reeval.ps1,
       and future noninteractive starters. The claim is an atomic cross-process
       test-and-set and stays effective until a covering run record is visible or a terminal
@@ -338,19 +338,19 @@ projects:
       divergent SHA normalization, anomalous timestamps, or unknowable registration state
       fail closed with a visible escalation — never claim unavailable / proceed anyway.
       Losing surfaces log claim-skip with the key and restart-correlatable holder identity.
-      Operator-invoked manual ao-review run remains outside the claim; automation treats a
+      Operator-invoked manual pack review runner remains outside the claim; automation treats a
       visible manual run record as coverage, while an operator racing inside AO registration
       lag is the accepted manual residual.
 
       PRE-RUN COVERAGE RE-CHECK / HEAD-READY RE-CHECK INSIDE THE CLAIM. After acquiring the claim and
-      immediately before emitting ao-review run, re-read Get-AoReviewRuns and re-apply
+      immediately before emitting pack review runner, re-read Get-AoReviewRuns and re-apply
       the covered-head predicate above with the smallest gap between read and run. If the
       head became covered between the turn's first observation and this re-check, abort and
       terminalize the claim as recheck-aborted. A stalled claimant that lost ownership to
       stale recovery must abort at the final ownership fence instead of starting.
 
       HEAD READY FOR REVIEW (Issue #195 — one predicate for all review-trigger paths).
-      Before any automated ao-review run (review-trigger-reconcile.ps1,
+      Before any automated pack review runner (review-trigger-reconcile.ps1,
       review-trigger-reeval.ps1, orchestrator-wake-listener.ps1 — not LLM turns), evaluate
       failed/cancelled on the current head FIRST (EMPTY REVIEW TRAP —
       never the plain uncovered-ready path). Then a PR head SHA is ready for review only when
@@ -371,12 +371,12 @@ projects:
       routes to the orchestrator/reconciler degraded-CI branch — bounded re-attempts to resolve
       required-check visibility, then observable operator escalation — not generic
       uncovered-not-ready worker-liveness handling. PRE-RUN HEAD-READY RE-CHECK widens #189:
-      immediately before ao-review run, re-read current head SHA, latest accepted report,
+      immediately before pack review runner, re-read current head SHA, latest accepted report,
       required-CI state, and coverage; abort if the predicate no longer holds. Mechanical
       implementation: docs/review-head-ready.mjs (shared with review-trigger-reconcile.ps1
       and docs/review-orchestrator-loop.mjs).
 
-      STALE REVIEWER WORKSPACE (Issue #98). Before ao-review run when the prior attempt for
+      STALE REVIEWER WORKSPACE (Issue #98). Before pack review runner when the prior attempt for
       the same PR head failed with failure detail containing worktree add and already
       exists, or when retrying after a failed reviewer infra run, run from the pack repo root:
         pwsh -NoProfile -File scripts/reviewer-workspace-preflight.ps1 -RepoRoot .
@@ -412,11 +412,11 @@ projects:
       EVENT-DRIVEN REVIEW TRIGGER (Issue #207 — wake listener, review-run only). On
       merge.ready (approved-and-green completion wake), orchestrator-wake-listener.ps1
       evaluates HEAD READY FOR REVIEW (#195), acquires the shared review-start claim, then
-      may ao-review run before forwarding the merge-intent wake. Merge handling must re-read
+      may pack review runner before forwarding the merge-intent wake. Merge handling must re-read
       run state (mergeable=false annotation when review is in-flight). Processing bound: 5s
       wake-to-run decision (listener-local). Side-effecting supervised child; additive to
       periodic reconcile below and heartbeat — not a replacement. Safety: never ao spawn,
-      --claim-pr, ao session kill, ao send, or merge from this path — only ao-review run.
+      --claim-pr, ao session kill, ao send, or merge from this path — only pack review runner.
 
       REVIEW-STATUS READER (Issue #611): worker report state comes from report-full snapshots only — `$.data[]` session rows with `reports[*]` via `Get-AoStatusSessionsWithReports` / audit-backed `.agent-report-audit`, never plain `ao session ls` or empty `reports: []` without naming the non-report-full source.
 
@@ -438,9 +438,9 @@ projects:
            degraded-CI orchestrator branch)
         5. For each head that is ready for review with a linked worker session: acquire the
            shared review-start claim, run STALE REVIEWER WORKSPACE preflight, PRE-RUN
-           HEAD-READY RE-CHECK inside the claim, then ao-review run <worker-session-id>
+           HEAD-READY RE-CHECK inside the claim, then pack review runner <worker-session-id>
       Safety (PR #97): never ao spawn, never --claim-pr, never ao session kill, never ao send
-      from this process — only ao-review run for a head ready for review. Skip uncovered-but-
+      from this process — only pack review runner for a head ready for review. Skip uncovered-but-
       not-ready heads with no worker-lifecycle action. Skip PRs with no linked worker session
       (orchestrator respawn discipline owns session creation). Verification:
         pwsh -NoProfile -File scripts/review-trigger-reconcile.ps1 -Once -DryRun
@@ -449,14 +449,14 @@ projects:
       DEFERRED-HEAD REVIEW RE-EVALUATION (Issue #235 — scoped supervised child, review-run
       only). When merge.ready defers as uncovered_not_ready / no_ready_for_review (#212),
       scripts/review-trigger-reeval.ps1 watches the small deferred-head set and may
-      acquire the shared review-start claim and ao-review run seconds-scale when #195
+      acquire the shared review-start claim and pack review runner seconds-scale when #195
       readiness lands on the current head SHA.
       Poll classification: scoped_deferred_head_watch (5-minute bounded window; incident
       wake-to-readiness delay ~77 s). Watch state: {stateRoot}/review-trigger-reeval-watch.json.
       Default poll: 5 s (-PollSeconds). Side-effect lock: review-trigger-reeval-side-effect.lock.
       Additive to #207 wake edge and #163 periodic reconcile backstop — not a full-PR sweep.
       Genuinely zero-signal heads (no wake and no in-progress report) remain backstop-only.
-      Safety: never ao spawn, --claim-pr, ao session kill, ao send, or merge — only ao-review run.
+      Safety: never ao spawn, --claim-pr, ao session kill, ao send, or merge — only pack review runner.
       Verification:
         pwsh -NoProfile -File scripts/review-trigger-reeval.ps1 -Once -DryRun
 
@@ -549,7 +549,7 @@ projects:
 
       ROUND PROGRESSION after worker fixes. When the PR head SHA advances past the
       last review run's target SHA, apply HEAD READY FOR REVIEW (#195) and PRE-RUN
-      HEAD-READY RE-CHECK, then ao-review run <session> for the next round only when the new head is ready for review — do not
+      HEAD-READY RE-CHECK, then pack review runner <session> for the next round only when the new head is ready for review — do not
       ask the operator. Intermediate commits while the worker is still fixing must not trigger
       a review run.
 
@@ -636,9 +636,9 @@ reactions:
 # - Do not patch Composio AO packages/core.
 # - PR CI scope validation is the second line of defense; runtime guard is first.
 
-# AO 0.10 review harness (Issue #623)
-# On AO 0.10.x, configure reviewers via project config API — not REVIEW_COMMAND/--command:
-#   ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'
-# Pack trigger loop uses POST /api/v1/sessions/{workerId}/reviews/trigger (scripts/ao-review.ps1 shim).
-# Operator adoption: docs/ao-0-10-review-harness-adoption.md
+# Pack-owned review runner (Issue #839)
+# AO project config carries no daemon reviewer-harness wiring after adoption.
+# Manual and automatic triggers use scripts/pack-review-runner.ts; status reads use
+# the pack-side run/status store through the Get-AoReviewRuns pack-store view.
+# Operator cutover: docs/ao-0-10-review-harness-adoption.md
 

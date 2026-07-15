@@ -215,6 +215,26 @@ describe('pack-owned review runner/store (Issue #839)', () => {
     expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({ status: 'failed', exitCode: 7 });
   });
 
+  it('records terminal timed_out status when the reviewer times out', async () => {
+    const storeRoot = tempRoot('opk-review-timeout-');
+    process.env.OPK_VITEST_HARNESS = '1';
+    const result = await startPackReview({
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 839,
+      headSha: HEAD_A,
+      claimMode: 'preacquired',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureReviewTimedOut: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({
+      status: 'timed_out',
+      latestRunStatus: 'timed_out',
+      failureReason: 'reviewer_process_timeout',
+    });
+  });
+
   it('does not let a divergent reviewed-worktree runner/store override trusted control code', async () => {
     const storeRoot = tempRoot('opk-review-shadow-store-');
     const reviewedRoot = tempRoot('opk-review-shadow-worktree-');

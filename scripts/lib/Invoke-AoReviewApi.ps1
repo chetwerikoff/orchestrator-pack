@@ -270,18 +270,6 @@ function Get-AoProjectConfigJson {
     return Unwrap-AoProjectConfigPayload -Payload (Invoke-AoDaemonHttpJson -Method GET -Path $path -BaseUrl $BaseUrl -HealthPayload $HealthPayload)
 }
 
-function Set-AoProjectReviewerHarness {
-    param(
-        [Parameter(Mandatory = $true)][string]$ProjectId,
-        [Parameter(Mandatory = $true)][string]$Harness,
-        [string]$BaseUrl = '',
-        [hashtable]$HealthPayload = $null
-    )
-    $path = "/api/v1/projects/$([uri]::EscapeDataString($ProjectId))/config"
-    return Invoke-AoDaemonHttpJson -Method PUT -Path $path -Body @{ reviewers = @(@{ harness = $Harness }) } `
-        -BaseUrl $BaseUrl -HealthPayload $HealthPayload -AllowedStatus @(200)
-}
-
 function Test-ReviewBeforeCleanupGate {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
@@ -324,12 +312,6 @@ function Invoke-AoReviewTriggerForWorker {
         [switch]$SkipHarnessGuard
     )
 
-    if ($null -ne $ProjectConfigFixture -and -not $FixturePayload) {
-        $reviewers = @($ProjectConfigFixture.reviewers)
-        if ($reviewers.Count -eq 0) {
-            return @{ ok = $false; httpStatus = 0; reason = 'reviewers_harness_misconfig'; classified = $true }
-        }
-    }
     if ($FixturePayload) {
         $httpStatus = if ($FixturePayload.httpStatus) { [int]$FixturePayload.httpStatus } else { 0 }
         $cli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/ao-0-10-review-api.mjs'

@@ -12,7 +12,6 @@ import {
   shouldRunHarnessContentShapeStage,
 } from '../docs/harness-post-submit-pn-content-shape.mjs';
 import { evaluateGatePollStep } from '../docs/scripted-review-confirmed-delivery-gate.mjs';
-import { classifyReviewerHarnessAbort } from '../docs/harness-review-bridge.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureDir = path.join(repoRoot, 'tests/fixtures/harness-post-submit-pn');
@@ -150,12 +149,6 @@ describe('harness post-submit [Pn] content-shape matrix (Issue #683)', () => {
     }
   });
 
-  it('pre-trigger reviewers-unset boundary stays delegated to #682 guard', () => {
-    const fixture = JSON.parse(readFileSync(path.join(fixtureDir, 'pretrigger-reviewers-unset-boundary.json'), 'utf8'));
-    const guard = classifyReviewerHarnessAbort(fixture.projectConfig, 'codex');
-    expect(guard.abort).toBe(true);
-    expect(guard.reason).toBe(fixture.expectedReason);
-  });
 
   it('enforcement fixtures contain no soft instruction escape hatches', () => {
     const text = readFileSync(path.join(fixtureDir, 'matrix.json'), 'utf8');

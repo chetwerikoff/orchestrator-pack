@@ -1,6 +1,11 @@
 # Migration notes
 
 
+## Pack-owned review runner cutover (Issue #839)
+
+After merge, clear the live AO project `reviewers` harness configuration, recycle the affected daemon project session, and remove the documented pre-cutover zombie reviewer sessions. Validate one manual and one automatic real-head run through `scripts/pack-review-runner.ts`; GitHub PR review is authoritative and the pack-side store is operational status only. Do not run daemon review endpoints or `ao review submit` in parallel. Full procedure: [`ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md).
+
+
 ## TypeScript migration foundation (Issue #800)
 
 This change adds the directly executable TypeScript runtime, strict typecheck and policy lint,

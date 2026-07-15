@@ -40,6 +40,7 @@ interface StartInput {
   claimMode?: 'acquire' | 'preacquired';
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
+  fixtureReviewTimedOut?: boolean;
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
 }
@@ -536,7 +537,12 @@ async function invokeReviewer(options: {
   storeRoot: string;
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
+  fixtureReviewTimedOut?: boolean;
 }): Promise<ProcessResult> {
+  if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewTimedOut) {
+    return { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false };
+  }
+
   if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewStdout !== undefined) {
     const exitCode = options.fixtureReviewExitCode ?? 0;
     return {
@@ -643,7 +649,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       runnerPid: process.pid,
     }, { projectId, storeRoot });
 
-    if (process.env.OPK_VITEST_HARNESS === '1' && input.fixtureReviewStdout !== undefined) {
+    if (process.env.OPK_VITEST_HARNESS === '1' && (input.fixtureReviewStdout !== undefined || input.fixtureReviewTimedOut === true)) {
       worktree = join(packReviewWorktreesDir(storeRoot), run.id);
       mkdirSync(worktree, { recursive: true });
     } else {
@@ -672,6 +678,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         storeRoot,
         fixtureReviewStdout: input.fixtureReviewStdout,
         fixtureReviewExitCode: input.fixtureReviewExitCode,
+        fixtureReviewTimedOut: input.fixtureReviewTimedOut,
       });
     } finally {
       clearInterval(heartbeat);

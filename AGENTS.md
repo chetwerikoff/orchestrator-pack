@@ -289,11 +289,12 @@ Local Codex PR review **is active**. On AO 0.10 the loop is **workspace-visible 
 **side-process scripts** supervised by `scripts/orchestrator-wake-supervisor.ps1` — not
 AO-injected `orchestratorRules`.
 
-- **Trigger:** `ao-review run` via `scripts/ao-review.ps1`; discover via `Get-AoReviewRuns` or
-  `ao-review list --json`.
+- **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational
+  status comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the
+  authoritative verdict.
 - Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
-  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** — retired `ao review send` / `execute` are
-  **REMOVED**.
+  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
+  are not fallback or dual-write paths.
 - **Pack review stdout (issue #663):** On exit 0, `REVIEW_COMMAND` stdout is non-empty terminal
   verdict JSON — see the behavior table in `plugins/ao-codex-pr-reviewer/README.md`. Zero-length
   stdout on exit 0 is not a valid success signal; when stdout parses as `verdict: clean`, treat the
@@ -351,8 +352,8 @@ On `changes-requested` / `ci-failed`: smallest scoped fix; escalate contradictor
 evidence. On delivered findings: **must not** idle — use `addressing_reviews` → optional
 `fixing_ci` → `ready_for_review` when CI green. Use underscore state names with
 `pack-worker-report --state <state>`. Do **not** run `pack-worker-report --state completed` while
-open/delivered findings exist. Inspect via `Get-AoReviewRuns` /
-`ao-review list --json`.
+open/delivered findings exist. Inspect via the `Get-AoReviewRuns` pack-store view and confirm the authoritative GitHub PR
+review is bound to the current head.
 
 Script-owned orchestrator review starters and predicates:
 [`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
@@ -360,11 +361,9 @@ Script-owned orchestrator review starters and predicates:
 #### Review delivery telemetry (Issue #718)
 
 Pack scripted review delivery is **stdout-first**: worker notification is sourced from the
-reviewer wrapper terminal JSON and the dispatch journal — not from daemon `GET /reviews`
-visibility. Best-effort `ao review submit`, `GET /reviews`, and `POST /reviews/trigger`
-telemetry runs after stdout capture; **on telemetry failure, skip silently — never post
-substitute notifications** that fabricate finding text from daemon state or pretend daemon
-delivery succeeded.
+reviewer wrapper terminal JSON, the authoritative GitHub PR review, and the dispatch journal.
+The pack-side run/status store records operational state only. Daemon review HTTP and
+`ao review submit` are retired; never fabricate finding text from a compatibility store row.
 **Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
 #### Review-cycle cap (Issue #646)
 
