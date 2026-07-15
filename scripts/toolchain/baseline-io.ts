@@ -2,7 +2,6 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcess } from '#opk-kernel/subprocess';
-import { resolveMergeStableCiBase } from '../lib/resolve-merge-stable-ci-base.ts';
 
 export interface ChangedFileEntry {
   readonly path: string;
@@ -37,7 +36,16 @@ async function gitCapture(repoRoot: string, args: readonly string[]): Promise<st
 
 /** Resolve the same non-self comparison boundary in PR and push contexts. */
 export async function resolveComparisonBaseRef(repoRoot: string): Promise<string | null> {
-  return (await resolveMergeStableCiBase(repoRoot))?.baseSha ?? null;
+  const resolver = resolve(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.ts');
+  const result = await runProcess({
+    command: 'node',
+    args: ['--experimental-strip-types', resolver, '--repo-root', repoRoot, '--json'],
+    cwd: repoRoot,
+    allowEmptyStdout: false,
+  });
+  if (!result.ok) return null;
+  const parsed = JSON.parse(result.stdout) as { baseSha?: unknown };
+  return typeof parsed.baseSha === 'string' ? parsed.baseSha : null;
 }
 
 export async function readGitFile(repoRoot: string, ref: string, relativePath: string): Promise<string | null> {

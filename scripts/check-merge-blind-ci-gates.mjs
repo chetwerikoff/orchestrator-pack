@@ -187,7 +187,7 @@ function validateRemediations(repoRoot) {
   }
 
   const baseline = read(repoRoot, 'scripts/toolchain/baseline-io.ts');
-  if (!baseline.includes('resolveMergeStableCiBase') || !baseline.includes('?.baseSha')) {
+  if (!baseline.includes('resolve-merge-stable-ci-base.ts') || !baseline.includes("'--json'")) {
     fail('baseline-io must delegate comparison-boundary resolution to the shared merge-stable helper');
   }
   const helper = read(repoRoot, 'scripts/lib/resolve-merge-stable-ci-base.ts');
