@@ -30,7 +30,7 @@ The adjacent `.js` modules are import-only NodeNext runtime bridges; do not invo
 
 Automatic review uses the same runner through the existing PowerShell reconcile and wake adapters. The preserved `scripts/lib/Review-StartClaim.ps1` mutex, atomic-write, and stale-reclaim primitive remains the concurrency authority. Do not use daemon review endpoints or `ao review submit` as a transition or fallback path.
 
-CI verifies the Node 20 adapter path, the full light-lane cutover contract, strict self-architect policy, complete pack verification, and compatibility with the merged current-`main` gate-runner migration. Baseline registries are rebuilt from current `main`, exactly two retired PowerShell-test rows and three retired raw-child fingerprints are removed, and the AGENTS budget golden is recaptured from the candidate tree.
+CI verifies the Node 20 adapter path, the full light-lane cutover contract, strict self-architect policy, complete pack verification, and compatibility with the merged current-`main` gate-runner migration. Baseline registries are rebuilt from current `main`, exactly two retired PowerShell-test rows and three retired raw-child fingerprints are removed, and the candidate AGENTS budget golden is committed explicitly.
 
 ## Required post-merge adoption
 
