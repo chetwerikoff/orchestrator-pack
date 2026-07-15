@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcessSync } from '#opk-kernel/subprocess';
-import { repoRoot, vitestHarnessBypassEnv } from './_test-pwsh-helpers.js';
+import { repoRoot, vitestHarnessBypassEnv } from './_test-vitest-harness-env.js';
 
 const stableTrustTempRoot = (() => {
   const explicit = String(process.env.OPK_VITEST_PRODUCTION_TMP ?? '').trim();

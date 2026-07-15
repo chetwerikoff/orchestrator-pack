@@ -31,7 +31,7 @@ import {
   validateOwnerReference,
 } from '../docs/orchestrator-message-registry.mjs';
 import { runProcessSync } from '#opk-kernel/subprocess';
-import { repoRoot, vitestHarnessBypassEnv } from './_test-pwsh-helpers.js';
+import { repoRoot, vitestHarnessBypassEnv } from './_test-vitest-harness-env.js';
 import { seedMinimalRegistryTree } from './_test-registry-fixture.js';
 
 const fixturesDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-message-registry');
