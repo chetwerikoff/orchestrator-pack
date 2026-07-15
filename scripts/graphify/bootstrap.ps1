@@ -39,7 +39,7 @@ if (-not (Test-Path -LiteralPath $lockFile -PathType Leaf)) {
 }
 
 Write-Host "[graphify bootstrap] creating isolated venv at $venvDir"
-& $python '-m' 'venv' $venvDir
+& $python '-m' 'venv' '--clear' $venvDir
 if ($LASTEXITCODE -ne 0) { throw "python -m venv failed with exit code $LASTEXITCODE" }
 
 $venvPython = if ($IsWindows) { Join-Path $venvDir 'Scripts/python.exe' } else { Join-Path $venvDir 'bin/python' }

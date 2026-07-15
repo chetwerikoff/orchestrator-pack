@@ -6,6 +6,16 @@
  * Vitest: scripts/graphify/query-graph.test.ts
  */
 import { readFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// Resolve the default graph path against the repo root (this file lives at
+// scripts/graphify/query-graph.mjs) rather than the current working directory, so the CLI
+// works the same regardless of where it's invoked from.
+const DEFAULT_GRAPH_PATH = join(
+  dirname(dirname(dirname(fileURLToPath(import.meta.url)))),
+  '.graphify/graph/graphify-out/graph.json',
+);
 
 const FILE_LEVEL_RELATIONS = new Set([
   'imports_from',
@@ -168,7 +178,7 @@ function parseArgs(argv) {
 
 function runCli(argv) {
   const { command, flags } = parseArgs(argv);
-  const graphPath = flags.graph ?? '.graphify/graph/graphify-out/graph.json';
+  const graphPath = flags.graph ?? DEFAULT_GRAPH_PATH;
   const graph = loadGraph(graphPath);
 
   if (command === 'hubs') {
@@ -189,7 +199,7 @@ function runCli(argv) {
   throw new Error(`Unknown command '${command}'. Expected one of: hubs, cluster, cycle.`);
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   try {
     process.exitCode = runCli(process.argv.slice(2));
