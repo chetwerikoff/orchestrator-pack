@@ -96,10 +96,6 @@ replacements = [
         "          : issue821RetiredSet.has(item) ? 'issue-821-retired'\n            : issue839RetiredSet.has(item) ? 'issue-839-retired'\n              : 'unqualified';",
     ),
     (
-        "               : 'Deleted path does not satisfy the binding deadness formula.',",
-        "               : reason === 'issue-839-retired'\n                 ? 'Issue #839 explicitly retires the daemon-era ao-review shim after pack-runner cutover.'\n                 : 'Deleted path does not satisfy the binding deadness formula.',",
-    ),
-    (
         "      .filter((row) => !issue821RetiredSet.has(row.path))",
         "      .filter((row) => !issue821RetiredSet.has(row.path) && !issue839RetiredSet.has(row.path))",
     ),
@@ -111,6 +107,24 @@ for before, after in replacements:
             f"reachability replacement failed ({count}): {before[:70]!r}"
         )
     text = text.replace(before, after, 1)
+
+fallback_pattern = re.compile(
+    r"(?m)^(?P<indent>\s*): 'Deleted path does not satisfy the binding deadness formula\.',$"
+)
+
+
+def replace_fallback(match):
+    indent = match.group("indent")
+    return (
+        f"{indent}: reason === 'issue-839-retired'\n"
+        f"{indent}  ? 'Issue #839 explicitly retires the daemon-era ao-review shim after pack-runner cutover.'\n"
+        f"{indent}  : 'Deleted path does not satisfy the binding deadness formula.',"
+    )
+
+
+text, n = fallback_pattern.subn(replace_fallback, text, count=1)
+if n != 1:
+    raise SystemExit(f"reachability fallback evidence replacement failed ({n})")
 p.write_text(text, encoding="utf-8")
 
 replace_one(
