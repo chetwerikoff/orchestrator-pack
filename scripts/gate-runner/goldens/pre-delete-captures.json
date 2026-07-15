@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "issue": 830,
+  "baseCommitSha": "b7394065b9ee1b046abb4cf29aff456df1935571",
+  "captureEnvironment": {
+    "source": "pre-delete main tree and its passing GitHub Actions verifier",
+    "workflowRunId": 29432995069,
+    "jobId": 87412452554
+  },
+  "captures": [
+    {
+      "gateId": "agent-rules-live-reference",
+      "legacyScript": "scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceBlobSha": "31951d82cc22bb34d88c50e422052116fc6cbb3f",
+      "case": "pre-change-real-tree",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-grep-inventory.ps1", "-RepoRoot", "<repo>"],
+      "exitCode": 1,
+      "stdout": "[FAIL] live references to retired agent\u005frules.md:\n - .cursor/rules/github-rest-over-graphql.mdc references retired agent\u005frules.md\n",
+      "artifacts": [],
+      "parityDisposition": "known false positive: generated global Cursor hint is superseded by pack policy and explicitly excluded by the TypeScript port"
+    },
+    {
+      "gateId": "agent-rules-live-reference",
+      "legacyScript": "scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceBlobSha": "31951d82cc22bb34d88c50e422052116fc6cbb3f",
+      "case": "clean-fixture",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-grep-inventory.ps1", "-RepoRoot", "<fixture>"],
+      "exitCode": 0,
+      "stdout": "[PASS] no live normative references to agent\u005frules.md\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-live-reference",
+      "legacyScript": "scripts/check-agent-rules-grep-inventory.ps1",
+      "sourceBlobSha": "31951d82cc22bb34d88c50e422052116fc6cbb3f",
+      "case": "forbidden-reference",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-grep-inventory.ps1", "-RepoRoot", "<fixture>"],
+      "exitCode": 1,
+      "stdout": "[FAIL] live references to retired agent\u005frules.md:\n - README.md references retired agent\u005frules.md\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-size-budget",
+      "legacyScript": "scripts/check-agent-rules-line-budget.ps1",
+      "sourceBlobSha": "4f8723a3e15763aec5f0a2fb795636eccc7e54ee",
+      "case": "real-clean-tree",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-line-budget.ps1", "-RepoRoot", "<repo>"],
+      "exitCode": 0,
+      "stdout": "[PASS] AGENTS.md size budget (450 lines, 28418 bytes)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-size-budget",
+      "legacyScript": "scripts/check-agent-rules-line-budget.ps1",
+      "sourceBlobSha": "4f8723a3e15763aec5f0a2fb795636eccc7e54ee",
+      "case": "over-budget-fixture",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-line-budget.ps1", "-RepoRoot", "<fixture>", "-MaxLines", "450", "-MaxBytes", "28672"],
+      "exitCode": 1,
+      "stdout": "[FAIL] AGENTS.md size budget:\n - AGENTS.md has 451 lines (ceiling 450)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-moved-content",
+      "legacyScript": "scripts/check-agent-rules-moved-content.ps1",
+      "sourceBlobSha": "d79be79cb0895f9a6c8ce0f49817333afa575901",
+      "case": "real-clean-tree",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-moved-content.ps1", "-RepoRoot", "<repo>"],
+      "exitCode": 0,
+      "stdout": "[PASS] AGENTS.md moved-content guard (split layout and stable titles)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "agent-rules-moved-content",
+      "legacyScript": "scripts/check-agent-rules-moved-content.ps1",
+      "sourceBlobSha": "d79be79cb0895f9a6c8ce0f49817333afa575901",
+      "case": "forbidden-moved-content",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-moved-content.ps1", "-RepoRoot", "<fixture>"],
+      "exitCode": 1,
+      "stdout": "[FAIL] AGENTS.md moved-content guard:\n - AGENTS.md still contains moved deep-dive anchor: ## Task complexity tier rubric\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "ao-capture-redaction",
+      "legacyScript": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
+      "sourceBlobSha": "e5e463136b99ed50e150a5f5c927b3c7f734a2e7",
+      "case": "real-clean-tree",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-ao-0-10-cli-capture-redaction.ps1"],
+      "exitCode": 0,
+      "stdout": "[PASS] AO 0.10 capture redaction gate (Issue #619/#637)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "ao-capture-redaction",
+      "legacyScript": "scripts/check-ao-0-10-cli-capture-redaction.ps1",
+      "sourceBlobSha": "e5e463136b99ed50e150a5f5c927b3c7f734a2e7",
+      "case": "credential-url-fixture",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-ao-0-10-cli-capture-redaction.ps1", "-CaptureDir", "<fixture>"],
+      "exitCode": 1,
+      "stdout": "[FAIL] AO 0.10 capture redaction gate (Issue #619/#637):\n  - leak.raw.json: matches forbidden pattern [a-zA-Z][a-zA-Z0-9+.-]*://[^:]+:[^@]+@\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "ao-capture-redaction",
+      "legacyScript": "scripts/check-ao-capture-redaction-selftest.ps1",
+      "sourceBlobSha": "4b680c0da622f900ac81b4d741938c85b3e923bd",
+      "case": "selftest-clean",
+      "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-ao-capture-redaction-selftest.ps1"],
+      "exitCode": 0,
+      "stdout": "[PASS] detected ghp_ via pattern(s): ghp_\n[PASS] detected gho_ via pattern(s): gho_\n[PASS] detected ghu_ via pattern(s): ghu_\n[PASS] detected ghs_ via pattern(s): ghs_\n[PASS] detected ghr_ via pattern(s): ghr_\n[PASS] detected github_pat_ via pattern(s): github_pat_\n[PASS] detected credential-in-URL via pattern: [a-zA-Z][a-zA-Z0-9+.-]*://[^:]+:[^@]+@\n[PASS] out-of-dir gate scan detects forbidden fixture\n[PASS] AO capture redaction self-test (Issue #637)\n",
+      "artifacts": []
+    }
+  ]
+}
