@@ -1,0 +1,124 @@
+name: Temporary issue 851 finalizer
+
+on:
+  push:
+    branches:
+      - agent/issue-851-gate-runner-extension-contract
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply census contract hardening
+        shell: bash
+        run: |
+          git apply --check <<'PATCH'
+          diff --git a/scripts/gate-runner/census.test.ts b/scripts/gate-runner/census.test.ts
+          index 9988b6c..94863c1 100644
+          --- a/scripts/gate-runner/census.test.ts
+          +++ b/scripts/gate-runner/census.test.ts
+          @@ -42,6 +42,26 @@ describe('frozen gate population census', () => {
+               invalidEntries[deferredIndex] = unnamed;
+               expect(validateCensusSchema({ ...terminal, entries: invalidEntries }).join('\n')).toContain('valid named sibling wave');
+           
+          +    const invalidOwnerEntries = [...entries];
+          +    invalidOwnerEntries[deferredIndex] = { ...invalidOwnerEntries[deferredIndex]!, deferredWave: 'Wave Z' as never };
+          +    expect(validateCensusSchema({ ...terminal, entries: invalidOwnerEntries }).join('\n')).toContain('valid named sibling wave');
+          +
+          +    const nonPortedGateEntries = [...entries];
+          +    nonPortedGateEntries[deferredIndex] = { ...nonPortedGateEntries[deferredIndex]!, gateIds: ['ghost-gate'] };
+          +    expect(validateCensusSchema({ ...terminal, entries: nonPortedGateEntries }).join('\n')).toContain('non-ported row cannot be admitted');
+          +
+          +    const portedIndex = entries.findIndex((entry) => entry.classification === 'ported-declarative');
+          +    const portedWithLegacyEntries = [...entries];
+          +    portedWithLegacyEntries[portedIndex] = {
+          +      ...portedWithLegacyEntries[portedIndex]!,
+          +      legacyReference: { path: 'scripts/verify.ps1', marker: 'legacy marker' },
+          +    };
+          +    expect(validateCensusSchema({ ...terminal, entries: portedWithLegacyEntries }).join('\n')).toContain('non-deferred row must not retain');
+          +
+          +    const portedWithOwnerEntries = [...entries];
+          +    portedWithOwnerEntries[portedIndex] = { ...portedWithOwnerEntries[portedIndex]!, deferredWave: 'PR 9 workflow sweep' };
+          +    expect(validateCensusSchema({ ...terminal, entries: portedWithOwnerEntries }).join('\n')).toContain('non-deferred row must not claim');
+          +
+               expect(validateCensusSchema({ ...terminal, entries: original.entries }).join('\n')).toContain('cannot retain provisional classification');
+             });
+           
+          diff --git a/scripts/gate-runner/census.ts b/scripts/gate-runner/census.ts
+          index d1007b2..f61020a 100644
+          --- a/scripts/gate-runner/census.ts
+          +++ b/scripts/gate-runner/census.ts
+          @@ -183,8 +183,9 @@ export function validateCensusSchema(census: GateCensus): string[] {
+                 } else if (entry.deferredWave !== undefined) {
+                   failures.push(`${entry.id}: provisional legacy row must not claim a Wave 3.b deferral owner`);
+                 }
+          -    } else if (entry.legacyReference) {
+          -      failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+          +    } else {
+          +      if (entry.legacyReference) failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+          +      if (entry.deferredWave !== undefined) failures.push(`${entry.id}: non-deferred row must not claim a deferral owner`);
+               }
+           
+               if (isPorted(entry)) {
+          PATCH
+          git apply <<'PATCH'
+          diff --git a/scripts/gate-runner/census.test.ts b/scripts/gate-runner/census.test.ts
+          index 9988b6c..94863c1 100644
+          --- a/scripts/gate-runner/census.test.ts
+          +++ b/scripts/gate-runner/census.test.ts
+          @@ -42,6 +42,26 @@ describe('frozen gate population census', () => {
+               invalidEntries[deferredIndex] = unnamed;
+               expect(validateCensusSchema({ ...terminal, entries: invalidEntries }).join('\n')).toContain('valid named sibling wave');
+           
+          +    const invalidOwnerEntries = [...entries];
+          +    invalidOwnerEntries[deferredIndex] = { ...invalidOwnerEntries[deferredIndex]!, deferredWave: 'Wave Z' as never };
+          +    expect(validateCensusSchema({ ...terminal, entries: invalidOwnerEntries }).join('\n')).toContain('valid named sibling wave');
+          +
+          +    const nonPortedGateEntries = [...entries];
+          +    nonPortedGateEntries[deferredIndex] = { ...nonPortedGateEntries[deferredIndex]!, gateIds: ['ghost-gate'] };
+          +    expect(validateCensusSchema({ ...terminal, entries: nonPortedGateEntries }).join('\n')).toContain('non-ported row cannot be admitted');
+          +
+          +    const portedIndex = entries.findIndex((entry) => entry.classification === 'ported-declarative');
+          +    const portedWithLegacyEntries = [...entries];
+          +    portedWithLegacyEntries[portedIndex] = {
+          +      ...portedWithLegacyEntries[portedIndex]!,
+          +      legacyReference: { path: 'scripts/verify.ps1', marker: 'legacy marker' },
+          +    };
+          +    expect(validateCensusSchema({ ...terminal, entries: portedWithLegacyEntries }).join('\n')).toContain('non-deferred row must not retain');
+          +
+          +    const portedWithOwnerEntries = [...entries];
+          +    portedWithOwnerEntries[portedIndex] = { ...portedWithOwnerEntries[portedIndex]!, deferredWave: 'PR 9 workflow sweep' };
+          +    expect(validateCensusSchema({ ...terminal, entries: portedWithOwnerEntries }).join('\n')).toContain('non-deferred row must not claim');
+          +
+               expect(validateCensusSchema({ ...terminal, entries: original.entries }).join('\n')).toContain('cannot retain provisional classification');
+             });
+           
+          diff --git a/scripts/gate-runner/census.ts b/scripts/gate-runner/census.ts
+          index d1007b2..f61020a 100644
+          --- a/scripts/gate-runner/census.ts
+          +++ b/scripts/gate-runner/census.ts
+          @@ -183,8 +183,9 @@ export function validateCensusSchema(census: GateCensus): string[] {
+                 } else if (entry.deferredWave !== undefined) {
+                   failures.push(`${entry.id}: provisional legacy row must not claim a Wave 3.b deferral owner`);
+                 }
+          -    } else if (entry.legacyReference) {
+          -      failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+          +    } else {
+          +      if (entry.legacyReference) failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
+          +      if (entry.deferredWave !== undefined) failures.push(`${entry.id}: non-deferred row must not claim a deferral owner`);
+               }
+           
+               if (isPorted(entry)) {
+          PATCH
+          rm .github/workflows/tmp-finish-issue-851.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/gate-runner/census.ts scripts/gate-runner/census.test.ts .github/workflows/tmp-finish-issue-851.yml
+          git commit -m "fix: harden terminal census taxonomy"
+          git push
