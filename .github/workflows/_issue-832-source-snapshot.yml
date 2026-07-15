@@ -1,27 +1,96 @@
-name: issue-832 source snapshot
+name: issue-832 merge current main
 
 on:
   push:
     branches:
       - agent/issue-831-json-producers-wave-b
-  pull_request:
-    branches:
-      - main
+    paths:
+      - .github/workflows/_issue-832-source-snapshot.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot:
+  merge-main:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/upload-artifact@v4
         with:
-          name: issue-832-current-source
-          path: |
-            .
-            !.git/**
-          include-hidden-files: true
-          retention-days: 1
-          if-no-files-found: error
+          fetch-depth: 0
+      - name: Merge main and resolve owned overlaps
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin main
+
+          set +e
+          git merge --no-ff --no-commit origin/main
+          merge_status=$?
+          set -e
+
+          mapfile -t unmerged < <(git diff --name-only --diff-filter=U)
+          for path in "${unmerged[@]}"; do
+            case "$path" in
+              scripts/kernel/subprocess.ts|scripts/vitest-ci-lanes.config.json) ;;
+              *) echo "unexpected merge conflict: $path" >&2; exit 1 ;;
+            esac
+          done
+
+          if printf '%s\n' "${unmerged[@]}" | grep -qx 'scripts/kernel/subprocess.ts'; then
+            git checkout --theirs scripts/kernel/subprocess.ts
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/kernel/subprocess.ts')
+          text = path.read_text()
+          text = text.replace("import type { Readable } from 'node:stream';", "import type { Readable, Writable } from 'node:stream';")
+          if 'readonly input?: string | Uint8Array;' not in text:
+              text = text.replace('  readonly args?: readonly string[];\n', '  readonly args?: readonly string[];\n  readonly input?: string | Uint8Array;\n', 1)
+          text = text.replace('ChildProcessByStdio<null, Readable, Readable>', 'ChildProcessByStdio<Writable, Readable, Readable>')
+          text = text.replace("stdio: ['ignore', 'pipe', 'pipe']", "stdio: ['pipe', 'pipe', 'pipe']")
+          marker = "  child.stderr.on('data', (chunk: Buffer) => consume(stderr, options.onStderrChunk, chunk));\n"
+          stdin_block = "\n  if (options.input === undefined) {\n    child.stdin.end();\n  } else {\n    child.stdin.end(options.input);\n  }\n"
+          if stdin_block.strip() not in text:
+              if marker not in text:
+                  raise SystemExit('subprocess stderr marker missing')
+              text = text.replace(marker, marker + stdin_block, 1)
+          path.write_text(text)
+          PY
+
+          if printf '%s\n' "${unmerged[@]}" | grep -qx 'scripts/vitest-ci-lanes.config.json'; then
+            git checkout --theirs scripts/vitest-ci-lanes.config.json
+          fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('scripts/vitest-ci-lanes.config.json')
+          data = json.loads(path.read_text())
+          classification = data['classification']
+          for name in [
+              'scripts/json-producers/golden-hygiene.test.ts',
+              'scripts/json-producers/read-delegation-audit-stop.test.ts',
+              'scripts/json-producers/rtk-discover-inventory.test.ts',
+              'scripts/json-producers/sanctioned-worker-kill-record.test.ts',
+              'scripts/json-producers/wave-b-reconciliation.test.ts',
+              'scripts/json-producers/worker-status-report.test.ts',
+              'scripts/kernel/json-artifact.test.ts',
+          ]:
+              classification[name] = 'light'
+          data['classification'] = dict(sorted(classification.items()))
+          path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          git add scripts/kernel/subprocess.ts scripts/vitest-ci-lanes.config.json
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            git diff --name-only --diff-filter=U >&2
+            exit 1
+          fi
+
+          rm -f .github/workflows/_issue-832-source-snapshot.yml
+          git add -A
+          if [ "$merge_status" -ne 0 ] || ! git diff --cached --quiet; then
+            git commit -m "Merge current main into issue 831 wave"
+            git push origin HEAD:agent/issue-831-json-producers-wave-b
+          fi
