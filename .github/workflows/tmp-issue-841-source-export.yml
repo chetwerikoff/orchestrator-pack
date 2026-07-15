@@ -1,0 +1,31 @@
+name: Temporary issue 841 source export
+
+on:
+  push:
+    branches:
+      - agent/tmp-issue-841-source-export
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Export tracked source
+        shell: bash
+        run: git archive --format=zip --output=orchestrator-pack-source.zip HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-pack-source
+          path: orchestrator-pack-source.zip
+          if-no-files-found: error
+          retention-days: 1
