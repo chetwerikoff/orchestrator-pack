@@ -112,7 +112,27 @@ jobs:
       - name: Verify foundation typecheck
         run: npm run typecheck:foundation
       - name: Verify foundation policy lint
-        run: npm run lint:foundation
+        id: lint
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint:foundation 2>&1 | tee /tmp/issue-839-lint.log
+      - name: Publish policy lint failure
+        if: steps.lint.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tail -n 160 /tmp/issue-839-lint.log >/tmp/issue-839-lint-tail.log
+          {
+            echo '## Issue #839 foundation policy lint failure'
+            echo '```text'
+            cat /tmp/issue-839-lint-tail.log
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+          exit 1
       - name: Verify PowerShell child baseline
         run: npm run check:pwsh-test-growth
       - name: Verify foundation tests
@@ -166,7 +186,7 @@ jobs:
         shell: bash
         run: git push origin HEAD:issue-839-pack-review-runner-v2
       - name: Report other failure
-        if: failure() && steps.focused.outcome != 'failure'
+        if: failure() && steps.lint.outcome != 'failure' && steps.focused.outcome != 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
