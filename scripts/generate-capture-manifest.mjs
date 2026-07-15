@@ -78,6 +78,10 @@ function readProvenanceFields(provenancePath) {
  */
 export function generateCaptureManifest(repoRoot, options = {}) {
   const corpusRelative = options.corpusRoot ?? 'tests/external-output-references';
+  const retiredCatalogPath = path.join(repoRoot, 'scripts', 'json-producers', 'retired-surfaces.json');
+  const retiredSurfaces = existsSync(retiredCatalogPath)
+    ? JSON.parse(readFileSync(retiredCatalogPath, 'utf8')).surfaces ?? []
+    : [];
   const referencesRoot = path.join(repoRoot, corpusRelative);
   const capturesDir = path.join(referencesRoot, 'captures');
   /** @type {Record<string, object>} */
@@ -121,6 +125,16 @@ export function generateCaptureManifest(repoRoot, options = {}) {
       };
       if (exitStatus !== undefined && !Number.isNaN(exitStatus)) {
         entry.exitStatus = exitStatus;
+      }
+      const retiredSurface = retiredSurfaces.find((surface) => {
+        if (!surface || typeof surface.id !== 'string' || typeof surface.sourceCommandPattern !== 'string') {
+          return false;
+        }
+        return new RegExp(surface.sourceCommandPattern, 'i').test(sourceCommand ?? '');
+      });
+      if (retiredSurface) {
+        entry.status = 'historical';
+        entry.retiredSurface = retiredSurface.id;
       }
       entries[id] = entry;
     }
