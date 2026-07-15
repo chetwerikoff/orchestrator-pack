@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { formatGateRunnerReport, main, runGateRunner } from './runner.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -24,7 +24,31 @@ describe('real gate runner dispatch', () => {
     expect(report.aggregate.status).toBe('PASS');
   });
 
+  it('honors repeated selectors and keeps gate-census runner-owned', async () => {
+    const report = runGateRunner(repoRoot, ['gate-census', 'agent-rules-size-budget']);
+    expect(report.results.map((result) => result.gateId)).toEqual(['agent-rules-size-budget', 'gate-census']);
+    expect(report.aggregate.status).toBe('PASS');
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    try {
+      expect(await main([
+        '--repo-root', repoRoot,
+        '--gate', 'agent-rules-size-budget',
+        '--gate', 'gate-census',
+        '--json',
+      ])).toBe(0);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it('fails closed on an unknown per-gate selector', async () => {
-    expect(await main(['--repo-root', repoRoot, '--gate', 'missing-gate'])).toBe(2);
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      expect(await main(['--repo-root', repoRoot, '--gate', 'missing-gate'])).toBe(2);
+      expect(stderr).toHaveBeenCalledWith('[FAIL] gate-runner dispatch: unknown gate id(s): missing-gate\n');
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
