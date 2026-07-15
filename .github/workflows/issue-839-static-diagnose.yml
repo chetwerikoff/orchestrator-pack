@@ -1,0 +1,65 @@
+name: issue-839-static-diagnose
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Apply same patch
+        run: |
+          awk 'BEGIN{take=0} /python3 - <<.PY./{take=1; next} take && /^          PY$/{exit} take{sub(/^          /,""); print}' .github/workflows/issue-839-pr-apply.yml > /tmp/apply.py
+          python3 /tmp/apply.py
+      - id: typecheck
+        continue-on-error: true
+        run: npm run typecheck:foundation 2>&1 | tee /tmp/typecheck.log
+      - id: lint
+        continue-on-error: true
+        run: npm run lint:foundation 2>&1 | tee /tmp/lint.log
+      - id: reconcile
+        continue-on-error: true
+        run: pwsh -NoProfile -File scripts/check-review-trigger-reconcile.ps1 2>&1 | tee /tmp/reconcile.log
+      - id: idempotency
+        continue-on-error: true
+        run: pwsh -NoProfile -File scripts/check-orchestrator-review-idempotency.ps1 2>&1 | tee /tmp/idempotency.log
+      - id: coverage
+        continue-on-error: true
+        run: pwsh -NoProfile -File scripts/check-orchestrator-review-head-coverage.ps1 2>&1 | tee /tmp/coverage.log
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          RECONCILE: ${{ steps.reconcile.outcome }}
+          IDEMPOTENCY: ${{ steps.idempotency.outcome }}
+          COVERAGE: ${{ steps.coverage.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 static-check diagnosis'
+            echo
+            echo "typecheck=$TYPECHECK lint=$LINT reconcile=$RECONCILE idempotency=$IDEMPOTENCY coverage=$COVERAGE"
+            for file in /tmp/typecheck.log /tmp/lint.log /tmp/reconcile.log /tmp/idempotency.log /tmp/coverage.log; do
+              echo; echo "### $file"; echo '```text'; tail -c 5000 "$file"; echo; echo '```'
+            done
+          } >/tmp/report.md
+          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/report.md
