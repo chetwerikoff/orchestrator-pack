@@ -1,0 +1,11 @@
+---
+description: Before answering a non-trivial codebase-structure question, checking the pack-owned Graphify code graph is recommended (not mandatory)
+alwaysApply: true
+---
+
+For a non-trivial "how does X relate to Y" or codebase-architecture question, checking
+`scripts/graphify/` first is recommended, not a required precondition -- fall back to normal
+grepping/reading whenever the graph is missing, stale, or simply not needed for the question at
+hand. See [`scripts/graphify/README.md`](../../scripts/graphify/README.md) for build/refresh/query
+commands. After a material code change, refreshing the graph is likewise recommended, not
+required. Full guidance: [`AGENTS.md`](../../AGENTS.md) § Codebase structure graph (Graphify).
