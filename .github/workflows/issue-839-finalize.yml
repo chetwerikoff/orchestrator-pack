@@ -31,15 +31,19 @@ jobs:
           set -euo pipefail
           awk 'BEGIN{take=0} /python3 - <<.PY./{take=1; next} take && /^          PY$/{exit} take{sub(/^          /,""); print}' .github/workflows/issue-839-pr-apply.yml > /tmp/apply.py
           python3 /tmp/apply.py
-      - name: Static verification
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run typecheck:foundation
-          npm run lint:foundation
-          pwsh -NoProfile -File scripts/check-review-trigger-reconcile.ps1
-          pwsh -NoProfile -File scripts/check-orchestrator-review-idempotency.ps1
-          pwsh -NoProfile -File scripts/check-orchestrator-review-head-coverage.ps1
+      - name: TypeScript typecheck
+        run: npm run typecheck:foundation
+      - name: TypeScript policy lint
+        run: npm run lint:foundation
+      - name: Review reconcile gate
+        shell: pwsh
+        run: ./scripts/check-review-trigger-reconcile.ps1
+      - name: Review idempotency gate
+        shell: pwsh
+        run: ./scripts/check-orchestrator-review-idempotency.ps1
+      - name: Review head coverage gate
+        shell: pwsh
+        run: ./scripts/check-orchestrator-review-head-coverage.ps1
       - name: Isolated targeted regression files
         shell: bash
         run: |
@@ -67,6 +71,7 @@ jobs:
             .github/workflows/issue-839-pr-apply.yml \
             .github/workflows/issue-839-test-diagnose.yml \
             .github/workflows/issue-839-matrix-diagnose.yml \
+            .github/workflows/issue-839-static-diagnose.yml \
             .github/workflows/issue-839-finalize.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
