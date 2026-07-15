@@ -1,4 +1,4 @@
-name: issue-832 failing-job diagnostic
+name: issue-832 final validation
 
 on:
   pull_request:
@@ -6,53 +6,48 @@ on:
       - main
 
 concurrency:
-  group: issue-832-diagnostic-${{ github.event.pull_request.number }}
+  group: issue-832-validation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  diagnostic:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
-      - name: Download failing job logs
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Generate final-tree reachability manifest
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          declare -A JOBS=(
-            [cheap-wins]=87371499155
-            [vitest-light]=87371532021
-            [vitest-heavy-1]=87372055243
-          )
-          for name in "${!JOBS[@]}"; do
-            raw="${RUNNER_TEMP}/${name}.raw"
-            log="${RUNNER_TEMP}/${name}.log"
-            curl -fsSL \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${JOBS[$name]}/logs" \
-              -o "$raw"
-            if unzip -t "$raw" >/dev/null 2>&1; then
-              unzip -p "$raw" > "$log"
-            else
-              cp "$raw" "$log"
-            fi
-            {
-              echo '=== failure-focused lines ==='
-              grep -nEi '(fail|failed|failure|error|exception|assertion|expected|received|test files|tests |##\[error\])' "$log" || true
-              echo '=== final 800 lines ==='
-              tail -n 800 "$log"
-            } > "${RUNNER_TEMP}/${name}-diagnostic.txt"
-          done
+          git rm -f .github/workflows/_issue-832-light-diagnostic.yml
+          node --no-warnings --loader ./scripts/toolchain/typescript-loader.mjs ./scripts/reachability-purge.mjs --write
+          git status --short
+      - name: Run Node 20 regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          npm test -- \
+            scripts/reachability-purge.test.ts \
+            scripts/sanctioned-worker-kill-record.test.ts \
+            scripts/read-delegation-audit.test.ts \
+            2>&1 | tee "${RUNNER_TEMP}/issue-832-targeted-tests.log"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: issue-832-failing-job-diagnostics
-          path: ${{ runner.temp }}/*-diagnostic.txt
+          name: issue-832-final-validation
+          path: |
+            scripts/reachability-purge.manifest.json
+            ${{ runner.temp }}/issue-832-targeted-tests.log
           retention-days: 1
           if-no-files-found: error
