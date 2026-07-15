@@ -1,22 +1,24 @@
 #!/usr/bin/env node
+import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runProcess } from '#opk-kernel/subprocess';
+import { promisify } from 'node:util';
 
 const ENV_KEYS = ['BASE_SHA', 'GITHUB_BASE_SHA', 'PR_BASE_SHA'];
 const FALLBACK_REFS = ['origin/main', 'refs/remotes/origin/main', 'main'];
+const execFileAsync = promisify(execFile);
 
 async function git(repoRoot, args, allowFailure = false) {
-  const result = await runProcess({
-    command: 'git',
-    args,
-    cwd: repoRoot,
-    allowEmptyStdout: true,
-  });
-  if (result.ok) return result.stdout.trim();
-  if (allowFailure) return null;
-  const detail = result.stderr.trim() || result.error || `exit ${String(result.exitCode)}`;
-  throw new Error(`git ${args.join(' ')} failed: ${detail}`);
+  try {
+    const result = await execFileAsync('git', args, { cwd: repoRoot, encoding: 'utf8' });
+    return result.stdout.trim();
+  } catch (error) {
+    if (allowFailure) return null;
+    const stderr = typeof error === 'object' && error && 'stderr' in error ? String(error.stderr).trim() : '';
+    const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown';
+    const detail = stderr || (error instanceof Error ? error.message : `exit ${code}`);
+    throw new Error(`git ${args.join(' ')} failed: ${detail}`);
+  }
 }
 
 function unique(values) {
