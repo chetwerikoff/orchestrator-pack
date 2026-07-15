@@ -21,8 +21,23 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Finalize, validate, and push clean tree
+      - name: Finalize, validate, and persist result
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash .github/scripts/finalize-issue-821.sh
+        run: |
+          set +e
+          report=issue-821-finalizer-report.txt
+          bash .github/scripts/finalize-issue-821.sh >"$report" 2>&1
+          status=$?
+          if (( status != 0 )); then
+            git checkout origin/main -- .github/workflows/typescript-foundation.yml scripts/vitest-heavy-topology.plan.json
+            rm -rf node_modules .github/scripts/finalize-issue-821.sh
+            git add -A
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "Persist issue 821 finalizer result"
+            git push origin HEAD:agent/issue-821-retire-autonomous-surface
+          fi
+          cat "$report"
+          exit "$status"
