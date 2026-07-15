@@ -30,6 +30,8 @@ The adjacent `.js` modules are import-only NodeNext runtime bridges; do not invo
 
 Automatic review uses the same runner through the existing PowerShell reconcile and wake adapters. The preserved `scripts/lib/Review-StartClaim.ps1` mutex, atomic-write, and stale-reclaim primitive remains the concurrency authority. Do not use daemon review endpoints or `ao review submit` as a transition or fallback path.
 
+CI verifies the Node 20 adapter path and the full light-lane cutover contract, including retirement of daemon reviewer-config writes.
+
 ## Required post-merge adoption
 
 1. Read the live project config with `ao project get orchestrator-pack --json`.
