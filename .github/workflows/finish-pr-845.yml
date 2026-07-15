@@ -1,0 +1,332 @@
+name: finish-pr-845
+
+on:
+  push:
+    branches: [issue-839-pack-review-runner-v2]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-839-pack-review-runner-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Apply issue 839 cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          yaml = Path('agent-orchestrator.yaml.example')
+          text = yaml.read_text(encoding='utf-8')
+          text = text.replace(
+              '      REVIEW DRIVING — AO 0.10 does not auto-trigger Codex review on PR open.\n'
+              '      Live procedure: AGENTS.md + side-process scripts (orchestratorRules below is legacy-import reference only).\n'
+              '      The orchestrator and reconcile loops jump the gaps via ao-review run / Get-AoReviewRuns.\n',
+              '      REVIEW DRIVING — reviews are pack-owned; AO does not spawn the reviewer.\n'
+              '      Live procedure: AGENTS.md + side-process scripts (orchestratorRules below is legacy-import reference only).\n'
+              '      The orchestrator and reconcile loops invoke the pack review runner and read the\n'
+              '      Get-AoReviewRuns pack-store view from the pack-side run/status store; never ao spawn.\n',
+          )
+          text = text.replace(
+              '      RUNTIME INVOCATION (shell only — do NOT embed --command in orchestratorRules):\n'
+              '        At review time: ao-review run <worker-session-id>  (scripts/ao-review.ps1 shim → POST .../reviews/trigger)\n'
+              '        REVIEW_COMMAND is configured in project review settings / operator shell — not re-pasted here.\n'
+              '        Discover/idempotency: Get-AoReviewRuns fan-out (GET /api/v1/sessions/{id}/reviews) or ao-review list <session-id> --json.\n'
+              '        Do not add double-quote characters inside this orchestratorRules literal.\n',
+              '      RUNTIME INVOCATION (shell only — do NOT embed --command in orchestratorRules):\n'
+              '        Manual trigger: node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>\n'
+              '        Automatic reconciliation delegates to the same pack review runner; never ao spawn.\n'
+              '        Discover/idempotency: Get-AoReviewRuns pack-store view backed by the pack-side run/status store.\n'
+              '        GitHub PR review is the authoritative verdict; the local store is operational run/status only.\n'
+              '        Do not add double-quote characters inside this orchestratorRules literal.\n',
+          )
+          tail = '''# AO 0.10 review harness (Issue #623)
+          # On AO 0.10.x, configure reviewers via project config API — not REVIEW_COMMAND/--command:
+          #   ao project set-config orchestrator-pack --config-json '{"reviewers":[{"harness":"codex"}]}'
+          # Pack trigger loop uses POST /api/v1/sessions/{workerId}/reviews/trigger (scripts/ao-review.ps1 shim).
+          # Operator adoption: docs/ao-0-10-review-harness-adoption.md
+          '''
+          replacement = '''# Pack-owned review runner (Issue #839)
+          # AO project config must carry no daemon reviewer-harness wiring after adoption.
+          # Manual and automatic review triggers use scripts/pack-review-runner.ts; status reads use
+          # the pack-side run/status store through the Get-AoReviewRuns pack-store view.
+          # Operator cutover and zombie cleanup: docs/ao-0-10-review-harness-adoption.md
+          '''
+          if tail not in text:
+              raise SystemExit('agent-orchestrator.yaml.example: old harness tail not found')
+          text = text.replace(tail, replacement)
+          text = text.replace('Get-AoReviewRuns fan-out', 'Get-AoReviewRuns pack-store view')
+          text = text.replace('ao-review list', 'Get-AoReviewRuns pack-store view')
+          text = text.replace('ao-review run', 'pack review runner')
+          text = text.replace('scripts/ao-review.ps1', 'scripts/pack-review-runner.ts')
+          text = text.replace('GET /api/v1/sessions/{id}/reviews', 'pack-side run/status store')
+          text = text.replace('GET /sessions/{id}/reviews', 'pack-side run/status store')
+          text = text.replace('/api/v1/sessions/{workerId}/reviews/trigger', 'pack review runner')
+          yaml.write_text(text, encoding='utf-8')
+
+          adoption = '''# Pack-owned review runner adoption (Issue #839)
+
+          ## Purpose
+
+          The pack owns review invocation and operational run/status tracking. AO must not spawn a reviewer for this project. Manual and automatic triggers both enter `scripts/pack-review-runner.ts`, which invokes the trusted pack reviewer from the trusted pack checkout, posts the GitHub PR review directly, and records operational state in the pack-side run/status store.
+
+          GitHub PR review is the authoritative verdict record. The local store is only authoritative for run existence, in-flight/terminal status, and the run bound to a `(PR, head)` claim.
+
+          ## Commands
+
+          Manual trigger by worker binding:
+
+          ```bash
+          node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>
+          ```
+
+          Manual trigger by explicit target:
+
+          ```bash
+          node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <pr> --head-sha <40-hex>
+          ```
+
+          Operational status:
+
+          ```bash
+          node --experimental-strip-types scripts/pack-review-runner.ts list --project-id orchestrator-pack
+          ```
+
+          Automatic review uses the same runner through the existing reconcile/wake PowerShell adapters. The preserved `Review-StartClaim.ps1` mutex/atomic-write/stale-reclaim primitive remains the concurrency authority. Do not use daemon review endpoints or `ao review submit` as a transition or fallback path.
+
+          ## Required post-merge adoption
+
+          1. Read the live project config with `ao project get orchestrator-pack --json`.
+          2. Clear the project reviewer-harness wiring. Use the live daemon's accepted empty-state shape: set `reviewers` to an empty array or omit the key, then read the config back and verify that no reviewer harness remains. Do not infer success from exit code alone.
+          3. Restart the AO daemon or recycle the affected project session according to the local config-change procedure. Verify a newly spawned/restored session observes the cleared config.
+          4. Remove known pre-cutover reviewer zombies: session 109 for PR #758, session 124 for PR #820, and the stuck #835 fallback. Use `ao session kill` or the existing dead-session reconciliation path. This is one-time hygiene, not a new recurring reaper.
+          5. Run one fresh manual trigger and one fresh automatic trigger on real open PR heads. Verify the trusted reviewer completes, one GitHub PR review is posted, the pack store reaches terminal state, and no daemon review HTTP traffic occurs.
+
+          ## Failure handling
+
+          - Missing, corrupt, duplicate, or ambiguous binding/store state fails closed; repair it rather than falling back to AO.
+          - A disappeared stale runner is observed as failed and becomes reclaimable through the existing claim policy.
+          - A reviewer non-zero exit or timeout records terminal `failed` or `timed_out`; neither is clean.
+          - A head change creates a distinct claim key. Review the new head rather than reusing stale-head success.
+
+          ## Rollback
+
+          Revert the pack-runner change and deliberately restore the previous project reviewer configuration. Never leave pack and daemon invocation active in parallel.
+          '''
+          Path('docs/ao-0-10-review-harness-adoption.md').write_text(textwrap := '\n'.join(line[10:] if line.startswith('          ') else line for line in adoption.splitlines()) + '\n', encoding='utf-8')
+
+          replace_once(
+              'AGENTS.md',
+              '- **Trigger:** `ao-review run` via `scripts/ao-review.ps1`; discover via `Get-AoReviewRuns` or\n'
+              '  `ao-review list --json`.\n'
+              '- Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on\n'
+              '  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER** — retired `ao review send` / `execute` are\n'
+              '  **REMOVED**.\n',
+              '- **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational status\n'
+              '  comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the verdict.\n'
+              '- Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on\n'
+              '  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`\n'
+              '  are not fallback paths.\n',
+          )
+
+          replace_once(
+              '.claude/skills/merge-with-local-adoption/SKILL.md',
+              '- PR review is run by **pack scripts** (`invoke-pack-review.ps1` under the wake\n'
+              '  supervisor), not by AO. Read verdicts via the pack wrapper\n'
+              '  `pwsh -NoProfile -File scripts/ao-review.ps1 list <worker-session-id> --json`\n'
+              '  (AO HTTP `/api/v1/sessions/{id}/reviews`) or the detached store\n'
+              '  `~/.ao/detached-pack-reviews/pr-<P>.json` (`verdict`, `findingCount`, `headSha`).\n'
+              '  Never call the `ao review` CLI to read verdicts — it has only `submit` (used by pack\n'
+              '  scripts to record a verdict back to AO).\n',
+              '- PR review is run by the **pack-owned runner**, not by AO. Manual invocation is\n'
+              '  `node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>`;\n'
+              '  operational status comes from `scripts/pack-review-runner.ts list` or the compatible\n'
+              '  `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict; the\n'
+              '  pack-side run/status store is operational state only. Never use daemon review HTTP or\n'
+              '  `ao review submit` as a fallback or dual-write path.\n',
+          )
+
+          adapter = Path('scripts/lib/Invoke-AoReviewApi.ps1')
+          text = adapter.read_text(encoding='utf-8')
+          old = '''function Set-AoProjectReviewerHarness {
+              param(
+                  [Parameter(Mandatory = $true)][string]$ProjectId,
+                  [Parameter(Mandatory = $true)][string]$Harness,
+                  [string]$BaseUrl = '',
+                  [hashtable]$HealthPayload = $null
+              )
+              $path = "/api/v1/projects/$([uri]::EscapeDataString($ProjectId))/config"
+              return Invoke-AoDaemonHttpJson -Method PUT -Path $path -Body @{ reviewers = @(@{ harness = $Harness }) } `
+                  -BaseUrl $BaseUrl -HealthPayload $HealthPayload -AllowedStatus @(200)
+          }
+
+          '''
+          if old not in text:
+              raise SystemExit('Invoke-AoReviewApi.ps1: reviewer harness setter not found')
+          text = text.replace(old, '')
+          old_guard = '''    if ($null -ne $ProjectConfigFixture -and -not $FixturePayload) {
+                  $reviewers = @($ProjectConfigFixture.reviewers)
+                  if ($reviewers.Count -eq 0) {
+                      return @{ ok = $false; httpStatus = 0; reason = 'reviewers_harness_misconfig'; classified = $true }
+                  }
+              }
+          '''
+          if old_guard not in text:
+              raise SystemExit('Invoke-AoReviewApi.ps1: harness guard not found')
+          text = text.replace(old_guard, '')
+          adapter.write_text(text, encoding='utf-8')
+
+          runner = Path('scripts/pack-review-runner.ts')
+          text = runner.read_text(encoding='utf-8')
+          text = text.replace('  fixtureReviewExitCode?: number;\n', '  fixtureReviewExitCode?: number;\n  fixtureReviewTimedOut?: boolean;\n', 1)
+          text = text.replace('  fixtureReviewExitCode?: number;\n}): Promise<ProcessResult> {', '  fixtureReviewExitCode?: number;\n  fixtureReviewTimedOut?: boolean;\n}): Promise<ProcessResult> {', 1)
+          marker = "  if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewStdout !== undefined) {\n"
+          timeout_fixture = "  if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewTimedOut) {\n    return { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false };\n  }\n\n"
+          if marker not in text:
+              raise SystemExit('pack-review-runner.ts: fixture marker missing')
+          text = text.replace(marker, timeout_fixture + marker, 1)
+          text = text.replace('        fixtureReviewExitCode: input.fixtureReviewExitCode,\n', '        fixtureReviewExitCode: input.fixtureReviewExitCode,\n        fixtureReviewTimedOut: input.fixtureReviewTimedOut,\n', 1)
+          runner.write_text(text, encoding='utf-8')
+
+          test = Path('scripts/ao-0-10-review-trigger.test.ts')
+          text = test.read_text(encoding='utf-8')
+          insert = '''
+            it('records terminal timed_out status when the controlled reviewer times out', async () => {
+              const storeRoot = tempRoot('opk-review-timeout-');
+              process.env.OPK_VITEST_HARNESS = '1';
+              const result = await startPackReview({
+                storeRoot,
+                sourceRepoRoot: repoRoot,
+                prNumber: 839,
+                headSha: HEAD_A,
+                claimMode: 'preacquired',
+                fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+                fixtureReviewTimedOut: true,
+              });
+              expect(result.ok).toBe(false);
+              expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({
+                status: 'timed_out',
+                failureReason: 'reviewer_process_timeout',
+              });
+            });
+
+            it('is structurally unaffected by fake daemon zombie metadata', () => {
+              const withoutZombie = tempRoot('opk-review-no-zombie-');
+              const withZombie = tempRoot('opk-review-zombie-');
+              process.env.AO_DAEMON_FAKE_REVIEW_SESSIONS = JSON.stringify([{ id: 109 }, { id: 124 }]);
+              expect(createRun(withoutZombie).created).toBe(true);
+              expect(createRun(withZombie).created).toBe(true);
+              expect(listPackReviewRuns({ storeRoot: withZombie })).toHaveLength(1);
+            });
+
+          '''
+          anchor = "  it('does not let a divergent reviewed-worktree runner/store override trusted control code', async () => {"
+          if anchor not in text:
+              raise SystemExit('ao-0-10 review test anchor missing')
+          text = text.replace(anchor, insert + anchor, 1)
+          test.write_text(text, encoding='utf-8')
+
+          bridge = Path('scripts/harness-review-bridge.test.ts')
+          text = bridge.read_text(encoding='utf-8')
+          text = text.replace('  classifyReviewerHarnessAbort,\n', '')
+          text = text.replace("import { classifyReviewTriggerResponse } from '../docs/ao-0-10-review-api.mjs';\n", '')
+          text = re.sub(r"const capturesDir = .*?;\n", '', text)
+          text = re.sub(r"const reviewApiLib = .*?;\n", '', text)
+          for title in [
+              'classifies unset reviewers before trigger',
+              'Invoke-AoReviewTriggerForWorker refuses trigger on misconfig fixture',
+              'ao-review trigger classify unchanged for capture payloads',
+          ]:
+              pattern = r"\n  it\('" + re.escape(title) + r"',[\s\S]*?\n  \}\);\n"
+              text, count = re.subn(pattern, '\n', text, count=1)
+              if count != 1:
+                  raise SystemExit(f'harness-review-bridge.test.ts: missing test {title}')
+          bridge.write_text(text, encoding='utf-8')
+
+          pn = Path('scripts/harness-post-submit-pn-content-shape.test.ts')
+          text = pn.read_text(encoding='utf-8')
+          text = text.replace("import { classifyReviewerHarnessAbort } from '../docs/harness-review-bridge.mjs';\n", '')
+          pattern = r"\n  it\('pre-trigger reviewers-unset boundary stays delegated to #682 guard',[\s\S]*?\n  \}\);\n"
+          text, count = re.subn(pattern, '\n', text, count=1)
+          if count != 1:
+              raise SystemExit('harness-post-submit test: old pre-trigger guard case missing')
+          pn.write_text(text, encoding='utf-8')
+          PY
+
+          AO_SESSION_ID=issue-839-pr-845 npx tsx plugins/ao-task-declaration/bin/declare.ts \
+            --issue 839 \
+            --iteration-id issue-839-pr-845 \
+            --declared-paths 'agent-orchestrator.yaml.example,AGENTS.md,docs/ao-0-10-review-harness-adoption.md,.claude/skills/merge-with-local-adoption/SKILL.md,.cursor/skills/merge-with-local-adoption/SKILL.md' \
+            --declared-globs 'scripts/**'
+
+          grep -RInE 'scripts/ao-review\.ps1|/api/v1/sessions/.*/reviews(?:/trigger)?' \
+            agent-orchestrator.yaml.example AGENTS.md docs/ao-0-10-review-harness-adoption.md \
+            .claude/skills/merge-with-local-adoption/SKILL.md \
+            .cursor/skills/merge-with-local-adoption/SKILL.md && exit 1 || true
+      - name: Validate issue 839
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee /tmp/issue-839-validation.log) 2>&1
+          npm run typecheck:foundation
+          npm run lint:foundation
+          pwsh -NoProfile -File scripts/check-review-trigger-reconcile.ps1
+          pwsh -NoProfile -File scripts/check-orchestrator-review-idempotency.ps1
+          pwsh -NoProfile -File scripts/check-orchestrator-review-head-coverage.ps1
+          npm test -- \
+            scripts/ao-0-10-review-trigger.test.ts \
+            scripts/review-handoff-wake-trigger.test.ts \
+            scripts/review-start-claim.test.ts \
+            scripts/review-start-claim-run-binding.test.ts \
+            scripts/scripted-review-confirmed-delivery-gate.test.ts \
+            scripts/harness-post-submit-pn-content-shape.test.ts \
+            scripts/harness-review-bridge.test.ts \
+            scripts/review-wake-trigger.test.ts
+      - name: Commit and push clean final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/finish-pr-845.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Complete pack-owned review runner cutover'
+          git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body 'Issue #839 completion pass: cutover docs/adapters updated, declaration committed, static gates passed, and all eight targeted regression files passed. Temporary workflow removed from the final tree.'
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          { echo '## Issue #839 completion failure'; echo; echo '```text'; tail -c 50000 /tmp/issue-839-validation.log 2>/dev/null || true; echo; echo '```'; } >/tmp/issue-839-failure.md
+          gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body-file /tmp/issue-839-failure.md
