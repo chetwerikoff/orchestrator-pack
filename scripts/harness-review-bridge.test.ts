@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,7 @@ import { resolveTrustedRunnerPaths } from './pack-review-runner.js';
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureDir = path.join(repoRoot, 'plugins/ao-codex-pr-reviewer/tests/fixtures');
 const harnessFixtures = path.join(repoRoot, 'tests/fixtures/harness-review-bridge');
+const reviewApiLib = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
 const SCOPED_ISSUE_NUMBER = 9;
 const tempRoots: string[] = [];
 const oldEnv = { ...process.env };
@@ -74,11 +76,26 @@ describe('pack review harness bridge (Issue #658 / #839)', () => {
   });
 
   it('keeps the PowerShell review seam as pack-runner/store glue without daemon review HTTP', () => {
-    const adapter = readFileSync(path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1'), 'utf8');
+    const adapter = readFileSync(reviewApiLib, 'utf8');
     expect(adapter).toContain('scripts/pack-review-runner.ts');
     expect(adapter).toContain("Subcommand 'start'");
     expect(adapter).toContain("Subcommand 'list'");
     expect(adapter).not.toMatch(/\/api\/v1\/sessions\/.*\/reviews(?:\/trigger)?/);
+  });
+
+  it('classifies the legacy local harness fixture without issuing daemon review HTTP', () => {
+    const out = execFileSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `. '${reviewApiLib}'; $fixture = @{ reviewers = @() }; $result = Invoke-AoReviewTriggerForWorker -SessionId 'worker-1' -ProjectConfigFixture $fixture; $result | ConvertTo-Json -Compress -Depth 5`,
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim();
+    const result = JSON.parse(out) as { ok: boolean; reason: string; classified: boolean };
+    expect(result).toMatchObject({ ok: false, reason: 'reviewers_harness_misconfig', classified: true });
+    expect(readFileSync(reviewApiLib, 'utf8')).not.toMatch(/\/api\/v1\/sessions\/.*\/reviews(?:\/trigger)?/);
   });
 
   it('submits mapper-normalized [Pn] structured findings', () => {
