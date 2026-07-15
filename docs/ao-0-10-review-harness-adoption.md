@@ -4,7 +4,7 @@
 
 The pack owns review invocation and operational run/status tracking. AO must not spawn a reviewer for this project. Manual and automatic triggers both enter `scripts/pack-review-runner.ts`, which invokes `scripts/invoke-pack-review.ps1` from the trusted pack checkout, posts the GitHub PR review directly, and records operational state in the pack-side run/status store.
 
-GitHub PR review is the authoritative verdict record. The local store is authoritative only for run existence, in-flight/terminal status, and the run bound to a `(PR, head)` claim.
+GitHub PR review is the authoritative verdict record. The local store is authoritative only for run existence, in-flight/terminal status, and the run bound to a `(PR, head)` claim. Repository-tracked configuration documents the cutover, but only the operator adoption below changes the live gitignored AO project state.
 
 ## Commands
 
