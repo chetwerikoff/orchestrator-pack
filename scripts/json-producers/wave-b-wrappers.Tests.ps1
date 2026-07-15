@@ -107,4 +107,20 @@ Describe 'Wave B PowerShell compatibility wrappers' {
         }
         finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
     }
+
+    It 'keeps the read-delegation Stop hook fail-open when the producer cannot launch' {
+        $temp = New-WaveBTempDirectory
+        $wrapper = Join-Path $script:RepoRoot 'scripts/invoke-read-delegation-audit-stop.ps1'
+        $pwshPath = (Get-Command pwsh -ErrorAction Stop).Source
+        $originalPath = $env:PATH
+        try {
+            $env:PATH = $temp
+            '{}' | & $pwshPath -NoLogo -NoProfile -File $wrapper
+            $LASTEXITCODE | Should -Be 0
+        }
+        finally {
+            $env:PATH = $originalPath
+            Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
