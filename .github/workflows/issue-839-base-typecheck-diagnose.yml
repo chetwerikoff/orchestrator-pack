@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   diagnose:
@@ -22,5 +24,29 @@ jobs:
       - name: Install dependencies quietly
         shell: bash
         run: npm ci --include=dev --silent >/dev/null 2>&1
-      - name: Type-check full pack sources
-        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Capture full-pack typecheck
+        id: typecheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tsc --project tsconfig.base.json --noEmit 2>&1 | tee /tmp/base-typecheck.log
+      - name: Publish compiler output
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.typecheck.outcome }}
+        shell: bash
+        run: |
+          {
+            echo '## Issue #839 tsconfig.base diagnosis'
+            echo
+            echo "outcome=$OUTCOME"
+            echo '```text'
+            cat /tmp/base-typecheck.log
+            echo '```'
+          } >/tmp/base-typecheck-report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body=@/tmp/base-typecheck-report.md
+      - name: Preserve failure result
+        if: steps.typecheck.outcome != 'success'
+        run: exit 1
