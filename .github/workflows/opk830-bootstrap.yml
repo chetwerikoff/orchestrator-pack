@@ -1,9 +1,6 @@
 name: Issue 830 bootstrap
 
 on:
-  push:
-    branches:
-      - agent/issue-830-gate-runner-core-census
   pull_request:
     branches:
       - main
@@ -20,17 +17,16 @@ jobs:
         with:
           fetch-depth: 0
           ref: agent/issue-830-gate-runner-core-census
-      - name: Apply final patch and replace bootstrap history
+      - name: Apply final patch and remove bootstrap transport
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/opk830-bootstrap
-          cp .opk830-bootstrap/chunk-* /tmp/opk830-bootstrap/
-          cat /tmp/opk830-bootstrap/chunk-* | base64 --decode > /tmp/opk830.patch.gz
+          cat .opk830-bootstrap/chunk-* | base64 --decode > /tmp/opk830.patch.gz
           printf '%s  %s\n' '7a8ae716b6aec351811d7522647d028ed2da1a56c94d2e7555a2e7c87b71af9a' '/tmp/opk830.patch.gz' | sha256sum -c -
           gzip --decompress --stdout /tmp/opk830.patch.gz > /tmp/opk830.patch
-          git reset --hard b7394065b9ee1b046abb4cf29aff456df1935571
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git am --3way /tmp/opk830.patch
-          git push --force origin HEAD:refs/heads/agent/issue-830-gate-runner-core-census
+          git rm -r .opk830-bootstrap .github/workflows/opk830-bootstrap.yml
+          git commit -m 'chore: remove issue 830 bootstrap transport'
+          git push origin HEAD:refs/heads/agent/issue-830-gate-runner-core-census
