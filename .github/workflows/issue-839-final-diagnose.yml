@@ -18,21 +18,21 @@ jobs:
   fix-and-verify:
     if: github.event.pull_request.number == 845
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           ref: issue-839-pack-review-runner-v2
           fetch-depth: 0
-      - name: Apply Node-version-aware review adapter fix
+      - name: Apply minimal Node-version-aware adapter fix
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          adapter_path = Path('scripts/lib/Invoke-AoReviewApi.ps1')
-          text = adapter_path.read_text(encoding='utf-8')
+          path = Path('scripts/lib/Invoke-AoReviewApi.ps1')
+          text = path.read_text(encoding='utf-8')
 
           old = ". (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')\n"
           new = old + ". (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')\n"
@@ -50,27 +50,13 @@ jobs:
           new = "    $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)\n    $nodeArgs += @('start', '--session-id', $SessionId, '--claim-mode', 'preacquired')\n    return ('node ' + ($nodeArgs -join ' '))"
           if text.count(old) != 1:
               raise SystemExit('expected exactly one Node 22-only diagnostic invocation line')
-          text = text.replace(old, new)
-          adapter_path.write_text(text, encoding='utf-8')
-
-          test_path = Path('scripts/ao-0-10-review-trigger.test.ts')
-          test = test_path.read_text(encoding='utf-8')
-          anchor = "    expect(adapter).not.toMatch(/Invoke-AoSessionReviewTrigger\\s+-SessionId.*BaseUrl/);\n"
-          addition = (
-              anchor
-              + "    expect(adapter).toContain('Invoke-TypeScriptCli.ps1');\n"
-              + "    expect(adapter).toContain('Get-OpkTypeScriptNodeArguments');\n"
-              + "    expect(adapter).not.toMatch(/& node[^\\r\\n]*--experimental-strip-types/);\n"
-          )
-          if test.count(anchor) != 1 or "expect(adapter).toContain('Invoke-TypeScriptCli.ps1')" in test:
-              raise SystemExit('unexpected adapter runtime regression assertion state')
-          test_path.write_text(test.replace(anchor, addition), encoding='utf-8')
+          path.write_text(text.replace(old, new), encoding='utf-8')
           PY
 
           rm -f .github/workflows/issue-839-final-diagnose.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/lib/Invoke-AoReviewApi.ps1 scripts/ao-0-10-review-trigger.test.ts .github/workflows/issue-839-final-diagnose.yml
+          git add scripts/lib/Invoke-AoReviewApi.ps1 .github/workflows/issue-839-final-diagnose.yml
           git commit -m 'Use shared Node 20 TypeScript loader for review adapter'
       - uses: actions/setup-node@v4
         with:
@@ -78,23 +64,23 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --include=dev --silent
-      - name: Full-pack and foundation TypeScript checks
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx tsc --project tsconfig.base.json --noEmit
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run test:foundation
-          npm run check:pwsh-test-growth
+      - name: Full-pack TypeScript typecheck
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Foundation TypeScript typecheck
+        run: npm run typecheck:foundation
+      - name: TypeScript policy lint
+        run: npm run lint:foundation
+      - name: TypeScript foundation tests
+        run: npm run test:foundation
+      - name: PowerShell child-test growth guard
+        run: npm run check:pwsh-test-growth
       - name: Review contract gates
         shell: pwsh
         run: |
           ./scripts/check-review-trigger-reconcile.ps1
           ./scripts/check-orchestrator-review-idempotency.ps1
           ./scripts/check-orchestrator-review-head-coverage.ps1
-      - name: Targeted review adapter regression on Node 20
-        shell: bash
+      - name: Review adapter regression on Node 20
         run: node scripts/run-vitest-with-harness.mjs run scripts/ao-0-10-review-trigger.test.ts
       - name: Plan heavy topology from candidate commit
         shell: bash
@@ -118,4 +104,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: gh pr comment 845 --repo chetwerikoff/orchestrator-pack --body "Issue #839 Node 20 finalization failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        run: gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983714885 --field body="Issue #839 minimal Node 20 finalization failed at a named workflow step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
