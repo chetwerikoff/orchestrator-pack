@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: orchestratorRules covered-head idempotency (Issue #189, #625).
+  Regression guard: covered-head idempotency with pack-owned review state.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -12,7 +12,6 @@ $loopMjs = Join-Path $Root 'docs/review-orchestrator-loop.mjs'
 $reconcileMjs = Join-Path $Root 'docs/review-trigger-reconcile.mjs'
 
 Assert-RequiredPathsExist -Paths @($example, $scriptOwnedDoc, $loopMjs, $reconcileMjs)
-
 $exampleText = Get-Content -LiteralPath $example -Raw
 $rulesText = Get-Content -LiteralPath $scriptOwnedDoc -Raw
 
@@ -29,22 +28,20 @@ $requiredExample = @(
     'FAILED / CANCELLED ON CURRENT HEAD',
     'not plain uncovered',
     'PRE-RUN COVERAGE RE-CHECK',
+    're-read the pack review run store',
     'Runs with no prNumber',
     'linkedSessionId',
     'fail closed to inaction',
+    'PACK-OWNED REVIEW RUNNER',
     'SCRIPT-OWNED ROUTINE REVIEW',
     'review-trigger-reconcile.ps1',
     'review-trigger-reeval.ps1',
     'orchestrator-wake-listener.ps1',
     'issue #641'
 )
-
 $missingExample = @($requiredExample | Where-Object { $exampleText -notlike "*$_*" })
-if ($exampleText -notlike '*re-read Get-AoReviewRuns*' -and $exampleText -notlike '*Get-AoReviewRuns fan-out*') {
-    $missingExample += 're-read Get-AoReviewRuns'
-}
 if ($missingExample.Count -gt 0) {
-    Write-Host ("agent-orchestrator.yaml.example missing Issue #189 phrases: {0}" -f ($missingExample -join ', '))
+    Write-Host ("agent-orchestrator.yaml.example missing pack-store head-coverage phrases: {0}" -f ($missingExample -join ', '))
     exit 1
 }
 
@@ -63,7 +60,6 @@ $requiredRules = @(
     'issue #641',
     'Script-owned procedure'
 )
-
 $missingRules = @($requiredRules | Where-Object { $rulesText -notlike "*$_*" })
 if ($missingRules.Count -gt 0) {
     Write-Host ("docs/script-owned-review-pipeline.md missing Issue #189 mirror phrases: {0}" -f ($missingRules -join ', '))
@@ -75,7 +71,6 @@ if ($loop -notmatch "from '\./review-trigger-reconcile\.mjs'") {
     Write-Host 'docs/review-orchestrator-loop.mjs must import coverage from review-trigger-reconcile.mjs'
     exit 1
 }
-
 if ($loop -notmatch 'export function shouldStartReviewRunOnUncoveredPath' -or
     $loop -notmatch 'export function evaluateReviewRunWithRecheck' -or
     $loop -notmatch 'export function evaluatePrNumberLessMergedRun') {
@@ -89,5 +84,5 @@ if ($reconcile -notmatch 'COVERED_TERMINAL_REVIEW_STATUSES') {
     exit 1
 }
 
-Write-Host '[PASS] orchestratorRules covered-head idempotency and no-drift wiring (Issue #189)'
+Write-Host '[PASS] pack-store covered-head idempotency and no-drift wiring (Issue #839)'
 exit 0
