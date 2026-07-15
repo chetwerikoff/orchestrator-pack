@@ -26,7 +26,16 @@ jobs:
       - name: Rebuild clean issue tree from main
         env:
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/apply-issue-821-final-fixes.mjs
+        run: |
+          set -o pipefail
+          node scripts/apply-issue-821-final-fixes.mjs 2>&1 | tee "$RUNNER_TEMP/issue-821-rebuild.log"
+      - name: Upload rebuild diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-821-rebuild-log-${{ github.run_id }}
+          path: ${{ runner.temp }}/issue-821-rebuild.log
+          if-no-files-found: warn
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Refresh policy baselines
@@ -38,6 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           npx vitest run \
+            scripts/issue-821-gate-activation.test.ts \
             scripts/autonomous-orchestrator-boundary.test.ts \
             scripts/autonomous-spawn-policy.test.ts \
             scripts/worker-recovery-spawn-argv.test.ts \
