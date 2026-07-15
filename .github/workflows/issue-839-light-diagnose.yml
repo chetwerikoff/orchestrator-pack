@@ -1,0 +1,70 @@
+name: issue-839-light-diagnose
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.number == 845
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --include=dev --silent
+      - name: Run light lane
+        id: light
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/run-vitest-light-lane.ps1
+      - name: Publish failed assertions
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.light.outcome }}
+        shell: bash
+        run: |
+          node - <<'NODE' >/tmp/failures.txt
+          const fs = require('node:fs');
+          const path = '.vitest-runtime-report-light.json';
+          if (!fs.existsSync(path)) {
+            console.log('runtime report missing');
+            process.exit(0);
+          }
+          const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+          let count = 0;
+          for (const file of report.testResults ?? []) {
+            for (const test of file.assertionResults ?? []) {
+              if (test.status !== 'failed') continue;
+              count += 1;
+              console.log(`FILE: ${file.name}`);
+              console.log(`TEST: ${test.fullName}`);
+              for (const message of test.failureMessages ?? []) console.log(message);
+              console.log('---');
+            }
+          }
+          if (count === 0) {
+            console.log(`no failed assertions; success=${report.success} numFailedTests=${report.numFailedTests} numFailedTestSuites=${report.numFailedTestSuites}`);
+          }
+          NODE
+          {
+            echo '## Issue #839 light-lane diagnosis'
+            echo
+            echo "outcome=$OUTCOME"
+            echo '```text'
+            cat /tmp/failures.txt
+            echo '```'
+          } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
