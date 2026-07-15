@@ -172,7 +172,7 @@ If a plugin has tests, run the plugin-specific test command documented in that p
 
 When adding behavior, prefer in order: (1) prompt/rules, (2) config, (3) plugin/hook,
 (4) CI guard, (5) documentation. Never choose a core patch unless the user explicitly asks for
-an upstream contribution plan.
+an upstream contribution plan. **TS-first:** New `scripts/**` files MUST use TypeScript/Node. PowerShell is frozen during migration; new `.ps1` needs explicit task-spec justification that TS/Node is unsuitable. Existing `.ps1` and wrappers/shims stay with #830/#831.
 
 **Rule delivery (AO 0.10.2):** Worker policy lives in this file. After merge, **recycle live
 worker AO sessions** so worktrees pick up the new tracked `AGENTS.md` — AO restart alone is

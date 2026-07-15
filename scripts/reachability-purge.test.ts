@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -7,8 +7,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { buildManifest as buildManifestRuntime } from './reachability-purge.mjs';
 
 interface ReachabilityManifest {
+  analysisBase: { ref: string; sha: string };
   graphNodeCount: number;
-  deletionManifest: Array<{ reason: string }>;
+  deletionManifest: Array<{ path: string; reason: string }>;
   suspectEdges: Array<{
     target?: string | null;
     possibleTargets?: string[];
@@ -39,21 +40,57 @@ interface ReachabilityManifest {
   completionBlockers: Array<{ code: string; path: string; evidence: string }>;
 }
 
+interface GateMigrationCensus {
+  entries: Array<{
+    sourceKind: string;
+    sourcePath: string;
+    classification: string;
+  }>;
+}
+
 const buildManifest = buildManifestRuntime as (repoRoot?: string) => Promise<ReachabilityManifest>;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = path.join(repoRoot, 'scripts', 'reachability-purge.manifest.json');
+const censusPath = path.join(repoRoot, 'scripts', 'gate-runner', 'census', 'pre-change-baseline.json');
+const census = JSON.parse(readFileSync(censusPath, 'utf8')) as GateMigrationCensus;
+const censusDeletionClassifications = new Set([
+  'ported-declarative',
+  'ported-custom',
+  'retired-with-justification',
+]);
+const censusQualifiedGateDeletions = new Set(
+  census.entries
+    .filter((entry) => entry.sourceKind === 'check-script' && censusDeletionClassifications.has(entry.classification))
+    .map((entry) => entry.sourcePath),
+);
 let manifest: ReachabilityManifest;
+
+function qualifiedCurrentDeletions(): string[] {
+  return [...censusQualifiedGateDeletions]
+    .filter((relativePath) => !existsSync(path.join(repoRoot, relativePath)))
+    .sort();
+}
+
+function unqualifiedUnexpected(current: ReachabilityManifest): string[] {
+  return current.deletionSetDiffFromFormula.unexpected
+    .filter((relativePath) => !censusQualifiedGateDeletions.has(relativePath))
+    .sort();
+}
 
 beforeAll(async () => {
   manifest = await buildManifest(repoRoot);
 }, 120_000);
 
 describe.sequential('reachability-purge', () => {
-  it('manifest committed, procedure re-runnable, and re-run reproduces the committed manifest with zero drift', () => {
-    const committed = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    expect(manifest.graphNodeCount).toBeGreaterThan(0);
-    expect(manifest.deletionManifest.length).toBeGreaterThan(0);
-    expect(manifest).toEqual(committed);
+  it('keeps the committed proof frozen while reconciling later gate deletions through the census', () => {
+    const committed = JSON.parse(readFileSync(manifestPath, 'utf8')) as ReachabilityManifest;
+    expect(committed.graphNodeCount).toBeGreaterThan(0);
+    expect(committed.deletionManifest.length).toBeGreaterThan(0);
+    expect(committed.deletionSetDiffFromFormula).toEqual({ missing: [], unexpected: [] });
+    expect(manifest.analysisBase).toEqual(committed.analysisBase);
+    expect(manifest.deletionSetDiffFromFormula.missing).toEqual([]);
+    expect(unqualifiedUnexpected(manifest)).toEqual([]);
+    expect([...manifest.deletionSetDiffFromFormula.unexpected].sort()).toEqual(qualifiedCurrentDeletions());
   });
 
   it('every suspect edge has an explicit disposition with recorded evidence, and no cross-scope works row lacks proof beyond edge-fired evidence', () => {
@@ -78,9 +115,14 @@ describe.sequential('reachability-purge', () => {
     }
   });
 
-  it('deletion set matches deadness formula including superseded-caller resolution', () => {
-    expect(manifest.deletionSetDiffFromFormula).toEqual({ missing: [], unexpected: [] });
-    expect(manifest.deletionManifest.every((row) => ['zero-reachability', 'superseded', 'backup', 'issue-821-retired', 'issue-839-retired'].includes(row.reason))).toBe(true);
+  it('deletion set matches deadness formula or a census-qualified later gate migration', () => {
+    expect(manifest.deletionSetDiffFromFormula.missing).toEqual([]);
+    expect(unqualifiedUnexpected(manifest)).toEqual([]);
+    expect([...manifest.deletionSetDiffFromFormula.unexpected].sort()).toEqual(qualifiedCurrentDeletions());
+    expect(manifest.deletionManifest.every((row) =>
+      ['zero-reachability', 'superseded', 'backup', 'issue-821-retired', 'issue-839-retired'].includes(row.reason)
+      || (row.reason === 'unqualified' && censusQualifiedGateDeletions.has(row.path)),
+    )).toBe(true);
     expect(manifest.supersededSurfaceInventory.every((row) => row.disposition.startsWith('held-'))).toBe(true);
   });
 
@@ -119,6 +161,7 @@ describe.sequential('reachability-purge', () => {
         ),
       ).toBe(true);
       expect(mutated.deletionSetDiffFromFormula.unexpected).toContain(deletedPath);
+      expect(unqualifiedUnexpected(mutated)).toContain(deletedPath);
     } finally {
       writeFileSync(agentsPath, original, 'utf8');
     }
