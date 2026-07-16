@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import ts from 'typescript';
 import { failGate, passGate, type EvidenceObservation, type GateResult } from './contracts.ts';
 import { populationDigest } from './census-generator.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
@@ -212,157 +211,334 @@ function hasOperatorCommand(text: string, marker: string): boolean {
   return new RegExp(`pwsh(?:\\.exe)?\\s+-NoProfile\\s+-File\\s+(?:\\./)?${escapeRegExp(target)}(?:\\s|$)`, 'iu').test(text);
 }
 
-function childProcessFunctionName(expression: ts.Expression): string | undefined {
-  if (ts.isIdentifier(expression)) return expression.text;
-  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
-  return undefined;
+interface ParsedCall {
+  readonly name: string;
+  readonly arguments: readonly string[];
 }
 
-function collectUniqueInitializers(source: ts.SourceFile): ReadonlyMap<string, ts.Expression> {
-  const values = new Map<string, ts.Expression>();
-  const ambiguous = new Set<string>();
-  const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-      const name = node.name.text;
-      if (values.has(name)) {
-        values.delete(name);
-        ambiguous.add(name);
-      } else if (!ambiguous.has(name)) {
-        values.set(name, node.initializer);
-      }
+function isIdentifierStart(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z_$]/u.test(character);
+}
+
+function isIdentifierPart(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z0-9_$]/u.test(character);
+}
+
+function skipLineComment(text: string, start: number): number {
+  const end = text.indexOf('\n', start + 2);
+  return end < 0 ? text.length : end + 1;
+}
+
+function skipBlockComment(text: string, start: number): number {
+  const end = text.indexOf('*/', start + 2);
+  return end < 0 ? text.length : end + 2;
+}
+
+function skipQuoted(text: string, start: number): number {
+  const quote = text[start];
+  let index = start + 1;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '\\') {
+      index += 2;
+      continue;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
+    if (character === quote) return index + 1;
+    index += 1;
+  }
+  return text.length;
+}
+
+function skipTrivia(text: string, start: number): number {
+  let index = start;
+  while (index < text.length) {
+    if (/\s/u.test(text[index] ?? '')) {
+      index += 1;
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function matchingDelimiter(text: string, start: number): number {
+  const opening = text[start];
+  const closingByOpening: Readonly<Record<string, string>> = { '(': ')', '[': ']', '{': '}' };
+  const closing = opening ? closingByOpening[opening] : undefined;
+  if (!closing) return -1;
+  const stack = [closing];
+  let index = start + 1;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    const nestedClosing = character ? closingByOpening[character] : undefined;
+    if (nestedClosing) {
+      stack.push(nestedClosing);
+      index += 1;
+      continue;
+    }
+    if (character === stack.at(-1)) {
+      stack.pop();
+      if (stack.length === 0) return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+function splitTopLevel(text: string, separator = ','): string[] {
+  const values: string[] = [];
+  let start = 0;
+  let index = 0;
+  const closingByOpening: Readonly<Record<string, string>> = { '(': ')', '[': ']', '{': '}' };
+  const stack: string[] = [];
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    const closing = character ? closingByOpening[character] : undefined;
+    if (closing) {
+      stack.push(closing);
+      index += 1;
+      continue;
+    }
+    if (character === stack.at(-1)) {
+      stack.pop();
+      index += 1;
+      continue;
+    }
+    if (character === separator && stack.length === 0) {
+      values.push(text.slice(start, index).trim());
+      start = index + 1;
+    }
+    index += 1;
+  }
+  const tail = text.slice(start).trim();
+  if (tail.length > 0 || values.length > 0) values.push(tail);
   return values;
 }
 
-function staticString(
-  expression: ts.Expression,
-  initializers: ReadonlyMap<string, ts.Expression>,
-  seen: ReadonlySet<string> = new Set(),
-): string | undefined {
-  if (ts.isStringLiteralLike(expression)) return expression.text;
-  if (ts.isIdentifier(expression)) {
-    if (seen.has(expression.text)) return undefined;
-    const initializer = initializers.get(expression.text);
-    if (!initializer) return undefined;
-    return staticString(initializer, initializers, new Set([...seen, expression.text]));
+function topLevelSeparator(text: string, separator: string): number {
+  let index = 0;
+  const closingByOpening: Readonly<Record<string, string>> = { '(': ')', '[': ']', '{': '}' };
+  const stack: string[] = [];
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    const closing = character ? closingByOpening[character] : undefined;
+    if (closing) {
+      stack.push(closing);
+      index += 1;
+      continue;
+    }
+    if (character === stack.at(-1)) {
+      stack.pop();
+      index += 1;
+      continue;
+    }
+    if (character === separator && stack.length === 0) return index;
+    index += 1;
   }
-  return undefined;
+  return -1;
 }
 
-function staticPath(
-  expression: ts.Expression,
-  initializers: ReadonlyMap<string, ts.Expression>,
-  seen: ReadonlySet<string> = new Set(),
-): string | undefined {
-  const literal = staticString(expression, initializers, seen);
+function parseCalls(text: string, acceptedNames: ReadonlySet<string>): ParsedCall[] {
+  const calls: ParsedCall[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    if (!isIdentifierStart(character)) {
+      index += 1;
+      continue;
+    }
+    const nameStart = index;
+    index += 1;
+    while (isIdentifierPart(text[index])) index += 1;
+    const name = text.slice(nameStart, index);
+    if (!acceptedNames.has(name)) continue;
+    const opening = skipTrivia(text, index);
+    if (text[opening] !== '(') continue;
+    const closing = matchingDelimiter(text, opening);
+    if (closing < 0) continue;
+    calls.push({ name, arguments: splitTopLevel(text.slice(opening + 1, closing)) });
+    index = closing + 1;
+  }
+  return calls;
+}
+
+function parseStringLiteral(expression: string): string | undefined {
+  const trimmed = expression.trim();
+  const quote = trimmed[0];
+  if ((quote !== '"' && quote !== "'") || trimmed.at(-1) !== quote) return undefined;
+  let value = '';
+  for (let index = 1; index < trimmed.length - 1; index += 1) {
+    const character = trimmed[index];
+    if (character !== '\\') {
+      value += character;
+      continue;
+    }
+    index += 1;
+    const escaped = trimmed[index];
+    if (escaped === undefined) return undefined;
+    switch (escaped) {
+      case 'n': value += '\n'; break;
+      case 'r': value += '\r'; break;
+      case 't': value += '\t'; break;
+      case 'b': value += '\b'; break;
+      case 'f': value += '\f'; break;
+      case 'v': value += '\v'; break;
+      default: value += escaped; break;
+    }
+  }
+  return value;
+}
+
+function unwrapDelimited(expression: string, opening: string, closing: string): string | undefined {
+  const trimmed = expression.trim();
+  if (trimmed[0] !== opening) return undefined;
+  const end = matchingDelimiter(trimmed, 0);
+  if (end !== trimmed.length - 1 || trimmed[end] !== closing) return undefined;
+  return trimmed.slice(1, end);
+}
+
+function parseCallExpression(expression: string, acceptedNames: ReadonlySet<string>): ParsedCall | undefined {
+  const trimmed = expression.trim();
+  let index = 0;
+  let finalName: string | undefined;
+  while (index < trimmed.length) {
+    if (!isIdentifierStart(trimmed[index])) return undefined;
+    const start = index;
+    index += 1;
+    while (isIdentifierPart(trimmed[index])) index += 1;
+    finalName = trimmed.slice(start, index);
+    index = skipTrivia(trimmed, index);
+    if (trimmed[index] !== '.') break;
+    index = skipTrivia(trimmed, index + 1);
+  }
+  if (!finalName || !acceptedNames.has(finalName) || trimmed[index] !== '(') return undefined;
+  const closing = matchingDelimiter(trimmed, index);
+  if (closing < 0 || skipTrivia(trimmed, closing + 1) !== trimmed.length) return undefined;
+  return { name: finalName, arguments: splitTopLevel(trimmed.slice(index + 1, closing)) };
+}
+
+function parseArrayExpression(expression: string): readonly string[] | undefined {
+  const contents = unwrapDelimited(expression, '[', ']');
+  return contents === undefined ? undefined : splitTopLevel(contents);
+}
+
+function parseObjectExpression(expression: string): ReadonlyMap<string, string> | undefined {
+  const contents = unwrapDelimited(expression, '{', '}');
+  if (contents === undefined) return undefined;
+  const properties = new Map<string, string>();
+  for (const property of splitTopLevel(contents)) {
+    if (property.startsWith('...')) continue;
+    const colon = topLevelSeparator(property, ':');
+    if (colon < 0) continue;
+    const rawName = property.slice(0, colon).trim();
+    const name = parseStringLiteral(rawName) ?? (/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(rawName) ? rawName : undefined);
+    if (name) properties.set(name, property.slice(colon + 1).trim());
+  }
+  return properties;
+}
+
+function normalizedPathExpression(expression: string): string | undefined {
+  const literal = parseStringLiteral(expression);
   if (literal !== undefined) return literal.replaceAll('\\', '/').replace(/^\.\//u, '');
-  if (ts.isIdentifier(expression)) return undefined;
-  if (!ts.isCallExpression(expression)) return undefined;
-  const name = childProcessFunctionName(expression.expression);
-  if (name !== 'join' && name !== 'resolve') return undefined;
+  const call = parseCallExpression(expression, new Set(['join', 'resolve']));
+  if (!call) return undefined;
   const segments: string[] = [];
-  for (const argument of expression.arguments) {
-    const value = staticPath(argument, initializers, seen);
+  for (const argument of call.arguments) {
+    const value = normalizedPathExpression(argument);
     if (value !== undefined && value.length > 0) segments.push(value.replace(/^\/+|\/+$/gu, ''));
   }
   return segments.length > 0 ? segments.join('/') : undefined;
 }
 
-function staticArray(
-  expression: ts.Expression,
-  initializers: ReadonlyMap<string, ts.Expression>,
-): ts.ArrayLiteralExpression | undefined {
-  if (ts.isArrayLiteralExpression(expression)) return expression;
-  if (!ts.isIdentifier(expression)) return undefined;
-  const initializer = initializers.get(expression.text);
-  return initializer && ts.isArrayLiteralExpression(initializer) ? initializer : undefined;
-}
-
-
-function staticObject(
-  expression: ts.Expression,
-  initializers: ReadonlyMap<string, ts.Expression>,
-): ts.ObjectLiteralExpression | undefined {
-  if (ts.isObjectLiteralExpression(expression)) return expression;
-  if (!ts.isIdentifier(expression)) return undefined;
-  const initializer = initializers.get(expression.text);
-  return initializer && ts.isObjectLiteralExpression(initializer) ? initializer : undefined;
-}
-
-function objectProperty(
-  object: ts.ObjectLiteralExpression,
-  name: string,
-): ts.Expression | undefined {
-  for (const property of object.properties) {
-    if (!ts.isPropertyAssignment(property)) continue;
-    const propertyName = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)
-      ? property.name.text
-      : undefined;
-    if (propertyName === name) return property.initializer;
-  }
-  return undefined;
-}
-
-function powerShellInvocation(
-  call: ts.CallExpression,
-  initializers: ReadonlyMap<string, ts.Expression>,
-): { readonly executable?: string; readonly argv?: ts.ArrayLiteralExpression } {
-  const functionName = childProcessFunctionName(call.expression);
-  if (functionName === 'spawnSync' || functionName === 'execFileSync') {
-    return {
-      executable: call.arguments[0] ? staticString(call.arguments[0], initializers)?.toLocaleLowerCase() : undefined,
-      argv: call.arguments[1] ? staticArray(call.arguments[1], initializers) : undefined,
-    };
-  }
-  if (functionName !== 'runProcessSync' || !call.arguments[0]) return {};
-  const options = staticObject(call.arguments[0], initializers);
-  if (!options) return {};
-  const command = objectProperty(options, 'command');
-  const args = objectProperty(options, 'args');
-  return {
-    executable: command ? staticString(command, initializers)?.toLocaleLowerCase() : undefined,
-    argv: args ? staticArray(args, initializers) : undefined,
-  };
-}
-
-function pathExpressionTargets(
-  expression: ts.Expression,
-  target: string,
-  initializers: ReadonlyMap<string, ts.Expression>,
-): boolean {
-  const candidate = staticPath(expression, initializers)?.replaceAll('\\', '/').replace(/^\.\//u, '');
+function pathExpressionTargets(expression: string, target: string): boolean {
+  const candidate = normalizedPathExpression(expression)?.replaceAll('\\', '/').replace(/^\.\//u, '');
   return candidate === target || candidate?.endsWith(`/${target}`) === true;
+}
+
+function invocationTargets(call: ParsedCall, target: string): boolean {
+  let executable: string | undefined;
+  let argv: readonly string[] | undefined;
+  if (call.name === 'spawnSync' || call.name === 'execFileSync') {
+    executable = call.arguments[0] ? parseStringLiteral(call.arguments[0])?.toLocaleLowerCase() : undefined;
+    argv = call.arguments[1] ? parseArrayExpression(call.arguments[1]) : undefined;
+  } else if (call.name === 'runProcessSync' && call.arguments[0]) {
+    const options = parseObjectExpression(call.arguments[0]);
+    const command = options?.get('command');
+    const args = options?.get('args');
+    executable = command ? parseStringLiteral(command)?.toLocaleLowerCase() : undefined;
+    argv = args ? parseArrayExpression(args) : undefined;
+  }
+  if ((executable !== 'pwsh' && executable !== 'pwsh.exe') || !argv) return false;
+  for (let index = 0; index < argv.length - 1; index += 1) {
+    const flag = argv[index];
+    const candidate = argv[index + 1];
+    if (!flag || !candidate || flag.trim().startsWith('...') || candidate.trim().startsWith('...')) continue;
+    if (parseStringLiteral(flag)?.toLocaleLowerCase() !== '-file') continue;
+    if (pathExpressionTargets(candidate, target)) return true;
+  }
+  return false;
 }
 
 function hasTestInvocation(text: string, marker: string): boolean {
   const target = referencedScriptPath(marker).replaceAll('\\', '/');
-  const source = ts.createSourceFile('legacy-reference.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const initializers = collectUniqueInitializers(source);
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (found) return;
-    if (ts.isCallExpression(node)) {
-    const { executable, argv } = powerShellInvocation(node, initializers);
-    if ((executable === 'pwsh' || executable === 'pwsh.exe') && argv) {
-      for (let index = 0; index < argv.elements.length - 1; index += 1) {
-        const flag = argv.elements[index];
-        const targetExpression = argv.elements[index + 1];
-        if (!flag || !targetExpression || ts.isSpreadElement(flag) || ts.isSpreadElement(targetExpression)) continue;
-        if (staticString(flag, initializers)?.toLocaleLowerCase() !== '-file') continue;
-        if (pathExpressionTargets(targetExpression, target, initializers)) {
-          found = true;
-          return;
-        }
-      }
-    }
-  }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return found;
+  const calls = parseCalls(text, new Set(['spawnSync', 'execFileSync', 'runProcessSync']));
+  return calls.some((call) => invocationTargets(call, target));
 }
 
 function hasBehaviorContainerReference(entry: CensusEntry, text: string): boolean {
