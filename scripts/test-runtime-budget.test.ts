@@ -64,12 +64,11 @@ describe('test runtime budget guard (Issue #488)', () => {
     expect(result.stderr).toMatch(/test-runtime-budget\.config\.json/i);
   });
 
-  it('fails per-file budget on file wall time when assertion durations are short', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'runtime-budget-file-wall-'));
-    const report = join(dir, 'report.json');
-    writeFileSync(
-      report,
-      JSON.stringify({
+  it.each([
+    {
+      name: 'fails per-file budget on file wall time when assertion durations are short',
+      tempPrefix: 'runtime-budget-file-wall-',
+      payload: {
         testResults: [
           {
             name: 'scripts/setup-heavy.test.ts',
@@ -80,27 +79,15 @@ describe('test runtime budget guard (Issue #488)', () => {
             ],
           },
         ],
-      }),
-    );
-    const result = spawnSync(process.execPath, [enforcer, report], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    rmSync(dir, { recursive: true, force: true });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/slow file: scripts\/setup-heavy\.test\.ts took 515000ms file wall time/i);
-    expect(result.stderr).not.toMatch(/slow test:/);
-  });
-
-  it('aggregates repeated merged entries before enforcing the per-file budget', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'runtime-budget-merged-file-'));
-    const report = join(dir, 'report.json');
-    const file = 'scripts/per-test-isolated.test.ts';
-    writeFileSync(
-      report,
-      JSON.stringify({
+      },
+      expectedDiagnostic: /slow file: scripts\/setup-heavy\.test\.ts took 515000ms file wall time/i,
+    },
+    {
+      name: 'aggregates repeated merged entries before enforcing the per-file budget',
+      tempPrefix: 'runtime-budget-merged-file-',
+      payload: {
         testResults: Array.from({ length: 5 }, (_, index) => ({
-          name: file,
+          name: 'scripts/per-test-isolated.test.ts',
           startTime: 0,
           endTime: 110_000,
           assertionResults: [
@@ -112,17 +99,21 @@ describe('test runtime budget guard (Issue #488)', () => {
             },
           ],
         })),
-      }),
-    );
+      },
+      expectedDiagnostic:
+        /slow file: scripts\/per-test-isolated\.test\.ts took 550000ms merged file duration across 5 test\(s\)/i,
+    },
+  ])('$name', ({ tempPrefix, payload, expectedDiagnostic }) => {
+    const dir = mkdtempSync(join(tmpdir(), tempPrefix));
+    const report = join(dir, 'report.json');
+    writeFileSync(report, JSON.stringify(payload));
     const result = spawnSync(process.execPath, [enforcer, report], {
       cwd: repoRoot,
       encoding: 'utf8',
     });
     rmSync(dir, { recursive: true, force: true });
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(
-      /slow file: scripts\/per-test-isolated\.test\.ts took 550000ms merged file duration across 5 test\(s\)/i,
-    );
+    expect(result.stderr).toMatch(expectedDiagnostic);
     expect(result.stderr).not.toMatch(/slow test:/);
   });
 
