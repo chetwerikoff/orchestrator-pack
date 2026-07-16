@@ -9,18 +9,48 @@ permissions:
   contents: read
 
 jobs:
-  export:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - name: Check out PR head
         uses: actions/checkout@v4
-      - name: Pack PR head
+        with:
+          fetch-depth: 0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Capture topology failure
         shell: bash
-        run: tar --exclude=.git -czf "$RUNNER_TEMP/orchestrator-pack-pr860-head.tar.gz" .
-      - name: Upload PR head
+        continue-on-error: true
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
+        run: |
+          set +e
+          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
+          node scripts/emit-vitest-heavy-topology.mjs --gha-output > topology.log 2>&1
+          echo $? > topology.exit
+          cat topology.log
+      - name: Capture light lane failure
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          ./scripts/run-vitest-light-lane.ps1 *> light-lane.log
+          $LASTEXITCODE | Set-Content -LiteralPath light-lane.exit
+          Get-Content -LiteralPath light-lane.log
+      - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: orchestrator-pack-pr860-head
-          path: ${{ runner.temp }}/orchestrator-pack-pr860-head.tar.gz
+          name: orchestrator-pack-pr860-ci-diagnostics
+          path: |
+            topology.log
+            topology.exit
+            light-lane.log
+            light-lane.exit
           retention-days: 1
           if-no-files-found: error
