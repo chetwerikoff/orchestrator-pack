@@ -115,30 +115,30 @@ function Invoke-CiRedWatchdogLookupRetention {
         $repoSlug = Get-CiRedWatchdogRepoSlug -RepoRoot $RepoRoot
         $hasOpenPrSnapshot = $false
         if ($null -ne $WorkerState) {
-  if ($WorkerState -is [hashtable]) {
-      $hasOpenPrSnapshot = $WorkerState.ContainsKey('openPrs') -and $null -ne $WorkerState.openPrs
-  }
-  else {
-      $hasOpenPrSnapshot = $null -ne $WorkerState.PSObject.Properties['openPrs'] -and $null -ne $WorkerState.openPrs
-  }
+            if ($WorkerState -is [hashtable]) {
+                $hasOpenPrSnapshot = $WorkerState.ContainsKey('openPrs') -and $null -ne $WorkerState.openPrs
+            }
+            else {
+                $hasOpenPrSnapshot = $null -ne $WorkerState.PSObject.Properties['openPrs'] -and $null -ne $WorkerState.openPrs
+            }
         }
         $snapshotAvailable = [bool]($repoSlug -and $hasOpenPrSnapshot)
         $rows = @()
         if ($snapshotAvailable) {
-  $rows = @($WorkerState.openPrs | ForEach-Object {
-      @{
-          repo = $repoSlug
-          prNumber = [int](Get-CiRedWatchdogProperty -Object $_ -Names @('number', 'prNumber'))
-          headSha = [string](Get-CiRedWatchdogProperty -Object $_ -Names @('headRefOid', 'headSha'))
-      }
-  })
+            $rows = @($WorkerState.openPrs | ForEach-Object {
+                @{
+                    repo = $repoSlug
+                    prNumber = [int](Get-CiRedWatchdogProperty -Object $_ -Names @('number', 'prNumber'))
+                    headSha = [string](Get-CiRedWatchdogProperty -Object $_ -Names @('headRefOid', 'headSha'))
+                }
+            })
         }
         return Invoke-CiRedWatchdogCli -Command 'prune-lookup-failures' -Payload @{
-  storeDir = Get-CiRedWatchdogStateDir
-  snapshot = @{ available = $snapshotAvailable; repo = [string]$repoSlug; openPrs = @($rows) }
-  nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-  actor = $Script:CiRedWatchdogSource
-  config = Get-CiRedWatchdogConfig
+            storeDir = Get-CiRedWatchdogStateDir
+            snapshot = @{ available = $snapshotAvailable; repo = [string]$repoSlug; openPrs = @($rows) }
+            nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            actor = $Script:CiRedWatchdogSource
+            config = Get-CiRedWatchdogConfig
         }
     }
     catch {
