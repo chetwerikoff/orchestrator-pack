@@ -1,0 +1,57 @@
+name: issue-849-targeted-diagnostic
+
+on:
+  push:
+    branches: [agent/issue-849-gh-signal-classification]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-849-targeted-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: ${{ !contains(github.event.head_commit.message, '[issue-849-diag-result]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-849-gh-signal-classification
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture exact targeted and topology output
+        shell: bash
+        run: |
+          set -u
+          functional_head="$(git rev-parse HEAD^)"
+          log="scripts/.issue-849-targeted-diagnostic.txt"
+          : > "$log"
+          {
+            echo '=== targeted gh-signal-classification ==='
+            set +e
+            npm test -- scripts/gh-signal-classification.test.ts
+            echo "targeted_exit=$?"
+            echo '=== heavy topology ==='
+            export PR_BASE_SHA=0e8846b1e7caf063d73792700968971d75e0524f
+            export PR_HEAD_SHA="$functional_head"
+            export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
+            export GITHUB_OUTPUT="$RUNNER_TEMP/topology-output"
+            node scripts/emit-vitest-heavy-topology.mjs --gha-output
+            echo "topology_exit=$?"
+            set -e
+          } > "$log" 2>&1
+          tail -n 800 "$log" > "$RUNNER_TEMP/tail"
+          mv "$RUNNER_TEMP/tail" "$log"
+          git rm .github/workflows/issue-849-targeted-diagnostic.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$log"
+          git commit -m "chore: record issue 849 targeted diagnostic [issue-849-diag-result]"
+          git push origin HEAD:agent/issue-849-gh-signal-classification
