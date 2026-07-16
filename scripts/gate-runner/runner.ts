@@ -81,13 +81,26 @@ function argumentValues(argv: readonly string[], name: string): string[] {
   return values;
 }
 
+function requiredArgumentValues(argv: readonly string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== name) continue;
+    const value = argv[index + 1];
+    if (value === undefined || value.trim().length === 0) {
+      throw new Error(`${name} requires a non-empty value`);
+    }
+    values.push(value);
+  }
+  return values;
+}
+
 function parseRepoRoot(argv: readonly string[]): string {
   return argumentValues(argv, '--repo-root')[0] ?? resolve(import.meta.dirname, '../..');
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
   try {
-    const selected = argumentValues(argv, '--gate');
+    const selected = requiredArgumentValues(argv, '--gate');
     const report = runGateRunner(parseRepoRoot(argv), selected.length > 0 ? selected : undefined);
     if (argv.includes('--json')) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     else process.stdout.write(formatGateRunnerReport(report));
