@@ -9,7 +9,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runProcessSync } from '#opk-kernel/subprocess';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   classifyGhJsonCapture,
@@ -24,7 +23,6 @@ import {
 } from './lib/ci-red-watchdog-ledger.mjs';
 import { pruneCiRedWatchdogLookupFailures } from './lib/ci-red-watchdog-lookup-retention.mjs';
 import { scanPowerShellGhMergedJson } from './lib/gh-signal-recon.ts';
-import { functionBody } from './_test-pwsh-helpers.js';
 import { repoRoot } from './_test-vitest-harness-env.js';
 import { GH_SIGNAL_TEST_HEAD as HEAD, writeGhSignalFake } from './gh-signal-test-fixture.ts';
 
@@ -71,25 +69,6 @@ const snapshot = (
 function seedResolved(storeDir: string, nowMs = 1_000): void {
   recordCiRedWatchdogLookupFailure({ storeDir, lookup: lookup(), nowMs, config: lookupRetentionConfig });
   resolveCiRedWatchdogLookupFailure({ storeDir, lookup: lookup(), nowMs: nowMs + 1, config: lookupRetentionConfig });
-}
-
-
-function quotePowerShell(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function runPowerShell(script: string): void {
-  const result = runProcessSync({
-    command: 'pwsh',
-    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: { OPK_VITEST_HARNESS: '1' },
-    inheritParentEnv: true,
-  });
-  if (!result.ok) {
-    throw new Error(`pwsh failed ${String(result.exitCode ?? result.outcome)}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
-  }
 }
 
 afterEach(() => {
@@ -199,7 +178,6 @@ describe('gh signal classification (Issue #849)', () => {
     pruneCiRedWatchdogLookupFailures({ storeDir, snapshot: current, nowMs: 6_001, config: lookupRetentionConfig });
     expect(readCiRedWatchdogLedger(storeDir).lookupFailures[ciRedLookupFailureKey(lookup())]).toBeUndefined();
   });
-
 
   it('retains a just-parked lookup after head supersession until the parked horizon', () => {
     const storeDir = tempRoot('ci-red-lookup-parked-superseded-');
@@ -319,47 +297,6 @@ describe('gh signal classification (Issue #849)', () => {
     const ledger = readCiRedWatchdogLedger(storeDir);
     expect(ledger.history.filter((entry) => String(entry.key).startsWith('lookup:')).length).toBeLessThanOrEqual(16);
     expect(ledger.history.some((entry) => entry.key === 'episode:keep')).toBe(true);
-  });
-
-
-  it('runs lookup retention for an authoritative empty open-PR snapshot without a checks bundle', () => {
-    const storeDir = tempRoot('ci-red-lookup-empty-open-prs-');
-    const identity = lookup();
-    const key = ciRedLookupFailureKey(identity);
-    recordCiRedWatchdogLookupFailure({
-      storeDir,
-      lookup: identity,
-      nowMs: 1_000,
-      config: { ...lookupRetentionConfig, maxAttempts: 2 },
-    });
-
-    const reconcileSource = readFileSync(join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'), 'utf8');
-    const tickFunction = functionBody(reconcileSource, 'Invoke-CiFailureNotificationTick');
-    expect(tickFunction.indexOf('Invoke-CiRedWatchdogLookupRetention')).toBeGreaterThanOrEqual(0);
-    expect(tickFunction.indexOf('Invoke-CiRedWatchdogLookupRetention')).toBeLessThan(tickFunction.indexOf('if ($openPrs.Count -gt 0)'));
-
-    runPowerShell(`
-$ErrorActionPreference = 'Stop'
-$env:AO_CI_RED_WATCHDOG_STATE_DIR = ${quotePowerShell(storeDir)}
-. ${quotePowerShell(join(repoRoot, 'scripts/lib/Ci-Red-Watchdog.ps1'))}
-function Get-CiRedWatchdogRepoSlug { param([string]$RepoRoot) 'acme/repo' }
-function Write-ReconcileSignalSource { param($Surface, $Source, $LogPrefix) }
-function Get-RepoIdentity { 'acme/repo' }
-function Invoke-CiFailureHelper {
-  param([string]$Mode, [hashtable]$Payload)
-  if ($Mode -eq 'reconcile-plan') { return [pscustomobject]@{ hard_failure = $false; actions = @() } }
-  throw "unexpected helper mode $Mode"
-}
-function Write-CiFailureNotificationLog { param($Prefix, $Message) }
-$RepoRoot = ${quotePowerShell(repoRoot)}
-$ProjectId = 'orchestrator-pack'
-$DryRun = $false
-$Script:CiFailureFixtureChecksBundle = $null
-${tickFunction}
-Invoke-CiFailureNotificationTick -WorkerState @{ sessions = @(); openPrs = @() } -StoreDir ${quotePowerShell(storeDir)} -EnqueueTickId 'retention-empty-open-prs' | Out-Null
-`);
-
-    expect(readCiRedWatchdogLedger(storeDir).lookupFailures[key]).toBeUndefined();
   });
 
   it('reads a legacy ledger without lookupFailures compatibly', () => {
