@@ -1,0 +1,20 @@
+name: issue-841-export-d32-pr
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Export reviewed tree
+        run: git archive d32c3cc00f664a12c85d59b4f8f179ce81103ff6 | gzip -9 > /tmp/pr860-d32.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr860-d32-exact-source
+          path: /tmp/pr860-d32.tar.gz
+          retention-days: 1
