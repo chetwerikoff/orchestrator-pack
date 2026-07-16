@@ -18,7 +18,7 @@ foreach ($file in @($payload.files)) {
   $tokens = $null
   $errors = $null
   $ast = [System.Management.Automation.Language.Parser]::ParseFile([string]$file, [ref]$tokens, [ref]$errors)
-  if (@($errors).Count -gt 0) { throw "PowerShell parse failed for $file: $($errors[0].Message)" }
+  if (@($errors).Count -gt 0) { throw "PowerShell parse failed for $($file): $($errors[0].Message)" }
 
   $assignments = @{}
   foreach ($assignment in @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))) {
