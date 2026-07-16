@@ -65,6 +65,29 @@ function summarizeByFile(tests) {
   return [...byFile.values()];
 }
 
+function aggregateFileEntries(fileEntries) {
+  const byFile = new Map();
+  for (const fileEntry of fileEntries) {
+    const durationMs = Number(fileEntry.durationMs);
+    const testCount = Number(fileEntry.testCount);
+    const entry = byFile.get(fileEntry.file) ?? {
+      file: fileEntry.file,
+      durationMs: 0,
+      testCount: 0,
+      timingSource: fileEntry.timingSource,
+      entryCount: 0,
+    };
+    entry.durationMs += Number.isFinite(durationMs) ? durationMs : 0;
+    entry.testCount += Number.isFinite(testCount) ? testCount : 0;
+    entry.entryCount += 1;
+    if (entry.entryCount > 1) {
+      entry.timingSource = 'merged';
+    }
+    byFile.set(fileEntry.file, entry);
+  }
+  return [...byFile.values()];
+}
+
 function main() {
   const { perTestMs, perFileMs } = loadConfig();
   if (!existsSync(reportPath)) {
@@ -75,7 +98,7 @@ function main() {
   const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
   const collected = collectFromVitestJson(payload, repoRoot);
   const tests = collected?.tests ?? [];
-  const files =
+  const parsedFiles =
     collected?.files ??
     summarizeByFile(
       (() => {
@@ -84,6 +107,7 @@ function main() {
         return fallbackTests;
       })(),
     );
+  const files = aggregateFileEntries(parsedFiles);
 
   if (!collected) {
     const fallbackTests = [];
@@ -106,7 +130,9 @@ function main() {
       const timingNote =
         fileEntry.timingSource === 'file-wall'
           ? 'file wall time'
-          : 'assertion-duration sum';
+          : fileEntry.timingSource === 'merged'
+            ? 'merged file duration'
+            : 'assertion-duration sum';
       violations.push(
         `slow file: ${fileEntry.file} took ${Math.round(fileEntry.durationMs)}ms ${timingNote} across ${fileEntry.testCount} test(s) (budget ${perFileMs}ms per file)`,
       );
