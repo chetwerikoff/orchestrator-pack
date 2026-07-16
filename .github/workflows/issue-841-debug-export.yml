@@ -1,0 +1,26 @@
+name: issue-841-debug-export
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+      - name: Pack PR head
+        shell: bash
+        run: tar --exclude=.git -czf "$RUNNER_TEMP/orchestrator-pack-pr860-head.tar.gz" .
+      - name: Upload PR head
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-pack-pr860-head
+          path: ${{ runner.temp }}/orchestrator-pack-pr860-head.tar.gz
+          retention-days: 1
+          if-no-files-found: error
