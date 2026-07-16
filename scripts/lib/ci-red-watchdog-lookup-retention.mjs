@@ -82,6 +82,55 @@ function normalizeSnapshot(snapshot) {
   return { repo, heads };
 }
 
+function recordAgeMs(record, state, nowMs) {
+  const anchor = state === 'resolved'
+    ? Number(record?.resolvedAtMs ?? record?.updatedAtMs ?? record?.createdAtMs ?? nowMs)
+    : Number(record?.updatedAtMs ?? record?.createdAtMs ?? nowMs);
+  return Math.max(0, nowMs - anchor);
+}
+
+function removalReason(record, identity, authoritative, nowMs, retention) {
+  const state = String(record?.state ?? '');
+  const hasPr = authoritative.heads.has(identity.prNumber);
+  const currentHead = authoritative.heads.get(identity.prNumber);
+  const ageMs = recordAgeMs(record, state, nowMs);
+
+  if (state === 'parked') {
+    return ageMs >= retention.parkedRetentionMs ? 'parked_retention_expired' : '';
+  }
+  if (state === 'resolved') {
+    return ageMs >= retention.resolvedRetentionMs ? 'resolved_retention_expired' : '';
+  }
+  if (state === 'deferred') {
+    if (!hasPr) return 'authoritative_pr_terminal';
+    if (currentHead && currentHead !== identity.headSha) return 'authoritative_head_superseded';
+  }
+  return '';
+}
+
+function appendRetentionTombstone(ledger, { key, record, identity, reason, atMs, actor }) {
+  ledger.history.push({
+    sequence: Number(ledger.nextSequence ?? 1),
+    atMs,
+    key: 'lookup:retention',
+    actor: String(actor || 'ci-red-watchdog'),
+    attemptId: '',
+    from: String(record?.state ?? ''),
+    to: 'pruned',
+    reason,
+    metadata: {
+      lookupKey: key,
+      repo: identity.repo,
+      prNumber: identity.prNumber,
+      requiredCheckContext: identity.requiredCheckContext,
+      headSha: identity.headSha,
+      lastDeferReason: String(record?.lastDeferReason ?? ''),
+      parkedReason: String(record?.parkedReason ?? ''),
+    },
+  });
+  ledger.nextSequence = Number(ledger.nextSequence ?? 1) + 1;
+}
+
 export function pruneCiRedWatchdogLookupFailures({
   storeDir = '',
   snapshot,
@@ -94,48 +143,44 @@ export function pruneCiRedWatchdogLookupFailures({
   return withCiRedWatchdogLedgerLock(storeDir, () => {
     const ledger = readCiRedWatchdogLedger(storeDir);
     ledger.lookupFailures ??= {};
+    if (!authoritative) {
+      return {
+        ok: true,
+        pruned: false,
+        historyCompacted: false,
+        reason: 'authoritative_open_pr_snapshot_unavailable',
+        removedKeys: [],
+        ledger,
+      };
+    }
+
+    const removed = [];
     const removedKeys = new Set();
-
-    if (authoritative) {
-      for (const [key, record] of Object.entries(ledger.lookupFailures)) {
-        const identity = normalizedIdentity(record?.identity);
-        if (!identity || identity.repo !== authoritative.repo) continue;
-        const hasPr = authoritative.heads.has(identity.prNumber);
-        const currentHead = authoritative.heads.get(identity.prNumber);
-        const ageMs = Math.max(0, nowMs - Number(record?.updatedAtMs ?? record?.createdAtMs ?? nowMs));
-        const closedOrMerged = !hasPr;
-        const superseded = Boolean(currentHead && currentHead !== identity.headSha);
-        const expiredResolved = record?.state === 'resolved' && ageMs >= retention.resolvedRetentionMs;
-        const expiredParked = record?.state === 'parked' && ageMs >= retention.parkedRetentionMs;
-        if (!(closedOrMerged || superseded || expiredResolved || expiredParked)) continue;
-        delete ledger.lookupFailures[key];
-        removedKeys.add(key);
-      }
+    for (const [key, record] of Object.entries(ledger.lookupFailures)) {
+      const identity = normalizedIdentity(record?.identity);
+      if (!identity || identity.repo !== authoritative.repo) continue;
+      const reason = removalReason(record, identity, authoritative, nowMs, retention);
+      if (!reason) continue;
+      removed.push({ key, record, identity, reason });
+      delete ledger.lookupFailures[key];
+      removedKeys.add(key);
     }
 
-    const historyChanged = compactLookupHistory(ledger, retention.maxHistory, removedKeys);
-    if (removedKeys.size > 0) {
-      ledger.history.push({
-        sequence: Number(ledger.nextSequence ?? 1),
-        atMs: nowMs,
-        key: 'lookup:retention',
-        actor: String(actor || 'ci-red-watchdog'),
-        attemptId: '',
-        from: 'retained',
-        to: 'compacted',
-        reason: 'lookup_failure_retention_pruned',
-        metadata: { removed: removedKeys.size },
-      });
-      ledger.nextSequence = Number(ledger.nextSequence ?? 1) + 1;
-      compactLookupHistory(ledger, retention.maxHistory, removedKeys);
+    let historyChanged = compactLookupHistory(ledger, retention.maxHistory, removedKeys);
+    for (const item of removed) {
+      appendRetentionTombstone(ledger, { ...item, atMs: nowMs, actor });
     }
-    if (removedKeys.size > 0 || historyChanged) writeLedger(storeDir, ledger);
+    if (removed.length > 0) {
+      compactLookupHistory(ledger, retention.maxHistory);
+      historyChanged = true;
+    }
+    if (removed.length > 0 || historyChanged) writeLedger(storeDir, ledger);
 
     return {
       ok: true,
-      pruned: removedKeys.size > 0,
+      pruned: removed.length > 0,
       historyCompacted: historyChanged,
-      reason: authoritative ? 'authoritative_lookup_retention_applied' : 'authoritative_open_pr_snapshot_unavailable',
+      reason: 'authoritative_lookup_retention_applied',
       removedKeys: [...removedKeys],
       ledger,
     };
