@@ -28,4 +28,4 @@ The launch-inventory parity proof normalizes only the two merge-tree-sensitive i
 
 Two timing-sensitive heavy tests produced one-off failures during repeated full-matrix runs: detached TestMode supervisor startup and the repo-tick stale-serve window. Each failing scenario passed when rerun in isolation through the same Vitest fleet harness without a code change. Final acceptance still requires a complete green PR workflow on the cleaned head rather than relying on those focused probes alone.
 
-The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows run against the cleaned connector-authored head.
+The implementation branch was rebased onto `main` commit `c709020ff3669051f65202724b17339e738b33f4`; the temporary rebase workflow commit was removed before the force-with-lease push. The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots, and standard pull-request workflows run against the cleaned connector-authored head.
