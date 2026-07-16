@@ -1,0 +1,214 @@
+ root / 'scripts/check-supervisor-test-wait-inventory.test.ts'
+text = p.read_text()
+text = text.replace(
+"      'node',\n      ['scripts/lib/supervisor-test-wait-inventory.mjs', 'production'],\n",
+"      'pwsh',\n      ['-NoProfile', '-File', 'scripts/check-supervisor-test-wait-inventory.ps1', '-Root', repoRoot, '-Mode', 'production'],\n"
+)
+text = text.replace(
+"      'node',\n      ['scripts/lib/supervisor-test-wait-inventory.mjs', 'negative-regression'],\n",
+"      'pwsh',\n      ['-NoProfile', '-File', 'scripts/check-supervisor-test-wait-inventory.ps1', '-Root', repoRoot, '-Mode', 'negative-regression'],\n"
+)
+p.write_text(text)
+
+# 4) Census regressions.
+p = root / 'scripts/gate-runner/census.test.ts'
+text = p.read_text()
+addition = '''
+
+  it('rejects an unrelated child call plus a disconnected target path literal', () => {
+    const census = loadCensus(repoRoot);
+    const row = census.entries.find((entry) => entry.legacyReference?.kind === 'test-invocation');
+    expect(row).toBeDefined();
+    const snapshot = captureSourceSnapshot(repoRoot);
+    const files = Object.fromEntries(snapshot.files);
+    files[row!.legacyReference!.path] = [
+      "import { execFileSync } from 'node:child_process';",
+      "import path from 'node:path';",
+      "const repoRoot = '/fixture';",
+      `const retiredPath = path.join(repoRoot, '${row!.sourcePath}');`,
+      "execFileSync('node', ['some-unrelated-helper.mjs']);",
+      'void retiredPath;',
+      '',
+    ].join('\\n');
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
+  });
+
+  it('rejects a helper-only test for a deferred PowerShell wrapper', () => {
+    const census = loadCensus(repoRoot);
+    const row = census.entries.find((entry) => entry.id === 'check-script:scripts/check-supervisor-test-wait-inventory.ps1');
+    expect(row).toBeDefined();
+    const snapshot = captureSourceSnapshot(repoRoot);
+    const files = Object.fromEntries(snapshot.files);
+    files[row!.legacyReference!.path] = [
+      "import { execFileSync } from 'node:child_process';",
+      "execFileSync('node', ['scripts/lib/supervisor-test-wait-inventory.mjs', 'production']);",
+      '',
+    ].join('\\n');
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
+  });
+'''
+
+def insert_after_test(source: str, title: str, insertion: str) -> str:
+    marker = "  it('" + title + "', () => {"
+    test_start = source.find(marker)
+    if test_start < 0:
+        raise SystemExit(f'test anchor not found: {title}')
+    next_test = source.find("\n  it('", test_start + len(marker))
+    if next_test < 0:
+        suite_end = source.rfind("\n});")
+        if suite_end < 0:
+            raise SystemExit(f'test suite end not found after: {title}')
+        next_test = suite_end
+    return source[:next_test] + insertion + source[next_test:]
+
+text = insert_after_test(
+    text,
+    'rejects a prose-only mention that replaces an executable workflow step',
+    addition,
+)
+addition2 = '''
+
+  it('requires every schema v2 ported row to identify its migration wave', () => {
+    const census = clone(loadCensus(repoRoot));
+    const index = census.entries.findIndex((entry) => entry.classification.startsWith('ported-'));
+    const entries = [...census.entries];
+    const { portedInWave: _removed, ...withoutOwner } = entries[index]!;
+    entries[index] = withoutOwner;
+    expect(validateCensusSchema({ ...census, entries }).join('\\n')).toContain('valid portedInWave owner');
+  });
+'''
+text = insert_after_test(
+    text,
+    'commits the terminal Wave 3.b taxonomy with named deferral owners only',
+    addition2,
+)
+p.write_text(text)
+
+# 5) Frozen source spans and metadata.
+span_text = '''function Test-RequiredFile {
+    param([string]$RelativePath)
+    $path = Join-Path $Root $RelativePath
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        Write-Check $RelativePath 'PASS' 'present'
+    }
+    else {
+        Write-Check $RelativePath 'FAIL' 'missing'
+        Add-Failure "Missing file: $RelativePath"
+    }
+}
+
+function Test-ContractMarkers {
+    param(
+        [string]$RelativePath,
+        [string[]]$Markers
+    )
+    $path = Join-Path $Root $RelativePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Check $RelativePath 'FAIL' 'missing contract README'
+        Add-Failure "Missing contract README: $RelativePath"
+        return
+    }
+
+    $content = Get-Content -LiteralPath $path -Raw
+    $missing = @()
+    foreach ($marker in $Markers) {
+        if ($content.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            $missing += $marker
+        }
+    }
+
+    if ($missing.Count -eq 0) {
+        Write-Check $RelativePath 'PASS' 'contract markers present'
+    }
+    else {
+        Write-Check $RelativePath 'FAIL' ('missing markers: ' + ($missing -join ', '))
+        Add-Failure "Contract $RelativePath missing markers: $($missing -join ', ')"
+    }
+}
+'''
+span_path = root / 'scripts/fixtures/gate-runner/legacy-wave-3b/verify-source-spans.ps1'
+span_path.write_text(span_text)
+
+def extract_fn(src, name):
+    m = re.search(rf'^function {re.escape(name)}\s*\{{[\s\S]*?^\}}', src.replace('\r\n','\n'), re.M)
+    if not m: raise RuntimeError(name)
+    return m.group(0).strip() + '\n'
+meta = {
+    'version': 1,
+    'sourcePath': 'scripts/verify.ps1',
+    'sourceBlobSha': '6e1c57e8a8114e0e74618bb6e8129463ca4ae881',
+    'spans': []
+}
+for name,start,end in [('Test-RequiredFile',105,115),('Test-ContractMarkers',117,144)]:
+    fn=extract_fn(span_text,name)
+    meta['spans'].append({'name':name,'startLine':start,'endLine':end,'sha256':hashlib.sha256(fn.encode()).hexdigest()})
+(root / 'scripts/fixtures/gate-runner/legacy-wave-3b/verify-source-spans.json').write_text(json.dumps(meta, indent=2)+'\n')
+
+# 6) Manifest: add positive verify captures.
+p = root / 'scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json'
+manifest = json.loads(p.read_text())
+positive_verify = [
+  {
+    'gateId':'verify-required-files','legacyScript':'scripts/verify.ps1',
+    'legacyReplayScript':'scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1',
+    'sourceBlobSha':'6e1c57e8a8114e0e74618bb6e8129463ca4ae881','case':'positive-required-file-present',
+    'captureMode':'fixture-replay','scenario':'verify-required-file-present',
+    'argv':['pwsh','-NoProfile','-File','scripts/verify.ps1'],'exitCode':0,
+    'stdout':'[PASS] AGENTS.md - present\n','stderr':'','expectedRunnerStatus':'PASS',
+    'expectedRunnerStdout':'[PASS] verify required-file inventory\n',
+    'parityDisposition':'The legacy replay proves the successful required-file predicate; the runner preserves the PASS verdict while emitting its gate-level inventory summary.',
+    'artifacts':[]
+  },
+  {
+    'gateId':'verify-structure-contract','legacyScript':'scripts/verify.ps1',
+    'legacyReplayScript':'scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1',
+    'sourceBlobSha':'6e1c57e8a8114e0e74618bb6e8129463ca4ae881','case':'positive-contract-markers-present',
+    'captureMode':'fixture-replay','scenario':'verify-contract-markers-present',
+    'argv':['pwsh','-NoProfile','-File','scripts/verify.ps1'],'exitCode':0,
+    'stdout':'[PASS] plugins/ao-scope-guard/README.md - contract markers present\n','stderr':'','expectedRunnerStatus':'PASS',
+    'expectedRunnerStdout':'[PASS] verify prompt inventory and plugin contract markers\n',
+    'parityDisposition':'The legacy replay proves the successful contract-marker predicate; the runner preserves the PASS verdict while emitting its combined structure summary.',
+    'artifacts':[]
+  }
+]
+# Insert after six real-clean-tree captures.
+manifest['captures'][6:6] = positive_verify
+p.write_text(json.dumps(manifest, indent=2)+'\n')
+
+# 7) bulk-cli parity: independent census population + provenance.
+p = root / 'scripts/gate-runner/custom/bulk-cli-parity.test.ts'
+text = p.read_text()
+text = text.replace(
+"interface CaptureManifest {\n",
+"interface FrozenVerifySpan {\n  readonly name: string;\n  readonly startLine: number;\n  readonly endLine: number;\n  readonly sha256: string;\n}\n\ninterface FrozenVerifyProvenance {\n  readonly version: number;\n  readonly sourcePath: string;\n  readonly sourceBlobSha: string;\n  readonly spans: readonly FrozenVerifySpan[];\n}\n\ninterface CaptureManifest {\n"
+)
+text = text.replace(
+"const wave3b = JSON.parse(readFileSync(resolve(import.meta.dirname, '../goldens/wave-3b-pre-delete-captures.json'), 'utf8')) as CaptureManifest;\n",
+"const wave3b = JSON.parse(readFileSync(resolve(import.meta.dirname, '../goldens/wave-3b-pre-delete-captures.json'), 'utf8')) as CaptureManifest;\nconst verifySpanFixture = readFileSync(resolve(frozenFixtureRoot, 'verify-source-spans.ps1'), 'utf8');\nconst verifyProvenance = JSON.parse(readFileSync(resolve(frozenFixtureRoot, 'verify-source-spans.json'), 'utf8')) as FrozenVerifyProvenance;\n"
+)
+# Replace capturesByScript with parameterized + helpers.
+old = '''function capturesByScript(): Map<string, Capture[]> {
+  const result = new Map<string, Capture[]>();
+  for (const capture of [...wave3a.captures, ...wave3b.captures]) {
+    const values = result.get(capture.legacyScript) ?? [];
+    values.push(capture);
+    result.set(capture.legacyScript, values);
+  }
+  return result;
+}
+'''
+new = '''function capturesByScript(captures: readonly Capture[]): Map<string, Capture[]> {
+  const result = new Map<string, Capture[]>();
+  for (const capture of captures) {
+    const values = result.get(capture.legacyScript) ?? [];
+    values.push(capture);
+    result.set(capture.legacyScript, values);
+  }
+  return result;
+}
+
+function isPorted(entry: ReturnType<typeof loadCensus>['entries'][n
