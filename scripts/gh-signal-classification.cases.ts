@@ -75,7 +75,8 @@ afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('gh signal classification (Issue #849)', () => {
+export function registerGhSignalClassificationTests(): void {
+  describe('gh signal classification (Issue #849)', () => {
   it('parses stdout only while preserving arbitrary stderr evidence', () => {
     const stderr = [
       'gh-wrapper-audit: complete route=pr-view',
@@ -369,3 +370,4 @@ describe('gh signal classification (Issue #849)', () => {
     expect(wrapper).toContain('gh-wrapper-audit-retention:');
   });
 });
+}

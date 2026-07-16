@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runProcessSync } from '#opk-kernel/subprocess';
 import { GH_SIGNAL_TEST_HEAD, writeGhSignalFake } from './gh-signal-test-fixture.ts';
+import { registerGhSignalClassificationTests } from './gh-signal-classification.cases.ts';
 import {
   AUTONOMOUS_RESPAWN_POLICY_VERSION,
   DEAD_WORKER_RECONCILER_VERSION,
@@ -129,6 +130,8 @@ function actualWorkerStatusStoreRow(sessionId: string, overrides: Record<string,
     ...overrides,
   };
 }
+
+registerGhSignalClassificationTests();
 
 describe('dead-worker-reconciler (Issue #593)', () => {
   it('validates default-OFF autonomous respawn policy', () => {
