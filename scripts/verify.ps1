@@ -102,47 +102,6 @@ function Test-CommandVersion {
     return $version
 }
 
-function Test-RequiredFile {
-    param([string]$RelativePath)
-    $path = Join-Path $Root $RelativePath
-    if (Test-Path -LiteralPath $path -PathType Leaf) {
-        Write-Check $RelativePath 'PASS' 'present'
-    }
-    else {
-        Write-Check $RelativePath 'FAIL' 'missing'
-        Add-Failure "Missing file: $RelativePath"
-    }
-}
-
-function Test-ContractMarkers {
-    param(
-        [string]$RelativePath,
-        [string[]]$Markers
-    )
-    $path = Join-Path $Root $RelativePath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Write-Check $RelativePath 'FAIL' 'missing contract README'
-        Add-Failure "Missing contract README: $RelativePath"
-        return
-    }
-
-    $content = Get-Content -LiteralPath $path -Raw
-    $missing = @()
-    foreach ($marker in $Markers) {
-        if ($content.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
-            $missing += $marker
-        }
-    }
-
-    if ($missing.Count -eq 0) {
-        Write-Check $RelativePath 'PASS' 'contract markers present'
-    }
-    else {
-        Write-Check $RelativePath 'FAIL' ('missing markers: ' + ($missing -join ', '))
-        Add-Failure "Contract $RelativePath missing markers: $($missing -join ', ')"
-    }
-}
-
 Write-Host '== orchestrator-pack verify =='
 Write-Host "Root: $Root"
 Write-Host ''
@@ -187,56 +146,6 @@ else {
         Add-Warning 'gh CLI not found; cannot check auth'
     }
 }
-
-Write-Host ''
-Write-Host '== Pack structure =='
-$requiredFiles = @(
-    'README.md',
-    '.gitignore',
-    '.gitattributes',
-    'docs/migration_notes.md',
-    'docs/architecture.md',
-    'docs/github_issues_cursor_codex_setup.md',
-    'docs/repository_policy.md',
-    'prompts/self_architect_check.md',
-    'AGENTS.md',
-    'plugins/README.md',
-    'plugins/ao-task-declaration/README.md',
-    'plugins/ao-scope-guard/README.md',
-    'plugins/ao-token-chain-ledger/README.md',
-    'plugins/ao-codex-pr-reviewer/README.md',
-    'scripts/bootstrap.ps1',
-    'scripts/verify.ps1',
-    'scripts/check-reusable.ps1',
-    'scripts/install-git-hooks.ps1',
-    'scripts/lint-self-architect.ps1',
-    'scripts/lint-self-architect.config.json',
-    'agent-orchestrator.yaml.example',
-    '.github/workflows/scope-guard.yml'
-)
-foreach ($file in $requiredFiles) { Test-RequiredFile $file }
-
-Write-Host ''
-Write-Host '== Prompt files =='
-$promptDir = Join-Path $Root 'prompts'
-$promptFiles = @()
-if (Test-Path -LiteralPath $promptDir -PathType Container) {
-    $promptFiles = @(Get-ChildItem -LiteralPath $promptDir -Filter '*.md' -File -ErrorAction SilentlyContinue)
-}
-if ($promptFiles.Count -ge 1) {
-    Write-Check 'prompts/*.md' 'PASS' (('{0} prompt files found: {1}' -f $promptFiles.Count, (($promptFiles | ForEach-Object { $_.Name }) -join ', ')))
-}
-else {
-    Write-Check 'prompts/*.md' 'FAIL' 'expected at least self_architect_check.md'
-    Add-Failure 'Missing prompt markdown files'
-}
-
-Write-Host ''
-Write-Host '== Plugin contract markers =='
-Test-ContractMarkers 'plugins/ao-task-declaration/README.md' @('DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline')
-Test-ContractMarkers 'plugins/ao-scope-guard/README.md' @('DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line')
-Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md' @('chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd')
-Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md' @('Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch')
 
 Write-Host ''
 Write-Host '== Operator adoption example guard (Issue #101) =='
@@ -736,23 +645,6 @@ else {
     Add-Failure 'Missing vestigial fleet retirement guard (Issue #745)'
 }
 
-Write-Host '== AO 0.10 review vocabulary (Issue #625) =='
-$review010VocabularyCheck = Join-Path $Root 'scripts/check-review-010-vocabulary.ps1'
-if (Test-Path -LiteralPath $review010VocabularyCheck -PathType Leaf) {
-    & $review010VocabularyCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-review-010-vocabulary.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-review-010-vocabulary.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'AO 0.10 review vocabulary checks failed (Issue #625)'
-    }
-}
-else {
-    Write-Check 'scripts/check-review-010-vocabulary.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing AO 0.10 review vocabulary check script (Issue #625)'
-}
-
 Write-Host ''
 Write-Host '== deferred-head review re-evaluation (Issue #235) =='
 $reviewReadyReportStateSeedCheck = Join-Path $Root 'scripts/check-review-ready-report-state-seed.ps1'
@@ -821,9 +713,8 @@ else {
 
 
 
-Write-Host '== pack worker report contract (Issue #717) =='
+Write-Host '== no report-audit bind contract (Issue #717) =='
 foreach ($check in @(
-        @{ path = 'scripts/check-agents-report-contract.ps1'; label = 'agents report contract' },
         @{ path = 'scripts/check-no-report-audit-bind.ps1'; label = 'no report-audit bind' }
     )) {
     $full = Join-Path $Root $check.path
@@ -1009,23 +900,6 @@ else {
     Add-Failure 'Missing wake-supervisor fleet doc coverage guard (Issue #702)'
 }
 
-Write-Host ''
-Write-Host '== launch-argv contract inventory (Issue #661) =='
-$launchArgvInventoryCheck = Join-Path $Root 'scripts/check-launch-argv-inventory.ps1'
-if (Test-Path -LiteralPath $launchArgvInventoryCheck -PathType Leaf) {
-    & $launchArgvInventoryCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-launch-argv-inventory.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-launch-argv-inventory.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'launch-argv inventory guard failed (Issue #661)'
-    }
-}
-else {
-    Write-Check 'scripts/check-launch-argv-inventory.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing launch-argv inventory guard (Issue #661)'
-}
 
 Write-Host ''
 Write-Host '== review bulk-send / stuck-open diagnostic (Issue #140) =='
@@ -1190,9 +1064,7 @@ else {
 Write-Host ''
 Write-Host '== Strict review gate fixtures (Issue #79) =='
 $strictGate = Join-Path $Root 'scripts/invoke-pack-review-strict-gate.ps1'
-$aoCommandCheck = Join-Path $Root 'scripts/check-review-command-not-ao.ps1'
-if ((Test-Path -LiteralPath $strictGate -PathType Leaf) -and
-    (Test-Path -LiteralPath $aoCommandCheck -PathType Leaf)) {
+if (Test-Path -LiteralPath $strictGate -PathType Leaf) {
     & $strictGate
     if ($LASTEXITCODE -eq 0) {
         Write-Check 'scripts/invoke-pack-review-strict-gate.ps1' 'PASS' 'fixture gate completed'
@@ -1201,19 +1073,10 @@ if ((Test-Path -LiteralPath $strictGate -PathType Leaf) -and
         Write-Check 'scripts/invoke-pack-review-strict-gate.ps1' 'FAIL' "exit=$LASTEXITCODE"
         Add-Failure 'Strict review gate failed on committed fixtures (Issue #79)'
     }
-
-    & $aoCommandCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-review-command-not-ao.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-review-command-not-ao.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'Example REVIEW_COMMAND must not use .ao/ as canonical path (Issue #79)'
-    }
 }
 else {
-    Write-Check 'strict review gate scripts' 'FAIL' 'missing gate or .ao check'
-    Add-Failure 'Missing strict review gate scripts (Issue #79)'
+    Write-Check 'strict review gate scripts' 'FAIL' 'missing gate'
+    Add-Failure 'Missing strict review gate script (Issue #79)'
 }
 
 Write-Host ''
@@ -1648,22 +1511,8 @@ foreach ($check in @(
     }
 }
 
-Write-Host '== External-output fixture shape guard (Issue #223) =='
-$externalOutputShapeGuard = Join-Path $Root 'scripts/check-external-output-shape-guard.ps1'
-if (Test-Path -LiteralPath $externalOutputShapeGuard -PathType Leaf) {
-    & $externalOutputShapeGuard
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-external-output-shape-guard.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-external-output-shape-guard.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'External-output fixture shape guard failed (Issue #223)'
-    }
-}
-else {
-    Write-Check 'scripts/check-external-output-shape-guard.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing external-output fixture shape guard script (Issue #223)'
-}
+
+
 
 Write-Host ''
 Write-Host '== Task complexity tier calibration consistency (Issue #574) =='
@@ -1688,24 +1537,6 @@ if (Test-Path -LiteralPath $tierCalibrationCheck -PathType Leaf) {
 else {
     Write-Check 'scripts/check-tier-calibration-consistency.ps1' 'FAIL' 'missing'
     Add-Failure 'Missing task complexity tier calibration check script (Issue #574)'
-}
-
-Write-Host ''
-Write-Host '== Coworker delegation threshold drift (Issue #255) =='
-$coworkerThresholdDriftCheck = Join-Path $Root 'scripts/check-coworker-delegation-threshold-drift.ps1'
-if (Test-Path -LiteralPath $coworkerThresholdDriftCheck -PathType Leaf) {
-    & $coworkerThresholdDriftCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'Coworker delegation threshold drift check failed (Issue #255)'
-    }
-}
-else {
-    Write-Check 'scripts/check-coworker-delegation-threshold-drift.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing coworker delegation threshold drift check script (Issue #255)'
 }
 
 $reviewerContractMappingCheck = Join-Path $Root 'scripts/check-reviewer-contract-mapping.ps1'

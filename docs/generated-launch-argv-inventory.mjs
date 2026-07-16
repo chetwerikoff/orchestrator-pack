@@ -3,7 +3,7 @@
  * Materialize the committed generated launch-argv inventory for audit without
  * storing hundreds of hash-pinned census rows by hand (Issue #661 / #745).
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -41,18 +41,10 @@ export function loadCommittedLaunchArgvBundle(repoRoot) {
 }
 
 export function auditCommittedLaunchArgvInventory(repoRoot) {
-  const path = inventoryPath(repoRoot);
-  const original = readFileSync(path, 'utf8');
-  const materialized = materializeGeneratedLaunchArgvInventory(repoRoot);
-  if (!materialized.generated) {
-    return auditLaunchArgvInventory(repoRoot);
-  }
-  try {
-    writeFileSync(path, `${JSON.stringify(materialized.inventory, null, 2)}\n`, 'utf8');
-    return auditLaunchArgvInventory(repoRoot);
-  } finally {
-    writeFileSync(path, original, 'utf8');
-  }
+  // auditLaunchArgvInventory already materializes generated-v1 rows in memory.
+  // Avoid mutating the shared committed inventory file so parallel gate-runner
+  // invocations cannot race or observe another process's temporary payload.
+  return auditLaunchArgvInventory(repoRoot);
 }
 
 function cli() {

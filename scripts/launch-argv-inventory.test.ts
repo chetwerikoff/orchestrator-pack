@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { runProcess } from '#opk-kernel/subprocess';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   auditCommittedLaunchArgvInventory,
@@ -19,18 +20,25 @@ import {
 } from '../docs/launch-argv-registry.mjs';
 
 const repoRoot = join(import.meta.dirname, '..');
-const guardScript = join(repoRoot, 'scripts/check-launch-argv-inventory.ps1');
+const gateRunner = join(repoRoot, 'scripts/gate-runner/runner.ts');
 const registryCli = join(repoRoot, 'docs/launch-argv-registry.mjs');
 const generatedRegistryCli = join(repoRoot, 'docs/generated-launch-argv-inventory.mjs');
 const fixtureRoot = join(repoRoot, 'scripts/fixtures/launch-argv-inventory');
 const pwshTimeoutMs = 120_000;
 
-function runGuard(args: string[] = []) {
-  return spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', guardScript, ...args], {
+async function runGuard(args: string[] = []) {
+  const result = await runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', gateRunner, '--repo-root', repoRoot, '--gate', 'launch-argv-inventory', ...args],
     cwd: repoRoot,
-    encoding: 'utf8',
-    timeout: pwshTimeoutMs,
+    inheritParentEnv: true,
+    timeoutMs: pwshTimeoutMs,
   });
+  return {
+    status: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 function writeJson(dir: string, rel: string, value: unknown) {
@@ -55,8 +63,8 @@ describe('launch-argv inventory (#661)', { timeout: pwshTimeoutMs }, () => {
     expect(result.stats.inventoryRows).toBeGreaterThan(0);
   });
 
-  it('guard script passes on the real repository tree', () => {
-    const result = runGuard();
+  it('guard script passes on the real repository tree', async () => {
+    const result = await runGuard();
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toMatch(/PASS.*launch-argv inventory guard/i);
   });

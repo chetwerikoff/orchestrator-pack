@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "issue": 841,
+  "baseCommitSha": "0e8846b1e7caf063d73792700968971d75e0524f",
+  "captureEnvironment": {
+    "source": "Legacy PowerShell entrypoints on main immediately before Wave 3.b deletion. Node-backed wrapper output was captured with the legacy wrapper present in the tracked tree."
+  },
+  "captures": [
+    {
+      "gateId": "agents-report-contract",
+      "legacyScript": "scripts/check-agents-report-contract.ps1",
+      "sourceBlobSha": "ee5f7b56373b3584307dba22b4eb898452ec319b",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agents-report-contract.ps1"
+      ],
+      "exitCode": 0,
+      "stdout": "check-agents-report-contract: PASS\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "coworker-delegation-threshold-drift",
+      "legacyScript": "scripts/check-coworker-delegation-threshold-drift.ps1",
+      "sourceBlobSha": "3605aeff39385d09a8245763f990d20832fc4df9",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-coworker-delegation-threshold-drift.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] coworker delegation T1 floor is 400 with no stale 600 volume-floor literals in tracked policy files.\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "external-output-shape-guard",
+      "legacyScript": "scripts/check-external-output-shape-guard.ps1",
+      "sourceBlobSha": "e9637c2561071a07269e63a5d1507ab3528dcf61",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-external-output-shape-guard.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] external-output shape guard (Issue #223)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "launch-argv-inventory",
+      "legacyScript": "scripts/check-launch-argv-inventory.ps1",
+      "sourceBlobSha": "2087d7a7720292d33c5d14bc8d726a1d3f9705f3",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-launch-argv-inventory.ps1",
+        "-Root",
+        "<repo>"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] generated launch-argv inventory audit (550 production hits, 495 rows)\n[PASS] launch-argv inventory guard (Issue #661)\n",
+      "expectedRunnerStdout": "[PASS] generated launch-argv inventory audit (549 production hits, 494 rows)\n[PASS] launch-argv inventory guard (Issue #661)\n",
+      "parityDisposition": "Intentional self-inventory delta: deleting the legacy wrapper removes its own launch site/row while preserving the audit verdict and wrapper-level PASS line.",
+      "artifacts": []
+    },
+    {
+      "gateId": "review-010-vocabulary",
+      "legacyScript": "scripts/check-review-010-vocabulary.ps1",
+      "sourceBlobSha": "6763a4e68d8ab18db9ea3b5431d330b7a8f9f461",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-review-010-vocabulary.ps1"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] AO 0.10 review vocabulary guard (no dead CLI / false-equivalence fields)\n",
+      "artifacts": []
+    },
+    {
+      "gateId": "review-command-not-ao",
+      "legacyScript": "scripts/check-review-command-not-ao.ps1",
+      "sourceBlobSha": "08fc61515e5d3d04f9ccc17124344f55f35485a7",
+      "case": "real-clean-tree",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-review-command-not-ao.ps1"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n",
+      "artifacts": []
+    }
+  ]
+}

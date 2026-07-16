@@ -1922,7 +1922,7 @@ After merge of the worker PR that adds RCA/spec discipline rules and
 
 ## External-output fixture shape guard (Issue #223)
 
-After merge, CI runs `scripts/check-external-output-shape-guard.ps1` (also
+After merge, CI runs `node --experimental-strip-types scripts/gate-runner/runner.ts --gate external-output-shape-guard` (also
 `npm test` via `scripts/external-output-shape-guard.test.ts`). No operator
 adoption beyond normal CI.
 

@@ -14,6 +14,14 @@ describe('real gate runner dispatch', () => {
       'agent-rules-size-budget',
       'agent-rules-moved-content',
       'ao-capture-redaction',
+      'verify-required-files',
+      'agents-report-contract',
+      'coworker-delegation-threshold-drift',
+      'review-010-vocabulary',
+      'review-command-not-ao',
+      'verify-structure-contract',
+      'external-output-shape-guard',
+      'launch-argv-inventory',
       'gate-census',
     ]);
   });
