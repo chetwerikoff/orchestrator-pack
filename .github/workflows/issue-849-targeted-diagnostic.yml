@@ -1,20 +1,19 @@
 name: issue-849-targeted-diagnostic
 
-# Temporary capture. It commits only the bounded log; the GitHub App removes this workflow afterward.
+# Temporary read-only PR diagnostic. The GitHub App removes this workflow after reading the artifact.
 on:
-  push:
-    branches: [agent/issue-849-gh-signal-classification]
+  pull_request:
+    types: [synchronize]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: issue-849-targeted-diagnostic
+  group: issue-849-targeted-diagnostic-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   diagnose:
-    if: ${{ !contains(github.event.head_commit.message, '[issue-849-diag-result]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -31,7 +30,6 @@ jobs:
         shell: bash
         run: |
           set -u
-          functional_head="$(git rev-parse HEAD^)"
           log="scripts/.issue-849-targeted-diagnostic.txt"
           : > "$log"
           {
@@ -41,7 +39,7 @@ jobs:
             echo "targeted_exit=$?"
             echo '=== heavy topology ==='
             export PR_BASE_SHA=0e8846b1e7caf063d73792700968971d75e0524f
-            export PR_HEAD_SHA="$functional_head"
+            export PR_HEAD_SHA=8c15900972a1ba4d1a82207b23a393eaa69d2474
             export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
             export GITHUB_OUTPUT="$RUNNER_TEMP/topology-output"
             node scripts/emit-vitest-heavy-topology.mjs --gha-output
@@ -50,8 +48,11 @@ jobs:
           } > "$log" 2>&1
           tail -n 800 "$log" > "$RUNNER_TEMP/tail"
           mv "$RUNNER_TEMP/tail" "$log"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$log"
-          git commit -m "chore: record issue 849 targeted diagnostic [issue-849-diag-result]"
-          git push origin HEAD:agent/issue-849-gh-signal-classification
+      - name: Upload bounded diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-849-targeted-diagnostic
+          path: scripts/.issue-849-targeted-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 1
