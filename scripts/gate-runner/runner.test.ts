@@ -51,4 +51,26 @@ describe('real gate runner dispatch', () => {
       stderr.mockRestore();
     }
   });
+
+  it.each([
+    ['missing', ['--repo-root', repoRoot, '--gate']],
+    ['empty', ['--repo-root', repoRoot, '--gate', '']],
+    ['whitespace-only', ['--repo-root', repoRoot, '--gate', '   ']],
+    ['missing after a valid selector', [
+      '--repo-root', repoRoot,
+      '--gate', 'agent-rules-size-budget',
+      '--gate',
+    ]],
+  ])('fails closed when --gate has a %s value', async (_caseName, argv) => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      expect(await main(argv)).toBe(2);
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).toHaveBeenCalledWith('[FAIL] gate-runner dispatch: --gate requires a non-empty value\n');
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
 });
