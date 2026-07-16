@@ -23,7 +23,7 @@ const REPO_TICK_CONSUMERS = buildGithubFleetWakeConsumers(repoRoot, {
 function withMultiPrHarness(prefix: string): FleetHarness {
   const harness = createGithubFleetCacheHarness(prefix);
   harness.env.GH_FLEET_TEST_LIST_JSON = multiPrList;
-  harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '30';
+  harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '300';
   harness.env.GH_FLEET_PR_VIEW_TTL_SECONDS = '15';
   harness.env.GH_FLEET_CI_CHECKS_TTL_SECONDS = '15';
   return harness;
