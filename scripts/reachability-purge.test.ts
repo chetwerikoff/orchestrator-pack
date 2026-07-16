@@ -57,6 +57,7 @@ const censusDeletionClassifications = new Set([
   'ported-declarative',
   'ported-custom',
   'retired-with-justification',
+  'retired-with-reason',
 ]);
 const censusQualifiedGateDeletions = new Set(
   census.entries

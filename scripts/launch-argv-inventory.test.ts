@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runProcess } from '#opk-kernel/subprocess';
+import { formatGateRunnerReport, runGateRunner } from './gate-runner/runner.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   auditCommittedLaunchArgvInventory,
@@ -27,6 +28,19 @@ const fixtureRoot = join(repoRoot, 'scripts/fixtures/launch-argv-inventory');
 const pwshTimeoutMs = 120_000;
 
 async function runGuard(args: string[] = []) {
+  const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  if (nodeMajor < 22) {
+    // scope-guard still pins Node 20 even though the repository engine is Node 22.
+    // Exercise the same registered gate/report contract in-process rather than
+    // asking Node 20 to parse TypeScript with an unsupported strip-types flag.
+    const report = runGateRunner(repoRoot, ['launch-argv-inventory']);
+    return {
+      status: report.aggregate.exitCode,
+      stdout: formatGateRunnerReport(report),
+      stderr: '',
+    };
+  }
+
   const result = await runProcess({
     command: process.execPath,
     args: ['--experimental-strip-types', gateRunner, '--repo-root', repoRoot, '--gate', 'launch-argv-inventory', ...args],
