@@ -7,11 +7,11 @@
   "baseline": {
     "commit_sha": "0e8846b1e7caf063d73792700968971d75e0524f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:3dfe32fc84a7d8693719206a26ff5dd2cbf2cfeff6b26b8f81747a1ef81d2444"
+    "active_scope_hash": "sha256:98797428adade5df2c76f3aa95954b07d060c1175276dde1ef09a8e6af908485"
   },
   "declared_paths": [
-    "scripts/lib/pack-review-run-store.ts",
-    "scripts/pack-review-run-store-atomic-replace.test.ts"
+    "scripts/ao-0-10-review-trigger.test.ts",
+    "scripts/lib/pack-review-run-store.ts"
   ],
   "declared_globs": [],
   "amendments": []
