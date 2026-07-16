@@ -1,0 +1,28 @@
+name: issue-841-review-snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Pack source tree
+        shell: bash
+        run: tar --exclude=.git -czf "$RUNNER_TEMP/orchestrator-pack-pr860-review.tar.gz" .
+      - name: Upload source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-pack-pr860-review
+          path: ${{ runner.temp }}/orchestrator-pack-pr860-review.tar.gz
+          retention-days: 1
+          if-no-files-found: error
