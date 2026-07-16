@@ -201,7 +201,7 @@ jobs:
     name: Type-check pack sources
     needs: classify-pr-changes
     if: |
-      always() &&
+      !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
@@ -232,7 +232,7 @@ jobs:
     name: Vitest light lane
     needs: classify-pr-changes
     if: |
-      always() &&
+      !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
@@ -262,7 +262,7 @@ jobs:
     name: Plan Vitest heavy topology
     needs: classify-pr-changes
     if: |
-      always() &&
+      !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
@@ -313,7 +313,7 @@ jobs:
     name: Vitest heavy shard ${{ matrix.shard }}/${{ needs.plan-vitest-ci-topology.outputs.heavy_shard_count }}
     needs: [classify-pr-changes, plan-vitest-ci-topology]
     if: |
-      always() &&
+      !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
@@ -355,7 +355,7 @@ jobs:
     name: Pester regression
     needs: classify-pr-changes
     if: |
-      always() &&
+      !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest

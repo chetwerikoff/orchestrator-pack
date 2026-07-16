@@ -148,6 +148,36 @@ describe('ci-pipeline-split config and workflow binding (#556/#695 lanes)', () =
     expect(yaml).not.toMatch(/shard: \[1, 2, 3, 4, 5, 6, 7\]/);
     expect(yaml).not.toMatch(/test-aggregate:[\s\S]*!cancelled\(\)/);
   });
+
+  it('keeps scope-guard cancellation gates mapped job by job (#870)', () => {
+    const yaml = readFileSync(scopeGuardPath, 'utf8');
+    const jobBlock = (jobId: string) => {
+      const marker = `  ${jobId}:\n`;
+      const start = yaml.indexOf(marker);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const remainder = yaml.slice(start + marker.length);
+      const nextJob = remainder.search(/^  [a-z0-9-]+:\n/m);
+      return nextJob === -1 ? remainder : remainder.slice(0, nextJob);
+    };
+
+    for (const jobId of [
+      'test-typecheck',
+      'test-vitest-light',
+      'plan-vitest-ci-topology',
+      'test-vitest-heavy',
+      'test-pester',
+    ]) {
+      const block = jobBlock(jobId);
+      expect(block).toMatch(/^    if: \|\n      !cancelled\(\) &&$/m);
+      expect(block).not.toMatch(/^    if: \|\n      always\(\) &&$/m);
+    }
+
+    for (const jobId of ['test-aggregate', 'self-architect-lint']) {
+      const block = jobBlock(jobId);
+      expect(block).toMatch(/^    if: \|\n      always\(\) &&$/m);
+      expect(block).not.toMatch(/^    if: \|\n      !cancelled\(\) &&$/m);
+    }
+  });
 });
 
 describe('vitest CI lane classification and shard assignment (#556)', () => {
