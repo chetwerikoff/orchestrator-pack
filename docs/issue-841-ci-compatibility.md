@@ -17,4 +17,6 @@ The expanded gate-runner suite contains 89 tests, and the foundation suite conta
 
 Frozen legacy scripts under `scripts/fixtures/gate-runner/**` are test evidence, not production deletion candidates. Reachability analysis may retain them as graph evidence but excludes that fixture subtree from the production deletion formula.
 
+The launch-inventory parity proof normalizes only the two merge-tree-sensitive integer counters in the generated audit line. It still compares the complete PASS line shape and the wrapper-level PASS text exactly, so a verdict or diagnostic contract change remains a failure.
+
 The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows run against this cleaned tree after stale diagnostic runs have been cancelled.
