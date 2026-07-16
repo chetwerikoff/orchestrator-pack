@@ -12,11 +12,11 @@ The post-migration reviews harden seven proof boundaries:
 - schema v2 freezes the deferred `check-reusable.ps1` behavior surface so appended predicates cannot bypass the 283-row census;
 - frozen PowerShell replay fixtures exercise successful and failing cases for each deleted entrypoint plus the migrated `verify.ps1` required-file and contract-marker behaviors;
 - deferred census references carry an explicit invocation kind and are validated as executable call shapes rather than arbitrary marker substrings;
-- test-backed PowerShell references are parsed as TypeScript call expressions and must bind `pwsh`, the adjacent `-File` argument, and the exact retained wrapper path inside one sanctioned `runProcessSync` invocation; the wrapper test uses the subprocess kernel rather than adding a raw child-process exception;
+- test-backed PowerShell references are parsed as TypeScript call expressions and must bind `pwsh`, the adjacent `-File` argument, and the exact retained wrapper path inside one sanctioned `runProcessSync` invocation; the wrapper proof is hosted by the gate-runner census suite rather than mutating the supervisor RPC capture scope;
 - every ported census row declares `portedInWave`, and Wave 3.b parity completeness is derived from that census-owned migration population instead of from the capture manifest being tested;
 - the partial `verify.ps1` replay is bound to the complete frozen source blob, verified Git blob SHA, recorded source offsets, and normalized span hashes, so a predicate mutation cannot be hidden behind an unchanged provenance comment.
 
-The expanded gate-runner suite contains 94 tests, and the foundation suite contains 173 tests. The Linux verification path runs all frozen legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
+The expanded gate-runner suite contains 95 tests, and the foundation suite contains 174 tests. The Linux verification path runs all frozen legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
 
 The rereview-specific mutation regressions cover a disconnected wrapper path plus an unrelated child call, helper-only Node execution without the retained PowerShell wrapper, removal of one migrated script's captures from the manifest, and replay predicate drift while the source-SHA comment remains unchanged.
 
