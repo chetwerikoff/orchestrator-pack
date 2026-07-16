@@ -77,10 +77,11 @@
       "exitCode": 0,
       "stdout": "[PASS] generated launch-argv inventory audit (550 production hits, 495 rows)\n[PASS] launch-argv inventory guard (Issue #661)\n",
       "expectedRunnerStdout": "[PASS] generated launch-argv inventory audit (549 production hits, 494 rows)\n[PASS] launch-argv inventory guard (Issue #661)\n",
-      "parityDisposition": "Intentional self-inventory delta: deleting the legacy wrapper removes its own launch site/row while preserving the audit verdict and wrapper-level PASS line.",
+      "parityDisposition": "Intentional self-inventory delta: deleting the legacy wrapper removes its own launch site/row. The production-hit and inventory-row counts are merge-tree-sensitive, so parity normalizes only those integers while preserving the exact PASS format and wrapper-level PASS line.",
       "artifacts": [],
       "captureMode": "real-clean-tree",
-      "expectedRunnerStatus": "PASS"
+      "expectedRunnerStatus": "PASS",
+      "stdoutNormalization": "launch-argv-counts"
     },
     {
       "gateId": "review-010-vocabulary",

@@ -34,6 +34,7 @@ interface Capture {
   readonly expectedRunnerStatus?: GateStatus;
   readonly expectedRunnerStdout?: string;
   readonly expectedRunnerDiagnostics?: readonly string[];
+  readonly stdoutNormalization?: 'launch-argv-counts';
   readonly parityDisposition?: string;
   readonly artifacts: readonly string[];
 }
@@ -54,6 +55,15 @@ const tempDirs: string[] = [];
 
 function normalizeOutput(text: string): string {
   return text.replaceAll('\r\n', '\n');
+}
+
+function normalizeCaptureStdout(capture: Capture, text: string): string {
+  const normalized = normalizeOutput(text);
+  if (capture.stdoutNormalization !== 'launch-argv-counts') return normalized;
+  return normalized.replace(
+    /\[PASS\] generated launch-argv inventory audit \(\d+ production hits, \d+ rows\)/gu,
+    '[PASS] generated launch-argv inventory audit (<production-hits> production hits, <rows> rows)',
+  );
 }
 
 function gitBlobSha(text: string): string {
@@ -271,8 +281,10 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
       if (expectedStdout !== capture.stdout) expect(capture.parityDisposition?.length).toBeGreaterThan(20);
       const result = report.results.find((candidate) => candidate.gateId === capture.gateId);
       expect(result?.status, capture.gateId).toBe(capture.expectedRunnerStatus ?? 'PASS');
-      expect(result?.legacyStdout, capture.gateId).toBe(expectedStdout);
-      expect(formatted, capture.gateId).toContain(expectedStdout.trimEnd());
+      expect(normalizeCaptureStdout(capture, result?.legacyStdout ?? ''), capture.gateId)
+        .toBe(normalizeCaptureStdout(capture, expectedStdout));
+      expect(normalizeCaptureStdout(capture, formatted), capture.gateId)
+        .toContain(normalizeCaptureStdout(capture, expectedStdout).trimEnd());
     }
   });
 
