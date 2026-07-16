@@ -18,6 +18,8 @@ The post-migration reviews harden seven proof boundaries:
 
 The expanded gate-runner suite contains 94 tests, and the foundation suite contains 173 tests. The Linux verification path runs all frozen legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
 
+The rereview-specific mutation regressions cover a disconnected wrapper path plus an unrelated child call, helper-only Node execution without the retained PowerShell wrapper, removal of one migrated script's captures from the manifest, and replay predicate drift while the source-SHA comment remains unchanged.
+
 Frozen legacy scripts under `scripts/fixtures/gate-runner/**` are test evidence, not production deletion candidates. Reachability analysis may retain them as graph evidence but excludes that fixture subtree from the production deletion formula.
 
 The launch-inventory parity proof normalizes only the two merge-tree-sensitive integer counters in the generated audit line. It still compares the complete PASS line shape and the wrapper-level PASS text exactly, so a verdict or diagnostic contract change remains a failure.
