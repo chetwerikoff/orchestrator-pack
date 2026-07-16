@@ -29,6 +29,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev --silent
+      - name: Restore tracked tree after dependency install
+        shell: bash
+        run: git reset --hard HEAD
       - name: Amend committed declaration
         id: declare
         continue-on-error: true
