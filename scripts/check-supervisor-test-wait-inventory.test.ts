@@ -14,8 +14,8 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 describe('check-supervisor-test-wait-inventory guard (Issue #693)', () => {
   it('production inventory passes', () => {
     const out = execFileSync(
-      'node',
-      ['scripts/lib/supervisor-test-wait-inventory.mjs', 'production'],
+      'pwsh',
+      ['-NoProfile', '-File', 'scripts/check-supervisor-test-wait-inventory.ps1', '-Root', repoRoot, '-Mode', 'production'],
       { cwd: repoRoot, encoding: 'utf8' },
     );
     expect(out).toContain('[PASS]');
@@ -23,8 +23,8 @@ describe('check-supervisor-test-wait-inventory guard (Issue #693)', () => {
 
   it('negative regression corpus is rejected', () => {
     const out = execFileSync(
-      'node',
-      ['scripts/lib/supervisor-test-wait-inventory.mjs', 'negative-regression'],
+      'pwsh',
+      ['-NoProfile', '-File', 'scripts/check-supervisor-test-wait-inventory.ps1', '-Root', repoRoot, '-Mode', 'negative-regression'],
       { cwd: repoRoot, encoding: 'utf8' },
     );
     expect(out).toContain('negative regression corpus rejected');

@@ -118,6 +118,50 @@
       "expectedRunnerStatus": "PASS"
     },
     {
+      "gateId": "verify-required-files",
+      "legacyScript": "scripts/verify.ps1",
+      "legacyReplayScript": "scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1",
+      "sourceBlobSha": "6e1c57e8a8114e0e74618bb6e8129463ca4ae881",
+      "case": "positive-required-file-present",
+      "captureMode": "fixture-replay",
+      "scenario": "verify-required-file-present",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/verify.ps1"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] AGENTS.md - present\n",
+      "stderr": "",
+      "expectedRunnerStatus": "PASS",
+      "expectedRunnerStdout": "[PASS] verify required-file inventory\n",
+      "parityDisposition": "The legacy replay proves the successful required-file predicate; the runner preserves the PASS verdict while emitting its gate-level inventory summary.",
+      "artifacts": []
+    },
+    {
+      "gateId": "verify-structure-contract",
+      "legacyScript": "scripts/verify.ps1",
+      "legacyReplayScript": "scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1",
+      "sourceBlobSha": "6e1c57e8a8114e0e74618bb6e8129463ca4ae881",
+      "case": "positive-contract-markers-present",
+      "captureMode": "fixture-replay",
+      "scenario": "verify-contract-markers-present",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/verify.ps1"
+      ],
+      "exitCode": 0,
+      "stdout": "[PASS] plugins/ao-scope-guard/README.md - contract markers present\n",
+      "stderr": "",
+      "expectedRunnerStatus": "PASS",
+      "expectedRunnerStdout": "[PASS] verify prompt inventory and plugin contract markers\n",
+      "parityDisposition": "The legacy replay proves the successful contract-marker predicate; the runner preserves the PASS verdict while emitting its combined structure summary.",
+      "artifacts": []
+    },
+    {
       "gateId": "agents-report-contract",
       "legacyScript": "scripts/check-agents-report-contract.ps1",
       "sourceBlobSha": "ee5f7b56373b3584307dba22b4eb898452ec319b",

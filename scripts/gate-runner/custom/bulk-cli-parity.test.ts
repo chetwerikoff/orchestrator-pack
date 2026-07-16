@@ -39,6 +39,20 @@ interface Capture {
   readonly artifacts: readonly string[];
 }
 
+interface FrozenVerifySpan {
+  readonly name: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly sha256: string;
+}
+
+interface FrozenVerifyProvenance {
+  readonly version: number;
+  readonly sourcePath: string;
+  readonly sourceBlobSha: string;
+  readonly spans: readonly FrozenVerifySpan[];
+}
+
 interface CaptureManifest {
   readonly version: number;
   readonly issue: number;
@@ -48,8 +62,9 @@ interface CaptureManifest {
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 const frozenFixtureRoot = resolve(import.meta.dirname, '../../fixtures/gate-runner/legacy-wave-3b');
-const wave3a = JSON.parse(readFileSync(resolve(import.meta.dirname, '../goldens/pre-delete-captures.json'), 'utf8')) as CaptureManifest;
 const wave3b = JSON.parse(readFileSync(resolve(import.meta.dirname, '../goldens/wave-3b-pre-delete-captures.json'), 'utf8')) as CaptureManifest;
+const frozenVerifySource = readFileSync(resolve(frozenFixtureRoot, 'verify-frozen.ps1'), 'utf8');
+const verifyProvenance = JSON.parse(readFileSync(resolve(frozenFixtureRoot, 'verify-source-spans.json'), 'utf8')) as FrozenVerifyProvenance;
 const liveSnapshot = captureSourceSnapshot(repoRoot);
 const tempDirs: string[] = [];
 
@@ -71,14 +86,95 @@ function gitBlobSha(text: string): string {
   return createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex');
 }
 
-function capturesByScript(): Map<string, Capture[]> {
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function capturesByScript(captures: readonly Capture[]): Map<string, Capture[]> {
   const result = new Map<string, Capture[]>();
-  for (const capture of [...wave3a.captures, ...wave3b.captures]) {
+  for (const capture of captures) {
     const values = result.get(capture.legacyScript) ?? [];
     values.push(capture);
     result.set(capture.legacyScript, values);
   }
   return result;
+}
+
+function isPorted(entry: ReturnType<typeof loadCensus>['entries'][number]): boolean {
+  return entry.classification === 'ported-declarative' || entry.classification === 'ported-custom';
+}
+
+function wave3bParityCompletenessFailures(captures: readonly Capture[]): string[] {
+  const census = loadCensus(repoRoot);
+  const failures: string[] = [];
+  const migrated = census.entries.filter((entry) => isPorted(entry) && entry.portedInWave === '3.b');
+  const standalone = migrated.filter((entry) => entry.sourceKind === 'check-script');
+  const byScript = capturesByScript(captures);
+  for (const entry of standalone) {
+    const evidence = byScript.get(entry.sourcePath) ?? [];
+    if (!evidence.some((capture) => capture.exitCode === 0)) failures.push(`${entry.sourcePath}: missing successful legacy capture`);
+    if (!evidence.some((capture) => capture.exitCode !== 0)) failures.push(`${entry.sourcePath}: missing failing legacy capture`);
+    for (const gateId of entry.gateIds ?? []) {
+      if (!evidence.some((capture) => capture.gateId === gateId)) failures.push(`${entry.sourcePath}: missing capture for ${gateId}`);
+    }
+  }
+
+  const migratedVerifyMembers = migrated.filter((entry) => entry.sourceKind === 'verify-script-member');
+  for (const member of migratedVerifyMembers) {
+    const source = standalone.find((entry) => entry.sourcePath === member.marker);
+    if (!source) failures.push(`${member.id}: missing Wave 3.b standalone migration owner`);
+    for (const gateId of member.gateIds ?? []) {
+      if (!source?.gateIds?.includes(gateId)) failures.push(`${member.id}: gate ${gateId} is not covered by its standalone migration`);
+    }
+  }
+
+  const verifyRows = migrated.filter((entry) => entry.sourceKind === 'verify-inline');
+  const verifyGateIds = new Set(verifyRows.flatMap((entry) => [...(entry.gateIds ?? [])]));
+  for (const gateId of verifyGateIds) {
+    const evidence = captures.filter((capture) => capture.legacyScript === 'scripts/verify.ps1' && capture.gateId === gateId);
+    if (!evidence.some((capture) => capture.exitCode === 0)) failures.push(`scripts/verify.ps1:${gateId}: missing successful legacy capture`);
+    if (!evidence.some((capture) => capture.exitCode !== 0)) failures.push(`scripts/verify.ps1:${gateId}: missing failing legacy capture`);
+  }
+  for (const row of verifyRows) {
+    for (const gateId of row.gateIds ?? []) {
+      if (!captures.some((capture) => capture.legacyScript === 'scripts/verify.ps1' && capture.gateId === gateId)) {
+        failures.push(`${row.id}: missing verify behavior capture for ${gateId}`);
+      }
+    }
+  }
+  return failures;
+}
+
+function extractPowerShellFunction(text: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const match = new RegExp(`^function ${escaped}\\s*\\{[\\s\\S]*?^\\}`, 'mu').exec(normalizeOutput(text));
+  return match ? `${match[0].trim()}\n` : undefined;
+}
+
+function verifyReplayProvenanceFailures(replay: string, frozenSource = frozenVerifySource): string[] {
+  const failures: string[] = [];
+  if (verifyProvenance.version !== 1) failures.push('verify replay provenance version must be 1');
+  if (verifyProvenance.sourcePath !== 'scripts/verify.ps1') failures.push('verify replay provenance source path drifted');
+  if (verifyProvenance.sourceBlobSha !== '6e1c57e8a8114e0e74618bb6e8129463ca4ae881') failures.push('verify replay provenance source blob drifted');
+  if (gitBlobSha(frozenSource) !== verifyProvenance.sourceBlobSha) failures.push('frozen verify.ps1 blob is not the recorded source');
+  const sourceLines = normalizeOutput(frozenSource).split('\n');
+  for (const span of verifyProvenance.spans) {
+    if (span.startLine <= 0 || span.endLine < span.startLine || span.endLine > sourceLines.length) {
+      failures.push(`${span.name}: invalid frozen source offsets`);
+      continue;
+    }
+    const offsetSpan = `${sourceLines.slice(span.startLine - 1, span.endLine).join('\n').trim()}\n`;
+    const frozen = extractPowerShellFunction(frozenSource, span.name);
+    const replayed = extractPowerShellFunction(replay, span.name);
+    if (!frozen) {
+      failures.push(`${span.name}: frozen source span missing`);
+      continue;
+    }
+    if (offsetSpan !== frozen) failures.push(`${span.name}: recorded offsets no longer select the frozen function`);
+    if (sha256(offsetSpan) !== span.sha256) failures.push(`${span.name}: frozen source span hash drifted`);
+    if (replayed !== offsetSpan) failures.push(`${span.name}: replay predicate drifted from frozen source span`);
+  }
+  return failures;
 }
 
 function overlaySnapshot(overrides: Readonly<Record<string, string>> = {}, removed: readonly string[] = []): SourceSnapshot {
@@ -194,6 +290,12 @@ function createReplayRoot(capture: Capture): { root: string; script: string; arg
         "",
       ].join('\n'));
       return { root, script, args: [] };
+    case 'verify-required-file-present':
+      writeFixture(join(root, 'AGENTS.md'), 'fixture\n');
+      return { root, script, args: ['-Scenario', 'required-file', '-RepoRoot', root] };
+    case 'verify-contract-markers-present':
+      writeFixture(join(root, 'plugins/ao-scope-guard/README.md'), 'DD-024 runtime guard git add commit PR-level CI second line\n');
+      return { root, script, args: ['-Scenario', 'contract-marker', '-RepoRoot', root] };
     case 'verify-missing-required-file':
       return { root, script, args: ['-Scenario', 'required-file', '-RepoRoot', root] };
     case 'verify-missing-contract-marker':
@@ -231,41 +333,42 @@ afterAll(() => {
 });
 
 describe('Wave 3.b per-entrypoint CLI parity', () => {
-  it('binds every ported standalone PowerShell gate to positive and negative pre-delete evidence', () => {
+  it('derives the complete Wave 3.b parity population from census migration ownership', () => {
     expect(wave3b.version).toBe(2);
     expect(wave3b.issue).toBe(841);
     expect(wave3b.baseCommitSha).toBe('0e8846b1e7caf063d73792700968971d75e0524f');
-    const byScript = capturesByScript();
-    const census = loadCensus(repoRoot);
-    const wave3bStandaloneScripts = new Set(
-      wave3b.captures
-        .filter((capture) => capture.captureMode === 'real-clean-tree')
-        .map((capture) => capture.legacyScript),
-    );
-    for (const sourcePath of wave3bStandaloneScripts) {
-      const entry = census.entries.find((candidate) => candidate.sourceKind === 'check-script' && candidate.sourcePath === sourcePath);
-      expect(entry, sourcePath).toBeDefined();
-      expect(entry!.classification.startsWith('ported-'), sourcePath).toBe(true);
-      const captures = byScript.get(sourcePath) ?? [];
-      expect(captures.some((capture) => capture.exitCode === 0), `${sourcePath}: positive`).toBe(true);
-      expect(captures.some((capture) => capture.exitCode !== 0), `${sourcePath}: negative`).toBe(true);
-      for (const gateId of entry!.gateIds ?? []) {
-        expect(captures.some((capture) => capture.gateId === gateId), `${sourcePath} -> ${gateId}`).toBe(true);
-      }
-    }
-    for (const gateId of ['verify-required-files', 'verify-structure-contract']) {
-      expect(wave3b.captures.some((capture) => capture.gateId === gateId && capture.exitCode !== 0), gateId).toBe(true);
-    }
+    expect(wave3bParityCompletenessFailures(wave3b.captures)).toEqual([]);
   });
 
-  it('binds exact frozen standalone fixtures to their recorded Git blob SHAs', () => {
+  it('fails completeness when one migrated script is removed from the evidence manifest', () => {
+    const census = loadCensus(repoRoot);
+    const sourcePath = census.entries.find((entry) => entry.portedInWave === '3.b' && entry.sourceKind === 'check-script')?.sourcePath;
+    expect(sourcePath).toBeDefined();
+    const mutated = wave3b.captures.filter((capture) => capture.legacyScript !== sourcePath);
+    expect(wave3bParityCompletenessFailures(mutated).join('\n')).toContain(`${sourcePath}: missing successful legacy capture`);
+  });
+
+  it('binds standalone fixtures and verify replay predicates to frozen source evidence', () => {
     const exactCaptures = wave3b.captures.filter((capture) => capture.captureMode === 'fixture-replay' && !capture.legacyReplayScript);
     for (const capture of exactCaptures) {
       const source = readFileSync(resolve(frozenFixtureRoot, basename(capture.legacyScript)), 'utf8');
       expect(gitBlobSha(source), capture.legacyScript).toBe(capture.sourceBlobSha);
     }
     const verifyReplay = readFileSync(resolve(frozenFixtureRoot, 'verify-behavior-replay.ps1'), 'utf8');
-    expect(verifyReplay).toContain('6e1c57e8a8114e0e74618bb6e8129463ca4ae881');
+    expect(verifyReplayProvenanceFailures(verifyReplay)).toEqual([]);
+    for (const capture of wave3b.captures.filter((candidate) => candidate.legacyScript === 'scripts/verify.ps1')) {
+      expect(capture.sourceBlobSha).toBe(verifyProvenance.sourceBlobSha);
+    }
+  });
+
+  it('fails verify replay provenance when a predicate drifts but the SHA comment remains', () => {
+    const verifyReplay = readFileSync(resolve(frozenFixtureRoot, 'verify-behavior-replay.ps1'), 'utf8');
+    const mutated = verifyReplay.replace(
+      'if (Test-Path -LiteralPath $path -PathType Leaf) {',
+      'if ($true -or (Test-Path -LiteralPath $path -PathType Leaf)) {',
+    );
+    expect(mutated).toContain('6e1c57e8a8114e0e74618bb6e8129463ca4ae881');
+    expect(verifyReplayProvenanceFailures(mutated).join('\n')).toContain('Test-RequiredFile: replay predicate drifted');
   });
 
   it('preserves positive exit class, gate stdout, and report semantics', () => {
@@ -306,11 +409,11 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
     },
   );
 
-  it('replays every negative frozen PowerShell fixture when pwsh is available and requires it in CI', () => {
+  it('replays every frozen PowerShell fixture when pwsh is available and requires it in CI', () => {
     const available = pwshAvailable();
-    if (process.env.GITHUB_ACTIONS === 'true') expect(available, 'pwsh is required for legacy negative parity replay in GitHub Actions').toBe(true);
+    if (process.env.GITHUB_ACTIONS === 'true') expect(available, 'pwsh is required for legacy parity replay in GitHub Actions').toBe(true);
     if (!available) return;
-    for (const capture of wave3b.captures.filter((candidate) => candidate.exitCode !== 0)) {
+    for (const capture of wave3b.captures.filter((candidate) => candidate.captureMode === 'fixture-replay')) {
       const replayed = replayLegacyCapture(capture);
       expect(replayed.exitCode, `${capture.legacyScript} exit`).toBe(capture.exitCode);
       expect(replayed.stdout, `${capture.legacyScript} stdout`).toBe(capture.stdout);

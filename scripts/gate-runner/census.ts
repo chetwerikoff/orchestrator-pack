@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { failGate, passGate, type EvidenceObservation, type GateResult } from './contracts.ts';
 import { populationDigest } from './census-generator.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
@@ -39,6 +40,8 @@ export const DEFERRED_WAVES = [
 
 export type CensusClassification = (typeof CENSUS_CLASSIFICATIONS)[number];
 export type DeferredWave = (typeof DEFERRED_WAVES)[number];
+export const PORTED_WAVES = ['3.a', '3.b'] as const;
+export type PortedWave = (typeof PORTED_WAVES)[number];
 export const CENSUS_SOURCE_KINDS = ['check-script', 'verify-script-member', 'verify-inline', 'check-reusable-behavior'] as const;
 export type CensusSourceKind = (typeof CENSUS_SOURCE_KINDS)[number];
 export const LEGACY_REFERENCE_KINDS = [
@@ -50,7 +53,6 @@ export const LEGACY_REFERENCE_KINDS = [
   'workflow-step',
   'operator-command',
   'test-invocation',
-  'delegated-test-invocation',
 ] as const;
 export type LegacyReferenceKind = (typeof LEGACY_REFERENCE_KINDS)[number];
 
@@ -61,6 +63,7 @@ export interface CensusEntry {
   readonly marker: string;
   readonly classification: CensusClassification;
   readonly gateIds?: readonly string[];
+  readonly portedInWave?: PortedWave;
   readonly legacyReference?: {
     readonly path: string;
     readonly marker: string;
@@ -98,6 +101,7 @@ const VALID_RETIREMENT_CODES = new Set([
   'non-proving-observation',
 ]);
 const VALID_DEFERRED_WAVES = new Set<string>(DEFERRED_WAVES);
+const VALID_PORTED_WAVES = new Set<string>(PORTED_WAVES);
 
 export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json';
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
@@ -208,12 +212,114 @@ function hasOperatorCommand(text: string, marker: string): boolean {
   return new RegExp(`pwsh(?:\\.exe)?\\s+-NoProfile\\s+-File\\s+(?:\\./)?${escapeRegExp(target)}(?:\\s|$)`, 'iu').test(text);
 }
 
+function childProcessFunctionName(expression: ts.Expression): string | undefined {
+  if (ts.isIdentifier(expression)) return expression.text;
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  return undefined;
+}
+
+function collectUniqueInitializers(source: ts.SourceFile): ReadonlyMap<string, ts.Expression> {
+  const values = new Map<string, ts.Expression>();
+  const ambiguous = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const name = node.name.text;
+      if (values.has(name)) {
+        values.delete(name);
+        ambiguous.add(name);
+      } else if (!ambiguous.has(name)) {
+        values.set(name, node.initializer);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return values;
+}
+
+function staticString(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+  seen: ReadonlySet<string> = new Set(),
+): string | undefined {
+  if (ts.isStringLiteralLike(expression)) return expression.text;
+  if (ts.isIdentifier(expression)) {
+    if (seen.has(expression.text)) return undefined;
+    const initializer = initializers.get(expression.text);
+    if (!initializer) return undefined;
+    return staticString(initializer, initializers, new Set([...seen, expression.text]));
+  }
+  return undefined;
+}
+
+function staticPath(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+  seen: ReadonlySet<string> = new Set(),
+): string | undefined {
+  const literal = staticString(expression, initializers, seen);
+  if (literal !== undefined) return literal.replaceAll('\\', '/').replace(/^\.\//u, '');
+  if (ts.isIdentifier(expression)) return undefined;
+  if (!ts.isCallExpression(expression)) return undefined;
+  const name = childProcessFunctionName(expression.expression);
+  if (name !== 'join' && name !== 'resolve') return undefined;
+  const segments: string[] = [];
+  for (const argument of expression.arguments) {
+    const value = staticPath(argument, initializers, seen);
+    if (value !== undefined && value.length > 0) segments.push(value.replace(/^\/+|\/+$/gu, ''));
+  }
+  return segments.length > 0 ? segments.join('/') : undefined;
+}
+
+function staticArray(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+): ts.ArrayLiteralExpression | undefined {
+  if (ts.isArrayLiteralExpression(expression)) return expression;
+  if (!ts.isIdentifier(expression)) return undefined;
+  const initializer = initializers.get(expression.text);
+  return initializer && ts.isArrayLiteralExpression(initializer) ? initializer : undefined;
+}
+
+function pathExpressionTargets(
+  expression: ts.Expression,
+  target: string,
+  initializers: ReadonlyMap<string, ts.Expression>,
+): boolean {
+  const candidate = staticPath(expression, initializers)?.replaceAll('\\', '/').replace(/^\.\//u, '');
+  return candidate === target || candidate?.endsWith(`/${target}`) === true;
+}
+
 function hasTestInvocation(text: string, marker: string): boolean {
-  const target = referencedScriptPath(marker);
-  const childCall = /(?:spawnSync|execFileSync)\s*\(/u.test(text);
-  const pathArgument = new RegExp(`path\\.join\\([^\\r\\n]*['\"]${escapeRegExp(target)}['\"]`, 'iu').test(text);
-  const literalCommand = new RegExp(`pwsh[^\\r\\n]*-File\\s+${escapeRegExp(target)}`, 'iu').test(text);
-  return childCall && (pathArgument || literalCommand);
+  const target = referencedScriptPath(marker).replaceAll('\\', '/');
+  const source = ts.createSourceFile('legacy-reference.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const initializers = collectUniqueInitializers(source);
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const functionName = childProcessFunctionName(node.expression);
+      if (functionName === 'spawnSync' || functionName === 'execFileSync') {
+        const executable = node.arguments[0] ? staticString(node.arguments[0], initializers)?.toLocaleLowerCase() : undefined;
+        const argv = node.arguments[1] ? staticArray(node.arguments[1], initializers) : undefined;
+        if ((executable === 'pwsh' || executable === 'pwsh.exe') && argv) {
+          for (let index = 0; index < argv.elements.length - 1; index += 1) {
+            const flag = argv.elements[index];
+            const targetExpression = argv.elements[index + 1];
+            if (!flag || !targetExpression || ts.isSpreadElement(flag) || ts.isSpreadElement(targetExpression)) continue;
+            if (staticString(flag, initializers)?.toLocaleLowerCase() !== '-file') continue;
+            if (pathExpressionTargets(targetExpression, target, initializers)) {
+              found = true;
+              return;
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
 }
 
 function hasBehaviorContainerReference(entry: CensusEntry, text: string): boolean {
@@ -242,18 +348,6 @@ function hasBehaviorContainerReference(entry: CensusEntry, text: string): boolea
   }
 }
 
-function hasDelegatedTestInvocation(entry: CensusEntry, snapshot: SourceSnapshot, text: string, marker: string): boolean {
-  const source = snapshot.files.get(entry.sourcePath);
-  if (source === undefined) return false;
-  const bareTarget = marker.replace(/^scripts\//u, '');
-  const delegated = new RegExp(
-    `Join-Path\\s+\\$Root\\s+['\"]${escapeRegExp(marker)}['\"]`,
-    'iu',
-  ).test(source) && /&\s+node\s+\$[A-Za-z_][A-Za-z0-9_]*\b/iu.test(source);
-  const testExecutesTarget = /execFileSync\s*\(\s*['"]node['"]/u.test(text)
-    && new RegExp(`['\"]${escapeRegExp(marker)}['\"]`, 'u').test(text);
-  return delegated && testExecutesTarget && bareTarget.length > 0;
-}
 
 function legacyReferenceIsWired(entry: CensusEntry, snapshot: SourceSnapshot): boolean {
   const reference = entry.legacyReference;
@@ -268,8 +362,7 @@ function legacyReferenceIsWired(entry: CensusEntry, snapshot: SourceSnapshot): b
     case 'powershell-wrapper-binding': return hasPowerShellWrapperBinding(text, reference.marker);
     case 'workflow-step': return hasWorkflowStep(text, reference.marker);
     case 'operator-command': return hasOperatorCommand(text, reference.marker);
-    case 'test-invocation': return hasTestInvocation(text, reference.marker);
-    case 'delegated-test-invocation': return hasDelegatedTestInvocation(entry, snapshot, text, reference.marker);
+    case 'test-invocation': return hasTestInvocation(text, entry.sourcePath);
   }
 }
 
@@ -338,8 +431,21 @@ export function validateCensusSchema(census: GateCensus): string[] {
 
     if (isPorted(entry)) {
       if (!entry.gateIds || entry.gateIds.length === 0) failures.push(`${entry.id}: ported row lacks gateIds`);
-    } else if (entry.gateIds && entry.gateIds.length > 0) {
-      failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
+      if (census.version === 2 && (!entry.portedInWave || !VALID_PORTED_WAVES.has(entry.portedInWave))) {
+        failures.push(`${entry.id}: schema v2 ported row lacks a valid portedInWave owner`);
+      }
+      if (census.version === 1 && entry.portedInWave !== undefined) failures.push(`${entry.id}: schema v1 cannot claim portedInWave`);
+    } else {
+      if (entry.gateIds && entry.gateIds.length > 0) failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
+      if (entry.portedInWave !== undefined) failures.push(`${entry.id}: non-ported row cannot claim portedInWave`);
+    }
+
+    if (isDeferred(entry) && entry.sourceKind === 'check-script'
+      && entry.legacyReference?.kind === 'test-invocation') {
+      const referencedTarget = referencedScriptPath(entry.legacyReference.marker);
+      if (referencedTarget !== entry.sourcePath) {
+        failures.push(`${entry.id}: test-backed legacy invocation must target the retained PowerShell wrapper ${entry.sourcePath}`);
+      }
     }
 
     if (isRetired(entry)) {

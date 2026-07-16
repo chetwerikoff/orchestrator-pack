@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourcePath": "scripts/verify.ps1",
+  "sourceBlobSha": "6e1c57e8a8114e0e74618bb6e8129463ca4ae881",
+  "spans": [
+    {
+      "name": "Test-RequiredFile",
+      "startLine": 105,
+      "endLine": 115,
+      "sha256": "421d0a3c5b6868c119fd115e55ca4f8f085426e7f0a78f8becb9b9ab287ab50a"
+    },
+    {
+      "name": "Test-ContractMarkers",
+      "startLine": 117,
+      "endLine": 144,
+      "sha256": "b1b62d359d89db9fd0df2ab8b8f5db780a992eb2ef963599fbcd1c6ae5d36517"
+    }
+  ]
+}
