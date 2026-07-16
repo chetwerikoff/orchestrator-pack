@@ -22,6 +22,49 @@ describe('frozen gate population census', () => {
     expect(result.status, result.details?.join('\n')).toBe('PASS');
   });
 
+  it('accepts the terminal Wave 3.b taxonomy while rejecting unnamed deferrals and provisional rows', () => {
+    const original = clone(loadCensus(repoRoot));
+    const entries = original.entries.map((entry) => {
+      if (entry.classification === 'still-enforced-by-legacy') {
+        return { ...entry, classification: 'deferred-to-named-wave' as const, deferredWave: 'PR 9 workflow sweep' as const };
+      }
+      if (entry.classification === 'retired-with-justification') {
+        return { ...entry, classification: 'retired-with-reason' as const };
+      }
+      return entry;
+    });
+    const terminal = { ...original, version: 2 as const, wave: '3.b' as const, migrationIssue: 841 as const, entries };
+    expect(validateCensusSchema(terminal).join('\n')).toBe('');
+
+    const deferredIndex = entries.findIndex((entry) => entry.classification === 'deferred-to-named-wave');
+    const invalidEntries = [...entries];
+    const { deferredWave: _removed, ...unnamed } = invalidEntries[deferredIndex]!;
+    invalidEntries[deferredIndex] = unnamed;
+    expect(validateCensusSchema({ ...terminal, entries: invalidEntries }).join('\n')).toContain('valid named sibling wave');
+
+    const invalidOwnerEntries = [...entries];
+    invalidOwnerEntries[deferredIndex] = { ...invalidOwnerEntries[deferredIndex]!, deferredWave: 'Wave Z' as never };
+    expect(validateCensusSchema({ ...terminal, entries: invalidOwnerEntries }).join('\n')).toContain('valid named sibling wave');
+
+    const nonPortedGateEntries = [...entries];
+    nonPortedGateEntries[deferredIndex] = { ...nonPortedGateEntries[deferredIndex]!, gateIds: ['ghost-gate'] };
+    expect(validateCensusSchema({ ...terminal, entries: nonPortedGateEntries }).join('\n')).toContain('non-ported row cannot be admitted');
+
+    const portedIndex = entries.findIndex((entry) => entry.classification === 'ported-declarative');
+    const portedWithLegacyEntries = [...entries];
+    portedWithLegacyEntries[portedIndex] = {
+      ...portedWithLegacyEntries[portedIndex]!,
+      legacyReference: { path: 'scripts/verify.ps1', marker: 'legacy marker' },
+    };
+    expect(validateCensusSchema({ ...terminal, entries: portedWithLegacyEntries }).join('\n')).toContain('non-deferred row must not retain');
+
+    const portedWithOwnerEntries = [...entries];
+    portedWithOwnerEntries[portedIndex] = { ...portedWithOwnerEntries[portedIndex]!, deferredWave: 'PR 9 workflow sweep' };
+    expect(validateCensusSchema({ ...terminal, entries: portedWithOwnerEntries }).join('\n')).toContain('non-deferred row must not claim');
+
+    expect(validateCensusSchema({ ...terminal, entries: original.entries }).join('\n')).toContain('cannot retain provisional classification');
+  });
+
   it('fails on an unaccounted baseline row or committed count drift', () => {
     const census = clone(loadCensus(repoRoot)) as GateCensus & { entries: GateCensus['entries'] };
     const altered = { ...census, entries: census.entries.slice(1) } as GateCensus;
@@ -64,7 +107,6 @@ describe('frozen gate population census', () => {
     expect(validateCensusSchema({ ...census, entries }).join('\n')).toContain('caller absence');
   });
 
-
   it('fails when generated population provenance or digest drifts', () => {
     const census = clone(loadCensus(repoRoot));
     expect(validateCensusSchema({ ...census, generation: { ...census.generation, populationDigest: '0'.repeat(64) } }).join('\n')).toContain('generated population digest drift');
@@ -97,7 +139,6 @@ describe('frozen gate population census', () => {
     });
     expect(evaluateCensus(census, snapshot, registered).details?.join('\n')).toContain('unaccounted check script');
   });
-
 
   it('discovers command, required-file, contract-marker, and named Write-Check members', () => {
     const ids = discoverVerifyInlineIds(readFileSync(resolve(repoRoot, 'scripts/verify.ps1'), 'utf8'));
