@@ -13,6 +13,17 @@
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')
 
+$Script:AoReviewApiCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/ao-0-10-review-api.mjs'
+
+function Invoke-AoReviewApiCli {
+    param(
+        [Parameter(Mandatory = $true)][string]$Subcommand,
+        [hashtable]$Payload
+    )
+    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:AoReviewApiCli `
+        -Subcommand $Subcommand -Payload $Payload -Label 'ao-0-10-review-api' -JsonDepth 30
+}
+
 function Resolve-PackReviewTrustedRoot {
     $configured = if ($env:AO_TRUSTED_PACK_ROOT) {
         $env:AO_TRUSTED_PACK_ROOT
@@ -273,6 +284,24 @@ function Get-AoProjectConfigJson {
     return Unwrap-AoProjectConfigPayload -Payload (Invoke-AoDaemonHttpJson -Method GET -Path $path -BaseUrl $BaseUrl -HealthPayload $HealthPayload)
 }
 
+
+function Set-AoProjectReviewerHarness {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectId,
+        [string]$Harness = '',
+        [string]$BaseUrl = '',
+        [hashtable]$HealthPayload = $null
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Harness)) {
+        throw 'reviewer harness activation is retired; this compatibility helper only clears reviewers'
+    }
+    $path = "/api/v1/projects/$([uri]::EscapeDataString($ProjectId))/config"
+    $body = @{ reviewers = @() }
+    return Invoke-AoDaemonHttpJson -Method PUT -Path $path -Body $body -BaseUrl $BaseUrl `
+        -HealthPayload $HealthPayload -AllowedStatus @(200)
+}
+
 function Test-ReviewBeforeCleanupGate {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
@@ -324,6 +353,24 @@ function Invoke-AoReviewTriggerForWorker {
         } -Label 'review-trigger-fixture-classify' -JsonDepth 20
         if ($classified.ok) { return $classified }
         return @{ ok = $false; httpStatus = $httpStatus; reason = 'review_trigger_invalid'; detail = $FixturePayload }
+    }
+
+
+    if ($null -ne $ProjectConfigFixture -and -not $SkipHarnessGuard) {
+        $projectConfig = Unwrap-AoProjectConfigPayload -Payload $ProjectConfigFixture
+        $guard = Invoke-AoReviewApiCli -Subcommand 'harness-guard' -Payload @{
+            payload         = $projectConfig
+            expectedHarness = 'codex'
+        }
+        if ($guard.abort) {
+            return @{
+                ok         = $false
+                httpStatus = 0
+                reason     = [string]$guard.reason
+                classified = $true
+                harness    = $guard.harness
+            }
+        }
     }
 
     try {
