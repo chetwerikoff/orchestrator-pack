@@ -22,6 +22,8 @@ The rereview-specific mutation regressions cover a disconnected wrapper path plu
 
 Frozen legacy scripts under `scripts/fixtures/gate-runner/**` are test evidence, not production deletion candidates. Reachability analysis may retain them as graph evidence but excludes that fixture subtree from the production deletion formula.
 
+The restored supervisor RPC test retains its original two Issue #800 raw-child baseline entries. The proof was relocated instead of changing the frozen RPC binding scope or adding a new policy exception.
+
 The launch-inventory parity proof normalizes only the two merge-tree-sensitive integer counters in the generated audit line. It still compares the complete PASS line shape and the wrapper-level PASS text exactly, so a verdict or diagnostic contract change remains a failure.
 
 A one-off heavy-shard failure in the existing TestMode fleet-reaper wall-clock test was reproduced as an infrastructure launch flake: the focused test passed through the same heavy harness without code changes. Final acceptance still requires a complete green PR workflow on the cleaned head rather than relying on that focused probe alone.
