@@ -30,6 +30,7 @@ $PlannerCli = Join-Path $PackRoot 'docs/dead-worker-reconciler.mjs'
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/WorkerReportStore.ps1')
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
+. (Join-Path $PSScriptRoot 'lib/Gh-SignalDispatch.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-WorkerMessageAdoptionBinding.ps1')
@@ -49,13 +50,6 @@ $Script:DeadWorkerDefaultState = @{
     quarantinedActions = @{}
     lastTickMs         = $null
 }
-$Script:DeadWorkerCliPrefixAllowlist = @(
-    '^\[notifier\]\s*',
-    '^\[gh[^\]]*\]\s*',
-    '^\[scripts/gh[^\]]*\]\s*',
-    '^(warn|warning|info):\s*'
-)
-
 function Write-DeadWorkerLog {
     param([string]$Message)
     $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -402,133 +396,23 @@ function Get-DeadWorkerFixturePayload {
     }
 }
 
-function Get-DeadWorkerCliBridgeText {
-    param([object]$RawOutput)
-
-    return (($RawOutput | ForEach-Object {
-                if ($_ -is [string]) { $_ }
-                elseif ($null -ne $_) { $_.ToString() }
-            }) -join "`n").Trim()
-}
-
-function Test-DeadWorkerAllowedPrefixLine {
-    param([string]$Line)
-
-    foreach ($pattern in $Script:DeadWorkerCliPrefixAllowlist) {
-        if ($Line -match $pattern) { return $true }
-    }
-    return $false
-}
-
-function Get-DeadWorkerJsonBridgePayload {
-    param(
-        [string]$Text,
-        [ValidateSet('Array', 'Object')]
-        [string]$ExpectedRoot,
-        [string]$FailureLabel
-    )
-
-    $trimmed = [string]$Text
-    while ($trimmed.Length -gt 0) {
-        $trimmed = $trimmed.TrimStart()
-        if (-not $trimmed) { break }
-        $lineBreak = $trimmed.IndexOf("`n")
-        $line = if ($lineBreak -ge 0) { $trimmed.Substring(0, $lineBreak).TrimEnd("`r") } else { $trimmed }
-        if (Test-DeadWorkerAllowedPrefixLine -Line $line) {
-            $trimmed = if ($lineBreak -ge 0) { $trimmed.Substring($lineBreak + 1) } else { '' }
-            continue
-        }
-        $expectedChar = if ($ExpectedRoot -eq 'Array') { '[' } else { '{' }
-        if ($trimmed[0] -eq $expectedChar) { break }
-        throw "$FailureLabel parse failed: unrecognized prefix line"
-    }
-
-    if (-not $trimmed) {
-        throw "$FailureLabel produced no JSON output"
-    }
-
-    $openChar = if ($ExpectedRoot -eq 'Array') { '[' } else { '{' }
-    $closeChar = if ($ExpectedRoot -eq 'Array') { ']' } else { '}' }
-    if ($trimmed[0] -ne $openChar) {
-        throw "$FailureLabel parse failed: expected top-level $ExpectedRoot"
-    }
-
-    $depth = 0
-    $inString = $false
-    $escaped = $false
-    $endIndex = -1
-    for ($index = 0; $index -lt $trimmed.Length; $index++) {
-        $ch = $trimmed[$index]
-        if ($inString) {
-            if ($escaped) {
-                $escaped = $false
-            }
-            elseif ($ch -eq '\') {
-                $escaped = $true
-            }
-            elseif ($ch -eq '"') {
-                $inString = $false
-            }
-            continue
-        }
-        if ($ch -eq '"') {
-            $inString = $true
-            continue
-        }
-        if ($ch -eq $openChar) {
-            $depth++
-            continue
-        }
-        if ($ch -eq $closeChar) {
-            $depth--
-            if ($depth -eq 0) {
-                $endIndex = $index
-                break
-            }
-        }
-    }
-
-    if ($endIndex -lt 0) {
-        throw "$FailureLabel parse failed: unterminated JSON"
-    }
-
-    $jsonText = $trimmed.Substring(0, $endIndex + 1)
-    $trailing = $trimmed.Substring($endIndex + 1).Trim()
-    if ($trailing) {
-        throw "$FailureLabel parse failed: trailing non-whitespace after JSON"
-    }
-    return $jsonText
-}
-
-function ConvertFrom-DeadWorkerCliJsonArray {
-    param(
-        [object]$RawOutput,
-        [string]$FailureLabel
-    )
-
-    $text = Get-DeadWorkerCliBridgeText -RawOutput $RawOutput
-    if (-not $text) { return @() }
-    $jsonText = Get-DeadWorkerJsonBridgePayload -Text $text -ExpectedRoot Array -FailureLabel $FailureLabel
-    return @($jsonText | ConvertFrom-Json)
-}
-
 function Invoke-DeadWorkerGhListJsonArray {
     param(
-        [string[]]$Args,
+        [string[]]$GhArgs,
         [string]$FailureLabel,
         [string]$FixturePath = ''
     )
 
-    $raw = if ($FixturePath) {
-        Get-Content -LiteralPath $FixturePath -Raw
+    $result = Invoke-GhSignalJsonCommand `
+        -Command (Join-Path $PackRoot 'scripts/gh') `
+        -Arguments $GhArgs `
+        -ExpectedRoot 'array' `
+        -WorkingDirectory $RepoRoot `
+        -FixturePath $FixturePath
+    if (-not $result.ok) {
+        throw "$FailureLabel failed: $(Format-GhSignalFailureDetail -Result $result)"
     }
-    else {
-        & (Join-Path $PackRoot 'scripts/gh') @Args 2>&1
-    }
-    if (-not $FixturePath -and $LASTEXITCODE -ne 0) {
-        throw "$FailureLabel failed (exit $LASTEXITCODE): $(Get-DeadWorkerCliBridgeText -RawOutput $raw)"
-    }
-    return ConvertFrom-DeadWorkerCliJsonArray -RawOutput $raw -FailureLabel $FailureLabel
+    return @($result.value)
 }
 
 function Invoke-DeadWorkerRecovery {
@@ -592,9 +476,9 @@ function Get-DeadWorkerPrSnapshot {
         $terminalPrs = @()
         Push-Location -LiteralPath $RepoRoot
         try {
-            $merged = @(Invoke-DeadWorkerGhListJsonArray -Args @('pr', 'list', '--state', 'merged', '--json', 'number,headRefName,state,mergedAt', '--limit', '200') `
+            $merged = @(Invoke-DeadWorkerGhListJsonArray -GhArgs @('pr', 'list', '--state', 'merged', '--json', 'number,headRefName,state,mergedAt', '--limit', '200') `
                 -FailureLabel 'gh pr list merged' -FixturePath $env:AO_DEAD_WORKER_GH_MERGED_RAW_FIXTURE)
-            $closed = @(Invoke-DeadWorkerGhListJsonArray -Args @('pr', 'list', '--state', 'closed', '--json', 'number,headRefName,state,closedAt', '--limit', '200') `
+            $closed = @(Invoke-DeadWorkerGhListJsonArray -GhArgs @('pr', 'list', '--state', 'closed', '--json', 'number,headRefName,state,closedAt', '--limit', '200') `
                 -FailureLabel 'gh pr list closed' -FixturePath $env:AO_DEAD_WORKER_GH_CLOSED_RAW_FIXTURE)
             $byNumber = @{}
             foreach ($pr in @($merged + $closed)) {

@@ -7,6 +7,7 @@
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Get-SupervisedRepoSlug.ps1')
 . (Join-Path $PSScriptRoot 'Audit-JsonlRetention.ps1')
+. (Join-Path $PSScriptRoot 'Gh-SignalDispatch.ps1')
 
 $Script:GhFleetOpenPrListTtlSeconds = 15
 $Script:GhFleetPrViewTtlSeconds = 15
@@ -530,28 +531,18 @@ function Invoke-GhFleetFetchOpenPrListUpstream {
         [string]$FailureKind = 'gh_pr_list_failed'
     )
 
-    $raw = gh pr list --state open --json number,headRefOid,baseRefName,headRefName --limit 200 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $detail = "gh pr list failed (exit $LASTEXITCODE): $raw"
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments @('pr', 'list', '--state', 'open', '--json', 'number,headRefOid,baseRefName,headRefName', '--limit', '200') `
+        -ExpectedRoot 'array' `
+        -WorkingDirectory ([string](Get-Location).Path)
+    if (-not $result.ok) {
+        $detail = "gh pr list failed: $(Format-GhSignalFailureDetail -Result $result)"
         if ($FailureKind -eq 'snapshot_populate_failed') {
             throw (Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage $detail)
         }
         throw $detail
     }
-
-    if (-not $raw) {
-        return @()
-    }
-
-    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
-    if ($null -eq $parsed) {
-        $detail = "gh pr list failed (exit 0): no parseable JSON array in output: $raw"
-        if ($FailureKind -eq 'snapshot_populate_failed') {
-            throw (Format-GhFleetOpenPrListFailure -Kind 'snapshot_populate_failed' -InnerMessage $detail)
-        }
-        throw $detail
-    }
-    return @($parsed)
+    return @($result.value)
 }
 
 function Invoke-GhFleetResolveCommitDate {
@@ -700,99 +691,6 @@ function Format-GhFleetCacheFailure {
     return "${Kind}: $InnerMessage"
 }
 
-
-function ConvertFrom-GhFleetMixedJsonOutput {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Raw,
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('object', 'array')]
-        [string]$Kind
-    )
-
-    $text = [string]$Raw
-    if (-not $text.Trim()) { return $null }
-
-    $openChar = if ($Kind -eq 'array') { '[' } else { '{' }
-    $closeChar = if ($Kind -eq 'array') { ']' } else { '}' }
-    $start = $text.IndexOf($openChar)
-    if ($start -lt 0) { return $null }
-
-    $depth = 0
-    $inString = $false
-    $escaped = $false
-    for ($i = $start; $i -lt $text.Length; $i++) {
-        $c = $text[$i]
-        if ($inString) {
-            if ($escaped) {
-                $escaped = $false
-                continue
-            }
-            if ($c -eq '\') {
-                $escaped = $true
-                continue
-            }
-            if ($c -eq '"') {
-                $inString = $false
-            }
-            continue
-        }
-        if ($c -eq '"') {
-            $inString = $true
-            continue
-        }
-        if ($c -eq $openChar) {
-            $depth++
-            continue
-        }
-        if ($c -eq $closeChar) {
-            $depth--
-            if ($depth -eq 0) {
-                $slice = $text.Substring($start, $i - $start + 1)
-                if ($Kind -eq 'array') {
-                    return ,@($slice | ConvertFrom-Json)
-                }
-                return ($slice | ConvertFrom-Json)
-            }
-        }
-    }
-
-    throw "gh output missing terminable JSON $Kind payload: $text"
-}
-
-
-function Get-GhFleetScalarFromMixedOutput {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Raw
-    )
-
-    $text = [string]$Raw
-    if (-not $text.Trim()) {
-        throw 'gh output missing scalar payload: empty'
-    }
-
-    $matched = $null
-    foreach ($line in ($text -split "(`r`n|`n|`r)")) {
-        $trim = $line.Trim()
-        if ($trim -match '^\d+$') {
-            $matched = [int]$trim
-        }
-    }
-    if ($null -ne $matched) {
-        return $matched
-    }
-
-    $trimmed = $text.Trim()
-    if ($trimmed -match '^(\d+)\b') {
-        return [int]$Matches[1]
-    }
-    if ($trimmed -match '(\d+)\s*$') {
-        return [int]$Matches[1]
-    }
-
-    throw "gh output missing scalar payload: $text"
-}
 
 function Get-GhFleetDatumSnapshotPaths {
     param(
@@ -953,47 +851,28 @@ function Invoke-GhFleetFetchPrViewUpstream {
         [int]$PrNumber
     )
 
-    $raw = gh pr view $PrNumber --json number,headRefOid,baseRefName,state,isDraft,mergeable,headRefName 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh pr view failed (exit $LASTEXITCODE): $raw"
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments @('pr', 'view', [string]$PrNumber, '--json', 'number,headRefOid,baseRefName,state,isDraft,mergeable,headRefName') `
+        -ExpectedRoot 'object' `
+        -WorkingDirectory ([string](Get-Location).Path)
+    if (-not $result.ok) {
+        throw "gh pr view failed: $(Format-GhSignalFailureDetail -Result $result)"
     }
-    if (-not $raw) {
-        return $null
-    }
-    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'object'
-    if (-not $parsed) {
-        throw "gh pr view failed (exit 0): no parseable JSON object in output: $raw"
-    }
-    return $parsed
+    return $result.value
 }
 
 function Invoke-GhFleetFetchChecksUpstream {
     param([int]$PrNumber)
 
-    $raw = gh pr checks $PrNumber --json name,state,bucket,link,startedAt,completedAt,workflow,description 2>&1
-    $exitCode = $LASTEXITCODE
-    if (-not $raw) {
-        if ($exitCode -ne 0) {
-            throw "gh pr checks failed (exit $exitCode): no parseable JSON output"
-        }
-        return @()
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments @('pr', 'checks', [string]$PrNumber, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description') `
+        -ExpectedRoot 'array' `
+        -AllowedExitCodes @(0, 1, 8) `
+        -WorkingDirectory ([string](Get-Location).Path)
+    if (-not $result.ok) {
+        throw "gh pr checks failed: $(Format-GhSignalFailureDetail -Result $result)"
     }
-    try {
-        $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
-    }
-    catch {
-        if ($exitCode -ne 0) {
-            throw "gh pr checks failed (exit $exitCode): $raw"
-        }
-        throw
-    }
-    if ($null -eq $parsed) {
-        if ($exitCode -ne 0) {
-            throw "gh pr checks failed (exit $exitCode): $raw"
-        }
-        return @()
-    }
-    return @($parsed)
+    return @($result.value)
 }
 
 function Invoke-GhFleetFetchBranchProtectionUpstream {
@@ -1003,40 +882,32 @@ function Invoke-GhFleetFetchBranchProtectionUpstream {
     )
 
     $encodedBaseRef = [uri]::EscapeDataString([string]$BaseBranch)
-    $protectionRaw = gh api "repos/$RepoSlug/branches/$encodedBaseRef/protection" 2>&1
-    $protectionExit = $LASTEXITCODE
-    if ($protectionExit -ne 0) {
-        $protectionText = ($protectionRaw | ForEach-Object { $_.ToString() }) -join "`n"
-        if ($protectionText -match 'Branch not protected|404') {
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments @('api', "repos/$RepoSlug/branches/$encodedBaseRef/protection") `
+        -ExpectedRoot 'object' `
+        -WorkingDirectory ([string](Get-Location).Path)
+    if (-not $result.ok) {
+        $failureText = "$(Format-GhSignalFailureDetail -Result $result)"
+        if ([int]$result.exitCode -ne 0 -and $failureText -match 'Branch not protected|404') {
             return @{ lookupFailed = $false; unprotected = $true; protection = $null }
         }
-        throw "branch protection lookup failed (exit $protectionExit): $protectionText"
+        throw "branch protection lookup failed: $failureText"
     }
-    $protection = ConvertFrom-GhFleetMixedJsonOutput -Raw $protectionRaw -Kind 'object'
-    if (-not $protection) {
-        throw "branch protection lookup failed (exit 0): no parseable JSON object in output: $protectionRaw"
-    }
-    return @{ lookupFailed = $false; unprotected = $false; protection = $protection }
+    return @{ lookupFailed = $false; unprotected = $false; protection = $result.value }
 }
 
 function Invoke-GhFleetFetchPrListByHeadUpstream {
     param([string]$HeadBranch)
 
-    $raw = gh pr list --head $HeadBranch --json number,url --limit 1 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh pr list --head failed (exit $LASTEXITCODE): $raw"
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments @('pr', 'list', '--head', $HeadBranch, '--json', 'number,url', '--limit', '1') `
+        -ExpectedRoot 'array' `
+        -WorkingDirectory ([string](Get-Location).Path)
+    if (-not $result.ok) {
+        throw "gh pr list --head failed: $(Format-GhSignalFailureDetail -Result $result)"
     }
-    if (-not $raw) {
-        return $null
-    }
-    $parsed = ConvertFrom-GhFleetMixedJsonOutput -Raw $raw -Kind 'array'
-    if ($null -eq $parsed) {
-        return $null
-    }
-    $rows = @($parsed)
-    if ($rows.Count -eq 0) {
-        return $null
-    }
+    $rows = @($result.value)
+    if ($rows.Count -eq 0) { return $null }
     $n = [int]$rows[0].number
     if ($n -le 0) { return $null }
     return $n
@@ -1048,13 +919,15 @@ function Invoke-GhFleetFetchReviewFreshnessUpstream {
         [int]$PrNumber
     )
 
-    $raw = gh api "repos/$RepoSlug/pulls/$PrNumber/reviews" --jq 'length' 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "review freshness lookup failed (exit $LASTEXITCODE): $raw"
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments @('api', "repos/$RepoSlug/pulls/$PrNumber/reviews", '--jq', 'length') `
+        -ExpectedRoot 'number' `
+        -WorkingDirectory ([string](Get-Location).Path)
+    if (-not $result.ok) {
+        throw "review freshness lookup failed: $(Format-GhSignalFailureDetail -Result $result)"
     }
-    $reviewCount = Get-GhFleetScalarFromMixedOutput -Raw $raw
     $etag = [string](Get-Date).ToUniversalTime().Ticks
-    return @{ etag = $etag; reviewCount = $reviewCount; fresh = $true }
+    return @{ etag = $etag; reviewCount = [int]$result.value; fresh = $true }
 }
 
 function Invoke-GhFleetCachedPrView {

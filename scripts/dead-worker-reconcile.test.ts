@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { runProcessSync } from '#opk-kernel/subprocess';
+import { GH_SIGNAL_TEST_HEAD, writeGhSignalFake } from './gh-signal-test-fixture.ts';
+import { registerGhSignalClassificationTests } from './gh-signal-classification.cases.ts';
 import {
   AUTONOMOUS_RESPAWN_POLICY_VERSION,
   DEAD_WORKER_RECONCILER_VERSION,
@@ -35,6 +38,45 @@ import {
 const repoRoot = join(import.meta.dirname, '..');
 const capturesDir = join(repoRoot, 'tests/external-output-references/captures/dead-worker-reconciler');
 const fixturesDir = join(repoRoot, 'scripts/fixtures/dead-worker-reconciler');
+
+function quotePowerShell(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function extractPowerShellFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}`);
+  if (start < 0) throw new Error(`${name} not found`);
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    else if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unterminated function ${name}`);
+}
+
+
+function runGhSignalPowerShell(script: string, env: Record<string, string> = {}): string {
+  const result = runProcessSync({
+    command: 'pwsh',
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      OPK_VITEST_HARNESS: '1',
+      ...env,
+    },
+    inheritParentEnv: false,
+  });
+  if (!result.ok) {
+    throw new Error(`pwsh failed ${String(result.exitCode ?? result.outcome)}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
 
 function readCapture(name: string) {
   return JSON.parse(readFileSync(join(capturesDir, name), 'utf8'));
@@ -88,6 +130,8 @@ function actualWorkerStatusStoreRow(sessionId: string, overrides: Record<string,
     ...overrides,
   };
 }
+
+registerGhSignalClassificationTests();
 
 describe('dead-worker-reconciler (Issue #593)', () => {
   it('validates default-OFF autonomous respawn policy', () => {
@@ -539,7 +583,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(output).toMatch(/attempt_started|dry-run|recoverable/i);
   });
 
-  it('completes a live-shaped tick when terminal PR JSON is prefixed before JSON payload', () => {
+  it('completes a live-shaped tick when terminal PR JSON has independent stderr diagnostics', () => {
     const tempDir = mkdtempSync(join(repoRoot, '.tmp-dead-worker-live-'));
     const statePath = join(tempDir, 'dead-worker-state.json');
     const livePayloadPath = join(tempDir, 'live-payload.json');
@@ -548,8 +592,18 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     const closedRawPath = join(tempDir, 'closed-raw.txt');
     const policyPath = join(tempDir, 'respawn-policy.json');
     writeFileSync(openPrsPath, '[]');
-    writeFileSync(mergedRawPath, '[notifier] prefixed terminal list\n[]\n');
-    writeFileSync(closedRawPath, '[notifier] prefixed terminal list\n[]\n');
+    const separatedCapture = JSON.stringify({
+      outcome: 'exit',
+      exitCode: 0,
+      stdout: '[]\n',
+      stderr: [
+        'gh-wrapper-audit: complete route=pr-list',
+        'gh-wrapper-audit-retention: rotate files=1',
+        'warning: arbitrary native gh diagnostic',
+      ].join('\n'),
+    });
+    writeFileSync(mergedRawPath, separatedCapture);
+    writeFileSync(closedRawPath, separatedCapture);
     writeFileSync(policyPath, JSON.stringify({
       version: AUTONOMOUS_RESPAWN_POLICY_VERSION,
       allowReconcileDeadWorkerRespawn: true,
@@ -1014,4 +1068,134 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     }));
     expect(plan.actions.some((candidate) => candidate.sessionId === absentSession.sessionId)).toBe(false);
   });
+
+  it('accepts independent gh stderr across fleet inventory consumers and valid-empty checks (Issue #849)', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-gh-signal-fleet-'));
+    writeGhSignalFake(tempDir, { alwaysDiagnostics: true });
+    try {
+      const output = runGhSignalPowerShell(`
+. ${quotePowerShell(join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1'))}
+$open = @(Invoke-GhFleetFetchOpenPrListUpstream)
+$view = Invoke-GhFleetFetchPrViewUpstream -PrNumber 849
+$checks = @(Invoke-GhFleetFetchChecksUpstream -PrNumber 849)
+$protection = Invoke-GhFleetFetchBranchProtectionUpstream -RepoSlug 'acme/repo' -BaseBranch 'main'
+$headPr = Invoke-GhFleetFetchPrListByHeadUpstream -HeadBranch 'topic'
+$reviews = Invoke-GhFleetFetchReviewFreshnessUpstream -RepoSlug 'acme/repo' -PrNumber 849
+@{
+  openCount = $open.Count
+  viewNumber = $view.number
+  checksCount = $checks.Count
+  checksKind = if ($checks.Count -eq 0) { 'valid-empty' } else { 'non-empty' }
+  protected = -not $protection.unprotected
+  headPr = $headPr
+  reviewCount = $reviews.reviewCount
+} | ConvertTo-Json -Compress
+`, {
+        PATH: `${tempDir}:${process.env.PATH ?? ''}`,
+        GH_SIGNAL_FAKE_SCENARIO: 'fleet',
+      });
+      expect(JSON.parse(output.split('\n').at(-1) as string)).toEqual({
+        openCount: 1,
+        viewNumber: 849,
+        checksCount: 0,
+        checksKind: 'valid-empty',
+        protected: true,
+        headPr: 849,
+        reviewCount: 0,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps watchdog authoritative JSON stderr outside parser input (Issue #849)', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-gh-signal-watchdog-'));
+    writeGhSignalFake(tempDir, { alwaysDiagnostics: true });
+    try {
+      const output = runGhSignalPowerShell(`
+. ${quotePowerShell(join(repoRoot, 'scripts/lib/Ci-Red-Watchdog.ps1'))}
+$result = Get-CiRedWatchdogAuthoritativeCheck -RepoRoot ${quotePowerShell(repoRoot)} -RepoSlug 'acme/repo' ` +
+        `-PrNumber 849 -HeadSha '${GH_SIGNAL_TEST_HEAD}' -RequiredContext 'ci' -CheckRow @{}
+$result | ConvertTo-Json -Depth 20 -Compress
+`, {
+        PATH: `${tempDir}:${process.env.PATH ?? ''}`,
+        GH_SIGNAL_FAKE_SCENARIO: 'watchdog',
+        AO_CI_RED_WATCHDOG_STATE_DIR: tempDir,
+      });
+      const result = JSON.parse(output.split('\n').at(-1) as string);
+      expect(result).toMatchObject({ ok: true, checkRunId: '9001', attempt: 1, diagnosticOk: true });
+      expect(result.diagnosticRaw).toContain('AssertionError');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses separated gh channels for the pr-scope linked-issue read (Issue #849)', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-gh-signal-scope-'));
+    writeGhSignalFake(tempDir, { alwaysDiagnostics: true });
+    try {
+      const source = readFileSync(join(repoRoot, 'scripts/pr-scope-check.ps1'), 'utf8');
+      const body = extractPowerShellFunction(source, 'Read-ScopeGuardIssueBody');
+      const output = runGhSignalPowerShell(`
+. ${quotePowerShell(join(repoRoot, 'scripts/lib/Gh-SignalDispatch.ps1'))}
+${body}
+$result = Read-ScopeGuardIssueBody -IssueNumber 849 -WorkingDirectory ${quotePowerShell(repoRoot)}
+$result | ConvertTo-Json -Compress
+`, {
+        PATH: `${tempDir}:${process.env.PATH ?? ''}`,
+        GH_SIGNAL_FAKE_SCENARIO: 'fleet',
+      });
+      expect(JSON.parse(output.split('\n').at(-1) as string)).toEqual({
+        ok: true,
+        body: 'Issue body from authoritative read',
+        reason: '',
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parks repeated no-episode watchdog lookup failures instead of continuing forever (Issue #849)', () => {
+    const tempDir = mkdtempSync(join(repoRoot, '.tmp-gh-signal-tick-'));
+    try {
+      const output = runGhSignalPowerShell(`
+. ${quotePowerShell(join(repoRoot, 'scripts/lib/Ci-Red-Watchdog.ps1'))}
+function Get-CiRedWatchdogRepoSlug { param([string]$RepoRoot) return 'acme/repo' }
+function Get-CiRedWatchdogDecisionSessions { param([object[]]$FallbackSessions) return @() }
+function Resolve-CiRedWatchdogWorkerBinding { param($Sessions,$OpenPrs,$PrNumber,$HeadSha,$ProjectId,$NowMs,$SubmitState) return @{ ok = $false; reason = 'worker_unresolved' } }
+function Get-CiRedWatchdogSubmitState { return @{} }
+function Get-CiRedWatchdogAuthoritativeCheck { return @{ ok = $false; reason = 'check_runs_unavailable' } }
+function Write-CiRedWatchdogLog { param([string]$Message) }
+function Get-CiRedWatchdogConfig {
+  return @{
+    inactivityThresholdMs = 30000; activityObservationFreshnessMs = 5000; leaseMs = 5000
+    submitProofTimeoutMs = 1000; maxAttempts = 2; episodeLifetimeMs = 60000
+    backoffMs = @(1000); maxDiagnosticChars = 6000
+  }
+}
+$workerState = @{ sessions = @(); openPrs = @(@{ number = 849; headRefOid = '${GH_SIGNAL_TEST_HEAD}' }) }
+$checks = @{
+  ciChecksByPr = @{ '849' = @(@{ name = 'ci'; conclusion = 'failure' }) }
+  requiredCheckNamesByPr = @{ '849' = @('ci') }
+}
+$first = Invoke-CiRedWatchdogTick -RepoRoot ${quotePowerShell(repoRoot)} -ProjectId 'orchestrator-pack' -WorkerState $workerState -ChecksBundle $checks
+Start-Sleep -Milliseconds 1100
+$second = Invoke-CiRedWatchdogTick -RepoRoot ${quotePowerShell(repoRoot)} -ProjectId 'orchestrator-pack' -WorkerState $workerState -ChecksBundle $checks
+$ledger = Invoke-CiRedWatchdogCli -Command 'inspect-ledger' -Payload @{ storeDir = ${quotePowerShell(tempDir)} }
+$record = @($ledger.lookupFailures.PSObject.Properties.Value)[0]
+@{ firstDeferred = $first.deferred; secondDeferred = $second.deferred; state = $record.state; attempts = $record.attempts } | ConvertTo-Json -Compress
+`, {
+        AO_CI_RED_WATCHDOG_STATE_DIR: tempDir,
+      });
+      expect(JSON.parse(output.split('\n').at(-1) as string)).toEqual({
+        firstDeferred: 1,
+        secondDeferred: 1,
+        state: 'parked',
+        attempts: 2,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
 });

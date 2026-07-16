@@ -374,10 +374,6 @@ function main() {
       status: 1,
       rateLimit,
     }, parsed));
-    if (message.startsWith('no checks reported')) {
-      process.stderr.write(`${message}\n`);
-      process.exit(1);
-    }
     failRest(message);
   }
 }
