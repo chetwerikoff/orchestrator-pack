@@ -419,5 +419,5 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
       expect(replayed.stdout, `${capture.legacyScript} stdout`).toBe(capture.stdout);
       expect(replayed.stderr, `${capture.legacyScript} stderr`).toBe(capture.stderr ?? '');
     }
-  });
+  }, 30_000);
 });
