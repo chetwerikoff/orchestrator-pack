@@ -220,7 +220,8 @@
     "scripts/worker-status-store.test.ts": "light",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "tests/agents-md-relocation.test.ts": "light",
-    "tests/agents-md-size-budget.test.ts": "light"
+    "tests/agents-md-size-budget.test.ts": "light",
+    "scripts/gate-runner/registry.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
