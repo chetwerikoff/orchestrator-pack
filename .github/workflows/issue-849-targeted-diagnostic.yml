@@ -1,6 +1,6 @@
 name: issue-849-targeted-diagnostic
 
-# Second push activates this temporary self-cleaning capture workflow.
+# Temporary capture. It commits only the bounded log; the GitHub App removes this workflow afterward.
 on:
   push:
     branches: [agent/issue-849-gh-signal-classification]
@@ -50,7 +50,6 @@ jobs:
           } > "$log" 2>&1
           tail -n 800 "$log" > "$RUNNER_TEMP/tail"
           mv "$RUNNER_TEMP/tail" "$log"
-          git rm .github/workflows/issue-849-targeted-diagnostic.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$log"
