@@ -361,3 +361,25 @@ query are each a plain foreground, on-demand invocation with no new background p
 
 **Status: pack-owned, tracked, and opt-in** — see `scripts/graphify/README.md` for usage and
 `docs/migration_notes.md` for the one-time per-machine bootstrap step.
+
+### Vitest topology planning is execution-free (Issue #872)
+
+Decision adopted 2026-07-16: `plan-vitest-ci-topology` is a topology-only job. Its emitter step
+sets `OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1` and passes `--skip-oversized-guard`; the job may read
+committed runtime history and topology policy, classify changed paths, derive the heavy shard
+count/matrix, and publish the plan artifact, but it must not execute Vitest. The legacy
+pre-topology oversized guard remains available to other consumers, but it is advisory in this
+workflow rather than a merge gate.
+
+Merge-blocking runtime protection lives after real execution in the heavy shard runner through
+`scripts/enforce-vitest-runtime-budget.mjs`. The prerequisite in Issue #875 aggregates repeated
+assertion durations for a normalized file across per-test-isolated reports, while preserving
+single-entry file-wall enforcement and a fail-closed wall-time fallback when assertion data is
+missing. This keeps the relocated guard effective without multiplying repeated Vitest process
+startup time into the file test-duration budget.
+
+This decision does not change LPT assignment, `targetShardSeconds`, `heavyShardCount`, lane
+classification, committed runtime history, or the runtime-history refresh workflow. The separate
+`scripts/check-ci-pipeline-split.ps1` consumer retains its same-run measurement behavior. Content
+hash/history-freshness work and any future shard-count policy changes remain owned by a separate
+follow-up, not this relocation.
