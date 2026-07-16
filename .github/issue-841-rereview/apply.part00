@@ -1,0 +1,213 @@
+from pathlib import Path
+import json, hashlib, re, subprocess
+
+root = Path.cwd()
+# Remove temporary source exporter from exported tree.
+(root / '.github/workflows/issue-841-export-rereview-source.yml').unlink(missing_ok=True)
+
+# 1) census.ts: AST-bound test invocation + portedInWave schema.
+p = root / 'scripts/gate-runner/census.ts'
+text = p.read_text()
+text = text.replace("import { resolve } from 'node:path';\n", "import { resolve } from 'node:path';\nimport ts from 'typescript';\n")
+text = text.replace(
+"export type DeferredWave = (typeof DEFERRED_WAVES)[number];\n",
+"export type DeferredWave = (typeof DEFERRED_WAVES)[number];\nexport const PORTED_WAVES = ['3.a', '3.b'] as const;\nexport type PortedWave = (typeof PORTED_WAVES)[number];\n"
+)
+text = text.replace(
+"  readonly gateIds?: readonly string[];\n",
+"  readonly gateIds?: readonly string[];\n  readonly portedInWave?: PortedWave;\n"
+)
+text = text.replace(
+"const VALID_DEFERRED_WAVES = new Set<string>(DEFERRED_WAVES);\n",
+"const VALID_DEFERRED_WAVES = new Set<string>(DEFERRED_WAVES);\nconst VALID_PORTED_WAVES = new Set<string>(PORTED_WAVES);\n"
+)
+new = '''function childProcessFunctionName(expression: ts.Expression): string | undefined {
+  if (ts.isIdentifier(expression)) return expression.text;
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  return undefined;
+}
+
+function collectUniqueInitializers(source: ts.SourceFile): ReadonlyMap<string, ts.Expression> {
+  const values = new Map<string, ts.Expression>();
+  const ambiguous = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const name = node.name.text;
+      if (values.has(name)) {
+        values.delete(name);
+        ambiguous.add(name);
+      } else if (!ambiguous.has(name)) {
+        values.set(name, node.initializer);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return values;
+}
+
+function staticString(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+  seen: ReadonlySet<string> = new Set(),
+): string | undefined {
+  if (ts.isStringLiteralLike(expression)) return expression.text;
+  if (ts.isIdentifier(expression)) {
+    if (seen.has(expression.text)) return undefined;
+    const initializer = initializers.get(expression.text);
+    if (!initializer) return undefined;
+    return staticString(initializer, initializers, new Set([...seen, expression.text]));
+  }
+  return undefined;
+}
+
+function staticPath(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+  seen: ReadonlySet<string> = new Set(),
+): string | undefined {
+  const literal = staticString(expression, initializers, seen);
+  if (literal !== undefined) return literal.replaceAll('\\\\', '/').replace(/^\\.\\//u, '');
+  if (ts.isIdentifier(expression)) return undefined;
+  if (!ts.isCallExpression(expression)) return undefined;
+  const name = childProcessFunctionName(expression.expression);
+  if (name !== 'join' && name !== 'resolve') return undefined;
+  const segments: string[] = [];
+  for (const argument of expression.arguments) {
+    const value = staticPath(argument, initializers, seen);
+    if (value !== undefined && value.length > 0) segments.push(value.replace(/^\\/+|\\/+$/gu, ''));
+  }
+  return segments.length > 0 ? segments.join('/') : undefined;
+}
+
+function staticArray(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+): ts.ArrayLiteralExpression | undefined {
+  if (ts.isArrayLiteralExpression(expression)) return expression;
+  if (!ts.isIdentifier(expression)) return undefined;
+  const initializer = initializers.get(expression.text);
+  return initializer && ts.isArrayLiteralExpression(initializer) ? initializer : undefined;
+}
+
+function pathExpressionTargets(
+  expression: ts.Expression,
+  target: string,
+  initializers: ReadonlyMap<string, ts.Expression>,
+): boolean {
+  const candidate = staticPath(expression, initializers)?.replaceAll('\\\\', '/').replace(/^\\.\\//u, '');
+  return candidate === target || candidate?.endsWith(`/${target}`) === true;
+}
+
+function hasTestInvocation(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker).replaceAll('\\\\', '/');
+  const source = ts.createSourceFile('legacy-reference.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const initializers = collectUniqueInitializers(source);
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const functionName = childProcessFunctionName(node.expression);
+      if (functionName === 'spawnSync' || functionName === 'execFileSync') {
+        const executable = node.arguments[0] ? staticString(node.arguments[0], initializers)?.toLocaleLowerCase() : undefined;
+        const argv = node.arguments[1] ? staticArray(node.arguments[1], initializers) : undefined;
+        if ((executable === 'pwsh' || executable === 'pwsh.exe') && argv) {
+          for (let index = 0; index < argv.elements.length - 1; index += 1) {
+            const flag = argv.elements[index];
+            const targetExpression = argv.elements[index + 1];
+            if (!flag || !targetExpression || ts.isSpreadElement(flag) || ts.isSpreadElement(targetExpression)) continue;
+            if (staticString(flag, initializers)?.toLocaleLowerCase() !== '-file') continue;
+            if (pathExpressionTargets(targetExpression, target, initializers)) {
+              found = true;
+              return;
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+'''
+start_block = text.index('function hasTestInvocation(')
+end_block = text.index('\nfunction hasBehaviorContainerReference', start_block)
+text = text[:start_block] + new + text[end_block:]
+new2 = '''function hasDelegatedTestInvocation(entry: CensusEntry, snapshot: SourceSnapshot, text: string, marker: string): boolean {
+  const source = snapshot.files.get(entry.sourcePath);
+  if (source === undefined) return false;
+  const delegatedTarget = marker.replace(/^scripts\\//u, '');
+  const delegated = new RegExp(
+    `Join-Path\\s+\\$Root\\s+['"]${escapeRegExp(marker)}['"]`,
+    'iu',
+  ).test(source) && /&\\s+node\\s+\\$[A-Za-z_][A-Za-z0-9_]*\\b/iu.test(source);
+  return delegatedTarget.length > 0 && delegated && hasTestInvocation(text, entry.sourcePath);
+}
+'''
+start_block = text.index('function hasDelegatedTestInvocation(')
+end_block = text.index('\nfunction legacyReferenceIsWired', start_block)
+text = text[:start_block] + new2 + text[end_block:]
+text = text.replace(
+"    case 'test-invocation': return hasTestInvocation(text, reference.marker);\n",
+"    case 'test-invocation': return hasTestInvocation(text, entry.sourcePath);\n"
+)
+old_schema = '''    if (isPorted(entry)) {
+      if (!entry.gateIds || entry.gateIds.length === 0) failures.push(`${entry.id}: ported row lacks gateIds`);
+    } else if (entry.gateIds && entry.gateIds.length > 0) {
+      failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
+    }
+'''
+new_schema = '''    if (isPorted(entry)) {
+      if (!entry.gateIds || entry.gateIds.length === 0) failures.push(`${entry.id}: ported row lacks gateIds`);
+      if (census.version === 2 && (!entry.portedInWave || !VALID_PORTED_WAVES.has(entry.portedInWave))) {
+        failures.push(`${entry.id}: schema v2 ported row lacks a valid portedInWave owner`);
+      }
+      if (census.version === 1 && entry.portedInWave !== undefined) failures.push(`${entry.id}: schema v1 cannot claim portedInWave`);
+    } else {
+      if (entry.gateIds && entry.gateIds.length > 0) failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
+      if (entry.portedInWave !== undefined) failures.push(`${entry.id}: non-ported row cannot claim portedInWave`);
+    }
+
+    if (isDeferred(entry) && entry.sourceKind === 'check-script'
+      && (entry.legacyReference?.kind === 'test-invocation' || entry.legacyReference?.kind === 'delegated-test-invocation')) {
+      const referencedTarget = referencedScriptPath(entry.legacyReference.marker);
+      if (referencedTarget !== entry.sourcePath) {
+        failures.push(`${entry.id}: test-backed legacy invocation must target the retained PowerShell wrapper ${entry.sourcePath}`);
+      }
+    }
+'''
+if old_schema not in text:
+    raise SystemExit('old ported schema block not found')
+text = text.replace(old_schema, new_schema)
+p.write_text(text)
+
+# 2) Baseline: independent migration ownership and actual wrapper reference.
+p = root / 'scripts/gate-runner/census/pre-change-baseline.json'
+data = json.loads(p.read_text())
+wave3b_scripts = {
+    'scripts/check-agents-report-contract.ps1',
+    'scripts/check-coworker-delegation-threshold-drift.ps1',
+    'scripts/check-external-output-shape-guard.ps1',
+    'scripts/check-launch-argv-inventory.ps1',
+    'scripts/check-review-010-vocabulary.ps1',
+    'scripts/check-review-command-not-ao.ps1',
+}
+for entry in data['entries']:
+    if entry['classification'].startswith('ported-'):
+        is_3b = (
+            (entry['sourceKind'] == 'check-script' and entry['sourcePath'] in wave3b_scripts)
+            or (entry['sourceKind'] == 'verify-script-member' and entry['marker'] in wave3b_scripts)
+            or (entry['sourceKind'] == 'verify-inline' and any(g in {'verify-required-files','verify-structure-contract'} for g in entry.get('gateIds', [])))
+        )
+        entry['portedInWave'] = '3.b' if is_3b else '3.a'
+    if entry['id'] == 'check-script:scripts/check-supervisor-test-wait-inventory.ps1':
+        entry['legacyReference'] = {
+            'path': 'scripts/check-supervisor-test-wait-inventory.test.ts',
+            'marker': 'scripts/check-supervisor-test-wait-inventory.ps1',
+            'kind': 'test-invocation',
+        }
+p.write_text(json.dumps(data, indent=2) + '\n')
+
+# 3) Supervisor test executes retained PowerShell wrapper.
+p =
