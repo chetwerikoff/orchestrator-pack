@@ -6,7 +6,6 @@ on:
       - main
 
 permissions:
-  actions: write
   contents: write
 
 jobs:
@@ -21,37 +20,33 @@ jobs:
           ref: agent/issue-841-bulk-gate-port
           fetch-depth: 0
 
-      - name: Patch hash-bound fixture validation and push
+      - name: Patch validation, remove helper, and push
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TEMP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
           path = Path('.github/workflows/issue-841-apply-rereview-fixes.yml')
           text = path.read_text()
-          old = '          git diff --cached --check "$CLEAN_BASE"\n'
-          new = '''          # The exact frozen verify.ps1 blob contains pre-existing trailing whitespace.
-          # Its byte identity is guarded separately; every authored file remains under diff --check.
-          git diff --cached --check "$CLEAN_BASE" -- . \\
-            ':(exclude)scripts/fixtures/gate-runner/legacy-wave-3b/verify-frozen.ps1'
-          '''
-          if old not in text:
-              raise SystemExit('target validation command not found')
+          old = 'git diff --cached --check "$CLEAN_BASE"'
+          checked = ' '.join([
+              'scripts/check-supervisor-test-wait-inventory.test.ts',
+              'scripts/fixtures/gate-runner/legacy-wave-3b/verify-source-spans.json',
+              'scripts/gate-runner/census.test.ts',
+              'scripts/gate-runner/census.ts',
+              'scripts/gate-runner/census/pre-change-baseline.json',
+              'scripts/gate-runner/custom/bulk-cli-parity.test.ts',
+              'scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json',
+              'scripts/toolchain/powershell-child-tests.json',
+              'scripts/toolchain/raw-child-process-baseline.json',
+          ])
+          new = f'{old} -- {checked}'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one validation command, found {text.count(old)}')
           path.write_text(text.replace(old, new))
           PY
 
           rm -f .github/workflows/issue-841-fix-frozen-whitespace.yml
-
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$TEMP_HEAD_SHA&per_page=100" \
-            --jq '.workflow_runs[] | select((.name == "scope-guard" or .name == "issue-841-apply-rereview-fixes") and .status != "completed") | .id' \
-            | while read -r run_id; do
-                [ -z "$run_id" ] && continue
-                gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/force-cancel" || true
-              done
-
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
