@@ -77,4 +77,17 @@ Describe 'CI-red watchdog lookup retention reconcile integration' {
         $retentionIndex | Should -BeGreaterOrEqual 0
         $checksGateIndex | Should -BeGreaterThan $retentionIndex
     }
+
+    It 'passes the CI-red watchdog self-test command' {
+        Push-Location $RepoRoot
+        try {
+            $output = @(& node (Join-Path $RepoRoot 'scripts/lib/ci-red-watchdog-selftest.mjs') 2>&1)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+        }
+        $exitCode | Should -Be 0 -Because ($output -join "`n")
+        ($output -join "`n") | Should -Match '\[PASS\] CI-red watchdog self-test \([0-9]+ cases\)'
+    }
 }
