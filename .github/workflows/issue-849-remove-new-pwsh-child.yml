@@ -1,0 +1,94 @@
+name: issue-849-remove-new-pwsh-child
+
+on:
+  push:
+    branches: [agent/issue-849-gh-signal-classification]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-849-remove-new-pwsh-child
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-849-gh-signal-classification
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Remove new PowerShell child-test while preserving coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/gh-signal-classification.test.ts')
+          text = path.read_text(encoding='utf-8')
+
+          for import_line in (
+              "import { runProcessSync } from '#opk-kernel/subprocess';\n",
+              "import { functionBody } from './_test-pwsh-helpers.js';\n",
+          ):
+              if import_line not in text:
+                  raise SystemExit(f'missing expected import: {import_line.strip()}')
+              text = text.replace(import_line, '', 1)
+
+          helper_start = text.index('\nfunction quotePowerShell')
+          helper_end = text.index('\nafterEach(', helper_start)
+          text = text[:helper_start] + '\n' + text[helper_end:]
+
+          test_start_marker = "  it('runs lookup retention for an authoritative empty open-PR snapshot without a checks bundle', () => {"
+          test_end_marker = "\n  it('reads a legacy ledger without lookupFailures compatibly'"
+          test_start = text.index(test_start_marker)
+          test_end = text.index(test_end_marker, test_start)
+          replacement = """  it('wires lookup retention before the empty-open-PR checks gate', () => {
+            const reconcileSource = readFileSync(join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'), 'utf8');
+            const tickStart = reconcileSource.indexOf('function Invoke-CiFailureNotificationTick');
+            const retentionCall = reconcileSource.indexOf('Invoke-CiRedWatchdogLookupRetention', tickStart);
+            const checksGate = reconcileSource.indexOf('if ($openPrs.Count -gt 0)', tickStart);
+            expect(tickStart).toBeGreaterThanOrEqual(0);
+            expect(retentionCall).toBeGreaterThan(tickStart);
+            expect(checksGate).toBeGreaterThan(retentionCall);
+
+            const watchdogSource = readFileSync(join(repoRoot, 'scripts/lib/Ci-Red-Watchdog.ps1'), 'utf8');
+            const helperStart = watchdogSource.indexOf('function Invoke-CiRedWatchdogLookupRetention');
+            expect(helperStart).toBeGreaterThanOrEqual(0);
+            expect(watchdogSource.indexOf("$WorkerState.ContainsKey('openPrs')", helperStart)).toBeGreaterThan(helperStart);
+            expect(watchdogSource.indexOf('$null -ne $WorkerState.openPrs', helperStart)).toBeGreaterThan(helperStart);
+            expect(watchdogSource.indexOf('openPrs = @($rows)', helperStart)).toBeGreaterThan(helperStart);
+          });
+
+"""
+          text = text[:test_start] + replacement + text[test_end + 1:]
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Verify targeted regression and policy
+        env:
+          PR_BASE_SHA: 0e8846b1e7caf063d73792700968971d75e0524f
+        run: |
+          set -euo pipefail
+          npm test -- scripts/gh-signal-classification.test.ts
+          npm run check:pwsh-test-growth
+          npm run typecheck:foundation
+          npm run lint:foundation
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/gh-signal-classification.test.ts
+          git commit -m "test: keep empty-snapshot wiring regression Node-only"
+          git push origin HEAD:agent/issue-849-gh-signal-classification
