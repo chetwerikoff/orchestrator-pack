@@ -176,7 +176,10 @@ function isPaginatedApiRequest(args: readonly string[]): boolean {
   return args[0] === 'api' && args.includes('--paginate');
 }
 
-function prepareCommandArgs(args: readonly string[], expectedRoot: GhJsonRoot): string[] {
+export function prepareGhJsonCommandArguments(
+  args: readonly string[],
+  expectedRoot: GhJsonRoot,
+): string[] {
   const prepared = [...args];
   if (expectedRoot === 'array' && isPaginatedApiRequest(prepared) && !prepared.includes('--slurp')) {
     prepared.push('--slurp');
@@ -208,7 +211,7 @@ export function runGhJsonCommand(request: GhJsonCommandRequest): GhJsonSignalRes
   if (!command) throw new TypeError('gh signal command is required');
   const requestedArgs = Array.isArray(request.args) ? request.args.map((entry) => String(entry)) : [];
   const expectedRoot = normalizeExpectedRoot(request.expectedRoot);
-  const args = prepareCommandArgs(requestedArgs, expectedRoot);
+  const args = prepareGhJsonCommandArguments(requestedArgs, expectedRoot);
   const capture = request.fixturePath
     ? readFixtureCapture(path.resolve(request.fixturePath))
     : runProcessSync({
