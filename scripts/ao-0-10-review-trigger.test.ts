@@ -4,18 +4,44 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const fsHarness = vi.hoisted(() => ({
+  actualRenameSync: undefined as typeof import('node:fs').renameSync | undefined,
+  renameSync: vi.fn((source: string, destination: string) => {
+    fsHarness.actualRenameSync!(source, destination);
+  }),
+}));
+const cryptoHarness = vi.hoisted(() => ({
+  actualRandomUUID: undefined as typeof import('node:crypto').randomUUID | undefined,
+  randomUUID: vi.fn(() => cryptoHarness.actualRandomUUID!()),
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  fsHarness.actualRenameSync = actual.renameSync;
+  return { ...actual, renameSync: fsHarness.renameSync };
+});
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  cryptoHarness.actualRandomUUID = actual.randomUUID;
+  return { ...actual, randomUUID: cryptoHarness.randomUUID };
+});
+
 import {
   createPackReviewRun,
+  getPackReviewRun,
   listPackReviewRuns,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
+  updatePackReviewRun,
 } from './lib/pack-review-run-store.js';
 import {
   resolveBindingFromCache,
@@ -57,7 +83,42 @@ function createRun(storeRoot: string, headSha = HEAD_A, surface = 'automatic') {
   });
 }
 
+function useRealRename(): void {
+  fsHarness.renameSync.mockReset();
+  fsHarness.renameSync.mockImplementation((source, destination) => {
+    fsHarness.actualRenameSync!(source, destination);
+  });
+}
+
+function useRealRandomUUID(): void {
+  cryptoHarness.randomUUID.mockReset();
+  cryptoHarness.randomUUID.mockImplementation(() => cryptoHarness.actualRandomUUID!());
+}
+
+function errno(code: string, message: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
+}
+
+function recordPath(storeRoot: string, runId: string): string {
+  return path.join(resolvePackReviewRunStoreRoot({ storeRoot }), 'runs', `${runId}.json`);
+}
+
+function readRawRecord(recordFile: string): string {
+  return readFileSync(recordFile, 'utf8');
+}
+
+function readRecordStatus(recordFile: string): string {
+  return String((JSON.parse(readRawRecord(recordFile)) as { status?: unknown }).status ?? '');
+}
+
+beforeEach(() => {
+  useRealRename();
+  useRealRandomUUID();
+});
+
 afterEach(() => {
+  useRealRename();
+  useRealRandomUUID();
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -144,14 +205,14 @@ describe('pack-owned review runner/store (Issue #839)', () => {
     const storeRoot = tempRoot('opk-review-stale-');
     process.env.PACK_REVIEW_RUN_STALE_MINUTES = '2';
     const created = createRun(storeRoot);
-    const recordPath = path.join(resolvePackReviewRunStoreRoot({ storeRoot }), 'runs', `${created.run.id}.json`);
-    const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+    const file = recordPath(storeRoot, created.run.id);
+    const record = JSON.parse(readFileSync(file, 'utf8'));
     record.status = 'running';
     record.latestRunStatus = 'running';
     record.runnerPid = 999_999_999;
     record.updatedAt = '2000-01-01T00:00:00.000Z';
     record.heartbeatAtUtc = record.updatedAt;
-    writeFileSync(recordPath, `${JSON.stringify(record)}\n`, 'utf8');
+    writeFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
     expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({
       status: 'failed',
       latestRunStatus: 'failed',
@@ -261,5 +322,122 @@ describe('pack-owned review runner/store (Issue #839)', () => {
     const first = createRun(storeRoot);
     setPackReviewRunTerminal(first.run.id, 'failed', { exitCode: 1 }, { storeRoot });
     expect(createRun(storeRoot).created).toBe(true);
+  });
+});
+
+describe('pack review-run record atomic replacement (Issue #861)', () => {
+  it('positive-outcome: lands a terminal status through the public readers', () => {
+    const storeRoot = tempRoot('opk-review-atomic-positive-');
+    const created = createRun(storeRoot);
+    fsHarness.renameSync.mockClear();
+
+    setPackReviewRunTerminal(created.run.id, 'up_to_date', {}, {
+      storeRoot,
+      now: new Date('2026-07-16T08:01:00.000Z'),
+    });
+
+    expect(fsHarness.renameSync).toHaveBeenCalledTimes(1);
+    expect(getPackReviewRun(created.run.id, { storeRoot })?.status).toBe('up_to_date');
+    expect(listPackReviewRuns({ storeRoot })).toEqual([
+      expect.objectContaining({
+        id: created.run.id,
+        status: 'up_to_date',
+        latestRunStatus: 'up_to_date',
+      }),
+    ]);
+  });
+
+  it('keeps the prior parseable record when rename is interrupted before taking effect', () => {
+    const storeRoot = tempRoot('opk-review-atomic-interrupt-');
+    const created = createRun(storeRoot);
+    const file = recordPath(storeRoot, created.run.id);
+    const prior = readRawRecord(file);
+    fsHarness.renameSync.mockReset();
+    fsHarness.renameSync.mockImplementationOnce(() => {
+      throw errno('EIO', 'simulated interruption before rename effect');
+    });
+
+    expect(() => updatePackReviewRun(created.run.id, {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+    }, { storeRoot })).toThrow(/simulated interruption/);
+
+    expect(existsSync(file)).toBe(true);
+    expect(readRawRecord(file)).toBe(prior);
+    expect(readRecordStatus(file)).toBe('queued');
+    expect(readdirSync(path.dirname(file)).some((name) => name.endsWith('.tmp'))).toBe(false);
+  });
+
+  it('retries the rename itself after transient contention without deleting the destination', () => {
+    const storeRoot = tempRoot('opk-review-atomic-retry-');
+    const created = createRun(storeRoot);
+    const file = recordPath(storeRoot, created.run.id);
+    const prior = readRawRecord(file);
+    let observedDuringFailure = '';
+    fsHarness.renameSync.mockReset();
+    fsHarness.renameSync
+      .mockImplementationOnce((_source, destination) => {
+        observedDuringFailure = readFileSync(destination, 'utf8');
+        throw errno('EBUSY', 'simulated transient contention');
+      })
+      .mockImplementation((source, destination) => {
+        fsHarness.actualRenameSync!(source, destination);
+      });
+
+    updatePackReviewRun(created.run.id, {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+    }, { storeRoot });
+
+    expect(fsHarness.renameSync).toHaveBeenCalledTimes(2);
+    expect(observedDuringFailure).toBe(prior);
+    expect(readRecordStatus(file)).toBe('reviewing');
+  });
+
+  it('bounds transient retries, reports exhaustion, preserves a record, and releases the store lock', () => {
+    const storeRoot = tempRoot('opk-review-atomic-exhausted-');
+    const created = createRun(storeRoot);
+    const file = recordPath(storeRoot, created.run.id);
+    fsHarness.renameSync.mockReset();
+    fsHarness.renameSync.mockImplementation(() => {
+      throw errno('EPERM', 'simulated persistent contention');
+    });
+
+    expect(() => updatePackReviewRun(created.run.id, {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+    }, { storeRoot })).toThrow(/rename_retry_exhausted code=EPERM attempts=4/);
+
+    expect(fsHarness.renameSync).toHaveBeenCalledTimes(4);
+    expect(existsSync(file)).toBe(true);
+    expect(['queued', 'reviewing']).toContain(readRecordStatus(file));
+    expect(existsSync(path.join(storeRoot, '.store-lock'))).toBe(false);
+
+    useRealRename();
+    expect(updatePackReviewRun(created.run.id, {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+    }, { storeRoot }).status).toBe('reviewing');
+  });
+
+  it('keeps create-only collision behavior unchanged', () => {
+    const storeRoot = tempRoot('opk-review-atomic-create-only-');
+    const created = createRun(storeRoot);
+    setPackReviewRunTerminal(created.run.id, 'up_to_date', {}, { storeRoot });
+    const compact = created.run.id.slice('prr-'.length);
+    const collisionUuid = [
+      compact.slice(0, 8),
+      compact.slice(8, 12),
+      compact.slice(12, 16),
+      compact.slice(16, 20),
+      compact.slice(20),
+    ].join('-') as `${string}-${string}-${string}-${string}-${string}`;
+    cryptoHarness.randomUUID
+      .mockImplementationOnce(() => '11111111-1111-4111-8111-111111111111')
+      .mockImplementationOnce(() => collisionUuid);
+
+    expect(() => createRun(storeRoot)).toThrow(
+      `pack review run already exists: ${created.run.id}`,
+    );
   });
 });
