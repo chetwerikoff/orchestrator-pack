@@ -12,7 +12,7 @@ The post-migration reviews harden seven proof boundaries:
 - schema v2 freezes the deferred `check-reusable.ps1` behavior surface so appended predicates cannot bypass the 283-row census;
 - frozen PowerShell replay fixtures exercise successful and failing cases for each deleted entrypoint plus the migrated `verify.ps1` required-file and contract-marker behaviors;
 - deferred census references carry an explicit invocation kind and are validated as executable call shapes rather than arbitrary marker substrings;
-- test-backed PowerShell references are parsed as TypeScript call expressions and must bind `pwsh`, the adjacent `-File` argument, and the exact retained wrapper path inside the same child-process invocation;
+- test-backed PowerShell references are parsed as TypeScript call expressions and must bind `pwsh`, the adjacent `-File` argument, and the exact retained wrapper path inside one sanctioned `runProcessSync` invocation; the wrapper test uses the subprocess kernel rather than adding a raw child-process exception;
 - every ported census row declares `portedInWave`, and Wave 3.b parity completeness is derived from that census-owned migration population instead of from the capture manifest being tested;
 - the partial `verify.ps1` replay is bound to the complete frozen source blob, verified Git blob SHA, recorded source offsets, and normalized span hashes, so a predicate mutation cannot be hidden behind an unchanged provenance comment.
 
