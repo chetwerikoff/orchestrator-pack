@@ -172,10 +172,42 @@ function readFixtureCapture(fixturePath: string): GhJsonCapture {
   };
 }
 
+function isPaginatedApiRequest(args: readonly string[]): boolean {
+  return args[0] === 'api' && args.includes('--paginate');
+}
+
+function prepareCommandArgs(args: readonly string[]): string[] {
+  const prepared = [...args];
+  if (isPaginatedApiRequest(prepared) && !prepared.includes('--slurp')) {
+    prepared.push('--slurp');
+  }
+  return prepared;
+}
+
+function normalizePaginatedApiResult(
+  result: GhJsonSignalResult,
+  requestedArgs: readonly string[],
+  expectedRoot: GhJsonRoot,
+): GhJsonSignalResult {
+  if (!result.ok || expectedRoot !== 'array' || !isPaginatedApiRequest(requestedArgs) || !Array.isArray(result.value)) {
+    return result;
+  }
+
+  const value = result.value.flatMap((page) => Array.isArray(page) ? page : [page]);
+  const empty = value.length === 0;
+  return {
+    ...result,
+    classification: empty ? 'empty' : 'success',
+    reason: empty ? 'gh_json_empty_success' : 'gh_json_success',
+    value,
+  };
+}
+
 export function runGhJsonCommand(request: GhJsonCommandRequest): GhJsonSignalResult {
   const command = String(request.command ?? '').trim();
   if (!command) throw new TypeError('gh signal command is required');
-  const args = Array.isArray(request.args) ? request.args.map((entry) => String(entry)) : [];
+  const requestedArgs = Array.isArray(request.args) ? request.args.map((entry) => String(entry)) : [];
+  const args = prepareCommandArgs(requestedArgs);
   const capture = request.fixturePath
     ? readFixtureCapture(path.resolve(request.fixturePath))
     : runProcessSync({
@@ -185,7 +217,9 @@ export function runGhJsonCommand(request: GhJsonCommandRequest): GhJsonSignalRes
       inheritParentEnv: true,
       encoding: 'utf8',
     });
-  return classifyGhJsonCapture(capture, request);
+  const expectedRoot = normalizeExpectedRoot(request.expectedRoot);
+  const result = classifyGhJsonCapture(capture, { ...request, expectedRoot });
+  return normalizePaginatedApiResult(result, requestedArgs, expectedRoot);
 }
 
 function cliValue(flag: string): string | undefined {
