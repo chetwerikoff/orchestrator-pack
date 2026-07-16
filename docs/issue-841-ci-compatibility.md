@@ -13,6 +13,6 @@ The post-migration review hardens four proof boundaries:
 - frozen PowerShell replay fixtures exercise a meaningful negative case for each deleted entrypoint plus the migrated `verify.ps1` required-file and contract-marker behaviors;
 - deferred census references carry an explicit invocation kind and are validated as executable call shapes rather than arbitrary marker substrings.
 
-The expanded gate-runner suite contains 89 tests, and the foundation suite contains 168 tests. The Linux verification path runs the legacy parity fixtures with PowerShell available.
+The expanded gate-runner suite contains 89 tests, and the foundation suite contains 168 tests. The Linux verification path runs the legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
 
 The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows are run only after that cleanup state is committed.
