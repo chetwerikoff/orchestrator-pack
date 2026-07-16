@@ -220,3 +220,21 @@ jobs:
     expect(result.jobs).toHaveLength(1);
   });
 });
+
+describe('plan-time Vitest execution boundary (#872)', () => {
+  it('keeps topology planning execution-free and makes the legacy oversized guard advisory', () => {
+    const workflow = readFileSync(join(process.cwd(), '.github/workflows/scope-guard.yml'), 'utf8');
+    const planJobStart = workflow.indexOf('  plan-vitest-ci-topology:');
+    const nextJobStart = workflow.indexOf('\n  test-vitest-heavy:', planJobStart);
+
+    expect(planJobStart).toBeGreaterThanOrEqual(0);
+    expect(nextJobStart).toBeGreaterThan(planJobStart);
+
+    const planJob = workflow.slice(planJobStart, nextJobStart);
+    expect(planJob).toContain("OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'");
+    expect(planJob).toContain(
+      'node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard',
+    );
+    expect(planJob).not.toMatch(/(?:npx\s+vitest|node_modules\/\.bin\/vitest|npm\s+test|npm\s+run\s+test)/i);
+  });
+});
