@@ -70,36 +70,34 @@ jobs:
           git rm .github/workflows/issue-839-amend-declaration.yml .github/workflows/issue-839-scope-cleanup.yml scripts/issue-839-scope-cleanup.py
           git add scripts/lib/Invoke-AoReviewApi.ps1 tests/harness-pretrigger-config-read.test.ts scripts/toolchain/powershell-child-tests.json scripts/toolchain/raw-child-process-baseline.json
           git commit -m 'Keep issue 839 compatibility tests within declared scope'
-      - name: Run full verifier
-        id: verifier
+      - name: Run Pester regression
+        id: pester
         continue-on-error: true
         shell: pwsh
         run: |
-          ./scripts/verify.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-verifier.log
+          ./scripts/test-all.ps1 -SkipNpm *>&1 | Tee-Object -FilePath /tmp/issue-839-pester.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Publish verifier failure
-        if: steps.verifier.outcome == 'failure'
+      - name: Publish Pester failure
+        if: steps.pester.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          python3 - <<'PY' >/tmp/issue-839-verifier-summary.log
-          from pathlib import Path
-          import re
-          text = Path('/tmp/issue-839-verifier.log').read_text(encoding='utf-8', errors='replace')
-          lines = text.splitlines()
-          pattern = re.compile(r'(\[FAIL\]|FAILURE|Failed Tests|AssertionError|Error:|error |== Summary ==|Summary|exit code)', re.I)
-          selected = []
-          for i, line in enumerate(lines):
-              if pattern.search(line):
-                  lo = max(0, i - 3)
-                  hi = min(len(lines), i + 8)
-                  selected.extend(lines[lo:hi])
-                  selected.append('---')
-          if not selected:
-              selected = lines[-120:]
-          print('\n'.join(selected[-260:]))
-          PY
-          { echo '## Issue #839 verifier failure'; echo '```text'; cat /tmp/issue-839-verifier-summary.log; echo '```'; } >/tmp/report.md
+          tail -n 220 /tmp/issue-839-pester.log >/tmp/issue-839-tail.log
+          { echo '## Issue #839 Pester failure'; echo '```text'; cat /tmp/issue-839-tail.log; echo '```'; } >/tmp/report.md
           gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
           exit 1
+      - name: Verify strict self-architect
+        shell: pwsh
+        run: ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
+      - name: Push verified scoped candidate
+        shell: bash
+        run: git push origin HEAD:issue-839-pack-review-runner-v2
+      - name: Report other failure
+        if: failure() && steps.pester.outcome != 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api --method POST repos/chetwerikoff/orchestrator-pack/issues/845/comments \
+            --field body="Issue #839 final scoped candidate failed at a named step: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
