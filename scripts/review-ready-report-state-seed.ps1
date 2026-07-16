@@ -79,14 +79,18 @@ function ConvertTo-WorkerStatusRefreshOperatorStatus {
         failureCount      = [int]$Diagnostic.failureCount
         evictionRemoved   = [int]$Diagnostic.evictionRemoved
         evictionFailed    = [bool]$Diagnostic.evictionFailed
-        githubDegraded    = [bool]$Diagnostic.githubDegraded
+        githubDegraded            = [bool]$Diagnostic.githubDegraded
+        detailDeadlineReached      = [bool]$Diagnostic.detailDeadlineReached
+        detailSkippedByDeadline   = [int]$Diagnostic.detailSkippedByDeadlineCount
+        detailElapsedMs            = [long]$Diagnostic.detailElapsedMs
     }
 }
 
 function Invoke-ReviewReadyOwnedWorkerStatusRefresh {
     param(
         [hashtable]$FixturePayload = $null,
-        [switch]$DryRunMode
+        [switch]$DryRunMode,
+        [scriptblock]$ProgressWriter = $null
     )
 
     if ($DryRunMode -and -not ($FixturePayload -and $FixturePayload.workerStatusRefresh)) {
@@ -101,6 +105,7 @@ function Invoke-ReviewReadyOwnedWorkerStatusRefresh {
         RepoSlug           = $SupervisedRepoSlug
         IncludeTerminated  = $true
         Owner              = 'review-ready-report-state-seed'
+        ProgressWriter      = $ProgressWriter
     }
     if ($FixturePayload) {
         $refreshParams['Sessions'] = @($FixturePayload.sessions)
@@ -187,7 +192,7 @@ try {
                 -WorkStep 'poll_start' -WorkCursor 1 -WorkTotal (Get-ReviewReadyReportStateSeedWorkTotal) `
                 -TickId $progressBundle.TickId
             try {
-                $refreshDiagnostic = Invoke-ReviewReadyOwnedWorkerStatusRefresh -DryRunMode:$DryRun
+                $refreshDiagnostic = Invoke-ReviewReadyOwnedWorkerStatusRefresh -DryRunMode:$DryRun -ProgressWriter $progressBundle.Write
                 $result = Invoke-ReviewReadyReportStateSeedTick -StateRoot $stateRoot -ProjectId $ProjectId `
                     -RepoRoot $RepoRoot -ReviewCommand $reviewCommand -DryRun:$DryRun -SupervisedRepoSlug $SupervisedRepoSlug `
                     -ProgressWriter $progressBundle.Write -TickId $progressBundle.TickId `

@@ -339,6 +339,19 @@
       "entrypointMode": "unchanged"
     },
     {
+      "path": "scripts/lib/Get-WorkerStatusDecisionSessions.ps1",
+      "sourceKind": "powershell-json-producer",
+      "taxonomy": "d",
+      "ownerWave": "wave-d",
+      "owningIssue": "migration-plan-pr7-8",
+      "disposition": "deferred",
+      "reason": "Polls, supervises, recovers, or is tightly coupled to subprocess/tmux/fleet lifecycle; deferred to Wave D / PR 7-8.",
+      "goldenStatus": "none",
+      "parityTargets": [],
+      "parityTests": [],
+      "entrypointMode": "unchanged"
+    },
+    {
       "path": "scripts/lib/Gh-FleetInventoryCache.ps1",
       "sourceKind": "powershell-json-producer",
       "taxonomy": "a",
