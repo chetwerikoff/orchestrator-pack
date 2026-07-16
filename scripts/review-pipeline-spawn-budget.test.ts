@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { loadPromptTemplate } from '../plugins/ao-codex-pr-reviewer/lib/prompt.js';
 import {
   aggregateSpawnEvents,
   attributeSpawnSourceClass,
@@ -12,12 +21,85 @@ import {
   validateJournalRateAttribution,
   verifyCommittedCaptureReplays,
 } from '../docs/review-pipeline-spawn-budget.mjs';
-import { repoRoot } from './_test-pwsh-helpers.js';
+import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const fixturesDir = path.join(repoRoot, 'tests/external-output-references/review-pipeline-spawn-budget');
 
 function loadCapture(name: string) {
   return JSON.parse(readFileSync(path.join(fixturesDir, `${name}.capture.json`), 'utf8'));
+}
+
+function writeExecutable(filePath: string, content: string) {
+  writeFileSync(filePath, content, 'utf8');
+  chmodSync(filePath, 0o755);
+}
+
+function runClaudeWrapperPromptFixture(options: {
+  workspacePrompt?: string;
+  inheritedOverride?: string;
+}) {
+  const root = mkdtempSync(path.join(tmpdir(), 'opk-claude-prompt-source-'));
+  const workspace = path.join(root, 'reviewed-workspace');
+  const fakeBin = path.join(root, 'bin');
+  const captureFile = path.join(root, 'captured-prompt.txt');
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(fakeBin, { recursive: true });
+
+  if (options.workspacePrompt !== undefined) {
+    const promptDir = path.join(workspace, 'prompts');
+    mkdirSync(promptDir, { recursive: true });
+    writeFileSync(path.join(promptDir, 'codex_review_prompt.md'), options.workspacePrompt, 'utf8');
+  }
+
+  let inheritedOverridePath: string | undefined;
+  if (options.inheritedOverride !== undefined) {
+    inheritedOverridePath = path.join(workspace, 'inherited-review-prompt.md');
+    writeFileSync(inheritedOverridePath, options.inheritedOverride, 'utf8');
+  }
+
+  writeExecutable(path.join(fakeBin, 'npm'), '#!/usr/bin/env bash\nexit 0\n');
+  writeExecutable(path.join(fakeBin, 'git'), '#!/usr/bin/env bash\nexit 1\n');
+  writeExecutable(path.join(fakeBin, 'gh'), '#!/usr/bin/env bash\nexit 1\n');
+  writeExecutable(
+    path.join(fakeBin, 'node'),
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'case " $* " in',
+      '  *" --prompt-only "*) cat "$AO_CODEX_REVIEW_PROMPT_FILE" ;;',
+      "  *) printf 'NO_FINDINGS\\n' ;;",
+      'esac',
+      '',
+    ].join('\n'),
+  );
+  writeExecutable(
+    path.join(fakeBin, 'claude'),
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'cat > "$AO_CLAUDE_PROMPT_CAPTURE_FILE"',
+      "printf 'NO_FINDINGS\\n'",
+      '',
+    ].join('\n'),
+  );
+
+  const env: Record<string, string> = {
+    AO_CLAUDE_PROMPT_CAPTURE_FILE: captureFile,
+    AO_CODEX_REVIEW_PROMPT_FILE: inheritedOverridePath ?? '',
+    AO_ISSUE_NUMBER: '865',
+    PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+  };
+
+  try {
+    const wrapper = path.join(repoRoot, 'scripts/run-pack-review-claude.ps1');
+    runPwsh(
+      `& ${psString(wrapper)} --repo-root ${psString(workspace)} --base 'origin/main'`,
+      env,
+    );
+    return readFileSync(captureFile, 'utf8').trimEnd();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe('review-pipeline spawn budget (Issue #480)', () => {
@@ -147,5 +229,52 @@ describe('review-pipeline spawn budget (Issue #480)', () => {
       expect(result.ok, `${name}: ${result.reason}`).toBe(true);
       expect(result.reason).toBe('journal_rate_attribution_ok');
     }
+  });
+});
+
+describe('Claude review wrapper trusted prompt source (Issue #865)', () => {
+  const trustedPrompt = readFileSync(
+    path.join(repoRoot, 'prompts/codex_review_prompt.md'),
+    'utf8',
+  ).trimEnd();
+
+  it('loads the trusted pack-root prompt instead of the reviewed workspace copy', () => {
+    const captured = runClaudeWrapperPromptFixture({
+      workspacePrompt: 'WORKSPACE_CONTROLLED_PROMPT_DO_NOT_LOAD',
+    });
+    expect(captured).toBe(trustedPrompt);
+    expect(captured).not.toContain('WORKSPACE_CONTROLLED_PROMPT_DO_NOT_LOAD');
+  });
+
+  it('overwrites an inherited reviewed-workspace prompt override before loading', () => {
+    const captured = runClaudeWrapperPromptFixture({
+      inheritedOverride: 'INHERITED_WORKSPACE_PROMPT_DO_NOT_LOAD',
+    });
+    expect(captured).toBe(trustedPrompt);
+    expect(captured).not.toContain('INHERITED_WORKSPACE_PROMPT_DO_NOT_LOAD');
+  });
+
+  it('preserves explicit overrides for direct loader invocation', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'opk-direct-prompt-override-'));
+    const overridePath = path.join(root, 'local-review-prompt.md');
+    const override = 'LOCAL_TRUSTED_DEVELOPMENT_OVERRIDE\n';
+    const previous = process.env.AO_CODEX_REVIEW_PROMPT_FILE;
+    writeFileSync(overridePath, override, 'utf8');
+    try {
+      process.env.AO_CODEX_REVIEW_PROMPT_FILE = overridePath;
+      expect(loadPromptTemplate()).toBe(override);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AO_CODEX_REVIEW_PROMPT_FILE;
+      } else {
+        process.env.AO_CODEX_REVIEW_PROMPT_FILE = previous;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the Codex wrapper outside the prompt override mechanism', () => {
+    const codexWrapper = readFileSync(path.join(repoRoot, 'scripts/run-pack-review.ps1'), 'utf8');
+    expect(codexWrapper).not.toContain('AO_CODEX_REVIEW_PROMPT_FILE');
   });
 });
