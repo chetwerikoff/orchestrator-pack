@@ -1,0 +1,23 @@
+name: issue-841-cancel-stale
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel stale scope-guard runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run cancel 29478257320 --repo "$GITHUB_REPOSITORY" || true
+          gh run cancel 29478619764 --repo "$GITHUB_REPOSITORY" || true
