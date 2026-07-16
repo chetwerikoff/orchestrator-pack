@@ -27,13 +27,7 @@ worktree probes run from the operator terminal only — never inside AO-managed 
 - `agent-orchestrator.yaml` / `.example` are **not** live runtime config (legacy-import
   only). Live config = per-project ProjectConfig: `ao project get/set-config`; it resolves
   when a session spawns/restores — not on daemon restart. `ao start` has no project operand.
-- PR review is run by **pack scripts** (`invoke-pack-review.ps1` under the wake
-  supervisor), not by AO. Read verdicts via the pack wrapper
-  `pwsh -NoProfile -File scripts/ao-review.ps1 list <worker-session-id> --json`
-  (AO HTTP `/api/v1/sessions/{id}/reviews`) or the detached store
-  `~/.ao/detached-pack-reviews/pr-<P>.json` (`verdict`, `findingCount`, `headSha`).
-  Never call the `ao review` CLI to read verdicts — it has only `submit` (used by pack
-  scripts to record a verdict back to AO).
+- PR review is run by the **pack-owned runner**, not by AO. Manual invocation is `node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>`; operational status comes from `scripts/pack-review-runner.ts list` or the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict; the pack-side run/status store is operational state only. Never use daemon review HTTP or `ao review submit` as a fallback or dual-write path.
 - Send shape: `ao send --session <id> --message "<text>"` (what
   `scripts/journaled-worker-send.ps1` calls).
 - `ao status --json` = daemon health only; never parse it for sessions.

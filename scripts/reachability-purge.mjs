@@ -38,6 +38,10 @@ const REQUIRED_RETIRED_SHIMS = [
   'scripts/_resolve-system-git.sh',
 ];
 
+const ISSUE_839_ACCEPTED_RETIRED_PATHS = [
+  'scripts/ao-review.ps1',
+];
+
 const ISSUE_821_KEEP_LIVE_HELPERS = [
   'scripts/lib/derive-gh-repo-from-checkout.mjs',
 ];
@@ -1036,8 +1040,10 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     ...supersededCandidates,
     ...deletableBackupCandidates,
     ...ISSUE_821_ACCEPTED_RETIRED_PATHS,
+    ...ISSUE_839_ACCEPTED_RETIRED_PATHS,
   ])].sort();
   const issue821RetiredSet = new Set(ISSUE_821_ACCEPTED_RETIRED_PATHS);
+  const issue839RetiredSet = new Set(ISSUE_839_ACCEPTED_RETIRED_PATHS);
 
   const deletedGovernedNodes = deletedFromBase.filter((item) => isDeletionGraphNode(item) || BACKUP_PATTERN.test(item));
   const deletedTests = deletedFromBase.filter(isTestFile);
@@ -1047,7 +1053,8 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
       : supersededCandidates.includes(item) ? 'superseded'
         : zeroReachabilityCandidates.includes(item) ? 'zero-reachability'
           : issue821RetiredSet.has(item) ? 'issue-821-retired'
-            : 'unqualified';
+            : issue839RetiredSet.has(item) ? 'issue-839-retired'
+              : 'unqualified';
     return {
       path: item,
       kind: 'file',
@@ -1060,7 +1067,9 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
             ? 'AO 0.10.2 superseded surface with no unresolved live caller.'
             : reason === 'issue-821-retired'
               ? 'Issue #821 explicitly retires the dead autonomous surface shim/interposer machinery.'
-              : 'Deleted path does not satisfy the binding deadness formula.',
+              : reason === 'issue-839-retired'
+                ? 'Issue #839 explicitly retires the daemon-era ao-review shim after pack-runner cutover.'
+                : 'Deleted path does not satisfy the binding deadness formula.',
     };
   });
 
@@ -1084,7 +1093,7 @@ export async function buildManifest(repoRoot = repoRootFromScript()) {
     // a violation.
     ...retiredShimBlockers
       .filter((row) => row.deletedInCurrentTree && row.inboundTrustedEdges.length > 0)
-      .filter((row) => !issue821RetiredSet.has(row.path))
+      .filter((row) => !issue821RetiredSet.has(row.path) && !issue839RetiredSet.has(row.path))
       .map((row) => ({
         code: 'shim-cluster-deleted-despite-live-inbound-edge',
         path: row.path,

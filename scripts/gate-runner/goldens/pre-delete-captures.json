@@ -44,7 +44,7 @@
       "case": "real-clean-tree",
       "argv": ["pwsh", "-NoProfile", "-File", "scripts/check-agent-rules-line-budget.ps1", "-RepoRoot", "<repo>"],
       "exitCode": 0,
-      "stdout": "[PASS] AGENTS.md size budget (450 lines, 28654 bytes)\n",
+      "stdout": "[PASS] AGENTS.md size budget (441 lines, 28353 bytes)\n",
       "artifacts": []
     },
     {

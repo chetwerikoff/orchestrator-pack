@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,7 +9,6 @@ import {
   assertNoBoardFieldEmission,
   assertTrustedPackRootExecution,
   classifyHarnessBridgeFailure,
-  classifyReviewerHarnessAbort,
   containsProseSubmitMarkers,
   evaluateHarnessKillSwitch,
   evaluateNestedReviewBudget,
@@ -19,7 +17,6 @@ import {
   resolveHarnessExecutionSurfaces,
   validateMapperSubmitPayload,
 } from '../docs/harness-review-bridge.mjs';
-import { classifyReviewTriggerResponse } from '../docs/ao-0-10-review-api.mjs';
 import {
   HARNESS_BRIDGE_KILL_SWITCH,
   buildHarnessSubmitPayload,
@@ -30,8 +27,6 @@ import {
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureDir = path.join(repoRoot, 'plugins/ao-codex-pr-reviewer/tests/fixtures');
 const harnessFixtures = path.join(repoRoot, 'tests/fixtures/harness-review-bridge');
-const capturesDir = path.join(repoRoot, 'tests/external-output-references/captures/ao-0-10-review-api');
-const reviewApiLib = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
 const SCOPED_ISSUE_NUMBER = 9;
 const tempRoots: string[] = [];
 const oldEnv = { ...process.env };
@@ -171,36 +166,8 @@ describe('AO 0.10 harness review bridge (Issue #658)', () => {
     expect(source.match(/\bexecuteReview\(/g)).toHaveLength(1);
   });
 
-  it('classifies unset reviewers before trigger', () => {
-    const guard = classifyReviewerHarnessAbort({}, 'codex');
-    expect(guard.abort).toBe(true);
-    expect(guard.reason).toBe('reviewers_harness_misconfig');
-  });
 
-  it('Invoke-AoReviewTriggerForWorker refuses trigger on misconfig fixture', () => {
-    const out = execFileSync(
-      'pwsh',
-      [
-        '-NoProfile',
-        '-Command',
-        `. '${reviewApiLib}'; $fixture = @{ reviewers = @() }; $result = Invoke-AoReviewTriggerForWorker -SessionId 'worker-1' -ProjectConfigFixture $fixture; $result | ConvertTo-Json -Compress -Depth 5`,
-      ],
-      { cwd: repoRoot, encoding: 'utf8' },
-    ).trim();
-    const result = JSON.parse(out) as { ok: boolean; reason: string; classified: boolean };
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('reviewers_harness_misconfig');
-    expect(result.classified).toBe(true);
-  });
 
-  it('ao-review trigger classify unchanged for capture payloads', () => {
-    const created = JSON.parse(readFileSync(path.join(capturesDir, 'trigger-created.raw.json'), 'utf8'));
-    expect(classifyReviewTriggerResponse(created, 201)).toMatchObject({
-      ok: true,
-      created: true,
-      reused: false,
-    });
-  });
 
   it('failure-class matrix covers binding-table rows', () => {
     for (const failureClass of [

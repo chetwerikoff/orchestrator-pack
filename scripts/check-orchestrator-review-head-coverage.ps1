@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: orchestratorRules covered-head idempotency (Issue #189, #625).
+  Regression guard: orchestratorRules covered-head idempotency on the pack run store (Issue #189, #625, #839).
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -36,15 +36,18 @@ $requiredExample = @(
     'review-trigger-reconcile.ps1',
     'review-trigger-reeval.ps1',
     'orchestrator-wake-listener.ps1',
-    'issue #641'
+    'issue #641',
+    'pack review runner',
+    'pack-side run/status store',
+    'Get-AoReviewRuns pack-store view'
 )
 
 $missingExample = @($requiredExample | Where-Object { $exampleText -notlike "*$_*" })
-if ($exampleText -notlike '*re-read Get-AoReviewRuns*' -and $exampleText -notlike '*Get-AoReviewRuns fan-out*') {
-    $missingExample += 're-read Get-AoReviewRuns'
+if ($exampleText -like '*Get-AoReviewRuns fan-out*' -or $exampleText -like '*ao-review list*') {
+    $missingExample += 'retired daemon review-list wording still present'
 }
 if ($missingExample.Count -gt 0) {
-    Write-Host ("agent-orchestrator.yaml.example missing Issue #189 phrases: {0}" -f ($missingExample -join ', '))
+    Write-Host ("agent-orchestrator.yaml.example missing Issue #189/#839 phrases: {0}" -f ($missingExample -join ', '))
     exit 1
 }
 
@@ -75,7 +78,6 @@ if ($loop -notmatch "from '\./review-trigger-reconcile\.mjs'") {
     Write-Host 'docs/review-orchestrator-loop.mjs must import coverage from review-trigger-reconcile.mjs'
     exit 1
 }
-
 if ($loop -notmatch 'export function shouldStartReviewRunOnUncoveredPath' -or
     $loop -notmatch 'export function evaluateReviewRunWithRecheck' -or
     $loop -notmatch 'export function evaluatePrNumberLessMergedRun') {
@@ -89,5 +91,5 @@ if ($reconcile -notmatch 'COVERED_TERMINAL_REVIEW_STATUSES') {
     exit 1
 }
 
-Write-Host '[PASS] orchestratorRules covered-head idempotency and no-drift wiring (Issue #189)'
+Write-Host '[PASS] orchestratorRules covered-head idempotency reads the pack-owned run store (Issue #839)'
 exit 0

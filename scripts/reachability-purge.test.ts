@@ -120,7 +120,7 @@ describe.sequential('reachability-purge', () => {
     expect(unqualifiedUnexpected(manifest)).toEqual([]);
     expect([...manifest.deletionSetDiffFromFormula.unexpected].sort()).toEqual(qualifiedCurrentDeletions());
     expect(manifest.deletionManifest.every((row) =>
-      ['zero-reachability', 'superseded', 'backup', 'issue-821-retired'].includes(row.reason)
+      ['zero-reachability', 'superseded', 'backup', 'issue-821-retired', 'issue-839-retired'].includes(row.reason)
       || (row.reason === 'unqualified' && censusQualifiedGateDeletions.has(row.path)),
     )).toBe(true);
     expect(manifest.supersededSurfaceInventory.every((row) => row.disposition.startsWith('held-'))).toBe(true);
