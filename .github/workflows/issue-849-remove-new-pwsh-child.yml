@@ -1,5 +1,6 @@
 name: issue-849-remove-new-pwsh-child
 
+# One-shot exact patch; delete after the verified patch commit lands.
 on:
   push:
     branches: [agent/issue-849-gh-signal-classification]
