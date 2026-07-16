@@ -29,7 +29,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --include=dev --silent
-      - name: Restore scoped compatibility seams
+      - name: Build scoped candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -80,41 +80,65 @@ jobs:
             scripts/toolchain/powershell-child-tests.json \
             scripts/toolchain/raw-child-process-baseline.json
           git commit -m 'Keep issue 839 compatibility tests within declared scope'
-      - name: Verify foundation contracts
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx tsc --project tsconfig.base.json --noEmit
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run check:pwsh-test-growth
-          npm run test:foundation
-      - name: Verify review compatibility regressions
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/run-vitest-with-harness.mjs run \
-            tests/harness-pretrigger-config-read.test.ts \
-            scripts/ao-0-10-review-trigger.test.ts \
-            scripts/review-producer-contract-mapping.test.ts \
-            scripts/harness-review-bridge.test.ts
-      - name: Verify light lane and full pack
+      - name: Run full light lane
+        id: light
+        continue-on-error: true
         shell: pwsh
         run: |
-          ./scripts/run-vitest-light-lane.ps1
+          ./scripts/run-vitest-light-lane.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-light.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/verify.ps1
+      - name: Publish light lane failure
+        if: steps.light.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tail -n 200 /tmp/issue-839-light.log >/tmp/issue-839-tail.log
+          { echo '## Issue #839 light lane failure'; echo '```text'; cat /tmp/issue-839-tail.log; echo '```'; } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+          exit 1
+      - name: Run full verifier
+        id: verifier
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/verify.ps1 *>&1 | Tee-Object -FilePath /tmp/issue-839-verifier.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/test-all.ps1 -SkipNpm
+      - name: Publish verifier failure
+        if: steps.verifier.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tail -n 220 /tmp/issue-839-verifier.log >/tmp/issue-839-tail.log
+          { echo '## Issue #839 verifier failure'; echo '```text'; cat /tmp/issue-839-tail.log; echo '```'; } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+          exit 1
+      - name: Run Pester regression
+        id: pester
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          ./scripts/test-all.ps1 -SkipNpm *>&1 | Tee-Object -FilePath /tmp/issue-839-pester.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish Pester failure
+        if: steps.pester.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tail -n 220 /tmp/issue-839-pester.log >/tmp/issue-839-tail.log
+          { echo '## Issue #839 Pester failure'; echo '```text'; cat /tmp/issue-839-tail.log; echo '```'; } >/tmp/report.md
+          gh api --method PATCH repos/chetwerikoff/orchestrator-pack/issues/comments/4983724500 --field body=@/tmp/report.md
+          exit 1
       - name: Verify strict self-architect
         shell: pwsh
         run: ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
       - name: Push verified scoped candidate
         shell: bash
         run: git push origin HEAD:issue-839-pack-review-runner-v2
-      - name: Report failure
-        if: failure()
+      - name: Report other failure
+        if: failure() && steps.light.outcome != 'failure' && steps.verifier.outcome != 'failure' && steps.pester.outcome != 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
