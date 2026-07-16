@@ -340,9 +340,9 @@ export function registerGhSignalClassificationTests(): void {
     const root = tempRoot('gh-signal-recon-allowed-');
     const file = join(root, 'scripts/lib/Ci-Failure-Notification-Common.ps1');
     mkdirSync(join(root, 'scripts/lib'), { recursive: true });
-    writeFileSync(file, 'gh repo view --json nameWithOwner 2>&1');
+    writeFileSync(file, 'gh repo view --json nameWithOwner -q .nameWithOwner 2>&1');
     expect(scanPowerShellGhMergedJson([file], root)).toEqual([]);
-    writeFileSync(file, `$raw = gh repo view --json nameWithOwner 2>&1\n$raw | ConvertFrom-Json`);
+    writeFileSync(file, `$raw = gh repo view --json nameWithOwner -q .nameWithOwner 2>&1\n$raw | ConvertFrom-Json`);
     expect(scanPowerShellGhMergedJson([file], root)).toHaveLength(1);
   });
 

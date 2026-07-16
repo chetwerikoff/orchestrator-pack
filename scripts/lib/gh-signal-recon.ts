@@ -72,7 +72,7 @@ foreach ($file in @($payload.files)) {
 
     $relative = [string]$file
     if ($payload.repoRoot) { $relative = [IO.Path]::GetRelativePath([string]$payload.repoRoot, [string]$file).Replace('\\','/') }
-    $narrow = $relative -eq 'scripts/lib/Ci-Failure-Notification-Common.ps1' -and -not $parsedLater -and $text -match '(?is)^\s*gh\s+repo\s+view\s+--json\s+nameWithOwner\s+2\s*>&\s*1\s*$'
+    $narrow = $relative -eq 'scripts/lib/Ci-Failure-Notification-Common.ps1' -and -not $parsedLater -and $text -match '(?is)^\s*gh\s+repo\s+view\s+--json\s+nameWithOwner\s+-q\s+\.nameWithOwner\s+2\s*>&\s*1\s*$'
     if ($narrow) { continue }
     $findings += [ordered]@{
       file = $relative
