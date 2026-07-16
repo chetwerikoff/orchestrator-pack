@@ -15,4 +15,6 @@ The post-migration review hardens four proof boundaries:
 
 The expanded gate-runner suite contains 89 tests, and the foundation suite contains 168 tests. The Linux verification path runs the legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
 
+Frozen legacy scripts under `scripts/fixtures/gate-runner/**` are test evidence, not production deletion candidates. Reachability analysis may retain them as graph evidence but excludes that fixture subtree from the production deletion formula.
+
 The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows run against this cleaned tree after stale diagnostic runs have been cancelled.
