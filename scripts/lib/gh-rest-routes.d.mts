@@ -14,6 +14,13 @@ export function routePrView(
   cwd: string,
 ): unknown;
 
+export function routePrChecks(
+  realGh: string,
+  repo: { slug: string; host: string },
+  prNumber: number,
+  cwd: string,
+): unknown[];
+
 export function executeRestRoute(
   routeId: string,
   ctx: {

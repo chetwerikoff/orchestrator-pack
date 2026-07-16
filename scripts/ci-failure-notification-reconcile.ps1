@@ -562,6 +562,7 @@ function Invoke-CiFailureNotificationTick {
 
     $repo = Get-RepoIdentity
     $openPrs = @($WorkerState.openPrs)
+    $null = Invoke-CiRedWatchdogLookupRetention -RepoRoot $RepoRoot -WorkerState $WorkerState -DryRunMode:$DryRun
     $checksBundle = $null
     if ($openPrs.Count -gt 0) {
         $checksBundle = if ($Script:CiFailureFixtureChecksBundle) {

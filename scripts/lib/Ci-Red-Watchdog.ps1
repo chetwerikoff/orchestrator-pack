@@ -56,6 +56,9 @@ function Get-CiRedWatchdogConfig {
         episodeLifetimeMs              = 2 * 60 * 60 * 1000
         backoffMs                      = @((5 * 60 * 1000), (10 * 60 * 1000), (20 * 60 * 1000))
         maxDiagnosticChars             = 6000
+        lookupResolvedRetentionMs      = 24 * 60 * 60 * 1000
+        lookupParkedRetentionMs        = 7 * 24 * 60 * 60 * 1000
+        lookupHistoryMaxEntries        = 512
     }
 }
 
@@ -91,7 +94,55 @@ function Invoke-CiRedWatchdogCli {
     }
 }
 
+. (Join-Path $PSScriptRoot 'Gh-SignalDispatch.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-GitHub.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Worker.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Boundary.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Tick.ps1')
+
+function Invoke-CiRedWatchdogLookupRetention {
+    param(
+        [string]$RepoRoot,
+        [object]$WorkerState,
+        [switch]$DryRunMode
+    )
+
+    if ($DryRunMode) {
+        return @{ ok = $true; skipped = $true; reason = 'dry_run' }
+    }
+
+    try {
+        $repoSlug = Get-CiRedWatchdogRepoSlug -RepoRoot $RepoRoot
+        $hasOpenPrSnapshot = $false
+        if ($null -ne $WorkerState) {
+            if ($WorkerState -is [hashtable]) {
+                $hasOpenPrSnapshot = $WorkerState.ContainsKey('openPrs') -and $null -ne $WorkerState.openPrs
+            }
+            else {
+                $hasOpenPrSnapshot = $null -ne $WorkerState.PSObject.Properties['openPrs'] -and $null -ne $WorkerState.openPrs
+            }
+        }
+        $snapshotAvailable = [bool]($repoSlug -and $hasOpenPrSnapshot)
+        $rows = @()
+        if ($snapshotAvailable) {
+            $rows = @($WorkerState.openPrs | ForEach-Object {
+                @{
+                    repo = $repoSlug
+                    prNumber = [int](Get-CiRedWatchdogProperty -Object $_ -Names @('number', 'prNumber'))
+                    headSha = [string](Get-CiRedWatchdogProperty -Object $_ -Names @('headRefOid', 'headSha'))
+                }
+            })
+        }
+        return Invoke-CiRedWatchdogCli -Command 'prune-lookup-failures' -Payload @{
+            storeDir = Get-CiRedWatchdogStateDir
+            snapshot = @{ available = $snapshotAvailable; repo = [string]$repoSlug; openPrs = @($rows) }
+            nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            actor = $Script:CiRedWatchdogSource
+            config = Get-CiRedWatchdogConfig
+        }
+    }
+    catch {
+        Write-CiRedWatchdogLog "lookup retention skipped reason=cleanup_failed detail=$($_.Exception.Message)"
+        return @{ ok = $false; skipped = $true; reason = 'cleanup_failed'; detail = $_.Exception.Message }
+    }
+}

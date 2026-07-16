@@ -111,23 +111,23 @@ function Invoke-CiRedWatchdogGhJson {
         [string]$RepoRoot,
         [string[]]$Arguments
     )
-    Push-Location -LiteralPath $RepoRoot
-    try {
-        $raw = & gh @Arguments 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            return @{ ok = $false; reason = 'gh_command_failed'; detail = (($raw | ForEach-Object { $_.ToString() }) -join "`n") }
-        }
-        $text = ($raw | ForEach-Object { $_.ToString() }) -join "`n"
-        if (-not $text.Trim()) { return @{ ok = $false; reason = 'gh_empty_output' } }
-        try {
-            return @{ ok = $true; value = ($text | ConvertFrom-Json) }
-        }
-        catch {
-            return @{ ok = $false; reason = 'gh_json_parse_failed' }
+
+    $result = Invoke-GhSignalJsonCommand `
+        -Arguments $Arguments `
+        -ExpectedRoot 'object' `
+        -WorkingDirectory $RepoRoot
+    if (-not $result.ok) {
+        return @{
+            ok = $false
+            reason = [string]$result.reason
+            detail = (Format-GhSignalFailureDetail -Result $result)
+            exitCode = $result.exitCode
         }
     }
-    finally {
-        Pop-Location
+    return @{
+        ok = $true
+        value = $result.value
+        classification = [string]$result.classification
     }
 }
 

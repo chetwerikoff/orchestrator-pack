@@ -9,22 +9,24 @@ const fleetCache = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-FleetInvento
 describe('Invoke-GhOpenPrList query cost (node-limit regression)', () => {
   const openPrListBody = functionBody(ghPrChecks, 'Invoke-GhOpenPrList');
   const upstreamBody = functionBody(fleetCache, 'Invoke-GhFleetFetchOpenPrListUpstream');
-  const prListLine = upstreamBody.split('\n').find((l) => l.includes('gh pr list'));
+  const prListArguments = upstreamBody.match(/-Arguments\s+@\(([^)]*)\)/s)?.[0];
 
   it('issues a gh pr list query in the fleet upstream fetch helper', () => {
-    expect(prListLine, 'gh pr list invocation not found').toBeTruthy();
+    expect(upstreamBody).toMatch(/Invoke-GhSignalJsonCommand/);
+    expect(prListArguments, 'gh pr list argument vector not found').toBeTruthy();
+    expect(prListArguments).toMatch(/'pr'\s*,\s*'list'/);
   });
 
   it('requests baseRefName for handoff admission snapshots', () => {
-    expect(prListLine).toMatch(/baseRefName/);
+    expect(prListArguments).toMatch(/baseRefName/);
   });
 
   it('requests headRefName for fleet head-branch indexes', () => {
-    expect(prListLine).toMatch(/headRefName/);
+    expect(prListArguments).toMatch(/headRefName/);
   });
 
   it('does not request the heavy commits connection in the list query', () => {
-    expect(prListLine).not.toMatch(/commits/);
+    expect(prListArguments).not.toMatch(/commits/);
   });
 
   it('routes open-PR inventory through the fleet cache layer', () => {
