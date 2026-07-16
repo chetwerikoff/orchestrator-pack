@@ -1,0 +1,20 @@
+name: diag-issue-849
+on:
+  push:
+    branches: [diag/issue-849-pack-review]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Run issue 849 suite
+        env:
+          OPK_VITEST_HARNESS: '1'
+        run: npx vitest run scripts/gh-signal-classification.test.ts --maxWorkers=1 --reporter=verbose
