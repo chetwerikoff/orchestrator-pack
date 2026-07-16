@@ -26,6 +26,6 @@ The restored supervisor RPC test retains its original two Issue #800 raw-child b
 
 The launch-inventory parity proof normalizes only the two merge-tree-sensitive integer counters in the generated audit line. It still compares the complete PASS line shape and the wrapper-level PASS text exactly, so a verdict or diagnostic contract change remains a failure.
 
-A one-off heavy-shard failure in the existing TestMode fleet-reaper wall-clock test was reproduced as an infrastructure launch flake: the focused test passed through the same heavy harness without code changes. Final acceptance still requires a complete green PR workflow on the cleaned head rather than relying on that focused probe alone.
+Two timing-sensitive heavy tests produced one-off failures during repeated full-matrix runs: detached TestMode supervisor startup and the repo-tick stale-serve window. Each failing scenario passed when rerun in isolation through the same Vitest fleet harness without a code change. Final acceptance still requires a complete green PR workflow on the cleaned head rather than relying on those focused probes alone.
 
 The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows run against the cleaned connector-authored head.
