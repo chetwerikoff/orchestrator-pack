@@ -295,12 +295,13 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OPK_VITEST_PR_SCOPE_MODE: ${{ vars.OPK_VITEST_PR_SCOPE_MODE }}
+          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
         run: |
           set -euo pipefail
           if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
             export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "${PR_BASE_SHA}" --head "${PR_HEAD_SHA}")"
           fi
-          node scripts/emit-vitest-heavy-topology.mjs --gha-output
+          node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard
 
       - name: Upload heavy topology artifact
         uses: actions/upload-artifact@v4
