@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "maxCallsPerTick": 16,
+  "perCallTimeoutMs": 3000,
+  "globalDeadlineMs": 12000,
+  "postKillDrainMs": 250
+}
