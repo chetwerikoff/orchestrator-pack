@@ -14,3 +14,5 @@ The post-migration review hardens four proof boundaries:
 - deferred census references carry an explicit invocation kind and are validated as executable call shapes rather than arbitrary marker substrings.
 
 The expanded gate-runner suite contains 89 tests, and the foundation suite contains 168 tests. The Linux verification path runs the legacy parity fixtures with PowerShell available.
+
+The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree.
