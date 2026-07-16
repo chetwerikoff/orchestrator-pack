@@ -67,9 +67,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # npm installation can expose mode-only drift in unrelated executable files.
-          git checkout "$CLEAN_BASE" -- plugins
-
           rm -f .github/workflows/issue-841-apply-rereview-fixes.yml
           rm -rf .github/issue-841-rereview
 
@@ -86,6 +83,21 @@ jobs:
           scripts/toolchain/raw-child-process-baseline.json
           EOF
           )
+
+          # Tests and npm installation may expose generated or mode-only drift.
+          # Restore every path outside the reviewed ten-file change set to the clean source head.
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            if printf '%s\n' "$expected" | grep -Fqx -- "$path"; then
+              continue
+            fi
+            if git cat-file -e "$CLEAN_BASE:$path" 2>/dev/null; then
+              git checkout "$CLEAN_BASE" -- "$path"
+            else
+              rm -rf -- "$path"
+            fi
+          done < <(git diff --name-only "$CLEAN_BASE")
+
           actual=$(git diff --name-only "$CLEAN_BASE" | sort)
           if [ "$actual" != "$(printf '%s\n' "$expected" | sort)" ]; then
             echo 'Unexpected final changed-path set:' >&2
