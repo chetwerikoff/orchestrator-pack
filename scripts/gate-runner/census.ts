@@ -281,6 +281,53 @@ function staticArray(
   return initializer && ts.isArrayLiteralExpression(initializer) ? initializer : undefined;
 }
 
+
+function staticObject(
+  expression: ts.Expression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(expression)) return expression;
+  if (!ts.isIdentifier(expression)) return undefined;
+  const initializer = initializers.get(expression.text);
+  return initializer && ts.isObjectLiteralExpression(initializer) ? initializer : undefined;
+}
+
+function objectProperty(
+  object: ts.ObjectLiteralExpression,
+  name: string,
+): ts.Expression | undefined {
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const propertyName = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)
+      ? property.name.text
+      : undefined;
+    if (propertyName === name) return property.initializer;
+  }
+  return undefined;
+}
+
+function powerShellInvocation(
+  call: ts.CallExpression,
+  initializers: ReadonlyMap<string, ts.Expression>,
+): { readonly executable?: string; readonly argv?: ts.ArrayLiteralExpression } {
+  const functionName = childProcessFunctionName(call.expression);
+  if (functionName === 'spawnSync' || functionName === 'execFileSync') {
+    return {
+      executable: call.arguments[0] ? staticString(call.arguments[0], initializers)?.toLocaleLowerCase() : undefined,
+      argv: call.arguments[1] ? staticArray(call.arguments[1], initializers) : undefined,
+    };
+  }
+  if (functionName !== 'runProcessSync' || !call.arguments[0]) return {};
+  const options = staticObject(call.arguments[0], initializers);
+  if (!options) return {};
+  const command = objectProperty(options, 'command');
+  const args = objectProperty(options, 'args');
+  return {
+    executable: command ? staticString(command, initializers)?.toLocaleLowerCase() : undefined,
+    argv: args ? staticArray(args, initializers) : undefined,
+  };
+}
+
 function pathExpressionTargets(
   expression: ts.Expression,
   target: string,
@@ -298,24 +345,20 @@ function hasTestInvocation(text: string, marker: string): boolean {
   const visit = (node: ts.Node): void => {
     if (found) return;
     if (ts.isCallExpression(node)) {
-      const functionName = childProcessFunctionName(node.expression);
-      if (functionName === 'spawnSync' || functionName === 'execFileSync') {
-        const executable = node.arguments[0] ? staticString(node.arguments[0], initializers)?.toLocaleLowerCase() : undefined;
-        const argv = node.arguments[1] ? staticArray(node.arguments[1], initializers) : undefined;
-        if ((executable === 'pwsh' || executable === 'pwsh.exe') && argv) {
-          for (let index = 0; index < argv.elements.length - 1; index += 1) {
-            const flag = argv.elements[index];
-            const targetExpression = argv.elements[index + 1];
-            if (!flag || !targetExpression || ts.isSpreadElement(flag) || ts.isSpreadElement(targetExpression)) continue;
-            if (staticString(flag, initializers)?.toLocaleLowerCase() !== '-file') continue;
-            if (pathExpressionTargets(targetExpression, target, initializers)) {
-              found = true;
-              return;
-            }
-          }
+    const { executable, argv } = powerShellInvocation(node, initializers);
+    if ((executable === 'pwsh' || executable === 'pwsh.exe') && argv) {
+      for (let index = 0; index < argv.elements.length - 1; index += 1) {
+        const flag = argv.elements[index];
+        const targetExpression = argv.elements[index + 1];
+        if (!flag || !targetExpression || ts.isSpreadElement(flag) || ts.isSpreadElement(targetExpression)) continue;
+        if (staticString(flag, initializers)?.toLocaleLowerCase() !== '-file') continue;
+        if (pathExpressionTargets(targetExpression, target, initializers)) {
+          found = true;
+          return;
         }
       }
     }
+  }
     ts.forEachChild(node, visit);
   };
   visit(source);

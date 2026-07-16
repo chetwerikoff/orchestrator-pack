@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { runProcessSync } from '#opk-kernel/subprocess';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
@@ -11,23 +11,35 @@ import { resolveHeavyLaneFingerprint } from './lib/vitest-ci-lanes.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+function runInventory(mode: 'production' | 'negative-regression'): string {
+  const result = runProcessSync({
+    command: 'pwsh',
+    args: [
+      '-NoProfile',
+      '-File',
+      'scripts/check-supervisor-test-wait-inventory.ps1',
+      '-Root',
+      repoRoot,
+      '-Mode',
+      mode,
+    ],
+    cwd: repoRoot,
+    encoding: 'utf8',
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`inventory wrapper failed ${result.exitCode ?? result.outcome}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+  }
+  return result.stdout;
+}
+
 describe('check-supervisor-test-wait-inventory guard (Issue #693)', () => {
   it('production inventory passes', () => {
-    const out = execFileSync(
-      'pwsh',
-      ['-NoProfile', '-File', 'scripts/check-supervisor-test-wait-inventory.ps1', '-Root', repoRoot, '-Mode', 'production'],
-      { cwd: repoRoot, encoding: 'utf8' },
-    );
-    expect(out).toContain('[PASS]');
+    expect(runInventory('production')).toContain('[PASS]');
   });
 
   it('negative regression corpus is rejected', () => {
-    const out = execFileSync(
-      'pwsh',
-      ['-NoProfile', '-File', 'scripts/check-supervisor-test-wait-inventory.ps1', '-Root', repoRoot, '-Mode', 'negative-regression'],
-      { cwd: repoRoot, encoding: 'utf8' },
-    );
-    expect(out).toContain('negative regression corpus rejected');
+    expect(runInventory('negative-regression')).toContain('negative regression corpus rejected');
   });
 
   it('derives heavy-lane fingerprint from vitest.config.ts', () => {
