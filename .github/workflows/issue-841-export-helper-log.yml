@@ -1,0 +1,28 @@
+name: issue-841-export-helper-log
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'agent/issue-841-bulk-gate-port'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Export completed helper job log
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/jobs/87608537124/logs" > "$RUNNER_TEMP/helper.log"
+      - name: Upload helper log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr860-helper-log
+          path: ${{ runner.temp }}/helper.log
+          retention-days: 1
+          if-no-files-found: error
