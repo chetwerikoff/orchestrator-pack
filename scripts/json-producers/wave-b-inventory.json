@@ -365,6 +365,19 @@
       "entrypointMode": "unchanged"
     },
     {
+      "path": "scripts/lib/Gh-SignalDispatch.ps1",
+      "sourceKind": "powershell-json-producer",
+      "taxonomy": "d",
+      "ownerWave": "wave-c",
+      "owningIssue": "#849",
+      "disposition": "deferred",
+      "reason": "Thin PowerShell compatibility dispatch into the TypeScript gh-signal classifier; full transport ownership remains deferred to Wave C / PR 6.",
+      "goldenStatus": "none",
+      "parityTargets": [],
+      "parityTests": [],
+      "entrypointMode": "unchanged"
+    },
+    {
       "path": "scripts/lib/Harness-PnRetriggerState.ps1",
       "sourceKind": "powershell-json-producer",
       "taxonomy": "c",

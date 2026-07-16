@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   CI_RED_WATCHDOG_SCHEMA_VERSION,
   boundedInt,
@@ -22,7 +22,7 @@ import {
 } from './ci-red-watchdog-core.mjs';
 
 function freshLedger() {
-  return { schemaVersion: CI_RED_WATCHDOG_SCHEMA_VERSION, nextSequence: 1, episodes: {}, history: [] };
+  return { schemaVersion: CI_RED_WATCHDOG_SCHEMA_VERSION, nextSequence: 1, episodes: {}, lookupFailures: {}, history: [] };
 }
 
 export function resolveCiRedWatchdogStoreDir(input = '') {
@@ -61,6 +61,7 @@ export function readCiRedWatchdogLedger(storeDir = '') {
     if (!parsed.episodes || typeof parsed.episodes !== 'object' || !Array.isArray(parsed.history)) {
       throw new Error('invalid_ledger_shape');
     }
+    if (!parsed.lookupFailures || typeof parsed.lookupFailures !== 'object') parsed.lookupFailures = {};
     parsed.nextSequence = boundedInt(parsed.nextSequence, parsed.history.length + 1, 1);
     return parsed;
   } catch {
@@ -91,6 +92,7 @@ function writeCiRedWatchdogLedger(storeDir, ledger) {
     schemaVersion: CI_RED_WATCHDOG_SCHEMA_VERSION,
     nextSequence: boundedInt(ledger.nextSequence, 1, 1),
     episodes: ledger.episodes ?? {},
+    lookupFailures: ledger.lookupFailures ?? {},
     history: Array.isArray(ledger.history) ? ledger.history : [],
     ...(Array.isArray(ledger.quarantinedPaths) ? { quarantinedPaths: ledger.quarantinedPaths } : {}),
   };
@@ -170,6 +172,139 @@ function baseEpisodeRecord(identity, nowMs) {
     currentAttempt: null,
     verifiedDeliveries: {},
   };
+}
+
+function normalizeLookupFailureIdentity(input) {
+  if (!input || typeof input !== 'object') throw new Error('ci-red watchdog lookup identity is required');
+  const repo = String(input.repo ?? '').trim().toLowerCase();
+  const prNumber = Number(input.prNumber);
+  const requiredCheckContext = String(input.requiredCheckContext ?? '').trim();
+  const headSha = String(input.headSha ?? '').trim().toLowerCase();
+  if (!repo) throw new Error('ci-red watchdog lookup identity requires repo');
+  if (!Number.isInteger(prNumber) || prNumber <= 0) throw new Error('ci-red watchdog lookup identity requires positive prNumber');
+  if (!requiredCheckContext) throw new Error('ci-red watchdog lookup identity requires requiredCheckContext');
+  if (!/^[0-9a-f]{40}$/.test(headSha)) throw new Error('ci-red watchdog lookup identity requires valid headSha');
+  return { repo, prNumber, requiredCheckContext, headSha };
+}
+
+export function ciRedLookupFailureKey(input) {
+  const identity = normalizeLookupFailureIdentity(input);
+  const serialized = [
+    'lookup',
+    identity.repo,
+    identity.prNumber,
+    identity.requiredCheckContext,
+    identity.headSha,
+  ].map((value) => encodeURIComponent(String(value))).join('|');
+  return `lookup:${createHash('sha256').update(serialized).digest('hex')}`;
+}
+
+function baseLookupFailureRecord(identity, nowMs) {
+  return {
+    kind: 'authoritative-check-lookup',
+    identity: normalizeLookupFailureIdentity(identity),
+    state: 'deferred',
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+    attempts: 0,
+    totalAttempts: 0,
+    nextEligibleAtMs: nowMs,
+    lastDeferReason: '',
+  };
+}
+
+export function recordCiRedWatchdogLookupFailure({
+  storeDir = '',
+  lookup,
+  reason = 'authoritative_lookup_failed',
+  nowMs = Date.now(),
+  actor = 'ci-failure-notification-reconcile',
+  config: rawConfig = {},
+} = {}) {
+  const config = resolveCiRedWatchdogConfig(rawConfig);
+  const identity = normalizeLookupFailureIdentity(lookup);
+  const key = ciRedLookupFailureKey(identity);
+  return withCiRedWatchdogLedgerLock(storeDir, () => {
+    const ledger = readCiRedWatchdogLedger(storeDir);
+    ledger.lookupFailures ??= {};
+    let record = ledger.lookupFailures[key];
+    if (!record || record.state === 'resolved') {
+      const priorTotal = Number(record?.totalAttempts ?? 0);
+      record = baseLookupFailureRecord(identity, nowMs);
+      record.totalAttempts = priorTotal;
+      ledger.lookupFailures[key] = record;
+    }
+    if (record.state === 'parked') {
+      return { ok: true, action: 'park', reason: record.parkedReason, key, record };
+    }
+    if (record.attempts > 0 && Number(record.nextEligibleAtMs ?? 0) > nowMs) {
+      return { ok: true, action: 'defer', reason: 'authoritative_lookup_backoff_active', key, record };
+    }
+
+    const from = String(record.state || 'deferred');
+    record.attempts = Number(record.attempts ?? 0) + 1;
+    record.totalAttempts = Number(record.totalAttempts ?? 0) + 1;
+    record.updatedAtMs = nowMs;
+    record.lastDeferReason = String(reason || 'authoritative_lookup_failed');
+    const shouldPark = record.attempts >= config.maxAttempts;
+    record.state = shouldPark ? 'parked' : 'deferred';
+    record.nextEligibleAtMs = shouldPark ? 0 : nowMs + backoffForAttempt(config, record.attempts);
+    if (shouldPark) record.parkedReason = 'authoritative_lookup_failure_ceiling';
+    appendTransition(ledger, {
+      key,
+      atMs: nowMs,
+      actor,
+      from,
+      to: record.state,
+      reason: shouldPark ? record.parkedReason : record.lastDeferReason,
+      metadata: {
+        attempts: record.attempts,
+        failureReason: record.lastDeferReason,
+        nextEligibleAtMs: record.nextEligibleAtMs,
+      },
+    });
+    writeCiRedWatchdogLedger(storeDir, ledger);
+    return {
+      ok: true,
+      action: shouldPark ? 'park' : 'defer',
+      reason: shouldPark ? record.parkedReason : record.lastDeferReason,
+      key,
+      record,
+    };
+  }, { config });
+}
+
+export function resolveCiRedWatchdogLookupFailure({
+  storeDir = '',
+  lookup,
+  nowMs = Date.now(),
+  actor = 'ci-failure-notification-reconcile',
+  config: rawConfig = {},
+} = {}) {
+  const config = resolveCiRedWatchdogConfig(rawConfig);
+  const identity = normalizeLookupFailureIdentity(lookup);
+  const key = ciRedLookupFailureKey(identity);
+  return withCiRedWatchdogLedgerLock(storeDir, () => {
+    const ledger = readCiRedWatchdogLedger(storeDir);
+    const record = ledger.lookupFailures?.[key];
+    if (!record || record.state === 'resolved') return { ok: true, resolved: false, key };
+    const from = String(record.state || 'deferred');
+    record.state = 'resolved';
+    record.updatedAtMs = nowMs;
+    record.resolvedAtMs = nowMs;
+    record.nextEligibleAtMs = 0;
+    appendTransition(ledger, {
+      key,
+      atMs: nowMs,
+      actor,
+      from,
+      to: 'resolved',
+      reason: 'authoritative_lookup_recovered',
+      metadata: { attempts: Number(record.attempts ?? 0) },
+    });
+    writeCiRedWatchdogLedger(storeDir, ledger);
+    return { ok: true, resolved: true, key, record };
+  }, { config });
 }
 
 function backoffForAttempt(config, attempts) {

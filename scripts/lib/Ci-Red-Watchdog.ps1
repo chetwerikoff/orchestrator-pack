@@ -91,6 +91,7 @@ function Invoke-CiRedWatchdogCli {
     }
 }
 
+. (Join-Path $PSScriptRoot 'Gh-SignalDispatch.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-GitHub.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Worker.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Boundary.ps1')

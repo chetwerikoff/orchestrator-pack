@@ -82,6 +82,7 @@
     "scripts/gh-pr-checks-empty-openprs.test.ts": "heavy",
     "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts": "heavy",
     "scripts/gh-repo-resolve.test.ts": "heavy",
+    "scripts/gh-signal-classification.test.ts": "heavy",
     "scripts/gh-wrapper.test.ts": "heavy",
     "scripts/github-fleet-cache-bypass-guard.test.ts": "heavy",
     "scripts/github-fleet-cache-bypass.test.ts": "heavy",

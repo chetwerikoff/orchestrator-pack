@@ -24,6 +24,7 @@ function Invoke-CiRedWatchdogTick {
     $openPrs = @($WorkerState.openPrs)
     $submitState = if ($DryRunMode) { @{} } else { Get-CiRedWatchdogSubmitState }
     $candidates = @()
+    $preEpisodeDeferred = 0
     foreach ($pr in $openPrs) {
         $prNumber = [int](Get-CiRedWatchdogProperty -Object $pr -Names @('number', 'prNumber'))
         $headSha = [string](Get-CiRedWatchdogProperty -Object $pr -Names @('headRefOid', 'headSha'))
@@ -39,6 +40,12 @@ function Invoke-CiRedWatchdogTick {
             if ($matching.Count -eq 0) { continue }
             $check = $matching | Where-Object { Test-CiRedWatchdogFailureConclusion -Check $_ } | Select-Object -First 1
             if (-not $check) { continue }
+            $lookupIdentity = @{
+                repo                 = $repoSlug
+                prNumber             = $prNumber
+                requiredCheckContext = [string]$context.Identity
+                headSha              = $headSha.ToLowerInvariant()
+            }
             $authoritative = Get-CiRedWatchdogAuthoritativeCheck -RepoRoot $RepoRoot -RepoSlug $repoSlug `
                 -PrNumber $prNumber -HeadSha $headSha.ToLowerInvariant() -RequiredContext ([string]$context.MatchName) `
                 -RequiredAppId ([string]$context.AppId) -CheckRow $check
@@ -50,8 +57,30 @@ function Invoke-CiRedWatchdogTick {
                     conclusion = [string](Get-CiRedWatchdogProperty -Object $check -Names @('conclusion', 'state', 'bucket'))
                 }
                 if (-not $authoritative.checkRunId -or $authoritative.attempt -le 0) {
-                    Write-CiRedWatchdogLog "defer pr=$prNumber check=$($context.Identity) reason=$($authoritative.reason)"
+                    $lookupState = $null
+                    if (-not $DryRunMode) {
+                        $lookupState = Invoke-CiRedWatchdogCli -Command 'record-lookup-failure' -Payload @{
+                            storeDir = $storeDir
+                            lookup   = $lookupIdentity
+                            reason   = [string]$authoritative.reason
+                            nowMs    = $nowMs
+                            actor    = $Script:CiRedWatchdogSource
+                            config   = $config
+                        }
+                    }
+                    $stateText = if ($lookupState) { " state=$($lookupState.record.state) attempts=$($lookupState.record.attempts)" } else { '' }
+                    Write-CiRedWatchdogLog "defer pr=$prNumber check=$($context.Identity) reason=$($authoritative.reason)$stateText"
+                    $preEpisodeDeferred++
                     continue
+                }
+            }
+            if (-not $DryRunMode) {
+                $null = Invoke-CiRedWatchdogCli -Command 'resolve-lookup-failure' -Payload @{
+                    storeDir = $storeDir
+                    lookup   = $lookupIdentity
+                    nowMs    = $nowMs
+                    actor    = $Script:CiRedWatchdogSource
+                    config   = $config
                 }
             }
             if (-not $worker.ok) {
@@ -211,5 +240,5 @@ function Invoke-CiRedWatchdogTick {
         }
     }
 
-    return @{ evaluated = $candidates.Count; sent = $sent; deferred = $deferred; verified = $verified }
+    return @{ evaluated = ($candidates.Count + $preEpisodeDeferred); sent = $sent; deferred = ($deferred + $preEpisodeDeferred); verified = $verified }
 }

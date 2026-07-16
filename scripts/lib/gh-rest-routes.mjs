@@ -272,7 +272,6 @@ function enrichCheckRunsWithWorkflow(realGh, repo, checkRuns, cwd) {
 export function routePrChecks(realGh, repo, prNumber, cwd) {
   const pull = fetchPull(realGh, repo, prNumber, cwd);
   const headSha = pull.head?.sha;
-  const headRef = pull.head?.ref ?? 'unknown';
   if (!headSha) {
     throw new Error(`${REST_ERROR_MARKER}: missing head sha for PR ${prNumber}`);
   }
@@ -317,10 +316,6 @@ export function routePrChecks(realGh, repo, prNumber, cwd) {
   });
 
   const contexts = mergeCheckContexts(checkRuns, combined);
-  if (contexts.length === 0) {
-    throw new Error(`no checks reported on the '${headRef}' branch`);
-  }
-
   return aggregateChecks(contexts);
 }
 
@@ -476,9 +471,6 @@ export function executeRestRoute(routeId, ctx) {
     }
   } catch (err) {
     if (err instanceof Error && err.message.startsWith(REST_ERROR_MARKER)) {
-      throw err;
-    }
-    if (err instanceof Error && err.message.startsWith('no checks reported')) {
       throw err;
     }
     throw new Error(`${REST_ERROR_MARKER}: ${err instanceof Error ? err.message : String(err)}`);

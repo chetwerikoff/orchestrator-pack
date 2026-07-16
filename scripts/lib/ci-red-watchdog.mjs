@@ -12,6 +12,8 @@ import {
   inspectCiRedWatchdogAttempt,
   markCiRedWatchdogTransportIssued,
   readCiRedWatchdogLedger,
+  recordCiRedWatchdogLookupFailure,
+  resolveCiRedWatchdogLookupFailure,
   reconcileCiRedWatchdogSubmitted,
   releaseCiRedWatchdogAttempt,
 } from './ci-red-watchdog-ledger.mjs';
@@ -47,6 +49,8 @@ export function runCiRedWatchdogCli(command, input) {
     case 'reconcile-submit': return reconcileCiRedWatchdogSubmitted(input);
     case 'inspect-attempt': return inspectCiRedWatchdogAttempt(input);
     case 'inspect-ledger': return readCiRedWatchdogLedger(input?.storeDir);
+    case 'record-lookup-failure': return recordCiRedWatchdogLookupFailure(input);
+    case 'resolve-lookup-failure': return resolveCiRedWatchdogLookupFailure(input);
     default: throw new Error(`unknown ci-red watchdog command: ${command}`);
   }
 }

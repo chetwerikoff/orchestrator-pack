@@ -11,6 +11,7 @@ else {
 }
 # Trusted/base checker only; PR head supplies repoRoot for snapshots/diff (Issue #6 / #691).
 $CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
+. (Join-Path $PSScriptRoot 'lib/Gh-SignalDispatch.ps1')
 
 function Write-ScopeGuardComment {
     param(
@@ -74,10 +75,14 @@ function Test-DegradedLabelAuthorized {
         [int]$PrNumber
     )
 
-    $events = gh api "repos/$Repository/issues/$PrNumber/events" --paginate 2>$null | ConvertFrom-Json
-    if (-not $events) {
+    $eventsRead = Invoke-GhSignalJsonCommand `
+        -Arguments @('api', "repos/$Repository/issues/$PrNumber/events", '--paginate') `
+        -ExpectedRoot 'array' `
+        -WorkingDirectory $TrustedRoot
+    if (-not $eventsRead.ok) {
         return $false
     }
+    $events = @($eventsRead.value)
 
     $labelEvents = @($events | Where-Object {
             $_.event -eq 'labeled' -and $_.label.name -eq 'scope-guard-degraded'
@@ -135,8 +140,14 @@ if (-not $prNumber -or -not $repository) {
 
 # Always read the PR body via gh — do not pass github.event.pull_request.body through
 # workflow env (PR_BODY). Multiline bodies with colons truncate in GHA env injection.
-$prJson = gh pr view $prNumber --repo $repository --json body | ConvertFrom-Json
-$prBody = Normalize-PrBody -Body ([string]$prJson.body)
+$prRead = Invoke-GhSignalJsonCommand `
+    -Arguments @('pr', 'view', [string]$prNumber, '--repo', $repository, '--json', 'body') `
+    -ExpectedRoot 'object' `
+    -WorkingDirectory $TrustedRoot
+if (-not $prRead.ok) {
+    Write-Error "gh pr view failed: $(Format-GhSignalFailureDetail -Result $prRead)"
+}
+$prBody = Normalize-PrBody -Body ([string]$prRead.value.body)
 
 function Get-ScopeGuardIssueNumber {
     param([string]$Body)
@@ -165,23 +176,38 @@ function Get-ScopeGuardIssueNumber {
     }
 }
 
+function Read-ScopeGuardIssueBody {
+    param(
+        [int]$IssueNumber,
+        [string]$WorkingDirectory
+    )
+
+    try {
+        $issueRead = Invoke-GhSignalJsonCommand `
+            -Arguments @('issue', 'view', [string]$IssueNumber, '--json', 'body') `
+            -ExpectedRoot 'object' `
+            -WorkingDirectory $WorkingDirectory
+        if (-not $issueRead.ok) {
+            return @{ ok = $false; body = ''; reason = [string]$issueRead.reason }
+        }
+        return @{ ok = $true; body = [string]$issueRead.value.body; reason = '' }
+    }
+    catch {
+        return @{ ok = $false; body = ''; reason = 'gh_signal_dispatch_failed' }
+    }
+}
+
 $issueBody = $null
 $issueReadFailed = $false
 $linkedIssueNumber = Get-ScopeGuardIssueNumber -Body $prBody
 
 if ($linkedIssueNumber) {
-    $issueViewOutput = gh issue view $linkedIssueNumber --json body 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $issueReadFailed = $true
+    $issueRead = Read-ScopeGuardIssueBody -IssueNumber $linkedIssueNumber -WorkingDirectory $TrustedRoot
+    if ($issueRead.ok) {
+        $issueBody = [string]$issueRead.body
     }
     else {
-        try {
-            $issueJson = $issueViewOutput | ConvertFrom-Json
-            $issueBody = [string]$issueJson.body
-        }
-        catch {
-            $issueReadFailed = $true
-        }
+        $issueReadFailed = $true
     }
 }
 
