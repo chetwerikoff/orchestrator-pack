@@ -1,0 +1,140 @@
+f ($true -or (Test-Path -LiteralPath $path -PathType Leaf)) {',
+    );
+    expect(mutated).toContain('6e1c57e8a8114e0e74618bb6e8129463ca4ae881');
+    expect(verifyReplayProvenanceFailures(mutated).join('\\n')).toContain('Test-RequiredFile: replay predicate drifted');
+  });
+'''
+if oldprov not in text:
+    raise SystemExit('old provenance test not found')
+text = text.replace(oldprov,newprov)
+p.write_text(text)
+
+print('Applied rereview fixes')
+
+# 8) Final hardening: remove the fail-open delegated reference kind, bind provenance to the full frozen blob,
+# replay all frozen scenarios, and preserve compact baseline formats.
+p = root / 'scripts/gate-runner/census.ts'
+text = p.read_text()
+text = text.replace("  'delegated-test-invocation',\n", '')
+if 'function hasDelegatedTestInvocation(' in text:
+    start = text.index('function hasDelegatedTestInvocation(')
+    end = text.index('\nfunction legacyReferenceIsWired', start)
+    text = text[:start] + text[end:]
+text = text.replace("    case 'delegated-test-invocation': return hasDelegatedTestInvocation(entry, snapshot, text, reference.marker);\n", '')
+text = text.replace(
+    "      && (entry.legacyReference?.kind === 'test-invocation' || entry.legacyReference?.kind === 'delegated-test-invocation')) {",
+    "      && entry.legacyReference?.kind === 'test-invocation') {",
+)
+p.write_text(text)
+
+# Store the exact frozen verify.ps1 source and prove its Git blob identity before committing it.
+frozen_bytes = subprocess.check_output([
+    'git', 'show', '0e8846b1e7caf063d73792700968971d75e0524f:scripts/verify.ps1'
+])
+expected_blob = '6e1c57e8a8114e0e74618bb6e8129463ca4ae881'
+actual_blob = hashlib.sha1(f'blob {len(frozen_bytes)}\0'.encode() + frozen_bytes).hexdigest()
+if actual_blob != expected_blob:
+    raise SystemExit(f'frozen verify blob mismatch: {actual_blob}')
+fixture_root = root / 'scripts/fixtures/gate-runner/legacy-wave-3b'
+(fixture_root / 'verify-frozen.ps1').write_bytes(frozen_bytes)
+(fixture_root / 'verify-source-spans.ps1').unlink(missing_ok=True)
+
+# Rebind provenance checks to the full frozen source and replay every fixture, including positive verify cases.
+p = root / 'scripts/gate-runner/custom/bulk-cli-parity.test.ts'
+text = p.read_text()
+text = text.replace("const wave3a = JSON.parse(readFileSync(resolve(import.meta.dirname, '../goldens/pre-delete-captures.json'), 'utf8')) as CaptureManifest;\n", '')
+text = text.replace(
+    "const verifySpanFixture = readFileSync(resolve(frozenFixtureRoot, 'verify-source-spans.ps1'), 'utf8');\n",
+    "const frozenVerifySource = readFileSync(resolve(frozenFixtureRoot, 'verify-frozen.ps1'), 'utf8');\n",
+)
+start = text.index('function verifyReplayProvenanceFailures(')
+end = text.index('\nfunction overlaySnapshot', start)
+provenance = r'''function verifyReplayProvenanceFailures(replay: string, frozenSource = frozenVerifySource): string[] {
+  const failures: string[] = [];
+  if (verifyProvenance.version !== 1) failures.push('verify replay provenance version must be 1');
+  if (verifyProvenance.sourcePath !== 'scripts/verify.ps1') failures.push('verify replay provenance source path drifted');
+  if (verifyProvenance.sourceBlobSha !== '6e1c57e8a8114e0e74618bb6e8129463ca4ae881') failures.push('verify replay provenance source blob drifted');
+  if (gitBlobSha(frozenSource) !== verifyProvenance.sourceBlobSha) failures.push('frozen verify.ps1 blob is not the recorded source');
+  const sourceLines = normalizeOutput(frozenSource).split('\n');
+  for (const span of verifyProvenance.spans) {
+    if (span.startLine <= 0 || span.endLine < span.startLine || span.endLine > sourceLines.length) {
+      failures.push(`${span.name}: invalid frozen source offsets`);
+      continue;
+    }
+    const offsetSpan = `${sourceLines.slice(span.startLine - 1, span.endLine).join('\n').trim()}\n`;
+    const frozen = extractPowerShellFunction(frozenSource, span.name);
+    const replayed = extractPowerShellFunction(replay, span.name);
+    if (!frozen) {
+      failures.push(`${span.name}: frozen source span missing`);
+      continue;
+    }
+    if (offsetSpan !== frozen) failures.push(`${span.name}: recorded offsets no longer select the frozen function`);
+    if (sha256(offsetSpan) !== span.sha256) failures.push(`${span.name}: frozen source span hash drifted`);
+    if (replayed !== offsetSpan) failures.push(`${span.name}: replay predicate drifted from frozen source span`);
+  }
+  return failures;
+}
+'''
+text = text[:start] + provenance + text[end:]
+old_replay = r'''  it('replays every negative frozen PowerShell fixture when pwsh is available and requires it in CI', () => {
+    const available = pwshAvailable();
+    if (process.env.GITHUB_ACTIONS === 'true') expect(available, 'pwsh is required for legacy negative parity replay in GitHub Actions').toBe(true);
+    if (!available) return;
+    for (const capture of wave3b.captures.filter((candidate) => candidate.exitCode !== 0)) {
+      const replayed = replayLegacyCapture(capture);
+      expect(replayed.exitCode, `${capture.legacyScript} exit`).toBe(capture.exitCode);
+      expect(replayed.stdout, `${capture.legacyScript} stdout`).toBe(capture.stdout);
+      expect(replayed.stderr, `${capture.legacyScript} stderr`).toBe(capture.stderr ?? '');
+    }
+  });
+'''
+new_replay = r'''  it('replays every frozen PowerShell fixture when pwsh is available and requires it in CI', () => {
+    const available = pwshAvailable();
+    if (process.env.GITHUB_ACTIONS === 'true') expect(available, 'pwsh is required for legacy parity replay in GitHub Actions').toBe(true);
+    if (!available) return;
+    for (const capture of wave3b.captures.filter((candidate) => candidate.captureMode === 'fixture-replay')) {
+      const replayed = replayLegacyCapture(capture);
+      expect(replayed.exitCode, `${capture.legacyScript} exit`).toBe(capture.exitCode);
+      expect(replayed.stdout, `${capture.legacyScript} stdout`).toBe(capture.stdout);
+      expect(replayed.stderr, `${capture.legacyScript} stderr`).toBe(capture.stderr ?? '');
+    }
+  });
+'''
+if old_replay not in text:
+    raise SystemExit('legacy replay test anchor not found')
+text = text.replace(old_replay, new_replay)
+p.write_text(text)
+
+# Update the two existing raw-child fingerprints without increasing the raw subprocess surface.
+p = root / 'scripts/toolchain/raw-child-process-baseline.json'
+data = json.loads(p.read_text())
+raw_replacements = {
+    '805329f4b677af21f23c': '46c65a8bca308e61dff6',
+    '4f440c12d4f939787855': 'a7df377bd104b2a79cbf',
+}
+seen = 0
+for entry in data['entries']:
+    if entry.get('path') == 'scripts/check-supervisor-test-wait-inventory.test.ts' and entry.get('fingerprint') in raw_replacements:
+        entry['fingerprint'] = raw_replacements[entry['fingerprint']]
+        seen += 1
+if seen != 2:
+    raise SystemExit(f'expected two supervisor raw-child baseline replacements, saw {seen}')
+p.write_text(json.dumps(data, separators=(',', ':')) + '\n')
+
+# The existing test now boots pwsh directly, so record that path in the dedicated PowerShell-child baseline.
+p = root / 'scripts/toolchain/powershell-child-tests.json'
+data = json.loads(p.read_text())
+path = 'scripts/check-supervisor-test-wait-inventory.test.ts'
+if not any(entry.get('path') == path for entry in data['entries']):
+    data['entries'].append({
+        'path': path,
+        'justification': 'Pre-existing PowerShell child test at the Issue #800 baseline (direct:execFileSync); preserve until that test is migrated in a later PR.',
+    })
+    data['entries'].sort(key=lambda entry: entry['path'])
+p.write_text(json.dumps(data, separators=(',', ':')) + '\n')
+
+# Keep the repository's committed compact census format.
+p = root / 'scripts/gate-runner/census/pre-change-baseline.json'
+p.write_text(json.dumps(json.loads(p.read_text()), separators=(',', ':')) + '\n')
+
+print('Applied final PR #860 rereview proof fixes')
