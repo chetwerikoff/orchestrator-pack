@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runProcessSync } from '#opk-kernel/subprocess';
 import {
   DEFERRED_WAVES,
   discoverVerifyInlineIds,
@@ -27,6 +28,31 @@ describe('frozen gate population census', () => {
   it('reconciles the real final tree', () => {
     const result = evaluateCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), registeredGateIds);
     expect(result.status, result.details?.join('\n')).toBe('PASS');
+  });
+
+  it('executes the retained supervisor wait inventory PowerShell wrapper', () => {
+    const result = runProcessSync({
+      command: 'pwsh',
+      args: [
+        '-NoProfile',
+        '-File',
+        'scripts/check-supervisor-test-wait-inventory.ps1',
+        '-Root',
+        repoRoot,
+        '-Mode',
+        'production',
+      ],
+      cwd: repoRoot,
+      encoding: 'utf8',
+      inheritParentEnv: true,
+    });
+    if (result.outcome === 'spawn-failure') {
+      expect(process.env.GITHUB_ACTIONS, 'pwsh must be available in GitHub Actions').not.toBe('true');
+      return;
+    }
+    expect(result.outcome).toBe('exit');
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain('[PASS]');
   });
 
   it('commits the terminal Wave 3.b taxonomy with named deferral owners only', () => {
