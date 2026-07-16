@@ -1,29 +1,60 @@
-name: issue-849-recon-diagnostic
+name: issue-849-recon-fix
 
 on:
   pull_request:
     types: [synchronize]
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: issue-849-recon-fix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  diagnose:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[issue-849-recon-fix]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-849-gh-signal-classification
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --include=dev
-      - name: Emit exact recon findings
+      - name: Bind the scalar carve-out to the shipped argv
         shell: bash
         run: |
-          node --experimental-strip-types --input-type=module <<'NODE' > issue-849-recon-findings.json
+          python - <<'PY'
+          from pathlib import Path
+
+          recon = Path('scripts/lib/gh-signal-recon.ts')
+          source = recon.read_text(encoding='utf-8')
+          old = r"nameWithOwner\s+2\s*>&\s*1\s*$'"
+          new = r"nameWithOwner\s+-q\s+\.nameWithOwner\s+2\s*>&\s*1\s*$'"
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one recon carve-out, found {source.count(old)}')
+          recon.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          cases = Path('scripts/gh-signal-classification.cases.ts')
+          source = cases.read_text(encoding='utf-8')
+          old = 'gh repo view --json nameWithOwner 2>&1'
+          new = 'gh repo view --json nameWithOwner -q .nameWithOwner 2>&1'
+          if source.count(old) != 2:
+              raise SystemExit(f'expected two scalar fixtures, found {source.count(old)}')
+          cases.write_text(source.replace(old, new), encoding='utf-8')
+          PY
+          git diff --check
+      - run: npm ci --include=dev
+      - name: Verify the real heavy entry and exact recon sweep
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test -- scripts/dead-worker-reconcile.test.ts
+          node --experimental-strip-types --input-type=module <<'NODE'
           import { readdirSync, statSync } from 'node:fs';
           import { join } from 'node:path';
           import { scanPowerShellGhMergedJson } from './scripts/lib/gh-signal-recon.ts';
@@ -36,10 +67,15 @@ jobs:
             }
           };
           visit(join(process.cwd(), 'scripts'));
-          process.stdout.write(JSON.stringify(scanPowerShellGhMergedJson(files, process.cwd()), null, 2));
+          const findings = scanPowerShellGhMergedJson(files, process.cwd());
+          if (findings.length) throw new Error(JSON.stringify(findings));
           NODE
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-849-recon-findings
-          path: issue-849-recon-findings.json
-          retention-days: 1
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/lib/gh-signal-recon.ts scripts/gh-signal-classification.cases.ts
+          git commit -m "fix: bind scalar recon carve-out to shipped argv [issue-849-recon-fix]"
+          git push origin HEAD:agent/issue-849-gh-signal-classification
