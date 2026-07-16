@@ -1,0 +1,29 @@
+name: issue-841-export-topology-log
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'agent/issue-841-bulk-gate-port'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Export completed topology job log
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/jobs/87650345584/logs" > "$RUNNER_TEMP/topology.log"
+      - name: Upload topology log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr860-final-topology-log
+          path: ${{ runner.temp }}/topology.log
+          retention-days: 1
+          if-no-files-found: error
