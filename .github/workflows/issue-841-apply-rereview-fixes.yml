@@ -70,42 +70,54 @@ jobs:
           rm -f .github/workflows/issue-841-apply-rereview-fixes.yml
           rm -rf .github/issue-841-rereview
 
-          expected=$(cat <<'EOF'
-          scripts/check-supervisor-test-wait-inventory.test.ts
-          scripts/fixtures/gate-runner/legacy-wave-3b/verify-frozen.ps1
-          scripts/fixtures/gate-runner/legacy-wave-3b/verify-source-spans.json
-          scripts/gate-runner/census.test.ts
-          scripts/gate-runner/census.ts
-          scripts/gate-runner/census/pre-change-baseline.json
-          scripts/gate-runner/custom/bulk-cli-parity.test.ts
-          scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json
-          scripts/toolchain/powershell-child-tests.json
-          scripts/toolchain/raw-child-process-baseline.json
-          EOF
+          expected_paths=(
+            scripts/check-supervisor-test-wait-inventory.test.ts
+            scripts/fixtures/gate-runner/legacy-wave-3b/verify-frozen.ps1
+            scripts/fixtures/gate-runner/legacy-wave-3b/verify-source-spans.json
+            scripts/gate-runner/census.test.ts
+            scripts/gate-runner/census.ts
+            scripts/gate-runner/census/pre-change-baseline.json
+            scripts/gate-runner/custom/bulk-cli-parity.test.ts
+            scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json
+            scripts/toolchain/powershell-child-tests.json
+            scripts/toolchain/raw-child-process-baseline.json
           )
 
+          # Stage first so new provenance files participate in the fail-closed tree comparison.
+          git add -A
+
           # Tests and npm installation may expose generated or mode-only drift.
-          # Restore every path outside the reviewed ten-file change set to the clean source head.
+          # Restore every staged path outside the reviewed ten-file set to the clean source head.
           while IFS= read -r path; do
             [ -z "$path" ] && continue
-            if printf '%s\n' "$expected" | grep -Fqx -- "$path"; then
+            allowed=false
+            for expected_path in "${expected_paths[@]}"; do
+              if [ "$path" = "$expected_path" ]; then
+                allowed=true
+                break
+              fi
+            done
+            if [ "$allowed" = true ]; then
               continue
             fi
             if git cat-file -e "$CLEAN_BASE:$path" 2>/dev/null; then
               git checkout "$CLEAN_BASE" -- "$path"
+              git add -- "$path"
             else
               rm -rf -- "$path"
+              git add -A -- "$path"
             fi
-          done < <(git diff --name-only "$CLEAN_BASE")
+          done < <(git diff --cached --name-only "$CLEAN_BASE")
 
-          actual=$(git diff --name-only "$CLEAN_BASE" | sort)
-          if [ "$actual" != "$(printf '%s\n' "$expected" | sort)" ]; then
+          expected=$(printf '%s\n' "${expected_paths[@]}" | sort)
+          actual=$(git diff --cached --name-only "$CLEAN_BASE" | sort)
+          if [ "$actual" != "$expected" ]; then
             echo 'Unexpected final changed-path set:' >&2
             printf '%s\n' "$actual" >&2
             exit 1
           fi
 
-          git diff --check "$CLEAN_BASE"
+          git diff --cached --check "$CLEAN_BASE"
 
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$TEMP_HEAD_SHA&per_page=100" \
             --jq '.workflow_runs[] | select(.name == "scope-guard" and .status != "completed") | .id' \
@@ -116,6 +128,5 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
           git commit -m 'fix: close PR 860 rereview proof gaps'
           git push origin HEAD:agent/issue-841-bulk-gate-port
