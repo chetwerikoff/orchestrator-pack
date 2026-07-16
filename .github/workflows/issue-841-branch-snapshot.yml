@@ -1,0 +1,28 @@
+name: issue-841-branch-snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Pack repository snapshot
+        shell: bash
+        run: tar --exclude=.git -czf "$RUNNER_TEMP/orchestrator-pack-issue-841-branch.tar.gz" .
+      - name: Upload repository snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-pack-issue-841-branch
+          path: ${{ runner.temp }}/orchestrator-pack-issue-841-branch.tar.gz
+          retention-days: 1
+          if-no-files-found: error
