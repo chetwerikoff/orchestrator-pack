@@ -30,10 +30,7 @@ foreach ($arg in $cli.ForwardArgs) {
 
 Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
-$workspacePrompt = Join-Path $resolvedRoot 'prompts/codex_review_prompt.md'
-if (Test-Path -LiteralPath $workspacePrompt -PathType Leaf) {
-    $env:AO_CODEX_REVIEW_PROMPT_FILE = $workspacePrompt
-}
+$env:AO_CODEX_REVIEW_PROMPT_FILE = Join-Path $packRoot 'prompts/codex_review_prompt.md'
 
 Push-Location -LiteralPath $resolvedRoot
 try {
