@@ -56,6 +56,9 @@ function Get-CiRedWatchdogConfig {
         episodeLifetimeMs              = 2 * 60 * 60 * 1000
         backoffMs                      = @((5 * 60 * 1000), (10 * 60 * 1000), (20 * 60 * 1000))
         maxDiagnosticChars             = 6000
+        lookupResolvedRetentionMs      = 24 * 60 * 60 * 1000
+        lookupParkedRetentionMs        = 7 * 24 * 60 * 60 * 1000
+        lookupHistoryMaxEntries        = 512
     }
 }
 
@@ -96,3 +99,42 @@ function Invoke-CiRedWatchdogCli {
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Worker.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Boundary.ps1')
 . (Join-Path $PSScriptRoot 'Ci-Red-Watchdog-Tick.ps1')
+
+$Script:InvokeCiRedWatchdogTickCore = ${function:Invoke-CiRedWatchdogTick}
+function Invoke-CiRedWatchdogTick {
+    param(
+        [string]$RepoRoot,
+        [string]$ProjectId,
+        [hashtable]$WorkerState,
+        [object]$ChecksBundle,
+        [switch]$DryRunMode
+    )
+
+    if (-not $DryRunMode) {
+        try {
+            $repoSlug = Get-CiRedWatchdogRepoSlug -RepoRoot $RepoRoot
+            $snapshotAvailable = [bool]($repoSlug -and $null -ne $WorkerState -and $null -ne $WorkerState.openPrs)
+            $rows = @()
+            if ($snapshotAvailable) {
+                $rows = @($WorkerState.openPrs | ForEach-Object {
+                    @{
+                        repo = $repoSlug
+                        prNumber = [int](Get-CiRedWatchdogProperty -Object $_ -Names @('number', 'prNumber'))
+                        headSha = [string](Get-CiRedWatchdogProperty -Object $_ -Names @('headRefOid', 'headSha'))
+                    }
+                })
+            }
+            $null = Invoke-CiRedWatchdogCli -Command 'prune-lookup-failures' -Payload @{
+                storeDir = Get-CiRedWatchdogStateDir
+                snapshot = @{ available = $snapshotAvailable; repo = [string]$repoSlug; openPrs = @($rows) }
+                nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                actor = $Script:CiRedWatchdogSource
+                config = Get-CiRedWatchdogConfig
+            }
+        }
+        catch {
+            Write-CiRedWatchdogLog "lookup retention skipped reason=cleanup_failed detail=$($_.Exception.Message)"
+        }
+    }
+    return & $Script:InvokeCiRedWatchdogTickCore @PSBoundParameters
+}
