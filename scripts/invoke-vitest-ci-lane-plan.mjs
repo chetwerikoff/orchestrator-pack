@@ -3,7 +3,7 @@
  * Emit Vitest CI lane plan JSON for PowerShell runners (Issue #556).
  *
  * Usage:
- *   node scripts/invoke-vitest-ci-lane-plan.mjs light
+ *   node scripts/invoke-vitest-ci-lane-plan.mjs light [--shard 1]
  *   node scripts/invoke-vitest-ci-lane-plan.mjs heavy --shard 3
  *   node scripts/invoke-vitest-ci-lane-plan.mjs wallclock
  */
@@ -39,12 +39,16 @@ const artifactPlan = loadArtifactPlan();
 const plan = artifactPlan
   ? {
       ok: true,
-      config: { lightMaxWorkers: Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? 0) || 2 },
+      config: {
+        lightMaxWorkers: Number(process.env.VITEST_LIGHT_MAX_WORKERS ?? 0) || 2,
+        lightShardCount: Number(artifactPlan.lightShardCount ?? 0) || 1,
+      },
       light: artifactPlan.lightFiles ?? [],
       heavy: artifactPlan.heavyFiles ?? [],
       postMergeWallclock: artifactPlan.postMergeWallclockFiles ?? [],
       parked: artifactPlan.parkedFiles ?? [],
       discovered: artifactPlan.discovered ?? [],
+      lightShards: artifactPlan.lightShards ?? [],
       heavyShards: artifactPlan.heavyShards ?? [],
       topology: artifactPlan,
     }
@@ -56,7 +60,32 @@ if (!plan.ok) {
 }
 
 if (mode === 'light') {
-  console.log(JSON.stringify({ lightMaxWorkers: plan.config.lightMaxWorkers, light: plan.light }));
+  if (Number.isFinite(shard) && shard >= 1) {
+    const lightShard = plan.lightShards.find((entry) => entry.shard === shard);
+    if (!lightShard) {
+      const count = plan.config.lightShardCount ?? plan.topology.lightShardCount ?? plan.lightShards.length;
+      console.error(`light shard ${shard} not found (count=${count})`);
+      process.exit(1);
+    }
+    console.log(
+      JSON.stringify({
+        lightMaxWorkers: plan.config.lightMaxWorkers,
+        lightShardCount: plan.config.lightShardCount ?? plan.topology.lightShardCount,
+        light: lightShard.files,
+        shard: lightShard.shard,
+        totalRuntimeMs: lightShard.totalRuntimeMs,
+      }),
+    );
+    process.exit(0);
+  }
+  console.log(
+    JSON.stringify({
+      lightMaxWorkers: plan.config.lightMaxWorkers,
+      lightShardCount: plan.config.lightShardCount ?? plan.topology.lightShardCount,
+      light: plan.light,
+      lightShards: plan.lightShards,
+    }),
+  );
   process.exit(0);
 }
 

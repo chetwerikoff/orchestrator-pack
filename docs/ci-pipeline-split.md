@@ -10,7 +10,7 @@ contract tests**.
 classify-pr-changes (markdown-only skip)
   |
   +--> Type-check pack sources (tsc --noEmit + review-start claim guard)
-  +--> Vitest light lane (bounded workers; classified light files only)
+  +--> Vitest light lane shards 1..2 (bounded workers; classified light files only)
   +--> Vitest heavy shard 1..N (runtime-weighted; serial in-runner)
   +--> Pester regression (test-all.ps1 -SkipNpm)
   |
@@ -38,7 +38,7 @@ Every discovered Vitest file must be explicitly classified in
 
 | Lane | Execution | Criteria |
 | --- | --- | --- |
-| **light** | Bounded in-process parallelism (`lightMaxWorkers`, currently **2**) | Pure unit/static tests without subprocess/git/tmux/PowerShell integration |
+| **light** | Runtime-weighted 2-way matrix sharding with bounded in-process parallelism (`lightMaxWorkers`, currently **2**) | Pure unit/static tests without subprocess/git/tmux/PowerShell integration |
 | **heavy** | Serial in-runner on one GitHub Actions shard | Subprocess, git, filesystem, tmux, or PowerShell integration tests |
 | **unclassified** | Blocks CI | New, renamed, or missing manifest entries fail `classification-required` |
 
@@ -108,11 +108,19 @@ Issue #695 consumes the #691 runtime-history schema (`files` ms map plus optiona
 weights, derivation runs on the committed `ci-baseline-estimates` seed; real-artifact
 integration completes after #691 lands.
 
-## Light lane parallelism bound
+## Light lane sharding and parallelism bound
 
-`lightMaxWorkers` is explicit, capped at **4**, and reversible by setting
-`lightMaxWorkers: 1` or disabling the light lane (see rollback). CI scans logs for
-`onTaskUpdate`, `vitest-worker`, `STACK_TRACE_ERROR`, and RPC timeout signatures.
+`lightShardCount` is explicit, capped at **2** for Issue #874, and assigned with the
+same greedy LPT bin-packing helper used by the heavy lane. The `test-vitest-light`
+job is a matrix over `plan-vitest-ci-topology`'s `light_shard_matrix` output, so the
+fail-closed aggregate still consumes the single `test-vitest-light` job result.
+
+`lightMaxWorkers` remains explicit, capped at **4** in `vitest.config.ts`, and set to
+**2** for the sharded lane. CI scans logs for `onTaskUpdate`, `vitest-worker`,
+`STACK_TRACE_ERROR`, and RPC timeout signatures.
+
+Issue #874's isolation audit for the selected `worker=2, shard=2` cell is recorded in
+`docs/vitest-light-lane-isolation-audit-874.md`.
 
 ## Timeout budget alignment
 
@@ -201,6 +209,16 @@ Follow up to restore derived topology once weights are trustworthy.
 
 Branch protection and the aggregate check name **Run pack contract tests** stay
 unchanged.
+
+### To unsharded light lane
+
+1. Set `lightShardCount` back to **1** in `scripts/vitest-ci-lanes.config.json`.
+2. Restore `test-vitest-light` in `.github/workflows/scope-guard.yml` to a non-matrix
+   job invoking `scripts/run-vitest-light-lane.ps1` without `-Shard`.
+3. Remove `light_shard_count` / `light_shard_matrix` workflow output assertions only
+   after `scripts/check-ci-pipeline-split.ps1` has been updated to prove the unsharded
+   light lane still covers the full classified light set.
+4. Keep `test-aggregate` consuming `VITEST_LIGHT_RESULT` from `needs.test-vitest-light.result`.
 
 ### To pre-#487 monolithic path
 

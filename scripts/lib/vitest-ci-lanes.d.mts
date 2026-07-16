@@ -20,6 +20,7 @@ import type {
 
 export interface LanesConfig {
   lightMaxWorkers: number;
+  lightShardCount: number;
   heavyDefaultRuntimeMs: number;
   heavyTopology: HeavyTopologyPolicy;
   heavyForkPoolMinRuntimeMs: number;
@@ -34,6 +35,8 @@ export interface HeavyShardAssignment {
   totalRuntimeMs: number;
 }
 
+export type LightShardAssignment = HeavyShardAssignment;
+
 export interface LanePlanSuccess {
   ok: true;
   discovered: string[];
@@ -43,6 +46,7 @@ export interface LanePlanSuccess {
   heavy: string[];
   postMergeWallclock: string[];
   parked: string[];
+  lightShards: LightShardAssignment[];
   heavyShards: HeavyShardAssignment[];
   runtimeHistory: Record<string, number>;
   topology: HeavyTopologyArtifact;
@@ -102,6 +106,12 @@ export declare function assignHeavyShards(
   shardCount: number,
   defaultRuntimeMs: number,
 ): HeavyShardAssignment[];
+export declare function assignLightShards(
+  lightFiles: string[],
+  runtimeHistory: Record<string, number>,
+  shardCount: number,
+  defaultRuntimeMs: number,
+): LightShardAssignment[];
 export declare function buildLanePlan(
   repoRoot?: string,
   options?: {

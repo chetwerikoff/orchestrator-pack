@@ -155,6 +155,12 @@ else {
         if ($planJob -notmatch 'heavy_shard_matrix') {
             Add-Fail 'plan-vitest-ci-topology job must expose heavy_shard_matrix output'
         }
+        if ($planJob -notmatch 'light_shard_count') {
+            Add-Fail 'plan-vitest-ci-topology job must expose light_shard_count output'
+        }
+        if ($planJob -notmatch 'light_shard_matrix') {
+            Add-Fail 'plan-vitest-ci-topology job must expose light_shard_matrix output'
+        }
         if ($planJob -notmatch 'vitest-heavy-topology') {
             Add-Fail 'plan-vitest-ci-topology job must upload vitest-heavy-topology artifact'
         }
@@ -165,12 +171,27 @@ else {
         if ($lightJob -notmatch 'run-vitest-light-lane\.ps1') {
             Add-Fail 'test-vitest-light job must invoke scripts/run-vitest-light-lane.ps1'
         }
+        if ($lightJob -notmatch 'strategy:\s*' -or $lightJob -notmatch 'matrix:\s*') {
+            Add-Fail 'test-vitest-light job must use a matrix strategy for shards'
+        }
+        if ($lightJob -notmatch 'fromJson\(needs\.plan-vitest-ci-topology\.outputs\.light_shard_matrix\)') {
+            Add-Fail 'test-vitest-light job must consume light_shard_matrix from plan-vitest-ci-topology outputs'
+        }
+        if ($lightJob -match 'shard:\s*\[1,\s*2\]') {
+            Add-Fail 'test-vitest-light matrix must be derived from plan output, not hand-listed indices'
+        }
+        if ($lightJob -notmatch 'plan-vitest-ci-topology') {
+            Add-Fail 'test-vitest-light job must need plan-vitest-ci-topology for derived matrix'
+        }
+        if ($lightJob -notmatch 'run-vitest-light-lane\.ps1 -Shard \$\{\{ matrix\.shard \}\}') {
+            Add-Fail 'test-vitest-light job must pass matrix.shard to scripts/run-vitest-light-lane.ps1'
+        }
         if ($lightJob -match 'continue-on-error:\s*true') {
             Add-Fail 'test-vitest-light job must not use continue-on-error: true'
         }
         $displayName = Get-JobDisplayName -JobText $lightJob
-        if ($displayName -and $displayName -ne $lightLaneJobName) {
-            Add-Fail "test-vitest-light display name must be '$lightLaneJobName'"
+        if ($displayName -and -not $displayName.StartsWith($lightLaneJobName, [System.StringComparison]::Ordinal)) {
+            Add-Fail "test-vitest-light display name must start with '$lightLaneJobName'"
         }
     }
 
@@ -374,8 +395,39 @@ if ((Test-Path -LiteralPath $lanesLib) -and (Get-Command node -ErrorAction Silen
             Write-Host "  discovered: $($plan.discovered.Count) files; light: $($plan.light.Count); heavy: $($plan.heavy.Count); postMergeWallclock: $($plan.postMergeWallclock.Count); parked: $($plan.parked.Count)"
             $union = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
             $duplicates = [System.Collections.Generic.List[string]]::new()
+            $lightShardUnion = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            $lightShardDuplicates = [System.Collections.Generic.List[string]]::new()
+            foreach ($shard in $plan.lightShards) {
+                foreach ($file in $shard.files) {
+                    if ($lightShardUnion.Contains($file)) {
+                        $lightShardDuplicates.Add($file) | Out-Null
+                    }
+                    else {
+                        [void]$lightShardUnion.Add($file)
+                    }
+                    if ($union.Contains($file)) {
+                        $duplicates.Add($file) | Out-Null
+                    }
+                    else {
+                        [void]$union.Add($file)
+                    }
+                }
+            }
             foreach ($file in $plan.light) {
-                if ($union.Contains($file)) { $duplicates.Add($file) | Out-Null } else { [void]$union.Add($file) }
+                if (-not $lightShardUnion.Contains($file)) {
+                    Add-Fail "light shard union missing classified light file: $file"
+                }
+            }
+            foreach ($file in $lightShardUnion) {
+                if ($plan.light -notcontains $file) {
+                    Add-Fail "light shard union has unexpected file not classified light: $file"
+                }
+            }
+            foreach ($dup in $lightShardDuplicates) {
+                Add-Fail "duplicate Vitest light file across light shards: $dup"
+            }
+            if ($plan.lightShards.Count -ne $plan.config.lightShardCount) {
+                Add-Fail "light shard assignment count ($($plan.lightShards.Count)) does not match config ($($plan.config.lightShardCount))"
             }
             foreach ($file in $plan.postMergeWallclock) {
                 if ($union.Contains($file)) {

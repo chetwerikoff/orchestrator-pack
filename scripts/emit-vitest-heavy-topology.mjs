@@ -40,6 +40,8 @@ function writeGhaOutput(topology) {
   }
   appendFileSync(outputPath, `heavy_shard_count=${topology.heavyShardCount}\n`);
   appendFileSync(outputPath, `heavy_shard_matrix=${JSON.stringify(topology.heavyShardMatrix)}\n`);
+  appendFileSync(outputPath, `light_shard_count=${topology.lightShardCount}\n`);
+  appendFileSync(outputPath, `light_shard_matrix=${JSON.stringify(topology.lightShardMatrix)}\n`);
   appendFileSync(
     outputPath,
     `fallback_classification=${topology.fallbackClassification}\n`,
@@ -99,6 +101,9 @@ if (diagnostic) {
     lightFiles: [],
     postMergeWallclockFiles: [],
     parkedFiles: [],
+    lightShardCount: 1,
+    lightShardMatrix: [1],
+    lightShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
     heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
     measurementDiagnostic: diagnostic,
   };
@@ -126,6 +131,9 @@ const artifact = {
   lightFiles: result.light,
   postMergeWallclockFiles: result.postMergeWallclock,
   parkedFiles: result.parked,
+  lightShardCount: result.config.lightShardCount,
+  lightShardMatrix: result.lightShards.map((entry) => entry.shard),
+  lightShards: result.lightShards,
   heavyShards: result.heavyShards,
 };
 writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
@@ -142,6 +150,6 @@ if (result.topology.fallbackClassification === 'fixed-fallback') {
 }
 
 if (ghaOutput) {
-  writeGhaOutput(result.topology);
+  writeGhaOutput(artifact);
 }
 console.log(JSON.stringify(artifact));
