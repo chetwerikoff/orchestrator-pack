@@ -4,7 +4,12 @@
  * Reads Vitest JSON output and reports actionable slow file/test violations.
  */
 import { readFileSync, existsSync } from 'node:fs';
-import { collectFromVitestJson, normalizeFilePath } from './lib/vitest-json-report.mjs';
+import {
+  collectFromVitestJson,
+  normalizeFilePath,
+  resolveFileDurationMs,
+  sumAssertionDurationMs,
+} from './lib/vitest-json-report.mjs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -65,6 +70,91 @@ function summarizeByFile(tests) {
   return [...byFile.values()];
 }
 
+function collectMergedFileMetrics(payload) {
+  if (!Array.isArray(payload?.testResults)) {
+    return null;
+  }
+
+  const byFile = new Map();
+  for (const fileResult of payload.testResults) {
+    const file = normalizeFilePath(fileResult.name, repoRoot);
+    const assertions = Array.isArray(fileResult.assertionResults)
+      ? fileResult.assertionResults
+      : [];
+    const assertionDurationMs = sumAssertionDurationMs(assertions);
+    const wallDurationMs = resolveFileDurationMs(fileResult);
+    const entry = byFile.get(file) ?? {
+      file,
+      entryCount: 0,
+      testCount: 0,
+      assertionDurationMs: 0,
+      wallDurationSumMs: 0,
+      maxNonAssertionOverheadMs: 0,
+      allEntriesHaveAssertions: true,
+    };
+
+    entry.entryCount += 1;
+    entry.testCount += assertions.length;
+    entry.assertionDurationMs += assertionDurationMs;
+    entry.wallDurationSumMs += wallDurationMs;
+    if (assertions.length === 0) {
+      entry.allEntriesHaveAssertions = false;
+    } else {
+      entry.maxNonAssertionOverheadMs = Math.max(
+        entry.maxNonAssertionOverheadMs,
+        Math.max(0, wallDurationMs - assertionDurationMs),
+      );
+    }
+    byFile.set(file, entry);
+  }
+
+  return byFile;
+}
+
+function aggregateFileEntries(fileEntries, payload) {
+  const mergedMetrics = collectMergedFileMetrics(payload);
+  const byFile = new Map();
+  for (const fileEntry of fileEntries) {
+    const durationMs = Number(fileEntry.durationMs);
+    const testCount = Number(fileEntry.testCount);
+    const entry = byFile.get(fileEntry.file) ?? {
+      file: fileEntry.file,
+      durationMs: 0,
+      testCount: 0,
+      timingSource: fileEntry.timingSource,
+      entryCount: 0,
+    };
+    entry.durationMs += Number.isFinite(durationMs) ? durationMs : 0;
+    entry.testCount += Number.isFinite(testCount) ? testCount : 0;
+    entry.entryCount += 1;
+    byFile.set(fileEntry.file, entry);
+  }
+
+  for (const entry of byFile.values()) {
+    if (entry.entryCount <= 1) {
+      continue;
+    }
+
+    const metrics = mergedMetrics?.get(entry.file);
+    if (
+      metrics &&
+      metrics.entryCount === entry.entryCount &&
+      metrics.allEntriesHaveAssertions
+    ) {
+      entry.durationMs =
+        metrics.assertionDurationMs + metrics.maxNonAssertionOverheadMs;
+      entry.testCount = metrics.testCount;
+      entry.timingSource = 'merged-assertions-plus-overhead';
+    } else {
+      entry.durationMs = metrics?.wallDurationSumMs ?? entry.durationMs;
+      entry.testCount = metrics?.testCount ?? entry.testCount;
+      entry.timingSource = 'merged-file-wall-sum';
+    }
+  }
+
+  return [...byFile.values()];
+}
+
 function main() {
   const { perTestMs, perFileMs } = loadConfig();
   if (!existsSync(reportPath)) {
@@ -75,21 +165,11 @@ function main() {
   const payload = JSON.parse(readFileSync(reportPath, 'utf8'));
   const collected = collectFromVitestJson(payload, repoRoot);
   const tests = collected?.tests ?? [];
-  const files =
-    collected?.files ??
-    summarizeByFile(
-      (() => {
-        const fallbackTests = [];
-        collectResults(payload, fallbackTests);
-        return fallbackTests;
-      })(),
-    );
-
   if (!collected) {
-    const fallbackTests = [];
-    collectResults(payload, fallbackTests);
-    tests.push(...fallbackTests);
+    collectResults(payload, tests);
   }
+  const parsedFiles = collected?.files ?? summarizeByFile(tests);
+  const files = aggregateFileEntries(parsedFiles, payload);
 
   const violations = [];
 
@@ -106,7 +186,11 @@ function main() {
       const timingNote =
         fileEntry.timingSource === 'file-wall'
           ? 'file wall time'
-          : 'assertion-duration sum';
+          : fileEntry.timingSource === 'merged-assertions-plus-overhead'
+            ? 'merged assertion duration plus one invocation overhead'
+            : fileEntry.timingSource === 'merged-file-wall-sum'
+              ? 'merged file wall time'
+              : 'assertion-duration sum';
       violations.push(
         `slow file: ${fileEntry.file} took ${Math.round(fileEntry.durationMs)}ms ${timingNote} across ${fileEntry.testCount} test(s) (budget ${perFileMs}ms per file)`,
       );
