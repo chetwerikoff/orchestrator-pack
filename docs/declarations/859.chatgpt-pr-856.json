@@ -31,7 +31,7 @@
         ],
         "removed": []
       },
-      "reason": "Address review findings by sharing runtime and probe detail bounds, keeping enrichment below the supervisor stall budget with heartbeats, adding durable fair rotation and accepted-evidence retention, and failing closed when initialized detail state is lost or a lookup returns non-numeric evidence.",
+      "reason": "Address review findings by sharing runtime and probe detail bounds, keeping enrichment below the supervisor stall budget with heartbeats, adding durable fair rotation, making partial cursor initialization recoverable, and bounding accepted evidence by freshness plus session identity.",
       "actor": "chatgpt",
       "timestamp": "2026-07-16T10:08:00.000Z",
       "applied": true
