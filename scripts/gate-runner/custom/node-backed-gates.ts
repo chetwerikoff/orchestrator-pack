@@ -46,7 +46,7 @@ export function evaluateNodeBackedGate(
       liveEvidence(command, 'unreachable', result.error ?? (result.stderr || 'node spawn failed')),
       [result.error ?? (result.stderr || 'node spawn failed')],
       false,
-      result.stdout || command.legacyStdout,
+      result.stdout || undefined,
     );
   }
   if (result.outcome !== 'exit') {
@@ -56,7 +56,7 @@ export function evaluateNodeBackedGate(
       liveEvidence(command, 'unreachable', `${result.outcome}${result.signal ? ` (${result.signal})` : ''}`),
       [`process outcome=${result.outcome}${result.signal ? ` signal=${result.signal}` : ''}`],
       false,
-      result.stdout || command.legacyStdout,
+      result.stdout || undefined,
     );
   }
   const output = `${result.stdout}${result.stderr}`;

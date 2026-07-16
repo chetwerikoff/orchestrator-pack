@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "issue": 841,
   "baseCommitSha": "0e8846b1e7caf063d73792700968971d75e0524f",
   "captureEnvironment": {
@@ -19,7 +19,9 @@
       ],
       "exitCode": 0,
       "stdout": "check-agents-report-contract: PASS\n",
-      "artifacts": []
+      "artifacts": [],
+      "captureMode": "real-clean-tree",
+      "expectedRunnerStatus": "PASS"
     },
     {
       "gateId": "coworker-delegation-threshold-drift",
@@ -36,7 +38,9 @@
       ],
       "exitCode": 0,
       "stdout": "[PASS] coworker delegation T1 floor is 400 with no stale 600 volume-floor literals in tracked policy files.\n",
-      "artifacts": []
+      "artifacts": [],
+      "captureMode": "real-clean-tree",
+      "expectedRunnerStatus": "PASS"
     },
     {
       "gateId": "external-output-shape-guard",
@@ -53,7 +57,9 @@
       ],
       "exitCode": 0,
       "stdout": "[PASS] external-output shape guard (Issue #223)\n",
-      "artifacts": []
+      "artifacts": [],
+      "captureMode": "real-clean-tree",
+      "expectedRunnerStatus": "PASS"
     },
     {
       "gateId": "launch-argv-inventory",
@@ -72,7 +78,9 @@
       "stdout": "[PASS] generated launch-argv inventory audit (550 production hits, 495 rows)\n[PASS] launch-argv inventory guard (Issue #661)\n",
       "expectedRunnerStdout": "[PASS] generated launch-argv inventory audit (549 production hits, 494 rows)\n[PASS] launch-argv inventory guard (Issue #661)\n",
       "parityDisposition": "Intentional self-inventory delta: deleting the legacy wrapper removes its own launch site/row while preserving the audit verdict and wrapper-level PASS line.",
-      "artifacts": []
+      "artifacts": [],
+      "captureMode": "real-clean-tree",
+      "expectedRunnerStatus": "PASS"
     },
     {
       "gateId": "review-010-vocabulary",
@@ -87,7 +95,9 @@
       ],
       "exitCode": 0,
       "stdout": "[PASS] AO 0.10 review vocabulary guard (no dead CLI / false-equivalence fields)\n",
-      "artifacts": []
+      "artifacts": [],
+      "captureMode": "real-clean-tree",
+      "expectedRunnerStatus": "PASS"
     },
     {
       "gateId": "review-command-not-ao",
@@ -102,6 +112,201 @@
       ],
       "exitCode": 0,
       "stdout": "[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n",
+      "artifacts": [],
+      "captureMode": "real-clean-tree",
+      "expectedRunnerStatus": "PASS"
+    },
+    {
+      "gateId": "agents-report-contract",
+      "legacyScript": "scripts/check-agents-report-contract.ps1",
+      "sourceBlobSha": "ee5f7b56373b3584307dba22b4eb898452ec319b",
+      "case": "negative-removed-command",
+      "captureMode": "fixture-replay",
+      "scenario": "agents-removed-command",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-agents-report-contract.ps1"
+      ],
+      "exitCode": 1,
+      "stdout": "AGENTS.md still references removed ao report command\n",
+      "stderr": "",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerStdout": "AGENTS.md still references removed ao report command\n",
+      "expectedRunnerDiagnostics": [
+        "AGENTS.md still references removed ao report command"
+      ],
+      "artifacts": []
+    },
+    {
+      "gateId": "coworker-delegation-threshold-drift",
+      "legacyScript": "scripts/check-coworker-delegation-threshold-drift.ps1",
+      "sourceBlobSha": "3605aeff39385d09a8245763f990d20832fc4df9",
+      "case": "negative-stale-600-literal",
+      "captureMode": "fixture-replay",
+      "scenario": "coworker-stale-600",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-coworker-delegation-threshold-drift.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] coworker delegation threshold drift:\n - CLAUDE.md still contains stale volume-floor literal: more than 600 lines\n",
+      "stderr": "",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerStdout": "[FAIL] coworker delegation threshold drift:\n - CLAUDE.md still contains stale volume-floor literal: more than 600 lines\n",
+      "expectedRunnerDiagnostics": [
+        "CLAUDE.md still contains stale volume-floor literal: more than 600 lines"
+      ],
+      "artifacts": []
+    },
+    {
+      "gateId": "external-output-shape-guard",
+      "legacyScript": "scripts/check-external-output-shape-guard.ps1",
+      "sourceBlobSha": "e9637c2561071a07269e63a5d1507ab3528dcf61",
+      "case": "negative-child-shape-violation",
+      "captureMode": "fixture-replay",
+      "scenario": "external-shape-violation",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-external-output-shape-guard.ps1",
+        "-RepoRoot",
+        "<repo>"
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "fixture.json @ $.headRefOid field=headRefOid [ao-worker-report/completed]: forbidden phantom field\n",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerDiagnostics": [
+        "forbidden phantom field"
+      ],
+      "artifacts": []
+    },
+    {
+      "gateId": "launch-argv-inventory",
+      "legacyScript": "scripts/check-launch-argv-inventory.ps1",
+      "sourceBlobSha": "2087d7a7720292d33c5d14bc8d726a1d3f9705f3",
+      "case": "negative-unmapped-launch-site",
+      "captureMode": "fixture-replay",
+      "scenario": "launch-unmapped-site",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-launch-argv-inventory.ps1",
+        "-Root",
+        "<repo>"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] launch-argv inventory guard (Issue #661)\n",
+      "stderr": "scripts/new-unregistered-launch.ts: unmapped production launch site\n[FAIL] generated launch-argv inventory audit (1 production hits, 0 rows)\n",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerStdout": "[FAIL] launch-argv inventory guard (Issue #661)\n",
+      "expectedRunnerDiagnostics": [
+        "unmapped production launch site",
+        "generated launch-argv inventory audit"
+      ],
+      "artifacts": []
+    },
+    {
+      "gateId": "review-010-vocabulary",
+      "legacyScript": "scripts/check-review-010-vocabulary.ps1",
+      "sourceBlobSha": "6763a4e68d8ab18db9ea3b5431d330b7a8f9f461",
+      "case": "negative-dead-review-argv",
+      "captureMode": "fixture-replay",
+      "scenario": "review-dead-argv",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-review-010-vocabulary.ps1"
+      ],
+      "exitCode": 1,
+      "stdout": "AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead ao review CLI argv\n",
+      "stderr": "",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerStdout": "AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead ao review CLI argv\n",
+      "expectedRunnerDiagnostics": [
+        "scripts/bad.mjs: dead ao review CLI argv"
+      ],
+      "artifacts": []
+    },
+    {
+      "gateId": "review-command-not-ao",
+      "legacyScript": "scripts/check-review-command-not-ao.ps1",
+      "sourceBlobSha": "08fc61515e5d3d04f9ccc17124344f55f35485a7",
+      "case": "negative-gitignored-review-command",
+      "captureMode": "fixture-replay",
+      "scenario": "review-command-ao-path",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-review-command-not-ao.ps1"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: pwsh .ao/review.ps1\n",
+      "stderr": "",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerStdout": "[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: pwsh .ao/review.ps1\n",
+      "expectedRunnerDiagnostics": [
+        "Canonical REVIEW_COMMAND must not use gitignored .ao/ paths"
+      ],
+      "artifacts": []
+    },
+    {
+      "gateId": "verify-required-files",
+      "legacyScript": "scripts/verify.ps1",
+      "legacyReplayScript": "scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1",
+      "sourceBlobSha": "6e1c57e8a8114e0e74618bb6e8129463ca4ae881",
+      "case": "negative-required-file-missing",
+      "captureMode": "fixture-replay",
+      "scenario": "verify-missing-required-file",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/verify.ps1"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] AGENTS.md - missing\nLEGACY_DIAGNOSTIC: Missing file: AGENTS.md\n",
+      "stderr": "",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerStdout": "Missing required pack files:\n - missing required file: AGENTS.md\n",
+      "expectedRunnerDiagnostics": [
+        "missing required file: AGENTS.md"
+      ],
+      "parityDisposition": "The TypeScript runner preserves the failing required-file verdict and path diagnostic while using the frozen declarative failure heading instead of verify.ps1 table formatting.",
+      "artifacts": []
+    },
+    {
+      "gateId": "verify-structure-contract",
+      "legacyScript": "scripts/verify.ps1",
+      "legacyReplayScript": "scripts/fixtures/gate-runner/legacy-wave-3b/verify-behavior-replay.ps1",
+      "sourceBlobSha": "6e1c57e8a8114e0e74618bb6e8129463ca4ae881",
+      "case": "negative-contract-marker-missing",
+      "captureMode": "fixture-replay",
+      "scenario": "verify-missing-contract-marker",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/verify.ps1"
+      ],
+      "exitCode": 1,
+      "stdout": "[FAIL] plugins/ao-scope-guard/README.md - missing markers: runtime guard\nLEGACY_DIAGNOSTIC: Contract plugins/ao-scope-guard/README.md missing markers: runtime guard\n",
+      "stderr": "",
+      "expectedRunnerStatus": "FAIL",
+      "expectedRunnerDiagnostics": [
+        "Contract plugins/ao-scope-guard/README.md missing marker: runtime guard"
+      ],
+      "parityDisposition": "The TypeScript runner preserves the failing contract path and marker diagnostic; its structured detail is singular per missing marker rather than verify.ps1 aggregate table wording.",
       "artifacts": []
     }
   ]

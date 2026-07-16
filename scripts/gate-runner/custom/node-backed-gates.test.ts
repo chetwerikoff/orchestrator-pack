@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { aggregateLane } from '../contracts.ts';
+import { formatGateRunnerReport } from '../runner.ts';
 import type { ProcessResult } from '#opk-kernel/subprocess';
 import {
   evaluateNodeBackedGate,
@@ -49,18 +51,23 @@ describe('node-backed Wave 3.b gates', () => {
     expect(result.details?.join('\n')).toContain('fixture contract failed');
   });
 
-  it('returns an unallowed SKIP when live node execution is unavailable', () => {
+  it.each([
+    ['spawn-failure', outcome({ outcome: 'spawn-failure', ok: false, exitCode: null, error: 'ENOENT', stdout: '' })],
+    ['signal', outcome({ outcome: 'signal', ok: false, exitCode: null, signal: 'SIGTERM', stdout: 'partial child output\n' })],
+    ['timeout', outcome({ outcome: 'timeout', ok: false, exitCode: null, timedOut: true, stdout: '' })],
+    ['cancelled', outcome({ outcome: 'cancelled', ok: false, exitCode: null, cancelled: true, stdout: '' })],
+  ] as const)('formats %s as SKIP without synthesizing a legacy PASS line', (_caseName, processResult) => {
     const command = nodeBackedGateCommands[0]!;
-    const runner: NodeGateProcessRunner = () => outcome({
-      outcome: 'spawn-failure',
-      ok: false,
-      exitCode: null,
-      error: 'ENOENT',
-      stdout: '',
-    });
+    const runner: NodeGateProcessRunner = () => processResult;
     const result = evaluateNodeBackedGate(command, '/fixture', runner);
+    const formatted = formatGateRunnerReport({ results: [result], aggregate: aggregateLane([result]) });
     expect(result.status).toBe('SKIP');
     expect(result.allowSkip).not.toBe(true);
     expect(result.evidence).toContainEqual(expect.objectContaining({ class: 'live-adoption', state: 'unreachable' }));
+    expect(result.legacyStdout).toBe(processResult.stdout || undefined);
+    expect(formatted).not.toContain('[PASS] external-output shape guard');
+    expect(formatted).toContain('[SKIP] external-output-shape-guard:');
+    if (processResult.stdout) expect(formatted).toContain(processResult.stdout.trimEnd());
   });
+
 });

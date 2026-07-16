@@ -14,6 +14,11 @@ import { captureSourceSnapshot, memorySnapshot } from './source-snapshot.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 
+function escapeRegExpLiteral(text: string): string {
+  const metacharacters = new Set(['\\', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|']);
+  return [...text].map((character) => metacharacters.has(character) ? `\\${character}` : character).join('');
+}
+
 function clone(census: GateCensus): GateCensus {
   return JSON.parse(JSON.stringify(census)) as GateCensus;
 }
@@ -69,9 +74,19 @@ describe('frozen gate population census', () => {
     const portedWithLegacyEntries = [...census.entries];
     portedWithLegacyEntries[portedIndex] = {
       ...portedWithLegacyEntries[portedIndex]!,
-      legacyReference: { path: 'scripts/verify.ps1', marker: 'legacy marker' },
+      legacyReference: { path: 'scripts/verify.ps1', marker: 'legacy marker', kind: 'verify-script-call' },
     };
     expect(validateCensusSchema({ ...census, entries: portedWithLegacyEntries }).join('\n')).toContain('non-deferred row must not retain');
+
+    const invalidReferenceKindEntries = [...census.entries];
+    invalidReferenceKindEntries[deferredIndex] = {
+      ...invalidReferenceKindEntries[deferredIndex]!,
+      legacyReference: {
+        ...invalidReferenceKindEntries[deferredIndex]!.legacyReference!,
+        kind: 'substring-only' as never,
+      },
+    };
+    expect(validateCensusSchema({ ...census, entries: invalidReferenceKindEntries }).join('\n')).toContain('invalid legacy reference kind');
 
     const portedWithOwnerEntries = [...census.entries];
     portedWithOwnerEntries[portedIndex] = { ...portedWithOwnerEntries[portedIndex]!, deferredWave: 'PR 9 workflow sweep' };
@@ -84,6 +99,16 @@ describe('frozen gate population census', () => {
     expect(validateCensusSchema(altered).join('\n')).toContain('populationCount');
   });
 
+  it('fails when a new check-reusable behavior is appended without a census row', () => {
+    const census = loadCensus(repoRoot);
+    const snapshot = captureSourceSnapshot(repoRoot);
+    const files = Object.fromEntries(snapshot.files);
+    files['scripts/check-reusable.ps1'] = `${files['scripts/check-reusable.ps1'] ?? ''}\nif ($env:OPK_HIDDEN_POLICY) { throw 'new hidden enforcement behavior' }\n`;
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\n')).toContain('check-reusable.ps1 behavior surface drifted without census reclassification');
+  });
+
   it('fails when a deferred check-reusable behavior disappears', () => {
     const census = loadCensus(repoRoot);
     const row = census.entries.find((entry) => entry.classification === 'deferred-to-named-wave' && entry.sourceKind === 'check-reusable-behavior');
@@ -92,7 +117,22 @@ describe('frozen gate population census', () => {
     const files = Object.fromEntries(snapshot.files);
     files['scripts/check-reusable.ps1'] = (files['scripts/check-reusable.ps1'] ?? '').replaceAll(row!.marker, 'marker removed');
     const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
-    expect(result.details?.join('\n')).toContain(`${row!.id}: cited legacy invocation is no longer wired`);
+    expect(result.details?.join('\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
+  });
+
+  it('rejects a prose-only mention that replaces an executable workflow step', () => {
+    const census = loadCensus(repoRoot);
+    const row = census.entries.find((entry) => entry.legacyReference?.kind === 'workflow-step');
+    expect(row).toBeDefined();
+    const snapshot = captureSourceSnapshot(repoRoot);
+    const files = Object.fromEntries(snapshot.files);
+    const reference = row!.legacyReference!;
+    const target = reference.marker.startsWith('scripts/') ? reference.marker : `scripts/${reference.marker}`;
+    files[reference.path] = (files[reference.path] ?? '')
+      .replace(new RegExp(`^\\s*run:\\s+[^\\r\\n]*${escapeRegExpLiteral(target)}[^\\r\\n]*$`, 'mu'), `      # prose-only mention: ${reference.marker}`);
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\n')).toContain('typed legacy invocation is no longer executable');
   });
 
   it('fails when a deferred legacy invocation disappears', () => {
@@ -103,7 +143,7 @@ describe('frozen gate population census', () => {
     const files = Object.fromEntries(snapshot.files);
     files['scripts/verify.ps1'] = (files['scripts/verify.ps1'] ?? '').replaceAll(row!.legacyReference!.marker, 'marker removed');
     const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
-    expect(result.details?.join('\n')).toContain('cited legacy invocation');
+    expect(result.details?.join('\n')).toContain('typed legacy invocation is no longer executable');
   });
 
   it('fails an invalid retirement justification that relies on caller absence', () => {

@@ -41,6 +41,18 @@ export type CensusClassification = (typeof CENSUS_CLASSIFICATIONS)[number];
 export type DeferredWave = (typeof DEFERRED_WAVES)[number];
 export const CENSUS_SOURCE_KINDS = ['check-script', 'verify-script-member', 'verify-inline', 'check-reusable-behavior'] as const;
 export type CensusSourceKind = (typeof CENSUS_SOURCE_KINDS)[number];
+export const LEGACY_REFERENCE_KINDS = [
+  'verify-script-call',
+  'verify-inline-call',
+  'behavior-container',
+  'powershell-delegation',
+  'powershell-wrapper-binding',
+  'workflow-step',
+  'operator-command',
+  'test-invocation',
+  'delegated-test-invocation',
+] as const;
+export type LegacyReferenceKind = (typeof LEGACY_REFERENCE_KINDS)[number];
 
 export interface CensusEntry {
   readonly id: string;
@@ -49,7 +61,11 @@ export interface CensusEntry {
   readonly marker: string;
   readonly classification: CensusClassification;
   readonly gateIds?: readonly string[];
-  readonly legacyReference?: { readonly path: string; readonly marker: string };
+  readonly legacyReference?: {
+    readonly path: string;
+    readonly marker: string;
+    readonly kind: LegacyReferenceKind;
+  };
   readonly deferredWave?: DeferredWave;
   readonly retirementJustification?: {
     readonly reasonCode: string;
@@ -129,6 +145,134 @@ function addMatches(target: Set<string>, text: string, pattern: RegExp, prefix: 
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function referencedScriptPath(marker: string): string {
+  return marker.startsWith('scripts/') ? marker : `scripts/${marker}`;
+}
+
+function assignedPathVariable(text: string, rootVariable: 'Root' | 'PSScriptRoot', path: string): string | undefined {
+  const match = new RegExp(
+    `\\$([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*Join-Path\\s+\\$${rootVariable}\\s+['\"]${escapeRegExp(path)}['\"]`,
+    'iu',
+  ).exec(text);
+  return match?.[1];
+}
+
+function invokesPowerShellVariable(text: string, variable: string): boolean {
+  return new RegExp(`&\\s+(?:pwsh\\s+-NoProfile\\s+-File\\s+)?\\$${escapeRegExp(variable)}\\b`, 'iu').test(text);
+}
+
+function hasVerifyScriptCall(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  const variable = assignedPathVariable(text, 'Root', target);
+  if (variable && invokesPowerShellVariable(text, variable)) return true;
+
+  const tableEntry = new RegExp(
+    `@\\{\\s*(?:Path|path)\\s*=\\s*['\"]${escapeRegExp(target)}['\"]`,
+    'iu',
+  ).test(text);
+  if (!tableEntry) return false;
+  const resolvesTablePath = /Join-Path\s+\$Root\s+\$check\.(?:Path|path)/iu.test(text);
+  const invokesResolvedPath = /&\s+\$(?:checkPath|full)\b/iu.test(text);
+  return resolvesTablePath && invokesResolvedPath;
+}
+
+function hasPowerShellDelegation(text: string, marker: string): boolean {
+  const bare = marker.replace(/^scripts\//u, '');
+  const direct = new RegExp(
+    `&\\s*\\(Join-Path\\s+\\$PSScriptRoot\\s+['\"]${escapeRegExp(bare)}['\"]\\)`,
+    'iu',
+  ).test(text);
+  if (direct) return true;
+  const variable = assignedPathVariable(text, 'PSScriptRoot', bare) ?? assignedPathVariable(text, 'Root', referencedScriptPath(marker));
+  return variable !== undefined && invokesPowerShellVariable(text, variable);
+}
+
+function hasPowerShellWrapperBinding(text: string, marker: string): boolean {
+  const bare = marker.replace(/^scripts\//u, '');
+  const variable = assignedPathVariable(text, 'PSScriptRoot', bare) ?? assignedPathVariable(text, 'Root', referencedScriptPath(marker));
+  if (!variable) return false;
+  return new RegExp(`['\"]--core['\"]\\s*,\\s*\\$${escapeRegExp(variable)}\\b`, 'iu').test(text);
+}
+
+function hasWorkflowStep(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  return new RegExp(`^\\s*run:\\s+[^\\r\\n]*(?:\\./)?${escapeRegExp(target)}(?:\\s|$)`, 'imu').test(text);
+}
+
+function hasOperatorCommand(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  return new RegExp(`pwsh(?:\\.exe)?\\s+-NoProfile\\s+-File\\s+(?:\\./)?${escapeRegExp(target)}(?:\\s|$)`, 'iu').test(text);
+}
+
+function hasTestInvocation(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  const childCall = /(?:spawnSync|execFileSync)\s*\(/u.test(text);
+  const pathArgument = new RegExp(`path\\.join\\([^\\r\\n]*['\"]${escapeRegExp(target)}['\"]`, 'iu').test(text);
+  const literalCommand = new RegExp(`pwsh[^\\r\\n]*-File\\s+${escapeRegExp(target)}`, 'iu').test(text);
+  return childCall && (pathArgument || literalCommand);
+}
+
+function hasBehaviorContainerReference(entry: CensusEntry, text: string): boolean {
+  switch (entry.id) {
+    case 'check-reusable:allow-no-git':
+      return /if\s*\(\$AllowNoGit\)\s*\{\s*exit\s+0\s*\}/iu.test(text);
+    case 'check-reusable:allowed-path-patterns':
+      return /\$allowedPathPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:allowed-root-patterns':
+      return /\$allowedRootPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:exception-patterns':
+      return /\$exceptionPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:forbidden-patterns':
+      return /\$forbiddenPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:git-command-presence':
+      return /if\s*\(\s*-not\s*\(Get-Command\s+git\b[^)]*\)\s*\)\s*\{/iu.test(text)
+        && /Write-Host\s+['"]\[WARN\] git not found; cannot inspect tracked files\.['"]/iu.test(text);
+    case 'check-reusable:tracked-file-enumeration':
+      return /&\s+git\s+-C\s+\$Root\s+ls-files\b/iu.test(text);
+    case 'check-reusable:violation-aggregation':
+      return /if\s*\(\$Violations\.Count\s+-gt\s+0\)\s*\{/iu.test(text);
+    case 'check-reusable:worktree-detection':
+      return /&\s+git\s+-C\s+\$Root\s+rev-parse\s+--is-inside-work-tree\b/iu.test(text);
+    default:
+      return false;
+  }
+}
+
+function hasDelegatedTestInvocation(entry: CensusEntry, snapshot: SourceSnapshot, text: string, marker: string): boolean {
+  const source = snapshot.files.get(entry.sourcePath);
+  if (source === undefined) return false;
+  const bareTarget = marker.replace(/^scripts\//u, '');
+  const delegated = new RegExp(
+    `Join-Path\\s+\\$Root\\s+['\"]${escapeRegExp(marker)}['\"]`,
+    'iu',
+  ).test(source) && /&\s+node\s+\$[A-Za-z_][A-Za-z0-9_]*\b/iu.test(source);
+  const testExecutesTarget = /execFileSync\s*\(\s*['"]node['"]/u.test(text)
+    && new RegExp(`['\"]${escapeRegExp(marker)}['\"]`, 'u').test(text);
+  return delegated && testExecutesTarget && bareTarget.length > 0;
+}
+
+function legacyReferenceIsWired(entry: CensusEntry, snapshot: SourceSnapshot): boolean {
+  const reference = entry.legacyReference;
+  if (!reference) return false;
+  const text = snapshot.files.get(reference.path);
+  if (text === undefined) return false;
+  switch (reference.kind) {
+    case 'verify-script-call': return hasVerifyScriptCall(text, reference.marker);
+    case 'verify-inline-call': return discoverVerifyInlineIds(text).has(entry.id);
+    case 'behavior-container': return hasBehaviorContainerReference(entry, text);
+    case 'powershell-delegation': return hasPowerShellDelegation(text, reference.marker);
+    case 'powershell-wrapper-binding': return hasPowerShellWrapperBinding(text, reference.marker);
+    case 'workflow-step': return hasWorkflowStep(text, reference.marker);
+    case 'operator-command': return hasOperatorCommand(text, reference.marker);
+    case 'test-invocation': return hasTestInvocation(text, reference.marker);
+    case 'delegated-test-invocation': return hasDelegatedTestInvocation(entry, snapshot, text, reference.marker);
+  }
+}
+
 export function discoverVerifyInlineIds(verify: string): Set<string> {
   const ids = new Set<string>();
   addMatches(ids, verify, /Test-CommandVersion\s+-Command\s+'([^']+)'/gu, 'verify-inline:command-version:');
@@ -177,7 +321,11 @@ export function validateCensusSchema(census: GateCensus): string[] {
     }
 
     if (isDeferred(entry)) {
-      if (!entry.legacyReference?.path || !entry.legacyReference.marker) failures.push(`${entry.id}: deferred row lacks a cited legacy invocation`);
+      if (!entry.legacyReference?.path || !entry.legacyReference.marker || !entry.legacyReference.kind) {
+        failures.push(`${entry.id}: deferred row lacks a typed legacy invocation`);
+      } else if (!LEGACY_REFERENCE_KINDS.includes(entry.legacyReference.kind)) {
+        failures.push(`${entry.id}: invalid legacy reference kind ${String(entry.legacyReference.kind)}`);
+      }
       if (entry.classification === 'deferred-to-named-wave') {
         if (!entry.deferredWave || !VALID_DEFERRED_WAVES.has(entry.deferredWave)) failures.push(`${entry.id}: deferred row lacks a valid named sibling wave`);
       } else if (entry.deferredWave !== undefined) {
@@ -285,8 +433,9 @@ export function evaluateCensus(
     if (deferred) {
       const reference = entry.legacyReference;
       if (!reference) continue;
-      const text = snapshot.files.get(reference.path);
-      if (text === undefined || !text.includes(reference.marker)) failures.push(`${entry.id}: cited legacy invocation is no longer wired at ${reference.path}`);
+      if (!legacyReferenceIsWired(entry, snapshot)) {
+        failures.push(`${entry.id}: typed legacy invocation is no longer executable at ${reference.path} (${reference.kind})`);
+      }
     }
   }
 
@@ -295,7 +444,7 @@ export function evaluateCensus(
   const allReusableRowsDeferred = reusableRows.length > 0 && reusableRows.every(isDeferred);
   if (allReusableRowsDeferred) {
     if (checkReusable === undefined) failures.push('scripts/check-reusable.ps1 is missing while its behaviors remain legacy-enforced');
-    else if (census.version === 1 && sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
+    else if (sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
       failures.push('scripts/check-reusable.ps1 behavior surface drifted without census reclassification');
     }
   } else {
