@@ -37,92 +37,10 @@ jobs:
           git fetch origin main
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('scripts/lib/Invoke-AoReviewApi.ps1')
-          text = path.read_text(encoding='utf-8')
-
-          cli = """
-$Script:AoReviewApiCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/ao-0-10-review-api.mjs'
-
-function Invoke-AoReviewApiCli {
-    param(
-        [Parameter(Mandatory = $true)][string]$Subcommand,
-        [hashtable]$Payload
-    )
-    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:AoReviewApiCli `
-        -Subcommand $Subcommand -Payload $Payload -Label 'ao-0-10-review-api' -JsonDepth 30
-}
-"""
-          marker = ". (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')\n"
-          if 'function Invoke-AoReviewApiCli' not in text:
-              if text.count(marker) != 1:
-                  raise SystemExit('Invoke-AoReviewApiCli insertion marker not unique')
-              text = text.replace(marker, marker + cli, 1)
-
-          setter = """
-function Set-AoProjectReviewerHarness {
-    param(
-        [Parameter(Mandatory = $true)][string]$ProjectId,
-        [string]$Harness = '',
-        [string]$BaseUrl = '',
-        [hashtable]$HealthPayload = $null
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($Harness)) {
-        throw 'reviewer harness activation is retired; this compatibility helper only clears reviewers'
-    }
-    $path = "/api/v1/projects/$([uri]::EscapeDataString($ProjectId))/config"
-    $body = @{ reviewers = @() }
-    return Invoke-AoDaemonHttpJson -Method PUT -Path $path -Body $body -BaseUrl $BaseUrl `
-        -HealthPayload $HealthPayload -AllowedStatus @(200)
-}
-
-"""
-          setter_marker = '\nfunction Test-ReviewBeforeCleanupGate {'
-          if 'function Set-AoProjectReviewerHarness' not in text:
-              if text.count(setter_marker) != 1:
-                  raise SystemExit('Set-AoProjectReviewerHarness insertion marker not unique')
-              text = text.replace(setter_marker, '\n' + setter + 'function Test-ReviewBeforeCleanupGate {', 1)
-
-          fixture_guard = """
-    if ($null -ne $ProjectConfigFixture -and -not $SkipHarnessGuard) {
-        $projectConfig = Unwrap-AoProjectConfigPayload -Payload $ProjectConfigFixture
-        $guard = Invoke-AoReviewApiCli -Subcommand 'harness-guard' -Payload @{
-            payload         = $projectConfig
-            expectedHarness = 'codex'
-        }
-        if ($guard.abort) {
-            return @{
-                ok         = $false
-                httpStatus = 0
-                reason     = [string]$guard.reason
-                classified = $true
-                harness    = $guard.harness
-            }
-        }
-    }
-
-"""
-          fn_start = text.index('function Invoke-AoReviewTriggerForWorker')
-          fn_end = text.index('function Get-ReviewTriggerInvocationLine', fn_start)
-          fn = text[fn_start:fn_end]
-          if "ProjectConfigFixture -and -not $SkipHarnessGuard" not in fn:
-              try_marker = '    try {\n'
-              if fn.count(try_marker) != 1:
-                  raise SystemExit('Invoke-AoReviewTriggerForWorker try marker not unique')
-              fn = fn.replace(try_marker, fixture_guard + try_marker, 1)
-              text = text[:fn_start] + fn + text[fn_end:]
-
-          path.write_text(text, encoding='utf-8')
-          PY
-
+          python3 scripts/issue-839-scope-cleanup.py
           git show origin/main:tests/harness-pretrigger-config-read.test.ts > tests/harness-pretrigger-config-read.test.ts
           git show origin/main:scripts/toolchain/powershell-child-tests.json > scripts/toolchain/powershell-child-tests.json
           git show origin/main:scripts/toolchain/raw-child-process-baseline.json > scripts/toolchain/raw-child-process-baseline.json
-
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -152,11 +70,16 @@ function Set-AoProjectReviewerHarness {
           doc['entries'] = filtered
           path.write_text(json.dumps(doc, separators=(',', ':')) + '\n', encoding='utf-8')
           PY
-
-          git rm .github/workflows/issue-839-amend-declaration.yml .github/workflows/issue-839-scope-cleanup.yml
-          git add scripts/lib/Invoke-AoReviewApi.ps1 tests/harness-pretrigger-config-read.test.ts scripts/toolchain/powershell-child-tests.json scripts/toolchain/raw-child-process-baseline.json
+          git rm \
+            .github/workflows/issue-839-amend-declaration.yml \
+            .github/workflows/issue-839-scope-cleanup.yml \
+            scripts/issue-839-scope-cleanup.py
+          git add \
+            scripts/lib/Invoke-AoReviewApi.ps1 \
+            tests/harness-pretrigger-config-read.test.ts \
+            scripts/toolchain/powershell-child-tests.json \
+            scripts/toolchain/raw-child-process-baseline.json
           git commit -m 'Keep issue 839 compatibility tests within declared scope'
-
       - name: Verify foundation contracts
         shell: bash
         run: |
