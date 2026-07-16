@@ -1,0 +1,30 @@
+name: issue-841-export-current-proof-source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'agent/issue-841-bulk-gate-port'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/issue-841-bulk-gate-port
+          fetch-depth: 0
+      - name: Pack current source tree
+        shell: bash
+        run: git archive --format=tar HEAD | gzip -9 > "$RUNNER_TEMP/pr860-current-proof-source.tar.gz"
+      - name: Upload source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr860-current-proof-source
+          path: ${{ runner.temp }}/pr860-current-proof-source.tar.gz
+          retention-days: 1
