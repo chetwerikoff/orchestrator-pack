@@ -88,10 +88,41 @@ const SAFE_STALE_FLOOR_MINUTES = 2;
 const LOCK_WAIT_ATTEMPTS = 400;
 const LOCK_WAIT_MS = 25;
 const LOCK_UNREADABLE_STALE_MS = 30_000;
+const RECORD_RENAME_ATTEMPTS = 4;
+const RECORD_RENAME_BACKOFF_MS = 10;
+const TRANSIENT_RENAME_ERROR_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
 
 function sleepSync(milliseconds: number): void {
   const cell = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(cell, 0, 0, milliseconds);
+}
+
+function errorCode(error: unknown): string {
+  return error instanceof Error && 'code' in error
+    ? String((error as NodeJS.ErrnoException).code ?? '')
+    : '';
+}
+
+function renameRecordWithRetry(temp: string, path: string): void {
+  // On Linux/POSIX, rename(2) atomically replaces an existing file (not a directory),
+  // so readers see prior or new content without an absence window. Windows may report
+  // transient contention (EPERM/EBUSY/EACCES); retry rename itself, never pre-delete.
+  for (let attempt = 1; attempt <= RECORD_RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      renameSync(temp, path);
+      return;
+    } catch (error) {
+      const code = errorCode(error);
+      if (!TRANSIENT_RENAME_ERROR_CODES.has(code)) throw error;
+      if (attempt === RECORD_RENAME_ATTEMPTS) {
+        throw new Error(
+          `pack review run store atomic replace failed: rename_retry_exhausted code=${code} attempts=${RECORD_RENAME_ATTEMPTS} destination=${path}`,
+          { cause: error },
+        );
+      }
+      sleepSync(RECORD_RENAME_BACKOFF_MS * attempt);
+    }
+  }
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -334,8 +365,7 @@ function writeRecordUnlocked(storeRoot: string, record: PackReviewRunRecord, cre
   const temp = join(dirname(path), `.${randomUUID()}.tmp`);
   writeFileSync(temp, `${JSON.stringify(record)}\n`, 'utf8');
   try {
-    if (existsSync(path)) rmSync(path, { force: true });
-    renameSync(temp, path);
+    renameRecordWithRetry(temp, path);
   } finally {
     rmSync(temp, { force: true });
   }
