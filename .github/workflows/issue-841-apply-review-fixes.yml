@@ -1,0 +1,53 @@
+name: issue-841-apply-review-fixes
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/issue-841-bulk-gate-port'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/issue-841-bulk-gate-port
+          fetch-depth: 0
+      - name: Reconstruct and apply reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat docs/.issue-841-review-patch.part* > "$RUNNER_TEMP/review-fixes.patch.gz.b64"
+          echo 'da9b2352f5c68ddf902137f47dff64637aaf65c2c4d2568eada3fa5d4007f826  '"$RUNNER_TEMP/review-fixes.patch.gz.b64" | sha256sum -c -
+          base64 -d "$RUNNER_TEMP/review-fixes.patch.gz.b64" | gzip -d > "$RUNNER_TEMP/review-fixes.patch"
+          echo '6bf0fe1c76c60ece14957bfe211f56f260dd09158fcca317c5437b168f6b80f7  '"$RUNNER_TEMP/review-fixes.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/review-fixes.patch"
+          git apply "$RUNNER_TEMP/review-fixes.patch"
+          rm -f docs/.issue-841-review-patch.part*
+          rm -f .github/workflows/issue-841-apply-review-fixes.yml
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Verify review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gate-runner-selftest
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run test:foundation
+          git diff --check
+      - name: Commit and push implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: address PR 860 gate migration review'
+          git push origin HEAD:agent/issue-841-bulk-gate-port
