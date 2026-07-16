@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { runProcess } from './kernel/subprocess.mjs';
 
 const repoRoot = process.cwd();
 const runner = join(repoRoot, 'scripts', 'run-vitest-with-harness.mjs');
@@ -20,87 +20,58 @@ const files = [
   'scripts/submit-worker-input-draft.test.ts',
 ];
 const MAX_CAPTURE = 160_000;
-const TIMEOUT_MS = 480_000;
+const TIMEOUT_SECONDS = 480;
 const CONCURRENCY = 6;
 
-function bounded(current, chunk) {
-  const next = current + String(chunk);
-  return next.length > MAX_CAPTURE ? next.slice(-MAX_CAPTURE) : next;
+function bounded(value) {
+  const text = String(value ?? '');
+  return text.length > MAX_CAPTURE ? text.slice(-MAX_CAPTURE) : text;
 }
 
-function runFile(file) {
-  return new Promise((resolve) => {
-    const child = spawn(
+async function runFile(file) {
+  const startedAt = Date.now();
+  const result = await runProcess({
+    command: 'timeout',
+    args: [
+      '--signal=TERM',
+      '--kill-after=5s',
+      `${TIMEOUT_SECONDS}s`,
       process.execPath,
-      [runner, 'run', file, '--reporter=verbose', '--maxWorkers=1'],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          CI: 'true',
-          OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-      },
-    );
-
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let settled = false;
-    let timer;
-    const startedAt = Date.now();
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      stdout = bounded(stdout, chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr = bounded(stderr, chunk);
-    });
-
-    const finish = (status, signal, error = null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const result = {
-        file,
-        status,
-        signal,
-        timedOut,
-        durationMs: Date.now() - startedAt,
-        error,
-        stdout,
-        stderr,
-      };
-      console.log(
-        JSON.stringify({
-          file,
-          status,
-          signal,
-          timedOut,
-          durationMs: result.durationMs,
-        }),
-      );
-      resolve(result);
-    };
-
-    timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        if (process.platform === 'win32') {
-          child.kill('SIGKILL');
-        } else {
-          process.kill(-child.pid, 'SIGKILL');
-        }
-      } catch {}
-    }, TIMEOUT_MS);
-
-    child.once('error', (error) => finish(null, null, error.message));
-    child.once('close', (status, signal) => finish(status, signal));
+      runner,
+      'run',
+      file,
+      '--reporter=verbose',
+      '--maxWorkers=1',
+    ],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    env: {
+      CI: 'true',
+      OPK_TESTMODE_FLEET_WORKSPACE_ROOT: repoRoot,
+    },
   });
+  const timedOut = result.exitCode === 124 || result.exitCode === 137;
+  const entry = {
+    file,
+    outcome: result.outcome,
+    status: result.exitCode,
+    signal: result.signal,
+    timedOut,
+    durationMs: Date.now() - startedAt,
+    error: result.error ?? null,
+    stdout: bounded(result.stdout),
+    stderr: bounded(result.stderr),
+  };
+  console.log(
+    JSON.stringify({
+      file,
+      status: entry.status,
+      signal: entry.signal,
+      timedOut,
+      durationMs: entry.durationMs,
+    }),
+  );
+  return entry;
 }
 
 async function runPool(items, concurrency) {
