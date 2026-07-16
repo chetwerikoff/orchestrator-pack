@@ -6,14 +6,17 @@ This is a test-environment compatibility path only. Node 22 continues to exercis
 
 ## Review remediation
 
-The post-migration review hardens four proof boundaries:
+The post-migration reviews harden seven proof boundaries:
 
 - non-executable Node-backed gates preserve actual child stdout on `SKIP` but never synthesize a legacy `PASS` line;
 - schema v2 freezes the deferred `check-reusable.ps1` behavior surface so appended predicates cannot bypass the 283-row census;
-- frozen PowerShell replay fixtures exercise a meaningful negative case for each deleted entrypoint plus the migrated `verify.ps1` required-file and contract-marker behaviors;
-- deferred census references carry an explicit invocation kind and are validated as executable call shapes rather than arbitrary marker substrings.
+- frozen PowerShell replay fixtures exercise successful and failing cases for each deleted entrypoint plus the migrated `verify.ps1` required-file and contract-marker behaviors;
+- deferred census references carry an explicit invocation kind and are validated as executable call shapes rather than arbitrary marker substrings;
+- test-backed PowerShell references are parsed as TypeScript call expressions and must bind `pwsh`, the adjacent `-File` argument, and the exact retained wrapper path inside the same child-process invocation;
+- every ported census row declares `portedInWave`, and Wave 3.b parity completeness is derived from that census-owned migration population instead of from the capture manifest being tested;
+- the partial `verify.ps1` replay is bound to the complete frozen source blob, verified Git blob SHA, recorded source offsets, and normalized span hashes, so a predicate mutation cannot be hidden behind an unchanged provenance comment.
 
-The expanded gate-runner suite contains 89 tests, and the foundation suite contains 168 tests. The Linux verification path runs the legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
+The expanded gate-runner suite contains 94 tests, and the foundation suite contains 173 tests. The Linux verification path runs all frozen legacy parity fixtures with PowerShell available. The Wave 3.b parity manifest is version 2 and includes both successful and failing legacy executions.
 
 Frozen legacy scripts under `scripts/fixtures/gate-runner/**` are test evidence, not production deletion candidates. Reachability analysis may retain them as graph evidence but excludes that fixture subtree from the production deletion formula.
 
@@ -21,4 +24,4 @@ The launch-inventory parity proof normalizes only the two merge-tree-sensitive i
 
 A one-off heavy-shard failure in the existing TestMode fleet-reaper wall-clock test was reproduced as an infrastructure launch flake: the focused test passed through the same heavy harness without code changes. Final acceptance still requires a complete green PR workflow on the cleaned head rather than relying on that focused probe alone.
 
-The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows run against this cleaned tree after stale diagnostic runs have been cancelled. The final connector-authored head is the only verification target.
+The final review-remediation diff remains confined to the issue's permitted `docs/**` and `scripts/**` roots; temporary workflow and transport files are not part of the proposed tree. Standard pull-request workflows run against the cleaned connector-authored head.
