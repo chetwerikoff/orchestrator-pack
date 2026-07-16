@@ -117,7 +117,18 @@ jobs:
             exit 1
           fi
 
-          git diff --cached --check "$CLEAN_BASE"
+          # The exact frozen verify.ps1 blob contains pre-existing trailing whitespace.
+          # Its byte identity is guarded above; every authored file remains under diff --check.
+          git diff --cached --check "$CLEAN_BASE" -- \
+            scripts/check-supervisor-test-wait-inventory.test.ts \
+            scripts/fixtures/gate-runner/legacy-wave-3b/verify-source-spans.json \
+            scripts/gate-runner/census.test.ts \
+            scripts/gate-runner/census.ts \
+            scripts/gate-runner/census/pre-change-baseline.json \
+            scripts/gate-runner/custom/bulk-cli-parity.test.ts \
+            scripts/gate-runner/goldens/wave-3b-pre-delete-captures.json \
+            scripts/toolchain/powershell-child-tests.json \
+            scripts/toolchain/raw-child-process-baseline.json
 
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$TEMP_HEAD_SHA&per_page=100" \
             --jq '.workflow_runs[] | select(.name == "scope-guard" and .status != "completed") | .id' \
