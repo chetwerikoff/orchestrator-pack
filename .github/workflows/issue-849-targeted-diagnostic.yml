@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          log="scripts/.issue-849-targeted-diagnostic.txt"
+          log="scripts/issue-849-targeted-diagnostic.txt"
           : > "$log"
           {
             echo '=== targeted gh-signal-classification ==='
@@ -53,6 +53,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-849-targeted-diagnostic
-          path: scripts/.issue-849-targeted-diagnostic.txt
+          path: scripts/issue-849-targeted-diagnostic.txt
           if-no-files-found: error
           retention-days: 1
