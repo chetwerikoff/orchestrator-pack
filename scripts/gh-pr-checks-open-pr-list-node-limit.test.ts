@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { functionBody, repoRoot } from './_test-pwsh-helpers.js';
-import { registerGhSignalClassificationTests } from './gh-signal-classification.cases.ts';
 
 const ghPrChecks = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1'), 'utf8');
 const fleetCache = readFileSync(path.join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1'), 'utf8');
@@ -78,7 +77,3 @@ describe('Invoke-GhPrViewStructuredCapture review-start path (#566)', () => {
     expect(captureBody).toMatch(/--json[^\n]*state/);
   });
 });
-
-// Keep the issue #849 gh-signal cases attached to an existing heavy GH integration
-// entry so they remain discoverable without introducing an unclassified test file.
-registerGhSignalClassificationTests();
