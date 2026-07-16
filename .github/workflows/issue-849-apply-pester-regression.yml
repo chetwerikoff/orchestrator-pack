@@ -1,0 +1,139 @@
+name: issue-849-apply-pester-regression
+
+on:
+  push:
+    branches: [agent/issue-849-gh-signal-classification]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-849-apply-pester-regression
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-849-gh-signal-classification
+          fetch-depth: 0
+      - name: Move empty-snapshot integration to Pester
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          test_path = Path('scripts/gh-signal-classification.test.ts')
+          text = test_path.read_text()
+          text = text.replace("import { runProcessSync } from '#opk-kernel/subprocess';\n", '')
+          text = text.replace("import { functionBody } from './_test-pwsh-helpers.js';\n", '')
+          helper_start = text.index('\nfunction quotePowerShell')
+          helper_end = text.index('\nafterEach', helper_start)
+          text = text[:helper_start] + '\n' + text[helper_end:]
+          integration_start = text.index("  it('runs lookup retention for an authoritative empty open-PR snapshot without a checks bundle'")
+          integration_end = text.index("  it('reads a legacy ledger without lookupFailures compatibly'", integration_start)
+          replacement = """  it('wires lookup retention before the non-empty checks-bundle gate', () => {
+            const reconcileSource = readFileSync(join(repoRoot, 'scripts/ci-failure-notification-reconcile.ps1'), 'utf8');
+            const retentionIndex = reconcileSource.indexOf('Invoke-CiRedWatchdogLookupRetention');
+            const checksGateIndex = reconcileSource.indexOf('if ($openPrs.Count -gt 0)');
+            expect(retentionIndex).toBeGreaterThanOrEqual(0);
+            expect(checksGateIndex).toBeGreaterThan(retentionIndex);
+          });
+
+"""
+          text = text[:integration_start] + replacement + text[integration_end:]
+          test_path.write_text(text)
+
+          pester = r'''#requires -Version 7.0
+
+BeforeAll {
+    $RepoRoot = Split-Path -Parent $PSScriptRoot
+    . (Join-Path $PSScriptRoot 'lib/Ci-Red-Watchdog.ps1')
+}
+
+Describe 'CI-red watchdog lookup retention reconcile integration' {
+    It 'runs retention for an authoritative empty open-PR snapshot without a checks bundle' {
+        $storeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ci-red-empty-open-prs-{0}" -f [guid]::NewGuid().ToString('n'))
+        $previousStateDir = $env:AO_CI_RED_WATCHDOG_STATE_DIR
+        try {
+            New-Item -ItemType Directory -Path $storeDir -Force | Out-Null
+            $env:AO_CI_RED_WATCHDOG_STATE_DIR = $storeDir
+            $headSha = 'a' * 40
+            $record = Invoke-CiRedWatchdogCli -Command 'record-lookup-failure' -Payload @{
+                storeDir = $storeDir
+                lookup = @{
+                    repo = 'acme/repo'
+                    prNumber = 849
+                    requiredCheckContext = 'ci'
+                    headSha = $headSha
+                }
+                reason = 'check_runs_unavailable'
+                nowMs = 1000
+                config = @{
+                    maxAttempts = 2
+                    backoffMs = @(1)
+                    episodeLifetimeMs = 60000
+                }
+            }
+            $record.action | Should -Be 'defer'
+
+            Mock Get-CiRedWatchdogRepoSlug { 'acme/repo' }
+            $result = Invoke-CiRedWatchdogLookupRetention -RepoRoot $RepoRoot -WorkerState @{
+                sessions = @()
+                openPrs = @()
+            }
+            $result.ok | Should -BeTrue
+            $result.reason | Should -Be 'authoritative_lookup_retention_applied'
+
+            $ledger = Invoke-CiRedWatchdogCli -Command 'inspect-ledger' -Payload @{ storeDir = $storeDir }
+            @($ledger.lookupFailures.PSObject.Properties).Count | Should -Be 0
+            @($ledger.history | Where-Object {
+                $_.key -eq 'lookup:retention' -and
+                $_.reason -eq 'authoritative_pr_terminal' -and
+                [int]$_.metadata.prNumber -eq 849 -and
+                [string]$_.metadata.headSha -eq $headSha
+            }).Count | Should -Be 1
+        }
+        finally {
+            if ($null -eq $previousStateDir) {
+                Remove-Item Env:AO_CI_RED_WATCHDOG_STATE_DIR -ErrorAction SilentlyContinue
+            }
+            else {
+                $env:AO_CI_RED_WATCHDOG_STATE_DIR = $previousStateDir
+            }
+            Remove-Item -LiteralPath $storeDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'keeps maintenance before candidate checks-bundle gating in the reconcile tick' {
+        $path = Join-Path $PSScriptRoot 'ci-failure-notification-reconcile.ps1'
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+        @($errors).Count | Should -Be 0
+        $tick = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-CiFailureNotificationTick'
+        }, $true)
+        $tick | Should -Not -BeNullOrEmpty
+        $source = $tick.Extent.Text
+        $retentionIndex = $source.IndexOf('Invoke-CiRedWatchdogLookupRetention')
+        $checksGateIndex = $source.IndexOf('if ($openPrs.Count -gt 0)')
+        $retentionIndex | Should -BeGreaterOrEqual 0
+        $checksGateIndex | Should -BeGreaterThan $retentionIndex
+    }
+}
+'''
+          Path('scripts/ci-red-watchdog-lookup-retention.Tests.ps1').write_text(pester)
+          PY
+          git rm .github/workflows/issue-849-apply-pester-regression.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: run empty-snapshot retention in Pester"
+          git push origin HEAD:agent/issue-849-gh-signal-classification
