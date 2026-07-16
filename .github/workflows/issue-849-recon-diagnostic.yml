@@ -1,0 +1,45 @@
+name: issue-849-recon-diagnostic
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-849-gh-signal-classification
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Emit exact recon findings
+        shell: bash
+        run: |
+          node --experimental-strip-types --input-type=module <<'NODE' > issue-849-recon-findings.json
+          import { readdirSync, statSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { scanPowerShellGhMergedJson } from './scripts/lib/gh-signal-recon.ts';
+          const files = [];
+          const visit = (dir) => {
+            for (const name of readdirSync(dir)) {
+              const full = join(dir, name);
+              if (statSync(full).isDirectory()) visit(full);
+              else if (name.endsWith('.ps1')) files.push(full);
+            }
+          };
+          visit(join(process.cwd(), 'scripts'));
+          process.stdout.write(JSON.stringify(scanPowerShellGhMergedJson(files, process.cwd()), null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-849-recon-findings
+          path: issue-849-recon-findings.json
+          retention-days: 1
