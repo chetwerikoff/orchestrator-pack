@@ -1,5 +1,6 @@
 name: issue-849-targeted-diagnostic
 
+# Second push activates this temporary self-cleaning capture workflow.
 on:
   push:
     branches: [agent/issue-849-gh-signal-classification]
