@@ -1,0 +1,28 @@
+name: issue-841-export-final-verifier-log
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'agent/issue-841-bulk-gate-port'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Export completed verifier job log
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/jobs/87612904306/logs" > "$RUNNER_TEMP/verifier.log"
+      - name: Upload verifier log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr860-final-verifier-log
+          path: ${{ runner.temp }}/verifier.log
+          retention-days: 1
+          if-no-files-found: error
