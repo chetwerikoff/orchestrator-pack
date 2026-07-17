@@ -1,0 +1,17 @@
+[PASS] merge-blind CI gate audit: 23 classified sites, 4 discovery dimensions
+[PASS] issue #823 PR/main parity and negative controls (historical PR 3a3a299cdcc0e00270b4fa2c785b98ac7fdb4992, post-merge main 225187b7d3507a0872fc1bf435089a7e3aa0c1d7)
+file:///tmp/pr869-merge/scripts/lib/vitest-pre-topology-measurement.mjs:40
+    throw new Error(
+          ^
+
+Error: pre-topology measurement bound exceeded: 34 files > 32; split the change or refresh measured runtime history
+    at resolvePreTopologyMeasurementTargets (file:///tmp/pr869-merge/scripts/lib/vitest-pre-topology-measurement.mjs:40:11)
+    at resolvePreTopologyMeasurementPlan (file:///tmp/pr869-merge/scripts/lib/vitest-pre-topology-measurement.mjs:49:22)
+    at materializeOverlay (file:///tmp/pr869-merge/scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs:56:16)
+    at file:///tmp/pr869-merge/scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs:110:25
+    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
+    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+
+Node.js v20.20.2
+EXIT_CODE=1
