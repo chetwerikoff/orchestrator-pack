@@ -75,6 +75,12 @@ function assertCacheHit(binding) {
   assert.equal(binding.bindingCacheGeneration, 45);
 }
 
+function assertSharedUnbound(binding) {
+  assert.equal(binding.ok, false);
+  assert.equal(binding.reason, 'no_worker_session');
+  assert.equal(binding.bindingSource, 'binding_contract:miss');
+}
+
 function run() {
   const dir = mkdtempSync(join(tmpdir(), 'opk-854-binding-cache-'));
   try {
@@ -84,15 +90,10 @@ function run() {
     assertCacheHit(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     writeCache(cachePath, [bindingRecord({ ageMs: 8 * 24 * 60 * 60 * 1_000 })]);
-    const expired = resolveWorkerStatusSessionBinding(input(cachePath));
-    assert.equal(expired.ok, false);
-    assert.equal(expired.reason, 'no_issue_binding');
-    assert.equal(expired.bindingSource, 'binding_contract:none');
+    assertSharedUnbound(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     writeCache(cachePath, [bindingRecord({ superseded: true })]);
-    const superseded = resolveWorkerStatusSessionBinding(input(cachePath));
-    assert.equal(superseded.ok, false);
-    assert.equal(superseded.reason, 'no_issue_binding');
+    assertSharedUnbound(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     writeFileSync(cachePath, '{not-json', 'utf8');
     const unreadable = resolveWorkerStatusSessionBinding(input(cachePath));
@@ -140,8 +141,7 @@ function run() {
         source: 'backfill_resolver',
       }),
     ]);
-    const staleOtherRepo = input(cachePath);
-    assertCacheHit(resolveWorkerStatusSessionBinding(staleOtherRepo));
+    assertCacheHit(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     process.stdout.write(`${JSON.stringify({
       issue: 854,
@@ -150,8 +150,8 @@ function run() {
       cacheSource: 'push_register',
       scenarios: [
         'shared_cache_hit',
-        'ttl_expired',
-        'superseded',
+        'ttl_expired_shared_unbound',
+        'superseded_shared_unbound',
         'unreadable',
         'unreadable_no_legacy_fallback',
         'multi_repo_ambiguous',
