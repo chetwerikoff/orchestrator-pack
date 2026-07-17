@@ -37,6 +37,8 @@ export interface AoSession {
   status?: string;
   repoSlug?: string;
   prs?: unknown[];
+  /** Other daemon fields stay opaque and are not resolver inputs. */
+  [field: string]: unknown;
 }
 
 export interface SessionPrReference {
@@ -67,18 +69,29 @@ export interface PrSessionBindingResolution {
   deferReason?: string;
 }
 
+export interface SessionPrBindingOptions {
+  headSha?: string;
+  repoSlug?: string;
+  openListAuthoritative?: boolean;
+  /** @deprecated Accepted but ignored; per-session detail enrichment is retired. */
+  sessionDetail?: unknown;
+}
+
 export declare function parseSessionPrReference(value: unknown): SessionPrReference | null;
 export declare function listSessionPrReferences(
   session: AoSession | null | undefined,
   options?: { repoSlug?: string },
 ): SessionPrReference[];
 export declare function getSessionIssueNumber(session: AoSession | null | undefined): number;
-/** Compatibility export; retired daemon-row PR aliases are never read. */
-export declare function getExplicitSessionPrNumber(): 0;
-/** Per-session detail enrichment is retired. */
-export declare function sessionDetailFromSessionGetPayload(): null;
-export declare function shouldEnrichSessionDetailFromGet(): false;
-export declare function buildSessionDetailsById(): Record<string, never>;
+/** Compatibility export; its argument is ignored and retired daemon-row aliases are never read. */
+export declare function getExplicitSessionPrNumber(session?: AoSession | null): 0;
+/** Compatibility export; its payload is ignored because per-session detail enrichment is retired. */
+export declare function sessionDetailFromSessionGetPayload(payload?: unknown): null;
+export declare function shouldEnrichSessionDetailFromGet(session?: AoSession | null): false;
+export declare function buildSessionDetailsById(
+  sessions?: AoSession[],
+  sessionGetsById?: Record<string, unknown>,
+): Record<string, never>;
 export declare function issueLinkedWorkerBranchLiterals(issueNumber: number): string[];
 export declare function headRefCorrelatesToIssue(
   headRefName: string,
@@ -94,24 +107,23 @@ export declare function listIssueCorrelatedOpenPrs(
 export declare function resolveSessionPrBinding(
   session: AoSession | null | undefined,
   openPrs?: OpenPr[],
-  options?: { headSha?: string; repoSlug?: string; openListAuthoritative?: boolean },
+  options?: SessionPrBindingOptions,
 ): SessionPrBinding;
 export declare function isEnrichedPrBinding(binding: SessionPrBinding): boolean;
 export declare function sessionMatchesPrBound(
   session: AoSession | null | undefined,
   prNumber: number,
   openPrs?: OpenPr[],
-  options?: { headSha?: string; repoSlug?: string; openListAuthoritative?: boolean },
+  options?: SessionPrBindingOptions,
 ): boolean;
 export declare function resolvePrOwningWorkerSessionBinding(
   sessions: AoSession[] | null | undefined,
   prNumber: number,
   openPrs?: OpenPr[],
-  options?: {
-    headSha?: string;
-    repoSlug?: string;
-    openListAuthoritative?: boolean;
+  options?: SessionPrBindingOptions & {
     requireLive?: boolean;
+    /** @deprecated Accepted but ignored; per-session detail enrichment is retired. */
+    sessionDetailsById?: Record<string, unknown>;
     isLive?: (session: AoSession) => boolean;
     getSessionId?: (session: AoSession) => string | null;
   },
