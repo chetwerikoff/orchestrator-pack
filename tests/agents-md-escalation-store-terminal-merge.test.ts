@@ -1,8 +1,8 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from '../scripts/kernel/subprocess.ts';
 
 const repoRoot = join(import.meta.dirname, '..');
 
@@ -11,10 +11,11 @@ function ps(value: string) {
 }
 
 function runPwsh(script: string) {
-  return spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+  return runProcessSync({
+    command: 'pwsh',
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
     cwd: repoRoot,
-    encoding: 'utf8',
-    env: { ...process.env },
+    inheritParentEnv: true,
   });
 }
 
@@ -82,7 +83,7 @@ describe('escalation-store terminal merge invariant', () => {
       } | ConvertTo-Json -Compress
     `);
 
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
     const output = JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '{}') as {
       ackOk: boolean;
       terminalState: string;
