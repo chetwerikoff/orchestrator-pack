@@ -409,7 +409,11 @@ function Get-WorkerStatusPrSessionBindingCachePath {
     }
     if ($env:AO_REPORT_STATE_SEED_STATE) {
         $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
-        return (Join-Path (Split-Path -Parent $seedPath) 'pr-session-binding-cache.json')
+        $parent = Split-Path -Parent $seedPath
+        if (-not $parent) {
+            return 'pr-session-binding-cache.json'
+        }
+        return (Join-Path $parent 'pr-session-binding-cache.json')
     }
     return (Join-Path $HOME '.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json')
 }
