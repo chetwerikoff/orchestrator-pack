@@ -12,8 +12,38 @@ import {
   readPrSessionBindingCacheFile,
   resolveBindingRepoSlug,
   resolvePrSessionBindingCachePath,
+  lookupBindingByPr,
+  lookupBindingBySession,
   resolvePrSessionBindingForConsumer,
 } from '../../docs/pr-session-binding-cache.mjs';
+
+
+const TARGET_PR_FAIL_CLOSED_REASONS = new Set([
+  'binding_cache_conflict',
+  'ambiguous_issue_pr_binding',
+  'ambiguous_pr_session_binding',
+  'head_owner_mismatch',
+]);
+
+function targetPrFailClosedBelongsToSession(store, repoSlug, sessionId, prNumber, resolution) {
+  if (!resolution?.failClosed) {
+    return false;
+  }
+  const reason = String(resolution.reason ?? '').trim();
+  if (!TARGET_PR_FAIL_CLOSED_REASONS.has(reason)) {
+    return false;
+  }
+  const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
+  if (resolvedSessionId && resolvedSessionId === sessionId) {
+    return true;
+  }
+  const prRecord = lookupBindingByPr(store, repoSlug, prNumber);
+  if (prRecord && String(prRecord.sessionId ?? '').trim() === sessionId) {
+    return true;
+  }
+  const sessionRecord = lookupBindingBySession(store, repoSlug, sessionId);
+  return Boolean(sessionRecord && Number(sessionRecord.prNumber ?? 0) === Number(prNumber));
+}
 
 export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
@@ -401,6 +431,10 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       });
     } catch {
       return workerStatusBindingFailure('binding_cache_read_failed', headHint);
+    }
+    if (targetPrFailClosedBelongsToSession(store, repo.repoSlug, sessionId, prNumber, resolution)) {
+      const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
+      return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
     }
     const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
     if (resolvedSessionId !== sessionId) {

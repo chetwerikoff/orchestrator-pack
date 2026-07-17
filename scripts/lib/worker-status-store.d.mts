@@ -89,6 +89,9 @@ export interface WorkerStatusSessionBindingResult {
   prNumber?: number;
   headSha?: string;
   bindingSource?: string;
+  repoSlug?: string;
+  bindingContractSource?: string;
+  bindingCacheGeneration?: number;
   enriched?: boolean;
 }
 

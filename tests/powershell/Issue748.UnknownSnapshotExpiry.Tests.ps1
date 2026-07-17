@@ -219,4 +219,124 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+
+    It 'Get-WorkerStatusWriterGenerationVector seeds bindingCacheGeneration from cache only' {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("opk-854-genvec-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $stateDir = Join-Path $dir 'state-dir'
+        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+        $cachePath = Join-Path $dir 'authoritative-pr-session-binding-cache.json'
+        $storePath = Join-Path $dir 'worker-status-store.json'
+        $repo = 'chetwerikoff/orchestrator-pack'
+        $sessionId = 'orchestrator-pack-137'
+        $prNumber = 887
+        $headSha = 'head887'
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $githubSnapshot = @{
+            openPrs = @(
+                [pscustomobject]@{
+                    number = $prNumber
+                    state = 'OPEN'
+                    headRefOid = $headSha
+                    headRefName = "ao/$sessionId/root"
+                    headCommittedAt = '2025-01-15T12:00:00Z'
+                }
+            )
+            reviewRuns = @()
+            ciChecksByPr = @{ "$prNumber" = @() }
+            requiredCheckNamesByPr = @{ "$prNumber" = @() }
+            requiredCheckLookupFailedByPr = @{ "$prNumber" = $false }
+            degraded = $false
+        }
+
+        $oldBindingCache = $env:AO_PR_SESSION_BINDING_CACHE
+        $oldStateDir = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
+        $oldSideEffectDir = $env:AO_SIDE_PROCESS_STATE_DIR
+        try {
+            $env:AO_PR_SESSION_BINDING_CACHE = $cachePath
+            $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $stateDir
+            $env:AO_SIDE_PROCESS_STATE_DIR = $dir
+
+            $missVector = Get-WorkerStatusWriterGenerationVector -SessionId $sessionId -RepoTickGeneration 10 -GithubSnapshot $githubSnapshot
+            [long]$missVector.bindingCacheGeneration | Should -Be 0
+
+            $miss = Write-WorkerStatusRow -WriteInput @{
+                repoSlug = $repo
+                session = [pscustomobject]@{
+                    id = $sessionId
+                    sessionId = $sessionId
+                    role = 'worker'
+                    status = 'working'
+                    issueId = 874
+                    displayName = '874'
+                    branch = "ao/$sessionId/root"
+                }
+                reports = @()
+                githubSnapshot = $githubSnapshot
+                osLiveness = @{ status = 'working'; dead = $false }
+                writerGenerationVector = $missVector
+            } -StorePath $storePath -NowMs $nowMs
+            $miss.ok | Should -BeTrue
+            $miss.row.winningSource | Should -Be 'degraded'
+            [long]$miss.row.generationVector.bindingCacheGeneration | Should -Be 0
+
+            $record = [ordered]@{
+                schemaVersion = 1
+                sessionId = $sessionId
+                prNumber = $prNumber
+                issueNumber = 874
+                headSha = $headSha
+                repoSlug = $repo
+                source = 'push_register'
+                lastUpdatedMs = $nowMs - 1000
+                superseded = $false
+            }
+            $records = [ordered]@{}
+            $records["$repo|session:$sessionId"] = $record
+            $records["$repo|pr:$prNumber"] = $record
+            [System.IO.File]::WriteAllText(
+                $cachePath,
+                (([ordered]@{
+                    schemaVersion = 1
+                    lastUpdatedMs = $record.lastUpdatedMs
+                    generation = 48
+                    records = $records
+                } | ConvertTo-Json -Compress -Depth 10) + "`n"),
+                [System.Text.UTF8Encoding]::new($false)
+            )
+
+            $hitVector = Get-WorkerStatusWriterGenerationVector -SessionId $sessionId -RepoTickGeneration 10 -GithubSnapshot $githubSnapshot
+            [long]$hitVector.bindingCacheGeneration | Should -Be 48
+
+            $hit = Write-WorkerStatusRow -WriteInput @{
+                repoSlug = $repo
+                session = [pscustomobject]@{
+                    id = $sessionId
+                    sessionId = $sessionId
+                    role = 'worker'
+                    status = 'working'
+                    issueId = 874
+                    displayName = '874'
+                    branch = "ao/$sessionId/root"
+                }
+                reports = @()
+                githubSnapshot = $githubSnapshot
+                osLiveness = @{ status = 'working'; dead = $false }
+                writerGenerationVector = $hitVector
+            } -StorePath $storePath -NowMs ($nowMs + 1)
+            $hit.ok | Should -BeTrue
+            $hit.row.winningSource | Should -Be 'github_pr'
+            $hit.row.derivedStatus | Should -Be 'pr_open'
+            [long]$hit.row.generationVector.bindingCacheGeneration | Should -Be 48
+        }
+        finally {
+            if ($null -eq $oldBindingCache) { Remove-Item Env:AO_PR_SESSION_BINDING_CACHE -ErrorAction SilentlyContinue }
+            else { $env:AO_PR_SESSION_BINDING_CACHE = $oldBindingCache }
+            if ($null -eq $oldStateDir) { Remove-Item Env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR -ErrorAction SilentlyContinue }
+            else { $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $oldStateDir }
+            if ($null -eq $oldSideEffectDir) { Remove-Item Env:AO_SIDE_PROCESS_STATE_DIR -ErrorAction SilentlyContinue }
+            else { $env:AO_SIDE_PROCESS_STATE_DIR = $oldSideEffectDir }
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

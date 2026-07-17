@@ -124,6 +124,33 @@ function run() {
     assertCacheHit(resolveWorkerStatusSessionBinding(unrelatedFirst));
 
     writeCache(cachePath);
+    const failClosedTarget = input(cachePath, [PR_UNRELATED, PR_NUMBER, 888]);
+    failClosedTarget.openPrs = [
+      {
+        number: PR_UNRELATED,
+        state: 'OPEN',
+        headRefOid: 'head869',
+        headRefName: 'agent/issue-869',
+      },
+      {
+        number: PR_NUMBER,
+        state: 'OPEN',
+        headRefOid: HEAD,
+        headRefName: 'issue-874-a',
+      },
+      {
+        number: 888,
+        state: 'OPEN',
+        headRefOid: 'head888',
+        headRefName: 'issue-874-b',
+      },
+    ];
+    const failClosed = resolveWorkerStatusSessionBinding(failClosedTarget);
+    assert.equal(failClosed.ok, false);
+    assert.equal(failClosed.reason, 'ambiguous_issue_pr_binding');
+    assert.equal(failClosed.bindingSource, 'binding_contract:cache');
+
+    writeCache(cachePath);
     const ambiguousRepo = input(cachePath);
     ambiguousRepo.openPrs = [
       {
@@ -167,6 +194,7 @@ function run() {
         'unreadable',
         'unreadable_no_legacy_fallback',
         'unrelated_pr_first_still_hits_target',
+        'target_pr_fail_closed_surfaces_authoritative_reason',
         'multi_repo_ambiguous',
         'stale_other_repo_evicted_without_ambiguity',
       ],

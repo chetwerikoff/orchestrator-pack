@@ -453,25 +453,22 @@ function Get-WorkerStatusWriterGenerationVector {
     }
 
     $bindingGen = [long]0
-    if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
-        foreach ($pr in @($GithubSnapshot.openPrs)) {
-            $headMs = [long]0
-            $committedAt = ''
-            if ($pr.headCommittedAt) { $committedAt = [string]$pr.headCommittedAt }
-            if ($committedAt) {
-                try {
-                    $headMs = [DateTimeOffset]::Parse($committedAt).ToUnixTimeMilliseconds()
-                }
-                catch {
-                    $headMs = 0
-                }
-            }
-            if ($headMs -gt $bindingGen) {
-                $bindingGen = $headMs
+    $bindingCachePath = ''
+    if ($env:AO_PR_SESSION_BINDING_CACHE) {
+        $bindingCachePath = [string]$env:AO_PR_SESSION_BINDING_CACHE
+    }
+    elseif ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
+        $bindingCachePath = Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'pr-session-binding-cache.json'
+    }
+    if ($bindingCachePath -and (Test-Path -LiteralPath $bindingCachePath)) {
+        try {
+            $bindingCache = Get-Content -LiteralPath $bindingCachePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $bindingCache.generation) {
+                $bindingGen = [long]$bindingCache.generation
             }
         }
-        if ($bindingGen -le 0) {
-            $bindingGen = [long](@($GithubSnapshot.openPrs).Count)
+        catch {
+            $bindingGen = [long]0
         }
     }
 

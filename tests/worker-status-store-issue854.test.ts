@@ -119,6 +119,45 @@ function liveRecomputeInput({
 }
 
 describe('issue #854 live recompute binding cache (AC4 shape)', () => {
+  it('surfaces target-PR fail-closed reason instead of generic no_issue_binding', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opk-854-failclosed-'));
+    try {
+      const cachePath = join(dir, 'cache.json');
+      writeBindingCache(cachePath, [targetRecord()]);
+      const openPrs = [
+        { number: PR_UNRELATED, state: 'OPEN', headRefOid: 'head869', headRefName: 'agent/issue-869' },
+        { number: PR_TARGET, state: 'OPEN', headRefOid: HEAD, headRefName: 'issue-874-a' },
+        { number: 888, state: 'OPEN', headRefOid: 'head888', headRefName: 'issue-874-b' },
+      ];
+      const binding = resolveWorkerStatusSessionBinding({
+        session: {
+          id: SESSION_ID,
+          sessionId: SESSION_ID,
+          role: 'worker',
+          status: 'working',
+          issueId: 874,
+          displayName: '874',
+        },
+        openPrs,
+        githubSnapshot: { openPrs },
+        repoSlug: REPO,
+        bindingCachePath: cachePath,
+        cwd: '/tmp/non-checkout-cwd',
+        nowMs: NOW_MS,
+        osLiveness: { status: 'working', dead: false },
+        env: {
+          AO_PR_SESSION_BINDING_CACHE: cachePath,
+          ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: join(dir, 'state-dir'),
+        },
+      });
+      expect(binding.ok).toBe(false);
+      expect(binding.reason).toBe('ambiguous_issue_pr_binding');
+      expect(binding.bindingSource).toBe('binding_contract:cache');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('resolves the target PR even when an unrelated open PR is iterated first', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opk-854-order-'));
     try {
