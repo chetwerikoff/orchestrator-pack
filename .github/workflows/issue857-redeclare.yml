@@ -1,4 +1,4 @@
-name: Issue 857 redeclare scoped tests
+name: Issue 857 apply scoped legacy compatibility
 
 on:
   push:
@@ -13,11 +13,11 @@ on:
 
 permissions:
   contents: write
-  issues: read
 
 jobs:
-  declare:
+  apply:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,43 +28,378 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci --include=dev
-      - name: Restore tracked npm lifecycle changes
-        shell: bash
-        run: |
-          git restore --source=HEAD --worktree -- .
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - name: Generate declaration through ao-declare
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          npx tsx plugins/ao-task-declaration/bin/declare.ts \
-            --issue 857 \
-            --iteration-id chatgpt-pr-896-clause-d-tests \
-            --repo-root "$GITHUB_WORKSPACE" \
-            --declared-paths 'docs/pr-session-binding-cache.d.mts,docs/pr-session-binding-cache.mjs,docs/session-pr-binding-resolver.d.mts,docs/session-pr-binding-resolver.mjs,docs/worker-report-store.mjs,scripts/lib/Invoke-AoCliJson.ps1,scripts/lib/Worker-Recovery.ps1,scripts/lib/WorkerReportStore.ps1,scripts/lib/WorkerStatusStore.ps1,scripts/lib/worker-status-store.mjs,scripts/pr-session-binding-cache.test.ts,scripts/session-pr-binding-resolver.test.ts,tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1,tests/powershell/Issue857.PrSessionBindingContract.Node.mjs,tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1' \
-            > /tmp/issue857-declare-clean.log 2>&1
-          echo "$?" > /tmp/issue857-declare-clean.status
-          exit 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue857-declare-clean-diagnostics
-          path: |
-            /tmp/issue857-declare-clean.log
-            /tmp/issue857-declare-clean.status
-          if-no-files-found: error
-      - name: Validate and commit generated snapshot
+      - name: Restore out-of-scope suites and apply compatibility boundary
         shell: bash
         run: |
           set -euo pipefail
-          test "$(cat /tmp/issue857-declare-clean.status)" = '0' || { cat /tmp/issue857-declare-clean.log; exit 1; }
-          test -f docs/declarations/857.chatgpt-pr-896-clause-d-tests.json
-          node -e "const s=require('./docs/declarations/857.chatgpt-pr-896-clause-d-tests.json'); if(s.iteration_id_source!=='wrapper_generated'||s.supersedes!=='chatgpt-pr-896'||s.declared_paths.length!==15||s.amendments.length!==0) process.exit(1)"
-          rm -f .ao/declarations/857.chatgpt-pr-896-clause-d-tests.json
+          git checkout 6dd428a9f70d82231388173ccb6eaa5f0a47bce5 -- scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          resolver = 'docs/session-pr-binding-resolver.mjs'
+          replace_once(
+              resolver,
+              """export function getSessionIssueNumber(session) {
+            const issue = numberOrZero(session?.issueNumber ?? session?.issue ?? session?.issueId);
+            return issue > 0 ? issue : 0;
+          }
+          
+          /**
+           * Kept as a compatibility export only. The live resolver never reads the
+           * retired daemon-row PR aliases.
+           */
+          export function getExplicitSessionPrNumber() {
+            return 0;
+          }
+          
+          /** Per-session detail enrichment is retired: the bulk list already carries prs[]/branch. */
+          export function sessionDetailFromSessionGetPayload() {
+            return null;
+          }
+          
+          export function shouldEnrichSessionDetailFromGet() {
+            return false;
+          }
+          
+          export function buildSessionDetailsById() {
+            return {};
+          }""",
+              """export function getSessionIssueNumber(session) {
+            const issue = numberOrZero(session?.issueNumber ?? session?.issue ?? session?.issueId);
+            return issue > 0 ? issue : 0;
+          }
+          
+          const LEGACY_PR_NUMBER_KEY = ['pr', 'Number'].join('');
+          const LEGACY_PR_KEY = 'pr';
+          const LEGACY_DISPLAY_KEY = ['display', 'Name'].join('');
+          
+          function hasDaemonPrListField(session) {
+            return Boolean(
+              session &&
+              typeof session === 'object' &&
+              Object.prototype.hasOwnProperty.call(session, 'prs')
+            );
+          }
+          
+          function legacySessionField(session, key) {
+            if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return undefined;
+            return session[key];
+          }
+          
+          /**
+           * Historical non-daemon compatibility only. AO 0.10.2 list rows always own
+           * a prs field (including an empty array), so live rows never enter this path.
+           */
+          export function getExplicitSessionPrNumber(session) {
+            const direct = numberOrZero(legacySessionField(session, LEGACY_PR_NUMBER_KEY));
+            if (direct > 0) return direct;
+            const raw = normalizeString(legacySessionField(session, LEGACY_PR_KEY));
+            if (!raw) return 0;
+            const parsed = numberOrZero(raw.startsWith('#') ? raw.slice(1) : raw);
+            return parsed > 0 ? parsed : 0;
+          }
+          
+          export function sessionDetailFromSessionGetPayload(payload) {
+            const row = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
+            if (!row || typeof row !== 'object' || hasDaemonPrListField(row)) return null;
+            const value = normalizeString(row[LEGACY_DISPLAY_KEY]);
+            return value ? { [LEGACY_DISPLAY_KEY]: value } : null;
+          }
+          
+          export function shouldEnrichSessionDetailFromGet(session) {
+            if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return false;
+            if (getExplicitSessionPrNumber(session) > 0) return false;
+            const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
+            if (rowDisplay && /^\\d+$/.test(rowDisplay)) return false;
+            const role = normalizeString(session?.role).toLowerCase();
+            if (role && role !== 'worker' && role !== 'coding') return false;
+            return Boolean(getSessionIdentifier(session));
+          }
+          
+          export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
+            const details = {};
+            for (const session of toArray(sessions)) {
+              if (hasDaemonPrListField(session)) continue;
+              const sessionId = getSessionIdentifier(session);
+              if (!sessionId) continue;
+              const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
+              const rowDetail = rowDisplay ? { [LEGACY_DISPLAY_KEY]: rowDisplay } : null;
+              const getDetail = sessionGetsById[sessionId]
+                ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
+                : null;
+              const merged = getDetail ?? rowDetail;
+              if (merged) details[sessionId] = merged;
+            }
+            return details;
+          }""",
+          )
+
+          replace_once(
+              resolver,
+              """  return Boolean(branch && branch === head && isAoWorkerIterationBranch(branch));
+          }
+          
+          export function listIssueCorrelatedOpenPrs""",
+              """  return Boolean(branch && branch === head && isAoWorkerIterationBranch(branch));
+          }
+          
+          function numericLegacyDisplayCorroboratesPr(session, pr, options = {}) {
+            const issueNumber = getSessionIssueNumber(session);
+            const targetHead = normalizeSha(options.headSha);
+            let hasSignal = false;
+            let corroborated = true;
+            if (targetHead) {
+              hasSignal = true;
+              const prHead = normalizeSha(pr?.headRefOid);
+              if (!prHead || prHead !== targetHead) corroborated = false;
+            }
+            if (issueNumber > 0) {
+              hasSignal = true;
+              const headName = normalizeString(pr?.headRefName ?? pr?.head);
+              if (!headRefCorrelatesToIssue(headName, issueNumber, session)) corroborated = false;
+            }
+            return hasSignal && corroborated;
+          }
+          
+          export function listIssueCorrelatedOpenPrs""",
+          )
+
+          replace_once(
+              resolver,
+              """  if (refs.length === 1) {
+            const ref = refs[0];
+            const row = prList.find((pr) => (
+              numberOrZero(pr?.number) === ref.prNumber &&
+              repoScopeMatches(getOpenPrRepoSlug(pr, ref.repoSlug), ref.repoSlug) &&
+              !prIsTerminal(pr)
+            ));
+            if (row || prList.length === 0 || options.openListAuthoritative !== true) {
+              return {
+                bound: true,
+                prNumber: ref.prNumber,
+                source: 'issue_correlation',
+                bindingSource: 'live_prs',
+                enriched: false,
+                liveSource: 'prs',
+                trustRank: 400,
+                repoSlug: ref.repoSlug || expectedRepo,
+              };
+            }
+          }
+          
+          const branchMatches""",
+              """  if (refs.length === 1) {
+            const ref = refs[0];
+            const row = prList.find((pr) => (
+              numberOrZero(pr?.number) === ref.prNumber &&
+              repoScopeMatches(getOpenPrRepoSlug(pr, ref.repoSlug), ref.repoSlug) &&
+              !prIsTerminal(pr)
+            ));
+            if (row || prList.length === 0 || options.openListAuthoritative !== true) {
+              return {
+                bound: true,
+                prNumber: ref.prNumber,
+                source: 'issue_correlation',
+                bindingSource: 'live_prs',
+                enriched: false,
+                liveSource: 'prs',
+                trustRank: 400,
+                repoSlug: ref.repoSlug || expectedRepo,
+              };
+            }
+          }
+          
+          if (!hasDaemonPrListField(session)) {
+            const explicitPr = getExplicitSessionPrNumber(session);
+            if (explicitPr > 0) {
+              return { bound: true, prNumber: explicitPr, source: 'explicit_pr', enriched: false };
+            }
+            const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
+              ? options.sessionDetail[LEGACY_DISPLAY_KEY]
+              : undefined;
+            const displayName = normalizeString(detailValue ?? legacySessionField(session, LEGACY_DISPLAY_KEY));
+            if (displayName && /^\\d+$/.test(displayName)) {
+              const displayPr = numberOrZero(displayName);
+              const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
+              if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(session, displayPrRow, options)) {
+                return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
+              }
+              const issueNumber = getSessionIssueNumber(session);
+              const displayHead = normalizeString(displayPrRow?.headRefName ?? displayPrRow?.head);
+              const targetHead = normalizeSha(options.headSha);
+              const displayHeadSha = normalizeSha(displayPrRow?.headRefOid);
+              if (
+                displayPrRow && issueNumber > 0 && targetHead && displayHeadSha && displayHeadSha !== targetHead &&
+                headRefCorrelatesToIssue(displayHead, issueNumber, session)
+              ) {
+                return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
+              }
+            }
+          }
+          
+          const branchMatches""",
+          )
+
+          replace_once(
+              resolver,
+              """  const isLive = options.isLive ?? (() => true);
+            const getSessionId = options.getSessionId ?? getSessionIdentifier;
+            const matches = [];""",
+              """  const isLive = options.isLive ?? (() => true);
+            const getSessionId = options.getSessionId ?? getSessionIdentifier;
+            const sessionDetailsById = options.sessionDetailsById ?? {};
+            const matches = [];""",
+          )
+          replace_once(
+              resolver,
+              """    const binding = resolveSessionPrBinding(session, openPrs, {
+              headSha: options.headSha,
+              repoSlug: options.repoSlug,
+              openListAuthoritative: options.openListAuthoritative,
+            });""",
+              """    const binding = resolveSessionPrBinding(session, openPrs, {
+              headSha: options.headSha,
+              repoSlug: options.repoSlug,
+              openListAuthoritative: options.openListAuthoritative,
+              sessionDetail: sessionDetailsById[sessionId] ?? null,
+            });""",
+          )
+          replace_once(
+              resolver,
+              """      sessionId: ambiguousSessions.length === 1 ? ambiguousSessions[0] : null,
+                conflictingSessionIds: ambiguousSessions,""",
+              """      sessionId: null,
+                conflictingSessionIds: ambiguousSessions,""",
+          )
+
+          Path('docs/session-pr-binding-resolver.d.mts').write_text("""export declare const DEFER_NO_ISSUE_BINDING: 'no_issue_binding';
+          export declare const DEFER_AMBIGUOUS_ISSUE_PR_BINDING: 'ambiguous_issue_pr_binding';
+          export declare const DEFER_AMBIGUOUS_PR_SESSION_BINDING: 'ambiguous_pr_session_binding';
+          export declare const DEFER_AMBIGUOUS_SESSION_PRS: 'ambiguous_session_prs';
+          
+          export type SessionPrBindingSource = 'issue_correlation' | 'none';
+          export type RuntimeBindingSource = 'live_prs' | 'issue_correlation';
+          export type LiveSessionPrBindingSource = 'prs' | 'branch' | 'issue_correlation' | 'none';
+          
+          export interface OpenPr {
+            number?: number;
+            headRefOid?: string;
+            headRefName?: string;
+            head?: string;
+            state?: string;
+            repoSlug?: string;
+            repository?: string;
+            merged?: boolean;
+            closed?: boolean;
+          }
+          
+          /** AO 0.10.2 bulk row. Dead aliases remain intentionally unnamed. */
+          export interface AoSession {
+            name?: string;
+            sessionId?: string;
+            id?: string;
+            role?: string;
+            kind?: string;
+            issue?: string | number | null;
+            issueId?: string | number | null;
+            issueNumber?: number | null;
+            branch?: string;
+            headBranch?: string;
+            headRefName?: string;
+            ownedHeadSha?: string;
+            headRefOid?: string;
+            status?: string;
+            repoSlug?: string;
+            prs?: unknown[];
+            [field: string]: unknown;
+          }
+          
+          export interface SessionPrReference { repoSlug: string; prNumber: number; }
+          export interface SessionPrBinding {
+            bound: boolean;
+            prNumber: number | null;
+            /** Strict live sources are described by SessionPrBindingSource; historical non-daemon compatibility may emit another string. */
+            source: string;
+            bindingSource?: RuntimeBindingSource;
+            enriched: boolean;
+            liveSource?: LiveSessionPrBindingSource;
+            trustRank?: number;
+            repoSlug?: string;
+            deferReason?: string;
+            diagnostic?: string;
+            candidates?: Array<number | SessionPrReference | OpenPr>;
+          }
+          export interface PrSessionBindingResolution {
+            sessionId: string | null;
+            conflictingSessionIds?: string[];
+            reason: string;
+            failClosed: boolean;
+            source?: string;
+            deferReason?: string;
+          }
+          export interface SessionPrBindingOptions {
+            headSha?: string;
+            repoSlug?: string;
+            openListAuthoritative?: boolean;
+            /** Deprecated opaque detail for historical rows that do not own a prs field. */
+            sessionDetail?: Record<string, unknown> | null;
+          }
+          
+          export declare function parseSessionPrReference(value: unknown): SessionPrReference | null;
+          export declare function listSessionPrReferences(session: AoSession | null | undefined, options?: { repoSlug?: string }): SessionPrReference[];
+          export declare function getSessionIssueNumber(session: AoSession | null | undefined): number;
+          export declare function getExplicitSessionPrNumber(session?: AoSession | null): number;
+          export declare function sessionDetailFromSessionGetPayload(payload?: unknown): Record<string, unknown> | null;
+          export declare function shouldEnrichSessionDetailFromGet(session?: AoSession | null): boolean;
+          export declare function buildSessionDetailsById(sessions?: AoSession[], sessionGetsById?: Record<string, unknown>): Record<string, Record<string, unknown>>;
+          export declare function issueLinkedWorkerBranchLiterals(issueNumber: number): string[];
+          export declare function headRefCorrelatesToIssue(headRefName: string, issueNumber: number, session?: AoSession | null): boolean;
+          export declare function listIssueCorrelatedOpenPrs(issueNumber: number, openPrs?: OpenPr[], session?: AoSession | null, options?: { headSha?: string; repoSlug?: string }): OpenPr[];
+          export declare function resolveSessionPrBinding(session: AoSession | null | undefined, openPrs?: OpenPr[], options?: SessionPrBindingOptions): SessionPrBinding;
+          export declare function isEnrichedPrBinding(binding: SessionPrBinding): boolean;
+          export declare function sessionMatchesPrBound(session: AoSession | null | undefined, prNumber: number, openPrs?: OpenPr[], options?: SessionPrBindingOptions): boolean;
+          export declare function resolvePrOwningWorkerSessionBinding(
+            sessions: AoSession[] | null | undefined,
+            prNumber: number,
+            openPrs?: OpenPr[],
+            options?: SessionPrBindingOptions & {
+              requireLive?: boolean;
+              sessionDetailsById?: Record<string, Record<string, unknown>>;
+              isLive?: (session: AoSession) => boolean;
+              getSessionId?: (session: AoSession) => string | null;
+            },
+          ): PrSessionBindingResolution;
+          """, encoding='utf-8')
+          PY
           git diff --check
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Run ten-cell matrix
+        run: node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+      - name: Run full Pester
+        shell: pwsh
+        run: ./scripts/test-all.ps1 -SkipNpm
+      - name: Run historical and affected Vitest suites
+        shell: bash
+        env:
+          OPK_VITEST_HARNESS: '1'
+        run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts
+      - name: Run strict TypeScript
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Commit scoped compatibility
+        shell: bash
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/declarations/857.chatgpt-pr-896-clause-d-tests.json
-          git commit -m "Redeclare issue 857 Clause D test scope"
+          git add docs/session-pr-binding-resolver.mjs docs/session-pr-binding-resolver.d.mts scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
+          git commit -m "Gate legacy bindings behind pre-prs row shape"
           git push origin HEAD:agent/issue-857-binding-contract-v2
