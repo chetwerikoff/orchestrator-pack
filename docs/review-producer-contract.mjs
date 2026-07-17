@@ -17,6 +17,7 @@ export const PR_REVIEW_STATUSES = [
   'needs_review',
   'running',
   'up_to_date',
+  'commented',
   'changes_requested',
   'ineligible',
 ];
@@ -33,7 +34,7 @@ export const BOARD_COLUMN_STATUSES = [
 ];
 
 /** Terminal covered statuses for head idempotency (#189) — do not start a new review. */
-export const COVERED_TERMINAL_PR_REVIEW_STATUSES = new Set(['up_to_date', 'changes_requested']);
+export const COVERED_TERMINAL_PR_REVIEW_STATUSES = new Set(['up_to_date', 'commented', 'changes_requested']);
 
 /** In-flight engine + latestRun statuses. */
 export const IN_FLIGHT_PR_REVIEW_STATUSES = new Set(['needs_review', 'running']);
@@ -249,7 +250,8 @@ export function mapEngineStateToBoardStatus({ prReviewStatus, latestRun, headSha
   if (engineStatus === 'needs_review' && !latest) {
     return 'queued';
   }
-  if (engineStatus === 'up_to_date' || String(latest?.verdict ?? '').toLowerCase() === 'approved') {
+  if (engineStatus === 'up_to_date' || engineStatus === 'commented'
+    || String(latest?.verdict ?? '').toLowerCase() === 'approved') {
     return 'clean';
   }
   if (engineStatus === 'changes_requested') {

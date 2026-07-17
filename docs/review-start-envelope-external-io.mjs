@@ -11,6 +11,7 @@ const COVERED_RUN_STATUSES = [
   'running',
   'reviewing',
   'up_to_date',
+  'commented',
   'changes_requested',
 ];
 

@@ -23,6 +23,15 @@ import {
   type PackReviewRunRecord,
   type PackReviewRunStatus,
 } from './lib/pack-review-run-store.js';
+import {
+  createGithubReviewTransport,
+  requireProcess,
+  reconcileGithubCommentReview,
+  recoverIncompleteGithubCommentReviewForHead,
+  writeGithubReviewCapture,
+  type GithubReviewEvent,
+  type GithubReviewTransport,
+} from './lib/github-review-reconciliation.js';
 
 interface StartInput {
   projectId?: string;
@@ -43,6 +52,7 @@ interface StartInput {
   fixtureReviewTimedOut?: boolean;
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
+  fixtureGithubReviewTransport?: GithubReviewTransport;
 }
 
 interface ListInput {
@@ -71,6 +81,7 @@ interface ReviewPayload {
   findingCount: number;
   findings: ReviewPayloadFinding[];
 }
+
 
 interface ClaimLease {
   acquired: boolean;
@@ -184,14 +195,6 @@ function positiveInteger(value: unknown, label: string): number | undefined {
   return number;
 }
 
-async function requireProcess(result: ProcessResult, label: string): Promise<string> {
-  if (!result.ok) {
-    const detail = trim(result.stderr || result.error || result.stdout);
-    throw new Error(`${label} failed${detail ? `: ${detail}` : ''}`);
-  }
-  return result.stdout.trim();
-}
-
 async function runGit(repoRoot: string, args: readonly string[], label: string): Promise<string> {
   return requireProcess(await runProcess({
     command: 'git',
@@ -287,6 +290,26 @@ function parseReviewPayload(stdout: string): ReviewPayload {
   throw new Error('reviewer produced no valid terminal verdict payload');
 }
 
+function asReviewPayloadFinding(value: unknown): ReviewPayloadFinding | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as ReviewPayloadFinding
+    : null;
+}
+
+function selectGithubReviewEvent(payload: ReviewPayload): GithubReviewEvent {
+  if (payload.findings.length === 0) {
+    return payload.verdict === 'clean' && payload.findingCount === 0
+      ? 'APPROVE'
+      : 'REQUEST_CHANGES';
+  }
+
+  const allNonBlocking = payload.findings.every((value) => {
+    const finding = asReviewPayloadFinding(value);
+    return finding?.severity === 'warning' || finding?.severity === 'info';
+  });
+  return allNonBlocking ? 'COMMENT' : 'REQUEST_CHANGES';
+}
+
 function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload): string {
   const lines = [
     `## Pack review — ${payload.verdict === 'clean' && payload.findingCount === 0 ? 'no findings' : 'findings'}`,
@@ -298,7 +321,13 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
   if (payload.findings.length === 0) {
     lines.push('No findings.', '');
   } else {
-    payload.findings.forEach((finding, index) => {
+    payload.findings.forEach((value, index) => {
+      const finding = asReviewPayloadFinding(value);
+      if (!finding) {
+        lines.push(`### Malformed finding payload at index ${index + 1}`, '');
+        lines.push('The reviewer emitted a non-object finding; it was treated as blocking.', '');
+        return;
+      }
       lines.push(`### ${finding.title || `Finding ${index + 1}`}`, '');
       if (finding.body) lines.push(finding.body, '');
       if (finding.filePath) lines.push(`Path: \`${finding.filePath}\``, '');
@@ -308,6 +337,7 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
   return lines.join('\n');
 }
 
+
 async function postGithubReview(options: {
   repoRoot: string;
   repoSlug: string;
@@ -315,56 +345,57 @@ async function postGithubReview(options: {
   headSha: string;
   run: PackReviewRunRecord;
   payload: ReviewPayload;
-  fixtureGithubReviewId?: number;
-  fixtureRepoSlug?: string;
-}): Promise<{ id: number | string; url: string }> {
-  const event = options.payload.verdict === 'clean' && options.payload.findingCount === 0
-    ? 'APPROVE'
-    : 'REQUEST_CHANGES';
+  projectId: string;
+  storeRoot: string;
+  transport: GithubReviewTransport;
+}): Promise<{
+  id: number | string;
+  url: string;
+  event: GithubReviewEvent;
+  dismissedReviewIds: Array<number | string>;
+}> {
+  const event = selectGithubReviewEvent(options.payload);
   const body = formatGithubReviewBody(options.run, options.payload);
-  const capture = trim(process.env.PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE);
-  if (capture || process.env.OPK_VITEST_HARNESS === '1' && options.fixtureGithubReviewId) {
-    if (capture) {
-      mkdirSync(dirname(resolve(capture)), { recursive: true });
-      writeFileSync(resolve(capture), `${JSON.stringify({
-        repoSlug: options.repoSlug,
-        prNumber: options.prNumber,
-        commitId: options.headSha,
-        event,
-        body,
-      }, null, 2)}\n`, 'utf8');
-    }
-    return { id: options.fixtureGithubReviewId ?? 1, url: `fixture://pull/${options.prNumber}/review` };
+  if (event === 'COMMENT') {
+    const reconciled = await reconcileGithubCommentReview({
+      run: options.run,
+      body,
+      transport: options.transport,
+      projectId: options.projectId,
+      storeRoot: options.storeRoot,
+    });
+    writeGithubReviewCapture({
+      repoSlug: options.repoSlug,
+      prNumber: options.prNumber,
+      commitId: options.headSha,
+      event,
+      body,
+      dismissedReviewIds: reconciled.dismissedReviewIds,
+      transport: options.transport,
+    });
+    return {
+      id: reconciled.id,
+      url: reconciled.url,
+      event,
+      dismissedReviewIds: reconciled.dismissedReviewIds,
+    };
   }
 
-  const request = `${JSON.stringify({
-    commit_id: options.headSha,
+  const posted = await options.transport.postReview({
     event,
     body,
-  })}\n`;
-  const result = await runProcess({
-    command: 'gh',
-    args: [
-      'api',
-      '--method', 'POST',
-      `repos/${options.repoSlug}/pulls/${options.prNumber}/reviews`,
-      '--input', '-',
-    ],
-    input: request,
-    cwd: options.repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 60_000,
+    commitId: options.headSha,
   });
-  const stdout = await requireProcess(result, 'GitHub PR review post');
-  let parsed: { id?: number | string; html_url?: string };
-  try {
-    parsed = JSON.parse(stdout) as { id?: number | string; html_url?: string };
-  } catch (error) {
-    throw new Error(`GitHub PR review post returned invalid JSON: ${describeError(error)}`);
-  }
-  if (!parsed.id) throw new Error('GitHub PR review post returned no review id');
-  return { id: parsed.id, url: trim(parsed.html_url) };
+  writeGithubReviewCapture({
+    repoSlug: options.repoSlug,
+    prNumber: options.prNumber,
+    commitId: options.headSha,
+    event,
+    body,
+    dismissedReviewIds: [],
+    transport: options.transport,
+  });
+  return { ...posted, event, dismissedReviewIds: [] };
 }
 
 async function ensureCommitAvailable(repoRoot: string, headSha: string): Promise<void> {
@@ -604,6 +635,13 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const target = await resolveTarget(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const claimMode = input.claimMode ?? 'acquire';
+  const githubReviewTransport = createGithubReviewTransport({
+    repoRoot: target.sourceRepoRoot,
+    repoSlug: target.repoSlug,
+    prNumber: target.prNumber,
+    fixtureReviewId: input.fixtureGithubReviewId,
+    fixtureTransport: input.fixtureGithubReviewTransport,
+  });
   let claimLease: ClaimLease | null = null;
   let run: PackReviewRunRecord | null = null;
   let worktree = '';
@@ -626,6 +664,30 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   }
 
   try {
+    const recovered = await recoverIncompleteGithubCommentReviewForHead({
+      projectId,
+      storeRoot,
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      transport: githubReviewTransport,
+    });
+    if (recovered) {
+      const runs = listPackReviewRuns({ projectId, storeRoot });
+      if (claimLease) await claimLease.release('run_started', runs);
+      return {
+        ok: true,
+        created: false,
+        reused: true,
+        recovered: true,
+        reason: 'recovered_comment_reconciliation',
+        runId: recovered.id,
+        status: recovered.status,
+        httpStatus: 200,
+        githubReviewId: recovered.githubReviewId,
+        githubReviewUrl: recovered.githubReviewUrl,
+      };
+    }
+
     const created = createPackReviewRun({
       projectId,
       storeRoot,
@@ -714,15 +776,20 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       headSha: target.headSha,
       run,
       payload,
-      fixtureGithubReviewId: input.fixtureGithubReviewId,
+      projectId,
+      storeRoot,
+      transport: githubReviewTransport,
     });
-    const status: PackReviewRunStatus = payload.verdict === 'clean' && payload.findingCount === 0
+    const status: PackReviewRunStatus = githubReview.event === 'APPROVE'
       ? 'up_to_date'
-      : 'changes_requested';
+      : githubReview.event === 'COMMENT'
+        ? 'commented'
+        : 'changes_requested';
     setPackReviewRunTerminal(run.id, status, {
       exitCode: 0,
       githubReviewId: githubReview.id,
       githubReviewUrl: githubReview.url,
+      githubReviewEvent: githubReview.event,
     }, { projectId, storeRoot });
     terminal = true;
     const runs = listPackReviewRuns({ projectId, storeRoot });

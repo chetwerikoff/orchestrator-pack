@@ -16,6 +16,7 @@ export const PACK_REVIEW_RUN_STORE_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'running', 'reviewing']);
 export const PACK_REVIEW_TERMINAL_STATUSES = new Set([
   'up_to_date',
+  'commented',
   'changes_requested',
   'failed',
   'timed_out',
@@ -28,10 +29,32 @@ export type PackReviewRunStatus =
   | 'running'
   | 'reviewing'
   | 'up_to_date'
+  | 'commented'
   | 'changes_requested'
   | 'failed'
   | 'timed_out'
   | 'cancelled';
+
+export type GithubCommentReviewReconciliationPhase =
+  | 'prepared'
+  | 'comment_posted'
+  | 'dismissals_pending'
+  | 'complete';
+
+export interface GithubCommentReviewReconciliation {
+  schemaVersion: 1;
+  event: 'COMMENT';
+  phase: GithubCommentReviewReconciliationPhase;
+  actorLogin: string;
+  commentBody: string;
+  commentReviewId?: number | string;
+  commentReviewUrl?: string;
+  pendingDismissalReviewIds: Array<number | string>;
+  dismissedReviewIds: Array<number | string>;
+  preparedAtUtc: string;
+  updatedAtUtc: string;
+  lastError?: string;
+}
 
 export interface PackReviewRunRecord {
   schemaVersion: 1;
@@ -59,6 +82,8 @@ export interface PackReviewRunRecord {
   failureReason?: string;
   githubReviewId?: number | string;
   githubReviewUrl?: string;
+  githubReviewEvent?: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
+  githubReviewReconciliation?: GithubCommentReviewReconciliation;
   stale?: boolean;
 }
 
@@ -476,7 +501,7 @@ export function heartbeatPackReviewRun(runId: string, options: PackReviewStoreOp
 
 export function setPackReviewRunTerminal(
   runId: string,
-  status: Extract<PackReviewRunStatus, 'up_to_date' | 'changes_requested' | 'failed' | 'timed_out' | 'cancelled'>,
+  status: Extract<PackReviewRunStatus, 'up_to_date' | 'commented' | 'changes_requested' | 'failed' | 'timed_out' | 'cancelled'>,
   fields: Partial<PackReviewRunRecord> = {},
   options: PackReviewStoreOptions = {},
 ): PackReviewRunRecord {

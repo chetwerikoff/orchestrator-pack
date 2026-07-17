@@ -21,6 +21,7 @@ export const TIER_CAP_BY_TIER = Object.freeze({ T1: 2, T2: 4, T3: 8 });
 export const VALID_REVIEW_CYCLE_TIERS = new Set(Object.keys(TIER_CAP_BY_TIER));
 
 export const TERMINAL_CLEAN_EARLY_STOP = 'clean_early_stop';
+export const TERMINAL_COMMENTED_EARLY_STOP = 'commented_early_stop';
 export const TERMINAL_AT_CAP_OPEN_FINDINGS = 'at_cap_open_findings';
 export const REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED = 'review_cycle_cap_budget_exhausted';
 
@@ -123,6 +124,11 @@ export function isCleanTerminalRun(run) {
 /**
  * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
+export function isCommentedTerminalRun(run) {
+  return resolveAuthoritativeReviewRunStatus(run) === 'commented'
+    && resolveOpenFindingCount(run) === 0;
+}
+
 export function isZeroFindingFailedOrCancelled(run) {
   const status = resolveAuthoritativeReviewRunStatus(run);
   if (status !== 'failed' && status !== 'cancelled') {
@@ -214,6 +220,9 @@ export function classifyTerminalRun(run, currentHeadSha = '') {
   if (isCleanTerminalRun(run)) {
     return { kind: 'clean', openFindings: 0 };
   }
+  if (isCommentedTerminalRun(run)) {
+    return { kind: 'non_blocking', openFindings: 0 };
+  }
   const status = resolveAuthoritativeReviewRunStatus(run);
   if (status === 'failed' || status === 'cancelled') {
     return { kind: 'open_findings', openFindings: resolveOpenFindingCount(run) };
@@ -285,7 +294,7 @@ export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
     const target = normalizeSha(run?.targetSha);
     if (!target) continue;
     const classification = classifyTerminalRun(run, currentHeadSha);
-    if (classification.kind !== 'clean' && classification.kind !== 'open_findings') {
+    if (classification.kind !== 'clean' && classification.kind !== 'non_blocking' && classification.kind !== 'open_findings') {
       continue;
     }
     const runMs =
@@ -327,7 +336,7 @@ export function resolveCurrentHeadOpenFindingCount(runs, prNumber, currentHeadSh
   }
   const latest = sortRunsByRecency(forHead)[0];
   const classification = classifyTerminalRun(latest, currentHeadSha);
-  if (classification.kind === 'clean') {
+  if (classification.kind === 'clean' || classification.kind === 'non_blocking') {
     return 0;
   }
   if (classification.kind === 'open_findings') {
@@ -422,13 +431,29 @@ export function syncReviewCycleCapState(input) {
   let prState = normalizePrCapCycleState(capStateRoot, prNumber);
 
   if (
-    (prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
-      prState.terminalHeadSha &&
-      prState.terminalHeadSha !== currentHeadSha) ||
-    (prState.mergeEligible &&
-      (!prState.terminalHeadSha || prState.terminalHeadSha !== currentHeadSha))
+    prState.terminal === TERMINAL_CLEAN_EARLY_STOP &&
+    prState.terminalHeadSha &&
+    prState.terminalHeadSha !== currentHeadSha
   ) {
     prState = openFreshCycle({ ...input, prNumber, nowMs });
+  } else if (
+    prState.mergeEligible &&
+    prState.terminal !== TERMINAL_COMMENTED_EARLY_STOP &&
+    (!prState.terminalHeadSha || prState.terminalHeadSha !== currentHeadSha)
+  ) {
+    prState = openFreshCycle({ ...input, prNumber, nowMs });
+  } else if (
+    prState.terminal === TERMINAL_COMMENTED_EARLY_STOP &&
+    prState.terminalHeadSha &&
+    prState.terminalHeadSha !== currentHeadSha
+  ) {
+    prState = {
+      ...prState,
+      terminal: null,
+      terminalHeadSha: '',
+      mergeEligible: false,
+      atCapRecord: null,
+    };
   }
 
   if (prState.terminal === TERMINAL_AT_CAP_OPEN_FINDINGS) {
@@ -466,6 +491,17 @@ export function syncReviewCycleCapState(input) {
   if (cleanEntry && cleanEntry.targetSha === currentHeadSha) {
     prState.terminal = TERMINAL_CLEAN_EARLY_STOP;
     prState.terminalHeadSha = cleanEntry.targetSha;
+    prState.mergeEligible = true;
+    prState.atCapRecord = null;
+    capStateRoot[String(prNumber)] = prState;
+    return { capState: capStateRoot, prState };
+  }
+
+  const nonBlockingEntry = [...budget].reverse()
+    .find((entry) => entry.classification.kind === 'non_blocking');
+  if (nonBlockingEntry && nonBlockingEntry.targetSha === currentHeadSha) {
+    prState.terminal = TERMINAL_COMMENTED_EARLY_STOP;
+    prState.terminalHeadSha = nonBlockingEntry.targetSha;
     prState.mergeEligible = true;
     prState.atCapRecord = null;
     capStateRoot[String(prNumber)] = prState;
@@ -557,6 +593,19 @@ export function evaluateReviewCycleCapGate(input) {
       return {
         allowStart: false,
         reason: TERMINAL_CLEAN_EARLY_STOP,
+        terminal: prState.terminal,
+        mergeEligible: true,
+        capState: synced.capState,
+        prState,
+      };
+    }
+  }
+
+  if (prState.terminal === TERMINAL_COMMENTED_EARLY_STOP) {
+    if (prState.terminalHeadSha === currentHeadSha) {
+      return {
+        allowStart: false,
+        reason: TERMINAL_COMMENTED_EARLY_STOP,
         terminal: prState.terminal,
         mergeEligible: true,
         capState: synced.capState,

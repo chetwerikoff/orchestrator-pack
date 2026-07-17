@@ -28,12 +28,16 @@ export const BOARD_STATUSES = [
 
 export type BoardStatus = (typeof BOARD_STATUSES)[number];
 
-export type PrReviewStatus =
-  | 'needs_review'
-  | 'running'
-  | 'up_to_date'
-  | 'changes_requested'
-  | 'ineligible';
+export const PR_REVIEW_STATUSES = [
+  'needs_review',
+  'running',
+  'up_to_date',
+  'commented',
+  'changes_requested',
+  'ineligible',
+] as const;
+
+export type PrReviewStatus = (typeof PR_REVIEW_STATUSES)[number];
 
 export interface ReviewRunState {
   id?: string | null;
@@ -165,7 +169,7 @@ export function mapEngineToBoardStatus(input: EngineBoardMappingInput): BoardSta
     return 'queued';
   }
 
-  if (prReviewStatus === 'up_to_date' || verdict === 'approved') {
+  if (prReviewStatus === 'up_to_date' || prReviewStatus === 'commented' || verdict === 'approved') {
     return 'clean';
   }
 

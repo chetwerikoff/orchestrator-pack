@@ -40,6 +40,7 @@ export const NON_TERMINAL_REVIEW_STATUSES = new Set([
 
 export const TERMINAL_REVIEW_STATUSES = new Set([
   'up_to_date',
+  'commented',
   'changes_requested',
   'outdated',
   'failed',

@@ -14,7 +14,7 @@ $Script:ReviewStartClaimDefaultStaleMinutes = 10
 $Script:ReviewStartClaimSafeFloorMinutes = 2
 $Script:ReviewStartClaimTerminalRetentionCount = 64
 $Script:ReviewStartClaimMutexStaleSeconds = 5
-$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'changes_requested')
+$Script:ReviewStartClaimCoveredRunStatuses = @('queued', 'preparing', 'running', 'reviewing', 'up_to_date', 'commented', 'changes_requested')
 $Script:ReviewStartClaimInFlightRunStatuses = @('queued', 'preparing', 'running', 'reviewing')
 $Script:ReviewStartClaimTerminalFailureRunStatuses = @('failed', 'cancelled')
 

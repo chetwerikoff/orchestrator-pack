@@ -17,6 +17,7 @@ import {
   REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
   TERMINAL_AT_CAP_OPEN_FINDINGS,
   TERMINAL_CLEAN_EARLY_STOP,
+  TERMINAL_COMMENTED_EARLY_STOP,
   TIER_CAP_BY_TIER,
   buildAtCapOpenFindingsRecord,
   classifyTerminalRun,
@@ -217,6 +218,58 @@ describe('distinct head counting matrix', () => {
     const runs = [{ prNumber: pr, targetSha: sha, status: 'failed', reaperKilled: true, completedAt: '2026-07-01T00:00:00Z' }];
     expect(classifyTerminalRun(runs[0], sha).kind).toBe('excluded');
     expect(deriveDistinctHeadBudget(runs, pr, sha)).toHaveLength(0);
+  });
+
+  it('counts one commented head as one non-blocking cycle without open findings', () => {
+    const sha = 'commented'.padEnd(40, 'c');
+    const runs = [{
+      prNumber: pr,
+      targetSha: sha,
+      status: 'commented',
+      findingCount: 2,
+      openFindingCount: 0,
+      completedAt: '2026-07-01T00:00:00Z',
+    }];
+    expect(classifyTerminalRun(runs[0], sha)).toMatchObject({ kind: 'non_blocking', openFindings: 0 });
+    const budget = deriveDistinctHeadBudget(runs, pr, sha);
+    expect(budget).toHaveLength(1);
+    expect(budget[0]?.classification.kind).toBe('non_blocking');
+  });
+
+  it('deduplicates repeated commented records for the same head', () => {
+    const sha = 'commented-duplicate'.padEnd(40, 'd');
+    const runs = [
+      { prNumber: pr, targetSha: sha, status: 'commented', openFindingCount: 0, completedAt: '2026-07-01T00:00:00Z' },
+      { prNumber: pr, targetSha: sha, status: 'commented', openFindingCount: 0, completedAt: '2026-07-01T01:00:00Z' },
+    ];
+    expect(deriveDistinctHeadBudget(runs, pr, sha)).toHaveLength(1);
+  });
+
+  it('successive commented heads exhaust the cap without becoming open-findings records', () => {
+    const heads = ['comment-a', 'comment-b'].map((value) => value.padEnd(40, 'e'));
+    const runs = heads.map((targetSha, index) => ({
+      prNumber: pr,
+      targetSha,
+      status: 'commented',
+      findingCount: 1,
+      openFindingCount: 0,
+      completedAt: `2026-07-0${index + 1}T00:00:00Z`,
+    }));
+    const currentGate = run(pr, heads[1]!, runs, { issueBody: '```complexity-tier\ntier: T1\n```' });
+    expect(currentGate.allowStart).toBe(false);
+    expect(currentGate.reason).toBe(TERMINAL_COMMENTED_EARLY_STOP);
+    expect(currentGate.mergeEligible).toBe(true);
+    expect(currentGate.prState?.distinctHeadsReviewed).toEqual(heads);
+    expect(deriveDistinctHeadBudget(runs, pr, heads[1]!).every((entry) => entry.classification.kind === 'non_blocking')).toBe(true);
+
+    const nextHead = 'comment-c'.padEnd(40, 'e');
+    const exhausted = run(pr, nextHead, runs, {
+      issueBody: '```complexity-tier\ntier: T1\n```',
+      capState: currentGate.capState,
+    });
+    expect(exhausted.allowStart).toBe(false);
+    expect(exhausted.reason).toBe(REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED);
+    expect(exhausted.prState?.distinctHeadsReviewed).toEqual(heads);
   });
 
   it('(f) four distinct terminal heads on T2 exhausts budget', () => {

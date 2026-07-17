@@ -5,6 +5,7 @@ export declare const DEFAULT_REVIEW_CYCLE_TIER: string;
 export declare const TIER_CAP_BY_TIER: Readonly<Record<string, number>>;
 export declare const VALID_REVIEW_CYCLE_TIERS: ReadonlySet<string>;
 export declare const TERMINAL_CLEAN_EARLY_STOP: string;
+export declare const TERMINAL_COMMENTED_EARLY_STOP: string;
 export declare const TERMINAL_AT_CAP_OPEN_FINDINGS: string;
 export declare const REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED: string;
 
@@ -18,6 +19,7 @@ export type TerminalRunClassification =
   | { kind: 'excluded'; reason: string }
   | { kind: 'in_flight' }
   | { kind: 'clean'; openFindings: 0 }
+  | { kind: 'non_blocking'; openFindings: 0 }
   | { kind: 'open_findings'; openFindings: number };
 
 export interface PrCapCycleState {
@@ -57,6 +59,8 @@ export declare function resolveOpenFindingCount(run: ReviewRun | Record<string, 
 export declare function isRunInFlight(run: ReviewRun | null | undefined): boolean;
 
 export declare function isCleanTerminalRun(run: ReviewRun | null | undefined): boolean;
+
+export declare function isCommentedTerminalRun(run: ReviewRun | null | undefined): boolean;
 
 export declare function isZeroFindingFailedOrCancelled(run: ReviewRun | null | undefined): boolean;
 

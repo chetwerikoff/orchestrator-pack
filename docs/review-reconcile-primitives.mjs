@@ -13,8 +13,8 @@ export const IN_FLIGHT_REVIEW_STATUSES = new Set([
   'reviewing',
 ]);
 
-/** AO 0.10 engine statuses that cover a head without starting a new review (#189, #625). */
-export const COVERED_TERMINAL_REVIEW_STATUSES = new Set(['up_to_date', 'changes_requested']);
+/** AO 0.10 engine statuses that cover a head; `commented` covers idempotency without blocking merge intent. */
+export const COVERED_TERMINAL_REVIEW_STATUSES = new Set(['up_to_date', 'commented', 'changes_requested']);
 
 /** Latest-run terminal failures that override stale prReviewStatus (#625). */
 export const FAILED_OR_CANCELLED_REVIEW_STATUSES = new Set(['failed', 'cancelled']);

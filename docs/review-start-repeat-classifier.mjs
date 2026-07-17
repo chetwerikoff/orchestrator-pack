@@ -23,7 +23,7 @@ export const CLASSIFIER_INPUT_KEYS = Object.freeze([
 ]);
 
 const IN_FLIGHT_RUN_STATES = new Set(['queued', 'preparing', 'running', 'reviewing']);
-const COVERED_TERMINAL_STATES = new Set(['up_to_date', 'changes_requested']);
+const COVERED_TERMINAL_STATES = new Set(['up_to_date', 'commented', 'changes_requested']);
 
 /**
  * @param {object} input

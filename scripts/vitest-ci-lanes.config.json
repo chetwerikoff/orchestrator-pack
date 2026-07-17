@@ -18,6 +18,7 @@
     "plugins/_shared/tests/issue_parser.test.ts": "light",
     "plugins/_shared/tests/normalize.test.ts": "light",
     "plugins/ao-codex-pr-reviewer/tests/review.test.ts": "light",
+    "plugins/ao-codex-pr-reviewer/tests/severity-defaults.test.ts": "light",
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "heavy",
     "plugins/ao-scope-guard/tests/agent_wrap.test.ts": "heavy",
     "plugins/ao-scope-guard/tests/check.test.ts": "light",
@@ -127,6 +128,7 @@
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-startup.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
+    "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pr-scope-check.test.ts": "heavy",
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/protected-signal-receipt.test.ts": "light",
@@ -222,7 +224,8 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": "light",
     "tests/agents-md-relocation.test.ts": "light",
     "tests/agents-md-size-budget.test.ts": "light",
-    "scripts/gate-runner/registry.test.ts": "light"
+    "scripts/gate-runner/registry.test.ts": "light",
+    "scripts/ao-reviews-board-commented.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
