@@ -517,12 +517,15 @@ export function isRowStale(row, nowMs = Date.now(), repoTickGeneration = 0) {
 }
 
 export function recomputeWorkerStatusRow(input = {}) {
-  const nowMs = Number(input.nowMs ?? Date.now());
-  const store = input.store ? createDefaultWorkerStatusStore(input.store) : null;
-  const sessionId = sessionIdOf(input.session ?? input);
+  const resolvedBinding = resolveWorkerStatusSessionBinding(input);
+  const binding = resolvedBinding.ok === true ? resolvedBinding : (input.binding ?? resolvedBinding);
+  const effectiveInput = { ...input, binding };
+  const nowMs = Number(effectiveInput.nowMs ?? Date.now());
+  const store = effectiveInput.store ? createDefaultWorkerStatusStore(effectiveInput.store) : null;
+  const sessionId = sessionIdOf(effectiveInput.session ?? effectiveInput);
   const existing = store?.records?.[sessionId];
-  const rawWriterVector = input.writerGenerationVector ?? input.generationVector ?? input.sourceGeneration ?? {};
-  const bindingCacheGeneration = Number(input.binding?.bindingCacheGeneration ?? rawWriterVector.bindingCacheGeneration ?? 0) || 0;
+  const rawWriterVector = effectiveInput.writerGenerationVector ?? effectiveInput.generationVector ?? effectiveInput.sourceGeneration ?? {};
+  const bindingCacheGeneration = Number(binding.bindingCacheGeneration ?? rawWriterVector.bindingCacheGeneration ?? 0) || 0;
   const writerVector = asGenerationVector({
     ...rawWriterVector,
     bindingCacheGeneration: Math.max(
@@ -534,7 +537,7 @@ export function recomputeWorkerStatusRow(input = {}) {
   const effectiveVector = reloadedMixedGeneration
     ? mergeGenerationVectorMax(existing, writerVector)
     : writerVector;
-  const fusion = fuseWorkerStatus({ ...input, existingRow: existing, nowMs });
+  const fusion = fuseWorkerStatus({ ...effectiveInput, existingRow: existing, nowMs });
   if (existing && !reloadedMixedGeneration && shouldRefuseMonotonicWrite(existing, writerVector)) {
     return { ok: false, reason: 'monotonic_refused', store };
   }
@@ -567,7 +570,7 @@ export function recomputeWorkerStatusRow(input = {}) {
   const row = {
     schemaVersion: WORKER_STATUS_STORE_SCHEMA_VERSION,
     sessionId,
-    repoSlug: String(input.repoSlug ?? input.session?.repoSlug ?? input.binding?.repoSlug ?? '').trim().toLowerCase() || undefined,
+    repoSlug: String(effectiveInput.repoSlug ?? effectiveInput.session?.repoSlug ?? binding.repoSlug ?? '').trim().toLowerCase() || undefined,
     status: fusion.status,
     derivedStatus: fusion.derivedStatus ?? fusion.status,
     winningSource: fusion.winningSource,
