@@ -271,7 +271,6 @@ function latestReport(input = {}) {
     })[0] ?? null;
 }
 
-
 function resolveWorkerStatusBindingCachePath(input = {}, env = process.env) {
   const explicit = String(input.bindingCachePath ?? '').trim();
   if (explicit) return explicit;
@@ -294,10 +293,17 @@ function resolveWorkerStatusBindingRepoSlug(input, session, openPrs, store, sess
   );
   if (explicit) return { repoSlug: explicit, failureReason: '' };
 
-  const openPrRepo = toArray(openPrs)
-    .map((pr) => normalizeRepoSlug(pr?.repoSlug ?? pr?.repository))
-    .find(Boolean);
-  if (openPrRepo) return { repoSlug: openPrRepo, failureReason: '' };
+  const openPrRepos = new Set(
+    toArray(openPrs)
+      .map((pr) => normalizeRepoSlug(pr?.repoSlug ?? pr?.repository))
+      .filter(Boolean),
+  );
+  if (openPrRepos.size === 1) {
+    return { repoSlug: [...openPrRepos][0], failureReason: '' };
+  }
+  if (openPrRepos.size > 1) {
+    return { repoSlug: '', failureReason: 'binding_cache_repo_ambiguous' };
+  }
 
   const cacheRepos = new Set(
     Object.values(store.records ?? {})
@@ -371,6 +377,15 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
 
   const cached = resolveWorkerStatusCachedBinding(input, session, openPrs, headHint);
   if (cached.binding) return cached.binding;
+  if (cached.failureReason) {
+    return {
+      ok: false,
+      reason: cached.failureReason,
+      prNumber: 0,
+      headSha: headHint,
+      bindingSource: 'none',
+    };
+  }
 
   const binding = resolveSessionPrBinding(session, openPrs, {
     headSha: headHint || undefined,
@@ -385,12 +400,11 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       headSha: normalizeSha(prRow?.headRefOid) || headHint,
       bindingSource: binding.source,
       enriched: Boolean(binding.enriched),
-      bindingDiagnostic: cached.failureReason || undefined,
     };
   }
   return {
     ok: false,
-    reason: String(cached.failureReason || binding.deferReason || 'binding_miss'),
+    reason: String(binding.deferReason ?? 'binding_miss'),
     prNumber: 0,
     headSha: headHint,
     bindingSource: binding.source ?? 'none',
