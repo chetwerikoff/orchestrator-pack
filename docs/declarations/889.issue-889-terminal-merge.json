@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "f58c6fd2606b6d2527e61d661bc44c68eb054484",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:758ec7b0462242aae5380fc4209be1bfb10a6015051b2a7a79424c0e336dd5cd"
+    "active_scope_hash": "sha256:515527af5407bd4b0d6f93d1669ca7f7c602b71c351efcfb9bf6ad290c43e8d6"
   },
   "declared_paths": [
     "docs/architecture.md",
@@ -16,7 +16,8 @@
     "tests/agents-md-relocation.test.ts",
     "tests/agents-md-size-budget.test.ts",
     "tests/escalation-store-terminal-merge-pure.test.ts",
-    "tests/escalation-store-terminal-merge-writers.test.ts"
+    "tests/escalation-store-terminal-merge-writers-aux.test.ts",
+    "tests/escalation-store-terminal-merge-writers-core.test.ts"
   ],
   "declared_globs": [],
   "amendments": []
