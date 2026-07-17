@@ -36,6 +36,23 @@ vi.mock('node:crypto', async (importOriginal) => {
 });
 
 import {
+  isDeliveredChangesRequested,
+  isUndeliveredChangesRequested,
+  mapEngineStateToBoardStatus,
+} from '../docs/review-producer-contract.mjs';
+import { evaluateMergeIntentAfterReviewTrigger } from '../docs/review-wake-trigger.mjs';
+import { classifyReviewStartAttempt } from '../docs/review-start-repeat-classifier.mjs';
+import {
+  evaluateMatchingRunEvidenceForKey,
+  findCoveringRunForKey as findLifecycleCoveringRun,
+} from '../docs/review-start-claim-lifecycle.mjs';
+import * as reviewStartEnvelopeExternalIo from '../docs/review-start-envelope-external-io.mjs';
+import {
+  classifyReviewStatus,
+  evaluateRecoveryForRun,
+  resolveRecoveryConfig,
+} from '../docs/review-run-liveness.mjs';
+import {
   createPackReviewRun,
   getPackReviewRun,
   listPackReviewRuns,
@@ -48,6 +65,16 @@ import {
   resolveTrustedRunnerPaths,
   startPackReview,
 } from './pack-review-runner.js';
+
+const findEnvelopeCoveringRun = (
+  reviewStartEnvelopeExternalIo as unknown as {
+    findCoveringRunForKey: (
+      reviewRuns: unknown[],
+      prNumber: number,
+      headSha: string,
+    ) => { run: Record<string, unknown>; status: string; runId: string } | null;
+  }
+).findCoveringRunForKey;
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempRoots: string[] = [];
@@ -257,6 +284,139 @@ describe('pack-owned review runner/store (Issue #839)', () => {
       event: 'APPROVE',
     });
     expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({ status: 'up_to_date', exitCode: 0 });
+  });
+
+  it('lists a warning-only COMMENT through the real PowerShell adapter as covered and non-blocking', async () => {
+    const storeRoot = tempRoot('opk-review-commented-adapter-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    process.env.OPK_VITEST_HARNESS = '1';
+    process.env.PACK_REVIEW_GITHUB_REVIEW_CAPTURE_FILE = capture;
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 866,
+      headSha: HEAD_A,
+      claimMode: 'preacquired',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureGithubReviewId: 86601,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings',
+        findingCount: 1,
+        findings: [{ title: 'Advisory', body: 'No action required.', severity: 'warning' }],
+      }),
+    });
+    expect(result).toMatchObject({ ok: true, status: 'commented', githubReviewId: 86601 });
+
+    const adapterPath = path.join(repoRoot, 'scripts/lib/Invoke-AoReviewApi.ps1');
+    const output = runPwsh(`
+      $env:PACK_REVIEW_RUN_STORE_ROOT = '${storeRoot.replaceAll("'", "''")}'
+      . '${adapterPath.replaceAll("'", "''")}'
+      $runs = @(Get-AoReviewRunsFromWorkerSessions -Project 'orchestrator-pack')
+      ConvertTo-Json -InputObject @($runs) -Depth 30 -Compress
+    `).trim();
+    const jsonLine = output.split(/\r?\n/).filter(Boolean).at(-1);
+    if (!jsonLine) throw new Error('PowerShell adapter returned no JSON');
+    const parsed = JSON.parse(jsonLine) as unknown;
+    const runs = Array.isArray(parsed) ? parsed : [parsed];
+    expect(runs).toHaveLength(1);
+    const run = runs[0] as Record<string, unknown>;
+    expect(run).toMatchObject({ status: 'commented', latestRunStatus: 'commented', githubReviewEvent: 'COMMENT' });
+    expect(isDeliveredChangesRequested(run)).toBe(false);
+    expect(isUndeliveredChangesRequested(run)).toBe(false);
+    expect(mapEngineStateToBoardStatus({
+      prReviewStatus: String(run.status),
+      latestRun: run,
+      headSha: HEAD_A,
+      entryHeadSha: HEAD_A,
+    })).toBe('clean');
+    expect(evaluateMergeIntentAfterReviewTrigger({
+      prNumber: 866,
+      headSha: HEAD_A,
+      reviewRuns: runs,
+      reviewDecision: 'none',
+    })).toMatchObject({
+      covered: true,
+      mergeable: true,
+      reason: 'covered_terminal_run',
+    });
+  });
+
+  it('treats commented as terminal coverage across review-start and recovery seams', () => {
+    const run = {
+      id: 'commented-866',
+      runId: 'commented-866',
+      project: 'orchestrator-pack',
+      projectId: 'orchestrator-pack',
+      prNumber: 866,
+      targetSha: HEAD_A,
+      status: 'commented',
+      latestRunStatus: 'commented',
+      createdAt: '2026-07-16T00:00:00.000Z',
+    };
+
+    expect(findLifecycleCoveringRun([run], 866, HEAD_A)).toMatchObject({
+      status: 'commented',
+      runId: 'commented-866',
+    });
+    expect(evaluateMatchingRunEvidenceForKey([run], 866, HEAD_A)).toEqual({
+      corruptEvidence: false,
+      ambiguousRuns: [],
+    });
+    expect(findEnvelopeCoveringRun([run], 866, HEAD_A)).toMatchObject({
+      status: 'commented',
+      runId: 'commented-866',
+    });
+    expect(classifyReviewStatus('commented')).toBe('terminal');
+    expect(evaluateRecoveryForRun({
+      run,
+      sidecar: null,
+      state: { observations: {}, escalations: {}, auditBackfills: {} },
+      nowMs: Date.parse('2026-07-16T01:00:00.000Z'),
+      config: resolveRecoveryConfig(),
+    })).toMatchObject({ action: 'skip', reason: 'already_terminal' });
+
+    expect(classifyReviewStartAttempt({
+      project: 'orchestrator-pack',
+      session: 'opk-866',
+      pr: 866,
+      head: HEAD_A,
+      cycle: 'cycle-1',
+      claimId: 'claim-866',
+      reviewRunState: 'commented',
+      triggerSurface: 'review-wake-trigger',
+      priorAttempts: [],
+      reviewRuns: [run],
+      claimOutcome: 'covered_by_run',
+      started: false,
+      cycleState: {},
+      openRevision: { open: false },
+    })).toMatchObject({
+      classification: 'covered_in_flight_suppressed',
+      coverageVerdict: 'covered',
+    });
+
+    const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+    const output = runPwsh(`
+      . '${claimHelperPath.replaceAll("'", "''")}'
+      $run = [pscustomobject]@{
+        id = 'commented-866'
+        runId = 'commented-866'
+        prNumber = 866
+        targetSha = '${HEAD_A}'
+        status = 'commented'
+        latestRunStatus = 'commented'
+      }
+      [pscustomobject]@{
+        visible = [bool](Test-ReviewStartClaimRunVisible -ReviewRuns @($run) -PrNumber 866 -HeadSha '${HEAD_A}')
+        retryEligible = [bool](Test-ReviewStartClaimRetryEligible -ReviewRuns @($run) -PrNumber 866 -HeadSha '${HEAD_A}')
+      } | ConvertTo-Json -Compress
+    `).trim();
+    const result = JSON.parse(output.split(/\r?\n/).filter(Boolean).at(-1) ?? '{}') as {
+      visible: boolean;
+      retryEligible: boolean;
+    };
+    expect(result).toEqual({ visible: true, retryEligible: false });
   });
 
   it('records terminal failed status when the reviewer exits nonzero', async () => {

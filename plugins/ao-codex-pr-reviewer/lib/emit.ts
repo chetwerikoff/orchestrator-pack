@@ -14,7 +14,7 @@ function mapSeverity(severity: string): AoReviewFinding['severity'] {
     case 'info':
       return severity;
     default:
-      return 'warning';
+      return 'error';
   }
 }
 
