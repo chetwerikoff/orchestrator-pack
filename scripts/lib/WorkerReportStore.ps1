@@ -67,14 +67,14 @@ function Set-WorkerReportStoreState {
     )
 
     $default = @{
-        schemaVersion   = 2
-        lastUpdatedMs   = $null
-        generation      = 0
-        sourceRecords   = @{}
-        bindingByKey    = @{}
-        seededKeys      = @()
+        schemaVersion    = 2
+        lastUpdatedMs    = $null
+        generation       = 0
+        sourceRecords    = @{}
+        bindingByKey     = @{}
+        seededKeys       = @()
         deferredScanKeys = @()
-        githubSnapshot  = $null
+        githubSnapshot   = $null
     }
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $default -JsonDepth 30
 }
@@ -148,72 +148,97 @@ function Resolve-PackWorkerReportTrustedBinding {
     )
 
     $headSha = Resolve-PackWorkerReportWorktreeHeadSha -RepoRoot $RepoRoot -HeadSha $WorktreeHeadSha
+    $sessions = @()
     $session = $null
     $openPrs = @()
+    $openListAuthoritative = $false
 
     $aoCli = Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1'
-    if (Test-Path -LiteralPath $aoCli) {
+    if (-not (Get-Command Get-AoStatusSessionsIncludingTerminated -CommandType Function -ErrorAction SilentlyContinue) -and
+        (Test-Path -LiteralPath $aoCli)) {
         . $aoCli
+    }
+    if (Get-Command Get-AoStatusSessionsIncludingTerminated -CommandType Function -ErrorAction SilentlyContinue) {
         try {
             $sessions = @(Get-AoStatusSessionsIncludingTerminated)
             foreach ($row in $sessions) {
-                $id = Get-AoSessionRowIdentifier -Row $row
-                if ($id -eq $SessionId) {
+                if ((Get-AoSessionRowIdentifier -Row $row) -eq $SessionId) {
                     $session = $row
                     break
                 }
             }
         }
         catch {
+            $sessions = @()
             $session = $null
         }
     }
 
     if (-not $session) {
-        return @{ ok = $false; sessionId = $SessionId; reason = 'no_source' }
+        return @{
+            ok        = $false
+            sessionId = $SessionId
+            reason    = 'no_source'
+        }
     }
 
     try {
         $ghPrChecks = Join-Path $PSScriptRoot 'Gh-PrChecks.ps1'
-        if (Test-Path -LiteralPath $ghPrChecks) {
+        if (-not (Get-Command Invoke-GhOpenPrList -CommandType Function -ErrorAction SilentlyContinue) -and
+            (Test-Path -LiteralPath $ghPrChecks)) {
             . $ghPrChecks
         }
         $openPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'pack-worker-report-trusted-binding')
+        $openListAuthoritative = $true
     }
     catch {
         $openPrs = @()
+        $openListAuthoritative = $false
     }
 
-    $slug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
-    if ([string]::IsNullOrWhiteSpace($slug)) {
-        return @{ ok = $false; sessionId = $SessionId; reason = 'missing_repo_slug' }
+    $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedRepoSlug)) {
+        return @{
+            ok        = $false
+            sessionId = $SessionId
+            reason    = 'no_source'
+            diagnostic = 'missing_repo_slug'
+        }
     }
 
     $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $session
+    $sessionRowsPayload = @()
+    foreach ($row in $sessions) {
+        if ($null -eq $row) { continue }
+        $sessionRowsPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $row)
+    }
     $openPrPayload = @()
     foreach ($pr in $openPrs) {
+        if ($null -eq $pr) { continue }
         $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
     }
 
     return Invoke-WorkerReportStoreCli -Subcommand 'resolveTrustedBinding' -Payload @{
-        session         = $sessionPayload
-        openPrs         = $openPrPayload
-        repoSlug        = [string]$slug
-        worktreeHeadSha = $headSha
+        session                = $sessionPayload
+        sessions               = $sessionRowsPayload
+        openPrs                = $openPrPayload
+        worktreeHeadSha        = $headSha
+        repoSlug               = [string]$resolvedRepoSlug
+        openListAuthoritative  = [bool]$openListAuthoritative
     }
 }
 
 function Resolve-PackWorkerReportDeliveryRunId {
     param(
         [string]$ReportState = '',
-        [string]$SessionId = '',
+        [string]$MessionId = '',
         [int]$PrNumber = 0,
         [string]$HeadSha = '',
         [string]$DeliveryRunId = '',
         [string]$ProjectId = ''
     )
 
-    if ([string]::IsNullOrWhiteSpace($ReportState) -or $ReportState -ne 'addressing_reviews') {
+    if ($ReportState -ne 'addressing_reviews') {
         return ''
     }
     if (-not [string]::IsNullOrWhiteSpace($DeliveryRunId)) {
@@ -249,13 +274,13 @@ function Resolve-PackWorkerReportDeliveryRunId {
     $runPayload = @()
     foreach ($run in $reviewRuns) {
         if ($null -eq $run) { continue }
-        $runPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $run)
+        $runPayload += (ConvertToCompactJsonHashtable -Value $run)
     }
     $resolved = Invoke-WorkerReportStoreCli -Subcommand 'resolveDeliveryRunId' -Payload @{
         reportState   = [string]$ReportState
         sessionId     = [string]$SessionId
         prNumber      = [int]$PrNumber
-        headSha       = [string]$HeadSha
+        headSha        = [string]$HeadSha
         deliveryRunId = ''
         reviewRuns    = $runPayload
     }
@@ -324,7 +349,7 @@ function Write-PackWorkerReportRecord {
         accepted       = $Accepted
         sessionId      = $SessionId
         repoSlug       = $RepoSlug
-        prNumber       = $PrNumber
+        prNumber      = $PrNumber
         headSha        = $HeadSha
         reportedAtMs   = $NowMs
         lastObservedMs = $NowMs
