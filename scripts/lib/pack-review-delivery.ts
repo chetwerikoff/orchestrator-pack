@@ -2,9 +2,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.js';
 import {
+  describePackReviewError as describeError,
   getPackReviewRun,
   setPackReviewRunTerminal,
   updatePackReviewRun,
+  trimPackReviewValue as trim,
   type PackReviewDeliveryChannel,
   type PackReviewDeliveryOutcome,
   type PackReviewJournalOutcome,
@@ -90,14 +92,6 @@ interface RecordMalformedReviewOptions extends PackReviewStoreOptions {
   failureReason: string;
   writeRequiredStatus: PackReviewRequiredStatusWriter;
   clock?: () => Date;
-}
-
-function trim(value: unknown): string {
-  return String(value ?? '').trim();
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function delay(milliseconds: number): Promise<void> {

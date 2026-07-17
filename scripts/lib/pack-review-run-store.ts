@@ -173,6 +173,14 @@ function renameRecordWithRetry(temp: string, path: string): void {
   }
 }
 
+export function trimPackReviewValue(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+export function describePackReviewError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('pack review run record must be a JSON object');

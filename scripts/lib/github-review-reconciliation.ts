@@ -2,10 +2,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.js';
 import {
+  describePackReviewError as describeError,
   getPackReviewRun,
   listPackReviewRuns,
   setPackReviewRunTerminal,
   updatePackReviewRun,
+  trimPackReviewValue as trim,
   type GithubCommentReviewReconciliation,
   type PackReviewRunRecord,
   type PackReviewStoreOptions,
@@ -74,14 +76,6 @@ interface CommentReconciliationOptions extends PackReviewStoreOptions {
   run: PackReviewRunRecord;
   body: string;
   transport: GithubReviewTransport;
-}
-
-function trim(value: unknown): string {
-  return String(value ?? '').trim();
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function processFailureMessage(result: ProcessResult, label: string): string {
