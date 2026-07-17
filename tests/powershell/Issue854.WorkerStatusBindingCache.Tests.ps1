@@ -16,5 +16,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
         $result.usableDerivedStatus | Should -Be 'pr_open'
         $result.winningSource | Should -Be 'github_pr'
         @($result.scenarios) | Should -Contain 'unreadable'
+        @($result.scenarios) | Should -Contain 'unreadable_no_legacy_fallback'
+        @($result.scenarios) | Should -Contain 'multi_repo_ambiguous'
     }
 }
