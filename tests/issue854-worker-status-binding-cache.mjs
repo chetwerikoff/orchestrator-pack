@@ -49,16 +49,14 @@ function input(cachePath) {
       status: 'working',
       issueId: 874,
       displayName: '874',
-      repoSlug: REPO,
     },
     openPrs: [{
       number: PR_NUMBER,
       state: 'OPEN',
       headRefOid: HEAD,
       headRefName: `ao/${SESSION_ID}/worker-status-cache`,
-      repoSlug: REPO,
     }],
-    repoSlug: REPO,
+    env: {},
     bindingCachePath: cachePath,
     nowMs: NOW_MS,
   };
@@ -139,9 +137,6 @@ function run() {
 
     writeCache(cachePath);
     const ambiguousRepo = input(cachePath);
-    delete ambiguousRepo.repoSlug;
-    delete ambiguousRepo.session.repoSlug;
-    ambiguousRepo.env = {};
     ambiguousRepo.openPrs = [
       {
         number: PR_NUMBER,
@@ -168,7 +163,7 @@ function run() {
       usableDerivedStatus: 'pr_open',
       winningSource: 'github_pr',
       scenarios: [
-        'cache_hit',
+        'cache_hit_from_cache_repo_scope',
         'ttl_expired',
         'superseded',
         'unreadable',
