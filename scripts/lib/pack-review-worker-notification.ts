@@ -53,8 +53,7 @@ if ($env:OPK_VITEST_HARNESS -eq '1' -and $fixtureTarget) {
     $workerTarget = $fixtureTarget
 }
 else {
-    $resolved = Resolve-ScriptedReviewDeliveryWorkerSession -PrNumber $prNumber -HeadSha $headSha `
-        -ProjectId $projectId -RepoRoot $repoRoot
+    $resolved = Resolve-ScriptedReviewDeliveryWorkerSession -PrNumber $prNumber -HeadSha $headSha -ProjectId $projectId -RepoRoot $repoRoot
     if (-not $resolved.ok) {
         @{ ok = $false; sent = $false; terminal = 'escalated'; reason = [string]$resolved.reason } |
             ConvertTo-Json -Compress -Depth 8
@@ -62,8 +61,7 @@ else {
     }
     $sessionId = [string]$resolved.sessionId
     $openPrs = @($resolved.openPrs)
-    $target = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $prNumber -SessionId $sessionId `
-        -HeadSha $headSha -ProjectId $projectId -OpenPrs $openPrs
+    $target = Resolve-WorkerNudgeTargetFromPrClaim -PrNumber $prNumber -SessionId $sessionId -HeadSha $headSha -ProjectId $projectId -OpenPrs $openPrs
     if (-not $target.ok) {
         @{ ok = $false; sent = $false; terminal = 'escalated'; reason = [string]$target.reason } |
             ConvertTo-Json -Compress -Depth 8
@@ -112,9 +110,7 @@ if (-not $admission.ok -and $admission.action -ne 'resume') {
     exit 0
 }
 
-$result = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId -MessageText $message `
-    -DeliveryKey $deliveryKey -DeliveryId $deliveryId -PrNumber $prNumber -TargetSha $headSha `
-    -ProjectId $projectId -FindingsHash $findingsHash -WorkerTarget $workerTarget -OpenPrs $openPrs
+$result = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId -MessageText $message -DeliveryKey $deliveryKey -DeliveryId $deliveryId -PrNumber $prNumber -TargetSha $headSha -ProjectId $projectId -FindingsHash $findingsHash -WorkerTarget $workerTarget -OpenPrs $openPrs
 $result | ConvertTo-Json -Compress -Depth 8
 `;
 
