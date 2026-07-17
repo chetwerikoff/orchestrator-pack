@@ -11,8 +11,24 @@
   },
   "declared_paths": [
     "scripts/lib/worker-status-store.mjs",
+    "tests/issue854-worker-status-binding-cache.mjs",
     "tests/powershell/Issue854.WorkerStatusBindingCache.Tests.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:e31e131652f0a04d24b0ccd78bd0aa1923ec51cc48bb6380bc59826d3e07dc1c",
+      "new_active_scope_hash": "sha256:c36c9b297585f17c54229fd311692424b66dae60b86fbbffe397eba59a81790d",
+      "changed": {
+        "added": [
+          "tests/issue854-worker-status-binding-cache.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Move the no-fixture production-path regression into TypeScript/Node while keeping the Pester surface as thin test wiring.",
+      "actor": "chatgpt",
+      "timestamp": "2026-07-17T03:12:00.000Z",
+      "applied": true
+    }
+  ]
 }
