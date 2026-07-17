@@ -1,0 +1,56 @@
+name: diagnose-pr869-pr-context
+
+on:
+  push:
+    branches:
+      - agent/pr869-pipeline-merge-diagnostic
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/pr869-pipeline-merge-diagnostic
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Reproduce pull-request merge context
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin 77f7f0e583b5a54cdad85e97f6705ef407354ec4
+          git worktree add --detach /tmp/pr869-merge 77f7f0e583b5a54cdad85e97f6705ef407354ec4
+          cp -a node_modules /tmp/pr869-merge/node_modules
+          set +e
+          cd /tmp/pr869-merge
+          env \
+            GITHUB_ACTIONS=true \
+            GITHUB_EVENT_NAME=pull_request \
+            GITHUB_SHA=77f7f0e583b5a54cdad85e97f6705ef407354ec4 \
+            GITHUB_BASE_REF=main \
+            GITHUB_HEAD_REF=agent/issue-862-review-delivery-outcome \
+            PR_BASE_SHA=173fdf2e96c339e367550a4cc4caffdeb4b89ae8 \
+            PR_HEAD_SHA=7a88629ce38c1a2616db269ad53e0a45edf9ca82 \
+            pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > /tmp/pr869-pr-context.log 2>&1
+          status=$?
+          tail -n 300 /tmp/pr869-pr-context.log > "$GITHUB_WORKSPACE/pr869-pr-context-tail.txt"
+          echo "EXIT_CODE=$status" >> "$GITHUB_WORKSPACE/pr869-pr-context-tail.txt"
+          exit 0
+      - name: Publish diagnostic tail
+        shell: bash
+        run: |
+          git rm .github/workflows/diagnose-pr869-pr-context.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add pr869-pr-context-tail.txt
+          git commit -m "diag: capture PR 869 merge-context pipeline failure"
+          git push origin HEAD:agent/pr869-pipeline-merge-diagnostic
