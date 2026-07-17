@@ -1,4 +1,4 @@
-name: Issue 857 post-remap diagnostic
+name: Issue 857 post-remap Pester diagnostic
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,15 +66,8 @@ jobs:
         run: |
           ./scripts/test-all.ps1 -SkipNpm *> issue857-pester-post-remap.log
           exit 0
-      - name: Capture affected Vitest suites
-        shell: bash
-        env:
-          OPK_VITEST_HARNESS: '1'
-        run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts > issue857-vitest-post-remap.log 2>&1 || true
       - uses: actions/upload-artifact@v4
         with:
-          name: issue857-post-remap-diagnostics
-          path: |
-            issue857-pester-post-remap.log
-            issue857-vitest-post-remap.log
+          name: issue857-post-remap-pester
+          path: issue857-pester-post-remap.log
           if-no-files-found: error
