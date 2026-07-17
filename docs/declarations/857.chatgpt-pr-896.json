@@ -10,15 +10,13 @@
     "active_scope_hash": "sha256:ffc72abee528ac3c7ec81ed00d45a17740a62e188339f0dc9d80010bff648783"
   },
   "declared_paths": [
-    "docs/declarations/857.chatgpt-pr-896.json",
     "docs/pr-session-binding-cache.mjs",
     "docs/session-pr-binding-resolver.mjs",
     "docs/worker-report-store.mjs",
-    "scripts/issue857-pr-session-binding-contract.test.ts",
     "scripts/lib/Invoke-AoCliJson.ps1",
     "scripts/lib/Worker-Recovery.ps1",
     "scripts/lib/WorkerReportStore.ps1",
-    "scripts/lib/WorkerStatusStore.ps1",
+    "tests/powershell/Issue857.PrSessionBindingContract.Node.mjs",
     "tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1"
   ],
   "declared_globs": [],
