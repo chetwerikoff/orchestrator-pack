@@ -397,12 +397,16 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
   }
   if (matches.length === 1) {
     const match = matches[0];
+    const bindingContractSource = String(match.resolution.source ?? 'unknown');
     return {
       ok: true,
       prNumber: Number(match.pr.number),
       headSha: normalizeSha(match.pr.headRefOid) || headHint,
       repoSlug: repo.repoSlug || undefined,
-      bindingSource: `binding_contract:${String(match.resolution.source ?? 'unknown')}`,
+      bindingSource: bindingContractSource === 'backfill_resolver'
+        ? 'issue_correlation'
+        : `binding_contract:${bindingContractSource}`,
+      bindingContractSource,
       bindingCacheGeneration: Number(store.generation ?? 0),
     };
   }
