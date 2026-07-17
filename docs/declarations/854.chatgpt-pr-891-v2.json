@@ -1,0 +1,19 @@
+{
+  "issue_number": 854,
+  "iteration_id": "chatgpt-pr-891-v2",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chatgpt-pr-891",
+  "created_at": "2026-07-17T03:46:00.000Z",
+  "baseline": {
+    "commit_sha": "b6d7535501b1c5899883d781ee0a71540a209275",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4d5e435977a1d5bd3e737f67b65bcdd9151f5bb48f587ec535689206bd32d5e4"
+  },
+  "declared_paths": [
+    "scripts/lib/worker-status-store.mjs",
+    "tests/issue854-worker-status-binding-cache.mjs",
+    "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
