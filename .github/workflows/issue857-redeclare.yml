@@ -39,21 +39,21 @@ jobs:
             --iteration-id chatgpt-pr-896-clause-d-tests \
             --repo-root "$GITHUB_WORKSPACE" \
             --declared-paths 'docs/pr-session-binding-cache.d.mts,docs/pr-session-binding-cache.mjs,docs/session-pr-binding-resolver.d.mts,docs/session-pr-binding-resolver.mjs,docs/worker-report-store.mjs,scripts/lib/Invoke-AoCliJson.ps1,scripts/lib/Worker-Recovery.ps1,scripts/lib/WorkerReportStore.ps1,scripts/lib/WorkerStatusStore.ps1,scripts/lib/worker-status-store.mjs,scripts/pr-session-binding-cache.test.ts,scripts/session-pr-binding-resolver.test.ts,tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1,tests/powershell/Issue857.PrSessionBindingContract.Node.mjs,tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1' \
-            > issue857-declare.log 2>&1
-          echo "$?" > issue857-declare.status
+            > /tmp/issue857-declare.log 2>&1
+          echo "$?" > /tmp/issue857-declare.status
           exit 0
       - uses: actions/upload-artifact@v4
         with:
           name: issue857-declare-diagnostics
           path: |
-            issue857-declare.log
-            issue857-declare.status
+            /tmp/issue857-declare.log
+            /tmp/issue857-declare.status
           if-no-files-found: error
       - name: Validate and commit generated snapshot
         shell: bash
         run: |
           set -euo pipefail
-          test "$(cat issue857-declare.status)" = '0' || { cat issue857-declare.log; exit 1; }
+          test "$(cat /tmp/issue857-declare.status)" = '0' || { cat /tmp/issue857-declare.log; exit 1; }
           test -f docs/declarations/857.chatgpt-pr-896-clause-d-tests.json
           node -e "const s=require('./docs/declarations/857.chatgpt-pr-896-clause-d-tests.json'); if(s.iteration_id_source!=='wrapper_generated'||s.supersedes!=='chatgpt-pr-896'||s.declared_paths.length!==15||s.amendments.length!==0) process.exit(1)"
           rm -f .ao/declarations/857.chatgpt-pr-896-clause-d-tests.json
