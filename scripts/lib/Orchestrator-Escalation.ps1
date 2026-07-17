@@ -621,6 +621,27 @@ function Merge-OrchestratorEscalationRouterWritebackState {
     }
 }
 
+function Set-OrchestratorEscalationPublisherStateFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$RecordKey,
+        [Parameter(Mandatory = $true)][bool]$RecordExistedAtSnapshot,
+        [long]$SnapshotLoadedAtMs = 0
+    )
+
+    $diskState = Get-MechanicalJsonStateFile -Path $Path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+    $writeState = Merge-OrchestratorEscalationRouterWritebackState -State $State -DiskState $diskState `
+        -DirtyRecordKeys @($RecordKey) -SnapshotLoadedAtMs $SnapshotLoadedAtMs
+
+    if (-not $RecordExistedAtSnapshot -and $State.records.ContainsKey($RecordKey) -and -not $diskState.records.ContainsKey($RecordKey)) {
+        $writeState.records[$RecordKey] = $State.records[$RecordKey]
+    }
+
+    Set-MechanicalJsonStateFile -Path $Path -State $writeState -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+    return $writeState
+}
+
 function Complete-OrchestratorEscalationQuarantine {
     param(
         [Parameter(Mandatory = $true)]$Record,
@@ -719,20 +740,26 @@ function Publish-OrchestratorEscalation {
     $route = [string]$class.route
     $now = Get-OrchestratorEscalationNowMs -NowMs $NowMs
     $path = Get-OrchestratorEscalationStatePath -StatePath $StatePath
+    $snapshotLoadedAtMs = Get-OrchestratorEscalationNowMs -NowMs $NowMs
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
     $state.schemaVersion = $Script:OrchestratorEscalationSchemaVersion
     $ownerProcess = Get-OrchestratorEscalationOwnerProcess -Class $class -Payload $Payload
     $recordKey = ''
+    $recordExistedAtSnapshot = $false
     if ($ReplayEscalationId) {
         $recordKey = $ReplayEscalationId
         if (-not $state.records.ContainsKey($recordKey)) {
             throw "unknown escalation replay id: $ReplayEscalationId"
         }
+        $recordExistedAtSnapshot = $true
     }
     else {
         $conditionKey = Get-OrchestratorEscalationConditionKey -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload
         $recordKey = Find-OrchestratorEscalationCurrentRecordKey -State $state -ConditionKey $conditionKey
-        if (-not $recordKey) {
+        if ($recordKey) {
+            $recordExistedAtSnapshot = $true
+        }
+        else {
             $epoch = Get-OrchestratorEscalationNextEpoch -State $state -ConditionKey $conditionKey
             $recordKey = Get-OrchestratorEscalationEpochRecordKey -ConditionKey $conditionKey -Epoch $epoch
             $state.records[$recordKey] = Initialize-OrchestratorEscalationRecord `
@@ -744,11 +771,13 @@ function Publish-OrchestratorEscalation {
     Sync-OrchestratorEscalationRecordDefaults -Record $record -EscalationClassId $EscalationClassId -CorrelationKey $CorrelationKey -Payload $Payload -Route $route -OwnerProcess $ownerProcess | Out-Null
     if (Test-OrchestratorEscalationAcked -Record $record) {
         Resolve-OrchestratorEscalationTerminalState -Record $record -TerminalState 'acked' -Now $now | Out-Null
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         return @{ ok = $true; status = 'acked'; escalationId = $recordKey; delivered = $false; reason = 'already_acked' }
     }
     if (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$record.terminalState)) {
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         return @{ ok = $true; status = [string]$record.terminalState; escalationId = $recordKey; delivered = $false; reason = 'already_terminal' }
     }
 
@@ -775,7 +804,8 @@ function Publish-OrchestratorEscalation {
         elseif ($class.PSObject.Properties.Name -contains 'promotion_target_class_id') {
             $promotedClass = [string]$class.promotion_target_class_id
         }
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         if ($promoteAfter -gt 0 -and $record.autoRetryTicks -ge $promoteAfter -and $promotedClass) {
             return Publish-OrchestratorEscalation -EscalationClassId $promotedClass -CorrelationKey $CorrelationKey `
                 -Payload $Payload -Message $Message -StatePath $path -OperatorInboxDir $OperatorInboxDir `
@@ -787,11 +817,13 @@ function Publish-OrchestratorEscalation {
 
     if (-not $ReplayEscalationId -and $record.attempts -gt 0) {
         if (Test-OrchestratorEscalationSourceRateLimited -Record $record -Now $now) {
-            Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+            Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+                -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
             return @{ ok = $true; status = 'source_rate_limited'; escalationId = $recordKey; delivered = $false; reason = 'source_rate_limited' }
         }
         $record.lastSourceEmitAtMs = $now
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         return @{ ok = $true; status = 'open_existing'; escalationId = $recordKey; delivered = $false; reason = 'condition_open' }
     }
 
@@ -801,7 +833,8 @@ function Publish-OrchestratorEscalation {
     $lastWake = if ($state.wakeWindows.ContainsKey($wakeKey)) { [long]$state.wakeWindows[$wakeKey] } else { 0 }
     if (-not $SkipWakeSuppression -and $lastWake -gt 0 -and ($now - $lastWake) -lt $Script:OrchestratorEscalationMinBackoffMs) {
         $record.lastSuppressedWakeAtMs = $now
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         return @{ ok = $true; status = 'wake_suppressed'; escalationId = $recordKey; delivered = $false; reason = 'wake_storm_cap' }
     }
 
@@ -828,7 +861,8 @@ function Publish-OrchestratorEscalation {
         else {
             throw "unsupported escalation route: $route"
         }
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         return @{ ok = $true; status = [string]$record.status; escalationId = $recordKey; ackToken = [string]$record.ackToken; delivered = $true }
     }
     catch {
@@ -845,7 +879,8 @@ function Publish-OrchestratorEscalation {
                 $state.wakeWindows.Remove($wakeKey) | Out-Null
             }
         }
-        Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+        Set-OrchestratorEscalationPublisherStateFile -Path $path -State $state -RecordKey $recordKey `
+            -RecordExistedAtSnapshot $recordExistedAtSnapshot -SnapshotLoadedAtMs $snapshotLoadedAtMs | Out-Null
         return @{ ok = $false; status = 'pending'; escalationId = $recordKey; reason = $reason; delivered = $false }
     }
 }
