@@ -70,6 +70,13 @@ export const SUBMIT_STATE_NOOP = 'noop';
 export const OPERATOR_ESCALATION_PREFIX =
   '[worker-message-submit-reconcile] ESCALATION:';
 
+/** Per reconcile pass, keep at most this many individual escalation records per class. */
+export const DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP = 8;
+export const DEFAULT_BULK_ESCALATION_SAMPLE_SIZE = 5;
+export const SUBMIT_ESCALATION_CLASS_ID = 'escalation-submit-adoption';
+export const SUBMIT_DIGEST_ESCALATION_CLASS_ID = SUBMIT_ESCALATION_CLASS_ID;
+export const SUBMIT_DIGEST_FAILURE_KIND = 'bulk_digest';
+
 export const FAILED_DELIVERY_UNRESOLVED = 'unresolved';
 
 export const STATE_ROOT_RECOVERY_REASON = 'wrong_state_root_active_deliveries';
@@ -706,6 +713,160 @@ function resolveDeliveryTerminalEscalation({ delivery, record, nowMs, reason, di
     failedDelivery: buildFailedDeliveryRecord({ delivery, record, nowMs, reason: failedReason }),
     diagnosis,
   };
+}
+
+function isTerminalEscalationState(value) {
+  const state = trimString(value);
+  return state === 'acked' || state === 'resolved' || state === 'quarantined' || state === 'dead_lettered';
+}
+
+function buildSubmitDigestKey(escalationClassId) {
+  return `${SUBMIT_DIGEST_ESCALATION_CLASS_ID}|project:global|${SUBMIT_DIGEST_FAILURE_KIND}|${trimString(escalationClassId) || SUBMIT_ESCALATION_CLASS_ID}`;
+}
+
+function buildSubmitDigestCorrelationKey(escalationClassId, generation) {
+  return `corr:submit-digest:${trimString(escalationClassId) || SUBMIT_ESCALATION_CLASS_ID}:${Number(generation) || 1}`;
+}
+
+function buildEscalationDigestSample(actions, limit) {
+  return actions.slice(0, limit).map((action) => ({
+    deliveryId: trimString(action.deliveryId),
+    sessionId: trimString(action.sessionId),
+    reason: trimString(action.reason),
+    failureKind: trimString(action.failureKind ?? action.reason),
+  }));
+}
+
+function mergeEscalationDigestSample(priorSample, newActions, limit) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...buildEscalationDigestSample(newActions, limit), ...toArray(priorSample)]) {
+    const deliveryId = trimString(item?.deliveryId);
+    if (!deliveryId || seen.has(deliveryId)) {
+      continue;
+    }
+    seen.add(deliveryId);
+    merged.push({
+      deliveryId,
+      sessionId: trimString(item?.sessionId),
+      reason: trimString(item?.reason),
+      failureKind: trimString(item?.failureKind),
+    });
+    if (merged.length >= limit) {
+      break;
+    }
+  }
+  return merged;
+}
+
+export function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
+  const cap = DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP;
+  const sampleSize = DEFAULT_BULK_ESCALATION_SAMPLE_SIZE;
+  const digestState = { ...(tracking?.bulkEscalationDigests ?? {}) };
+  const byClass = new Map();
+  for (const action of actions) {
+    if (action?.type !== 'escalate') {
+      continue;
+    }
+    const escalationClassId = trimString(action?.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
+    const bucket = byClass.get(escalationClassId) ?? [];
+    bucket.push(action);
+    byClass.set(escalationClassId, bucket);
+  }
+  if (byClass.size === 0) {
+    return { actions, bulkEscalationDigests: digestState };
+  }
+
+  const kept = [];
+  const digestByClass = new Map();
+  const classIndexes = new Map();
+  const individualLimitByClass = new Map();
+  for (const [escalationClassId, classActions] of byClass.entries()) {
+    classIndexes.set(escalationClassId, 0);
+    const digestKey = buildSubmitDigestKey(escalationClassId);
+    const prior = digestState[digestKey] ?? {};
+    const priorTerminal = isTerminalEscalationState(prior.terminalState ?? prior.status);
+    const priorCount = priorTerminal ? 0 : Number(prior.count ?? 0);
+    const priorAccountedIds = new Set(
+      priorTerminal ? [] : toArray(prior.accountedDeliveryIds).map((id) => trimString(id)).filter(Boolean),
+    );
+    const openDigestExists = !priorTerminal && priorCount > 0;
+    const individualLimit = openDigestExists ? 0 : cap;
+    individualLimitByClass.set(escalationClassId, individualLimit);
+    if (classActions.length <= individualLimit) {
+      continue;
+    }
+    const coalesced = classActions.slice(individualLimit);
+    const newCoalesced = coalesced.filter((action) => !priorAccountedIds.has(trimString(action.deliveryId)));
+    const nextCount = priorCount + newCoalesced.length;
+    const shouldEmit = priorTerminal || priorCount <= 0 || newCoalesced.length > 0;
+    const generation = shouldEmit && priorTerminal
+      ? Number(prior.generation ?? 1) + 1
+      : Number(prior.generation ?? 1) || 1;
+    const correlationKey = buildSubmitDigestCorrelationKey(escalationClassId, generation);
+    const sourceFailureKinds = [...new Set(classActions.map((action) => trimString(action.failureKind ?? action.reason)).filter(Boolean))];
+    const sample = mergeEscalationDigestSample(prior.sample, newCoalesced.length > 0 ? newCoalesced : coalesced, sampleSize);
+    const accountedDeliveryIds = [
+      ...new Set([
+        ...priorAccountedIds,
+        ...classActions.map((action) => trimString(action.deliveryId)).filter(Boolean),
+      ]),
+    ];
+    digestState[digestKey] = {
+      ...prior,
+      digestKey,
+      escalationClassId,
+      sourceFailureKind: sourceFailureKinds.length === 1 ? sourceFailureKinds[0] : 'multiple',
+      sourceFailureKinds,
+      digestEscalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+      correlationKey,
+      failureKind: SUBMIT_DIGEST_FAILURE_KIND,
+      count: nextCount,
+      sample,
+      accountedDeliveryIds,
+      generation,
+      terminalState: shouldEmit ? 'open' : trimString(prior.terminalState ?? prior.status) || 'open',
+      lastObservedAtMs: nowMs,
+      lastEmittedAtMs: shouldEmit ? nowMs : Number(prior.lastEmittedAtMs ?? 0),
+    };
+    if (shouldEmit) {
+      digestByClass.set(escalationClassId, {
+        type: 'escalate-digest',
+        escalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+        sourceEscalationClassId: escalationClassId,
+        sourceFailureKind: sourceFailureKinds.length === 1 ? sourceFailureKinds[0] : 'multiple',
+        sourceFailureKinds,
+        digestKey,
+        correlationKey,
+        failureKind: SUBMIT_DIGEST_FAILURE_KIND,
+        reason: 'bulk_escalation_digest',
+        count: nextCount,
+        sample,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} ${nextCount} worker message submit escalations are coalesced after per-pass cap ${cap} for ${escalationClassId}.`,
+      });
+    }
+  }
+
+  for (const action of actions) {
+    if (action?.type !== 'escalate') {
+      kept.push(action);
+      continue;
+    }
+    const escalationClassId = trimString(action.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
+    const individualLimit = individualLimitByClass.has(escalationClassId)
+      ? individualLimitByClass.get(escalationClassId)
+      : cap;
+    const index = classIndexes.get(escalationClassId) ?? 0;
+    classIndexes.set(escalationClassId, index + 1);
+    const classActions = byClass.get(escalationClassId) ?? [];
+    if (classActions.length <= individualLimit || index < individualLimit) {
+      kept.push({ ...action, escalationClassId });
+    }
+  }
+  for (const digest of digestByClass.values()) {
+    kept.push(digest);
+  }
+  return { actions: kept, bulkEscalationDigests: digestState };
 }
 
 function recordConsumptionResolution({ record, nowMs }) {
@@ -1745,9 +1906,16 @@ export function planWorkerMessageSubmitActions(input) {
     audit.push({ deliveryId, action: 'escalate', reason });
   }
 
+  const boundedEscalations = coalesceBulkEscalationActions({
+    actions,
+    tracking: baseTracking,
+    nowMs,
+  });
+
   const draftTracking = {
     deliveries: nextDeliveries,
     failedDeliveries: nextFailedDeliveries,
+    bulkEscalationDigests: boundedEscalations.bulkEscalationDigests,
     lastTickMs: nowMs,
     audit: [...toArray(baseTracking?.audit), ...audit],
   };
@@ -1770,7 +1938,7 @@ export function planWorkerMessageSubmitActions(input) {
   }
 
   return {
-    actions,
+    actions: boundedEscalations.actions,
     tracking: compacted.tracking,
     dispatchJournal: compactedJournal,
     deliveryCount: deliveries.length,

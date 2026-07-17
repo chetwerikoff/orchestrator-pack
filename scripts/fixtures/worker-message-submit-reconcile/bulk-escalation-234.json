@@ -1,0 +1,21 @@
+{
+  "description": "Issue #890 positive-outcome fixture: 234 send-failed deliveries in one fence-recovery sweep.",
+  "nowMs": 1717603000000,
+  "sessions": [],
+  "dispatchJournal": {},
+  "tracking": {
+    "deliveries": {},
+    "failedDeliveries": {},
+    "audit": []
+  },
+  "config": {
+    "deliveryBudgetMs": 1000,
+    "postDispatchLeaseMs": 1000
+  },
+  "generatedBacklog": {
+    "count": 234,
+    "sessionPrefix": "bulk-incident",
+    "repeatedSessionCount": 20,
+    "startMs": 1717601000000
+  }
+}
