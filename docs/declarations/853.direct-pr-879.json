@@ -1,0 +1,47 @@
+{
+  "issue_number": 853,
+  "iteration_id": "direct-pr-879",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-16T14:31:39.245Z",
+  "baseline": {
+    "commit_sha": "ed4889808a9212b6149dc7db0c11f1ffe48a76ea",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5d0d3a5fd1dc4285d940109f1b00b55a98b0712e3914e78c113423881bafdeb8"
+  },
+  "declared_paths": [
+    "docs/fleet-liveness-contract.md",
+    "scripts/fleet-liveness-census.cases.ts",
+    "scripts/fleet-liveness.cases.ts",
+    "scripts/gate-runner/fleet-liveness-census.ts",
+    "scripts/gh",
+    "scripts/kernel/json-contract.test.ts",
+    "scripts/kernel/side-process-liveness.ts",
+    "scripts/lib/Orchestrator-SideProcessProgress.ps1",
+    "scripts/orchestrator-side-process-liveness-contract.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:2138bf6d72809bc9d165dc52fb2cb1407b89e2bdc3306d2730ae2432cd641cfe",
+      "new_active_scope_hash": "sha256:5d0d3a5fd1dc4285d940109f1b00b55a98b0712e3914e78c113423881bafdeb8",
+      "changed": {
+        "added": [
+          "scripts/fleet-liveness-census.cases.ts",
+          "scripts/fleet-liveness.cases.ts",
+          "scripts/kernel/json-contract.test.ts"
+        ],
+        "removed": [
+          "scripts/fleet-liveness-census.test.ts",
+          "scripts/fleet-liveness.test.ts",
+          "scripts/review-ready-seed-liveness.test.ts",
+          "scripts/vitest-ci-lanes.config.json"
+        ]
+      },
+      "reason": "Move Issue #853 pure TypeScript scenarios into the existing foundation JSON-contract host after CI isolated a runtime failure in the heavy liveness host; preserve deterministic coverage without fabricating runtime-history data.",
+      "actor": "chatgpt",
+      "timestamp": "2026-07-16T15:46:00.000Z",
+      "applied": true
+    }
+  ]
+}
