@@ -1,6 +1,6 @@
 # Issue 841 post-rebase CI
 
-- The implementation branch is rebased onto `main` commit `ca0b71270dd4b57476bc2524db801ace52c57d2a` with no commits behind.
+- The implementation branch is rebased onto `main` commit `af70ecf032724a6279cda87d45c23e649064fe09` with no commits behind.
 - Wave 3.b ownership is frozen by an independent migration inventory and a generated digest that includes `classification`, `gateIds`, and `portedInWave`.
 - Every migrated `verify.ps1` row is bound to its concrete required-file, contract-marker, prompt-glob, or standalone-owner replacement rule.
 - Test-backed legacy references require the exact repository-owned PowerShell wrapper and fail-closed child-process handling.
