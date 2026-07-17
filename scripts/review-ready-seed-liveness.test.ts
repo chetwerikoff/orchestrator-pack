@@ -21,8 +21,8 @@ beforeAll(() => {
   }
 }, 120_000);
 
-describe('review-ready-seed-liveness first half diagnostic', () => {
-  for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX.slice(0, 8)) {
+describe('review-ready-seed-liveness third quarter diagnostic', () => {
+  for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX.slice(8, 12)) {
     it(`expected: ${row.expected}`, () => {
       const result = runReviewReadySeedFixtureRunner(runnerScript, fixtureDir, row.fixture);
       expect(result.expected).toBe(row.expected);
