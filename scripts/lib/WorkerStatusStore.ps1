@@ -402,6 +402,18 @@ function Test-WorkerStatusSiblingReadiness {
     return $result
 }
 
+
+function Get-WorkerStatusPrSessionBindingCachePath {
+    if ($env:AO_PR_SESSION_BINDING_CACHE) {
+        return [string]$env:AO_PR_SESSION_BINDING_CACHE
+    }
+    if ($env:AO_REPORT_STATE_SEED_STATE) {
+        $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
+        return (Join-Path (Split-Path -Parent $seedPath) 'pr-session-binding-cache.json')
+    }
+    return (Join-Path $HOME '.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json')
+}
+
 function Get-WorkerStatusWriterGenerationVector {
     param(
         [string]$SessionId = '',
@@ -453,13 +465,7 @@ function Get-WorkerStatusWriterGenerationVector {
     }
 
     $bindingGen = [long]0
-    $bindingCachePath = ''
-    if ($env:AO_PR_SESSION_BINDING_CACHE) {
-        $bindingCachePath = [string]$env:AO_PR_SESSION_BINDING_CACHE
-    }
-    elseif ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
-        $bindingCachePath = Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'pr-session-binding-cache.json'
-    }
+    $bindingCachePath = Get-WorkerStatusPrSessionBindingCachePath
     if ($bindingCachePath -and (Test-Path -LiteralPath $bindingCachePath)) {
         try {
             $bindingCache = Get-Content -LiteralPath $bindingCachePath -Raw -Encoding UTF8 | ConvertFrom-Json

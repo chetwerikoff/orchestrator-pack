@@ -151,6 +151,48 @@ function run() {
     assert.equal(failClosed.bindingSource, 'binding_contract:cache');
 
     writeCache(cachePath);
+    const staleSessionId = 'orchestrator-pack-999';
+    const conflictPr = 88;
+    const conflictHead = 'sharedhead88';
+    const staleRecord = {
+      schemaVersion: 1,
+      sessionId: staleSessionId,
+      prNumber: conflictPr,
+      issueNumber: 88,
+      headSha: conflictHead,
+      repoSlug: REPO,
+      source: 'push_register',
+      lastUpdatedMs: NOW_MS - 1_000,
+      superseded: false,
+    };
+    writeCache(cachePath, [staleRecord], 45);
+    const cacheConflict = resolveWorkerStatusSessionBinding({
+      session: {
+        id: SESSION_ID,
+        sessionId: SESSION_ID,
+        role: 'worker',
+        status: 'working',
+        issueId: 88,
+        displayName: '88',
+        branch: 'agent/issue-88',
+      },
+      openPrs: [{
+        number: conflictPr,
+        state: 'OPEN',
+        headRefOid: conflictHead,
+        headRefName: 'agent/issue-88',
+      }],
+      env: { AO_PR_SESSION_BINDING_CACHE: cachePath },
+      cwd: REPO_ROOT,
+      bindingCachePath: cachePath,
+      nowMs: NOW_MS,
+      osLiveness: { status: 'working', dead: false },
+    });
+    assert.equal(cacheConflict.ok, false);
+    assert.equal(cacheConflict.reason, 'binding_cache_conflict');
+    assert.equal(cacheConflict.bindingSource, 'binding_contract:cache');
+
+    writeCache(cachePath);
     const ambiguousRepo = input(cachePath);
     ambiguousRepo.openPrs = [
       {
@@ -195,6 +237,7 @@ function run() {
         'unreadable_no_legacy_fallback',
         'unrelated_pr_first_still_hits_target',
         'target_pr_fail_closed_surfaces_authoritative_reason',
+        'target_pr_cache_conflict_surfaces_when_stale_cache_names_other_session',
         'multi_repo_ambiguous',
         'stale_other_repo_evicted_without_ambiguity',
       ],

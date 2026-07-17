@@ -339,4 +339,57 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+
+    It 'Get-WorkerStatusPrSessionBindingCachePath matches shared resolver fallback precedence' {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("opk-854-cachepath-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $seedDir = Join-Path $dir 'seed-state'
+        $wakeDir = Join-Path $dir 'wake-supervisor'
+        New-Item -ItemType Directory -Path $seedDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $wakeDir -Force | Out-Null
+        $seedStatePath = Join-Path $seedDir 'report-seed-state.json'
+        $resolverCachePath = Join-Path $seedDir 'pr-session-binding-cache.json'
+        $decoyCachePath = Join-Path $wakeDir 'pr-session-binding-cache.json'
+        [System.IO.File]::WriteAllText($seedStatePath, '{}' + "`n", [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText(
+            $resolverCachePath,
+            ((@{ schemaVersion = 1; generation = 77; records = @{}; lastUpdatedMs = 1 } | ConvertTo-Json -Compress) + "`n"),
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        [System.IO.File]::WriteAllText(
+            $decoyCachePath,
+            ((@{ schemaVersion = 1; generation = 1; records = @{}; lastUpdatedMs = 1 } | ConvertTo-Json -Compress) + "`n"),
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $oldBindingCache = $env:AO_PR_SESSION_BINDING_CACHE
+        $oldSeedState = $env:AO_REPORT_STATE_SEED_STATE
+        $oldWakeDir = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
+        try {
+            Remove-Item Env:AO_PR_SESSION_BINDING_CACHE -ErrorAction SilentlyContinue
+            $env:AO_REPORT_STATE_SEED_STATE = $seedStatePath
+            $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $wakeDir
+
+            $psPath = Get-WorkerStatusPrSessionBindingCachePath
+            $nodeScript = @"
+import { resolvePrSessionBindingCachePath } from '$($RepoRoot -replace "'", "''")/docs/pr-session-binding-cache.mjs';
+console.log(resolvePrSessionBindingCachePath(process.env));
+"@
+            $nodePath = (& $Issue854NodePath --input-type=module -e $nodeScript | Out-String).Trim()
+            $psPath | Should -Be $nodePath
+            $psPath | Should -Be $resolverCachePath
+
+            $vector = Get-WorkerStatusWriterGenerationVector -SessionId 'orchestrator-pack-137' -RepoTickGeneration 1 -GithubSnapshot @{ openPrs = @() }
+            [long]$vector.bindingCacheGeneration | Should -Be 77
+        }
+        finally {
+            if ($null -eq $oldBindingCache) { Remove-Item Env:AO_PR_SESSION_BINDING_CACHE -ErrorAction SilentlyContinue }
+            else { $env:AO_PR_SESSION_BINDING_CACHE = $oldBindingCache }
+            if ($null -eq $oldSeedState) { Remove-Item Env:AO_REPORT_STATE_SEED_STATE -ErrorAction SilentlyContinue }
+            else { $env:AO_REPORT_STATE_SEED_STATE = $oldSeedState }
+            if ($null -eq $oldWakeDir) { Remove-Item Env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR -ErrorAction SilentlyContinue }
+            else { $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $oldWakeDir }
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

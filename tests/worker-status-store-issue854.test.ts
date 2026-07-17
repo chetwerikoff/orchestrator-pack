@@ -119,6 +119,67 @@ function liveRecomputeInput({
 }
 
 describe('issue #854 live recompute binding cache (AC4 shape)', () => {
+  it('surfaces binding_cache_conflict when stale cache names a different session', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opk-854-cache-conflict-'));
+    try {
+      const cachePath = join(dir, 'cache.json');
+      const staleSessionId = 'orchestrator-pack-999';
+      const prNumber = 88;
+      const headSha = 'sharedhead88';
+      const staleRecord = {
+        schemaVersion: 1,
+        sessionId: staleSessionId,
+        prNumber,
+        issueNumber: 88,
+        headSha,
+        repoSlug: REPO,
+        source: 'push_register',
+        lastUpdatedMs: NOW_MS - 1_000,
+        superseded: false,
+      };
+      writeFileSync(cachePath, `${JSON.stringify({
+        schemaVersion: 1,
+        generation: 45,
+        lastUpdatedMs: staleRecord.lastUpdatedMs,
+        records: {
+          [`${REPO}|session:${staleSessionId}`]: staleRecord,
+          [`${REPO}|pr:${prNumber}`]: staleRecord,
+        },
+      })}\n`);
+      const openPrs = [{
+        number: prNumber,
+        state: 'OPEN',
+        headRefOid: headSha,
+        headRefName: 'agent/issue-88',
+      }];
+      const binding = resolveWorkerStatusSessionBinding({
+        session: {
+          id: SESSION_ID,
+          sessionId: SESSION_ID,
+          role: 'worker',
+          status: 'working',
+          issueId: 88,
+          displayName: '88',
+          branch: 'agent/issue-88',
+        },
+        openPrs,
+        githubSnapshot: { openPrs },
+        repoSlug: REPO,
+        bindingCachePath: cachePath,
+        cwd: '/tmp/non-checkout-cwd',
+        nowMs: NOW_MS,
+        osLiveness: { status: 'working', dead: false },
+        env: { AO_PR_SESSION_BINDING_CACHE: cachePath },
+      });
+      expect(binding.ok).toBe(false);
+      expect(binding.reason).toBe('binding_cache_conflict');
+      expect(binding.bindingSource).toBe('binding_contract:cache');
+      expect(binding.reason).not.toBe('no_issue_binding');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces target-PR fail-closed reason instead of generic no_issue_binding', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opk-854-failclosed-'));
     try {

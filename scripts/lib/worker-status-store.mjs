@@ -18,11 +18,14 @@ import {
 } from '../../docs/pr-session-binding-cache.mjs';
 
 
-const TARGET_PR_FAIL_CLOSED_REASONS = new Set([
+const UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS = new Set([
   'binding_cache_conflict',
+  'head_owner_mismatch',
+]);
+
+const CACHE_GATED_TARGET_FAIL_CLOSED_REASONS = new Set([
   'ambiguous_issue_pr_binding',
   'ambiguous_pr_session_binding',
-  'head_owner_mismatch',
 ]);
 
 function targetPrFailClosedBelongsToSession(store, repoSlug, sessionId, prNumber, resolution) {
@@ -30,7 +33,10 @@ function targetPrFailClosedBelongsToSession(store, repoSlug, sessionId, prNumber
     return false;
   }
   const reason = String(resolution.reason ?? '').trim();
-  if (!TARGET_PR_FAIL_CLOSED_REASONS.has(reason)) {
+  if (UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS.has(reason)) {
+    return true;
+  }
+  if (!CACHE_GATED_TARGET_FAIL_CLOSED_REASONS.has(reason)) {
     return false;
   }
   const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
