@@ -7,6 +7,7 @@ import {
   PR_REVIEW_STATUSES,
 } from './lib/review-producer-contract.js';
 import {
+  GithubReviewPostError,
   reconcileGithubCommentReview,
   selectActiveSameActorBlockingReviewIds,
   type GithubReviewCaptureAction,
@@ -16,6 +17,7 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  type PackReviewRunRecord,
 } from './lib/pack-review-run-store.js';
 import {
   mapEngineStateToBoardStatus as mapMjsEngineStateToBoardStatus,
@@ -53,13 +55,35 @@ function review(
   };
 }
 
+function numericId(value: number | string): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : 0;
+}
+
 class ConcurrentReviewTransport implements GithubReviewTransport {
-  readonly actions: GithubReviewCaptureAction[] = [];
-  readonly reviews: GithubReviewSummary[] = [review(9, 'CHANGES_REQUESTED')];
+  readonly actions: GithubReviewCaptureAction[];
+  readonly reviews: GithubReviewSummary[];
   timeoutAfterAccept = false;
   failListAfterAcceptedPostOnce = false;
-  private acceptedPost = false;
-  private insertedNewerBlocker = false;
+  hiddenAcceptedCommentLists = 0;
+  duplicateCommentOnFirstList = false;
+  postedCommitIdOverride: string | undefined;
+  forbidPost = false;
+  private acceptedPost: boolean;
+  private insertedNewerBlocker: boolean;
+  private insertedDuplicateComment = false;
+  private nextId: number;
+
+  constructor(
+    reviews: GithubReviewSummary[] = [review(9, 'CHANGES_REQUESTED')],
+    actions: GithubReviewCaptureAction[] = [],
+  ) {
+    this.reviews = reviews;
+    this.actions = actions;
+    this.acceptedPost = reviews.some((entry) => entry.state === 'COMMENTED');
+    this.insertedNewerBlocker = reviews.some((entry) => String(entry.id) === '11');
+    this.nextId = Math.max(9, ...reviews.map((entry) => numericId(entry.id))) + 1;
+  }
 
   async resolveActorLogin(): Promise<string> {
     return ACTOR;
@@ -67,14 +91,27 @@ class ConcurrentReviewTransport implements GithubReviewTransport {
 
   async listReviews(): Promise<GithubReviewSummary[]> {
     if (this.acceptedPost && !this.insertedNewerBlocker) {
-      this.reviews.push(review(11, 'CHANGES_REQUESTED', NEWER_HEAD_SHA));
+      const blockerId = this.nextId++;
+      this.reviews.push(review(blockerId, 'CHANGES_REQUESTED', NEWER_HEAD_SHA));
       this.insertedNewerBlocker = true;
+    }
+    if (this.acceptedPost && this.duplicateCommentOnFirstList && !this.insertedDuplicateComment) {
+      const original = this.reviews.find((entry) => entry.state === 'COMMENTED');
+      if (!original) throw new Error('missing accepted COMMENT for duplicate injection');
+      const duplicateId = this.nextId++;
+      this.reviews.push({ ...original, id: duplicateId, url: `fixture://review/${duplicateId}` });
+      this.insertedDuplicateComment = true;
     }
     if (this.failListAfterAcceptedPostOnce) {
       this.failListAfterAcceptedPostOnce = false;
       throw new Error('injected list outage after accepted COMMENT');
     }
-    return this.reviews.map((entry) => ({ ...entry }));
+    const snapshot = this.reviews.map((entry) => ({ ...entry }));
+    if (this.acceptedPost && this.hiddenAcceptedCommentLists > 0) {
+      this.hiddenAcceptedCommentLists -= 1;
+      return snapshot.filter((entry) => entry.state !== 'COMMENTED');
+    }
+    return snapshot;
   }
 
   async postReview(input: {
@@ -82,21 +119,23 @@ class ConcurrentReviewTransport implements GithubReviewTransport {
     body: string;
     commitId: string;
   }): Promise<{ id: number | string; url: string }> {
+    if (this.forbidPost) throw new Error('duplicate COMMENT POST attempted after restart');
     this.actions.push({ kind: 'post', event: input.event, body: input.body });
+    const id = this.nextId++;
     const posted = review(
-      10,
+      id,
       input.event === 'COMMENT'
         ? 'COMMENTED'
         : input.event === 'APPROVE'
           ? 'APPROVED'
           : 'CHANGES_REQUESTED',
-      input.commitId,
+      this.postedCommitIdOverride ?? input.commitId,
       input.body,
     );
     this.reviews.push(posted);
     this.acceptedPost = true;
     if (this.timeoutAfterAccept) {
-      throw new Error('injected COMMENT timeout after acceptance');
+      throw new GithubReviewPostError('ambiguous', 'injected COMMENT timeout after acceptance');
     }
     return { id: posted.id, url: posted.url };
   }
@@ -122,6 +161,31 @@ function createRun(storeRoot: string) {
     trustedPackRoot: storeRoot,
     sourceRepoRoot: storeRoot,
   }).run;
+}
+
+function reloadRun(storeRoot: string, runId: string): PackReviewRunRecord {
+  const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+  if (!run) throw new Error(`missing recovery run ${runId}`);
+  return run;
+}
+
+function postOutcome(run: PackReviewRunRecord): string | undefined {
+  return (run.githubReviewReconciliation as { postOutcome?: string } | undefined)?.postOutcome;
+}
+
+async function reconcile(
+  storeRoot: string,
+  run: PackReviewRunRecord,
+  transport: GithubReviewTransport,
+  body: string,
+) {
+  return reconcileGithubCommentReview({
+    run,
+    body,
+    transport,
+    projectId: 'orchestrator-pack',
+    storeRoot,
+  });
 }
 
 afterEach(() => {
@@ -200,13 +264,7 @@ describe('reviews-board commented status parity (Issue #866)', () => {
     const transport = new ConcurrentReviewTransport();
     const body = `Advisory only.\n\nRun: \`${run.id}\``;
 
-    const result = await reconcileGithubCommentReview({
-      run,
-      body,
-      transport,
-      projectId: 'orchestrator-pack',
-      storeRoot,
-    });
+    const result = await reconcile(storeRoot, run, transport, body);
 
     expect(result.dismissedReviewIds).toEqual([9]);
     expect(transport.actions.map((action) => [action.kind, action.reviewId ?? null])).toEqual([
@@ -216,7 +274,7 @@ describe('reviews-board commented status parity (Issue #866)', () => {
     expect(transport.activeBlockingIds()).toEqual([11]);
   });
 
-  it('preserves the COMMENT fence during restart recovery', async () => {
+  it('preserves the COMMENT fence during restart recovery after a list error', async () => {
     const storeRoot = tempRoot('opk-comment-fence-restart-');
     const run = createRun(storeRoot);
     const transport = new ConcurrentReviewTransport();
@@ -224,30 +282,139 @@ describe('reviews-board commented status parity (Issue #866)', () => {
     transport.failListAfterAcceptedPostOnce = true;
     const body = `Advisory only.\n\nRun: \`${run.id}\``;
 
-    await expect(reconcileGithubCommentReview({
-      run,
-      body,
-      transport,
-      projectId: 'orchestrator-pack',
-      storeRoot,
-    })).rejects.toThrow('injected COMMENT timeout after acceptance');
-    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })?.githubReviewReconciliation)
-      .toMatchObject({ phase: 'prepared' });
+    await expect(reconcile(storeRoot, run, transport, body))
+      .rejects.toThrow('injected COMMENT timeout after acceptance');
+    const pending = reloadRun(storeRoot, run.id);
+    expect(pending.githubReviewReconciliation).toMatchObject({ phase: 'prepared' });
+    expect(postOutcome(pending)).toBe('ambiguous');
 
     transport.timeoutAfterAccept = false;
-    const recoveredRun = getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot });
-    if (!recoveredRun) throw new Error('missing recovery run');
-    const result = await reconcileGithubCommentReview({
-      run: recoveredRun,
-      body,
-      transport,
-      projectId: 'orchestrator-pack',
-      storeRoot,
-    });
+    const result = await reconcile(storeRoot, pending, transport, body);
 
     expect(result.dismissedReviewIds).toEqual([9]);
     expect(transport.activeBlockingIds()).toEqual([11]);
     expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(1);
+  });
+
+  it('does not repost while an accepted COMMENT is temporarily omitted by successful list responses', async () => {
+    const storeRoot = tempRoot('opk-comment-eventual-consistency-');
+    const run = createRun(storeRoot);
+    const transport = new ConcurrentReviewTransport();
+    transport.timeoutAfterAccept = true;
+    transport.hiddenAcceptedCommentLists = 2;
+    const body = `Advisory only.\n\nRun: \`${run.id}\``;
+
+    await expect(reconcile(storeRoot, run, transport, body))
+      .rejects.toThrow('injected COMMENT timeout after acceptance');
+    const ambiguous = reloadRun(storeRoot, run.id);
+    expect(postOutcome(ambiguous)).toBe('ambiguous');
+    expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(1);
+    expect(transport.actions.filter((action) => action.kind === 'dismiss')).toHaveLength(0);
+
+    transport.timeoutAfterAccept = false;
+    await expect(reconcile(storeRoot, ambiguous, transport, body))
+      .rejects.toThrow('accepted review is not yet observable');
+    expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(1);
+    expect(transport.activeBlockingIds()).toEqual([9, 11]);
+
+    const result = await reconcile(storeRoot, reloadRun(storeRoot, run.id), transport, body);
+    expect(result.dismissedReviewIds).toEqual([9]);
+    expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(1);
+    expect(transport.activeBlockingIds()).toEqual([11]);
+  });
+
+  it('preserves ambiguous POST state across process restart without posting a duplicate COMMENT', async () => {
+    const storeRoot = tempRoot('opk-comment-eventual-consistency-restart-');
+    const run = createRun(storeRoot);
+    const sharedReviews = [review(9, 'CHANGES_REQUESTED')];
+    const sharedActions: GithubReviewCaptureAction[] = [];
+    const firstProcess = new ConcurrentReviewTransport(sharedReviews, sharedActions);
+    firstProcess.timeoutAfterAccept = true;
+    firstProcess.hiddenAcceptedCommentLists = 1;
+    const body = `Advisory only.\n\nRun: \`${run.id}\``;
+
+    await expect(reconcile(storeRoot, run, firstProcess, body))
+      .rejects.toThrow('injected COMMENT timeout after acceptance');
+    const persisted = reloadRun(storeRoot, run.id);
+    expect(postOutcome(persisted)).toBe('ambiguous');
+
+    const restartedProcess = new ConcurrentReviewTransport(sharedReviews, sharedActions);
+    restartedProcess.forbidPost = true;
+    restartedProcess.hiddenAcceptedCommentLists = 1;
+    await expect(reconcile(storeRoot, persisted, restartedProcess, body))
+      .rejects.toThrow('accepted review is not yet observable');
+
+    const result = await reconcile(
+      storeRoot,
+      reloadRun(storeRoot, run.id),
+      restartedProcess,
+      body,
+    );
+    expect(result.dismissedReviewIds).toEqual([9]);
+    expect(sharedActions.filter((action) => action.kind === 'post')).toHaveLength(1);
+    expect(restartedProcess.activeBlockingIds()).toEqual([11]);
+  });
+
+  it('fails closed when ambiguous recovery finds multiple same-run COMMENT reviews', async () => {
+    const storeRoot = tempRoot('opk-comment-duplicate-boundary-');
+    const run = createRun(storeRoot);
+    const transport = new ConcurrentReviewTransport();
+    transport.timeoutAfterAccept = true;
+    transport.duplicateCommentOnFirstList = true;
+    const body = `Advisory only.\n\nRun: \`${run.id}\``;
+
+    await expect(reconcile(storeRoot, run, transport, body))
+      .rejects.toThrow('ambiguous GitHub COMMENT recovery found 2 matching reviews');
+    expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(1);
+    expect(transport.actions.filter((action) => action.kind === 'dismiss')).toHaveLength(0);
+    expect(transport.activeBlockingIds()).toEqual([9, 11]);
+  });
+
+  it.each([
+    ['missing', ''],
+    ['wrong-head', NEWER_HEAD_SHA],
+  ])('rejects %s commit evidence for a confirmed COMMENT boundary', async (_label, commitId) => {
+    const storeRoot = tempRoot('opk-comment-boundary-commit-evidence-');
+    const run = createRun(storeRoot);
+    const transport = new ConcurrentReviewTransport();
+    transport.postedCommitIdOverride = commitId;
+    const body = `Advisory only.\n\nRun: \`${run.id}\``;
+
+    await expect(reconcile(storeRoot, run, transport, body))
+      .rejects.toThrow(`does not match reconciliation ${run.id}`);
+    expect(transport.actions.filter((action) => action.kind === 'dismiss')).toHaveLength(0);
+    expect(transport.activeBlockingIds()).toEqual([9, 11]);
+  });
+
+  it.each([
+    ['missing', ''],
+    ['wrong-head', NEWER_HEAD_SHA],
+  ])('rejects %s commit evidence during ambiguous POST discovery', async (_label, commitId) => {
+    const storeRoot = tempRoot('opk-comment-discovery-commit-evidence-');
+    const run = createRun(storeRoot);
+    const transport = new ConcurrentReviewTransport();
+    transport.timeoutAfterAccept = true;
+    transport.postedCommitIdOverride = commitId;
+    const body = `Advisory only.\n\nRun: \`${run.id}\``;
+
+    await expect(reconcile(storeRoot, run, transport, body))
+      .rejects.toThrow(`expected '${HEAD_SHA}'`);
+    expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(1);
+    expect(transport.actions.filter((action) => action.kind === 'dismiss')).toHaveLength(0);
+    expect(transport.activeBlockingIds()).toEqual([9, 11]);
+  });
+
+  it('accepts exact target-head commit evidence during ambiguous POST discovery', async () => {
+    const storeRoot = tempRoot('opk-comment-discovery-exact-head-');
+    const run = createRun(storeRoot);
+    const transport = new ConcurrentReviewTransport();
+    transport.timeoutAfterAccept = true;
+    transport.postedCommitIdOverride = HEAD_SHA;
+    const body = `Advisory only.\n\nRun: \`${run.id}\``;
+
+    const result = await reconcile(storeRoot, run, transport, body);
+    expect(result.dismissedReviewIds).toEqual([9]);
+    expect(transport.activeBlockingIds()).toEqual([11]);
   });
 
   it.each([
