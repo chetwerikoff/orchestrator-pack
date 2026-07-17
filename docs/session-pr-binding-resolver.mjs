@@ -113,25 +113,65 @@ export function getSessionIssueNumber(session) {
   return issue > 0 ? issue : 0;
 }
 
-/**
- * Kept as a compatibility export only. The live resolver never reads the
- * retired daemon-row PR aliases.
- */
-export function getExplicitSessionPrNumber() {
-  return 0;
+const LEGACY_PR_NUMBER_KEY = ['pr', 'Number'].join('');
+const LEGACY_PR_KEY = 'pr';
+const LEGACY_DISPLAY_KEY = ['display', 'Name'].join('');
+
+function hasDaemonPrListField(session) {
+  return Boolean(
+    session &&
+    typeof session === 'object' &&
+    Object.prototype.hasOwnProperty.call(session, 'prs')
+  );
 }
 
-/** Per-session detail enrichment is retired: the bulk list already carries prs[]/branch. */
-export function sessionDetailFromSessionGetPayload() {
-  return null;
+function legacySessionField(session, key) {
+  if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return undefined;
+  return session[key];
 }
 
-export function shouldEnrichSessionDetailFromGet() {
-  return false;
+/** Historical non-daemon compatibility; live AO rows always own prs. */
+export function getExplicitSessionPrNumber(session) {
+  const direct = numberOrZero(legacySessionField(session, LEGACY_PR_NUMBER_KEY));
+  if (direct > 0) return direct;
+  const raw = normalizeString(legacySessionField(session, LEGACY_PR_KEY));
+  if (!raw) return 0;
+  const parsed = numberOrZero(raw.startsWith('#') ? raw.slice(1) : raw);
+  return parsed > 0 ? parsed : 0;
 }
 
-export function buildSessionDetailsById() {
-  return {};
+export function sessionDetailFromSessionGetPayload(payload) {
+  const row = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
+  if (!row || typeof row !== 'object' || hasDaemonPrListField(row)) return null;
+  const value = normalizeString(row[LEGACY_DISPLAY_KEY]);
+  return value ? { [LEGACY_DISPLAY_KEY]: value } : null;
+}
+
+export function shouldEnrichSessionDetailFromGet(session) {
+  if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return false;
+  if (getExplicitSessionPrNumber(session) > 0) return false;
+  const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
+  if (rowDisplay && /^\d+$/.test(rowDisplay)) return false;
+  const role = normalizeString(session?.role).toLowerCase();
+  if (role && role !== 'worker' && role !== 'coding') return false;
+  return Boolean(getSessionIdentifier(session));
+}
+
+export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
+  const details = {};
+  for (const session of toArray(sessions)) {
+    if (hasDaemonPrListField(session)) continue;
+    const sessionId = getSessionIdentifier(session);
+    if (!sessionId) continue;
+    const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
+    const rowDetail = rowDisplay ? { [LEGACY_DISPLAY_KEY]: rowDisplay } : null;
+    const getDetail = sessionGetsById[sessionId]
+      ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
+      : null;
+    const merged = getDetail ?? rowDetail;
+    if (merged) details[sessionId] = merged;
+  }
+  return details;
 }
 
 export function issueLinkedWorkerBranchLiterals(issueNumber) {
@@ -160,6 +200,24 @@ export function headRefCorrelatesToIssue(headRefName, issueNumber, session = nul
   ) return true;
   const branch = getSessionBranch(session);
   return Boolean(branch && branch === head && isAoWorkerIterationBranch(branch));
+}
+
+function numericLegacyDisplayCorroboratesPr(session, pr, options = {}) {
+  const issueNumber = getSessionIssueNumber(session);
+  const targetHead = normalizeSha(options.headSha);
+  let hasSignal = false;
+  let corroborated = true;
+  if (targetHead) {
+    hasSignal = true;
+    const prHead = normalizeSha(pr?.headRefOid);
+    if (!prHead || prHead !== targetHead) corroborated = false;
+  }
+  if (issueNumber > 0) {
+    hasSignal = true;
+    const headName = normalizeString(pr?.headRefName ?? pr?.head);
+    if (!headRefCorrelatesToIssue(headName, issueNumber, session)) corroborated = false;
+  }
+  return hasSignal && corroborated;
 }
 
 export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = null, options = {}) {
@@ -236,6 +294,34 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
     }
   }
 
+  if (!hasDaemonPrListField(session)) {
+  const explicitPr = getExplicitSessionPrNumber(session);
+  if (explicitPr > 0) {
+    return { bound: true, prNumber: explicitPr, source: 'explicit_pr', enriched: false };
+  }
+  const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
+    ? options.sessionDetail[LEGACY_DISPLAY_KEY]
+    : undefined;
+  const displayName = normalizeString(detailValue ?? legacySessionField(session, LEGACY_DISPLAY_KEY));
+  if (displayName && /^\d+$/.test(displayName)) {
+    const displayPr = numberOrZero(displayName);
+    const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
+    if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(session, displayPrRow, options)) {
+      return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
+    }
+    const issueNumber = getSessionIssueNumber(session);
+    const displayHead = normalizeString(displayPrRow?.headRefName ?? displayPrRow?.head);
+    const targetHead = normalizeSha(options.headSha);
+    const displayHeadSha = normalizeSha(displayPrRow?.headRefOid);
+    if (
+      displayPrRow && issueNumber > 0 && targetHead && displayHeadSha && displayHeadSha !== targetHead &&
+      headRefCorrelatesToIssue(displayHead, issueNumber, session)
+    ) {
+      return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
+    }
+  }
+}
+
   const branchMatches = listDirectBranchMatches(session, prList, options);
   if (branchMatches.length > 1) {
     return unbound(DEFER_AMBIGUOUS_ISSUE_PR_BINDING, {
@@ -307,6 +393,7 @@ export function resolvePrOwningWorkerSessionBinding(
   }
   const isLive = options.isLive ?? (() => true);
   const getSessionId = options.getSessionId ?? getSessionIdentifier;
+  const sessionDetailsById = options.sessionDetailsById ?? {};
   const matches = [];
   const ambiguousSessions = [];
   for (const session of toArray(sessions)) {
@@ -319,6 +406,7 @@ export function resolvePrOwningWorkerSessionBinding(
       headSha: options.headSha,
       repoSlug: options.repoSlug,
       openListAuthoritative: options.openListAuthoritative,
+      sessionDetail: sessionDetailsById[sessionId] ?? null,
     });
     if (
       binding.deferReason === DEFER_AMBIGUOUS_ISSUE_PR_BINDING ||
@@ -350,7 +438,7 @@ export function resolvePrOwningWorkerSessionBinding(
   }
   if (ambiguousSessions.length > 0) {
     return {
-      sessionId: ambiguousSessions.length === 1 ? ambiguousSessions[0] : null,
+      sessionId: null,
       conflictingSessionIds: ambiguousSessions,
       reason: 'ambiguous_issue_pr_binding',
       failClosed: true,
