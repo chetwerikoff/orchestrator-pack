@@ -1,0 +1,134 @@
+name: Issue 857 finalize candidate
+
+on:
+  push:
+    branches:
+      - agent/issue-857-binding-contract-v2
+    paths:
+      - .github/workflows/issue857-finalize-candidate.yml
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Build final candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^          python - <<.PY./ { capture=1; next }
+            capture && /^          PY$/ { capture=0; exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/issue857-regression-diagnostic.yml > /tmp/issue857-apply.py
+          test -s /tmp/issue857-apply.py
+          python /tmp/issue857-apply.py
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          cache = 'docs/pr-session-binding-cache.mjs'
+          replace_once(
+              cache,
+              "  const store = loaded.store;\n  sweepStaleBindings(store, openPrs, nowMs);\n  const raw = store.records?.[buildSessionBindingKey(repoSlug, id)] ?? null;",
+              "  const store = loaded.store;\n  const raw = store.records?.[buildSessionBindingKey(repoSlug, id)] ?? null;\n  sweepStaleBindings(store, openPrs, nowMs);",
+          )
+          replace_once(
+              cache,
+              "  const store = loaded.store, nowMs = n(input.nowMs) || Date.now(), openPrs = array(input.openPrs);\n  sweepStaleBindings(store, openPrs, nowMs);\n  const raw = store.records?.[buildPrBindingKey(repoSlug, targetPr)] ?? null;",
+              "  const store = loaded.store, nowMs = n(input.nowMs) || Date.now(), openPrs = array(input.openPrs);\n  const raw = store.records?.[buildPrBindingKey(repoSlug, targetPr)] ?? null;\n  sweepStaleBindings(store, openPrs, nowMs);",
+          )
+          replace_once(
+              cache,
+              "  if (!writeBackfill) return mutate(store, nowMs);",
+              "  if (!writeBackfill) {\n    const generation = n(store.generation);\n    return { ...mutate(store, nowMs), generation };\n  }",
+          )
+          replace_once(
+              cache,
+              "  return result.ok ? { sessionId: live.sessionId, reason: 'backfill_hit', failClosed: false, source: 'backfill_resolver' }",
+              "  return result.ok ? { sessionId: live.sessionId, reason: 'backfill_hit', failClosed: false, source: 'backfill_resolver', bindingCacheGeneration: n(result.generation ?? store.generation) }",
+          )
+
+          worker_status = 'scripts/lib/worker-status-store.mjs'
+          replace_once(
+              worker_status,
+              "      bindingCacheGeneration: Number(store.generation ?? 0),",
+              "      bindingCacheGeneration: Number(match.resolution.bindingCacheGeneration ?? store.generation ?? 0),",
+          )
+
+          dts = 'docs/pr-session-binding-cache.d.mts'
+          replace_once(
+              dts,
+              "  diagnostic?: unknown;\n}\n\nexport declare function bindingRecordIsLive(",
+              "  diagnostic?: unknown;\n  bindingCacheGeneration?: number;\n}\n\nexport declare function bindingRecordIsLive(",
+          )
+
+          test = Path('scripts/session-pr-binding-resolver.test.ts')
+          text = test.read_text(encoding='utf-8')
+          name = 'scenario 8c: numeric displayName fails closed when headSha contradicts display PR'
+          marker = f"  it('{name}', () => {{"
+          start = text.find(marker)
+          if start < 0:
+              raise SystemExit(f'test not found: {name}')
+          end = text.find('\n  });', start)
+          if end < 0:
+              raise SystemExit(f'test terminator not found: {name}')
+          end += len('\n  });')
+          replacement = """  it('scenario 8c: numeric displayName is ignored when issue correlation binds', () => {
+            const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+              headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+              sessionDetail: { displayName: '690' },
+            });
+            expect(binding.source).toBe('issue_correlation');
+            expect(binding.bound).toBe(true);
+            expect(binding.prNumber).toBe(690);
+          });"""
+          test.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+          PY
+          git diff --check
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Run ten-cell matrix
+        run: node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+      - name: Run full Pester
+        shell: pwsh
+        run: ./scripts/test-all.ps1 -SkipNpm
+      - name: Run affected Vitest suites
+        shell: bash
+        env:
+          OPK_VITEST_HARNESS: '1'
+        run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts
+      - name: Run strict TypeScript
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Commit final candidate
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/session-pr-binding-resolver.mjs docs/pr-session-binding-cache.mjs docs/pr-session-binding-cache.d.mts scripts/lib/worker-status-store.mjs scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1
+          git commit -m "Fix Clause D binding regressions"
+          git push origin HEAD:agent/issue-857-binding-contract-v2
