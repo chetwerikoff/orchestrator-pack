@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { resolveWorkerStatusSessionBinding } from '../scripts/lib/worker-status-store.mjs';
 
 const NOW_MS = 1_700_000_000_000;
@@ -10,6 +11,7 @@ const OTHER_REPO = 'owner/other';
 const SESSION_ID = 'orchestrator-pack-137';
 const PR_NUMBER = 887;
 const HEAD = 'head887';
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function bindingRecord({
   repoSlug = REPO,
@@ -60,7 +62,8 @@ function input(cachePath) {
       headRefOid: HEAD,
       headRefName: `ao/${SESSION_ID}/worker-status-cache`,
     }],
-    env: { GITHUB_REPOSITORY: REPO },
+    env: {},
+    cwd: REPO_ROOT,
     bindingCachePath: cachePath,
     nowMs: NOW_MS,
   };
@@ -113,7 +116,6 @@ function run() {
 
     writeCache(cachePath);
     const ambiguousRepo = input(cachePath);
-    ambiguousRepo.env = {};
     ambiguousRepo.openPrs = [
       {
         number: PR_NUMBER,
@@ -147,9 +149,10 @@ function run() {
       issue: 854,
       productionModule: 'scripts/lib/worker-status-store.mjs',
       sharedResolver: 'resolvePrSessionBindingForConsumer',
+      repoScopeSource: 'shared_checkout_resolution',
       cacheSource: 'push_register',
       scenarios: [
-        'shared_cache_hit',
+        'shared_cache_hit_without_row_repo_metadata',
         'ttl_expired_shared_unbound',
         'superseded_shared_unbound',
         'unreadable',
