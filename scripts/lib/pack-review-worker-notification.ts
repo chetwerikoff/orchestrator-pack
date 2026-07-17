@@ -2,13 +2,15 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.js';
+import {
+  packReviewDeliveryNeedsResume as basePackReviewDeliveryNeedsResume,
+} from './pack-review-delivery.ts';
 import type {
   PackReviewWorkerNotificationRequest,
   PackReviewWorkerNotificationResult,
 } from './pack-review-delivery.ts';
 import {
   trimPackReviewValue as trim,
-  type PackReviewDeliveryOutcome,
   type PackReviewRunRecord,
 } from './pack-review-run-store.js';
 
@@ -165,47 +167,19 @@ export async function sendPackReviewWorkerNotification(
   };
 }
 
-function isNonBlockingFinding(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const severity = trim((value as Record<string, unknown>).severity).toLowerCase();
-  return severity === 'warning' || severity === 'info' || severity === 'non-blocking';
-}
-
-function completedOutcome(
-  value: PackReviewDeliveryOutcome | undefined,
-  idempotencyKey: string,
-  states: readonly PackReviewDeliveryOutcome['state'][],
-): boolean {
-  return Boolean(value && value.idempotencyKey === idempotencyKey && states.includes(value.state));
-}
-
 export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean {
-  if (run.journalOutcome?.state !== 'persisted') return false;
-  if (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings') return false;
-  const findings = Array.isArray(run.findings) ? run.findings : [];
-  if (!Number.isInteger(run.findingCount) || Number(run.findingCount) !== findings.length) return false;
-
-  const blocking = findings.length > 0
-    ? findings.some((finding) => !isNonBlockingFinding(finding))
-    : run.reviewVerdict === 'findings';
-  const expectedStatus = blocking
-    ? 'changes_requested'
-    : run.reviewVerdict === 'clean' && findings.length === 0
-      ? 'up_to_date'
-      : 'commented';
-  if (run.status !== expectedStatus) return true;
-
-  const githubKey = `github-comment:${run.id}:${run.targetSha}`;
-  const statusKey = `required-status:orchestrator-pack/pack-review:${run.targetSha}`;
-  const workerKey = `worker-notification:${run.id}:${run.targetSha}`;
-  const githubComplete = completedOutcome(run.deliveryOutcomes?.githubComment, githubKey, ['succeeded'])
-    && run.githubReviewId !== undefined
-    && run.githubReviewReconciliation?.phase === 'complete';
-  const statusComplete = completedOutcome(run.deliveryOutcomes?.requiredStatus, statusKey, ['succeeded']);
-  const workerTerminal = completedOutcome(
-    run.deliveryOutcomes?.workerNotification,
-    workerKey,
-    ['delivered', 'failed', 'escalated'],
-  );
-  return !githubComplete || !statusComplete || !workerTerminal;
+  const worker = run.deliveryOutcomes?.workerNotification;
+  const expectedKey = `worker-notification:${run.id}:${run.targetSha}`;
+  if (!worker
+    || worker.idempotencyKey !== expectedKey
+    || (worker.state !== 'failed' && worker.state !== 'escalated')) {
+    return basePackReviewDeliveryNeedsResume(run);
+  }
+  return basePackReviewDeliveryNeedsResume({
+    ...run,
+    deliveryOutcomes: {
+      ...run.deliveryOutcomes,
+      workerNotification: { ...worker, state: 'delivered' },
+    },
+  });
 }
