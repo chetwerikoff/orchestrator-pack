@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { evaluateHeadReadyForReview } from '../docs/review-head-ready.mjs';
 import {
+  REVIEW_READY_SEED_LIVENESS_EXPECTED,
+} from './lib/review-ready-seed-liveness-matrix.mjs';
+import {
   BOUNDED_EXTERNAL_CALL_SCHEMA,
   consumePendingExternalCallTimeout,
   loadFleetLivenessContract,
@@ -12,10 +15,32 @@ import {
   runExternalCallWithLiveness,
   writeLivenessCheckpoint,
 } from './kernel/side-process-liveness.ts';
-import type { ProcessResult } from './kernel/subprocess.ts';
+import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const created: string[] = [];
+
+const ISSUE_853_RUNTIME_EXPECTED = [
+  'fast-tick-ok',
+  'long-tick-not-stalled-seed',
+  'long-tick-not-stalled-reeval',
+  'bounded-call-timeout-degraded',
+  'hang-still-stalled',
+  'progress-livelock-fails',
+  'progress-identity',
+  'dead-process-not-fresh',
+  'overlap-safe',
+  'atomic-progress-read',
+  'upgrade-safe-progress',
+  'e2e-seed-to-trigger-restored',
+] as const;
+
+const ISSUE_853_LOCAL_EXPECTED = new Set<string>([
+  'long-tick-not-stalled-seed',
+  'long-tick-not-stalled-reeval',
+  'bounded-call-timeout-degraded',
+  'e2e-seed-to-trigger-restored',
+]);
 
 function tempRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-fleet-liveness-'));
@@ -45,16 +70,61 @@ function emitProof(expected: string): void {
   console.log(JSON.stringify({ producer: 'orchestrator-pack', datum: 'fleet-liveness', expected }));
 }
 
+function quotePowerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+async function productionFreshnessVerdict(options: {
+  progress: Record<string, unknown>;
+  childId: string;
+  childPid: number;
+  tickId: string;
+  nowMs: number;
+  stallThresholdMs: number;
+}): Promise<Record<string, unknown>> {
+  const progressJson = JSON.stringify(options.progress);
+  const evidencePath = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1');
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `. ${quotePowerShellLiteral(evidencePath)}`,
+    `$progress = ${quotePowerShellLiteral(progressJson)} | ConvertFrom-Json`,
+    `$verdict = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $progress -ChildPid ${options.childPid} -StallThresholdMs ${options.stallThresholdMs} -NowMs ${options.nowMs} -TickId ${quotePowerShellLiteral(options.tickId)} -ChildId ${quotePowerShellLiteral(options.childId)}`,
+    '$verdict | ConvertTo-Json -Compress',
+  ].join('; ');
+  const result = await runProcess({
+    command: 'pwsh',
+    args: ['-NoProfile', '-NonInteractive', '-Command', script],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    timeoutMs: 30_000,
+    allowEmptyStdout: false,
+  });
+  expect(result.ok, result.stderr || result.error || 'PowerShell freshness verdict failed').toBe(true);
+  const output = result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+  expect(output).toBeDefined();
+  return JSON.parse(output ?? '{}') as Record<string, unknown>;
+}
+
 afterEach(() => {
   for (const root of created.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('fleet-liveness shared producer contract', () => {
+  it('maps every Issue #853 runtime matrix label to a local or inherited deterministic proof', () => {
+    const inherited = new Set<string>(REVIEW_READY_SEED_LIVENESS_EXPECTED);
+    for (const expected of ISSUE_853_RUNTIME_EXPECTED) {
+      expect(
+        ISSUE_853_LOCAL_EXPECTED.has(expected) || inherited.has(expected),
+        `missing deterministic proof mapping for ${expected}`,
+      ).toBe(true);
+    }
+  });
+
   for (const row of [
     { childId: 'review-ready-report-state-seed', expected: 'long-tick-not-stalled-seed' },
     { childId: 'review-trigger-reeval', expected: 'long-tick-not-stalled-reeval' },
   ]) {
-    it(`expected: ${row.expected}`, () => {
+    it(`expected: ${row.expected}`, async () => {
       const root = tempRoot();
       const checkpoints = [1_000, 9_000, 17_000, 25_000];
       for (const nowMs of checkpoints) {
@@ -76,7 +146,15 @@ describe('fleet-liveness shared producer contract', () => {
       const record = readProgress(root, row.childId);
       expect(record.workCursor).toBe(4);
       expect(record.progressSchemaVersion).toBe(2);
-      expect(30_000 - Number(record.lastProgressMs)).toBeLessThan(20_000);
+      const verdict = await productionFreshnessVerdict({
+        progress: record,
+        childId: row.childId,
+        childPid: 4242,
+        tickId: `tick-${row.childId}`,
+        nowMs: 30_000,
+        stallThresholdMs: 20_000,
+      });
+      expect(verdict).toMatchObject({ Fresh: true, Status: 'fresh' });
       emitProof(row.expected);
     });
   }
