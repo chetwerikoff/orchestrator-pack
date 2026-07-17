@@ -34,7 +34,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          npx tsx plugins/ao-task-declaration/bin/ao-declare.ts \
+          npx tsx plugins/ao-task-declaration/bin/declare.ts \
             --issue 857 \
             --iteration-id chatgpt-pr-896-clause-d-tests \
             --repo-root "$GITHUB_WORKSPACE" \
