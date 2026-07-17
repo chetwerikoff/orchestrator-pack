@@ -21,12 +21,11 @@ beforeAll(() => {
   }
 }, 120_000);
 
-describe('review-ready-seed-liveness final-pair-a diagnostic', () => {
-  for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX.slice(12, 14)) {
-    it(`expected: ${row.expected}`, () => {
-      const result = runReviewReadySeedFixtureRunner(runnerScript, fixtureDir, row.fixture);
-      expect(result.expected).toBe(row.expected);
-      expect(result.ok, result.detail).toBe(true);
-    });
-  }
+describe('review-ready-seed-liveness legacy-poll diagnostic', () => {
+  const row = REVIEW_READY_SEED_LIVENESS_MATRIX[14]!;
+  it(`expected: ${row.expected}`, () => {
+    const result = runReviewReadySeedFixtureRunner(runnerScript, fixtureDir, row.fixture);
+    expect(result.expected).toBe(row.expected);
+    expect(result.ok, result.detail).toBe(true);
+  });
 });
