@@ -160,7 +160,7 @@ worker PR/report/CI state
 | Command correct | `latestRun.body` (failure detail) on failed runs | Names wrapper matching `PACK_REVIEWER` (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
 | Strict gate (operator) | `pwsh -File scripts/orchestrator-diagnose.ps1 -Strict` | Exit 0 before human merge when AO is running |
 | Harness guard | `pwsh -File scripts/check-ao-0-10-review-trigger.ps1` | Exit 0 |
-| Vocabulary guard | `pwsh -File scripts/check-review-010-vocabulary.ps1` | Exit 0 |
+| Vocabulary guard | `node --experimental-strip-types scripts/gate-runner/runner.ts --gate review-010-vocabulary` | Exit 0 |
 
 ## Troubleshooting routing
 

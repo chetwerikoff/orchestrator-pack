@@ -82,15 +82,15 @@ if (-not (Test-Path -LiteralPath $spawnShape -PathType Leaf)) {
   }
 }
 
-$shapeGuard = Join-Path $Root 'scripts/check-external-output-shape-guard.ps1'
-if (-not (Test-Path -LiteralPath $shapeGuard -PathType Leaf)) {
-    $failures += 'missing scripts/check-external-output-shape-guard.ps1'
+$gateRunner = Join-Path $Root 'scripts/gate-runner/runner.ts'
+if (-not (Test-Path -LiteralPath $gateRunner -PathType Leaf)) {
+    $failures += 'missing scripts/gate-runner/runner.ts'
 } else {
   Push-Location $Root
   try {
-    & pwsh -NoProfile -File $shapeGuard
+    & node --experimental-strip-types $gateRunner --repo-root $Root --gate external-output-shape-guard
     if ($LASTEXITCODE -ne 0) {
-      $failures += 'check-external-output-shape-guard.ps1 failed (Issue #223 baseline)'
+      $failures += 'external-output-shape-guard runner entrypoint failed (Issue #223 baseline)'
     } else {
       Write-Step 'external-output shape guard (#223)' 'PASS' 'current corpus'
     }
