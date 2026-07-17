@@ -29,12 +29,19 @@ function Merge-EscalationRouterReplayState {
     param(
         [Parameter(Mandatory = $true)]$State,
         [Parameter(Mandatory = $true)]$DiskState,
-        [Parameter(Mandatory = $true)][string]$RecordKey
+        [Parameter(Mandatory = $true)][string]$RecordKey,
+        [long]$SnapshotLoadedAtMs = 0
     )
-    $State.schemaVersion = $DiskState.schemaVersion
-    $State.wakeWindows = if ($null -ne $DiskState.wakeWindows) { $DiskState.wakeWindows } else { @{} }
-    if ($DiskState.records.ContainsKey($RecordKey)) {
-        $State.records[$RecordKey] = $DiskState.records[$RecordKey]
+    $replayState = Merge-OrchestratorEscalationRouterWritebackState `
+        -State $State -DiskState $DiskState -DirtyRecordKeys @($RecordKey) `
+        -SnapshotLoadedAtMs $SnapshotLoadedAtMs
+    $State.schemaVersion = $replayState.schemaVersion
+    $State.wakeWindows = $replayState.wakeWindows
+    if ($replayState.records.ContainsKey($RecordKey)) {
+        $State.records[$RecordKey] = $replayState.records[$RecordKey]
+    }
+    elseif ($State.records.ContainsKey($RecordKey)) {
+        $State.records.Remove($RecordKey) | Out-Null
     }
 }
 
@@ -50,6 +57,7 @@ function Add-EscalationRouterDirtyRecordKey {
 
 function Invoke-EscalationRouterTick {
     $path = Get-OrchestratorEscalationStatePath
+    $snapshotLoadedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
     $catalog = Get-OrchestratorEscalationCatalog
     $redelivered = 0
@@ -123,11 +131,12 @@ function Invoke-EscalationRouterTick {
             -Message ([string]$record.lastMessage) -OrchestratorSessionId $orchId `
             -StatePath $path -ReplayEscalationId $key -SkipWakeSuppression -NowMs $now
         $diskState = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
-        Merge-EscalationRouterReplayState -State $state -DiskState $diskState -RecordKey $key
+        Merge-EscalationRouterReplayState -State $state -DiskState $diskState -RecordKey $key -SnapshotLoadedAtMs $snapshotLoadedAtMs
         if ($result.delivered) { $redelivered++ }
     }
     $latestState = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
-    $writebackState = Merge-OrchestratorEscalationRouterWritebackState -State $state -DiskState $latestState -DirtyRecordKeys @($dirtyRecordKeys.Keys)
+    $writebackState = Merge-OrchestratorEscalationRouterWritebackState -State $state -DiskState $latestState `
+        -DirtyRecordKeys @($dirtyRecordKeys.Keys) -SnapshotLoadedAtMs $snapshotLoadedAtMs
     Set-MechanicalJsonStateFile -Path $path -State $writebackState -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
     return $redelivered
 }
