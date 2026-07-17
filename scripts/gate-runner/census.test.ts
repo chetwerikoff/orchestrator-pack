@@ -79,6 +79,21 @@ describe('frozen gate population census', () => {
     expect(validateCensusSchema({ ...census, entries }).join('\n')).toContain('valid portedInWave owner');
   });
 
+  it('binds classification, gateIds, and portedInWave to the frozen migration ownership digest', () => {
+    const census = clone(loadCensus(repoRoot));
+    const index = census.entries.findIndex((entry) => entry.portedInWave === '3.b');
+    expect(index).toBeGreaterThanOrEqual(0);
+    const classificationEntries = [...census.entries];
+    classificationEntries[index] = { ...classificationEntries[index]!, classification: classificationEntries[index]!.classification === 'ported-declarative' ? 'ported-custom' : 'ported-declarative' };
+    expect(validateCensusSchema({ ...census, entries: classificationEntries }).join('\n')).toContain('migration ownership digest drift');
+    const gateEntries = [...census.entries];
+    gateEntries[index] = { ...gateEntries[index]!, gateIds: [...(gateEntries[index]!.gateIds ?? []), 'ghost-gate'] };
+    expect(validateCensusSchema({ ...census, entries: gateEntries }).join('\n')).toContain('migration ownership digest drift');
+    const waveEntries = [...census.entries];
+    waveEntries[index] = { ...waveEntries[index]!, portedInWave: '3.a' };
+    expect(validateCensusSchema({ ...census, entries: waveEntries }).join('\n')).toContain('migration ownership digest drift');
+  });
+
   it('rejects unnamed/invalid deferrals, provisional rows, and terminal-field leakage', () => {
     const census = clone(loadCensus(repoRoot));
     const deferredIndex = census.entries.findIndex((entry) => entry.classification === 'deferred-to-named-wave');
@@ -208,6 +223,40 @@ describe('frozen gate population census', () => {
     expect(result.details?.join('\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
   });
 
+
+  it('rejects a suffix-matching path outside the repository-owned wrapper', () => {
+    const census = loadCensus(repoRoot);
+    const row = census.entries.find((entry) => entry.legacyReference?.kind === 'test-invocation');
+    expect(row).toBeDefined();
+    const files = Object.fromEntries(captureSourceSnapshot(repoRoot).files);
+    files[row!.legacyReference!.path] = ["import { spawnSync } from 'node:child_process';", `const result = spawnSync('pwsh', ['-NoProfile', '-File', '/tmp/foreign/${row!.sourcePath}']);`, 'expect(result.status).toBe(0);', ''].join('\n');
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
+  });
+
+  it('rejects an ignored spawnSync result for the retained wrapper', () => {
+    const census = loadCensus(repoRoot);
+    const row = census.entries.find((entry) => entry.legacyReference?.kind === 'test-invocation');
+    expect(row).toBeDefined();
+    const files = Object.fromEntries(captureSourceSnapshot(repoRoot).files);
+    files[row!.legacyReference!.path] = ["import { spawnSync } from 'node:child_process';", `spawnSync('pwsh', ['-NoProfile', '-File', '${row!.sourcePath}']);`, 'expect(true).toBe(true);', ''].join('\n');
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
+  });
+
+  it('rejects a swallowed execFileSync failure for the retained wrapper', () => {
+    const census = loadCensus(repoRoot);
+    const row = census.entries.find((entry) => entry.legacyReference?.kind === 'test-invocation');
+    expect(row).toBeDefined();
+    const files = Object.fromEntries(captureSourceSnapshot(repoRoot).files);
+    files[row!.legacyReference!.path] = ["import { execFileSync } from 'node:child_process';", 'try {', `  execFileSync('pwsh', ['-NoProfile', '-File', '${row!.sourcePath}']);`, '} catch {', '  // swallowed', '}', ''].join('\n');
+    const result = evaluateCensus(census, memorySnapshot(files), registeredGateIds);
+    expect(result.status).toBe('FAIL');
+    expect(result.details?.join('\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
+  });
+
   it('fails when a deferred legacy invocation disappears', () => {
     const census = loadCensus(repoRoot);
     const row = census.entries.find((entry) => entry.classification === 'deferred-to-named-wave' && entry.legacyReference?.path === 'scripts/verify.ps1');
@@ -237,6 +286,7 @@ describe('frozen gate population census', () => {
   it('fails when generated population provenance or digest drifts', () => {
     const census = clone(loadCensus(repoRoot));
     expect(validateCensusSchema({ ...census, generation: { ...census.generation, populationDigest: '0'.repeat(64) } }).join('\n')).toContain('generated population digest drift');
+    expect(validateCensusSchema({ ...census, generation: { ...census.generation, migrationOwnershipDigest: '0'.repeat(64) } }).join('\n')).toContain('generated migration ownership digest drift');
   });
 
   it('fails when the frozen baseline commit or source hashes drift', () => {

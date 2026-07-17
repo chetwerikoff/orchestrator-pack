@@ -68,10 +68,6 @@ export function classifyPreflightGhOutcome(input = {}) {
     return { disposition: 'transient', reason: 'preflight_timeout', transientClass: 'timeout' };
   }
 
-  if (parseOk === false && parseReason === 'gh_binary_missing') {
-    return { disposition: 'terminal', reason: 'gh_binary_missing', terminalClass: 'config' };
-  }
-
   const text = stderr.toLowerCase();
 
   if (

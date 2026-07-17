@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { failGate, passGate, type EvidenceObservation, type GateResult } from './contracts.ts';
-import { populationDigest } from './census-generator.ts';
+import { migrationOwnershipDigest, populationDigest } from './census-generator.ts';
+import { VERIFY_REQUIRED_FILES } from './bulk-declarative-gates.ts';
+import { VERIFY_CONTRACT_MARKERS, VERIFY_PROMPT_GLOB } from './custom/bulk-static-gates.ts';
+import {
+  WAVE_3B_MIGRATION_INVENTORY_PATH,
+  parseWave3bMigrationInventory,
+  validateWave3bMigrationInventory,
+} from './wave-3b-migration-inventory.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
 export const LEGACY_CENSUS_CLASSIFICATIONS = [
@@ -81,12 +88,14 @@ export interface GateCensus {
   readonly issue: 830;
   readonly wave: '3.a' | '3.b';
   readonly migrationIssue?: 841;
+  readonly migrationInventoryPath?: typeof WAVE_3B_MIGRATION_INVENTORY_PATH;
   readonly baseCommitSha: string;
   readonly sourceHashes: Readonly<Record<string, string>>;
   readonly generation: {
     readonly tool: 'scripts/gate-runner/census-generator.ts';
     readonly baseCommitSha: string;
     readonly populationDigest: string;
+    readonly migrationOwnershipDigest: string;
   };
   readonly populationCount: number;
   readonly counts: Readonly<Record<string, number>>;
@@ -106,6 +115,7 @@ export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json'
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
+const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'e72c1eb63da367470283a8f3f684f9b03f2eccd90fb68ddb40da337cc261f9f1';
 const EXPECTED_SOURCE_HASHES = {
   'scripts/verify.ps1': '6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9',
   'scripts/check-reusable.ps1': 'dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb',
@@ -214,6 +224,8 @@ function hasOperatorCommand(text: string, marker: string): boolean {
 interface ParsedCall {
   readonly name: string;
   readonly arguments: readonly string[];
+  readonly start: number;
+  readonly end: number;
 }
 
 function isIdentifierStart(character: string | undefined): boolean {
@@ -412,7 +424,7 @@ function parseCalls(text: string, acceptedNames: ReadonlySet<string>): ParsedCal
     if (text[opening] !== '(') continue;
     const closing = matchingDelimiter(text, opening);
     if (closing < 0) continue;
-    calls.push({ name, arguments: splitTopLevel(text.slice(opening + 1, closing)) });
+    calls.push({ name, arguments: splitTopLevel(text.slice(opening + 1, closing)), start: nameStart, end: closing + 1 });
     index = closing + 1;
   }
   return calls;
@@ -470,7 +482,7 @@ function parseCallExpression(expression: string, acceptedNames: ReadonlySet<stri
   if (!finalName || !acceptedNames.has(finalName) || trimmed[index] !== '(') return undefined;
   const closing = matchingDelimiter(trimmed, index);
   if (closing < 0 || skipTrivia(trimmed, closing + 1) !== trimmed.length) return undefined;
-  return { name: finalName, arguments: splitTopLevel(trimmed.slice(index + 1, closing)) };
+  return { name: finalName, arguments: splitTopLevel(trimmed.slice(index + 1, closing)), start: 0, end: trimmed.length };
 }
 
 function parseArrayExpression(expression: string): readonly string[] | undefined {
@@ -493,22 +505,33 @@ function parseObjectExpression(expression: string): ReadonlyMap<string, string> 
   return properties;
 }
 
-function normalizedPathExpression(expression: string): string | undefined {
+function normalizedRelativeLiteral(expression: string): string | undefined {
   const literal = parseStringLiteral(expression);
-  if (literal !== undefined) return literal.replaceAll('\\', '/').replace(/^\.\//u, '');
-  const call = parseCallExpression(expression, new Set(['join', 'resolve']));
-  if (!call) return undefined;
-  const segments: string[] = [];
-  for (const argument of call.arguments) {
-    const value = normalizedPathExpression(argument);
-    if (value !== undefined && value.length > 0) segments.push(value.replace(/^\/+|\/+$/gu, ''));
+  if (literal === undefined) return undefined;
+  const normalized = literal.replaceAll('\\', '/').replace(/^\.\//u, '');
+  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized) || normalized.split('/').includes('..')) {
+    return undefined;
   }
-  return segments.length > 0 ? segments.join('/') : undefined;
+  return normalized;
+}
+
+function isRepositoryRootExpression(expression: string): boolean {
+  const trimmed = expression.trim();
+  return trimmed === 'repoRoot' || trimmed === 'root';
 }
 
 function pathExpressionTargets(expression: string, target: string): boolean {
-  const candidate = normalizedPathExpression(expression)?.replaceAll('\\', '/').replace(/^\.\//u, '');
-  return candidate === target || candidate?.endsWith(`/${target}`) === true;
+  const literal = normalizedRelativeLiteral(expression);
+  if (literal !== undefined) return literal === target;
+  const call = parseCallExpression(expression, new Set(['join', 'resolve']));
+  if (!call || call.arguments.length < 2 || !isRepositoryRootExpression(call.arguments[0] ?? '')) return false;
+  const suffix: string[] = [];
+  for (const argument of call.arguments.slice(1)) {
+    const segment = normalizedRelativeLiteral(argument);
+    if (segment === undefined) return false;
+    suffix.push(segment.replace(/^\/+|\/+$/gu, ''));
+  }
+  return suffix.join('/') === target;
 }
 
 function invocationTargets(call: ParsedCall, target: string): boolean {
@@ -535,10 +558,72 @@ function invocationTargets(call: ParsedCall, target: string): boolean {
   return false;
 }
 
+function assignedIdentifier(text: string, call: ParsedCall): string | undefined {
+  const lineStart = text.lastIndexOf('\n', call.start - 1) + 1;
+  const prefix = text.slice(lineStart, call.start);
+  return /(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*$/u.exec(prefix)?.[1];
+}
+
+function statusIsAsserted(text: string, identifier: string): boolean {
+  const escaped = escapeRegExp(identifier);
+  return new RegExp(`expect\\(\\s*${escaped}\\.status(?:\\s*,[\\s\\S]*?)?\\)\\.toBe\\(`, 'u').test(text)
+    || new RegExp(`if\\s*\\([^)]*${escaped}\\.status[^)]*\\)\\s*\\{?[\\s\\S]{0,240}?throw\\b`, 'u').test(text);
+}
+
+function processResultIsFailClosed(text: string, identifier: string): boolean {
+  const escaped = escapeRegExp(identifier);
+  return new RegExp(`if\\s*\\(\\s*!\\s*${escaped}\\.ok\\s*\\)\\s*\\{[\\s\\S]{0,500}?throw\\b`, 'u').test(text)
+    || new RegExp(`expect\\(\\s*${escaped}\\.ok(?:\\s*,[\\s\\S]*?)?\\)\\.toBe\\(true\\)`, 'u').test(text)
+    || (new RegExp(`expect\\(\\s*${escaped}\\.outcome`, 'u').test(text)
+      && new RegExp(`expect\\(\\s*${escaped}\\.exitCode`, 'u').test(text));
+}
+
+function returnedHelperName(text: string, call: ParsedCall): string | undefined {
+  const prefix = text.slice(0, call.start);
+  const functionMatches = [...prefix.matchAll(/function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\([^)]*\)\s*\{/gu)];
+  const candidate = functionMatches.at(-1);
+  if (!candidate || candidate.index === undefined) return undefined;
+  const open = text.indexOf('{', candidate.index);
+  const close = matchingDelimiter(text, open);
+  if (open < 0 || close < call.end) return undefined;
+  if (!/return\s*$/u.test(text.slice(Math.max(open + 1, call.start - 40), call.start))) return undefined;
+  return candidate[1];
+}
+
+function helperStatusIsAsserted(text: string, helper: string): boolean {
+  const escaped = escapeRegExp(helper);
+  if (new RegExp(`expect\\(\\s*${escaped}\\([^)]*\\)\\.status(?:\\s*,[\\s\\S]*?)?\\)\\.toBe\\(`, 'u').test(text)) return true;
+  for (const match of text.matchAll(new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*${escaped}\\(`, 'gu'))) {
+    const identifier = match[1];
+    if (identifier && statusIsAsserted(text, identifier)) return true;
+  }
+  return false;
+}
+
+function execFileSyncFailureIsNotSwallowed(text: string, call: ParsedCall): boolean {
+  const before = text.slice(Math.max(0, call.start - 800), call.start);
+  const after = text.slice(call.end, Math.min(text.length, call.end + 800));
+  const lastTry = before.lastIndexOf('try');
+  const lastBrace = before.lastIndexOf('}');
+  return !(lastTry > lastBrace && /catch\s*(?:\([^)]*\))?\s*\{/u.test(after));
+}
+
+function invocationFailureIsFailClosed(text: string, call: ParsedCall): boolean {
+  if (call.name === 'execFileSync') return execFileSyncFailureIsNotSwallowed(text, call);
+  const identifier = assignedIdentifier(text, call);
+  if (call.name === 'runProcessSync') return identifier !== undefined && processResultIsFailClosed(text, identifier);
+  if (call.name === 'spawnSync') {
+    if (identifier && statusIsAsserted(text, identifier)) return true;
+    const helper = returnedHelperName(text, call);
+    return helper !== undefined && helperStatusIsAsserted(text, helper);
+  }
+  return false;
+}
+
 function hasTestInvocation(text: string, marker: string): boolean {
   const target = referencedScriptPath(marker).replaceAll('\\', '/');
   const calls = parseCalls(text, new Set(['spawnSync', 'execFileSync', 'runProcessSync']));
-  return calls.some((call) => invocationTargets(call, target));
+  return calls.some((call) => invocationTargets(call, target) && invocationFailureIsFailClosed(text, call));
 }
 
 function hasBehaviorContainerReference(entry: CensusEntry, text: string): boolean {
@@ -610,6 +695,9 @@ function validateHeader(census: GateCensus, failures: string[]): void {
   }
   if (census.version !== 2 || census.wave !== '3.b' || census.migrationIssue !== 841) {
     failures.push('schema v2 census must bind to migration issue 841 / wave 3.b while retaining issue 830 provenance');
+  }
+  if (census.migrationInventoryPath !== WAVE_3B_MIGRATION_INVENTORY_PATH) {
+    failures.push(`schema v2 census must bind to ${WAVE_3B_MIGRATION_INVENTORY_PATH}`);
   }
 }
 
@@ -689,6 +777,13 @@ export function validateCensusSchema(census: GateCensus): string[] {
   if (census.generation?.baseCommitSha !== census.baseCommitSha) failures.push('census generation provenance is not bound to the frozen pre-change commit');
   const digest = populationDigest(census.entries);
   if (census.generation?.populationDigest !== digest) failures.push(`generated population digest drift: committed=${census.generation?.populationDigest ?? '<missing>'} actual=${digest}`);
+  const ownershipDigest = migrationOwnershipDigest(census.entries);
+  if (census.generation?.migrationOwnershipDigest !== ownershipDigest) {
+    failures.push(`generated migration ownership digest drift: committed=${census.generation?.migrationOwnershipDigest ?? '<missing>'} actual=${ownershipDigest}`);
+  }
+  if (ownershipDigest !== EXPECTED_MIGRATION_OWNERSHIP_DIGEST) {
+    failures.push(`frozen migration ownership digest drift: expected=${EXPECTED_MIGRATION_OWNERSHIP_DIGEST} actual=${ownershipDigest}`);
+  }
   for (const [path, hash] of Object.entries(census.sourceHashes)) {
     if (!path || !/^[0-9a-f]{64}$/u.test(hash)) failures.push(`invalid frozen source hash for ${path || '<empty>'}`);
   }
@@ -722,6 +817,26 @@ export function evaluateCensus(
   registeredGateIds: ReadonlySet<string>,
 ): GateResult {
   const failures = validateCensusSchema(census);
+  const inventoryText = snapshot.files.get(WAVE_3B_MIGRATION_INVENTORY_PATH);
+  if (inventoryText === undefined) {
+    failures.push(`Wave 3.b migration inventory is missing: ${WAVE_3B_MIGRATION_INVENTORY_PATH}`);
+  } else {
+    try {
+      const inventory = parseWave3bMigrationInventory(inventoryText);
+      failures.push(...validateWave3bMigrationInventory(
+        inventory,
+        census.entries,
+        registeredGateIds,
+        {
+          requiredFiles: VERIFY_REQUIRED_FILES,
+          contractMarkers: VERIFY_CONTRACT_MARKERS,
+          promptGlob: VERIFY_PROMPT_GLOB,
+        },
+      ));
+    } catch (error) {
+      failures.push(`Wave 3.b migration inventory is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const baselineScripts = new Map(
     census.entries
       .filter((entry) => entry.sourceKind === 'check-script')

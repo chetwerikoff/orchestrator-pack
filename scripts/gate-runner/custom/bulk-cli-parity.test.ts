@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from '#opk-kernel/subprocess';
 import { afterAll, describe, expect, it } from 'vitest';
-import { bulkDeclarativeGateDefinitions } from '../bulk-declarative-gates.ts';
+import { bulkDeclarativeGateDefinitions, VERIFY_REQUIRED_FILES } from '../bulk-declarative-gates.ts';
 import { evaluateDeclarativeGate } from '../declarative.ts';
 import { loadCensus } from '../census.ts';
 import { aggregateLane, type GateResult, type GateStatus } from '../contracts.ts';
-import { formatGateRunnerReport, runGateRunner } from '../runner.ts';
+import { formatGateRunnerReport, registeredGateIds, runGateRunner } from '../runner.ts';
 import { captureSourceSnapshot, memorySnapshot, type SourceSnapshot } from '../source-snapshot.ts';
 import {
   evaluateAgentsReportContract,
@@ -16,8 +16,11 @@ import {
   evaluateReview010Vocabulary,
   evaluateReviewCommandNotAo,
   evaluateVerifyStructureContract,
+  VERIFY_CONTRACT_MARKERS,
+  VERIFY_PROMPT_GLOB,
 } from './bulk-static-gates.ts';
 import { evaluateNodeBackedGate, nodeBackedGateCommands } from './node-backed-gates.ts';
+import { WAVE_3B_MIGRATION_INVENTORY_PATH, parseWave3bMigrationInventory, validateWave3bMigrationInventory, type Wave3bReplacementSurface } from '../wave-3b-migration-inventory.ts';
 
 interface Capture {
   readonly gateId: string;
@@ -63,6 +66,7 @@ interface CaptureManifest {
 const repoRoot = resolve(import.meta.dirname, '../../..');
 const frozenFixtureRoot = resolve(import.meta.dirname, '../../fixtures/gate-runner/legacy-wave-3b');
 const wave3b = JSON.parse(readFileSync(resolve(import.meta.dirname, '../goldens/wave-3b-pre-delete-captures.json'), 'utf8')) as CaptureManifest;
+const wave3bInventory = parseWave3bMigrationInventory(readFileSync(resolve(repoRoot, WAVE_3B_MIGRATION_INVENTORY_PATH), 'utf8'));
 const frozenVerifySource = readFileSync(resolve(frozenFixtureRoot, 'verify-frozen.ps1'), 'utf8');
 const verifyProvenance = JSON.parse(readFileSync(resolve(frozenFixtureRoot, 'verify-source-spans.json'), 'utf8')) as FrozenVerifyProvenance;
 const liveSnapshot = captureSourceSnapshot(repoRoot);
@@ -100,48 +104,35 @@ function capturesByScript(captures: readonly Capture[]): Map<string, Capture[]> 
   return result;
 }
 
-function isPorted(entry: ReturnType<typeof loadCensus>['entries'][number]): boolean {
-  return entry.classification === 'ported-declarative' || entry.classification === 'ported-custom';
+function replacementSurface(overrides: Partial<Wave3bReplacementSurface> = {}): Wave3bReplacementSurface {
+  return { requiredFiles: VERIFY_REQUIRED_FILES, contractMarkers: VERIFY_CONTRACT_MARKERS, promptGlob: VERIFY_PROMPT_GLOB, ...overrides };
 }
 
-function wave3bParityCompletenessFailures(captures: readonly Capture[]): string[] {
+function wave3bParityCompletenessFailures(captures: readonly Capture[], surface: Wave3bReplacementSurface = replacementSurface()): string[] {
   const census = loadCensus(repoRoot);
-  const failures: string[] = [];
-  const migrated = census.entries.filter((entry) => isPorted(entry) && entry.portedInWave === '3.b');
-  const standalone = migrated.filter((entry) => entry.sourceKind === 'check-script');
+  const failures = validateWave3bMigrationInventory(wave3bInventory, census.entries, registeredGateIds, surface);
+  const standalone = wave3bInventory.entries.filter((entry) => entry.sourceKind === 'check-script');
   const byScript = capturesByScript(captures);
   for (const entry of standalone) {
     const evidence = byScript.get(entry.sourcePath) ?? [];
     if (!evidence.some((capture) => capture.exitCode === 0)) failures.push(`${entry.sourcePath}: missing successful legacy capture`);
     if (!evidence.some((capture) => capture.exitCode !== 0)) failures.push(`${entry.sourcePath}: missing failing legacy capture`);
-    for (const gateId of entry.gateIds ?? []) {
-      if (!evidence.some((capture) => capture.gateId === gateId)) failures.push(`${entry.sourcePath}: missing capture for ${gateId}`);
-    }
+    for (const gateId of entry.gateIds) if (!evidence.some((capture) => capture.gateId === gateId)) failures.push(`${entry.sourcePath}: missing capture for ${gateId}`);
   }
-
-  const migratedVerifyMembers = migrated.filter((entry) => entry.sourceKind === 'verify-script-member');
-  for (const member of migratedVerifyMembers) {
-    const source = standalone.find((entry) => entry.sourcePath === member.marker);
+  const members = wave3bInventory.entries.filter((entry) => entry.sourceKind === 'verify-script-member');
+  for (const member of members) {
+    const ownerId = member.replacement.kind === 'standalone-owner' ? member.replacement.ownerId : '';
+    const source = wave3bInventory.entries.find((entry) => entry.id === ownerId);
     if (!source) failures.push(`${member.id}: missing Wave 3.b standalone migration owner`);
-    for (const gateId of member.gateIds ?? []) {
-      if (!source?.gateIds?.includes(gateId)) failures.push(`${member.id}: gate ${gateId} is not covered by its standalone migration`);
-    }
+    for (const gateId of member.gateIds) if (!source?.gateIds.includes(gateId)) failures.push(`${member.id}: gate ${gateId} is not covered by its standalone migration`);
   }
-
-  const verifyRows = migrated.filter((entry) => entry.sourceKind === 'verify-inline');
-  const verifyGateIds = new Set(verifyRows.flatMap((entry) => [...(entry.gateIds ?? [])]));
-  for (const gateId of verifyGateIds) {
+  const verifyRows = wave3bInventory.entries.filter((entry) => entry.sourceKind === 'verify-inline');
+  for (const gateId of new Set(verifyRows.flatMap((entry) => [...entry.gateIds]))) {
     const evidence = captures.filter((capture) => capture.legacyScript === 'scripts/verify.ps1' && capture.gateId === gateId);
     if (!evidence.some((capture) => capture.exitCode === 0)) failures.push(`scripts/verify.ps1:${gateId}: missing successful legacy capture`);
     if (!evidence.some((capture) => capture.exitCode !== 0)) failures.push(`scripts/verify.ps1:${gateId}: missing failing legacy capture`);
   }
-  for (const row of verifyRows) {
-    for (const gateId of row.gateIds ?? []) {
-      if (!captures.some((capture) => capture.legacyScript === 'scripts/verify.ps1' && capture.gateId === gateId)) {
-        failures.push(`${row.id}: missing verify behavior capture for ${gateId}`);
-      }
-    }
-  }
+  for (const row of verifyRows) for (const gateId of row.gateIds) if (!captures.some((capture) => capture.legacyScript === 'scripts/verify.ps1' && capture.gateId === gateId)) failures.push(`${row.id}: missing verify behavior capture for ${gateId}`);
   return failures;
 }
 
@@ -341,11 +332,31 @@ describe('Wave 3.b per-entrypoint CLI parity', () => {
   });
 
   it('fails completeness when one migrated script is removed from the evidence manifest', () => {
-    const census = loadCensus(repoRoot);
-    const sourcePath = census.entries.find((entry) => entry.portedInWave === '3.b' && entry.sourceKind === 'check-script')?.sourcePath;
+    const sourcePath = wave3bInventory.entries.find((entry) => entry.sourceKind === 'check-script')?.sourcePath;
     expect(sourcePath).toBeDefined();
     const mutated = wave3b.captures.filter((capture) => capture.legacyScript !== sourcePath);
     expect(wave3bParityCompletenessFailures(mutated).join('\n')).toContain(`${sourcePath}: missing successful legacy capture`);
+  });
+
+
+  it('fails completeness when one concrete required-file replacement rule is removed', () => {
+    const row = wave3bInventory.entries.find((entry) => entry.replacement.kind === 'required-file-rule');
+    expect(row).toBeDefined();
+    const replacement = row!.replacement;
+    if (replacement.kind !== 'required-file-rule') throw new Error('expected required-file replacement');
+    const failures = wave3bParityCompletenessFailures(wave3b.captures, replacementSurface({ requiredFiles: VERIFY_REQUIRED_FILES.filter((path) => path !== replacement.path) }));
+    expect(failures.join('\n')).toContain(`${row!.id}: required-file replacement rule is missing`);
+  });
+
+  it('fails completeness when one concrete contract marker replacement is removed', () => {
+    const row = wave3bInventory.entries.find((entry) => entry.replacement.kind === 'contract-marker-rule');
+    expect(row).toBeDefined();
+    const replacement = row!.replacement;
+    if (replacement.kind !== 'contract-marker-rule') throw new Error('expected contract-marker replacement');
+    const [marker] = replacement.markers;
+    expect(marker).toBeDefined();
+    const failures = wave3bParityCompletenessFailures(wave3b.captures, replacementSurface({ contractMarkers: { ...VERIFY_CONTRACT_MARKERS, [replacement.path]: (VERIFY_CONTRACT_MARKERS[replacement.path] ?? []).filter((value) => value !== marker) } }));
+    expect(failures.join('\n')).toContain(`${row!.id}: concrete replacement marker is missing: ${marker}`);
   });
 
   it('binds standalone fixtures and verify replay predicates to frozen source evidence', () => {

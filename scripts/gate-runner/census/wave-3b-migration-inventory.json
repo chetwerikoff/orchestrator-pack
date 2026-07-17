@@ -1,0 +1,680 @@
+{
+  "version": 1,
+  "issue": 841,
+  "baseCommitSha": "0e8846b1e7caf063d73792700968971d75e0524f",
+  "entries": [
+    {
+      "id": "check-script:scripts/check-agents-report-contract.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-agents-report-contract.ps1",
+      "marker": "check-agents-report-contract.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "agents-report-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "registered-gate",
+        "gateIds": [
+          "agents-report-contract"
+        ]
+      }
+    },
+    {
+      "id": "check-script:scripts/check-coworker-delegation-threshold-drift.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-coworker-delegation-threshold-drift.ps1",
+      "marker": "check-coworker-delegation-threshold-drift.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "coworker-delegation-threshold-drift"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "registered-gate",
+        "gateIds": [
+          "coworker-delegation-threshold-drift"
+        ]
+      }
+    },
+    {
+      "id": "check-script:scripts/check-external-output-shape-guard.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-external-output-shape-guard.ps1",
+      "marker": "check-external-output-shape-guard.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "external-output-shape-guard"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "registered-gate",
+        "gateIds": [
+          "external-output-shape-guard"
+        ]
+      }
+    },
+    {
+      "id": "check-script:scripts/check-launch-argv-inventory.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-launch-argv-inventory.ps1",
+      "marker": "check-launch-argv-inventory.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "launch-argv-inventory"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "registered-gate",
+        "gateIds": [
+          "launch-argv-inventory"
+        ]
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-010-vocabulary.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-010-vocabulary.ps1",
+      "marker": "check-review-010-vocabulary.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "review-010-vocabulary"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "registered-gate",
+        "gateIds": [
+          "review-010-vocabulary"
+        ]
+      }
+    },
+    {
+      "id": "check-script:scripts/check-review-command-not-ao.ps1",
+      "sourceKind": "check-script",
+      "sourcePath": "scripts/check-review-command-not-ao.ps1",
+      "marker": "check-review-command-not-ao.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "review-command-not-ao"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "registered-gate",
+        "gateIds": [
+          "review-command-not-ao"
+        ]
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-codex-pr-reviewer/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-codex-pr-reviewer/README.md'",
+      "classification": "ported-custom",
+      "gateIds": [
+        "verify-structure-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "contract-marker-rule",
+        "gateId": "verify-structure-contract",
+        "path": "plugins/ao-codex-pr-reviewer/README.md",
+        "markers": [
+          "Codex",
+          "gpt-5.5",
+          "PR review",
+          "GitHub Issues",
+          "no core patch"
+        ]
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-scope-guard/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-scope-guard/README.md'",
+      "classification": "ported-custom",
+      "gateIds": [
+        "verify-structure-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "contract-marker-rule",
+        "gateId": "verify-structure-contract",
+        "path": "plugins/ao-scope-guard/README.md",
+        "markers": [
+          "DD-024",
+          "runtime guard",
+          "git add",
+          "commit",
+          "PR-level CI",
+          "second line"
+        ]
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-task-declaration/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-task-declaration/README.md'",
+      "classification": "ported-custom",
+      "gateIds": [
+        "verify-structure-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "contract-marker-rule",
+        "gateId": "verify-structure-contract",
+        "path": "plugins/ao-task-declaration/README.md",
+        "markers": [
+          "DD-026",
+          "DD-027",
+          "declared_files",
+          "denylist",
+          "one amendment",
+          "baseline"
+        ]
+      }
+    },
+    {
+      "id": "verify-inline:contract-marker:plugins/ao-token-chain-ledger/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "Test-ContractMarkers 'plugins/ao-token-chain-ledger/README.md'",
+      "classification": "ported-custom",
+      "gateIds": [
+        "verify-structure-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "contract-marker-rule",
+        "gateId": "verify-structure-contract",
+        "path": "plugins/ao-token-chain-ledger/README.md",
+        "markers": [
+          "chain_id",
+          "planner",
+          "reviewer",
+          "worker",
+          "per-session cost",
+          "estimated_cost_usd"
+        ]
+      }
+    },
+    {
+      "id": "verify-inline:required-file:.gitattributes",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": ".gitattributes",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": ".gitattributes"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:.github/workflows/scope-guard.yml",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": ".github/workflows/scope-guard.yml",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": ".github/workflows/scope-guard.yml"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:.gitignore",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": ".gitignore",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": ".gitignore"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:AGENTS.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "AGENTS.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "AGENTS.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "README.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:agent-orchestrator.yaml.example",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "agent-orchestrator.yaml.example",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "agent-orchestrator.yaml.example"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/architecture.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/architecture.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "docs/architecture.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/github_issues_cursor_codex_setup.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/github_issues_cursor_codex_setup.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "docs/github_issues_cursor_codex_setup.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/migration_notes.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/migration_notes.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "docs/migration_notes.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:docs/repository_policy.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "docs/repository_policy.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "docs/repository_policy.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/README.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "plugins/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-codex-pr-reviewer/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-codex-pr-reviewer/README.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "plugins/ao-codex-pr-reviewer/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-scope-guard/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-scope-guard/README.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "plugins/ao-scope-guard/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-task-declaration/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-task-declaration/README.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "plugins/ao-task-declaration/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:plugins/ao-token-chain-ledger/README.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "plugins/ao-token-chain-ledger/README.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "plugins/ao-token-chain-ledger/README.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:prompts/self_architect_check.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "prompts/self_architect_check.md",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "prompts/self_architect_check.md"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/bootstrap.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/bootstrap.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/bootstrap.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/check-reusable.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-reusable.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/check-reusable.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/install-git-hooks.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/install-git-hooks.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/install-git-hooks.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/lint-self-architect.config.json",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/lint-self-architect.config.json",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/lint-self-architect.config.json"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/lint-self-architect.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/lint-self-architect.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/lint-self-architect.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:required-file:scripts/verify.ps1",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/verify.ps1",
+      "classification": "ported-declarative",
+      "gateIds": [
+        "verify-required-files"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "required-file-rule",
+        "gateId": "verify-required-files",
+        "path": "scripts/verify.ps1"
+      }
+    },
+    {
+      "id": "verify-inline:write-check:prompts/*.md",
+      "sourceKind": "verify-inline",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "prompts/*.md",
+      "classification": "ported-custom",
+      "gateIds": [
+        "verify-structure-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "prompt-glob-rule",
+        "gateId": "verify-structure-contract",
+        "pattern": "prompts/*.md"
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-agents-report-contract.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-agents-report-contract.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "agents-report-contract"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "standalone-owner",
+        "ownerId": "check-script:scripts/check-agents-report-contract.ps1",
+        "gateIds": [
+          "agents-report-contract"
+        ]
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-coworker-delegation-threshold-drift.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-coworker-delegation-threshold-drift.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "coworker-delegation-threshold-drift"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "standalone-owner",
+        "ownerId": "check-script:scripts/check-coworker-delegation-threshold-drift.ps1",
+        "gateIds": [
+          "coworker-delegation-threshold-drift"
+        ]
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-external-output-shape-guard.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-external-output-shape-guard.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "external-output-shape-guard"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "standalone-owner",
+        "ownerId": "check-script:scripts/check-external-output-shape-guard.ps1",
+        "gateIds": [
+          "external-output-shape-guard"
+        ]
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-launch-argv-inventory.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-launch-argv-inventory.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "launch-argv-inventory"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "standalone-owner",
+        "ownerId": "check-script:scripts/check-launch-argv-inventory.ps1",
+        "gateIds": [
+          "launch-argv-inventory"
+        ]
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-010-vocabulary.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-010-vocabulary.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "review-010-vocabulary"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "standalone-owner",
+        "ownerId": "check-script:scripts/check-review-010-vocabulary.ps1",
+        "gateIds": [
+          "review-010-vocabulary"
+        ]
+      }
+    },
+    {
+      "id": "verify-script:scripts/check-review-command-not-ao.ps1",
+      "sourceKind": "verify-script-member",
+      "sourcePath": "scripts/verify.ps1",
+      "marker": "scripts/check-review-command-not-ao.ps1",
+      "classification": "ported-custom",
+      "gateIds": [
+        "review-command-not-ao"
+      ],
+      "portedInWave": "3.b",
+      "replacement": {
+        "kind": "standalone-owner",
+        "ownerId": "check-script:scripts/check-review-command-not-ao.ps1",
+        "gateIds": [
+          "review-command-not-ao"
+        ]
+      }
+    }
+  ]
+}

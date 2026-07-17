@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { generatePrechangePopulation, populationDigest } from './census-generator.ts';
+import { generatePrechangePopulation, migrationOwnershipDigest, populationDigest } from './census-generator.ts';
 import { loadCensus } from './census.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
@@ -55,5 +55,7 @@ describe('pre-change census generator', () => {
     expect(census.generation.baseCommitSha).toBe(census.baseCommitSha);
     expect(census.generation.populationDigest).toMatch(/^[0-9a-f]{64}$/u);
     expect(populationDigest(census.entries)).toBe(census.generation.populationDigest);
+    expect(census.generation.migrationOwnershipDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(migrationOwnershipDigest(census.entries)).toBe(census.generation.migrationOwnershipDigest);
   });
 });

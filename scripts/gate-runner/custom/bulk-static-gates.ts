@@ -209,18 +209,26 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
   );
 }
 
-const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
+export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
   'plugins/ao-task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
   'plugins/ao-scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
   'plugins/ao-token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
   'plugins/ao-codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
 };
 
+export const VERIFY_PROMPT_GLOB = 'prompts/*.md';
+
+function matchesVerifyPromptGlob(path: string): boolean {
+  const [prefix = '', suffix = ''] = VERIFY_PROMPT_GLOB.split('*', 2);
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) return false;
+  return !path.slice(prefix.length, path.length - suffix.length).includes('/');
+}
+
 export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateResult {
   const gateId = 'verify-structure-contract';
   const failures: string[] = [];
   const unreachable: string[] = [];
-  const promptFiles = snapshot.paths.filter((path) => /^prompts\/[^/]+\.md$/u.test(path));
+  const promptFiles = snapshot.paths.filter(matchesVerifyPromptGlob);
   if (promptFiles.length === 0) failures.push('Missing prompt markdown files');
   for (const [path, markers] of Object.entries(VERIFY_CONTRACT_MARKERS)) {
     const text = requireText(snapshot, path, failures, unreachable);
