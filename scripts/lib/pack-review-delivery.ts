@@ -174,22 +174,34 @@ function storeOptions(options: PackReviewStoreOptions): PackReviewStoreOptions {
   return { projectId: options.projectId, storeRoot: options.storeRoot };
 }
 
+function safeGetPackReviewRun(
+  runId: string,
+  options: PackReviewStoreOptions,
+): PackReviewRunRecord | null {
+  try {
+    return getPackReviewRun(runId, storeOptions(options));
+  } catch {
+    return null;
+  }
+}
+
 function persistChannelOutcome(
   runId: string,
   channel: PackReviewDeliveryChannel,
   value: PackReviewDeliveryOutcome,
   options: PackReviewStoreOptions,
-): PackReviewRunRecord | null {
+): boolean {
   try {
-    const current = getPackReviewRun(runId, storeOptions(options));
-    return updatePackReviewRun(runId, {
+    const current = safeGetPackReviewRun(runId, options);
+    updatePackReviewRun(runId, {
       deliveryOutcomes: {
         ...(current?.deliveryOutcomes ?? {}),
         [channel]: value,
       },
     }, storeOptions(options));
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -261,7 +273,7 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
       ok: true,
       reason: 'journal_write_failed',
       status: classification.terminalStatus,
-      run: getPackReviewRun(options.run.id, storeOptions(options)),
+      run: safeGetPackReviewRun(options.run.id, options),
       journalOutcome: journal.outcome,
     };
   }
@@ -271,23 +283,18 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
   const workerKey = `worker-notification:${options.run.id}:${options.run.targetSha}`;
   let githubReview: PackReviewGithubCommentResult | undefined;
   let deliveryFailed = false;
+  const deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>> = {};
+  const recordChannelOutcome = (channel: PackReviewDeliveryChannel, value: PackReviewDeliveryOutcome): void => {
+    deliveryOutcomes[channel] = value;
+    if (!persistChannelOutcome(options.run.id, channel, value, options)) deliveryFailed = true;
+  };
 
   try {
     githubReview = await options.postGithubComment();
-    persistChannelOutcome(
-      options.run.id,
-      'githubComment',
-      outcome('succeeded', 'comment_posted', githubKey, options.clock),
-      options,
-    );
+    recordChannelOutcome('githubComment', outcome('succeeded', 'comment_posted', githubKey, options.clock));
   } catch (error) {
     deliveryFailed = true;
-    persistChannelOutcome(
-      options.run.id,
-      'githubComment',
-      outcome('failed', describeError(error), githubKey, options.clock),
-      options,
-    );
+    recordChannelOutcome('githubComment', outcome('failed', describeError(error), githubKey, options.clock));
   }
 
   try {
@@ -297,20 +304,10 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
       description: classification.description,
       idempotencyKey: statusKey,
     });
-    persistChannelOutcome(
-      options.run.id,
-      'requiredStatus',
-      outcome('succeeded', `status_${classification.requiredStatus}`, statusKey, options.clock),
-      options,
-    );
+    recordChannelOutcome('requiredStatus', outcome('succeeded', `status_${classification.requiredStatus}`, statusKey, options.clock));
   } catch (error) {
     deliveryFailed = true;
-    persistChannelOutcome(
-      options.run.id,
-      'requiredStatus',
-      outcome('failed', describeError(error), statusKey, options.clock),
-      options,
-    );
+    recordChannelOutcome('requiredStatus', outcome('failed', describeError(error), statusKey, options.clock));
   }
 
   try {
@@ -326,26 +323,17 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
       idempotencyKey: workerKey,
     });
     if (notified.state !== 'delivered') deliveryFailed = true;
-    persistChannelOutcome(
-      options.run.id,
-      'workerNotification',
-      outcome(notified.state, notified.reason, workerKey, options.clock),
-      options,
-    );
+    recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
   } catch (error) {
     deliveryFailed = true;
-    persistChannelOutcome(
-      options.run.id,
-      'workerNotification',
-      outcome('failed', describeError(error), workerKey, options.clock),
-      options,
-    );
+    recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
   }
 
   let terminalRun: PackReviewRunRecord | null = null;
   try {
     terminalRun = setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
       exitCode: 0,
+      deliveryOutcomes,
       ...(githubReview ? {
         githubReviewId: githubReview.id,
         githubReviewUrl: githubReview.url,
@@ -353,7 +341,7 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
       } : {}),
     }, storeOptions(options));
   } catch {
-    terminalRun = getPackReviewRun(options.run.id, storeOptions(options));
+    terminalRun = safeGetPackReviewRun(options.run.id, options);
   }
 
   return {
@@ -412,9 +400,10 @@ export async function recordMalformedPackReviewStatus(options: RecordMalformedRe
     run = setPackReviewRunTerminal(options.run.id, 'failed', {
       exitCode: 0,
       failureReason: `reviewer_output_malformed:${trim(options.failureReason) || 'invalid_terminal_payload'}`,
+      deliveryOutcomes: { requiredStatus: statusOutcome },
     }, storeOptions(options));
   } catch {
-    run = getPackReviewRun(options.run.id, storeOptions(options));
+    run = safeGetPackReviewRun(options.run.id, options);
   }
   return {
     ok: false,

@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "0336ddac7f1c605ecf3279ee4b13dd3a9ccab952",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:4bfcc314606cb8ef0c17abd319e0a0b08a157e7a9bf9422cc6017bfe789dc019"
+    "active_scope_hash": "sha256:0d2367289dc0c85ec0b6c0ec922c539edbdfbc6937d60e931475ff166a3b8e30"
   },
   "declared_paths": [
     "docs/migration_notes.md",
@@ -27,8 +27,26 @@
     "scripts/pack-review-runner-severity.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/review-delivery.test.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/scripted-review-confirmed-delivery-gate.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:4bfcc314606cb8ef0c17abd319e0a0b08a157e7a9bf9422cc6017bfe789dc019",
+      "new_active_scope_hash": "sha256:0d2367289dc0c85ec0b6c0ec922c539edbdfbc6937d60e931475ff166a3b8e30",
+      "changed": {
+        "added": [
+          "scripts/scripted-review-confirmed-delivery-gate.test.ts",
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "Cover legacy guard regression and measured runtime-history bindings required by the final CI gates.",
+      "actor": "chatgpt-issue-894-final",
+      "timestamp": "2026-07-17T16:45:59.724Z",
+      "applied": true
+    }
+  ]
 }

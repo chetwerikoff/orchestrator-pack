@@ -1,7 +1,7 @@
 {
   "issue": 556,
-  "source": "ci-baseline-estimates",
-  "dataChangedAt": "2026-07-10T03:00:00Z",
+  "source": "ci-measured",
+  "dataChangedAt": "2026-07-17T16:45:58.774Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -192,7 +192,9 @@
     "tests/agents-md-relocation.test.ts": 45000,
     "tests/agents-md-size-budget.test.ts": 45000,
     "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000,
-    "scripts/pr-session-binding-cache.test.ts": 120000
+    "scripts/pr-session-binding-cache.test.ts": 120000,
+    "scripts/pack-review-delivery.test.ts": 3895,
+    "scripts/pack-review-entrypoint-decoupling.test.ts": 499
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -383,8 +385,24 @@
     "scripts/worktree-gate-claim-completion-seam.test.ts": "measured",
     "tests/agents-md-relocation.test.ts": "measured",
     "tests/agents-md-size-budget.test.ts": "measured",
-    "scripts/worker-status-store.test.ts": "measured"
+    "scripts/worker-status-store.test.ts": "measured",
+    "scripts/pack-review-delivery.test.ts": "measured",
+    "scripts/pack-review-entrypoint-decoupling.test.ts": "measured"
   },
-  "recentSamples": {},
-  "fileChangedAt": {}
+  "recentSamples": {
+    "scripts/pack-review-delivery.test.ts": [
+      3895
+    ],
+    "scripts/pack-review-entrypoint-decoupling.test.ts": [
+      499
+    ]
+  },
+  "fileChangedAt": {
+    "scripts/pack-review-delivery.test.ts": "2026-07-17T16:45:58.774Z",
+    "scripts/pack-review-entrypoint-decoupling.test.ts": "2026-07-17T16:45:58.774Z"
+  },
+  "contentSha": {
+    "scripts/pack-review-delivery.test.ts": "41c9cf6bbf9b974c1344f805f74d7682bb8fee98cd3654d9dd8cf91cfa8811ae",
+    "scripts/pack-review-entrypoint-decoupling.test.ts": "3909712dfd45d784e6b3b4dce422b237380b8822928d63985a0b5b585b5ee883"
+  }
 }
