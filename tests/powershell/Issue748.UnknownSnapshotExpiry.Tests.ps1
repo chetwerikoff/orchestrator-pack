@@ -3,6 +3,8 @@
 BeforeAll {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     . (Join-Path $RepoRoot 'scripts/lib/Review-TriggerReeval-Common.ps1')
+    $Issue854ScenarioPath = Join-Path $RepoRoot 'tests/issue854-worker-status-binding-cache.mjs'
+    $Issue854NodePath = (Get-Command node -ErrorAction Stop).Source
 }
 
 Describe 'Issue #748 unknown PR snapshot retention' {
@@ -43,5 +45,13 @@ Describe 'Issue #748 unknown PR snapshot retention' {
         $action.reason | Should -Be 'snapshot_unknown'
         $result.watchEntries[$key].status | Should -Be 'watching'
         $result.watchEntries[$key].windowExpiresMs | Should -Be $originalExpiry
+    }
+}
+
+Describe 'Issue #854 worker-status binding cache wiring' {
+    It 'runs the Node production-path regression without new PowerShell business logic' {
+        $output = @(& $Issue854NodePath $Issue854ScenarioPath 2>&1)
+        $exitCode = $LASTEXITCODE
+        $exitCode | Should -Be 0 -Because ($output -join "`n")
     }
 }
