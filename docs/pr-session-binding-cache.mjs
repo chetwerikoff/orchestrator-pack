@@ -36,6 +36,7 @@ const n = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const text = (v) => String(v ?? '').trim();
 const repo = (v) => text(v).toLowerCase();
 const sha = (v) => /^[0-9a-f]{7,64}$/i.test(text(v)) ? text(v).toLowerCase() : '';
+const normalizeSha = sha;
 const array = (v) => Array.isArray(v) ? v : v == null ? [] : [v];
 const sessionIdOf = (s) => text(s?.sessionId ?? s?.id ?? s?.name) || null;
 const findSession = (sessions, id) => array(sessions).find((s) => sessionIdOf(s) === text(id)) ?? null;
@@ -46,7 +47,11 @@ function normalizeRepoFromCwd(env = process.env, cwd = process.cwd()) {
   const explicit = repo(env.AO_REPO_SLUG ?? env.GITHUB_REPOSITORY);
   if (explicit) return explicit;
   try {
-    const remote = execSync('git remote get-url origin', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const remote = execSync('git remote get-url origin', {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
     return repo(remote.match(/github\.com[:/]([^/]+\/[^/.]+)/i)?.[1]);
   } catch { return ''; }
 }
@@ -315,7 +320,13 @@ export function loadPushRegisterVerifiedSessions(options = {}) {
   if (!id) return { ok: false, reason: 'push_register_missing_session_identity', sessions: [] };
   const repoSlug = normalizeRepoFromCwd(env, cwd), project = text(env.AO_PROJECT_ID ?? env.AO_PROJECT) || repoSlug.split('/').pop();
   const args = ['session', 'get', id, '--json']; if (project) args.push('-p', project);
-  const result = spawnSync(text(env.AO_COMMAND) || 'ao', args, { cwd, env: { ...env }, encoding: 'utf8', timeout: 15_000 });
+  const aoCommand = text(env.AO_COMMAND) || 'ao';
+  const result = spawnSync(aoCommand, args, {
+    cwd,
+    env: { ...env },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
   try {
     if (result.status !== 0) throw new Error('failed');
     const row = sessionRowFromAoSessionGetPayload(JSON.parse(result.stdout));
@@ -341,7 +352,14 @@ export function provePushRegisterWorkerIdentity(env = process.env, options = {})
 
 export function fetchPriorPrOpenRowForPushRegister(repoSlug, prNumber, cwd = process.cwd(), env = process.env) {
   const slug = repo(repoSlug), number = n(prNumber); if (!slug || number <= 0) return null;
-  const result = spawnSync(text(env.GH_BIN ?? env.AO_GH_COMMAND) || 'gh', ['pr', 'view', String(number), '--repo', slug, '--json', 'number,state,headRefOid'], { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const ghCommand = text(env.GH_BIN ?? env.AO_GH_COMMAND) || 'gh';
+  const args = ['pr', 'view', String(number), '--repo', slug, '--json', 'number,state,headRefOid'];
+  const result = spawnSync(ghCommand, args, {
+    cwd,
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   try { const parsed = JSON.parse(result.stdout); return result.status === 0 && n(parsed.number) > 0 ? { number: n(parsed.number), state: text(parsed.state) || 'OPEN', headRefOid: sha(parsed.headRefOid), repoSlug: slug } : null; }
   catch { return null; }
 }
@@ -362,7 +380,20 @@ export function tryPushRegisterFromPrCreate({ argv, status, stdout, stderr, env 
   const prNumber = parsePrNumberFromGhPrCreateOutput(stdout, stderr); if (prNumber <= 0) return { registered: false, reason: 'push_register_pr_number_unparsed' };
   const verified = loadPushRegisterVerifiedSessions({ env, cwd, sessions }); if (!verified.ok) return { registered: false, reason: verified.reason, diagnostic: verified.reason };
   const identity = provePushRegisterWorkerIdentity(env, { cwd, sessions: verified.sessions }); if (!identity.ok) return { registered: false, reason: identity.reason, diagnostic: identity.reason };
-  let headSha = sha(env.AO_HEAD_SHA ?? env.GITHUB_SHA); try { if (!headSha) headSha = sha(execSync('git rev-parse HEAD', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()); } catch {}
+  let headSha = normalizeSha(env.AO_HEAD_SHA ?? env.GITHUB_SHA);
+  if (!headSha) {
+    try {
+      headSha = normalizeSha(
+        execSync('git rev-parse HEAD', {
+          cwd,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim(),
+      );
+    } catch {
+      headSha = '';
+    }
+  }
   try {
     const cachePath = resolvePrSessionBindingCachePath(env), current = readPrSessionBindingCacheFile(cachePath), prior = lookupBindingBySession(current, identity.repoSlug, identity.sessionId);
     const openPrs = prior && n(prior.prNumber) !== prNumber ? [fetchPriorPrOpenRow?.(identity.repoSlug, prior.prNumber, cwd, env) ?? fetchPriorPrOpenRowForPushRegister(identity.repoSlug, prior.prNumber, cwd, env)].filter(Boolean) : [];
