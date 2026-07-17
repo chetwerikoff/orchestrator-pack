@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import '../fleet-liveness.cases.ts';
 import '../fleet-liveness-census.cases.ts';
+import '../review-ready-seed-liveness.test.ts';
 import {
   parseCaptureManifest,
   parseDaemonStatusCapture,
@@ -58,7 +59,6 @@ describe('JSON contract kernel', () => {
     value.pid = 'not-a-number';
     expectContractPath(() => parseDaemonStatusCapture(JSON.stringify(value)), '$.pid');
   });
-
 
   it('reports a precise path for drifted capture-manifest data', () => {
     const value = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
