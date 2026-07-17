@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Pack-derived worker-status store PowerShell bridge (Issue #720 / #857).
+  Pack-derived worker-status store PowerShell bridge (Issue #720).
 #>
 
 $Script:WorkerStatusStoreCli = Join-Path $PSScriptRoot 'worker-status-store.mjs'
@@ -14,7 +14,13 @@ $Script:WorkerStatusKillSwitchEnv = 'PACK_WORKER_STATUS_STORE_DISABLED'
 function Test-WorkerStatusGithubDependencyModule {
     param($Module)
 
-    if (-not $Module -or -not (Get-Module -Name $Module.Name)) { return $false }
+    if (-not $Module) {
+        return $false
+    }
+    if (-not (Get-Module -Name $Module.Name)) {
+        return $false
+    }
+
     $requiredCommands = @(
         'Resolve-PackGateRepoRoot',
         'Invoke-GhOpenPrList',
@@ -23,8 +29,12 @@ function Test-WorkerStatusGithubDependencyModule {
         'Get-EnrichedAoReviewRuns'
     )
     foreach ($commandName in $requiredCommands) {
-        if (-not $Module.ExportedFunctions.ContainsKey($commandName)) { return $false }
-        if (-not (Get-Command $commandName -CommandType Function -ErrorAction SilentlyContinue)) { return $false }
+        if (-not $Module.ExportedFunctions.ContainsKey($commandName)) {
+            return $false
+        }
+        if (-not (Get-Command $commandName -CommandType Function -ErrorAction SilentlyContinue)) {
+            return $false
+        }
     }
     return $true
 }
@@ -60,7 +70,9 @@ function Import-WorkerStatusGithubDependencies {
         $moduleName = 'WorkerStatusGithubDependencies_{0}' -f ([Guid]::NewGuid().ToString('N'))
         $module = New-Module -Name $moduleName -ArgumentList (,$dependencyPaths) -ScriptBlock {
             param([string[]]$Paths)
-            foreach ($path in $Paths) { . $path }
+            foreach ($path in $Paths) {
+                . $path
+            }
         }
         $importedModule = @(Import-Module -ModuleInfo $module -Global -Force -DisableNameChecking -PassThru)[0]
         if (-not (Test-WorkerStatusGithubDependencyModule -Module $importedModule)) {
@@ -76,6 +88,7 @@ function Import-WorkerStatusGithubDependencies {
                 })
             throw "worker-status GitHub dependency module is missing required commands: $($missingCommands -join ', ')"
         }
+
         $script:WorkerStatusGithubDependenciesModule = $importedModule
         $script:WorkerStatusGithubDependenciesLoaded = $true
     }
@@ -83,7 +96,9 @@ function Import-WorkerStatusGithubDependencies {
         $script:WorkerStatusGithubDependenciesLoaded = $false
         $script:WorkerStatusGithubDependenciesModule = $null
         $script:WorkerStatusGithubDependenciesFailure = $_.Exception.Message
-        if ($module) { Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue }
+        if ($module) {
+            Remove-Module -ModuleInfo $module -Force -ErrorAction SilentlyContinue
+        }
         throw "worker-status GitHub dependency load failed: $($script:WorkerStatusGithubDependenciesFailure)"
     }
 }
@@ -107,6 +122,12 @@ function Get-WorkerStatusTrackedPrNumbers {
 
     $tracked = @()
     foreach ($session in @($Sessions)) {
+        if ($null -ne $session.prNumber) {
+            $pr = 0
+            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
+                $tracked += $pr
+            }
+        }
         foreach ($report in @($session.reports)) {
             if ($null -eq $report) { continue }
             $reportPr = 0
@@ -118,10 +139,17 @@ function Get-WorkerStatusTrackedPrNumbers {
     return @($tracked | Sort-Object -Unique)
 }
 
+
 function Test-WorkerStatusSessionsNeedPackBindingResolution {
     param([object[]]$Sessions = @())
 
     foreach ($session in @($Sessions)) {
+        if ($null -ne $session.prNumber) {
+            $pr = 0
+            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
+                continue
+            }
+        }
         $hasReportPr = $false
         foreach ($report in @($session.reports)) {
             if ($null -eq $report) { continue }
@@ -132,8 +160,13 @@ function Test-WorkerStatusSessionsNeedPackBindingResolution {
             }
         }
         if ($hasReportPr) { continue }
-        $role = [string]$session.role
-        if (-not $role -or $role -in @('worker', 'coding')) { return $true }
+        if ($null -ne $session.issueId -or $null -ne $session.issueNumber) {
+            return $true
+        }
+        $displayName = [string]$session.displayName
+        if ($displayName -and $displayName -match '^\d+$') {
+            return $true
+        }
     }
     return $false
 }
@@ -149,7 +182,7 @@ function Resolve-WorkerStatusSessionBinding {
     )
 
     if ($PrNumber -gt 0) {
-        return @{ ok = $true; prNumber = $PrNumber; headSha = $HeadSha; bindingSource = 'explicit_input' }
+        return @{ ok = $true; prNumber = $PrNumber; headSha = $HeadSha }
     }
     $openPrPayload = @()
     if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
@@ -157,16 +190,15 @@ function Resolve-WorkerStatusSessionBinding {
             $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
         }
     }
+    $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $Session
     $payload = @{
-        session  = (ConvertTo-MechanicalJsonStateHashtable -Value $Session)
+        session  = $sessionPayload
         openPrs  = $openPrPayload
         headSha  = $HeadSha
         prNumber = $PrNumber
     }
     if ($RepoSlug) { $payload.repoSlug = [string]$RepoSlug }
-    if ($null -ne $OsLiveness) {
-        $payload.osLiveness = ConvertTo-MechanicalJsonStateHashtable -Value $OsLiveness
-    }
+    if ($null -ne $OsLiveness) { $payload.osLiveness = (ConvertTo-MechanicalJsonStateHashtable -Value $OsLiveness) }
     return Invoke-WorkerStatusStoreCli -Subcommand 'resolveSessionBinding' -Payload $payload
 }
 
@@ -189,11 +221,17 @@ function Get-WorkerStatusRecomputeGithubSnapshot {
         elseif ($tracked.Count -gt 0) {
             @(Invoke-GhOpenPrListForNumbers -RepoRoot $repoRoot -PrNumbers $tracked -Consumer 'worker-status-recompute')
         }
-        else { @() }
+        else {
+            @()
+        }
         $checksBundle = Get-ReconcileChecksByPr -RepoRoot $repoRoot -OpenPrs $openPrs
         $reviewRuns = @()
-        try { $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $repoRoot) }
-        catch { $reviewRuns = @() }
+        try {
+            $reviewRuns = @(Get-EnrichedAoReviewRuns -Project $Project -RepoRoot $repoRoot)
+        }
+        catch {
+            $reviewRuns = @()
+        }
         return @{
             openPrs                       = @($openPrs)
             reviewRuns                    = @($reviewRuns)
@@ -204,7 +242,9 @@ function Get-WorkerStatusRecomputeGithubSnapshot {
             degraded                      = $false
         }
     }
-    catch { return $empty }
+    catch {
+        return $empty
+    }
 }
 
 function Resolve-WorkerStatusSessionGithubBlock {
@@ -215,14 +255,21 @@ function Resolve-WorkerStatusSessionGithubBlock {
         [string]$HeadSha = ''
     )
 
-    if (-not $Snapshot) { return $null }
+    if (-not $Snapshot) {
+        return $null
+    }
     if (-not $PrNumber) {
-        foreach ($report in @($Session.reports)) {
-            if ($null -eq $report) { continue }
-            $reportPr = 0
-            if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
-                $PrNumber = $reportPr
-                break
+        if ($null -ne $Session.prNumber) {
+            $PrNumber = [int]$Session.prNumber
+        }
+        else {
+            foreach ($report in @($Session.reports)) {
+                if ($null -eq $report) { continue }
+                $reportPr = 0
+                if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
+                    $PrNumber = $reportPr
+                    break
+                }
             }
         }
     }
@@ -230,24 +277,29 @@ function Resolve-WorkerStatusSessionGithubBlock {
     if ($PrNumber -gt 0) {
         $openPr = $Snapshot.openPrs | Where-Object { [int]$_.number -eq $PrNumber } | Select-Object -First 1
     }
+    $prOpen = ($null -ne $openPr)
     $resolvedHead = $HeadSha
-    if ($openPr -and $openPr.headRefOid) { $resolvedHead = [string]$openPr.headRefOid }
+    if ($openPr -and $openPr.headRefOid) {
+        $resolvedHead = [string]$openPr.headRefOid
+    }
     $prKey = if ($PrNumber -gt 0) { [string]$PrNumber } else { '' }
     $snapshotDegraded = [bool]$Snapshot.degraded
     return @{
-        prOpen                    = ($null -ne $openPr)
+        prOpen                    = $prOpen
         headSha                   = $resolvedHead
         reviewRuns                = @($Snapshot.reviewRuns)
         ciChecks                  = if ($prKey) { @($Snapshot.ciChecksByPr[$prKey]) } else { @() }
         requiredCheckNames        = if ($prKey) { @($Snapshot.requiredCheckNamesByPr[$prKey]) } else { @() }
         requiredCheckLookupFailed = if ($snapshotDegraded) { $true } elseif ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
-        unavailable               = $snapshotDegraded
+        unavailable                  = $snapshotDegraded
         degraded                  = $snapshotDegraded
     }
 }
 
 function Get-WorkerStatusStorePath {
-    if ($env:AO_WORKER_STATUS_STORE) { return $env:AO_WORKER_STATUS_STORE }
+    if ($env:AO_WORKER_STATUS_STORE) {
+        return $env:AO_WORKER_STATUS_STORE
+    }
     if ($env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
         return Join-Path $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR 'worker-status-store.json'
     }
@@ -260,7 +312,9 @@ function Get-WorkerStatusStoreLockPath {
 
     $path = if ($StorePath) { $StorePath } else { Get-WorkerStatusStorePath }
     $dir = Split-Path -Parent $path
-    if (-not $dir) { return Join-Path ([System.IO.Path]::GetTempPath()) 'worker-status-store.lock' }
+    if (-not $dir) {
+        return Join-Path ([System.IO.Path]::GetTempPath()) 'worker-status-store.lock'
+    }
     return Join-Path $dir 'worker-status-store.lock'
 }
 
@@ -283,28 +337,49 @@ function Get-WorkerStatusStoreState {
     }
     try {
         $rawText = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8
-        if ([string]::IsNullOrWhiteSpace($rawText)) { throw 'empty_worker_status_store' }
+        if ([string]::IsNullOrWhiteSpace($rawText)) {
+            throw 'empty_worker_status_store'
+        }
         $raw = $rawText | ConvertFrom-Json
-        return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload (ConvertTo-MechanicalJsonStateHashtable -Value $raw)
+        $payload = ConvertTo-MechanicalJsonStateHashtable -Value $raw
+        return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload $payload
     }
-    catch { return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload @{ schemaRejected = $true } }
+    catch {
+        return Invoke-WorkerStatusStoreCli -Subcommand 'migrate' -Payload @{ schemaRejected = $true }
+    }
 }
 
 function Set-WorkerStatusStoreState {
-    param([string]$Path, [object]$State)
+    param(
+        [string]$Path,
+        [object]$State
+    )
 
-    $default = @{ schemaVersion = 1; lastUpdatedMs = $null; generation = 0; records = @{} }
+    $default = @{
+        schemaVersion = 1
+        lastUpdatedMs = $null
+        generation    = 0
+        records       = @{}
+    }
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $default -JsonDepth 30
 }
 
 function Update-WorkerStatusStoreStateLocked {
-    param([string]$Path, [scriptblock]$Mutator, [long]$NowMs)
+    param(
+        [string]$Path,
+        [scriptblock]$Mutator,
+        [long]$NowMs
+    )
 
     $lockPath = Get-WorkerStatusStoreLockPath -StorePath $Path
-    return Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{ purpose = 'worker-status-store' } -Action {
+    return Invoke-OrchestratorSideEffectFenced -LockPath $lockPath -Metadata @{
+        purpose = 'worker-status-store'
+    } -Action {
         $current = Get-WorkerStatusStoreState -Path $Path
         $next = & $Mutator $current
-        if (-not $next.lastUpdatedMs) { $next.lastUpdatedMs = $NowMs }
+        if (-not $next.lastUpdatedMs) {
+            $next.lastUpdatedMs = $NowMs
+        }
         Set-WorkerStatusStoreState -Path $Path -State $next
         return $next
     }
@@ -327,11 +402,26 @@ function Test-WorkerStatusSiblingReadiness {
     return $result
 }
 
+
+function Get-WorkerStatusPrSessionBindingCachePath {
+    if ($env:AO_PR_SESSION_BINDING_CACHE) {
+        return [string]$env:AO_PR_SESSION_BINDING_CACHE
+    }
+    if ($env:AO_REPORT_STATE_SEED_STATE) {
+        $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
+        $parent = Split-Path -Parent $seedPath
+        if (-not $parent) {
+            return 'pr-session-binding-cache.json'
+        }
+        return (Join-Path $parent 'pr-session-binding-cache.json')
+    }
+    return (Join-Path $HOME '.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json')
+}
+
 function Get-WorkerStatusWriterGenerationVector {
     param(
         [string]$SessionId = '',
         [long]$RepoTickGeneration = 0,
-        [long]$BindingCacheGeneration = 0,
         $GithubSnapshot = $null
     )
 
@@ -345,9 +435,13 @@ function Get-WorkerStatusWriterGenerationVector {
     $reportStoreGen = [long]0
     try {
         $reportStore = Get-WorkerReportStoreState
-        if ($null -ne $reportStore.generation) { $reportStoreGen = [long]$reportStore.generation }
+        if ($null -ne $reportStore.generation) {
+            $reportStoreGen = [long]$reportStore.generation
+        }
     }
-    catch { $reportStoreGen = [long]0 }
+    catch {
+        $reportStoreGen = [long]0
+    }
 
     $journalCursor = [long]0
     try {
@@ -361,19 +455,39 @@ function Get-WorkerStatusWriterGenerationVector {
                 if ($entry -is [hashtable] -and $entry.ContainsKey('deliveredAtMs')) {
                     $delivered = [long]$entry['deliveredAtMs']
                 }
-                elseif ($null -ne $entry.deliveredAtMs) { $delivered = [long]$entry.deliveredAtMs }
-                if ($delivered -gt $journalCursor) { $journalCursor = $delivered }
+                elseif ($null -ne $entry.deliveredAtMs) {
+                    $delivered = [long]$entry.deliveredAtMs
+                }
+                if ($delivered -gt $journalCursor) {
+                    $journalCursor = $delivered
+                }
             }
         }
     }
-    catch { $journalCursor = [long]0 }
+    catch {
+        $journalCursor = [long]0
+    }
+
+    $bindingGen = [long]0
+    $bindingCachePath = Get-WorkerStatusPrSessionBindingCachePath
+    if ($bindingCachePath -and (Test-Path -LiteralPath $bindingCachePath)) {
+        try {
+            $bindingCache = Get-Content -LiteralPath $bindingCachePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $bindingCache.generation) {
+                $bindingGen = [long]$bindingCache.generation
+            }
+        }
+        catch {
+            $bindingGen = [long]0
+        }
+    }
 
     return @{
         writerSessionId        = $SessionId
         repoTickGeneration     = $RepoTickGeneration
         reportStoreGeneration  = $reportStoreGen
         journalCursor          = $journalCursor
-        bindingCacheGeneration = $BindingCacheGeneration
+        bindingCacheGeneration = $bindingGen
     }
 }
 
@@ -387,8 +501,13 @@ function Write-WorkerStatusRow {
     )
 
     $payload = if ($RecomputeInput) { $RecomputeInput } else { $WriteInput }
-    if (-not $payload) { return @{ ok = $false; reason = 'missing_input' } }
-    if (-not $NowMs) { $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    if (-not $payload) {
+        return @{ ok = $false; reason = 'missing_input' }
+    }
+
+    if (-not $NowMs) {
+        $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerStatusStorePath }
 
     $session = $payload.session
@@ -398,18 +517,29 @@ function Write-WorkerStatusRow {
         elseif ($session.name) { $session.name }
         else { $session.sessionId }
     )
-    if (-not $sessionId) { return @{ ok = $false; reason = 'missing_session_id' } }
+    if (-not $sessionId) {
+        return @{ ok = $false; reason = 'missing_session_id' }
+    }
 
     $writerVector = $payload.writerGenerationVector
-    if (-not $writerVector) { $writerVector = $payload.sourceGeneration }
-    if (-not $writerVector) { $writerVector = @{} }
+    if (-not $writerVector) {
+        $writerVector = $payload.sourceGeneration
+    }
+    if (-not $writerVector) {
+        $writerVector = @{}
+    }
 
     $report = $null
     $reports = @($payload.reports)
-    if ($reports.Count -gt 0) { $report = $reports[0] }
+    if ($reports.Count -gt 0) {
+        $report = $reports[0]
+    }
 
     $prNumber = 0
-    if ($report -and $null -ne $report.prNumber) {
+    if ($null -ne $session.prNumber) {
+        $prNumber = [int]$session.prNumber
+    }
+    elseif ($report -and $null -ne $report.prNumber) {
         $prNumber = [int]$report.prNumber
     }
     else {
@@ -427,19 +557,28 @@ function Write-WorkerStatusRow {
     elseif ($session.headRefOid) { $headSha = [string]$session.headRefOid }
     elseif ($report -and $report.headSha) { $headSha = [string]$report.headSha }
 
-    $repoTickGen = if ($writerVector.repoTickGeneration) { [long]$writerVector.repoTickGeneration } else { [long]0 }
-    $reportStoreGen = if ($writerVector.reportStoreGeneration) { [long]$writerVector.reportStoreGeneration } else { [long]0 }
-    $journalCursor = if ($writerVector.journalCursor) { [long]$writerVector.journalCursor } else { [long]0 }
-    $bindingGen = if ($writerVector.bindingCacheGeneration) { [long]$writerVector.bindingCacheGeneration } else { [long]0 }
+    $repoTickGen = [long]0
+    if ($writerVector.repoTickGeneration) { $repoTickGen = [long]$writerVector.repoTickGeneration }
+    $reportStoreGen = [long]0
+    if ($writerVector.reportStoreGeneration) { $reportStoreGen = [long]$writerVector.reportStoreGeneration }
+    $journalCursor = [long]0
+    if ($writerVector.journalCursor) { $journalCursor = [long]$writerVector.journalCursor }
+    $bindingGen = [long]0
+    if ($writerVector.bindingCacheGeneration) { $bindingGen = [long]$writerVector.bindingCacheGeneration }
 
     $sessionActivity = ''
     if ($session.activity) { $sessionActivity = [string]$session.activity }
     elseif ($session.state) { $sessionActivity = [string]$session.state }
 
     $githubSnapshot = $payload.githubSnapshot
-    $repoSlug = if ($payload.repoSlug) { [string]$payload.repoSlug } else { '' }
+
+    $repoSlug = ''
+    if ($payload.repoSlug) { $repoSlug = [string]$payload.repoSlug }
+
     $osLiveness = $payload.osLiveness
-    if (-not $osLiveness) { $osLiveness = Get-WorkerOsLiveness -SessionId $sessionId }
+    if (-not $osLiveness) {
+        $osLiveness = Get-WorkerOsLiveness -SessionId $sessionId
+    }
 
     $binding = Resolve-WorkerStatusSessionBinding -Session $session -GithubSnapshot $githubSnapshot `
         -PrNumber $prNumber -HeadSha $headSha -RepoSlug $repoSlug -OsLiveness $osLiveness
@@ -450,8 +589,14 @@ function Write-WorkerStatusRow {
         if ($binding.repoSlug) { $repoSlug = [string]$binding.repoSlug }
     }
     else {
-        $bindingReason = if ($binding.reason) { [string]$binding.reason } else { 'binding_miss' }
-        $binding = @{ ok = $false; reason = $bindingReason; prNumber = $prNumber; headSha = $headSha }
+        $bindingReason = 'binding_miss'
+        if ($binding.reason) { $bindingReason = [string]$binding.reason }
+        $binding = @{
+            ok       = $false
+            reason   = $bindingReason
+            prNumber = $prNumber
+            headSha  = $headSha
+        }
     }
 
     $githubBlock = $payload.github
@@ -493,7 +638,9 @@ function Write-WorkerStatusRow {
     Update-WorkerStatusStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
         param($current)
         $cliPayload = @{ store = $current }
-        foreach ($key in $recomputePayload.Keys) { $cliPayload[$key] = $recomputePayload[$key] }
+        foreach ($key in $recomputePayload.Keys) {
+            $cliPayload[$key] = $recomputePayload[$key]
+        }
         $result = Invoke-WorkerStatusStoreCli -Subcommand 'recompute' -Payload $cliPayload
         $captured.result = $result
         return $result.store
@@ -508,15 +655,22 @@ function Invoke-WorkerStatusStoreEviction {
         [long]$NowMs = 0
     )
 
-    if (-not $NowMs) { $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    if (-not $NowMs) {
+        $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerStatusStorePath }
     $captured = @{}
     Update-WorkerStatusStoreStateLocked -Path $path -NowMs $NowMs -Mutator {
         param($current)
         $result = Invoke-WorkerStatusStoreCli -Subcommand 'evict' -Payload @{
-            store = $current; sessions = @($Sessions); nowMs = $NowMs
+            store    = $current
+            sessions = @($Sessions)
+            nowMs    = $NowMs
         }
-        $captured.summary = @{ removed = [int]$result.removed; recordCount = [int]$result.recordCount }
+        $captured.summary = @{
+            removed     = [int]$result.removed
+            recordCount = [int]$result.recordCount
+        }
         return $result.store
     } | Out-Null
     return $captured.summary
@@ -530,13 +684,20 @@ function Merge-SessionsWithWorkerStatusStore {
         [long]$RepoTickGeneration = 0
     )
 
-    if (-not $NowMs) { $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+    if (-not $NowMs) {
+        $NowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    }
     $path = if ($StorePath) { $StorePath } else { Get-WorkerStatusStorePath }
     $store = Get-WorkerStatusStoreState -Path $path
     $result = Invoke-WorkerStatusStoreCli -Subcommand 'mergeIntoSessions' -Payload @{
-        sessions = @($Sessions); store = $store; nowMs = $NowMs; repoTickGeneration = $RepoTickGeneration
+        sessions           = @($Sessions)
+        store              = $store
+        nowMs              = $NowMs
+        repoTickGeneration = $RepoTickGeneration
     }
-    if ($result -is [array]) { return @($result) }
+    if ($result -is [array]) {
+        return @($result)
+    }
     return @($result.sessions)
 }
 
