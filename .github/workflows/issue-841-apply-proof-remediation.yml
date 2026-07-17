@@ -23,10 +23,10 @@ jobs:
         run: npm ci
       - name: Run focused review regressions
         run: npm test -- scripts/gate-runner/census-generator.test.ts scripts/gate-runner/census.test.ts scripts/gate-runner/custom/bulk-cli-parity.test.ts
-      - name: Run gate runner and typecheck
-        run: |
-          npm run gate-runner-selftest
-          npm run typecheck:foundation
+      - name: Run gate runner selftest
+        run: npm run gate-runner-selftest
+      - name: Run foundation typecheck
+        run: npm run typecheck:foundation
       - name: Commit actual implementation and remove transport
         run: |
           git checkout -- plugins || true
