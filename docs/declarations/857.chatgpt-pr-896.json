@@ -7,18 +7,40 @@
   "baseline": {
     "commit_sha": "7bb6ca1a614f490f6d585d2b9317d187fd004440",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ffc72abee528ac3c7ec81ed00d45a17740a62e188339f0dc9d80010bff648783"
+    "active_scope_hash": "sha256:346fbc242575825e7d34b0dbc291ce5ad9909cc8ff2aea385f96ddc09a0b4203"
   },
   "declared_paths": [
+    "docs/pr-session-binding-cache.d.mts",
     "docs/pr-session-binding-cache.mjs",
+    "docs/session-pr-binding-resolver.d.mts",
     "docs/session-pr-binding-resolver.mjs",
     "docs/worker-report-store.mjs",
     "scripts/lib/Invoke-AoCliJson.ps1",
     "scripts/lib/Worker-Recovery.ps1",
     "scripts/lib/WorkerReportStore.ps1",
+    "scripts/lib/WorkerStatusStore.ps1",
+    "scripts/lib/worker-status-store.mjs",
     "tests/powershell/Issue857.PrSessionBindingContract.Node.mjs",
     "tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ffc72abee528ac3c7ec81ed00d45a17740a62e188339f0dc9d80010bff648783",
+      "new_active_scope_hash": "sha256:346fbc242575825e7d34b0dbc291ce5ad9909cc8ff2aea385f96ddc09a0b4203",
+      "changed": {
+        "added": [
+          "docs/pr-session-binding-cache.d.mts",
+          "docs/session-pr-binding-resolver.d.mts",
+          "scripts/lib/WorkerStatusStore.ps1",
+          "scripts/lib/worker-status-store.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Clause D fence extension adds the declaration and worker-status consumer paths required to complete issue #857 without expanding the migration scope.",
+      "actor": "chatgpt-pr-896",
+      "timestamp": "2026-07-17T16:57:32.000Z",
+      "applied": true
+    }
+  ]
 }
