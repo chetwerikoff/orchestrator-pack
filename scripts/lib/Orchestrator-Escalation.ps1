@@ -540,7 +540,8 @@ function Merge-OrchestratorEscalationRouterWritebackState {
     param(
         [Parameter(Mandatory = $true)]$State,
         [Parameter(Mandatory = $true)]$DiskState,
-        [string[]]$DirtyRecordKeys = @()
+        [string[]]$DirtyRecordKeys = @(),
+        [long]$SnapshotLoadedAtMs = 0
     )
     if ($null -eq $DiskState.records) { $DiskState.records = @{} }
     if ($null -eq $DiskState.wakeWindows) { $DiskState.wakeWindows = @{} }
@@ -552,9 +553,50 @@ function Merge-OrchestratorEscalationRouterWritebackState {
         $mergedRecords[$key] = $DiskState.records[$key]
     }
     foreach ($key in @($DirtyRecordKeys)) {
-        if ($State.records.ContainsKey($key)) {
-            $mergedRecords[$key] = $State.records[$key]
+        if (-not $State.records.ContainsKey($key)) { continue }
+        if (-not $DiskState.records.ContainsKey($key)) { continue }
+
+        $memoryRecord = ConvertTo-OrchestratorEscalationHashtable -Value $State.records[$key]
+        $diskRecord = ConvertTo-OrchestratorEscalationHashtable -Value $DiskState.records[$key]
+        $memoryTerminalState = [string]$memoryRecord.terminalState
+        $diskTerminalState = [string]$diskRecord.terminalState
+        $memoryTerminal = Test-OrchestratorEscalationTerminalState -TerminalState $memoryTerminalState
+        $diskTerminal = Test-OrchestratorEscalationTerminalState -TerminalState $diskTerminalState
+        $memoryUpdatedAtMs = if ($null -ne $memoryRecord.updatedAtMs) { [long]$memoryRecord.updatedAtMs } else { 0 }
+        $diskUpdatedAtMs = if ($null -ne $diskRecord.updatedAtMs) { [long]$diskRecord.updatedAtMs } else { 0 }
+        $diskReleaseAtMs = if ($null -ne $diskRecord.quarantineReleasedAtMs) { [long]$diskRecord.quarantineReleasedAtMs } else { 0 }
+
+        $freshRelease = $SnapshotLoadedAtMs -gt 0 -and `
+            $memoryTerminalState -eq 'quarantined' -and $diskTerminalState -eq 'open' -and `
+            $diskReleaseAtMs -gt 0 -and $diskReleaseAtMs -ge $SnapshotLoadedAtMs
+
+        $selectedRecord = $memoryRecord
+        if ($freshRelease) {
+            $selectedRecord = $diskRecord
         }
+        elseif ($diskTerminal -and -not $memoryTerminal) {
+            $selectedRecord = $diskRecord
+        }
+        elseif ($diskTerminal -and $memoryTerminal -and $diskTerminalState -ne $memoryTerminalState) {
+            if ($memoryUpdatedAtMs -le $diskUpdatedAtMs) {
+                $selectedRecord = $diskRecord
+            }
+        }
+        elseif (-not $diskTerminal -and $memoryTerminal) {
+            $selectedRecord = $memoryRecord
+        }
+        elseif ($diskUpdatedAtMs -gt $memoryUpdatedAtMs) {
+            $selectedRecord = $diskRecord
+        }
+
+        $diskOperatorAckedAtMs = if ($null -ne $diskRecord.operatorAckedAtMs) { [long]$diskRecord.operatorAckedAtMs } else { 0 }
+        $memoryOperatorAckedAtMs = if ($null -ne $memoryRecord.operatorAckedAtMs) { [long]$memoryRecord.operatorAckedAtMs } else { 0 }
+        if ($diskOperatorAckedAtMs -gt 0 -and $diskOperatorAckedAtMs -ne $memoryOperatorAckedAtMs) {
+            $selectedRecord = ConvertTo-OrchestratorEscalationHashtable -Value $selectedRecord
+            $selectedRecord.operatorStatus = [string]$diskRecord.operatorStatus
+            $selectedRecord.operatorAckedAtMs = $diskOperatorAckedAtMs
+        }
+        $mergedRecords[$key] = $selectedRecord
     }
 
     $mergedWakeWindows = @{}
@@ -880,8 +922,10 @@ function Write-OperatorEscalationAck {
         return @{ ok = $false; reason = 'invalid_ack_token' }
     }
     Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+    $now = Get-OrchestratorEscalationNowMs -NowMs $NowMs
     $record.operatorStatus = 'acked'
-    $record.operatorAckedAtMs = Get-OrchestratorEscalationNowMs -NowMs $NowMs
+    $record.operatorAckedAtMs = $now
+    $record.updatedAtMs = $now
     Set-MechanicalJsonStateFile -Path $path -State $state -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
     return @{ ok = $true; status = 'operator_acked'; escalationId = $EscalationId }
 }
