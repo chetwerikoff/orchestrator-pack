@@ -18,16 +18,30 @@ BeforeAll {
             [hashtable]$Payload
         )
 
-        $inputJson = $Payload | ConvertTo-Json -Compress -Depth 30
-        $output = @($inputJson | & node $WorkerStatusCli $Subcommand 2>&1)
-        if ($LASTEXITCODE -ne 0) {
-            throw "worker-status CLI failed ($LASTEXITCODE)`n$($output -join "`n")"
+        $transportDir = New-Issue854TempDirectory
+        $inputPath = Join-Path $transportDir 'input.json'
+        $outputPath = Join-Path $transportDir 'output.json'
+        try {
+            $Payload | ConvertTo-Json -Compress -Depth 30 |
+                Set-Content -LiteralPath $inputPath -Encoding UTF8 -NoNewline
+            $output = @(& node $WorkerStatusCli $Subcommand `
+                    --input-file $inputPath --output-file $outputPath 2>&1)
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+                throw "worker-status CLI failed ($exitCode)`n$($output -join "`n")"
+            }
+            if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+                throw "worker-status CLI emitted no output file`n$($output -join "`n")"
+            }
+            $outputJson = Get-Content -LiteralPath $outputPath -Raw -Encoding UTF8
+            if ([string]::IsNullOrWhiteSpace($outputJson)) {
+                throw "worker-status CLI emitted empty JSON`n$($output -join "`n")"
+            }
+            return ($outputJson | ConvertFrom-Json)
         }
-        $jsonLines = @(($output -join "`n") -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') })
-        if ($jsonLines.Count -eq 0) {
-            throw "worker-status CLI emitted no JSON`n$($output -join "`n")"
+        finally {
+            Remove-Item -LiteralPath $transportDir -Recurse -Force -ErrorAction SilentlyContinue
         }
-        return ($jsonLines[-1] | ConvertFrom-Json)
     }
 
     function Set-Issue854BindingCache {
