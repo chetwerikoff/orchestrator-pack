@@ -1,0 +1,32 @@
+{
+  "issue_number": 874,
+  "iteration_id": "orchestrator-pack-137",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-17T00:04:30.702Z",
+  "baseline": {
+    "commit_sha": "667d79d8de35a5dcc4d70874c4326c4b06f35768",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:14261dd24d5c4b21298e172aec7d3cb223b10c7a42213f5fa0a7e6892fcd5388"
+  },
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "docs/ci-pipeline-split.md",
+    "docs/vitest-light-lane-isolation-audit-874.md",
+    "scripts/check-ci-pipeline-split-core.ps1",
+    "scripts/check-ci-pipeline-split.test.ts",
+    "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/manifest.json",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-001.meta.json",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-002.meta.json",
+    "scripts/fixtures/supervisor-test-waits-heavy-lane-rpc/pass-003.meta.json",
+    "scripts/invoke-vitest-ci-lane-plan.mjs",
+    "scripts/lib/vitest-ci-lanes.d.mts",
+    "scripts/lib/vitest-ci-lanes.mjs",
+    "scripts/lib/vitest-heavy-topology.d.mts",
+    "scripts/run-vitest-light-lane.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
