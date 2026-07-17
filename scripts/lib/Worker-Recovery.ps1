@@ -24,7 +24,6 @@ function Invoke-WorkerRecoveryCli {
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
 }
 
-
 function Invoke-WorkerRecoveryCli {
     param(
         [string]$Subcommand,
@@ -33,7 +32,6 @@ function Invoke-WorkerRecoveryCli {
     return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerRecoveryCli `
         -Subcommand $Subcommand -Payload $Payload -Label 'worker-recovery' -JsonDepth 30
 }
-
 
 function Get-WorkerRecoveryAoSessionById {
     param([string]$SessionId)
@@ -184,7 +182,6 @@ function Resolve-WorkerRecoveryGenerationToken {
     return ''
 }
 
-
 function Get-WorkerRecoveryWorktreeRecordFromRepo {
     param(
         [string]$RepoRoot,
@@ -211,7 +208,7 @@ function Get-WorkerRecoveryWorktreeRecordFromRepo {
         if (-not ($canon.ok -and $canon.canonical -eq $CanonicalPath)) { continue }
 
         $sessionId = ''
-        if ($CanonicalPath -match '[/\\]worktrees[/\\]([^/\\]+)') {
+        if ($CanonicalPath -match '[/\]worktrees[/\]([^/\]+)') {
             $sessionId = $Matches[1]
         }
         return @{
@@ -455,7 +452,6 @@ function Get-WorkerRecoveryDirtyState {
         Pop-Location
     }
 }
-
 
 function Invoke-WorkerRecoverySpawnArgvCli {
     param(
@@ -800,8 +796,16 @@ function Invoke-WorkerRecovery {
             $gateHead = [string]$selectionWorktreeRecord.head
         }
         $resolvedPrNumber = $PrNumber
-        if ($resolvedPrNumber -le 0 -and $Session -and $Session.prNumber) {
-            [void][int]::TryParse([string]$Session.prNumber, [ref]$resolvedPrNumber)
+        if ($resolvedPrNumber -le 0 -and -not $FixtureMode) {
+            $binding = Resolve-PackWorkerReportTrustedBinding -SessionId $SessionId `
+                -RepoRoot $RepoRoot -WorktreeHeadSha $gateHead
+            if (-not $binding -or -not $binding.ok) {
+                $bindingReason = if ($binding.reason) { [string]$binding.reason } else { 'no_source' }
+                $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path `
+                    -Record $claim.record -Outcome 'review_before_cleanup_blocked'
+                return @{ ok = $false; outcome = 'review_before_cleanup_blocked'; reason = $bindingReason }
+            }
+            $resolvedPrNumber = [int]$binding.prNumber
         }
         try {
             if (-not $FixtureMode) {
@@ -819,7 +823,6 @@ function Invoke-WorkerRecovery {
     elseif ($DryRun -and $shouldCleanup) {
         $cleanupDone = $true
     }
-
 
     $resolvedIssueNumber = $IssueNumber
     if ($resolvedIssueNumber -le 0 -and $Session -and $Session.issue) {
@@ -852,7 +855,6 @@ function Invoke-WorkerRecovery {
             $branchCleanupBlocked = $true
         }
     }
-
 
     $spawnDecision = 'not_attempted'
     $spawnOutcome = 'spawn_denied'
