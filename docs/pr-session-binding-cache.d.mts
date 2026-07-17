@@ -90,6 +90,7 @@ export interface PrConsumerBindingResolution {
   deferReason?: string;
   source?: 'cache' | 'backfill_resolver' | 'miss' | RuntimeBindingSource;
   diagnostic?: unknown;
+  bindingCacheGeneration?: number;
 }
 
 export declare function bindingRecordIsLive(

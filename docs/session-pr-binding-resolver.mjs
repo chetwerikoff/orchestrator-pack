@@ -165,16 +165,12 @@ export function headRefCorrelatesToIssue(headRefName, issueNumber, session = nul
 export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = null, options = {}) {
   const issue = numberOrZero(issueNumber);
   if (issue <= 0) return [];
-  const targetHead = normalizeSha(options.headSha);
   const expectedRepo = normalizeRepoSlug(options.repoSlug ?? session?.repoSlug);
   return toArray(openPrs).filter((pr) => {
     if (prIsTerminal(pr)) return false;
     if (!repoScopeMatches(getOpenPrRepoSlug(pr), expectedRepo)) return false;
     const headName = normalizeString(pr?.headRefName ?? pr?.head);
-    if (!headRefCorrelatesToIssue(headName, issue, session)) return false;
-    if (!targetHead) return true;
-    const prHead = normalizeSha(pr?.headRefOid);
-    return Boolean(prHead && prHead === targetHead);
+    return headRefCorrelatesToIssue(headName, issue, session);
   });
 }
 
@@ -232,7 +228,7 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
         prNumber: ref.prNumber,
         source: 'issue_correlation',
         bindingSource: 'live_prs',
-        enriched: true,
+        enriched: false,
         liveSource: 'prs',
         trustRank: 400,
         repoSlug: ref.repoSlug || expectedRepo,

@@ -464,7 +464,7 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
         ? 'issue_correlation'
         : `binding_contract:${bindingContractSource}`,
       bindingContractSource,
-      bindingCacheGeneration: Number(store.generation ?? 0),
+      bindingCacheGeneration: Number(match.resolution.bindingCacheGeneration ?? store.generation ?? 0),
     };
   }
 

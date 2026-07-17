@@ -277,7 +277,8 @@ Describe 'Issue #854 worker-status binding cache wiring' {
                 writerGenerationVector = $missVector
             } -StorePath $storePath -NowMs $nowMs
             $miss.ok | Should -BeTrue
-            $miss.row.winningSource | Should -Be 'degraded'
+            $miss.row.winningSource | Should -Be 'github_pr'
+            $miss.row.derivedStatus | Should -Be 'pr_open'
             [long]$miss.row.generationVector.bindingCacheGeneration | Should -Be 0
 
             $record = [ordered]@{

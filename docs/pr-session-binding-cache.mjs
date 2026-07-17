@@ -223,12 +223,25 @@ function loadStore(input) {
   catch (error) { return { store: createDefaultPrSessionBindingCache(), cachePath, readFailed: true, error }; }
 }
 
+function sweepStaleBindings(store, openPrs, nowMs) {
+  evictPrSessionBindings({
+    store,
+    openPrs,
+    nowMs,
+    openListAuthoritative: false,
+    repoSlug: '',
+  });
+}
+
 function writePair({ store, cachePath, input, nowMs, writeBackfill, old }) {
   const mutate = (target, writeMs) => {
     if (old) supersede(target, old, writeMs, input.conflict);
     return registerPrSessionBindingRecord(target, input, writeMs);
   };
-  if (!writeBackfill) return mutate(store, nowMs);
+  if (!writeBackfill) {
+    const generation = n(store.generation);
+    return { ...mutate(store, nowMs), generation };
+  }
   if (!cachePath) return mutate(store, nowMs);
   return updatePrSessionBindingCacheWithCas(cachePath, mutate, nowMs);
 }
@@ -242,6 +255,7 @@ export function resolveSessionPrBindingForConsumer(input) {
   if (loaded.readFailed) return unbound('binding_cache_read_failed', id, { diagnostic: text(loaded.error?.message) });
   const store = loaded.store;
   const raw = store.records?.[buildSessionBindingKey(repoSlug, id)] ?? null;
+  sweepStaleBindings(store, openPrs, nowMs);
   const cacheLive = bindingRecordIsLive(raw, openPrs, Boolean(input.openListAuthoritative), repoSlug, nowMs, input.ttlMs ?? DEFAULT_BINDING_TTL_MS);
   const live = resolveSessionPrBinding(input.session ?? {}, openPrs, { repoSlug, headSha: input.headSha, openListAuthoritative: input.openListAuthoritative });
   const liveAmbiguous = ambiguous(live), liveBound = Boolean(live.bound && n(live.prNumber) > 0);
@@ -282,9 +296,20 @@ export function resolvePrSessionBindingForConsumer(input) {
   if (loaded.readFailed) return { sessionId: null, reason: 'binding_cache_read_failed', failClosed: true, diagnostic: text(loaded.error?.message) };
   const store = loaded.store, nowMs = n(input.nowMs) || Date.now(), openPrs = array(input.openPrs);
   const raw = store.records?.[buildPrBindingKey(repoSlug, targetPr)] ?? null;
+  sweepStaleBindings(store, openPrs, nowMs);
   const cached = bindingRecordIsLive(raw, openPrs, Boolean(input.openListAuthoritative), repoSlug, nowMs) ? raw : null;
   const live = resolvePrOwningWorkerSessionBinding(input.sessions, targetPr, openPrs, { headSha: input.headSha, repoSlug, requireLive: true, isLive: input.isLive });
   if (live.failClosed) return { ...live, source: cached ? 'cache' : 'miss' };
+  const liveSession = live.sessionId ? findSession(input.sessions, live.sessionId) : null;
+  const targetHead = text(input.headSha).toLowerCase();
+  const liveSessionHead = text(liveSession?.ownedHeadSha ?? liveSession?.headRefOid).toLowerCase();
+  if (live.sessionId && targetHead && liveSessionHead && liveSessionHead !== targetHead) return {
+    sessionId: live.sessionId,
+    reason: 'head_owner_mismatch',
+    failClosed: true,
+    source: cached ? 'cache' : 'miss',
+    diagnostic: 'head_owner_mismatch',
+  };
   if (cached && live.sessionId && live.sessionId !== cached.sessionId) return {
     sessionId: live.sessionId, conflictingSessionId: cached.sessionId, reason: 'binding_cache_conflict', failClosed: true,
     deferReason: DEFER_AMBIGUOUS_PR_SESSION_BINDING, source: 'cache', diagnostic: 'binding_cache_conflict',
@@ -296,7 +321,7 @@ export function resolvePrSessionBindingForConsumer(input) {
     sessionId: live.sessionId, prNumber: targetPr, repoSlug, issueNumber: getSessionIssueNumber(session), headSha: input.headSha,
     source: BINDING_SOURCE_BACKFILL_RESOLVER, openPrs,
   } });
-  return result.ok ? { sessionId: live.sessionId, reason: 'backfill_hit', failClosed: false, source: 'backfill_resolver' }
+  return result.ok ? { sessionId: live.sessionId, reason: 'backfill_hit', failClosed: false, source: 'backfill_resolver', bindingCacheGeneration: n(result.generation ?? store.generation) }
     : { sessionId: live.sessionId, reason: result.reason === COLLISION ? 'binding_cache_conflict' : result.reason, failClosed: true, source: 'miss', diagnostic: result.diagnostic };
 }
 

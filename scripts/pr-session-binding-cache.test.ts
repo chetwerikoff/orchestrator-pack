@@ -509,71 +509,74 @@ describe('pr-session-binding-cache ambiguity', () => {
 
 
   it('Codex: cache hit fails closed when live corpus has PR-to-many-session ambiguity', () => {
-    const store = seedStore({ sessionId: 'opk-a', prNumber: 88, headSha: 'shared' });
-    const sessions = [
-      liveWorker('opk-a', 719, { prNumber: 88 }),
-      liveWorker('opk-b', 720, { prNumber: 88 }),
-    ];
-    const openPrs = [openPr(88, 'shared')];
+  const store = seedStore({ sessionId: 'opk-a', prNumber: 88, headSha: 'shared' });
+  const sessions = [
+    liveWorker('opk-a', 719, { prs: [`https://github.com/${repoSlug}/pull/88`] }),
+    liveWorker('opk-b', 720, { prs: [`https://github.com/${repoSlug}/pull/88`] }),
+  ];
+  const openPrs = [openPr(88, 'shared')];
 
-    const resolution = resolvePrSessionBindingForConsumer({
-      store,
-      repoSlug,
-      prNumber: 88,
-      headSha: 'shared',
-      sessions,
-      openPrs,
-      nowMs,
-      writeBackfill: false,
-      isLive: (session) => isLiveWorkerSession(session),
-    });
-    expect(resolution.failClosed).toBe(true);
-    expect(resolution.deferReason).toBe('ambiguous_pr_session_binding');
-    expect(resolution.source).toBe('cache');
+  const resolution = resolvePrSessionBindingForConsumer({
+    store,
+    repoSlug,
+    prNumber: 88,
+    headSha: 'shared',
+    sessions,
+    openPrs,
+    nowMs,
+    writeBackfill: false,
+    isLive: (session) => isLiveWorkerSession(session),
   });
+  expect(resolution.failClosed).toBe(true);
+  expect(resolution.deferReason).toBe('ambiguous_pr_session_binding');
+  expect(resolution.source).toBe('cache');
+});
 
   it('Codex: backfill does not write stale head when session lacks head ownership', () => {
-    const cachePath = tempCachePath();
-    const sessions = [liveWorker('opk-stale', 501, { prNumber: 501, ownedHeadSha: 'oldhead' })];
-    const openPrs = [openPr(501, 'newhead')];
+  const cachePath = tempCachePath();
+  const sessions = [liveWorker('opk-stale', 501, {
+    prs: [`https://github.com/${repoSlug}/pull/501`],
+    ownedHeadSha: 'oldhead',
+  })];
+  const openPrs = [openPr(501, 'newhead')];
 
-    const resolution = resolvePrSessionBindingForConsumer({
-      cachePath,
-      repoSlug,
-      prNumber: 501,
-      headSha: 'newhead',
-      sessions,
-      openPrs,
-      nowMs,
-      isLive: (session) => isLiveWorkerSession(session),
-    });
-    expect(resolution.failClosed).toBe(true);
-    expect(resolution.diagnostic).toBe('head_owner_mismatch');
-    const store = readPrSessionBindingCacheFile(cachePath);
-    expect(lookupBindingByPr(store, repoSlug, 501)).toBeNull();
+  const resolution = resolvePrSessionBindingForConsumer({
+    cachePath,
+    repoSlug,
+    prNumber: 501,
+    headSha: 'newhead',
+    sessions,
+    openPrs,
+    nowMs,
+    isLive: (session) => isLiveWorkerSession(session),
   });
+  expect(resolution.failClosed).toBe(true);
+  expect(resolution.diagnostic).toBe('head_owner_mismatch');
+  const store = readPrSessionBindingCacheFile(cachePath);
+  expect(lookupBindingByPr(store, repoSlug, 501)).toBeNull();
+});
 
   it('AC#5 class F: ambiguous PR to sessions fail closed', () => {
-    const cachePath = tempCachePath();
-    const sessions = [
-      liveWorker('opk-a', 719, { prNumber: 88 }),
-      liveWorker('opk-b', 720, { prNumber: 88 }),
-    ];
-    const openPrs = [openPr(88, 'shared')];
+  const cachePath = tempCachePath();
+  const sessions = [
+    liveWorker('opk-a', 719, { prs: [`https://github.com/${repoSlug}/pull/88`] }),
+    liveWorker('opk-b', 720, { prs: [`https://github.com/${repoSlug}/pull/88`] }),
+  ];
+  const openPrs = [openPr(88, 'shared')];
 
-    const resolution = resolvePrSessionBindingForConsumer({
-      cachePath,
-      repoSlug,
-      prNumber: 88,
-      headSha: 'shared',
-      sessions,
-      openPrs,
-      nowMs,
-      isLive: (session) => isLiveWorkerSession(session),
-    });
-    expect(resolution.failClosed).toBe(true);
-    expect(resolution.deferReason).toBe('ambiguous_pr_session_binding');
+  const resolution = resolvePrSessionBindingForConsumer({
+    cachePath,
+    repoSlug,
+    prNumber: 88,
+    headSha: 'shared',
+    sessions,
+    openPrs,
+    nowMs,
+    isLive: (session) => isLiveWorkerSession(session),
   });
+  expect(resolution.failClosed).toBe(true);
+  expect(resolution.deferReason).toBe('ambiguous_pr_session_binding');
+});
 });
 
 describe('pr-session-binding-cache eviction and supersede', () => {
