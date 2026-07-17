@@ -2,6 +2,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import './escalation-store-terminal-merge-writers-core.test.ts';
+import './escalation-store-terminal-merge-writers-replay.test.ts';
+import './escalation-store-terminal-merge-writer-operator-newer.test.ts';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturePath = path.join(repoRoot, 'tests/fixtures/agent-rules-relocation-musts.json');
