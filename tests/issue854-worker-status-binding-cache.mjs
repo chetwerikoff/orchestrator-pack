@@ -123,9 +123,42 @@ function run() {
     const unreadable = resolveWorkerStatusSessionBinding(input(cachePath));
     assert.equal(unreadable.ok, false);
     assert.equal(unreadable.reason, 'binding_cache_read_failed');
+    assert.equal(unreadable.bindingSource, 'none');
+
+    const legacyResolvable = input(cachePath);
+    legacyResolvable.session.issueId = PR_NUMBER;
+    legacyResolvable.session.displayName = String(PR_NUMBER);
+    legacyResolvable.openPrs[0].headRefName = `issue-${PR_NUMBER}`;
+    const unreadableNoLegacyFallback = resolveWorkerStatusSessionBinding(legacyResolvable);
+    assert.equal(unreadableNoLegacyFallback.ok, false);
+    assert.equal(unreadableNoLegacyFallback.reason, 'binding_cache_read_failed');
+    assert.equal(unreadableNoLegacyFallback.bindingSource, 'none');
 
     const storedText = readFileSync(cachePath, 'utf8');
     assert.equal(storedText, '{not-json');
+
+    writeCache(cachePath);
+    const ambiguousRepo = input(cachePath);
+    delete ambiguousRepo.repoSlug;
+    delete ambiguousRepo.session.repoSlug;
+    ambiguousRepo.openPrs = [
+      {
+        number: PR_NUMBER,
+        state: 'OPEN',
+        headRefOid: HEAD,
+        repoSlug: 'owner/first',
+      },
+      {
+        number: PR_NUMBER + 1,
+        state: 'OPEN',
+        headRefOid: 'head888',
+        repoSlug: 'owner/second',
+      },
+    ];
+    const ambiguous = resolveWorkerStatusSessionBinding(ambiguousRepo);
+    assert.equal(ambiguous.ok, false);
+    assert.equal(ambiguous.reason, 'binding_cache_repo_ambiguous');
+    assert.equal(ambiguous.bindingSource, 'none');
 
     process.stdout.write(`${JSON.stringify({
       issue: 854,
@@ -133,7 +166,14 @@ function run() {
       cacheSource: 'push_register',
       usableDerivedStatus: 'pr_open',
       winningSource: 'github_pr',
-      scenarios: ['cache_hit', 'ttl_expired', 'superseded', 'unreadable'],
+      scenarios: [
+        'cache_hit',
+        'ttl_expired',
+        'superseded',
+        'unreadable',
+        'unreadable_no_legacy_fallback',
+        'multi_repo_ambiguous',
+      ],
     })}\n`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
