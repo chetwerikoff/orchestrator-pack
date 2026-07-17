@@ -111,13 +111,13 @@ function run() {
     writeCache(cachePath, { ageMs: 8 * 24 * 60 * 60 * 1_000 });
     const expired = resolveWorkerStatusSessionBinding(input(cachePath));
     assert.equal(expired.ok, false);
-    assert.equal(expired.reason, 'binding_miss');
+    assert.equal(expired.reason, 'no_issue_binding');
     assert.doesNotMatch(String(expired.bindingSource), /^binding_cache:/);
 
     writeCache(cachePath, { superseded: true });
     const superseded = resolveWorkerStatusSessionBinding(input(cachePath));
     assert.equal(superseded.ok, false);
-    assert.equal(superseded.reason, 'binding_miss');
+    assert.equal(superseded.reason, 'no_issue_binding');
 
     writeFileSync(cachePath, '{not-json', 'utf8');
     const unreadable = resolveWorkerStatusSessionBinding(input(cachePath));
