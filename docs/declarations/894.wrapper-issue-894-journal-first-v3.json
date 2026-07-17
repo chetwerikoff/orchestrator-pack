@@ -2,7 +2,7 @@
   "issue_number": 894,
   "iteration_id": "wrapper-issue-894-journal-first-v3",
   "iteration_id_source": "ao_session",
-  "supersedes": "wrapper-issue-894-journal-first",
+  "supersedes": "wrapper-issue-894-journal-first-v2",
   "created_at": "2026-07-17T17:10:52.628Z",
   "baseline": {
     "commit_sha": "927b8bd260168b7a914d3b0186a3b6f36a105bba",
