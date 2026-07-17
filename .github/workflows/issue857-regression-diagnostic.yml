@@ -17,6 +17,7 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,22 +28,20 @@ jobs:
       - name: Install Pester
         shell: pwsh
         run: ./scripts/install-pester-ci.ps1
-      - name: Capture issue 857 Node matrix
-        shell: bash
-        run: node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs > issue857-node.log 2>&1 || true
-      - name: Capture issue 857 Pester
+      - name: Capture full Pester regression
         shell: pwsh
         run: |
-          Invoke-Pester -Path ./tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1 -Output Detailed -PassThru *> issue857-pester.log
+          ./scripts/test-all.ps1 -SkipNpm *> issue857-pester-full.log
           exit 0
       - name: Capture affected Vitest suites
         shell: bash
+        env:
+          OPK_VITEST_HARNESS: '1'
         run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts > issue857-vitest.log 2>&1 || true
       - uses: actions/upload-artifact@v4
         with:
-          name: issue857-regression-diagnostics
+          name: issue857-regression-diagnostics-full
           path: |
-            issue857-node.log
-            issue857-pester.log
+            issue857-pester-full.log
             issue857-vitest.log
           if-no-files-found: error
