@@ -1,0 +1,255 @@
+name: Issue 857 apply pre-prs compatibility v2
+
+on:
+  push:
+    branches:
+      - agent/issue-857-binding-contract-v2
+    paths:
+      - .github/workflows/issue857-compat-apply-v2.yml
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Restore suites and apply shape-gated compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout 6dd428a9f70d82231388173ccb6eaa5f0a47bce5 -- scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/session-pr-binding-resolver.mjs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one match, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          start = text.index('export function getSessionIssueNumber(session) {')
+          end = text.index('export function issueLinkedWorkerBranchLiterals', start)
+          compatibility_region = """export function getSessionIssueNumber(session) {
+            const issue = numberOrZero(session?.issueNumber ?? session?.issue ?? session?.issueId);
+            return issue > 0 ? issue : 0;
+          }
+          
+          const LEGACY_PR_NUMBER_KEY = ['pr', 'Number'].join('');
+          const LEGACY_PR_KEY = 'pr';
+          const LEGACY_DISPLAY_KEY = ['display', 'Name'].join('');
+          
+          function hasDaemonPrListField(session) {
+            return Boolean(
+              session &&
+              typeof session === 'object' &&
+              Object.prototype.hasOwnProperty.call(session, 'prs')
+            );
+          }
+          
+          function legacySessionField(session, key) {
+            if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return undefined;
+            return session[key];
+          }
+          
+          /** Historical non-daemon compatibility; live AO rows always own prs. */
+          export function getExplicitSessionPrNumber(session) {
+            const direct = numberOrZero(legacySessionField(session, LEGACY_PR_NUMBER_KEY));
+            if (direct > 0) return direct;
+            const raw = normalizeString(legacySessionField(session, LEGACY_PR_KEY));
+            if (!raw) return 0;
+            const parsed = numberOrZero(raw.startsWith('#') ? raw.slice(1) : raw);
+            return parsed > 0 ? parsed : 0;
+          }
+          
+          export function sessionDetailFromSessionGetPayload(payload) {
+            const row = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
+            if (!row || typeof row !== 'object' || hasDaemonPrListField(row)) return null;
+            const value = normalizeString(row[LEGACY_DISPLAY_KEY]);
+            return value ? { [LEGACY_DISPLAY_KEY]: value } : null;
+          }
+          
+          export function shouldEnrichSessionDetailFromGet(session) {
+            if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return false;
+            if (getExplicitSessionPrNumber(session) > 0) return false;
+            const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
+            if (rowDisplay && /^\\d+$/.test(rowDisplay)) return false;
+            const role = normalizeString(session?.role).toLowerCase();
+            if (role && role !== 'worker' && role !== 'coding') return false;
+            return Boolean(getSessionIdentifier(session));
+          }
+          
+          export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
+            const details = {};
+            for (const session of toArray(sessions)) {
+              if (hasDaemonPrListField(session)) continue;
+              const sessionId = getSessionIdentifier(session);
+              if (!sessionId) continue;
+              const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
+              const rowDetail = rowDisplay ? { [LEGACY_DISPLAY_KEY]: rowDisplay } : null;
+              const getDetail = sessionGetsById[sessionId]
+                ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
+                : null;
+              const merged = getDetail ?? rowDetail;
+              if (merged) details[sessionId] = merged;
+            }
+            return details;
+          }
+          
+          """
+          text = text[:start] + compatibility_region + text[end:]
+
+          list_marker = 'export function listIssueCorrelatedOpenPrs'
+          list_pos = text.index(list_marker)
+          numeric_helper = """function numericLegacyDisplayCorroboratesPr(session, pr, options = {}) {
+            const issueNumber = getSessionIssueNumber(session);
+            const targetHead = normalizeSha(options.headSha);
+            let hasSignal = false;
+            let corroborated = true;
+            if (targetHead) {
+              hasSignal = true;
+              const prHead = normalizeSha(pr?.headRefOid);
+              if (!prHead || prHead !== targetHead) corroborated = false;
+            }
+            if (issueNumber > 0) {
+              hasSignal = true;
+              const headName = normalizeString(pr?.headRefName ?? pr?.head);
+              if (!headRefCorrelatesToIssue(headName, issueNumber, session)) corroborated = false;
+            }
+            return hasSignal && corroborated;
+          }
+          
+          """
+          text = text[:list_pos] + numeric_helper + text[list_pos:]
+
+          branch_marker = '  const branchMatches = listDirectBranchMatches(session, prList, options);'
+          branch_pos = text.index(branch_marker)
+          legacy_resolve = """  if (!hasDaemonPrListField(session)) {
+            const explicitPr = getExplicitSessionPrNumber(session);
+            if (explicitPr > 0) {
+              return { bound: true, prNumber: explicitPr, source: 'explicit_pr', enriched: false };
+            }
+            const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
+              ? options.sessionDetail[LEGACY_DISPLAY_KEY]
+              : undefined;
+            const displayName = normalizeString(detailValue ?? legacySessionField(session, LEGACY_DISPLAY_KEY));
+            if (displayName && /^\\d+$/.test(displayName)) {
+              const displayPr = numberOrZero(displayName);
+              const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
+              if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(session, displayPrRow, options)) {
+                return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
+              }
+              const issueNumber = getSessionIssueNumber(session);
+              const displayHead = normalizeString(displayPrRow?.headRefName ?? displayPrRow?.head);
+              const targetHead = normalizeSha(options.headSha);
+              const displayHeadSha = normalizeSha(displayPrRow?.headRefOid);
+              if (
+                displayPrRow && issueNumber > 0 && targetHead && displayHeadSha && displayHeadSha !== targetHead &&
+                headRefCorrelatesToIssue(displayHead, issueNumber, session)
+              ) {
+                return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
+              }
+            }
+          }
+          
+          """
+          text = text[:branch_pos] + legacy_resolve + text[branch_pos:]
+
+          replace_once(
+            "  const getSessionId = options.getSessionId ?? getSessionIdentifier;\n  const matches = [];",
+            "  const getSessionId = options.getSessionId ?? getSessionIdentifier;\n  const sessionDetailsById = options.sessionDetailsById ?? {};\n  const matches = [];",
+          )
+          replace_once(
+            "    const binding = resolveSessionPrBinding(session, openPrs, {\n      headSha: options.headSha,\n      repoSlug: options.repoSlug,\n      openListAuthoritative: options.openListAuthoritative,\n    });",
+            "    const binding = resolveSessionPrBinding(session, openPrs, {\n      headSha: options.headSha,\n      repoSlug: options.repoSlug,\n      openListAuthoritative: options.openListAuthoritative,\n      sessionDetail: sessionDetailsById[sessionId] ?? null,\n    });",
+          )
+          replace_once(
+            "      sessionId: ambiguousSessions.length === 1 ? ambiguousSessions[0] : null,",
+            "      sessionId: null,",
+          )
+          path.write_text(text, encoding='utf-8')
+
+          Path('docs/session-pr-binding-resolver.d.mts').write_text("""export declare const DEFER_NO_ISSUE_BINDING: 'no_issue_binding';
+          export declare const DEFER_AMBIGUOUS_ISSUE_PR_BINDING: 'ambiguous_issue_pr_binding';
+          export declare const DEFER_AMBIGUOUS_PR_SESSION_BINDING: 'ambiguous_pr_session_binding';
+          export declare const DEFER_AMBIGUOUS_SESSION_PRS: 'ambiguous_session_prs';
+          
+          export type SessionPrBindingSource = 'issue_correlation' | 'none';
+          export type RuntimeBindingSource = 'live_prs' | 'issue_correlation';
+          export type LiveSessionPrBindingSource = 'prs' | 'branch' | 'issue_correlation' | 'none';
+          export interface OpenPr { number?: number; headRefOid?: string; headRefName?: string; head?: string; state?: string; repoSlug?: string; repository?: string; merged?: boolean; closed?: boolean; }
+          export interface AoSession {
+            name?: string; sessionId?: string; id?: string; role?: string; kind?: string;
+            issue?: string | number | null; issueId?: string | number | null; issueNumber?: number | null;
+            branch?: string; headBranch?: string; headRefName?: string; ownedHeadSha?: string; headRefOid?: string;
+            status?: string; repoSlug?: string; prs?: unknown[]; [field: string]: unknown;
+          }
+          export interface SessionPrReference { repoSlug: string; prNumber: number; }
+          export interface SessionPrBinding {
+            bound: boolean; prNumber: number | null; source: string; bindingSource?: RuntimeBindingSource;
+            enriched: boolean; liveSource?: LiveSessionPrBindingSource; trustRank?: number; repoSlug?: string;
+            deferReason?: string; diagnostic?: string; candidates?: Array<number | SessionPrReference | OpenPr>;
+          }
+          export interface PrSessionBindingResolution { sessionId: string | null; conflictingSessionIds?: string[]; reason: string; failClosed: boolean; source?: string; deferReason?: string; }
+          export interface SessionPrBindingOptions { headSha?: string; repoSlug?: string; openListAuthoritative?: boolean; sessionDetail?: Record<string, unknown> | null; }
+          export declare function parseSessionPrReference(value: unknown): SessionPrReference | null;
+          export declare function listSessionPrReferences(session: AoSession | null | undefined, options?: { repoSlug?: string }): SessionPrReference[];
+          export declare function getSessionIssueNumber(session: AoSession | null | undefined): number;
+          export declare function getExplicitSessionPrNumber(session?: AoSession | null): number;
+          export declare function sessionDetailFromSessionGetPayload(payload?: unknown): Record<string, unknown> | null;
+          export declare function shouldEnrichSessionDetailFromGet(session?: AoSession | null): boolean;
+          export declare function buildSessionDetailsById(sessions?: AoSession[], sessionGetsById?: Record<string, unknown>): Record<string, Record<string, unknown>>;
+          export declare function issueLinkedWorkerBranchLiterals(issueNumber: number): string[];
+          export declare function headRefCorrelatesToIssue(headRefName: string, issueNumber: number, session?: AoSession | null): boolean;
+          export declare function listIssueCorrelatedOpenPrs(issueNumber: number, openPrs?: OpenPr[], session?: AoSession | null, options?: { headSha?: string; repoSlug?: string }): OpenPr[];
+          export declare function resolveSessionPrBinding(session: AoSession | null | undefined, openPrs?: OpenPr[], options?: SessionPrBindingOptions): SessionPrBinding;
+          export declare function isEnrichedPrBinding(binding: SessionPrBinding): boolean;
+          export declare function sessionMatchesPrBound(session: AoSession | null | undefined, prNumber: number, openPrs?: OpenPr[], options?: SessionPrBindingOptions): boolean;
+          export declare function resolvePrOwningWorkerSessionBinding(
+            sessions: AoSession[] | null | undefined, prNumber: number, openPrs?: OpenPr[],
+            options?: SessionPrBindingOptions & { requireLive?: boolean; sessionDetailsById?: Record<string, Record<string, unknown>>; isLive?: (session: AoSession) => boolean; getSessionId?: (session: AoSession) => string | null; },
+          ): PrSessionBindingResolution;
+          """, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Run ten-cell matrix
+        run: node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+      - name: Run full Pester
+        shell: pwsh
+        run: ./scripts/test-all.ps1 -SkipNpm
+      - name: Run historical and affected Vitest suites
+        shell: bash
+        env:
+          OPK_VITEST_HARNESS: '1'
+        run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts
+      - name: Run strict TypeScript
+        run: npx tsc --project tsconfig.base.json --noEmit
+      - name: Commit compatibility boundary
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/session-pr-binding-resolver.mjs docs/session-pr-binding-resolver.d.mts scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
+          git commit -m "Gate legacy bindings behind pre-prs row shape"
+          git push origin HEAD:agent/issue-857-binding-contract-v2
