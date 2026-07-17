@@ -97,11 +97,16 @@ Describe 'Issue #854 worker-status binding cache wiring' {
         $oldStateDir = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
         $oldSideEffectDir = $env:AO_SIDE_PROCESS_STATE_DIR
         $oldGithubRepository = $env:GITHUB_REPOSITORY
+        $oldAoRepoSlug = $env:AO_REPO_SLUG
+        $pushedLocation = $false
         try {
             $env:AO_PR_SESSION_BINDING_CACHE = $cachePath
             $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $dir
             $env:AO_SIDE_PROCESS_STATE_DIR = $dir
-            $env:GITHUB_REPOSITORY = $repo
+            Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue
+            Remove-Item Env:AO_REPO_SLUG -ErrorAction SilentlyContinue
+            Push-Location $RepoRoot
+            $pushedLocation = $true
 
             $result = Write-WorkerStatusRow -RecomputeInput @{
                 session = [pscustomobject]@{
@@ -149,6 +154,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             $stored.records.$sessionId.winningSource | Should -Be 'github_pr'
         }
         finally {
+            if ($pushedLocation) { Pop-Location }
             if ($null -eq $oldBindingCache) { Remove-Item Env:AO_PR_SESSION_BINDING_CACHE -ErrorAction SilentlyContinue }
             else { $env:AO_PR_SESSION_BINDING_CACHE = $oldBindingCache }
             if ($null -eq $oldStateDir) { Remove-Item Env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR -ErrorAction SilentlyContinue }
@@ -157,6 +163,8 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             else { $env:AO_SIDE_PROCESS_STATE_DIR = $oldSideEffectDir }
             if ($null -eq $oldGithubRepository) { Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue }
             else { $env:GITHUB_REPOSITORY = $oldGithubRepository }
+            if ($null -eq $oldAoRepoSlug) { Remove-Item Env:AO_REPO_SLUG -ErrorAction SilentlyContinue }
+            else { $env:AO_REPO_SLUG = $oldAoRepoSlug }
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
