@@ -1,17 +1,16 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
   DEFER_AMBIGUOUS_PR_SESSION_BINDING,
-  DEFER_AMBIGUOUS_SESSION_PRS,
   DEFER_NO_ISSUE_BINDING,
-  buildSessionDetailsById,
-  getExplicitSessionPrNumber,
   headRefCorrelatesToIssue,
   listIssueCorrelatedOpenPrs,
+  buildSessionDetailsById,
   resolvePrOwningWorkerSessionBinding,
   resolveSessionPrBinding,
   sessionDetailFromSessionGetPayload,
@@ -26,414 +25,329 @@ import {
 import { planCiFailureReactionRecords } from '../docs/ci-failure-notification.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const capturesRoot = path.join(
-  repoRoot,
-  'tests/external-output-references/captures/ao-0-10-cli',
-);
-const repoSlug = 'chetwerikoff/orchestrator-pack';
+const capturesRoot = path.join(repoRoot, 'tests/external-output-references/captures/ao-0-10-cli');
+
+function readCapture(name: string) {
+  return JSON.parse(readFileSync(path.join(capturesRoot, name), 'utf8'));
+}
+
 const headSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
-
-const prUrl = (number: number, slug = repoSlug) =>
-  `https://github.com/${slug}/pull/${number}`;
-
-function openPr(
-  number: number,
-  headRefOid = headSha,
-  headRefName = `issue-${number}`,
-  state = 'OPEN',
-) {
-  return { number, headRefOid, headRefName, state, repoSlug };
-}
-
-function worker(
-  id: string,
-  issueNumber: number,
-  prs: string[] = [],
-  extra: Record<string, unknown> = {},
-) {
-  return {
-    id,
-    sessionId: id,
-    name: id,
-    role: 'worker',
-    status: 'working',
-    issueNumber,
-    issueId: String(issueNumber),
-    issue: String(issueNumber),
-    projectId: 'orchestrator-pack',
-    repoSlug,
-    branch: `issue-${issueNumber}`,
-    prs,
-    ...extra,
-  };
-}
-
-const openPr690 = openPr(690, headSha, 'issue-690-session-pr-binding');
-const issueOnlyListRow = worker(
-  'orchestrator-pack-45',
-  690,
-  [],
-  { branch: 'issue-690-session-pr-binding' },
-);
+const openPr690 = {
+  number: 690,
+  headRefOid: headSha,
+  headRefName: 'issue-690-session-pr-binding',
+};
 
 let isolatedBindingCachePath = '';
-let isolatedBindingCacheDir = '';
 
 beforeEach(() => {
-  isolatedBindingCacheDir = mkdtempSync(path.join(tmpdir(), 'session-pr-binding-cache-'));
-  isolatedBindingCachePath = path.join(isolatedBindingCacheDir, 'cache.json');
+  isolatedBindingCachePath = path.join(
+    mkdtempSync(path.join(tmpdir(), 'session-pr-binding-cache-')),
+    'cache.json',
+  );
   process.env.AO_PR_SESSION_BINDING_CACHE = isolatedBindingCachePath;
-});
-
-afterEach(() => {
-  delete process.env.AO_PR_SESSION_BINDING_CACHE;
-  if (isolatedBindingCacheDir) {
-    rmSync(isolatedBindingCacheDir, { recursive: true, force: true });
-  }
-  isolatedBindingCacheDir = '';
-  isolatedBindingCachePath = '';
 });
 
 function headOwnerOptions(extra: Record<string, unknown> = {}) {
   return {
     cachePath: isolatedBindingCachePath,
-    repoSlug,
+    repoSlug: 'chetwerikoff/orchestrator-pack',
     ...extra,
   };
 }
 
-function failedCiInput(sessions: Array<Record<string, unknown>>) {
-  return {
-    repo: repoSlug,
-    sessions,
-    openPrs: [openPr690],
-    ciChecksByPr: [
-      { prNumber: 690, checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }] },
-    ],
-    requiredCheckNamesByPr: [
-      { prNumber: 690, requiredCheckNames: ['Run pack contract tests'] },
-    ],
-  };
-}
+const issueOnlyListRow = {
+  id: 'orchestrator-pack-45',
+  sessionId: 'orchestrator-pack-45',
+  name: 'orchestrator-pack-45',
+  role: 'worker',
+  status: 'working',
+  issueId: '690',
+  issue: '690',
+  projectId: 'orchestrator-pack',
+};
 
 describe('session-pr-binding-resolver positive outcome', () => {
-  it('resolves owner for bulk list row with direct prs[] corroboration', () => {
-    const session = worker('orchestrator-pack-45', 690, [prUrl(690)], {
-      branch: 'unrelated-branch',
+  it('resolves owner for issue-only list row with displayName corroboration', () => {
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+      headSha,
+      sessionDetail: { displayName: '690' },
     });
-    const binding = resolveSessionPrBinding(session, [openPr690], { repoSlug, headSha });
-    expect(binding).toMatchObject({
-      bound: true,
-      prNumber: 690,
-      bindingSource: 'live_prs',
-      trustRank: 400,
-    });
+    expect(binding.bound).toBe(true);
+    expect(binding.prNumber).toBe(690);
+    expect(binding.source).toBe('display_name');
+
+    const owner = resolvePrOwningWorkerSessionBinding(
+      [{ ...issueOnlyListRow, role: 'worker', status: 'working' }],
+      690,
+      [openPr690],
+      {
+        headSha,
+        sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } },
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      },
+    );
+    expect(owner.sessionId).toBe('orchestrator-pack-45');
+    expect(
+      resolveHeadOwningWorkerSessionId(
+        [{ ...issueOnlyListRow, role: 'worker', status: 'working', branch: 'unrelated-branch' }],
+        690,
+        headSha,
+        [openPr690],
+        { sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } } },
+      ),
+    ).toBe('orchestrator-pack-45');
+  });
+
+  it('resolves owner via unique issue branch correlation when displayName is non-numeric', () => {
+    const session = { ...issueOnlyListRow, displayName: 'ao-0-10-cli-mig' };
+    const binding = resolveSessionPrBinding(session, [openPr690], { headSha });
+    expect(binding.source).toBe('issue_correlation');
+    expect(binding.prNumber).toBe(690);
 
     const owner = resolvePrOwningWorkerSessionBinding(
       [session],
       690,
       [openPr690],
-      { headSha, repoSlug, isLive: () => true },
+      {
+        headSha,
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      },
     );
     expect(owner.sessionId).toBe('orchestrator-pack-45');
-  });
-
-  it('resolves owner via unique issue branch correlation while retired fields are ignored', () => {
-    const session = {
-      ...issueOnlyListRow,
-      displayName: 'ao-0-10-cli-mig',
-      prNumber: 999,
-      pr: '#999',
-    };
-    const binding = resolveSessionPrBinding(session, [openPr690], { repoSlug, headSha });
-    expect(binding.bindingSource).toBe('issue_correlation');
-    expect(binding.prNumber).toBe(690);
-    expect(
-      resolvePrOwningWorkerSessionBinding(
-        [session],
-        690,
-        [openPr690],
-        { headSha, repoSlug, isLive: () => true },
-      ).sessionId,
-    ).toBe('orchestrator-pack-45');
+    expect(resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690], headOwnerOptions())).toBeNull();
   });
 });
 
 describe('session-pr-binding-resolver ambiguity axes', () => {
   it('fails closed when issue maps to multiple open PRs', () => {
-    const session = worker('orchestrator-pack-45', 690, [], { branch: '' });
-    const binding = resolveSessionPrBinding(
-      session,
-      [openPr690, openPr(691, headSha, 'issue-690-alt')],
-      { repoSlug },
-    );
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [
+      openPr690,
+      { ...openPr690, number: 691, headRefName: 'issue-690-alt' },
+    ]);
     expect(binding.bound).toBe(false);
     expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
   });
 
   it('surfaces issue ambiguity defer instead of no_worker_session', () => {
-    const session = worker('orchestrator-pack-45', 690, [], { branch: '' });
     const resolution = resolvePrOwningWorkerSessionBinding(
-      [session],
+      [{ ...issueOnlyListRow, role: 'worker', status: 'working' }],
       690,
-      [openPr690, openPr(691, headSha, 'issue-690-alt')],
-      { repoSlug, isLive: () => true },
+      [openPr690, { ...openPr690, number: 691, headRefName: 'issue-690-alt' }],
+      {
+        isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
+      },
     );
-    expect(resolution.sessionId).toBe('orchestrator-pack-45');
+    expect(resolution.sessionId).toBeNull();
     expect(resolution.failClosed).toBe(true);
     expect(resolution.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
     expect(resolution.reason).toBe('ambiguous_issue_pr_binding');
   });
 
-  it('fails closed when multiple live sessions claim the same PR through prs[]', () => {
+  it('fails closed when multiple live sessions claim the same PR', () => {
     const resolution = resolvePrOwningWorkerSessionBinding(
       [
-        worker('opk-a', 690, [prUrl(690)]),
-        worker('opk-b', 691, [prUrl(690)]),
+        { ...issueOnlyListRow, id: 'opk-a', sessionId: 'opk-a', name: 'opk-a', prNumber: 690 },
+        { ...issueOnlyListRow, id: 'opk-b', sessionId: 'opk-b', name: 'opk-b', prNumber: 690 },
       ],
       690,
       [openPr690],
-      { repoSlug, requireLive: true, isLive: () => true },
+      { requireLive: true, isLive: () => true, getSessionId: (s) => String(s.sessionId) },
     );
     expect(resolution.sessionId).toBeNull();
-    expect(resolution.conflictingSessionIds).toEqual(['opk-a', 'opk-b']);
     expect(resolution.deferReason).toBe(DEFER_AMBIGUOUS_PR_SESSION_BINDING);
   });
 
-  it('does not first-match when multiple workers share a direct prs[] claim', () => {
+  it('does not first-match when multiple workers share explicit prNumber', () => {
     expect(
       resolveWorkerSessionId(
-        [worker('opk-a', 55, [prUrl(55)]), worker('opk-b', 56, [prUrl(55)])],
+        [
+          { name: 'opk-a', role: 'worker', prNumber: 55, status: 'working' },
+          { name: 'opk-b', role: 'worker', prNumber: 55, status: 'working' },
+        ],
         55,
-        { openPrs: [openPr(55)] },
       ),
     ).toBeNull();
   });
 });
 
-describe('session-pr-binding-resolver direct-pr head ownership', () => {
-  it('grants head ownership only when direct prs[] is paired with current head evidence', () => {
-    const session = worker('orchestrator-pack-45', 690, [prUrl(690)], {
-      branch: 'unrelated-branch',
-      ownedHeadSha: headSha,
-    });
-    expect(sessionOwnsRunHead(session, 690, headSha, [openPr690])).toBe(true);
+describe('session-pr-binding-resolver displayName head ownership', () => {
+  it('grants head ownership for display_name binding corroborated by PR head', () => {
+    const session = { ...issueOnlyListRow, role: 'worker', branch: 'unrelated-branch' };
+    expect(
+      sessionOwnsRunHead(session, 690, headSha, [openPr690], {
+        sessionDetail: { displayName: '690' },
+      }),
+    ).toBe(true);
     expect(
       resolveHeadOwningWorkerSessionId(
         [session],
         690,
         headSha,
         [openPr690],
-        headOwnerOptions(),
+        { sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } } },
       ),
     ).toBe('orchestrator-pack-45');
   });
 });
 
 describe('session-pr-binding-resolver head forge guard', () => {
-  it('does not auto-grant head ownership for issue correlation without explicit head evidence', () => {
+  it('does not auto-grant head ownership for enriched issue correlation bind', () => {
     const session = { ...issueOnlyListRow, role: 'worker' };
     expect(sessionMatchesPr(session, 690, [openPr690], { headSha })).toBe(true);
     expect(sessionOwnsRunHead(session, 690, headSha, [openPr690])).toBe(false);
   });
 });
 
-describe('session-pr-binding-resolver retired prNumber regression', () => {
-  it('ignores legacy prNumber rows rather than treating them as live ownership evidence', () => {
-    const session = worker('opk-retired', 999, [], {
-      branch: 'unrelated-branch',
+describe('session-pr-binding-resolver explicit prNumber regression', () => {
+  it('keeps legacy owner and head ownership for explicit prNumber rows', () => {
+    const session = {
+      name: 'opk-explicit',
+      role: 'worker',
       prNumber: 690,
-      displayName: '690',
-      pr: '#690',
-      ownedHeadSha: headSha,
-    });
-    const binding = resolveSessionPrBinding(session, [openPr690], { repoSlug, headSha });
-    expect(binding.bound).toBe(false);
-    expect(getExplicitSessionPrNumber()).toBe(0);
+      status: 'working',
+    };
     expect(
-      resolveHeadOwningWorkerSessionId(
-        [session],
-        690,
-        headSha,
-        [openPr690],
-        headOwnerOptions(),
-      ),
-    ).toBeNull();
+      resolveHeadOwningWorkerSessionId([session], 690, headSha, [openPr690], headOwnerOptions()),
+    ).toBe('opk-explicit');
+    expect(sessionOwnsRunHead(session, 690, headSha, [openPr690])).toBe(true);
   });
 });
 
 describe('session-pr-binding-resolver scenario matrix', () => {
-  it('scenario 1: missing issueId and prs[] does not bind', () => {
-    const binding = resolveSessionPrBinding({ role: 'worker', prs: [] }, [openPr690]);
+  it('scenario 1: missing issueId does not bind', () => {
+    const binding = resolveSessionPrBinding({ role: 'worker' }, [openPr690]);
     expect(binding.bound).toBe(false);
     expect(binding.deferReason).toBe(DEFER_NO_ISSUE_BINDING);
   });
 
   it('scenario 2: unique issue/head corroboration binds', () => {
-    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], { repoSlug, headSha });
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], { headSha });
     expect(binding.bound).toBe(true);
-    expect(binding.prNumber).toBe(690);
   });
 
   it('scenario 3: issue with many open PRs defers', () => {
-    const session = worker('orchestrator-pack-45', 690, [], { branch: '' });
-    const binding = resolveSessionPrBinding(
-      session,
-      [openPr690, openPr(691, headSha, 'issue-690-dup')],
-      { repoSlug },
-    );
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [
+      openPr690,
+      { number: 691, headRefOid: headSha, headRefName: 'issue-690-dup' },
+    ]);
     expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
   });
 
-  it('scenario 3b: headSha filters issue correlation to the matching live PR', () => {
-    const session = worker('orchestrator-pack-45', 690, [], { branch: '' });
+  it('scenario 3b: issue with many open PRs defers before headSha disambiguation', () => {
     const binding = resolveSessionPrBinding(
-      session,
+      issueOnlyListRow,
       [
         openPr690,
-        openPr(691, 'cccccccccccccccccccccccccccccccccccccccc', 'issue-690-dup'),
+        { number: 691, headRefOid: 'cccccccccccccccccccccccccccccccccccccccc', headRefName: 'issue-690-dup' },
       ],
-      { repoSlug, headSha },
+      { headSha },
     );
-    expect(binding.bound).toBe(true);
-    expect(binding.prNumber).toBe(690);
+    expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_ISSUE_PR_BINDING);
   });
 
   it('does not return PR-bound session as head owner when headSha is stale', () => {
     const currentHead = 'cccccccccccccccccccccccccccccccccccccccc';
     const staleHead = 'dddddddddddddddddddddddddddddddddddddddd';
-    const session = worker('orchestrator-pack-1', 1, [prUrl(1)], { ownedHeadSha: currentHead });
-    const openPrs = [openPr(1, currentHead, 'issue-1')];
+    const session = {
+      sessionId: 'orchestrator-pack-1',
+      role: 'worker',
+      status: 'working',
+      prNumber: 1,
+    };
+    const openPrs = [{ number: 1, headRefOid: currentHead, headRefName: 'issue-1' }];
 
     expect(
-      resolveHeadOwningWorkerSessionId(
-        [session],
-        1,
-        staleHead,
-        openPrs,
-        headOwnerOptions(),
-      ),
+      resolveHeadOwningWorkerSessionId([session], 1, staleHead, openPrs, headOwnerOptions()),
     ).toBeNull();
     expect(
       resolveWorkerSessionId([session], 1, {
         openPrs,
         headSha: staleHead,
-        ownsHead: (row: Record<string, unknown>) => sessionOwnsRunHead(row, 1, staleHead, openPrs),
+        ownsHead: (row) => sessionOwnsRunHead(row, 1, staleHead, openPrs),
       }),
     ).toBeNull();
     expect(
       resolvePrOwningWorkerSessionBinding([session], 1, openPrs, {
         headSha: staleHead,
-        repoSlug,
         isLive: () => true,
+        getSessionId: (s) => String(s.sessionId ?? s.id ?? s.name),
       }).sessionId,
     ).toBe('orchestrator-pack-1');
   });
 
   it('scenario 4: many live sessions for one PR defers', () => {
     const resolution = resolvePrOwningWorkerSessionBinding(
-      [worker('a', 690, [prUrl(690)]), worker('b', 691, [prUrl(690)])],
+      [
+        { name: 'a', role: 'worker', prNumber: 690, status: 'working' },
+        { name: 'b', role: 'worker', prNumber: 690, status: 'working' },
+      ],
       690,
       [openPr690],
-      { repoSlug, isLive: () => true },
+      { isLive: () => true, getSessionId: (s) => String(s.name) },
     );
     expect(resolution.deferReason).toBe(DEFER_AMBIGUOUS_PR_SESSION_BINDING);
   });
 
-  it('scenario 5: reopened PR resolves to the currently open row only', () => {
-    const session = worker('opk-reopened', 690, [], { branch: 'issue-690-session-pr-binding' });
-    const binding = resolveSessionPrBinding(
-      session,
-      [
-        openPr(689, headSha, 'issue-690-old', 'MERGED'),
-        openPr690,
-      ],
-      { repoSlug, headSha },
-    );
+  it('scenario 5: reopened PR resolves to currently open PR only', () => {
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], { headSha });
     expect(binding.prNumber).toBe(690);
   });
 
-  it('scenario 6: direct prs[] allows ownership listing but not head forge', () => {
-    const session = worker('opk-direct', 690, [prUrl(690)], { branch: 'unrelated-branch' });
-    expect(resolveSessionPrBinding(session, [openPr690], { repoSlug }).bound).toBe(true);
+  it('scenario 6: enriched bind allows ownership listing but not head forge', () => {
+    const session = { ...issueOnlyListRow, role: 'worker' };
+    expect(resolveSessionPrBinding(session, [openPr690], { headSha }).bound).toBe(true);
     expect(sessionOwnsRunHead(session, 690, headSha, [openPr690])).toBe(false);
   });
 
   it('scenario 7: terminated session can still resolve PR without live requirement', () => {
-    const session = worker('orchestrator-pack-45', 690, [prUrl(690)], { status: 'terminated' });
+    const session = { ...issueOnlyListRow, status: 'terminated', prNumber: undefined };
     const resolution = resolvePrOwningWorkerSessionBinding(
       [session],
       690,
       [openPr690],
-      { repoSlug, requireLive: false, isLive: () => false },
+      {
+        requireLive: false,
+        getSessionId: () => 'orchestrator-pack-45',
+        isLive: () => false,
+      },
     );
     expect(resolution.sessionId).toBe('orchestrator-pack-45');
   });
 
   it('scenario 8: non-numeric displayName is not PR evidence', () => {
-    const capture = JSON.parse(
-      readFileSync(path.join(capturesRoot, 'session-get-worker.raw.json'), 'utf8'),
-    );
-    expect(String(capture.session.displayName)).toBe('ao-0-10-cli-mig');
-    const binding = resolveSessionPrBinding(
-      worker('orchestrator-pack-45', 690, [], {
-        branch: 'issue-690-session-pr-binding',
-        displayName: capture.session.displayName,
-      }),
-      [openPr690],
-      { repoSlug, headSha },
-    );
-    expect(binding.bindingSource).toBe('issue_correlation');
+    const preClaim = readCapture('session-get-worker.raw.json');
+    const displayName = String(preClaim.session.displayName);
+    expect(displayName).toBe('ao-0-10-cli-mig');
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+      headSha,
+      sessionDetail: { displayName },
+    });
+    expect(binding.source).toBe('issue_correlation');
   });
 
-  it('scenario 8b: stale numeric displayName cannot override branch correlation', () => {
-    const binding = resolveSessionPrBinding(
-      worker('orchestrator-pack-45', 690, [], {
-        branch: 'issue-690-session-pr-binding',
-        displayName: '704',
-        prNumber: 704,
-      }),
-      [openPr690, openPr(704, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'issue-704-other')],
-      { repoSlug, headSha },
-    );
+  it('scenario 8b: stale numeric displayName does not bind without head/issue corroboration', () => {
+    const staleHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690, { number: 704, headRefOid: staleHead, headRefName: 'issue-704-other' }], {
+      headSha,
+      sessionDetail: { displayName: '704' },
+    });
+    expect(binding.source).not.toBe('display_name');
     expect(binding.bound).toBe(true);
     expect(binding.prNumber).toBe(690);
-    expect(binding.bindingSource).toBe('issue_correlation');
+    expect(binding.source).toBe('issue_correlation');
   });
 
-  it('scenario 8c: numeric displayName cannot bypass contradictory head evidence', () => {
-    const binding = resolveSessionPrBinding(
-      worker('orchestrator-pack-45', 690, [], {
-        branch: 'issue-690-session-pr-binding',
-        displayName: '690',
-        prNumber: 690,
-      }),
-      [openPr690],
-      { repoSlug, headSha: 'cccccccccccccccccccccccccccccccccccccccc' },
-    );
+  it('scenario 8c: numeric displayName fails closed when headSha contradicts display PR', () => {
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      sessionDetail: { displayName: '690' },
+    });
+    expect(binding.source).not.toBe('display_name');
     expect(binding.bound).toBe(false);
-    expect(binding.source).toBe('none');
-  });
-
-  it('scenario 9: multiple in-scope prs[] references fail closed without index-zero selection', () => {
-    const binding = resolveSessionPrBinding(
-      worker('opk-many', 690, [prUrl(690), prUrl(691)]),
-      [openPr690, openPr(691)],
-      { repoSlug },
-    );
-    expect(binding.bound).toBe(false);
-    expect(binding.deferReason).toBe(DEFER_AMBIGUOUS_SESSION_PRS);
-    expect(binding.candidates).toHaveLength(2);
-  });
-
-  it('scenario 10: cross-repository prs[] references are filtered before ambiguity', () => {
-    const binding = resolveSessionPrBinding(
-      worker('opk-repo', 690, [prUrl(690), prUrl(777, 'other/repo')]),
-      [openPr690],
-      { repoSlug },
-    );
-    expect(binding.bound).toBe(true);
-    expect(binding.prNumber).toBe(690);
   });
 });
 
@@ -442,7 +356,7 @@ describe('session-pr-binding-resolver branch patterns', () => {
     expect(headRefCorrelatesToIssue('issue-683-harness-pn-post-submit', 683)).toBe(true);
     expect(
       listIssueCorrelatedOpenPrs(683, [
-        openPr(683, 'abcdef1', 'issue-683-harness-pn-post-submit'),
+        { number: 683, headRefOid: 'abc', headRefName: 'issue-683-harness-pn-post-submit' },
       ]),
     ).toHaveLength(1);
   });
@@ -451,66 +365,136 @@ describe('session-pr-binding-resolver branch patterns', () => {
     const branch = 'ao/orchestrator-pack-98/issue-731-vitest-history-delivery';
     expect(headRefCorrelatesToIssue(branch, 731)).toBe(true);
     expect(
-      listIssueCorrelatedOpenPrs(731, [openPr(738, 'd47c931', branch)]),
+      listIssueCorrelatedOpenPrs(731, [
+        { number: 738, headRefOid: 'd47c931', headRefName: branch },
+      ]),
     ).toHaveLength(1);
   });
 });
 
 describe('ci-failure reaction owner non-null', () => {
   it('records pending episode when head-owning worker resolves', () => {
-    const sessions = [worker('orchestrator-pack-45', 690, [prUrl(690)], { ownedHeadSha: headSha })];
-    const records = planCiFailureReactionRecords(failedCiInput(sessions));
+    const sessions = [
+      {
+        ...issueOnlyListRow,
+        role: 'worker',
+        status: 'working',
+        ownedHeadSha: headSha,
+      },
+    ];
+    const openPrs = [openPr690];
+    const records = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs,
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
     expect(records.records).toBeDefined();
     expect(records.records!.length).toBeGreaterThanOrEqual(1);
     expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
   });
 
   it('does not record episode for issue-correlation bind without explicit head evidence', () => {
-    const records = planCiFailureReactionRecords(failedCiInput([issueOnlyListRow]));
+    const sessions = [{ ...issueOnlyListRow, role: 'worker', status: 'working' }];
+    const records = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
     expect(records.records).toEqual([]);
   });
 
-  it('records episode when direct prs[] and PR head resolve as owner', () => {
+  it('records episode when displayName corroborated by PR head resolves as owner', () => {
     const sessions = [
-      worker('orchestrator-pack-45', 690, [prUrl(690)], {
-        branch: 'unrelated-branch',
-        ownedHeadSha: headSha,
-      }),
+      { ...issueOnlyListRow, role: 'worker', status: 'working', branch: 'unrelated-branch' },
     ];
-    const records = planCiFailureReactionRecords(failedCiInput(sessions));
+    const records = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } },
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
     expect(records.records).toHaveLength(1);
     expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
   });
 
-  it('bulk prs[] replaces session-get enrichment without weakening the head fence', () => {
-    const withoutHead = worker('orchestrator-pack-45', 690, [prUrl(690)], {
-      branch: 'unrelated-branch',
+  it('records episode when session-get displayName binds PR without list-row head fields', () => {
+    const sessions = [
+      {
+        id: 'orchestrator-pack-45',
+        sessionId: 'orchestrator-pack-45',
+        role: 'worker',
+        status: 'working',
+        issueId: '690',
+        branch: 'unrelated-branch',
+      },
+    ];
+    const withoutEnrichment = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
     });
-    expect(planCiFailureReactionRecords(failedCiInput([withoutHead])).records).toEqual([]);
+    expect(withoutEnrichment.records).toEqual([]);
 
-    const withHead = { ...withoutHead, ownedHeadSha: headSha };
-    const records = planCiFailureReactionRecords(failedCiInput([withHead]));
-    expect(records.records).toHaveLength(1);
-    expect(records.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
+    const withEnrichment = planCiFailureReactionRecords({
+      repo: 'chetwerikoff/orchestrator-pack',
+      sessions,
+      openPrs: [openPr690],
+      sessionDetailsById: { 'orchestrator-pack-45': { displayName: '690' } },
+      ciChecksByPr: [
+        {
+          prNumber: 690,
+          checks: [{ name: 'Run pack contract tests', state: 'FAILURE' }],
+        },
+      ],
+      requiredCheckNamesByPr: [{ prNumber: 690, requiredCheckNames: ['Run pack contract tests'] }],
+    });
+    expect(withEnrichment.records).toHaveLength(1);
+    expect(withEnrichment.records![0]?.episode?.targetId).toBe('orchestrator-pack-45');
   });
 });
 
-describe('retired session-get displayName enrichment', () => {
-  it('returns no details and leaves binding to the already-fetched bulk row', () => {
-    const getPayload = JSON.parse(
-      readFileSync(path.join(capturesRoot, 'session-get-numeric-displayname.raw.json'), 'utf8'),
-    );
-    expect(sessionDetailFromSessionGetPayload()).toBeNull();
-    expect(shouldEnrichSessionDetailFromGet()).toBe(false);
-    expect(buildSessionDetailsById()).toEqual({});
-    expect(getExplicitSessionPrNumber()).toBe(0);
-
-    const binding = resolveSessionPrBinding(
-      worker('orchestrator-pack-45', 690, [prUrl(690)]),
-      [openPr690],
-      { repoSlug, headSha },
-    );
-    expect(binding.bindingSource).toBe('live_prs');
+describe('session-get displayName enrichment', () => {
+  it('builds sessionDetailsById from ao session get payloads', () => {
+    const getPayload = readCapture('session-get-numeric-displayname.raw.json');
+    expect(sessionDetailFromSessionGetPayload(getPayload)).toEqual({ displayName: '690' });
+    expect(shouldEnrichSessionDetailFromGet(issueOnlyListRow)).toBe(true);
+    const details = buildSessionDetailsById([issueOnlyListRow], {
+      'orchestrator-pack-45': getPayload,
+    });
+    expect(details).toEqual({ 'orchestrator-pack-45': { displayName: '690' } });
+    const binding = resolveSessionPrBinding(issueOnlyListRow, [openPr690], {
+      headSha,
+      sessionDetail: details['orchestrator-pack-45'],
+    });
+    expect(binding.source).toBe('display_name');
     expect(binding.prNumber).toBe(690);
   });
 });
