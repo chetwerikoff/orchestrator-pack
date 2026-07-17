@@ -7,13 +7,14 @@
   "baseline": {
     "commit_sha": "f58c6fd2606b6d2527e61d661bc44c68eb054484",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:e73f3d977e573863be5fb3b11ef78ba16aa07174556bef6d36b2e907a9bc27f0"
+    "active_scope_hash": "sha256:2c52dfe797574f862462780d2c3ce02090b61117b081b0f6991e5d44b97174cb"
   },
   "declared_paths": [
     "docs/architecture.md",
     "scripts/lib/Orchestrator-Escalation.ps1",
     "scripts/orchestrator-escalation-router.ps1",
-    "tests/agents-md-escalation-store-terminal-merge.test.ts"
+    "tests/agents-md-relocation.test.ts",
+    "tests/escalation-store-terminal-merge.test.ts"
   ],
   "declared_globs": [],
   "amendments": []
