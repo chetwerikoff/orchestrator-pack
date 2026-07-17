@@ -5,12 +5,19 @@ BeforeAll {
     $InvokeAoPath = Join-Path $RepoRoot 'scripts/lib/Invoke-AoCliJson.ps1'
     $WorkerReportPath = Join-Path $RepoRoot 'scripts/lib/WorkerReportStore.ps1'
     $WorkerRecoveryPath = Join-Path $RepoRoot 'scripts/lib/Worker-Recovery.ps1'
-    $WorkerStatusPath = Join-Path $RepoRoot 'scripts/lib/WorkerStatusStore.ps1'
+    $WorkerStatusNodePath = Join-Path $RepoRoot 'scripts/lib/worker-status-store.mjs'
+    $NodeMatrixPath = Join-Path $PSScriptRoot 'Issue857.PrSessionBindingContract.Node.mjs'
 
     . $InvokeAoPath
 }
 
 Describe 'Issue #857 PowerShell binding dispatch' {
+    It 'executes all ten Node contract matrix cells' {
+        $output = & node $NodeMatrixPath 2>&1
+        $LASTEXITCODE | Should -Be 0 -Because ($output -join "`n")
+        ($output -join "`n") | Should -Match 'Issue #857 Node contract matrix: PASS'
+    }
+
     It 'structurally eliminates per-session detail fanout' {
         $script:sessionGetCalls = 0
         function Get-AoSessionGetJson {
@@ -83,38 +90,18 @@ Describe 'Issue #857 PowerShell binding dispatch' {
         $script:capturedWorkerReportPayload.session.PSObject.Properties.Name | Should -Not -Contain 'prNumber'
     }
 
-    It 'routes worker-status cache-path selection through the canonical Node locator' {
-        $script:workerStatusSubcommand = ''
-        function Invoke-WorkerStatusStoreCli {
-            param([string]$Subcommand, [hashtable]$Payload)
-            $script:workerStatusSubcommand = $Subcommand
-            if ($Subcommand -eq 'resolveBindingCachePath') {
-                return @{ path = 'pr-session-binding-cache.json' }
-            }
-            return @{ ok = $true }
-        }
-
-        $resolved = Invoke-WorkerStatusStoreCli -Subcommand 'resolveBindingCachePath' -Payload @{
-            env = @{ AO_REPORT_STATE_SEED_STATE = 'seed.json' }
-        }
-        $script:workerStatusSubcommand | Should -Be 'resolveBindingCachePath'
-        $resolved.path | Should -Be 'pr-session-binding-cache.json'
-    }
-
     It 'keeps recovery cleanup on the shared binding bridge' {
         $text = Get-Content -LiteralPath $WorkerRecoveryPath -Raw -Encoding UTF8
         $text | Should -Match 'Resolve-PackWorkerReportTrustedBinding'
         $text | Should -Not -Match '\$Session\.prNumber'
     }
 
-    It 'contains no PowerShell cache-path reimplementation or dead session predicates' {
-        $statusText = Get-Content -LiteralPath $WorkerStatusPath -Raw -Encoding UTF8
+    It 'keeps the already-shipped worker-status consumer on the shared resolver' {
+        $statusNodeText = Get-Content -LiteralPath $WorkerStatusNodePath -Raw -Encoding UTF8
         $reportText = Get-Content -LiteralPath $WorkerReportPath -Raw -Encoding UTF8
         $invokeText = Get-Content -LiteralPath $InvokeAoPath -Raw -Encoding UTF8
 
-        $statusText | Should -Not -Match 'Get-WorkerStatusPrSessionBindingCachePath'
-        $statusText | Should -Not -Match '\$session\.prNumber'
-        $statusText | Should -Not -Match '\$session\.displayName'
+        $statusNodeText | Should -Match 'resolvePrSessionBindingForConsumer'
         $reportText | Should -Not -Match '\$session\.prNumber'
         $invokeText | Should -Match 'return \$false'
     }
