@@ -230,7 +230,6 @@ function Test-AoEventsCliAvailable {
     }
 }
 
-
 function Get-AoStatusSessionsWithReportsFromPayload {
     param(
         $Payload,
@@ -255,7 +254,6 @@ function Get-AoStatusSessionsWithReportsFromPayload {
     }
     return $decorated
 }
-
 
 function Get-AoDaemonHealthJson {
     param([string]$AoCommand = 'ao')
@@ -315,6 +313,7 @@ function Get-AoSessionGetJson {
     if ($Project) { $args += @('-p', $Project) }
     return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao session get' -AoCommand $AoCommand
 }
+
 function Get-AoSessionRowIdentifier {
     param($Row)
 
@@ -331,17 +330,9 @@ function Get-AoSessionRowIdentifier {
 function Test-AoSessionRowNeedsSessionGetDetail {
     param($Row)
 
-    if (-not $Row) { return $false }
-    $prNumber = 0
-    if ($null -ne $Row.prNumber) {
-        [void][int]::TryParse([string]$Row.prNumber, [ref]$prNumber)
-    }
-    if ($prNumber -gt 0) { return $false }
-    $displayName = [string]$Row.displayName
-    if ($displayName -match '^\d+$') { return $false }
-    $role = [string]$Row.role
-    if ($role -and $role -notin @('worker', 'coding')) { return $false }
-    return -not [string]::IsNullOrWhiteSpace((Get-AoSessionRowIdentifier -Row $Row))
+    # Issue #857: bulk session-list rows already carry branch + prs[].
+    # Per-session detail enrichment is structurally retired.
+    return $false
 }
 
 function Build-AoSessionDetailsById {
@@ -351,32 +342,10 @@ function Build-AoSessionDetailsById {
         [string]$AoCommand = 'ao'
     )
 
-    $details = @{}
-    foreach ($row in @($Sessions)) {
-        if (-not (Test-AoSessionRowNeedsSessionGetDetail -Row $row)) {
-            $sessionId = Get-AoSessionRowIdentifier -Row $row
-            $displayName = [string]$row.displayName
-            if ($sessionId -and $displayName) {
-                $details[$sessionId] = @{ displayName = $displayName }
-            }
-            continue
-        }
-        $sessionId = Get-AoSessionRowIdentifier -Row $row
-        if (-not $sessionId) { continue }
-        try {
-            $payload = Get-AoSessionGetJson -SessionId $sessionId -Project $Project -AoCommand $AoCommand
-            $displayName = [string]$payload.session.displayName
-            if ($displayName) {
-                $details[$sessionId] = @{ displayName = $displayName }
-            }
-        }
-        catch {
-            continue
-        }
-    }
-    return $details
+    # Compatibility surface for callers that still pass the map. The decided
+    # binding contract never performs per-session ao session get fanout.
+    return @{}
 }
-
 
 function Test-AoSessionRowProjectMatches {
     param(
