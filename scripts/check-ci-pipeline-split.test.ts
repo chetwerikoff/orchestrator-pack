@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChangedPathManifest } from './lib/vitest-heavy-topology.d.mts';
+import { runProcessSync } from './kernel/subprocess.ts';
 import {
   assignHeavyShards,
   assignLightShards,
@@ -233,6 +234,47 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     expect([...assigned].sort()).toEqual([...plan.light].sort());
     expect(plan.lightShards).toHaveLength(plan.config.lightShardCount);
     expect(plan.config.lightShardCount).toBe(2);
+  });
+
+  it('light lane isolation audit enumerates every light file with resolved determination', () => {
+    const plan = buildLanePlan(repoRoot);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      return;
+    }
+
+    type LightIsolationAuditRow = {
+      file: string;
+      isolationSensitive: boolean;
+      determinationSource: string;
+      rationale: string;
+    };
+    type LightIsolationAudit = {
+      lightMaxWorkers: number;
+      lightShardCount: number;
+      rows: LightIsolationAuditRow[];
+    };
+    const auditResult = runProcessSync({
+      command: process.execPath,
+      args: ['scripts/audit-vitest-light-lane-isolation.mjs', '--format', 'json'],
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(auditResult.ok).toBe(true);
+    const audit = JSON.parse(auditResult.stdout) as LightIsolationAudit;
+    const auditFiles = audit.rows.map((row) => row.file);
+    const uniqueAuditFiles = new Set(auditFiles);
+
+    expect(audit.lightMaxWorkers).toBe(2);
+    expect(audit.lightShardCount).toBe(2);
+    expect(audit.rows).toHaveLength(plan.light.length);
+    expect(uniqueAuditFiles.size).toBe(plan.light.length);
+    expect([...uniqueAuditFiles].sort()).toEqual([...plan.light].sort());
+    for (const row of audit.rows) {
+      expect(typeof row.isolationSensitive).toBe('boolean');
+      expect(['mechanical', 'manual']).toContain(row.determinationSource);
+      expect(row.rationale.trim().length).toBeGreaterThan(0);
+    }
   });
 
   it('reuses the shared LPT bin packer for light shards', () => {
