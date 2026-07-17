@@ -141,6 +141,7 @@ function run() {
     const ambiguousRepo = input(cachePath);
     delete ambiguousRepo.repoSlug;
     delete ambiguousRepo.session.repoSlug;
+    ambiguousRepo.env = {};
     ambiguousRepo.openPrs = [
       {
         number: PR_NUMBER,
