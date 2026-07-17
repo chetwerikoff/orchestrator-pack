@@ -134,8 +134,6 @@
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-startup.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
-    "scripts/pack-review-delivery.test.ts": "light",
-    "scripts/pack-review-entrypoint-decoupling.test.ts": "light",
     "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pr-scope-check.test.ts": "heavy",
     "scripts/pr-session-binding-cache.test.ts": "light",
