@@ -22,8 +22,10 @@ Zero-signal heads: backstop via `review-trigger-reconcile.ps1`.
 
 ## Review finding delivery
 
-AO 0.10 auto-delivers on submit. Report `addressing_reviews` when
-`deliveredFindingCount > 0`. Confirm via `scripts/review-finding-delivery-confirm.ps1`.
+After a successful reviewer wrapper, the live pack-owned runner invokes the confirmed-delivery
+gate and records its delivered/failed/skipped outcome on the pack review-run record. GitHub review
+posting and terminal status remain independent of delivery success; the retired AO submit bridge
+is not part of this path.
 
 ## Review-status reader contract
 

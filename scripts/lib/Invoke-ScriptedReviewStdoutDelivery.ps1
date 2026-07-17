@@ -261,12 +261,68 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
     return @{ ok = $false; sent = $false; reason = 'dispatch_unknown_exhausted'; terminal = 'escalated' }
 }
 
+function Get-ScriptedReviewStdoutDeliveryOutcomeField {
+    param(
+        [Parameter(Mandatory = $true)]$Outcome,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($Outcome -is [System.Collections.IDictionary]) {
+        if ($Outcome.Contains($Name)) {
+            return [pscustomobject]@{ found = $true; value = $Outcome[$Name] }
+        }
+        return [pscustomobject]@{ found = $false; value = $null }
+    }
+
+    $property = $Outcome.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return [pscustomobject]@{ found = $false; value = $null }
+    }
+    return [pscustomobject]@{ found = $true; value = $property.Value }
+}
+
+function ConvertTo-ScriptedReviewStdoutDeliveryOutcome {
+    param(
+        [Parameter(Mandatory = $true)]$Outcome,
+        [string]$DeliveryKey = '',
+        [string]$SessionId = '',
+        [string]$DeliveryId = '',
+        [string]$Verdict = ''
+    )
+
+    $reasonField = Get-ScriptedReviewStdoutDeliveryOutcomeField -Outcome $Outcome -Name 'reason'
+    if (-not $reasonField.found -or $reasonField.value -isnot [string]) {
+        throw 'scripted review stdout delivery outcome is missing a string reason'
+    }
+    $reason = [string]$reasonField.value
+    if ([string]::IsNullOrWhiteSpace($reason)) {
+        throw 'scripted review stdout delivery outcome is missing a string reason'
+    }
+
+    $skippedField = Get-ScriptedReviewStdoutDeliveryOutcomeField -Outcome $Outcome -Name 'skipped'
+    $sentField = Get-ScriptedReviewStdoutDeliveryOutcomeField -Outcome $Outcome -Name 'sent'
+    $escalatedField = Get-ScriptedReviewStdoutDeliveryOutcomeField -Outcome $Outcome -Name 'escalated'
+    $terminalField = Get-ScriptedReviewStdoutDeliveryOutcomeField -Outcome $Outcome -Name 'terminal'
+    $result = [ordered]@{
+        ok          = [bool]$Outcome.ok
+        skipped     = if ($skippedField.found) { [bool]$skippedField.value } elseif ($sentField.found) { -not [bool]$sentField.value } else { $false }
+        escalated   = if ($escalatedField.found) { [bool]$escalatedField.value } else { $false }
+        reason      = $reason
+        deliveryKey = $DeliveryKey
+        sessionId   = $SessionId
+        deliveryId  = $DeliveryId
+        verdict     = $Verdict
+        terminal    = if ($terminalField.found) { [string]$terminalField.value } else { '' }
+    }
+    return $result
+}
+
 function Invoke-ScriptedReviewStdoutDelivery {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$WrapperStdout,
-        [Parameter(Mandatory = $true)][hashtable]$ParsedStdout,
+        [Parameter(Mandatory = $true)]$ParsedStdout,
         [Parameter(Mandatory = $true)][int]$PrNumber,
         [Parameter(Mandatory = $true)][string]$TargetSha,
         [string]$ProjectId = 'orchestrator-pack',
@@ -348,7 +404,7 @@ function Invoke-ScriptedReviewStdoutDelivery {
     }
 
     if ($SimulateCrashAfterVerdictBeforeSend) {
-        return @{ ok = $false; escalated = $false; resumed = $true; reason = 'crash_after_verdict_recorded' }
+        return @{ ok = $false; skipped = $false; escalated = $false; resumed = $true; reason = 'crash_after_verdict_recorded' }
     }
 
     $existing = if ($LifecycleStorePath) {
@@ -359,7 +415,9 @@ function Invoke-ScriptedReviewStdoutDelivery {
     }
     $entry = $existing.entry
     if ($entry -and [string]$entry.terminalStatus -eq 'delivered') {
-        return @{ ok = $true; skipped = $true; reason = 'already_delivered'; deliveryKey = $deliveryKey }
+        return ConvertTo-ScriptedReviewStdoutDeliveryOutcome -Outcome @{
+            ok = $true; skipped = $true; escalated = $false; reason = 'already_delivered'
+        } -DeliveryKey $deliveryKey -Verdict ([string]$ParsedStdout.gateVerdict)
     }
 
     $sessionResolve = Resolve-ScriptedReviewDeliveryWorkerSession -PrNumber $PrNumber -HeadSha $TargetSha `
@@ -416,15 +474,9 @@ function Invoke-ScriptedReviewStdoutDelivery {
             -PrNumber $PrNumber -SessionId $sessionId -Detail "deliveryKey=$deliveryKey"
     }
 
-    return @{
-        ok          = $true
-        skipped     = -not [bool]$send.sent
-        deliveryKey = $deliveryKey
-        sessionId   = $sessionId
-        deliveryId  = $deliveryId
-        verdict     = [string]$ParsedStdout.gateVerdict
-        terminal    = [string]$send.terminal
-    }
+    return ConvertTo-ScriptedReviewStdoutDeliveryOutcome -Outcome $send `
+        -DeliveryKey $deliveryKey -SessionId $sessionId -DeliveryId $deliveryId `
+        -Verdict ([string]$ParsedStdout.gateVerdict)
 }
 
 function Resume-ScriptedReviewStdoutDeliveryFromLifecycle {

@@ -1,0 +1,31 @@
+{
+  "issue_number": 862,
+  "iteration_id": "issue-862-pr-869-v3",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "issue-862-pr-869-v2",
+  "created_at": "2026-07-17T09:13:00Z",
+  "baseline": {
+    "commit_sha": "173fdf2e96c339e367550a4cc4caffdeb4b89ae8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:1c5e1efef8edc2da459e0f40223487b539b58f9ab0171f0b93f0557e24ae2a65"
+  },
+  "declared_paths": [
+    "docs/script-owned-review-pipeline.md",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/invoke-scripted-review-post-submit-delivery.ps1",
+    "scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1",
+    "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/scripted-review-confirmed-delivery-gate.ps1",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "scripts/*delivery-outcome*.ts",
+    "scripts/lib/*delivery-outcome*.ts"
+  ],
+  "amendments": []
+}

@@ -1,12 +1,12 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Post-submit confirmed-delivery gate for the pack scripted PR-review flow (Issue #669).
+  Confirmed worker-delivery gate for the live pack-owned PR-review flow (Issue #669).
 
 .DESCRIPTION
   Polls GET /api/v1/sessions/{id}/reviews (via Get-AoSessionReviewsJson / ao-review list)
-  after ao review submit and suppresses or fires exactly one explicit journaled-worker-send
-  for changes_requested findings. Never reads ao.db directly.
+  after the reviewer wrapper completes and suppresses or fires exactly one explicit
+  journaled-worker-send for changes_requested findings. Never reads ao.db directly.
 #>
 [CmdletBinding()]
 param(

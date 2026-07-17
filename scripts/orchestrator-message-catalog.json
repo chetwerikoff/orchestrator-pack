@@ -102,7 +102,7 @@
         "file": "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
         "function": "Invoke-ScriptedReviewStdoutDelivery",
         "anchor": "helper-body",
-        "predicateBodyHash": "7d8f21ebaed7e0f2"
+        "predicateBodyHash": "fe3a9ff0f99972a5"
       }
     },
     {
