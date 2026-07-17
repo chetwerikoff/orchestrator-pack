@@ -35,6 +35,14 @@ export type PackReviewRunStatus =
   | 'timed_out'
   | 'cancelled';
 
+export type PackReviewDeliveryOutcomeClassification = 'delivered' | 'failed' | 'skipped';
+
+export interface PackReviewDeliveryOutcome {
+  classification: PackReviewDeliveryOutcomeClassification;
+  escalated: boolean;
+  reason: string;
+}
+
 export type GithubCommentReviewReconciliationPhase =
   | 'prepared'
   | 'comment_posted'
@@ -82,6 +90,7 @@ export interface PackReviewRunRecord {
   failureReason?: string;
   githubReviewId?: number | string;
   githubReviewUrl?: string;
+  deliveryOutcome?: PackReviewDeliveryOutcome;
   githubReviewEvent?: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
   githubReviewReconciliation?: GithubCommentReviewReconciliation;
   stale?: boolean;
@@ -291,6 +300,28 @@ function recordPath(storeRoot: string, runId: string): string {
   return join(recordsDir(storeRoot), `${runId}.json`);
 }
 
+function parseDeliveryOutcome(value: unknown, path = ''): PackReviewDeliveryOutcome | undefined {
+  if (value === undefined) return undefined;
+  const raw = asObject(value);
+  const classification = String(raw.classification ?? '') as PackReviewDeliveryOutcomeClassification;
+  if (!['delivered', 'failed', 'skipped'].includes(classification)) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid deliveryOutcome.classification`);
+  }
+  if (typeof raw.escalated !== 'boolean') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid deliveryOutcome.escalated`);
+  }
+  if (typeof raw.reason !== 'string') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid deliveryOutcome.reason`);
+  }
+  return { classification, escalated: raw.escalated, reason: raw.reason };
+}
+
+function sameDeliveryOutcome(left: PackReviewDeliveryOutcome, right: PackReviewDeliveryOutcome): boolean {
+  return left.classification === right.classification
+    && left.escalated === right.escalated
+    && left.reason === right.reason;
+}
+
 function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   const raw = asObject(value);
   const schemaVersion = Number(raw.schemaVersion);
@@ -310,6 +341,7 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   }
   const createdAt = requiredString(raw.createdAt, 'createdAt', path);
   const updatedAt = requiredString(raw.updatedAt, 'updatedAt', path);
+  const deliveryOutcome = parseDeliveryOutcome(raw.deliveryOutcome, path);
   return {
     ...(raw as unknown as PackReviewRunRecord),
     schemaVersion: 1,
@@ -331,6 +363,7 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     createdAt,
     updatedAt,
     heartbeatAtUtc: String(raw.heartbeatAtUtc ?? updatedAt),
+    ...(deliveryOutcome ? { deliveryOutcome } : {}),
   };
 }
 
@@ -411,6 +444,38 @@ export function getPackReviewRun(runId: string, options: PackReviewStoreOptions 
     const path = recordPath(storeRoot, runId);
     if (!existsSync(path)) return null;
     return parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+  });
+}
+
+export function compareAndSetPackReviewDeliveryOutcome(
+  runId: string,
+  deliveryOutcome: PackReviewDeliveryOutcome,
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => {
+    const path = recordPath(storeRoot, runId);
+    if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
+    const existing = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+    if (options.projectId && existing.projectId !== options.projectId) {
+      throw new Error(`pack review run project mismatch: ${runId}`);
+    }
+    if (existing.deliveryOutcome) {
+      if (sameDeliveryOutcome(existing.deliveryOutcome, deliveryOutcome)) return existing;
+      throw new Error(`conflicting pack review delivery outcome for ${runId}`);
+    }
+
+    const updatedAt = (options.now ?? new Date()).toISOString();
+    const next = parseRecord({
+      ...existing,
+      deliveryOutcome,
+      updatedAt,
+      heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(existing.status)
+        ? updatedAt
+        : existing.heartbeatAtUtc,
+    }, path);
+    writeRecordUnlocked(storeRoot, next);
+    return next;
   });
 }
 

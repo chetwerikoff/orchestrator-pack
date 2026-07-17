@@ -50,6 +50,7 @@ interface StartInput {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  fixtureReviewWrapperPath?: string;
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
   fixtureGithubReviewTransport?: GithubReviewTransport;
@@ -569,6 +570,7 @@ async function invokeReviewer(options: {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  fixtureReviewWrapperPath?: string;
 }): Promise<ProcessResult> {
   if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewTimedOut) {
     return { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false };
@@ -601,10 +603,23 @@ async function invokeReviewer(options: {
     GITHUB_PR_NUMBER: String(options.prNumber),
     AO_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
+    PACK_REVIEW_PROJECT_ID: options.projectId,
+    PACK_REVIEW_RUN_STORE_ROOT: options.storeRoot,
   };
   if (options.sessionId) {
     env.AO_SESSION_ID = options.sessionId;
     env.AO_WORKER_SESSION_ID = options.sessionId;
+  }
+  const fixtureReviewWrapperPath = trim(options.fixtureReviewWrapperPath);
+  if (fixtureReviewWrapperPath) {
+    if (process.env.OPK_VITEST_HARNESS !== '1') {
+      throw new Error('fixtureReviewWrapperPath is available only under OPK_VITEST_HARNESS');
+    }
+    const resolvedFixtureReviewWrapperPath = resolve(fixtureReviewWrapperPath);
+    if (!existsSync(resolvedFixtureReviewWrapperPath)) {
+      throw new Error(`fixture review wrapper unavailable at ${resolvedFixtureReviewWrapperPath}`);
+    }
+    env.OPK_VITEST_PACK_REVIEW_WRAPPER_PATH = resolvedFixtureReviewWrapperPath;
   }
 
   return runProcess({
@@ -711,7 +726,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       runnerPid: process.pid,
     }, { projectId, storeRoot });
 
-    if (process.env.OPK_VITEST_HARNESS === '1' && (input.fixtureReviewStdout !== undefined || input.fixtureReviewTimedOut === true)) {
+    if (process.env.OPK_VITEST_HARNESS === '1' && (input.fixtureReviewStdout !== undefined
+      || input.fixtureReviewTimedOut === true
+      || Boolean(trim(input.fixtureReviewWrapperPath)))) {
       worktree = join(packReviewWorktreesDir(storeRoot), run.id);
       mkdirSync(worktree, { recursive: true });
     } else {
@@ -741,6 +758,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         fixtureReviewStdout: input.fixtureReviewStdout,
         fixtureReviewExitCode: input.fixtureReviewExitCode,
         fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        fixtureReviewWrapperPath: input.fixtureReviewWrapperPath,
       });
     } finally {
       clearInterval(heartbeat);

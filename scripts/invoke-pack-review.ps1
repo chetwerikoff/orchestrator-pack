@@ -1,7 +1,7 @@
-# Reviewer-agnostic AO review entrypoint (Issue #86).
+# Reviewer-agnostic pack review entrypoint (Issue #86).
 # REVIEW_COMMAND names this script only; PACK_REVIEWER selects claude | codex.
-# After a successful wrapper (ao review submit inside), post-submit delivery runs
-# invoke-scripted-review-post-submit-delivery.ps1 → confirmed-delivery gate (Issue #669).
+# After a successful wrapper, the live pack-owned path runs confirmed worker delivery.
+# The live path is independent of the retired AO review-submit bridge.
 #Requires -Version 5.1
 param()
 
@@ -22,6 +22,10 @@ if (-not $reviewer) {
 }
 
 $wrapperPath = Get-PackReviewWrapperPathForReviewer -Reviewer $reviewer -ScriptsRoot $PSScriptRoot
+$fixtureWrapperPath = [string]$env:OPK_VITEST_PACK_REVIEW_WRAPPER_PATH
+if ($env:OPK_VITEST_HARNESS -eq '1' -and -not [string]::IsNullOrWhiteSpace($fixtureWrapperPath)) {
+    $wrapperPath = (Resolve-Path -LiteralPath $fixtureWrapperPath -ErrorAction Stop).Path
+}
 if (-not (Test-Path -LiteralPath $wrapperPath -PathType Leaf)) {
     [Console]::Error.WriteLine("Pack review wrapper not found at $wrapperPath (PACK_REVIEWER=$reviewer)")
     exit 1
@@ -29,6 +33,8 @@ if (-not (Test-Path -LiteralPath $wrapperPath -PathType Leaf)) {
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
+$projectId = [string]$env:PACK_REVIEW_PROJECT_ID
+if ([string]::IsNullOrWhiteSpace($projectId)) { $projectId = 'orchestrator-pack' }
 
 $evidenceHandle = Initialize-ReviewFailureEvidence -RepoRoot $resolvedRoot -WrapperKind $reviewer
 if (-not $evidenceHandle.ok -and $env:AO_REVIEW_FAILURE_EVIDENCE_DEBUG) {
@@ -66,7 +72,8 @@ try {
         }
         if ($wrapperResult.exitCode -eq 0) {
             $delivery = Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview `
-                -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode
+                -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode -ProjectId $projectId
+            Record-PackReviewDeliveryOutcome -Delivery $delivery -ReviewTargetRoot $resolvedRoot
             if (-not $delivery.skipped -and -not $delivery.ok -and $env:AO_SCRIPTED_REVIEW_DELIVERY_DEBUG) {
                 [Console]::Error.WriteLine("scripted-review post-submit delivery failed: $($delivery.reason)")
             }
@@ -77,7 +84,8 @@ try {
     $wrapperResult = Invoke-PackReviewWrapperWithFailureEvidence -WrapperPath $wrapperPath -WrapperArgs $wrapperArgs -EvidenceHandle $null
     if ($wrapperResult.exitCode -eq 0) {
         $delivery = Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview `
-            -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode
+            -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode -ProjectId $projectId
+        Record-PackReviewDeliveryOutcome -Delivery $delivery -ReviewTargetRoot $resolvedRoot
         if (-not $delivery.skipped -and -not $delivery.ok -and $env:AO_SCRIPTED_REVIEW_DELIVERY_DEBUG) {
             [Console]::Error.WriteLine("scripted-review post-submit delivery failed: $($delivery.reason)")
         }
