@@ -17,6 +17,8 @@ import {
 import {
   createPackReviewRun,
   updatePackReviewRun,
+  type PackReviewDeliveryOutcome,
+  type PackReviewRunRecord,
 } from './lib/pack-review-run-store.js';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,6 +30,19 @@ function tempRoot(prefix: string): string {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
   tempRoots.push(root);
   return root;
+}
+
+function deliveryOutcome(
+  state: PackReviewDeliveryOutcome['state'],
+  idempotencyKey: string,
+  reason = state,
+): PackReviewDeliveryOutcome {
+  return {
+    state,
+    recordedAtUtc: '2026-07-17T12:00:00.000Z',
+    reason,
+    idempotencyKey,
+  };
 }
 
 afterEach(() => {
@@ -51,7 +66,6 @@ describe('pack review worker notification admission (Issue #894)', () => {
         trustedPackRoot: repoRoot,
         sourceRepoRoot: repoRoot,
       }).run;
-      const now = '2026-07-17T12:00:00.000Z';
       const terminal = updatePackReviewRun(run.id, {
         status: 'changes_requested',
         latestRunStatus: 'changes_requested',
@@ -60,46 +74,25 @@ describe('pack review worker notification admission (Issue #894)', () => {
         findings: [{ severity: 'error' }],
         journalOutcome: {
           state: 'persisted',
-          recordedAtUtc: now,
+          recordedAtUtc: '2026-07-17T12:00:00.000Z',
           reason: 'verdict_persisted',
           idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
           attempts: 1,
         },
         githubReviewId: 89401,
-        githubReviewUrl: 'fixture://review/89401',
-        githubReviewEvent: 'COMMENT',
         githubReviewReconciliation: {
-          schemaVersion: 1,
-          event: 'COMMENT',
           phase: 'complete',
-          actorLogin: 'fixture-pack-reviewer',
-          commentBody: 'fixture',
-          commentReviewId: 89401,
-          commentReviewUrl: 'fixture://review/89401',
-          pendingDismissalReviewIds: [],
-          dismissedReviewIds: [],
-          preparedAtUtc: now,
-          updatedAtUtc: now,
-        },
+        } as PackReviewRunRecord['githubReviewReconciliation'],
         deliveryOutcomes: {
-          githubComment: {
-            state: 'succeeded',
-            recordedAtUtc: now,
-            reason: 'comment_posted',
-            idempotencyKey: `github-comment:${run.id}:${HEAD_SHA}`,
-          },
-          requiredStatus: {
-            state: 'succeeded',
-            recordedAtUtc: now,
-            reason: 'status_failure',
-            idempotencyKey: `required-status:orchestrator-pack/pack-review:${HEAD_SHA}`,
-          },
-          workerNotification: {
-            state: workerState,
-            recordedAtUtc: now,
-            reason: `worker_${workerState}`,
-            idempotencyKey: `worker-notification:${run.id}:${HEAD_SHA}`,
-          },
+          githubComment: deliveryOutcome('succeeded', `github-comment:${run.id}:${HEAD_SHA}`),
+          requiredStatus: deliveryOutcome(
+            'succeeded',
+            `required-status:orchestrator-pack/pack-review:${HEAD_SHA}`,
+          ),
+          workerNotification: deliveryOutcome(
+            workerState,
+            `worker-notification:${run.id}:${HEAD_SHA}`,
+          ),
         },
       }, { projectId: 'orchestrator-pack', storeRoot });
 
@@ -117,9 +110,9 @@ describe('pack review worker notification admission (Issue #894)', () => {
       mkdirSync(fakeBin, { recursive: true });
       const fakeAo = path.join(fakeBin, 'ao');
       writeFileSync(fakeAo, [
-        '#!/usr/bin/env bash',
-        'printf "%s\\n" "$*" >> "$PACK_REVIEW_FAKE_AO_LOG"',
-        'exit 0',
+        '#!/usr/bin/env node',
+        "const { appendFileSync } = require('node:fs');",
+        "appendFileSync(process.env.PACK_REVIEW_FAKE_AO_LOG, process.argv.slice(2).join(' ') + '\\n');",
         '',
       ].join('\n'), 'utf8');
       chmodSync(fakeAo, 0o755);
@@ -136,30 +129,31 @@ describe('pack review worker notification admission (Issue #894)', () => {
         'Merge status: failure',
       ].join('\n');
 
-      process.env.OPK_VITEST_HARNESS = '1';
-      process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER = '1';
-      process.env.PACK_REVIEW_WORKER_NOTIFICATION_FIXTURE_TARGET = `${sessionId}:${sessionId}`;
-      process.env.AO_SESSION_ID = 'orchestrator-autonomous-surface';
-      process.env.AO_BASE_DIR = path.join(root, 'ao-base');
-      process.env.AO_JOURNALED_SEND_ASSUME_CONTRACT = '1';
-      process.env.AO_WORKER_MESSAGE_DISPATCH_JOURNAL = dispatchJournal;
-      process.env.PACK_REVIEW_FAKE_AO_LOG = aoLog;
-      process.env.PATH = `${fakeBin}:${originalEnv.PATH ?? ''}`;
+      Object.assign(process.env, {
+        OPK_VITEST_HARNESS: '1',
+        PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER: '1',
+        PACK_REVIEW_WORKER_NOTIFICATION_FIXTURE_TARGET: `${sessionId}:${sessionId}`,
+        AO_SESSION_ID: 'orchestrator-autonomous-surface',
+        AO_BASE_DIR: path.join(root, 'ao-base'),
+        AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
+        AO_WORKER_MESSAGE_DISPATCH_JOURNAL: dispatchJournal,
+        PACK_REVIEW_FAKE_AO_LOG: aoLog,
+        PATH: `${fakeBin}:${originalEnv.PATH ?? ''}`,
+      });
 
-      const request = { message, idempotencyKey: deliveryKey };
-      const first = await sendPackReviewWorkerNotification({
+      const notify = () => sendPackReviewWorkerNotification({
         trustedPackRoot: repoRoot,
         sessionId,
-        request,
+        request: { message, idempotencyKey: deliveryKey },
       });
-      expect(first).toMatchObject({ state: 'delivered', reason: 'explicit_send_dispatched' });
-
-      const resumed = await sendPackReviewWorkerNotification({
-        trustedPackRoot: repoRoot,
-        sessionId,
-        request,
+      expect(await notify()).toMatchObject({
+        state: 'delivered',
+        reason: 'explicit_send_dispatched',
       });
-      expect(resumed).toMatchObject({ state: 'delivered', reason: 'journal_duplicate_no_op' });
+      expect(await notify()).toMatchObject({
+        state: 'delivered',
+        reason: 'journal_duplicate_no_op',
+      });
 
       const sends = readFileSync(aoLog, 'utf8').split(/\r?\n/).filter(Boolean);
       expect(sends).toHaveLength(1);
