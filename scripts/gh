@@ -12,6 +12,17 @@ if [[ "${GH_WRAPPER_ACTIVE:-}" == "1" ]]; then
   exec /usr/bin/env -u GH_WRAPPER_ACTIVE "$real_gh" "$@"
 fi
 
+if [[ -n "${AO_SIDE_PROCESS_CHILD_ID:-}" && -n "${AO_SIDE_PROCESS_PROGRESS_DIR:-}" && "${AO_SIDE_PROCESS_LIVENESS_ACTIVE:-}" != "1" ]]; then
+  call_name="gh:${1:-command}:${2:-invoke}"
+  owner_pid="${AO_SIDE_PROCESS_OWNER_PID:-$PPID}"
+  export AO_SIDE_PROCESS_LIVENESS_ACTIVE=1
+  exec node --no-warnings --experimental-strip-types "${SCRIPT_DIR}/kernel/side-process-liveness.ts" call \
+    --call-name "$call_name" \
+    --child-id "$AO_SIDE_PROCESS_CHILD_ID" \
+    --owner-pid "$owner_pid" \
+    --progress-dir "$AO_SIDE_PROCESS_PROGRESS_DIR" \
+    -- bash "${BASH_SOURCE[0]}" "$@"
+fi
 
 # Operator REST unblock: resolvePR argv (claim-pr) — Issue #443 gap for pr view field set
 case "${1:-} ${2:-} ${*:--json}" in
