@@ -18,7 +18,7 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:e31e131652f0a04d24b0ccd78bd0aa1923ec51cc48bb6380bc59826d3e07dc1c",
-      "new_active_scope_hash": "sha256:4d5e435977a1d5bd3e737f67b65bcdd9151f5bb48f587ec535689206bd32d5e4",
+      "new_active_scope_hash": "sha256:0ff191e76a2217434260356e722f310211a8ea769cfe2e2bc9fe6d6cdb91ab4b",
       "changed": {
         "added": [
           "tests/issue854-worker-status-binding-cache.mjs",
