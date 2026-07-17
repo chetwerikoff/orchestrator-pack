@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.js';
@@ -29,8 +30,6 @@ $root = [string]$env:PACK_REVIEW_TRUSTED_ROOT
 if (-not $root) { throw 'PACK_REVIEW_TRUSTED_ROOT is required' }
 . (Join-Path $root 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1')
 . (Join-Path $root 'scripts/lib/Review-DeliveryLifecycle.ps1')
-. (Join-Path $root 'scripts/lib/Record-WorkerMessageDispatch.ps1')
-. (Join-Path $root 'scripts/lib/Worker-NudgeClaim.ps1')
 
 $sessionId = [string]$payload.sessionId
 $projectId = [string]$payload.projectId
@@ -39,6 +38,7 @@ $prNumber = [int]$payload.prNumber
 $headSha = [string]$payload.headSha
 $deliveryKey = [string]$payload.deliveryKey
 $message = [string]$payload.message
+$findingsHash = [string]$payload.findingsHash
 $workerTarget = ''
 $openPrs = $null
 
@@ -70,41 +70,8 @@ if (-not $delivery.ok) {
         ConvertTo-Json -Compress -Depth 8
     exit 0
 }
-$deliveryId = [string]$delivery.deliveryId
 
-$sha = [System.Security.Cryptography.SHA256]::Create()
-try {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($message)
-    $findingsHash = 'sha256:' + (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
-}
-finally {
-    $sha.Dispose()
-}
-
-$journalPath = Get-WorkerMessageDispatchJournalPath
-$journal = Get-WorkerMessageDispatchJournal -Path $journalPath
-$admission = Invoke-DispatchJournalCli -Subcommand 'deterministic-admit' -Payload @{
-    journal = $journal
-    incoming = @{
-        deliveryId = $deliveryId
-        sessionId = $sessionId
-        deterministicKey = $deliveryKey
-        findingsHash = $findingsHash
-        dispatchOutcome = 'dispatch_in_flight'
-    }
-}
-if ($admission.action -eq 'no_op_terminal') {
-    @{ ok = $true; sent = $false; skipped = $true; terminal = 'delivered'; reason = 'journal_duplicate_no_op'; deliveryId = [string]$admission.deliveryId } |
-        ConvertTo-Json -Compress -Depth 8
-    exit 0
-}
-if (-not $admission.ok -and $admission.action -ne 'resume') {
-    @{ ok = $false; sent = $false; terminal = 'escalated'; reason = [string]$admission.reason } |
-        ConvertTo-Json -Compress -Depth 8
-    exit 0
-}
-
-$result = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId -MessageText $message -DeliveryKey $deliveryKey -DeliveryId $deliveryId -PrNumber $prNumber -TargetSha $headSha -ProjectId $projectId -FindingsHash $findingsHash -WorkerTarget $workerTarget -OpenPrs $openPrs
+$result = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId -MessageText $message -DeliveryKey $deliveryKey -DeliveryId ([string]$delivery.deliveryId) -PrNumber $prNumber -TargetSha $headSha -ProjectId $projectId -FindingsHash $findingsHash -WorkerTarget $workerTarget -OpenPrs $openPrs
 $result | ConvertTo-Json -Compress -Depth 8
 `;
 
@@ -161,6 +128,7 @@ export async function sendPackReviewWorkerNotification(
   const target = parseTarget(options);
   if (!target) return { state: 'escalated', reason: 'worker_notification_target_unresolved' };
   const trustedPackRoot = resolve(options.trustedPackRoot);
+  const findingsHash = `sha256:${createHash('sha256').update(options.request.message, 'utf8').digest('hex')}`;
   const request = `${JSON.stringify({
     sessionId,
     projectId: trim(options.projectId) || 'orchestrator-pack',
@@ -168,6 +136,7 @@ export async function sendPackReviewWorkerNotification(
     prNumber: target.prNumber,
     headSha: target.headSha,
     deliveryKey: trim(options.request.idempotencyKey),
+    findingsHash,
     message: options.request.message,
   })}\n`;
   const result = await runProcess({
