@@ -583,8 +583,10 @@ describe('worker-status mixed generation vector', () => {
     expect(mergeGenerationVectorMax(existing, writer)).toEqual({
       repoTickGeneration: 10,
       reportStoreGeneration: 10,
-      journalCursor: 5,
+      reviewRunGeneration: 5,
+      githubGeneration: 0,
       bindingCacheGeneration: 5,
+      journalCursor: 5,
     });
   });
 
@@ -622,8 +624,10 @@ describe('worker-status mixed generation vector', () => {
     expect(result.row?.generationVector).toEqual({
       repoTickGeneration: 10,
       reportStoreGeneration: 10,
-      journalCursor: 5,
+      reviewRunGeneration: 5,
+      githubGeneration: 0,
       bindingCacheGeneration: 5,
+      journalCursor: 5,
     });
     expect(result.store?.records['opk-c12b']?.generationVector?.repoTickGeneration).toBe(10);
   });
