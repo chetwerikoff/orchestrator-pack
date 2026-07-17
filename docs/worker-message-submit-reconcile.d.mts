@@ -7,6 +7,8 @@ export declare const DEFAULT_DELIVERY_BACKSTOP_MS: number;
 export declare const DEFAULT_POST_DISPATCH_LEASE_MS: number;
 export declare const DEFAULT_CLAIM_STALE_MS: number;
 export declare const DEFAULT_OBSERVABILITY_SETTLE_MS: number;
+export declare const DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP: number;
+export declare const DEFAULT_BULK_ESCALATION_SAMPLE_SIZE: number;
 
 export declare const SUBMIT_STATE_PENDING: string;
 export declare const SUBMIT_STATE_SUBMITTED: string;
@@ -14,6 +16,9 @@ export declare const SUBMIT_STATE_ESCALATED: string;
 export declare const SUBMIT_STATE_NOOP: string;
 
 export declare const OPERATOR_ESCALATION_PREFIX: string;
+export declare const SUBMIT_ESCALATION_CLASS_ID: string;
+export declare const SUBMIT_DIGEST_ESCALATION_CLASS_ID: string;
+export declare const SUBMIT_DIGEST_FAILURE_KIND: string;
 export declare const FAILED_DELIVERY_UNRESOLVED: string;
 export declare const FAILED_DELIVERY_RESOLVED: string;
 export declare const FAILED_DELIVERY_AUDITED_CLOSED: string;
@@ -89,6 +94,7 @@ export interface RecoveryLatch {
 export interface SubmitTrackingState {
   deliveries?: Record<string, DeliveryTrackingRecord>;
   failedDeliveries?: Record<string, FailedDeliveryRecord>;
+  bulkEscalationDigests?: Record<string, Record<string, unknown>>;
   lastTickMs?: number;
   audit?: Array<Record<string, unknown>>;
   adoptionStatus?: string;
@@ -141,6 +147,23 @@ export type WorkerMessageSubmitAction =
       deliveryId: string;
       sessionId: string;
       reason: string;
+      diagnosis?: string;
+      failureKind?: string;
+      escalationClassId?: string;
+    }
+  | {
+      type: 'escalate-digest';
+      deliveryId?: string;
+      sessionId?: string;
+      escalationClassId: string;
+      sourceEscalationClassId: string;
+      sourceFailureKind: string;
+      digestKey: string;
+      correlationKey: string;
+      failureKind: string;
+      reason: string;
+      count: number;
+      sample: Array<Record<string, string>>;
       diagnosis?: string;
     }
   | {

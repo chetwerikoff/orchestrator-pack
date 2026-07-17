@@ -742,6 +742,23 @@ function Invoke-SubmitReconcileTick {
                     } | Out-Null
                 $escalated++
             }
+            'escalate-digest' {
+                Write-SubmitReconcileLog $action.diagnosis
+                $failureKind = if ($action.failureKind) { [string]$action.failureKind } else { 'bulk_digest' }
+                $corr = if ($action.correlationKey) { [string]$action.correlationKey } else { "corr:submit-digest:$($action.sourceEscalationClassId)" }
+                $dedupe = "dedupe:submit-digest:$($action.sourceEscalationClassId)`:$failureKind"
+                Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
+                    -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
+                    -Diagnosis @{
+                        failure_kind              = $failureKind
+                        diagnosis                 = $action.diagnosis
+                        reason                    = $action.reason
+                        source_escalation_class_id = [string]$action.sourceEscalationClassId
+                        coalesced_count           = [int]$action.count
+                        coalesced_sample          = @($action.sample)
+                    } | Out-Null
+                $escalated++
+            }
             'mark_consumed' {
                 Write-SubmitReconcileLog "consumed: delivery=$($action.deliveryId) session=$($action.sessionId)"
             }

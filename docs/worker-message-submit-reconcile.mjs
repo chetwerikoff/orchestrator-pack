@@ -70,6 +70,13 @@ export const SUBMIT_STATE_NOOP = 'noop';
 export const OPERATOR_ESCALATION_PREFIX =
   '[worker-message-submit-reconcile] ESCALATION:';
 
+/** Per reconcile pass, keep at most this many individual escalation records per class. */
+export const DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP = 8;
+export const DEFAULT_BULK_ESCALATION_SAMPLE_SIZE = 5;
+export const SUBMIT_ESCALATION_CLASS_ID = 'escalation-submit-adoption';
+export const SUBMIT_DIGEST_ESCALATION_CLASS_ID = SUBMIT_ESCALATION_CLASS_ID;
+export const SUBMIT_DIGEST_FAILURE_KIND = 'bulk_digest';
+
 export const FAILED_DELIVERY_UNRESOLVED = 'unresolved';
 
 export const STATE_ROOT_RECOVERY_REASON = 'wrong_state_root_active_deliveries';
@@ -706,6 +713,121 @@ function resolveDeliveryTerminalEscalation({ delivery, record, nowMs, reason, di
     failedDelivery: buildFailedDeliveryRecord({ delivery, record, nowMs, reason: failedReason }),
     diagnosis,
   };
+}
+
+function isTerminalEscalationState(value) {
+  const state = trimString(value);
+  return state === 'acked' || state === 'resolved' || state === 'quarantined' || state === 'dead_lettered';
+}
+
+function buildEscalationGroupKey(action) {
+  const escalationClassId = trimString(action?.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
+  const failureKind = trimString(action?.failureKind ?? action?.reason) || 'generic';
+  return `${escalationClassId}:${failureKind}`;
+}
+
+function buildSubmitDigestKey(groupKey) {
+  return `${SUBMIT_DIGEST_ESCALATION_CLASS_ID}|project:global|${SUBMIT_DIGEST_FAILURE_KIND}|${trimString(groupKey) || SUBMIT_ESCALATION_CLASS_ID}`;
+}
+
+function buildSubmitDigestCorrelationKey(groupKey) {
+  return `corr:submit-digest:${trimString(groupKey) || SUBMIT_ESCALATION_CLASS_ID}`;
+}
+
+function buildEscalationDigestSample(actions, limit) {
+  return actions.slice(0, limit).map((action) => ({
+    deliveryId: trimString(action.deliveryId),
+    sessionId: trimString(action.sessionId),
+    reason: trimString(action.reason),
+    failureKind: trimString(action.failureKind ?? action.reason),
+  }));
+}
+
+function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
+  const cap = DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP;
+  const sampleSize = DEFAULT_BULK_ESCALATION_SAMPLE_SIZE;
+  const digestState = { ...(tracking?.bulkEscalationDigests ?? {}) };
+  const byClass = new Map();
+  for (const action of actions) {
+    if (action?.type !== 'escalate') {
+      continue;
+    }
+    const groupKey = buildEscalationGroupKey(action);
+    const bucket = byClass.get(groupKey) ?? [];
+    bucket.push(action);
+    byClass.set(groupKey, bucket);
+  }
+  if (byClass.size === 0) {
+    return { actions, bulkEscalationDigests: digestState };
+  }
+
+  const kept = [];
+  const digestByClass = new Map();
+  const classIndexes = new Map();
+  for (const [groupKey, classActions] of byClass.entries()) {
+    classIndexes.set(groupKey, 0);
+    if (classActions.length <= cap) {
+      continue;
+    }
+    const first = classActions[0] ?? {};
+    const escalationClassId = trimString(first.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
+    const sourceFailureKind = trimString(first.failureKind ?? first.reason) || 'generic';
+    const coalesced = classActions.slice(cap);
+    const digestKey = buildSubmitDigestKey(groupKey);
+    const prior = digestState[digestKey] ?? {};
+    const priorCount = Number(prior.count ?? 0);
+    const priorTerminal = isTerminalEscalationState(prior.terminalState ?? prior.status);
+    const shouldEmit = priorTerminal || priorCount <= 0 || coalesced.length > priorCount;
+    const sample = buildEscalationDigestSample(coalesced, sampleSize);
+    digestState[digestKey] = {
+      ...prior,
+      digestKey,
+      groupKey,
+      escalationClassId,
+      sourceFailureKind,
+      digestEscalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+      failureKind: SUBMIT_DIGEST_FAILURE_KIND,
+      count: coalesced.length,
+      sample,
+      terminalState: shouldEmit ? 'open' : trimString(prior.terminalState ?? prior.status) || 'open',
+      lastObservedAtMs: nowMs,
+      lastEmittedAtMs: shouldEmit ? nowMs : Number(prior.lastEmittedAtMs ?? 0),
+    };
+    if (shouldEmit) {
+      digestByClass.set(groupKey, {
+        type: 'escalate-digest',
+        escalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+        sourceEscalationClassId: escalationClassId,
+        sourceFailureKind,
+        digestKey,
+        correlationKey: buildSubmitDigestCorrelationKey(groupKey),
+        failureKind: SUBMIT_DIGEST_FAILURE_KIND,
+        reason: 'bulk_escalation_digest',
+        count: coalesced.length,
+        sample,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} ${coalesced.length} worker message submit escalations were coalesced after per-pass cap ${cap} for ${groupKey}.`,
+      });
+    }
+  }
+
+  for (const action of actions) {
+    if (action?.type !== 'escalate') {
+      kept.push(action);
+      continue;
+    }
+    const groupKey = buildEscalationGroupKey(action);
+    const escalationClassId = trimString(action.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
+    const index = classIndexes.get(groupKey) ?? 0;
+    classIndexes.set(groupKey, index + 1);
+    const classActions = byClass.get(groupKey) ?? [];
+    if (classActions.length <= cap || index < cap) {
+      kept.push({ ...action, escalationClassId });
+    }
+  }
+  for (const digest of digestByClass.values()) {
+    kept.push(digest);
+  }
+  return { actions: kept, bulkEscalationDigests: digestState };
 }
 
 function recordConsumptionResolution({ record, nowMs }) {
@@ -1745,9 +1867,16 @@ export function planWorkerMessageSubmitActions(input) {
     audit.push({ deliveryId, action: 'escalate', reason });
   }
 
+  const boundedEscalations = coalesceBulkEscalationActions({
+    actions,
+    tracking: baseTracking,
+    nowMs,
+  });
+
   const draftTracking = {
     deliveries: nextDeliveries,
     failedDeliveries: nextFailedDeliveries,
+    bulkEscalationDigests: boundedEscalations.bulkEscalationDigests,
     lastTickMs: nowMs,
     audit: [...toArray(baseTracking?.audit), ...audit],
   };
@@ -1770,7 +1899,7 @@ export function planWorkerMessageSubmitActions(input) {
   }
 
   return {
-    actions,
+    actions: boundedEscalations.actions,
     tracking: compacted.tracking,
     dispatchJournal: compactedJournal,
     deliveryCount: deliveries.length,

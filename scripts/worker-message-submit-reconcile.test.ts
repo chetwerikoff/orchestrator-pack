@@ -41,6 +41,9 @@ import {
   evaluateStateRootReSeat,
   STATE_ROOT_RECOVERY_REASON,
   DEFAULT_DELIVERY_BACKSTOP_MS,
+  DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP,
+  SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+  SUBMIT_ESCALATION_CLASS_ID,
 } from '../docs/worker-message-submit-reconcile.mjs';
 import type {
   SubmitTrackingState,
@@ -75,10 +78,46 @@ type FixturePayload = {
   config?: Record<string, unknown>;
   reactionMessages?: Record<string, string>;
   floodActiveSessions?: Record<string, boolean>;
+  generatedBacklog?: {
+    count: number;
+    sessionPrefix?: string;
+    startMs?: number;
+  };
 };
 
 function loadFixture(name: string): FixturePayload {
-  return JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
+  const fixture = JSON.parse(readFileSync(path.join(fixturesDir, name), 'utf8')) as FixturePayload;
+  if (!fixture.generatedBacklog) {
+    return fixture;
+  }
+  const startMs = fixture.generatedBacklog.startMs ?? fixture.nowMs - 1000000;
+  const sessionPrefix = fixture.generatedBacklog.sessionPrefix ?? 'fixture-bulk';
+  const sessions = [...(fixture.sessions ?? [])];
+  const dispatchJournal = { ...(fixture.dispatchJournal ?? {}) };
+  for (let i = 0; i < fixture.generatedBacklog.count; i += 1) {
+    const sessionId = `${sessionPrefix}-${i}`;
+    const deliveryId = `${sessionId}:${startMs + i}:ao-send:send-failed`;
+    sessions.push({
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      runtime: 'alive',
+      activity: 'idle',
+      activityChangedAtMs: startMs + i,
+      reports: [],
+    });
+    dispatchJournal[deliveryId] = {
+      deliveryId,
+      sessionId,
+      deliveredAtMs: startMs + i,
+      source: DISPATCH_SOURCE_AO_SEND,
+      deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+      dispatchOutcome: 'send_failed',
+      draftState: 'draft_present',
+      messageShape: { charLength: 240, lineCount: 3 },
+    };
+  }
+  return { ...fixture, sessions, dispatchJournal };
 }
 
 function planFixture(name: string) {
@@ -98,6 +137,89 @@ function planFixture(name: string) {
 
 function submitActions(actions: WorkerMessageSubmitAction[]) {
   return actions.filter((a) => a.type === 'submit');
+}
+
+function escalationActions(actions: WorkerMessageSubmitAction[]) {
+  return actions.filter((a) => a.type === 'escalate');
+}
+
+function digestActions(actions: WorkerMessageSubmitAction[]) {
+  return actions.filter((a) => a.type === 'escalate-digest');
+}
+
+function buildEscalationBacklog(count: number, options: {
+  sessionPrefix?: string;
+  nowMs?: number;
+  startMs?: number;
+  tracking?: SubmitTrackingState;
+  extraClassCount?: number;
+} = {}) {
+  const nowMs = options.nowMs ?? 1717602000000;
+  const startMs = options.startMs ?? 1717601000000;
+  const dispatchJournal: Record<string, Record<string, unknown>> = {};
+  const sessions: Record<string, unknown>[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const sessionId = `${options.sessionPrefix ?? 'bulk'}-${i}`;
+    const deliveryId = `${sessionId}:${startMs + i}:ao-send:send-failed`;
+    sessions.push({
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      runtime: 'alive',
+      activity: 'idle',
+      activityChangedAtMs: startMs + i,
+      reports: [],
+    });
+    dispatchJournal[deliveryId] = {
+      deliveryId,
+      sessionId,
+      deliveredAtMs: startMs + i,
+      source: DISPATCH_SOURCE_AO_SEND,
+      deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+      dispatchOutcome: 'send_failed',
+      draftState: 'draft_present',
+      messageShape: { charLength: 240, lineCount: 3 },
+    };
+  }
+  for (let i = 0; i < (options.extraClassCount ?? 0); i += 1) {
+    const sessionId = `under-cap-${i}`;
+    const deliveryId = `${sessionId}:${startMs + 1000 + i}:ao-send:draft-absent`;
+    sessions.push({
+      sessionId,
+      role: 'worker',
+      status: 'working',
+      runtime: 'alive',
+      activity: 'idle',
+      activityChangedAtMs: startMs + 1000 + i,
+      reports: [],
+    });
+    dispatchJournal[deliveryId] = {
+      deliveryId,
+      sessionId,
+      deliveredAtMs: startMs + 1000 + i,
+      source: DISPATCH_SOURCE_AO_SEND,
+      deliveryPath: DELIVERY_PATH_PENDING_DRAFT,
+      dispatchOutcome: 'dispatched',
+      draftState: 'absent',
+      messageShape: { charLength: 240, lineCount: 3 },
+    };
+  }
+  return planWorkerMessageSubmitActions({
+    sessions,
+    dispatchJournal,
+    tracking: options.tracking ?? { deliveries: {}, failedDeliveries: {}, audit: [] },
+    nowMs,
+    config: { deliveryBudgetMs: 1000, postDispatchLeaseMs: 1000 },
+  });
+}
+
+function digestOnlyTracking(tracking: SubmitTrackingState): SubmitTrackingState {
+  return {
+    deliveries: {},
+    failedDeliveries: {},
+    audit: [],
+    bulkEscalationDigests: { ...(tracking.bulkEscalationDigests ?? {}) },
+  };
 }
 
 function writeFakeAoCli(dir: string): string {
@@ -4027,6 +4149,122 @@ describe('issue #602 adoption and consumption proof (S1-S7)', () => {
     });
     expect(masked.actions.some((a: WorkerMessageSubmitAction) => a.type === 'mark_consumed')).toBe(false);
     expect(submitActions(masked.actions)).toHaveLength(0);
+  });
+});
+
+describe('issue #890 bulk escalation cap and digest coalescing', () => {
+  it('row 1: leaves at-cap backlog as individual escalations only', () => {
+    const result = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+
+    expect(escalationActions(result.actions)).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+    expect(digestActions(result.actions)).toHaveLength(0);
+    expect(escalationActions(result.actions).map((a) => a.type)).toEqual(
+      Array(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP).fill('escalate'),
+    );
+  });
+
+  it('row 2 and mutual exclusivity: coalesces over-cap excess into one digest', () => {
+    const result = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 3);
+    const individual = escalationActions(result.actions);
+    const digests = digestActions(result.actions);
+
+    expect(individual).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+    expect(digests).toHaveLength(1);
+    expect(digests[0]).toMatchObject({
+      escalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+      sourceEscalationClassId: SUBMIT_ESCALATION_CLASS_ID,
+      failureKind: 'bulk_digest',
+      count: 3,
+    });
+    expect(digests[0].sample).toHaveLength(3);
+    const individuallyEscalated = new Set(individual.map((a) => a.deliveryId));
+    for (const sample of digests[0].sample) {
+      expect(individuallyEscalated.has(String(sample.deliveryId))).toBe(false);
+    }
+  });
+
+  it('row 3: unchanged open digest suppresses repeated digest action in the planner', () => {
+    const first = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2);
+    const digest = digestActions(first.actions)[0];
+
+    const second = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2, {
+      tracking: digestOnlyTracking(first.tracking),
+    });
+
+    expect(digest).toBeTruthy();
+    expect(second.tracking.bulkEscalationDigests?.[digest.digestKey]?.count).toBe(2);
+    expect(digestActions(second.actions)).toHaveLength(0);
+    expect(escalationActions(second.actions)).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+  });
+
+  it('row 4: growth updates the same open digest key rather than minting another digest key', () => {
+    const first = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2);
+    const firstDigest = digestActions(first.actions)[0];
+    const grown = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 4, {
+      tracking: digestOnlyTracking(first.tracking),
+    });
+    const grownDigest = digestActions(grown.actions)[0];
+
+    expect(grownDigest.digestKey).toBe(firstDigest.digestKey);
+    expect(grownDigest.correlationKey).toBe(firstDigest.correlationKey);
+    expect(grownDigest.count).toBe(4);
+    expect(grown.tracking.bulkEscalationDigests?.[firstDigest.digestKey]?.count).toBe(4);
+    expect(Object.keys(grown.tracking.bulkEscalationDigests ?? {})).toHaveLength(1);
+  });
+
+  it('row 5: terminal digest permits fresh excess to re-alert', () => {
+    const first = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2);
+    const digest = digestActions(first.actions)[0];
+    const terminalTracking = {
+      ...digestOnlyTracking(first.tracking),
+      bulkEscalationDigests: {
+        ...(first.tracking.bulkEscalationDigests ?? {}),
+        [digest.digestKey]: {
+          ...(first.tracking.bulkEscalationDigests?.[digest.digestKey] ?? {}),
+          terminalState: 'acked',
+        },
+      },
+    };
+
+    const next = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2, {
+      tracking: terminalTracking,
+    });
+
+    expect(digestActions(next.actions)).toHaveLength(1);
+    expect(digestActions(next.actions)[0].digestKey).toBe(digest.digestKey);
+  });
+
+  it('row 6: evaluates multiple source classes independently', () => {
+    const result = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2, {
+      extraClassCount: 2,
+    });
+    const individual = escalationActions(result.actions);
+    const sendFailed = individual.filter((a) => a.failureKind === 'send_failed');
+    const draftAbsent = individual.filter((a) => a.failureKind === 'draft_absent_or_changed');
+
+    expect(sendFailed).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+    expect(draftAbsent).toHaveLength(2);
+    expect(digestActions(result.actions)).toHaveLength(1);
+  });
+
+  it('terminalizes both individual and digest-coalesced deliveries in submit tracking', () => {
+    const result = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2);
+    const terminalStates = Object.values(result.tracking.deliveries ?? {}).map((record) => record.terminalState);
+
+    expect(terminalStates).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2);
+    expect(terminalStates.every((state) => state === 'escalated')).toBe(true);
+    expect(digestActions(result.actions)).toHaveLength(1);
+  });
+
+  it('positive outcome: 234-delivery incident-shaped fixture stays materially below 21 records', () => {
+    const result = planFixture('bulk-escalation-234.json');
+    const escalationCount = escalationActions(result.actions).length + digestActions(result.actions).length;
+
+    expect(result.deliveryCount).toBe(234);
+    expect(escalationActions(result.actions)).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+    expect(digestActions(result.actions)).toHaveLength(1);
+    expect(escalationCount).toBeLessThan(21);
+    expect(digestActions(result.actions)[0].count).toBe(234 - DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
   });
 });
 
