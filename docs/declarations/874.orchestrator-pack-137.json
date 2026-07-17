@@ -7,12 +7,13 @@
   "baseline": {
     "commit_sha": "667d79d8de35a5dcc4d70874c4326c4b06f35768",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:14261dd24d5c4b21298e172aec7d3cb223b10c7a42213f5fa0a7e6892fcd5388"
+    "active_scope_hash": "sha256:d051939ca9972236569f70be17d9240440167ab5c88d3572dd544932dff5f5e2"
   },
   "declared_paths": [
     ".github/workflows/scope-guard.yml",
     "docs/ci-pipeline-split.md",
     "docs/vitest-light-lane-isolation-audit-874.md",
+    "scripts/audit-vitest-light-lane-isolation.mjs",
     "scripts/check-ci-pipeline-split-core.ps1",
     "scripts/check-ci-pipeline-split.test.ts",
     "scripts/emit-vitest-heavy-topology.mjs",
@@ -28,5 +29,20 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:14261dd24d5c4b21298e172aec7d3cb223b10c7a42213f5fa0a7e6892fcd5388",
+      "new_active_scope_hash": "sha256:d051939ca9972236569f70be17d9240440167ab5c88d3572dd544932dff5f5e2",
+      "changed": {
+        "added": [
+          "scripts/audit-vitest-light-lane-isolation.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Address PR #887 review finding: add reproducible light-lane isolation scanner",
+      "actor": "orchestrator-pack-137",
+      "timestamp": "2026-07-17T00:52:41.735Z",
+      "applied": true
+    }
+  ]
 }
