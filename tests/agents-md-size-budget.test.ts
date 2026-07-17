@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import './escalation-store-terminal-merge-pure.test.ts';
-import './escalation-store-terminal-merge-writers-aux.test.ts';
+import './escalation-store-terminal-merge-writers-operator.test.ts';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const agentsMdPath = path.join(repoRoot, 'AGENTS.md');
