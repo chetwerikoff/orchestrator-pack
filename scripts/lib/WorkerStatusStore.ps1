@@ -573,13 +573,6 @@ function Write-WorkerStatusRow {
         $osLiveness = Get-WorkerOsLiveness -SessionId $sessionId
     }
 
-    $openPrPayload = @()
-    if ($githubSnapshot -and $githubSnapshot.openPrs) {
-        foreach ($pr in @($githubSnapshot.openPrs)) {
-            $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
-        }
-    }
-
     $binding = Resolve-WorkerStatusSessionBinding -Session $session -GithubSnapshot $githubSnapshot `
         -PrNumber $prNumber -HeadSha $headSha -RepoSlug $repoSlug -OsLiveness $osLiveness
     if ($binding.ok) {
@@ -617,13 +610,9 @@ function Write-WorkerStatusRow {
     $githubBlock = ConvertTo-MechanicalJsonStateHashtable -Value $githubBlock
     $githubBlock['repoTickGeneration'] = $repoTickGen
 
-    $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $session
-
     $recomputePayload = @{
         sessionId        = $sessionId
         repoSlug         = $repoSlug
-        session          = $sessionPayload
-        openPrs          = $openPrPayload
         binding          = $binding
         github           = $githubBlock
         report           = $report

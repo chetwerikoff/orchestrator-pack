@@ -198,6 +198,34 @@ describe('issue #854 live recompute binding cache (AC4 shape)', () => {
     }
   });
 
+  it('recompute does not re-resolve binding without session context (production shape)', () => {
+    const row = recomputeWorkerStatusRow({
+      sessionId: SESSION_ID,
+      binding: {
+        ok: true,
+        prNumber: PR_TARGET,
+        headSha: 'head887',
+        bindingCacheGeneration: 48,
+        repoSlug: REPO,
+        bindingSource: 'binding_contract:cache',
+      },
+      github: { prOpen: true, headSha: 'head887', reviewRuns: [], ciChecks: [], requiredCheckNames: [] },
+      repoSlug: REPO,
+      nowMs: NOW_MS,
+    });
+    expect(row.winningSource).toBe('github_pr');
+    expect(row.derivedStatus).toBe('pr_open');
+
+    const degraded = recomputeWorkerStatusRow({
+      sessionId: SESSION_ID,
+      binding: { ok: false, reason: 'no_issue_binding', prNumber: 0, headSha: '' },
+      github: { prOpen: true, headSha: 'head887', reviewRuns: [] },
+      nowMs: NOW_MS,
+    });
+    expect(degraded.winningSource).toBe('degraded');
+    expect(degraded.degradedReason).toBe('no_issue_binding');
+  });
+
   it('isolates defect-B binding flip with live os-liveness (empty cache vs cache hit)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opk-854-defect-b-'));
     try {

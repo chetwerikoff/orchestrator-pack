@@ -517,8 +517,10 @@ export function isRowStale(row, nowMs = Date.now(), repoTickGeneration = 0) {
 }
 
 export function recomputeWorkerStatusRow(input = {}) {
-  const resolvedBinding = resolveWorkerStatusSessionBinding(input);
-  const binding = resolvedBinding.ok === true ? resolvedBinding : (input.binding ?? resolvedBinding);
+  // Binding is resolved upstream via resolveSessionBinding (Write-WorkerStatusRow ->
+  // Resolve-WorkerStatusSessionBinding). Recompute only fuses the pre-resolved
+  // binding; it must not re-resolve from cwd/env.
+  const binding = input.binding ?? { ok: false, reason: 'binding_miss', prNumber: 0, headSha: '' };
   const effectiveInput = { ...input, binding };
   const nowMs = Number(effectiveInput.nowMs ?? Date.now());
   const store = effectiveInput.store ? createDefaultWorkerStatusStore(effectiveInput.store) : null;

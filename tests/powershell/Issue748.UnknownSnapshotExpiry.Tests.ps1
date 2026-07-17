@@ -57,7 +57,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
         $exitCode | Should -Be 0 -Because ($output -join "`n")
     }
 
-    It 'writes a usable row through the real Write-WorkerStatusRow seed path' {
+    It 'Major-3: threads WriteInput.repoSlug through Write-WorkerStatusRow (non-checkout cwd, no env slug)' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("opk-854-bridge-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $stateDir = Join-Path $dir 'state-dir'
