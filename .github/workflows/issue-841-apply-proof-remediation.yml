@@ -1,8 +1,7 @@
 name: issue-841-apply-proof-remediation
 on:
-  push:
-    paths:
-      - '.github/workflows/issue-841-apply-proof-remediation.yml'
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
