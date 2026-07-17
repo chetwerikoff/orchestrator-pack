@@ -225,7 +225,7 @@ pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1 -FixturePath scripts
 Flagged kinds: `bulk_send_trap`, `stuck_open`, `multi_open_awaiting_dispatch`. Use when
 `needs_triage` / `waiting_update` runs keep `openFindingCount > 0` but per-finding routing
 is expected — bulk send ships all open findings; partial send can leave remainder stuck
-without CLI dismiss/backlog (**A′** blocked. **Do not** hand-edit `code-reviews/findings/`
+without CLI dismiss/backlog (**A′** blocked). **Do not** hand-edit `code-reviews/findings/`
 (#122 class). Until upstream **A + A′** land (pipeline #1631/#1346 preferred, legacy #2088),
 treat flagged runs as upstream-blocked, not worker defects. Delivery trust still requires
 #1943 / #614 before prod `forward` acceptance (shared invariant #1).
