@@ -28,20 +28,33 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:ffc72abee528ac3c7ec81ed00d45a17740a62e188339f0dc9d80010bff648783",
-      "new_active_scope_hash": "sha256:71e49797b30925e2ed6a6063eb4e0b34f37d395922fe99bf59d520306643d822",
+      "new_active_scope_hash": "sha256:346fbc242575825e7d34b0dbc291ce5ad9909cc8ff2aea385f96ddc09a0b4203",
       "changed": {
         "added": [
           "docs/pr-session-binding-cache.d.mts",
           "docs/session-pr-binding-resolver.d.mts",
           "scripts/lib/WorkerStatusStore.ps1",
-          "scripts/lib/worker-status-store.mjs",
-          "scripts/session-pr-binding-resolver.test.ts"
+          "scripts/lib/worker-status-store.mjs"
         ],
         "removed": []
       },
       "reason": "Clause D fence extension adds the declaration and worker-status consumer paths required to complete issue #857 without expanding the migration scope.",
       "actor": "chatgpt-pr-896",
       "timestamp": "2026-07-17T16:57:32.000Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:346fbc242575825e7d34b0dbc291ce5ad9909cc8ff2aea385f96ddc09a0b4203",
+      "new_active_scope_hash": "sha256:71e49797b30925e2ed6a6063eb4e0b34f37d395922fe99bf59d520306643d822",
+      "changed": {
+        "added": [
+          "scripts/session-pr-binding-resolver.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Clause D regression mapping updates the existing resolver suite without shrinking named coverage.",
+      "actor": "chatgpt-pr-896",
+      "timestamp": "2026-07-17T17:20:00.000Z",
       "applied": true
     }
   ]
