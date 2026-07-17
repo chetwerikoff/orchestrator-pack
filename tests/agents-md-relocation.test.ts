@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import './escalation-store-terminal-merge.test.ts';
-import './escalation-store-terminal-merge-edge.test.ts';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturePath = path.join(repoRoot, 'tests/fixtures/agent-rules-relocation-musts.json');
