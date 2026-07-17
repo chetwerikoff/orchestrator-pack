@@ -122,12 +122,6 @@ function Get-WorkerStatusTrackedPrNumbers {
 
     $tracked = @()
     foreach ($session in @($Sessions)) {
-        if ($null -ne $session.prNumber) {
-            $pr = 0
-            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
-                $tracked += $pr
-            }
-        }
         foreach ($report in @($session.reports)) {
             if ($null -eq $report) { continue }
             $reportPr = 0
@@ -139,17 +133,12 @@ function Get-WorkerStatusTrackedPrNumbers {
     return @($tracked | Sort-Object -Unique)
 }
 
-
 function Test-WorkerStatusSessionsNeedPackBindingResolution {
     param([object[]]$Sessions = @())
 
     foreach ($session in @($Sessions)) {
-        if ($null -ne $session.prNumber) {
-            $pr = 0
-            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
-                continue
-            }
-        }
+        $role = [string]$session.role
+        if ($role -and $role -notin @('worker', 'coding')) { continue }
         $hasReportPr = $false
         foreach ($report in @($session.reports)) {
             if ($null -eq $report) { continue }
@@ -159,12 +148,7 @@ function Test-WorkerStatusSessionsNeedPackBindingResolution {
                 break
             }
         }
-        if ($hasReportPr) { continue }
-        if ($null -ne $session.issueId -or $null -ne $session.issueNumber) {
-            return $true
-        }
-        $displayName = [string]$session.displayName
-        if ($displayName -and $displayName -match '^\d+$') {
+        if (-not $hasReportPr) {
             return $true
         }
     }
@@ -181,9 +165,6 @@ function Resolve-WorkerStatusSessionBinding {
         [object]$OsLiveness = $null
     )
 
-    if ($PrNumber -gt 0) {
-        return @{ ok = $true; prNumber = $PrNumber; headSha = $HeadSha }
-    }
     $openPrPayload = @()
     if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
         foreach ($pr in @($GithubSnapshot.openPrs)) {
@@ -192,10 +173,12 @@ function Resolve-WorkerStatusSessionBinding {
     }
     $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $Session
     $payload = @{
-        session  = $sessionPayload
-        openPrs  = $openPrPayload
-        headSha  = $HeadSha
-        prNumber = $PrNumber
+        session               = $sessionPayload
+        sessions              = @($sessionPayload)
+        openPrs               = $openPrPayload
+        headSha               = $HeadSha
+        prNumber              = $PrNumber
+        openListAuthoritative = [bool]($GithubSnapshot -and -not $GithubSnapshot.degraded)
     }
     if ($RepoSlug) { $payload.repoSlug = [string]$RepoSlug }
     if ($null -ne $OsLiveness) { $payload.osLiveness = (ConvertTo-MechanicalJsonStateHashtable -Value $OsLiveness) }
@@ -259,17 +242,12 @@ function Resolve-WorkerStatusSessionGithubBlock {
         return $null
     }
     if (-not $PrNumber) {
-        if ($null -ne $Session.prNumber) {
-            $PrNumber = [int]$Session.prNumber
-        }
-        else {
-            foreach ($report in @($Session.reports)) {
-                if ($null -eq $report) { continue }
-                $reportPr = 0
-                if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
-                    $PrNumber = $reportPr
-                    break
-                }
+        foreach ($report in @($Session.reports)) {
+            if ($null -eq $report) { continue }
+            $reportPr = 0
+            if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
+                $PrNumber = $reportPr
+                break
             }
         }
     }
@@ -291,7 +269,7 @@ function Resolve-WorkerStatusSessionGithubBlock {
         ciChecks                  = if ($prKey) { @($Snapshot.ciChecksByPr[$prKey]) } else { @() }
         requiredCheckNames        = if ($prKey) { @($Snapshot.requiredCheckNamesByPr[$prKey]) } else { @() }
         requiredCheckLookupFailed = if ($snapshotDegraded) { $true } elseif ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
-        unavailable                  = $snapshotDegraded
+        unavailable               = $snapshotDegraded
         degraded                  = $snapshotDegraded
     }
 }
@@ -402,20 +380,14 @@ function Test-WorkerStatusSiblingReadiness {
     return $result
 }
 
-
 function Get-WorkerStatusPrSessionBindingCachePath {
-    if ($env:AO_PR_SESSION_BINDING_CACHE) {
-        return [string]$env:AO_PR_SESSION_BINDING_CACHE
-    }
-    if ($env:AO_REPORT_STATE_SEED_STATE) {
-        $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
-        $parent = Split-Path -Parent $seedPath
-        if (-not $parent) {
-            return 'pr-session-binding-cache.json'
+    $result = Invoke-WorkerStatusStoreCli -Subcommand 'resolveBindingCachePath' -Payload @{
+        env = @{
+            AO_PR_SESSION_BINDING_CACHE = $env:AO_PR_SESSION_BINDING_CACHE
+            AO_REPORT_STATE_SEED_STATE  = $env:AO_REPORT_STATE_SEED_STATE
         }
-        return (Join-Path $parent 'pr-session-binding-cache.json')
     }
-    return (Join-Path $HOME '.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json')
+    return [string]$result.path
 }
 
 function Get-WorkerStatusWriterGenerationVector {
@@ -536,10 +508,7 @@ function Write-WorkerStatusRow {
     }
 
     $prNumber = 0
-    if ($null -ne $session.prNumber) {
-        $prNumber = [int]$session.prNumber
-    }
-    elseif ($report -and $null -ne $report.prNumber) {
+    if ($report -and $null -ne $report.prNumber) {
         $prNumber = [int]$report.prNumber
     }
     else {
@@ -592,10 +561,11 @@ function Write-WorkerStatusRow {
         $bindingReason = 'binding_miss'
         if ($binding.reason) { $bindingReason = [string]$binding.reason }
         $binding = @{
-            ok       = $false
-            reason   = $bindingReason
-            prNumber = $prNumber
-            headSha  = $headSha
+            ok        = $false
+            reason    = $bindingReason
+            sessionId = $sessionId
+            prNumber  = $prNumber
+            headSha   = $headSha
         }
     }
 
