@@ -1,21 +1,15 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.js';
+import type {
+  PackReviewWorkerNotificationRequest,
+  PackReviewWorkerNotificationResult,
+} from './pack-review-delivery.ts';
 import {
   trimPackReviewValue as trim,
   type PackReviewDeliveryOutcome,
   type PackReviewRunRecord,
 } from './pack-review-run-store.js';
-
-export interface PackReviewWorkerNotificationRequest {
-  message: string;
-  idempotencyKey: string;
-}
-
-export interface PackReviewWorkerNotificationResult {
-  state: 'delivered' | 'failed' | 'escalated';
-  reason: string;
-}
 
 interface WorkerNotificationOptions {
   trustedPackRoot: string;
