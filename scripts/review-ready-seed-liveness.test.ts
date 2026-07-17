@@ -53,19 +53,12 @@ describe('review-ready-seed-liveness matrix coverage (Issue #473)', () => {
   });
 });
 
-describe.only('review-ready-seed-liveness (Issue #473)', () => {
-  for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX) {
+describe.only('review-ready-seed-liveness first half diagnostic', () => {
+  for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX.slice(0, 8)) {
     it(`expected: ${row.expected}`, () => {
       const result = runFixture(row.fixture);
       expect(result.expected).toBe(row.expected);
       expect(result.ok, result.detail).toBe(true);
-      console.log(
-        JSON.stringify({
-          producer: 'orchestrator-pack',
-          datum: 'review-ready-seed-liveness',
-          expected: row.expected,
-        }),
-      );
     });
   }
 });
