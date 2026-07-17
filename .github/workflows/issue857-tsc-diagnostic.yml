@@ -1,0 +1,34 @@
+name: Issue 857 typecheck diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-857-binding-contract-v2
+    paths:
+      - .github/workflows/issue857-tsc-diagnostic.yml
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture TypeScript diagnostics
+        shell: bash
+        run: npx tsc --project tsconfig.base.json --noEmit > issue857-tsc.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue857-tsc-diagnostics
+          path: issue857-tsc.log
+          if-no-files-found: error
