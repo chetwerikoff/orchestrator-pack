@@ -60,11 +60,15 @@ Describe 'Issue #854 worker-status binding cache wiring' {
     It 'writes a usable row through the real Write-WorkerStatusRow bridge' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("opk-854-bridge-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        $cachePath = Join-Path $dir 'pr-session-binding-cache.json'
+        $stateDir = Join-Path $dir 'state-dir'
+        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+        $cachePath = Join-Path $dir 'authoritative-pr-session-binding-cache.json'
+        $staleStateCachePath = Join-Path $stateDir 'pr-session-binding-cache.json'
         $storePath = Join-Path $dir 'worker-status-store.json'
         $repo = 'chetwerikoff/orchestrator-pack'
         $sessionId = 'orchestrator-pack-137'
         $prNumber = 887
+        $unrelatedPr = 869
         $headSha = 'head887'
         $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $record = [ordered]@{
@@ -92,23 +96,47 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             (($cache | ConvertTo-Json -Compress -Depth 10) + "`n"),
             [System.Text.UTF8Encoding]::new($false)
         )
+        $staleRecord = [ordered]@{
+            schemaVersion = 1
+            sessionId = 'orchestrator-pack-999'
+            prNumber = 999
+            issueNumber = 999
+            headSha = 'stalehead'
+            repoSlug = $repo
+            source = 'push_register'
+            lastUpdatedMs = $nowMs - 1000
+            superseded = $false
+        }
+        $staleRecords = [ordered]@{}
+        $staleRecords["$repo|session:orchestrator-pack-999"] = $staleRecord
+        $staleRecords["$repo|pr:999"] = $staleRecord
+        [System.IO.File]::WriteAllText(
+            $staleStateCachePath,
+            (([ordered]@{
+                schemaVersion = 1
+                lastUpdatedMs = $staleRecord.lastUpdatedMs
+                generation = 1
+                records = $staleRecords
+            } | ConvertTo-Json -Compress -Depth 10) + "`n"),
+            [System.Text.UTF8Encoding]::new($false)
+        )
 
         $oldBindingCache = $env:AO_PR_SESSION_BINDING_CACHE
         $oldStateDir = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
         $oldSideEffectDir = $env:AO_SIDE_PROCESS_STATE_DIR
         $oldGithubRepository = $env:GITHUB_REPOSITORY
         $oldAoRepoSlug = $env:AO_REPO_SLUG
-        $pushedLocation = $false
+        $oldLocation = Get-Location
         try {
             $env:AO_PR_SESSION_BINDING_CACHE = $cachePath
-            $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $dir
+            $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $stateDir
             $env:AO_SIDE_PROCESS_STATE_DIR = $dir
             Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue
             Remove-Item Env:AO_REPO_SLUG -ErrorAction SilentlyContinue
-            Push-Location $RepoRoot
-            $pushedLocation = $true
+            Set-Location $env:TEMP
 
             $result = Write-WorkerStatusRow -RecomputeInput @{
+                repoSlug = $repo
                 session = [pscustomobject]@{
                     id = $sessionId
                     sessionId = $sessionId
@@ -119,19 +147,27 @@ Describe 'Issue #854 worker-status binding cache wiring' {
                 }
                 reports = @()
                 githubSnapshot = @{
-                    openPrs = @([pscustomobject]@{
-                        number = $prNumber
-                        state = 'OPEN'
-                        headRefOid = $headSha
-                        headRefName = "ao/$sessionId/worker-status-cache"
-                    })
+                    openPrs = @(
+                        [pscustomobject]@{
+                            number = $unrelatedPr
+                            state = 'OPEN'
+                            headRefOid = 'head869'
+                            headRefName = 'agent/issue-862-review-delivery-outcome'
+                        },
+                        [pscustomobject]@{
+                            number = $prNumber
+                            state = 'OPEN'
+                            headRefOid = $headSha
+                            headRefName = "ao/$sessionId/worker-status-cache"
+                        }
+                    )
                     reviewRuns = @()
                     ciChecksByPr = @{ "$prNumber" = @() }
                     requiredCheckNamesByPr = @{ "$prNumber" = @() }
                     requiredCheckLookupFailedByPr = @{ "$prNumber" = $false }
                     degraded = $false
                 }
-                osLiveness = @{ status = 'working' }
+                osLiveness = @{ status = 'working'; dead = $false }
                 writerGenerationVector = @{
                     writerSessionId = 'issue-854-pester'
                     repoTickGeneration = 10
@@ -146,7 +182,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             $result.row.repoSlug | Should -Be $repo
             $result.row.derivedStatus | Should -Be 'pr_open'
             $result.row.winningSource | Should -Be 'github_pr'
-            [long]$result.row.generationVector.githubGeneration | Should -Be 45
+            [long]$result.row.generationVector.bindingCacheGeneration | Should -Be 45
             [long]$result.row.sourceGeneration.bindingCacheGeneration | Should -Be 45
 
             $stored = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -154,7 +190,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             $stored.records.$sessionId.winningSource | Should -Be 'github_pr'
         }
         finally {
-            if ($pushedLocation) { Pop-Location }
+            Set-Location $oldLocation
             if ($null -eq $oldBindingCache) { Remove-Item Env:AO_PR_SESSION_BINDING_CACHE -ErrorAction SilentlyContinue }
             else { $env:AO_PR_SESSION_BINDING_CACHE = $oldBindingCache }
             if ($null -eq $oldStateDir) { Remove-Item Env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR -ErrorAction SilentlyContinue }

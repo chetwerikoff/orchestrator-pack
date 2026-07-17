@@ -176,7 +176,9 @@ function Resolve-WorkerStatusSessionBinding {
         [object]$Session,
         [object]$GithubSnapshot,
         [int]$PrNumber = 0,
-        [string]$HeadSha = ''
+        [string]$HeadSha = '',
+        [string]$RepoSlug = '',
+        [object]$OsLiveness = $null
     )
 
     if ($PrNumber -gt 0) {
@@ -189,12 +191,15 @@ function Resolve-WorkerStatusSessionBinding {
         }
     }
     $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $Session
-    return Invoke-WorkerStatusStoreCli -Subcommand 'resolveSessionBinding' -Payload @{
+    $payload = @{
         session  = $sessionPayload
         openPrs  = $openPrPayload
         headSha  = $HeadSha
         prNumber = $PrNumber
     }
+    if ($RepoSlug) { $payload.repoSlug = [string]$RepoSlug }
+    if ($null -ne $OsLiveness) { $payload.osLiveness = $OsLiveness }
+    return Invoke-WorkerStatusStoreCli -Subcommand 'resolveSessionBinding' -Payload $payload
 }
 
 function Get-WorkerStatusRecomputeGithubSnapshot {
@@ -560,11 +565,21 @@ function Write-WorkerStatusRow {
 
     $githubSnapshot = $payload.githubSnapshot
 
+    $osLiveness = $payload.osLiveness
+    if (-not $osLiveness) {
+        $osLiveness = Get-WorkerOsLiveness -SessionId $sessionId
+    }
+
+    $repoSlug = ''
+    if ($payload.repoSlug) { $repoSlug = [string]$payload.repoSlug }
+
     $binding = Resolve-WorkerStatusSessionBinding -Session $session -GithubSnapshot $githubSnapshot `
-        -PrNumber $prNumber -HeadSha $headSha
+        -PrNumber $prNumber -HeadSha $headSha -RepoSlug $repoSlug -OsLiveness $osLiveness
     if ($binding.ok) {
         $prNumber = [int]$binding.prNumber
         if ($binding.headSha) { $headSha = [string]$binding.headSha }
+        if ($binding.bindingCacheGeneration) { $bindingGen = [long]$binding.bindingCacheGeneration }
+        if ($binding.repoSlug) { $repoSlug = [string]$binding.repoSlug }
     }
     else {
         $bindingReason = 'binding_miss'
@@ -594,13 +609,9 @@ function Write-WorkerStatusRow {
     }
     $githubBlock['repoTickGeneration'] = $repoTickGen
 
-    $osLiveness = $payload.osLiveness
-    if (-not $osLiveness) {
-        $osLiveness = Get-WorkerOsLiveness -SessionId $sessionId
-    }
-
     $recomputePayload = @{
         sessionId        = $sessionId
+        repoSlug         = $repoSlug
         binding          = $binding
         github           = $githubBlock
         report           = $report

@@ -10,6 +10,7 @@ const REPO = 'chetwerikoff/orchestrator-pack';
 const OTHER_REPO = 'owner/other';
 const SESSION_ID = 'orchestrator-pack-137';
 const PR_NUMBER = 887;
+const PR_UNRELATED = 869;
 const HEAD = 'head887';
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -46,7 +47,15 @@ function writeCache(path, records = [bindingRecord()]) {
   })}\n`, 'utf8');
 }
 
-function input(cachePath) {
+function input(cachePath, openPrOrder = [PR_NUMBER]) {
+  const openPrs = openPrOrder.map((number) => ({
+    number,
+    state: 'OPEN',
+    headRefOid: number === PR_NUMBER ? HEAD : `head${number}`,
+    headRefName: number === PR_NUMBER
+      ? `ao/${SESSION_ID}/worker-status-cache`
+      : `agent/issue-${number}`,
+  }));
   return {
     session: {
       id: SESSION_ID,
@@ -56,16 +65,12 @@ function input(cachePath) {
       issueId: 874,
       displayName: '874',
     },
-    openPrs: [{
-      number: PR_NUMBER,
-      state: 'OPEN',
-      headRefOid: HEAD,
-      headRefName: `ao/${SESSION_ID}/worker-status-cache`,
-    }],
+    openPrs,
     env: {},
     cwd: REPO_ROOT,
     bindingCachePath: cachePath,
     nowMs: NOW_MS,
+    osLiveness: { status: 'working', dead: false },
   };
 }
 
@@ -78,10 +83,10 @@ function assertCacheHit(binding, expectedGeneration = 45) {
   assert.equal(binding.bindingCacheGeneration, expectedGeneration);
 }
 
-function assertSharedUnbound(binding) {
+function assertProducerMiss(binding) {
   assert.equal(binding.ok, false);
-  assert.equal(binding.reason, 'no_worker_session');
-  assert.equal(binding.bindingSource, 'binding_contract:miss');
+  assert.equal(binding.reason, 'no_issue_binding');
+  assert.equal(binding.bindingSource, 'binding_contract:none');
 }
 
 function run() {
@@ -93,10 +98,10 @@ function run() {
     assertCacheHit(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     writeCache(cachePath, [bindingRecord({ ageMs: 8 * 24 * 60 * 60 * 1_000 })]);
-    assertSharedUnbound(resolveWorkerStatusSessionBinding(input(cachePath)));
+    assertProducerMiss(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     writeCache(cachePath, [bindingRecord({ superseded: true })]);
-    assertSharedUnbound(resolveWorkerStatusSessionBinding(input(cachePath)));
+    assertProducerMiss(resolveWorkerStatusSessionBinding(input(cachePath)));
 
     writeFileSync(cachePath, '{not-json', 'utf8');
     const unreadable = resolveWorkerStatusSessionBinding(input(cachePath));
@@ -113,6 +118,10 @@ function run() {
     assert.equal(unreadableNoLegacyFallback.reason, 'binding_cache_read_failed');
     assert.equal(unreadableNoLegacyFallback.bindingSource, 'none');
     assert.equal(readFileSync(cachePath, 'utf8'), '{not-json');
+
+    writeCache(cachePath);
+    const unrelatedFirst = input(cachePath, [PR_UNRELATED, PR_NUMBER]);
+    assertCacheHit(resolveWorkerStatusSessionBinding(unrelatedFirst));
 
     writeCache(cachePath);
     const ambiguousRepo = input(cachePath);
@@ -153,10 +162,11 @@ function run() {
       cacheSource: 'push_register',
       scenarios: [
         'shared_cache_hit_without_row_repo_metadata',
-        'ttl_expired_shared_unbound',
-        'superseded_shared_unbound',
+        'ttl_expired_producer_miss',
+        'superseded_producer_miss',
         'unreadable',
         'unreadable_no_legacy_fallback',
+        'unrelated_pr_first_still_hits_target',
         'multi_repo_ambiguous',
         'stale_other_repo_evicted_without_ambiguity',
       ],

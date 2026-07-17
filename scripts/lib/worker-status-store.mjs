@@ -41,13 +41,6 @@ const REVIEW_DELIVERED_RE = new RegExp(`^(${REVIEW_DELIVERED_STATUSES.join('|')}
 const SUCCESS_CHECK_RE = /^(success|successful|passed|pass|neutral|skipped)$/i;
 const FAILURE_CHECK_RE = /^(failure|failed|fail|error|cancelled|timed_out|action_required)$/i;
 const PENDING_CHECK_RE = /^(pending|queued|in_progress|running|waiting|requested)$/i;
-const SHARED_BINDING_MISS_REASONS = new Set([
-  'binding_miss_after_backfill',
-  'no_issue_binding',
-  'no_source',
-  'stale_cache_no_live',
-]);
-
 export function resolveWorkerStatusStorePath(env = process.env) {
   if (env.AO_WORKER_STATUS_STORE) {
     return String(env.AO_WORKER_STATUS_STORE);
@@ -128,7 +121,8 @@ function asGenerationVector(value = {}) {
     repoTickGeneration: Number(value.repoTickGeneration ?? 0) || 0,
     reportStoreGeneration: Number(value.reportStoreGeneration ?? 0) || 0,
     reviewRunGeneration: Number(value.reviewRunGeneration ?? value.journalCursor ?? 0) || 0,
-    githubGeneration: Number(value.githubGeneration ?? value.bindingCacheGeneration ?? 0) || 0,
+    githubGeneration: Number(value.githubGeneration ?? 0) || 0,
+    bindingCacheGeneration: Number(value.bindingCacheGeneration ?? 0) || 0,
     writerSessionId: String(value.writerSessionId ?? '').trim(),
   };
 }
@@ -136,7 +130,7 @@ function asGenerationVector(value = {}) {
 function compareGenerationVector(a = {}, b = {}) {
   const left = asGenerationVector(a);
   const right = asGenerationVector(b);
-  for (const key of ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration']) {
+  for (const key of ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration', 'bindingCacheGeneration']) {
     if (left[key] < right[key]) return -1;
     if (left[key] > right[key]) return 1;
   }
@@ -144,7 +138,7 @@ function compareGenerationVector(a = {}, b = {}) {
 }
 
 function hasMixedOlderAndNewer(writer = {}, existing = {}) {
-  const keys = ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration'];
+  const keys = ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration', 'bindingCacheGeneration'];
   let older = false;
   let newer = false;
   for (const key of keys) {
@@ -189,15 +183,27 @@ export function shouldReloadMixedGeneration(existingRow, writerGenerationVector)
   return hasMixedOlderAndNewer(writer, existing);
 }
 
-const MERGE_GENERATION_VECTOR_KEYS = ['repoTickGeneration', 'reportStoreGeneration', 'journalCursor', 'bindingCacheGeneration'];
+const MERGE_GENERATION_VECTOR_KEYS = [
+  'repoTickGeneration',
+  'reportStoreGeneration',
+  'reviewRunGeneration',
+  'githubGeneration',
+  'bindingCacheGeneration',
+];
 
 export function mergeGenerationVectorMax(existingRow = {}, writerGenerationVector = {}) {
   const existingRaw = existingRow.generationVector ?? existingRow.sourceGeneration ?? existingRow.writerGenerationVector ?? existingRow;
   const writerRaw = writerGenerationVector ?? {};
+  const existing = asGenerationVector(existingRaw);
+  const writer = asGenerationVector(writerRaw);
   const merged = {};
   for (const key of MERGE_GENERATION_VECTOR_KEYS) {
-    merged[key] = Math.max(Number(existingRaw[key] ?? 0), Number(writerRaw[key] ?? 0));
+    merged[key] = Math.max(Number(existing[key] ?? 0), Number(writer[key] ?? 0));
   }
+  merged.journalCursor = Math.max(
+    Number(existingRaw.journalCursor ?? existing.reviewRunGeneration ?? 0),
+    Number(writerRaw.journalCursor ?? writer.reviewRunGeneration ?? 0),
+  );
   const writerSessionId = String(writerRaw.writerSessionId ?? existingRaw.writerSessionId ?? '').trim();
   if (writerSessionId) merged.writerSessionId = writerSessionId;
   return merged;
@@ -276,15 +282,6 @@ function latestReport(input = {}) {
     })[0] ?? null;
 }
 
-function resolveWorkerStatusBindingCachePath(input = {}, env = process.env) {
-  const explicit = String(input.bindingCachePath ?? '').trim();
-  if (explicit) return explicit;
-  if (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
-    return join(String(env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR), 'pr-session-binding-cache.json');
-  }
-  return resolvePrSessionBindingCachePath(env);
-}
-
 function normalizeRepoSlug(value) {
   return String(value ?? '').trim().toLowerCase();
 }
@@ -312,6 +309,27 @@ function resolveWorkerStatusBindingRepoSlug(input, session, openPrs, env) {
       String(input.cwd ?? process.cwd()),
     ),
     failureReason: '',
+  };
+}
+
+function workerStatusBindingIsLive(input = {}) {
+  const session = input.session ?? {};
+  const os = input.osLiveness ?? {};
+  return (candidate) => {
+    const row = candidate ?? session;
+    const sessionStatus = String(row?.status ?? session?.status ?? '').toLowerCase();
+    if (os && typeof os === 'object') {
+      if (os.dead === true) return false;
+      if (os.dead === false) return true;
+      const osStatus = String(os.status ?? '').toLowerCase();
+      if (osStatus === 'pane-gone' || osStatus === 'gone') return false;
+      if (osStatus === 'pane-alive' || osStatus === 'live') return true;
+    }
+    if (typeof os === 'string') {
+      if (os === 'pane-gone' || os === 'gone') return false;
+      if (os === 'pane-alive' || os === 'live') return true;
+    }
+    return !TERMINAL_SESSION_RE.test(sessionStatus) && sessionStatus !== 'merged';
   };
 }
 
@@ -350,7 +368,7 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
     return workerStatusBindingFailure(repo.failureReason, headHint);
   }
 
-  const cachePath = resolveWorkerStatusBindingCachePath(input, env);
+  const cachePath = String(input.bindingCachePath ?? '').trim() || resolvePrSessionBindingCachePath(env);
   let store;
   try {
     store = readPrSessionBindingCacheFile(cachePath);
@@ -361,6 +379,7 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
   const sessionDetailsById = input.sessionDetail
     ? { [sessionId]: input.sessionDetail }
     : {};
+  const isLive = workerStatusBindingIsLive(input);
   const matches = [];
   for (const pr of openPrs) {
     const prNumber = Number(pr?.number ?? 0);
@@ -378,18 +397,20 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
         sessionDetailsById,
         nowMs: Number(input.nowMs ?? Date.now()),
         writeBackfill: false,
-        isLive: () => true,
+        isLive,
       });
     } catch {
       return workerStatusBindingFailure('binding_cache_read_failed', headHint);
     }
-    const reason = String(resolution?.reason ?? 'binding_miss_after_backfill');
-    if (resolution?.failClosed && !SHARED_BINDING_MISS_REASONS.has(reason)) {
+    const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
+    if (resolvedSessionId !== sessionId) {
+      continue;
+    }
+    if (resolution?.failClosed) {
+      const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
       return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
     }
-    if (String(resolution?.sessionId ?? '').trim() === sessionId) {
-      matches.push({ pr, resolution });
-    }
+    matches.push({ pr, resolution });
   }
 
   if (matches.length > 1) {
@@ -501,11 +522,11 @@ export function recomputeWorkerStatusRow(input = {}) {
   const sessionId = sessionIdOf(input.session ?? input);
   const existing = store?.records?.[sessionId];
   const rawWriterVector = input.writerGenerationVector ?? input.generationVector ?? input.sourceGeneration ?? {};
-  const bindingCacheGeneration = Number(input.binding?.bindingCacheGeneration ?? 0) || 0;
+  const bindingCacheGeneration = Number(input.binding?.bindingCacheGeneration ?? rawWriterVector.bindingCacheGeneration ?? 0) || 0;
   const writerVector = asGenerationVector({
     ...rawWriterVector,
-    githubGeneration: Math.max(
-      Number(rawWriterVector.githubGeneration ?? rawWriterVector.bindingCacheGeneration ?? 0),
+    bindingCacheGeneration: Math.max(
+      Number(rawWriterVector.bindingCacheGeneration ?? 0),
       bindingCacheGeneration,
     ),
   });
