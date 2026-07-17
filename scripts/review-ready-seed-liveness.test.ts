@@ -53,7 +53,7 @@ describe('review-ready-seed-liveness matrix coverage (Issue #473)', () => {
   });
 });
 
-describe('review-ready-seed-liveness (Issue #473)', () => {
+describe.only('review-ready-seed-liveness (Issue #473)', () => {
   for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX) {
     it(`expected: ${row.expected}`, () => {
       const result = runFixture(row.fixture);
