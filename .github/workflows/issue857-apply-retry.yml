@@ -1,0 +1,83 @@
+name: Issue 857 retry regression fixes
+
+on:
+  push:
+    branches:
+      - agent/issue-857-binding-contract-v2
+    paths:
+      - .github/workflows/issue857-apply-retry.yml
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Reuse verified replacements and correct stale-row ordering
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^          python - <<.PY./ { capture=1; next }
+            capture && /^          PY$/ { capture=0; exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/issue857-regression-diagnostic.yml > /tmp/issue857-apply.py
+          test -s /tmp/issue857-apply.py
+          python /tmp/issue857-apply.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('docs/pr-session-binding-cache.mjs')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+            (
+              "  const store = loaded.store;\n  sweepStaleBindings(store, openPrs, nowMs);\n  const raw = store.records?.[buildSessionBindingKey(repoSlug, id)] ?? null;",
+              "  const store = loaded.store;\n  const raw = store.records?.[buildSessionBindingKey(repoSlug, id)] ?? null;\n  sweepStaleBindings(store, openPrs, nowMs);",
+            ),
+            (
+              "  const store = loaded.store, nowMs = n(input.nowMs) || Date.now(), openPrs = array(input.openPrs);\n  sweepStaleBindings(store, openPrs, nowMs);\n  const raw = store.records?.[buildPrBindingKey(repoSlug, targetPr)] ?? null;",
+              "  const store = loaded.store, nowMs = n(input.nowMs) || Date.now(), openPrs = array(input.openPrs);\n  const raw = store.records?.[buildPrBindingKey(repoSlug, targetPr)] ?? null;\n  sweepStaleBindings(store, openPrs, nowMs);",
+            ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one stale-order block, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Run contract matrix
+        run: node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+      - name: Run full Pester
+        shell: pwsh
+        run: ./scripts/test-all.ps1 -SkipNpm
+      - name: Run affected Vitest suites
+        shell: bash
+        env:
+          OPK_VITEST_HARNESS: '1'
+        run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/session-pr-binding-resolver.mjs docs/pr-session-binding-cache.mjs scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1
+          git commit -m "Fix Clause D binding regressions"
+          git push origin HEAD:agent/issue-857-binding-contract-v2
