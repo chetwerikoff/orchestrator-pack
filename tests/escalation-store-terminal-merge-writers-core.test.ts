@@ -18,6 +18,9 @@ type WriterCoreMatrix = {
   publisherAckSuccessState: string;
   publisherAckFailureState: string;
   publisherDeleteMissing: boolean;
+  publisherOperatorStatus: string;
+  publisherOperatorAckedAtMs: number;
+  publisherNewRecordPresent: boolean;
 };
 
 let root = '';
@@ -31,6 +34,8 @@ beforeAll(() => {
   const publisherAckSuccessPath = join(root, 'publisher-ack-success.json');
   const publisherAckFailurePath = join(root, 'publisher-ack-failure.json');
   const publisherDeletePath = join(root, 'publisher-delete.json');
+  const publisherOperatorPath = join(root, 'publisher-operator.json');
+  const publisherNewRecordPath = join(root, 'publisher-new-record.json');
 
   const result = runProcessSync({
     command: 'pwsh',
@@ -108,6 +113,16 @@ beforeAll(() => {
             return @{ ok = $true; reason = 'fixture_delete' }
           }
 
+          if ($script:PublisherDeliveryMode -eq 'operator-ack') {
+            $operatorResult = Write-OperatorEscalationAck -EscalationId ([string]$Envelope.escalation_id) -AckToken ([string]$Envelope.ack_token) -StatePath $script:PublisherDeliveryStatePath -NowMs 1100
+            if (-not $operatorResult.ok) { throw "fixture operator ACK failed: $($operatorResult.reason)" }
+            return @{ ok = $true; reason = 'fixture_operator_ack' }
+          }
+
+          if ($script:PublisherDeliveryMode -eq 'new-record') {
+            return @{ ok = $true; reason = 'fixture_new_record' }
+          }
+
           $ackResult = Write-OrchestratorEscalationAck -EscalationId ([string]$Envelope.escalation_id) -AckToken ([string]$Envelope.ack_token) -StatePath $script:PublisherDeliveryStatePath -NowMs 1100
           if (-not $ackResult.ok) { throw "fixture ACK failed: $($ackResult.reason)" }
           if ($script:PublisherDeliveryMode -eq 'ack-failure') { throw 'fixture delivery failed after ACK' }
@@ -132,6 +147,17 @@ beforeAll(() => {
         $null = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'publisher-delete' -Payload @{ failure_kind = 'fixture' } -StatePath ${ps(publisherDeletePath)} -OrchestratorSessionId 'fixture-session' -ReplayEscalationId 'alpha' -SkipWakeSuppression -NowMs 1000
         $publisherDeleteDisk = Get-MechanicalJsonStateFile -Path ${ps(publisherDeletePath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
 
+        Set-FixtureState -Path ${ps(publisherOperatorPath)} -Record (New-FixtureRecord)
+        $script:PublisherDeliveryStatePath = ${ps(publisherOperatorPath)}
+        $script:PublisherDeliveryMode = 'operator-ack'
+        $null = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'publisher-operator' -Payload @{ failure_kind = 'fixture' } -StatePath ${ps(publisherOperatorPath)} -OrchestratorSessionId 'fixture-session' -ReplayEscalationId 'alpha' -SkipWakeSuppression -NowMs 1000
+        $publisherOperatorDisk = Get-MechanicalJsonStateFile -Path ${ps(publisherOperatorPath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+
+        $script:PublisherDeliveryStatePath = ${ps(publisherNewRecordPath)}
+        $script:PublisherDeliveryMode = 'new-record'
+        $publisherNewRecord = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'publisher-new-record' -Payload @{ failure_kind = 'fixture-new-record' } -StatePath ${ps(publisherNewRecordPath)} -OrchestratorSessionId 'fixture-session' -SkipWakeSuppression -NowMs 1000
+        $publisherNewRecordDisk = Get-MechanicalJsonStateFile -Path ${ps(publisherNewRecordPath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+
         [pscustomobject]@{
           ackMidTickOk = [bool]$ackMidTick.ok
           ackMidTickState = [string]$ackMerged.records['alpha'].terminalState
@@ -140,6 +166,9 @@ beforeAll(() => {
           publisherAckSuccessState = [string]$publisherAckSuccessDisk.records['alpha'].terminalState
           publisherAckFailureState = [string]$publisherAckFailureDisk.records['alpha'].terminalState
           publisherDeleteMissing = -not $publisherDeleteDisk.records.ContainsKey('alpha')
+          publisherOperatorStatus = [string]$publisherOperatorDisk.records['alpha'].operatorStatus
+          publisherOperatorAckedAtMs = [long]$publisherOperatorDisk.records['alpha'].operatorAckedAtMs
+          publisherNewRecordPresent = $publisherNewRecordDisk.records.ContainsKey([string]$publisherNewRecord.escalationId)
         } | ConvertTo-Json -Compress
       `,
     ],
@@ -169,5 +198,11 @@ describe('escalation-store ACK and quarantine writers', () => {
   });
   it('does not resurrect a record deleted inside publisher delivery', () => {
     expect(matrix.publisherDeleteMissing).toBe(true);
+  });
+  it('preserves an operator ACK written inside publisher delivery', () => {
+    expect(matrix).toMatchObject({ publisherOperatorStatus: 'acked', publisherOperatorAckedAtMs: 1100 });
+  });
+  it('persists a record created by a fresh publisher call', () => {
+    expect(matrix.publisherNewRecordPresent).toBe(true);
   });
 });
