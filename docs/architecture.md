@@ -383,3 +383,30 @@ classification, committed runtime history, or the runtime-history refresh workfl
 `scripts/check-ci-pipeline-split.ps1` consumer retains its same-run measurement behavior. Content
 hash/history-freshness work and any future shard-count policy changes remain owned by a separate
 follow-up, not this relocation.
+
+### Escalation-store router writeback is conflict-aware (Issue #889)
+
+Decision adopted 2026-07-17: atomic JSON replacement protects file integrity, but it is not a
+concurrency policy. The escalation router therefore resolves every dirty record against a fresh
+disk reread at both replay reconciliation and final tick writeback. The tick captures one
+`snapshotLoadedAtMs` token immediately before its initial state read and carries that token through
+both merge points.
+
+The per-record conflict order is:
+
+- a record deleted by an out-of-band writer stays deleted; stale memory cannot recreate it;
+- a disk terminal state beats a non-terminal memory state regardless of `updatedAtMs`;
+- two different terminal states use strict last-writer-wins: memory wins only when its
+  `updatedAtMs` is greater, and an equal timestamp keeps disk;
+- a quarantined memory record may reopen only when disk is `open` and carries an explicit
+  `quarantineReleasedAtMs >= snapshotLoadedAtMs`; a newer generic `updatedAtMs` is not release
+  authority, while an equal release/snapshot millisecond is valid;
+- two non-terminal records use strict last-writer-wins in the opposite tie direction: newer disk
+  wins, while equal timestamps preserve the router's in-memory bookkeeping;
+- `operatorAckedAtMs` is a one-way writer marker. When the disk marker differs, disk
+  `operatorStatus` and `operatorAckedAtMs` are overlaid even on a timestamp tie, and the writer
+  advances `updatedAtMs`.
+
+The replay merge delegates to the same record resolver as final writeback so an ACK, release, or
+delete observed at either reread cannot be undone later in the same tick. No lock, schema change,
+or sibling-store policy is implied by this decision.
