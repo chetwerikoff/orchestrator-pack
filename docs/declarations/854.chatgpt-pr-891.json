@@ -5,13 +5,14 @@
   "supersedes": null,
   "created_at": "2026-07-17T02:55:00.000Z",
   "baseline": {
-    "commit_sha": "2517aa5b98b8e9949aba762e97674a44c5e8ddc1",
+    "commit_sha": "83f7b2da278226eb4baa63ba6e058eaa5503a48f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:560ae2d48f48026a6d666c465e33d72e5c27a490238d6b5f3d95e4516bc691cc"
+    "active_scope_hash": "sha256:23e9c0f3ca09dc01e69c23d07c7a3d8b8753789b9f212d3ef9e7a048d2218274"
   },
   "declared_paths": [
     "scripts/lib/worker-status-store.mjs",
     "scripts/lib/WorkerStatusStore.ps1",
+    "scripts/worker-status-store.test.ts",
     "tests/issue854-worker-status-binding-cache.mjs",
     "tests/worker-status-store-issue854.test.ts",
     "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1"
@@ -20,34 +21,21 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:e31e131652f0a04d24b0ccd78bd0aa1923ec51cc48bb6380bc59826d3e07dc1c",
-      "new_active_scope_hash": "sha256:0ff191e76a2217434260356e722f310211a8ea769cfe2e2bc9fe6d6cdb91ab4b",
+      "new_active_scope_hash": "sha256:23e9c0f3ca09dc01e69c23d07c7a3d8b8753789b9f212d3ef9e7a048d2218274",
       "changed": {
         "added": [
-          "tests/issue854-worker-status-binding-cache.mjs",
-          "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1"
+          "scripts/lib/WorkerStatusStore.ps1",
+          "scripts/worker-status-store.test.ts",
+          "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1",
+          "tests/worker-status-store-issue854.test.ts"
         ],
         "removed": [
           "tests/powershell/Issue854.WorkerStatusBindingCache.Tests.ps1"
         ]
       },
-      "reason": "Move the no-fixture production-path regression into TypeScript/Node and reuse an existing Pester host instead of adding a new PowerShell file.",
-      "actor": "chatgpt",
-      "timestamp": "2026-07-17T03:49:00.000Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:0ff191e76a2217434260356e722f310211a8ea769cfe2e2bc9fe6d6cdb91ab4b",
-      "new_active_scope_hash": "sha256:560ae2d48f48026a6d666c465e33d72e5c27a490238d6b5f3d95e4516bc691cc",
-      "changed": {
-        "added": [
-          "scripts/lib/WorkerStatusStore.ps1",
-          "tests/worker-status-store-issue854.test.ts"
-        ],
-        "removed": []
-      },
-      "reason": "Architect review #891: thread authoritative repoSlug through Write-WorkerStatusRow bridge and add AC4-shaped vitest coverage for previously-masked binding cells.",
+      "reason": "Architect review #891: consume shared #857 resolver end-to-end, strengthen AC4 no-fixture regression (masked binding cells), thread repoSlug/OS liveness through Write-WorkerStatusRow bridge, and align mixed-generation vector expectations with bindingCacheGeneration axis.",
       "actor": "cursor-worker-140",
-      "timestamp": "2026-07-17T08:45:00.000Z",
+      "timestamp": "2026-07-17T09:10:00.000Z",
       "applied": true
     }
   ]
