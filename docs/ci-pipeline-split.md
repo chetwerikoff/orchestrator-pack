@@ -120,7 +120,11 @@ fail-closed aggregate still consumes the single `test-vitest-light` job result.
 `STACK_TRACE_ERROR`, and RPC timeout signatures.
 
 Issue #874's isolation audit for the selected `worker=2, shard=2` cell is recorded in
-`docs/vitest-light-lane-isolation-audit-874.md`.
+`docs/vitest-light-lane-isolation-audit-874.md`. Reproduce the mechanical scan with:
+
+```bash
+node scripts/audit-vitest-light-lane-isolation.mjs --format markdown
+```
 
 ## Timeout budget alignment
 
