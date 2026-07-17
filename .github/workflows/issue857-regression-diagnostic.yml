@@ -1,0 +1,48 @@
+name: Issue 857 regression diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-857-binding-contract-v2
+    paths:
+      - .github/workflows/issue857-regression-diagnostic.yml
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Capture issue 857 Node matrix
+        shell: bash
+        run: node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs > issue857-node.log 2>&1 || true
+      - name: Capture issue 857 Pester
+        shell: pwsh
+        run: |
+          Invoke-Pester -Path ./tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1 -Output Detailed -PassThru *> issue857-pester.log
+          exit 0
+      - name: Capture affected Vitest suites
+        shell: bash
+        run: npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts scripts/worker-status-store.test.ts > issue857-vitest.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue857-regression-diagnostics
+          path: |
+            issue857-node.log
+            issue857-pester.log
+            issue857-vitest.log
+          if-no-files-found: error
