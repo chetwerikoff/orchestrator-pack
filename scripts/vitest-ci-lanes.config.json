@@ -1,6 +1,7 @@
 {
   "issue": 694,
   "lightMaxWorkers": 2,
+  "lightShardCount": 2,
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
   "heavyPerTestIsolate": [
@@ -41,6 +42,7 @@
     "scripts/ao-0-10-review-trigger.test.ts": "light",
     "scripts/ao-events-correlation-degraded.test.ts": "light",
     "scripts/ao-events-fail-soft.test.ts": "heavy",
+    "scripts/ao-reviews-board-commented.test.ts": "light",
     "scripts/ao-session-adapter.test.ts": "light",
     "scripts/ao-spawn-shape.test.ts": "light",
     "scripts/audit-jsonl-retention.test.ts": "heavy",
@@ -132,6 +134,7 @@
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor-startup.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
+    "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pr-scope-check.test.ts": "heavy",
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/protected-signal-receipt.test.ts": "light",

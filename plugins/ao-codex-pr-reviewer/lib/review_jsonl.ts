@@ -256,7 +256,7 @@ function priorityToSeverity(priority: unknown, title: string): 'blocking' | 'non
   if (bracketed !== null) {
     return bracketed <= 1 ? 'blocking' : 'non-blocking';
   }
-  return 'non-blocking';
+  return 'blocking';
 }
 
 function normalizeFindingType(value: unknown): FindingType | null {

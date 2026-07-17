@@ -12,8 +12,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChangedPathManifest } from './lib/vitest-heavy-topology.d.mts';
+import { runProcessSync } from './kernel/subprocess.ts';
 import {
   assignHeavyShards,
+  assignLightShards,
   buildLanePlan,
   discoverVitestFiles,
   loadLanesConfig,
@@ -138,9 +140,12 @@ describe('ci-pipeline-split config and workflow binding (#556/#695 lanes)', () =
     expect(yaml).toMatch(/emit-vitest-heavy-topology\.mjs/);
     expect(yaml).toMatch(/OPK_VITEST_PR_SCOPE_MODE/);
     expect(yaml).toMatch(/fromJson\(needs\.plan-vitest-ci-topology\.outputs\.heavy_shard_matrix\)/);
+    expect(yaml).toMatch(/light_shard_count/);
+    expect(yaml).toMatch(/light_shard_matrix/);
+    expect(yaml).toMatch(/fromJson\(needs\.plan-vitest-ci-topology\.outputs\.light_shard_matrix\)/);
     expect(yaml).toMatch(/download-artifact@v4[\s\S]*vitest-heavy-topology/);
     expect(yaml).toMatch(/OPK_VITEST_TOPOLOGY_PLAN_PATH/);
-    expect(yaml).toMatch(/run-vitest-light-lane\.ps1/);
+    expect(yaml).toMatch(/run-vitest-light-lane\.ps1 -Shard \$\{\{ matrix\.shard \}\}/);
     expect(yaml).toMatch(/run-vitest-heavy-shard\.ps1/);
     expect(yaml).toMatch(/ci-test-aggregate\.ps1/);
     expect(yaml).toMatch(/VITEST_TOPOLOGY_PLAN_RESULT/);
@@ -216,6 +221,85 @@ describe('vitest CI lane classification and shard assignment (#556)', () => {
     expect([...assigned].sort()).toEqual([...plan.heavy].sort());
     expect(plan.heavyShards).toHaveLength(plan.topology.heavyShardCount);
     expect(plan.topology.heavyShardMatrix).toHaveLength(plan.topology.heavyShardCount);
+  });
+
+  it('runtime-weighted light shards cover all light files exactly once', () => {
+    const plan = buildLanePlan(repoRoot);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      return;
+    }
+    const assigned = plan.lightShards.flatMap((shard) => shard.files);
+    expect(new Set(assigned).size).toBe(assigned.length);
+    expect([...assigned].sort()).toEqual([...plan.light].sort());
+    expect(plan.lightShards).toHaveLength(plan.config.lightShardCount);
+    expect(plan.config.lightShardCount).toBe(2);
+  });
+
+  it('light lane isolation audit enumerates every light file with resolved determination', () => {
+    const plan = buildLanePlan(repoRoot);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      return;
+    }
+
+    type LightIsolationAuditRow = {
+      file: string;
+      isolationSensitive: boolean;
+      determinationSource: string;
+      rationale: string;
+    };
+    type LightIsolationAudit = {
+      lightMaxWorkers: number;
+      lightShardCount: number;
+      rows: LightIsolationAuditRow[];
+    };
+    const auditResult = runProcessSync({
+      command: process.execPath,
+      args: ['scripts/audit-vitest-light-lane-isolation.mjs', '--format', 'json'],
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(auditResult.ok).toBe(true);
+    const audit = JSON.parse(auditResult.stdout) as LightIsolationAudit;
+    const auditFiles = audit.rows.map((row) => row.file);
+    const uniqueAuditFiles = new Set(auditFiles);
+
+    expect(audit.lightMaxWorkers).toBe(2);
+    expect(audit.lightShardCount).toBe(2);
+    expect(audit.rows).toHaveLength(plan.light.length);
+    expect(uniqueAuditFiles.size).toBe(plan.light.length);
+    expect([...uniqueAuditFiles].sort()).toEqual([...plan.light].sort());
+    for (const row of audit.rows) {
+      expect(typeof row.isolationSensitive).toBe('boolean');
+      expect(['mechanical', 'manual']).toContain(row.determinationSource);
+      expect(row.rationale.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('reuses the shared LPT bin packer for light shards', () => {
+    const shards = assignLightShards(
+      ['scripts/a-light.test.ts', 'scripts/b-light.test.ts', 'scripts/c-light.test.ts'],
+      {
+        'scripts/a-light.test.ts': 30_000,
+        'scripts/b-light.test.ts': 20_000,
+        'scripts/c-light.test.ts': 10_000,
+      },
+      2,
+      120_000,
+    );
+    expect(shards).toEqual(
+      assignHeavyShards(
+        ['scripts/a-light.test.ts', 'scripts/b-light.test.ts', 'scripts/c-light.test.ts'],
+        {
+          'scripts/a-light.test.ts': 30_000,
+          'scripts/b-light.test.ts': 20_000,
+          'scripts/c-light.test.ts': 10_000,
+        },
+        2,
+        120_000,
+      ),
+    );
   });
 
   it('uses conservative fallback runtime for heavy files without history', () => {
