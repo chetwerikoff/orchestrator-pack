@@ -66,13 +66,13 @@ function input(cachePath) {
   };
 }
 
-function assertCacheHit(binding) {
+function assertCacheHit(binding, expectedGeneration = 45) {
   assert.equal(binding.ok, true);
   assert.equal(binding.prNumber, PR_NUMBER);
   assert.equal(binding.headSha, HEAD);
   assert.equal(binding.repoSlug, REPO);
   assert.equal(binding.bindingSource, 'binding_contract:cache');
-  assert.equal(binding.bindingCacheGeneration, 45);
+  assert.equal(binding.bindingCacheGeneration, expectedGeneration);
 }
 
 function assertSharedUnbound(binding) {
@@ -141,7 +141,7 @@ function run() {
         source: 'backfill_resolver',
       }),
     ]);
-    assertCacheHit(resolveWorkerStatusSessionBinding(input(cachePath)));
+    assertCacheHit(resolveWorkerStatusSessionBinding(input(cachePath)), 46);
 
     process.stdout.write(`${JSON.stringify({
       issue: 854,
@@ -155,7 +155,7 @@ function run() {
         'unreadable',
         'unreadable_no_legacy_fallback',
         'multi_repo_ambiguous',
-        'stale_other_repo_not_ambiguous',
+        'stale_other_repo_evicted_without_ambiguity',
       ],
     })}\n`);
   } finally {
