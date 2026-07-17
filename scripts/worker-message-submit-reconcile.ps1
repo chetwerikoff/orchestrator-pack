@@ -87,6 +87,50 @@ function Get-SubmitReconcileStateDeliveries {
     return $null
 }
 
+function Sync-SubmitBulkEscalationDigestTerminalState {
+    param($Tracking)
+
+    if (-not $Tracking -or -not $Tracking.bulkEscalationDigests) { return $Tracking }
+    try {
+        $path = Get-OrchestratorEscalationStatePath
+        $state = Get-MechanicalJsonStateFile -Path $path -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+        if (-not $state.records) { return $Tracking }
+        $next = ConvertTo-MechanicalJsonStateHashtable -Value $Tracking
+        $digests = Copy-MechanicalJsonMap -Map $next.bulkEscalationDigests
+        foreach ($digestKey in @($digests.Keys)) {
+            $digest = ConvertTo-MechanicalJsonStateHashtable -Value $digests[$digestKey]
+            $correlationKey = [string]$digest.correlationKey
+            if (-not $correlationKey) { continue }
+            $matched = $null
+            foreach ($recordKey in @($state.records.Keys)) {
+                $record = Sync-OrchestratorEscalationMutableRecord -State $state -RecordKey $recordKey
+                Sync-OrchestratorEscalationRecordDefaults -Record $record | Out-Null
+                if ([string]$record.escalationClassId -ne 'escalation-submit-adoption') { continue }
+                if ([string]$record.correlationKey -ne $correlationKey) { continue }
+                if ([string]$record.failureKind -ne 'bulk_digest') { continue }
+                $matched = $record
+                break
+            }
+            if ($matched) {
+                $terminal = [string]$matched.terminalState
+                $status = [string]$matched.status
+                if ($terminal) { $digest['terminalState'] = $terminal }
+                if ($status) { $digest['status'] = $status }
+                if ($terminal -and (Test-OrchestratorEscalationTerminalState -TerminalState $terminal)) {
+                    $digest['terminalSyncedAtMs'] = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                }
+                $digests[$digestKey] = $digest
+            }
+        }
+        $next['bulkEscalationDigests'] = $digests
+        return $next
+    }
+    catch {
+        Write-SubmitReconcileLog "digest terminal sync skipped: $($_.Exception.Message)"
+        return $Tracking
+    }
+}
+
 
 function Test-SubmitReconcileHasTerminalDeliveryEvidence {
     param([object]$State)
@@ -572,6 +616,8 @@ function Invoke-SubmitReconcileTick {
         }
     }
 
+    $tracking = Sync-SubmitBulkEscalationDigestTerminalState -Tracking $tracking
+
     $plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan' `
         -Payload @{
             sessions            = @($sessions)
@@ -747,16 +793,30 @@ function Invoke-SubmitReconcileTick {
                 $failureKind = if ($action.failureKind) { [string]$action.failureKind } else { 'bulk_digest' }
                 $corr = if ($action.correlationKey) { [string]$action.correlationKey } else { "corr:submit-digest:$($action.sourceEscalationClassId)" }
                 $dedupe = "dedupe:submit-digest:$($action.sourceEscalationClassId)`:$failureKind"
-                Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
+                $emitResult = Invoke-OrchestratorEscalationEmit -EscalationClassId 'escalation-submit-adoption' `
                     -SourceProcess 'worker-message-submit-reconcile' -CorrelationKey $corr -DedupeKey $dedupe `
                     -Diagnosis @{
                         failure_kind              = $failureKind
                         diagnosis                 = $action.diagnosis
                         reason                    = $action.reason
                         source_escalation_class_id = [string]$action.sourceEscalationClassId
+                        source_failure_kinds      = @($action.sourceFailureKinds)
                         coalesced_count           = [int]$action.count
                         coalesced_sample          = @($action.sample)
-                    } | Out-Null
+                    }
+                if ($action.digestKey -and $tracking.bulkEscalationDigests) {
+                    $digests = Copy-MechanicalJsonMap -Map $tracking.bulkEscalationDigests
+                    $digestKey = [string]$action.digestKey
+                    $digest = if ($digests.ContainsKey($digestKey)) { ConvertTo-MechanicalJsonStateHashtable -Value $digests[$digestKey] } else { @{} }
+                    $digest['lastPublishStatus'] = [string]$emitResult.status
+                    $digest['lastPublishEscalationId'] = [string]$emitResult.escalationId
+                    if ($emitResult.status -and (Test-OrchestratorEscalationTerminalState -TerminalState ([string]$emitResult.status))) {
+                        $digest['terminalState'] = [string]$emitResult.status
+                    }
+                    $digests[$digestKey] = $digest
+                    $tracking = ConvertTo-MechanicalJsonStateHashtable -Value $tracking
+                    $tracking['bulkEscalationDigests'] = $digests
+                }
                 $escalated++
             }
             'mark_consumed' {

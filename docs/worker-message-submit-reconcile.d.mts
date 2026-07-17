@@ -158,6 +158,7 @@ export type WorkerMessageSubmitAction =
       escalationClassId: string;
       sourceEscalationClassId: string;
       sourceFailureKind: string;
+      sourceFailureKinds?: string[];
       digestKey: string;
       correlationKey: string;
       failureKind: string;

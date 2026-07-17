@@ -4194,7 +4194,7 @@ describe('issue #890 bulk escalation cap and digest coalescing', () => {
     expect(digest).toBeTruthy();
     expect(second.tracking.bulkEscalationDigests?.[digest.digestKey]?.count).toBe(2);
     expect(digestActions(second.actions)).toHaveLength(0);
-    expect(escalationActions(second.actions)).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+    expect(escalationActions(second.actions)).toHaveLength(0);
   });
 
   it('row 4: growth updates the same open digest key rather than minting another digest key', () => {
@@ -4210,6 +4210,24 @@ describe('issue #890 bulk escalation cap and digest coalescing', () => {
     expect(grownDigest.count).toBe(4);
     expect(grown.tracking.bulkEscalationDigests?.[firstDigest.digestKey]?.count).toBe(4);
     expect(Object.keys(grown.tracking.bulkEscalationDigests ?? {})).toHaveLength(1);
+  });
+
+  it('row 4: accumulates newly actionable excess against an already-open digest count', () => {
+    const first = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2);
+    const firstDigest = digestActions(first.actions)[0];
+    const next = buildEscalationBacklog(2, {
+      sessionPrefix: 'bulk-growth',
+      tracking: digestOnlyTracking(first.tracking),
+    });
+    const nextDigest = digestActions(next.actions)[0];
+
+    expect(escalationActions(next.actions)).toHaveLength(0);
+    expect(nextDigest.digestKey).toBe(firstDigest.digestKey);
+    expect(nextDigest.count).toBe(4);
+    expect(next.tracking.bulkEscalationDigests?.[firstDigest.digestKey]?.count).toBe(4);
+    expect(next.tracking.bulkEscalationDigests?.[firstDigest.digestKey]?.accountedDeliveryIds).toHaveLength(
+      DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 4,
+    );
   });
 
   it('row 5: terminal digest permits fresh excess to re-alert', () => {
@@ -4232,19 +4250,24 @@ describe('issue #890 bulk escalation cap and digest coalescing', () => {
 
     expect(digestActions(next.actions)).toHaveLength(1);
     expect(digestActions(next.actions)[0].digestKey).toBe(digest.digestKey);
+    expect(digestActions(next.actions)[0].correlationKey).not.toBe(digest.correlationKey);
+    expect(next.tracking.bulkEscalationDigests?.[digest.digestKey]?.generation).toBe(2);
   });
 
-  it('row 6: evaluates multiple source classes independently', () => {
+  it('caps per escalation class, not per failure kind within that class', () => {
     const result = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2, {
       extraClassCount: 2,
     });
     const individual = escalationActions(result.actions);
     const sendFailed = individual.filter((a) => a.failureKind === 'send_failed');
     const draftAbsent = individual.filter((a) => a.failureKind === 'draft_absent_or_changed');
+    const digest = digestActions(result.actions)[0];
 
     expect(sendFailed).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
-    expect(draftAbsent).toHaveLength(2);
+    expect(draftAbsent).toHaveLength(0);
     expect(digestActions(result.actions)).toHaveLength(1);
+    expect(digest.count).toBe(4);
+    expect(digest.sourceFailureKinds).toEqual(['send_failed', 'draft_absent_or_changed']);
   });
 
   it('terminalizes both individual and digest-coalesced deliveries in submit tracking', () => {
@@ -4265,6 +4288,17 @@ describe('issue #890 bulk escalation cap and digest coalescing', () => {
     expect(digestActions(result.actions)).toHaveLength(1);
     expect(escalationCount).toBeLessThan(21);
     expect(digestActions(result.actions)[0].count).toBe(234 - DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+  });
+
+  it('runtime dispatcher syncs digest terminal state before planning', () => {
+    const script = readFileSync('scripts/worker-message-submit-reconcile.ps1', 'utf8');
+    const syncIndex = script.indexOf('Sync-SubmitBulkEscalationDigestTerminalState -Tracking $tracking');
+    const planIndex = script.indexOf("$plan = Invoke-MechanicalNodeFilterCli -FilterCliPath $SubmitFilterCli -Subcommand 'plan'");
+
+    expect(syncIndex).toBeGreaterThan(0);
+    expect(planIndex).toBeGreaterThan(syncIndex);
+    expect(script).toContain("$digest['lastPublishStatus'] = [string]$emitResult.status");
+    expect(script).toContain("Test-OrchestratorEscalationTerminalState -TerminalState ([string]$emitResult.status)");
   });
 });
 

@@ -720,18 +720,12 @@ function isTerminalEscalationState(value) {
   return state === 'acked' || state === 'resolved' || state === 'quarantined' || state === 'dead_lettered';
 }
 
-function buildEscalationGroupKey(action) {
-  const escalationClassId = trimString(action?.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
-  const failureKind = trimString(action?.failureKind ?? action?.reason) || 'generic';
-  return `${escalationClassId}:${failureKind}`;
+function buildSubmitDigestKey(escalationClassId) {
+  return `${SUBMIT_DIGEST_ESCALATION_CLASS_ID}|project:global|${SUBMIT_DIGEST_FAILURE_KIND}|${trimString(escalationClassId) || SUBMIT_ESCALATION_CLASS_ID}`;
 }
 
-function buildSubmitDigestKey(groupKey) {
-  return `${SUBMIT_DIGEST_ESCALATION_CLASS_ID}|project:global|${SUBMIT_DIGEST_FAILURE_KIND}|${trimString(groupKey) || SUBMIT_ESCALATION_CLASS_ID}`;
-}
-
-function buildSubmitDigestCorrelationKey(groupKey) {
-  return `corr:submit-digest:${trimString(groupKey) || SUBMIT_ESCALATION_CLASS_ID}`;
+function buildSubmitDigestCorrelationKey(escalationClassId, generation) {
+  return `corr:submit-digest:${trimString(escalationClassId) || SUBMIT_ESCALATION_CLASS_ID}:${Number(generation) || 1}`;
 }
 
 function buildEscalationDigestSample(actions, limit) {
@@ -743,6 +737,28 @@ function buildEscalationDigestSample(actions, limit) {
   }));
 }
 
+function mergeEscalationDigestSample(priorSample, newActions, limit) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...buildEscalationDigestSample(newActions, limit), ...toArray(priorSample)]) {
+    const deliveryId = trimString(item?.deliveryId);
+    if (!deliveryId || seen.has(deliveryId)) {
+      continue;
+    }
+    seen.add(deliveryId);
+    merged.push({
+      deliveryId,
+      sessionId: trimString(item?.sessionId),
+      reason: trimString(item?.reason),
+      failureKind: trimString(item?.failureKind),
+    });
+    if (merged.length >= limit) {
+      break;
+    }
+  }
+  return merged;
+}
+
 function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
   const cap = DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP;
   const sampleSize = DEFAULT_BULK_ESCALATION_SAMPLE_SIZE;
@@ -752,10 +768,10 @@ function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
     if (action?.type !== 'escalate') {
       continue;
     }
-    const groupKey = buildEscalationGroupKey(action);
-    const bucket = byClass.get(groupKey) ?? [];
+    const escalationClassId = trimString(action?.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
+    const bucket = byClass.get(escalationClassId) ?? [];
     bucket.push(action);
-    byClass.set(groupKey, bucket);
+    byClass.set(escalationClassId, bucket);
   }
   if (byClass.size === 0) {
     return { actions, bulkEscalationDigests: digestState };
@@ -764,48 +780,69 @@ function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
   const kept = [];
   const digestByClass = new Map();
   const classIndexes = new Map();
-  for (const [groupKey, classActions] of byClass.entries()) {
-    classIndexes.set(groupKey, 0);
-    if (classActions.length <= cap) {
+  const individualLimitByClass = new Map();
+  for (const [escalationClassId, classActions] of byClass.entries()) {
+    classIndexes.set(escalationClassId, 0);
+    const digestKey = buildSubmitDigestKey(escalationClassId);
+    const prior = digestState[digestKey] ?? {};
+    const priorTerminal = isTerminalEscalationState(prior.terminalState ?? prior.status);
+    const priorCount = priorTerminal ? 0 : Number(prior.count ?? 0);
+    const priorAccountedIds = new Set(
+      priorTerminal ? [] : toArray(prior.accountedDeliveryIds).map((id) => trimString(id)).filter(Boolean),
+    );
+    const openDigestExists = !priorTerminal && priorCount > 0;
+    const individualLimit = openDigestExists ? 0 : cap;
+    individualLimitByClass.set(escalationClassId, individualLimit);
+    if (classActions.length <= individualLimit) {
       continue;
     }
-    const first = classActions[0] ?? {};
-    const escalationClassId = trimString(first.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
-    const sourceFailureKind = trimString(first.failureKind ?? first.reason) || 'generic';
-    const coalesced = classActions.slice(cap);
-    const digestKey = buildSubmitDigestKey(groupKey);
-    const prior = digestState[digestKey] ?? {};
-    const priorCount = Number(prior.count ?? 0);
-    const priorTerminal = isTerminalEscalationState(prior.terminalState ?? prior.status);
-    const shouldEmit = priorTerminal || priorCount <= 0 || coalesced.length > priorCount;
-    const sample = buildEscalationDigestSample(coalesced, sampleSize);
+    const coalesced = classActions.slice(individualLimit);
+    const newCoalesced = coalesced.filter((action) => !priorAccountedIds.has(trimString(action.deliveryId)));
+    const nextCount = priorCount + newCoalesced.length;
+    const shouldEmit = priorTerminal || priorCount <= 0 || newCoalesced.length > 0;
+    const generation = shouldEmit && priorTerminal
+      ? Number(prior.generation ?? 1) + 1
+      : Number(prior.generation ?? 1) || 1;
+    const correlationKey = buildSubmitDigestCorrelationKey(escalationClassId, generation);
+    const sourceFailureKinds = [...new Set(classActions.map((action) => trimString(action.failureKind ?? action.reason)).filter(Boolean))];
+    const sample = mergeEscalationDigestSample(prior.sample, newCoalesced.length > 0 ? newCoalesced : coalesced, sampleSize);
+    const accountedDeliveryIds = [
+      ...new Set([
+        ...priorAccountedIds,
+        ...classActions.map((action) => trimString(action.deliveryId)).filter(Boolean),
+      ]),
+    ];
     digestState[digestKey] = {
       ...prior,
       digestKey,
-      groupKey,
       escalationClassId,
-      sourceFailureKind,
+      sourceFailureKind: sourceFailureKinds.length === 1 ? sourceFailureKinds[0] : 'multiple',
+      sourceFailureKinds,
       digestEscalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
+      correlationKey,
       failureKind: SUBMIT_DIGEST_FAILURE_KIND,
-      count: coalesced.length,
+      count: nextCount,
       sample,
+      accountedDeliveryIds,
+      generation,
       terminalState: shouldEmit ? 'open' : trimString(prior.terminalState ?? prior.status) || 'open',
       lastObservedAtMs: nowMs,
       lastEmittedAtMs: shouldEmit ? nowMs : Number(prior.lastEmittedAtMs ?? 0),
     };
     if (shouldEmit) {
-      digestByClass.set(groupKey, {
+      digestByClass.set(escalationClassId, {
         type: 'escalate-digest',
         escalationClassId: SUBMIT_DIGEST_ESCALATION_CLASS_ID,
         sourceEscalationClassId: escalationClassId,
-        sourceFailureKind,
+        sourceFailureKind: sourceFailureKinds.length === 1 ? sourceFailureKinds[0] : 'multiple',
+        sourceFailureKinds,
         digestKey,
-        correlationKey: buildSubmitDigestCorrelationKey(groupKey),
+        correlationKey,
         failureKind: SUBMIT_DIGEST_FAILURE_KIND,
         reason: 'bulk_escalation_digest',
-        count: coalesced.length,
+        count: nextCount,
         sample,
-        diagnosis: `${OPERATOR_ESCALATION_PREFIX} ${coalesced.length} worker message submit escalations were coalesced after per-pass cap ${cap} for ${groupKey}.`,
+        diagnosis: `${OPERATOR_ESCALATION_PREFIX} ${nextCount} worker message submit escalations are coalesced after per-pass cap ${cap} for ${escalationClassId}.`,
       });
     }
   }
@@ -815,12 +852,14 @@ function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
       kept.push(action);
       continue;
     }
-    const groupKey = buildEscalationGroupKey(action);
     const escalationClassId = trimString(action.escalationClassId) || SUBMIT_ESCALATION_CLASS_ID;
-    const index = classIndexes.get(groupKey) ?? 0;
-    classIndexes.set(groupKey, index + 1);
-    const classActions = byClass.get(groupKey) ?? [];
-    if (classActions.length <= cap || index < cap) {
+    const individualLimit = individualLimitByClass.has(escalationClassId)
+      ? individualLimitByClass.get(escalationClassId)
+      : cap;
+    const index = classIndexes.get(escalationClassId) ?? 0;
+    classIndexes.set(escalationClassId, index + 1);
+    const classActions = byClass.get(escalationClassId) ?? [];
+    if (classActions.length <= individualLimit || index < individualLimit) {
       kept.push({ ...action, escalationClassId });
     }
   }
