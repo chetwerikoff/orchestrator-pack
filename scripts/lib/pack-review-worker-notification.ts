@@ -82,6 +82,25 @@ function writeCapture(path: string, payload: Record<string, unknown>): void {
   writeFileSync(resolve(path), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
+function fixtureNotification(
+  options: WorkerNotificationOptions,
+  sessionId: string,
+): PackReviewWorkerNotificationResult | null {
+  if (process.env.OPK_VITEST_HARNESS !== '1'
+    || process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER === '1') {
+    return null;
+  }
+  const capturePath = trim(process.env.PACK_REVIEW_WORKER_NOTIFICATION_CAPTURE_FILE);
+  if (capturePath) {
+    writeCapture(capturePath, {
+      sessionId,
+      message: options.request.message,
+      idempotencyKey: options.request.idempotencyKey,
+    });
+  }
+  return { state: 'delivered', reason: 'fixture_dispatched' };
+}
+
 function parseTarget(options: WorkerNotificationOptions): {
   prNumber: number;
   headSha: string;
@@ -113,19 +132,8 @@ export async function sendPackReviewWorkerNotification(
 ): Promise<PackReviewWorkerNotificationResult> {
   const sessionId = trim(options.sessionId);
   if (!sessionId) return { state: 'escalated', reason: 'worker_session_unresolved' };
-
-  const capture = trim(process.env.PACK_REVIEW_WORKER_NOTIFICATION_CAPTURE_FILE);
-  const realAdapter = process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER === '1';
-  if (process.env.OPK_VITEST_HARNESS === '1' && !realAdapter) {
-    if (capture) {
-      writeCapture(capture, {
-        sessionId,
-        message: options.request.message,
-        idempotencyKey: options.request.idempotencyKey,
-      });
-    }
-    return { state: 'delivered', reason: 'fixture_dispatched' };
-  }
+  const fixture = fixtureNotification(options, sessionId);
+  if (fixture) return fixture;
 
   const target = parseTarget(options);
   if (!target) return { state: 'escalated', reason: 'worker_notification_target_unresolved' };
