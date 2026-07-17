@@ -5,12 +5,14 @@
   "supersedes": null,
   "created_at": "2026-07-17T02:55:00.000Z",
   "baseline": {
-    "commit_sha": "2d9a81ad21362f47788236096852817d942bb7c6",
+    "commit_sha": "4c132e88e8f957fbef48ceb4f06bc59e175f2ffd",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:0ff191e76a2217434260356e722f310211a8ea769cfe2e2bc9fe6d6cdb91ab4b"
+    "active_scope_hash": "sha256:23e9c0f3ca09dc01e69c23d07c7a3d8b8753789b9f212d3ef9e7a048d2218274"
   },
   "declared_paths": [
     "scripts/lib/worker-status-store.mjs",
+    "scripts/lib/WorkerStatusStore.ps1",
+    "scripts/worker-status-store.test.ts",
     "tests/issue854-worker-status-binding-cache.mjs",
     "tests/worker-status-store-issue854.test.ts",
     "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1"
@@ -19,9 +21,11 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:e31e131652f0a04d24b0ccd78bd0aa1923ec51cc48bb6380bc59826d3e07dc1c",
-      "new_active_scope_hash": "sha256:0ff191e76a2217434260356e722f310211a8ea769cfe2e2bc9fe6d6cdb91ab4b",
+      "new_active_scope_hash": "sha256:23e9c0f3ca09dc01e69c23d07c7a3d8b8753789b9f212d3ef9e7a048d2218274",
       "changed": {
         "added": [
+          "scripts/lib/WorkerStatusStore.ps1",
+          "scripts/worker-status-store.test.ts",
           "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1",
           "tests/worker-status-store-issue854.test.ts"
         ],
@@ -29,9 +33,9 @@
           "tests/powershell/Issue854.WorkerStatusBindingCache.Tests.ps1"
         ]
       },
-      "reason": "Architect review #891: strengthen AC4 no-fixture regression (masked binding cells) via vitest + existing Pester host; drop standalone Issue854 Pester file.",
+      "reason": "Architect verify round 2: thread authoritative repoSlug through Write-WorkerStatusRow seed path; reconcile mixed-generation vector tests; strengthen AC4/Pester bridge on real PS path.",
       "actor": "cursor-worker-140",
-      "timestamp": "2026-07-17T09:20:00.000Z",
+      "timestamp": "2026-07-17T09:50:00.000Z",
       "applied": true
     }
   ]

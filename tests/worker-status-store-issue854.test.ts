@@ -198,6 +198,45 @@ describe('issue #854 live recompute binding cache (AC4 shape)', () => {
     }
   });
 
+  it('isolates defect-B binding flip with live os-liveness (empty cache vs cache hit)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opk-854-defect-b-'));
+    try {
+      const cachePath = join(dir, 'cache.json');
+      const stateDir = join(dir, 'state-dir');
+      const base = liveRecomputeInput({
+        cachePath,
+        stateDirCachePath: stateDir,
+        sessionStatus: 'working',
+        osLiveness: { status: 'working', dead: false },
+        openPrOrder: [893, 891, PR_UNRELATED, PR_TARGET],
+      });
+      writeFileSync(cachePath, `${JSON.stringify({
+        schemaVersion: 1,
+        generation: 0,
+        records: {},
+        lastUpdatedMs: 0,
+      })}\n`);
+      const beforeBinding = resolveWorkerStatusSessionBinding(base);
+      expect(beforeBinding.ok).toBe(false);
+      expect(beforeBinding.reason).toBe('no_issue_binding');
+      const beforeRow = recomputeWorkerStatusRow({ ...base, binding: beforeBinding });
+      expect(beforeRow.winningSource).toBe('degraded');
+      expect(beforeRow.derivedStatus).toBe('unknown');
+
+      writeBindingCache(cachePath, [targetRecord()], 48);
+      const afterBinding = resolveWorkerStatusSessionBinding(base);
+      expect(afterBinding.ok).toBe(true);
+      expect(afterBinding.bindingSource).toBe('binding_contract:cache');
+      expect(afterBinding.bindingCacheGeneration).toBe(48);
+      const afterRow = recomputeWorkerStatusRow({ ...base, binding: afterBinding });
+      expect(afterRow.winningSource).toBe('github_pr');
+      expect(afterRow.derivedStatus).toBe('pr_open');
+      expect(afterRow.degradedReason).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('preserves bindingCacheGeneration across mixed-generation reload', () => {
     const existing = {
       sessionId: SESSION_ID,

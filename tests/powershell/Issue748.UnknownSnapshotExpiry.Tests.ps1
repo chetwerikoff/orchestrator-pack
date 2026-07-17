@@ -57,7 +57,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
         $exitCode | Should -Be 0 -Because ($output -join "`n")
     }
 
-    It 'writes a usable row through the production recompute CLI path' {
+    It 'writes a usable row through the real Write-WorkerStatusRow seed path' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("opk-854-bridge-" + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $stateDir = Join-Path $dir 'state-dir'
@@ -135,7 +135,6 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             Remove-Item Env:AO_REPO_SLUG -ErrorAction SilentlyContinue
             Set-Location $env:TEMP
 
-            $mjsPath = Join-Path $RepoRoot 'scripts/lib/worker-status-store.mjs'
             $openPrs = @(
                 @{
                     number = $unrelatedPr
@@ -147,28 +146,41 @@ Describe 'Issue #854 worker-status binding cache wiring' {
                     number = $prNumber
                     state = 'OPEN'
                     headRefOid = $headSha
-                    headRefName = "ao/$sessionId/worker-status-cache"
+                    headRefName = "ao/$sessionId/root"
                 }
             )
-            $payload = @{
+            $result = Write-WorkerStatusRow -WriteInput @{
                 repoSlug = $repo
-                session = @{
+                session = [pscustomobject]@{
                     id = $sessionId
                     sessionId = $sessionId
                     role = 'worker'
                     status = 'working'
                     issueId = 874
                     displayName = '874'
+                    branch = "ao/$sessionId/root"
                 }
-                openPrs = $openPrs
-                githubSnapshot = @{ openPrs = $openPrs }
-                github = @{
-                    prOpen = $true
-                    headSha = $headSha
+                reports = @()
+                githubSnapshot = @{
+                    openPrs = @(
+                        [pscustomobject]@{
+                            number = $unrelatedPr
+                            state = 'OPEN'
+                            headRefOid = 'head869'
+                            headRefName = 'agent/issue-862-review-delivery-outcome'
+                        },
+                        [pscustomobject]@{
+                            number = $prNumber
+                            state = 'OPEN'
+                            headRefOid = $headSha
+                            headRefName = "ao/$sessionId/root"
+                        }
+                    )
                     reviewRuns = @()
-                    ciChecks = @()
-                    requiredCheckNames = @()
-                    requiredCheckLookupFailed = $false
+                    ciChecksByPr = @{ "$prNumber" = @() }
+                    requiredCheckNamesByPr = @{ "$prNumber" = @() }
+                    requiredCheckLookupFailedByPr = @{ "$prNumber" = $false }
+                    degraded = $false
                 }
                 osLiveness = @{ status = 'working'; dead = $false }
                 writerGenerationVector = @{
@@ -178,19 +190,8 @@ Describe 'Issue #854 worker-status binding cache wiring' {
                     journalCursor = 30
                     bindingCacheGeneration = 0
                 }
-                store = @{
-                    schemaVersion = 1
-                    generation = 0
-                    records = @{}
-                    rows = @{}
-                }
-                nowMs = $nowMs
-            }
-            $stdin = ($payload | ConvertTo-Json -Compress -Depth 20)
-            $stdout = $stdin | & $Issue854NodePath $mjsPath recompute
-            $exitCode = $LASTEXITCODE
-            $exitCode | Should -Be 0 -Because $stdout
-            $result = $stdout | ConvertFrom-Json
+            } -StorePath $storePath -NowMs $nowMs
+
             $result.ok | Should -BeTrue -Because ($result | ConvertTo-Json -Compress -Depth 20)
             $result.row.sessionId | Should -Be $sessionId
             $result.row.repoSlug | Should -Be $repo
@@ -198,11 +199,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             $result.row.winningSource | Should -Be 'github_pr'
             [long]$result.row.generationVector.bindingCacheGeneration | Should -Be 45
             [long]$result.row.sourceGeneration.bindingCacheGeneration | Should -Be 45
-            [System.IO.File]::WriteAllText(
-                $storePath,
-                (($result.store | ConvertTo-Json -Compress -Depth 20) + "`n"),
-                [System.Text.UTF8Encoding]::new($false)
-            )
+
             $stored = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8 | ConvertFrom-Json
             $stored.records.$sessionId.derivedStatus | Should -Be 'pr_open'
             $stored.records.$sessionId.winningSource | Should -Be 'github_pr'
