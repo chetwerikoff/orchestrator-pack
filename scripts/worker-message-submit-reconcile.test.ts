@@ -26,6 +26,7 @@ import {
 import { readReactionMessagesFromYamlFile } from './reaction-config-messages.mjs';
 import {
   applySubmitOutcomes,
+  coalesceBulkEscalationActions,
   evaluateConcurrentSubmitClaim,
   evaluateSubmitDecision,
   isActiveSubmitClaim,
@@ -81,6 +82,7 @@ type FixturePayload = {
   generatedBacklog?: {
     count: number;
     sessionPrefix?: string;
+    repeatedSessionCount?: number;
     startMs?: number;
   };
 };
@@ -92,20 +94,25 @@ function loadFixture(name: string): FixturePayload {
   }
   const startMs = fixture.generatedBacklog.startMs ?? fixture.nowMs - 1000000;
   const sessionPrefix = fixture.generatedBacklog.sessionPrefix ?? 'fixture-bulk';
+  const repeatedSessionCount = Math.max(0, Number(fixture.generatedBacklog.repeatedSessionCount ?? 0));
   const sessions = [...(fixture.sessions ?? [])];
+  const sessionIds = new Set(sessions.map((session) => String(session.sessionId ?? '')));
   const dispatchJournal = { ...(fixture.dispatchJournal ?? {}) };
   for (let i = 0; i < fixture.generatedBacklog.count; i += 1) {
-    const sessionId = `${sessionPrefix}-${i}`;
+    const sessionId = `${sessionPrefix}-${repeatedSessionCount > 0 ? i % repeatedSessionCount : i}`;
     const deliveryId = `${sessionId}:${startMs + i}:ao-send:send-failed`;
-    sessions.push({
-      sessionId,
-      role: 'worker',
-      status: 'working',
-      runtime: 'alive',
-      activity: 'idle',
-      activityChangedAtMs: startMs + i,
-      reports: [],
-    });
+    if (!sessionIds.has(sessionId)) {
+      sessionIds.add(sessionId);
+      sessions.push({
+        sessionId,
+        role: 'worker',
+        status: 'working',
+        runtime: 'alive',
+        activity: 'idle',
+        activityChangedAtMs: startMs + i,
+        reports: [],
+      });
+    }
     dispatchJournal[deliveryId] = {
       deliveryId,
       sessionId,
@@ -4255,19 +4262,41 @@ describe('issue #890 bulk escalation cap and digest coalescing', () => {
   });
 
   it('caps per escalation class, not per failure kind within that class', () => {
-    const result = buildEscalationBacklog(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2, {
-      extraClassCount: 2,
+    const secondaryClassId = 'escalation-submit-adoption-secondary';
+    const result = coalesceBulkEscalationActions({
+      nowMs: 1717602000000,
+      tracking: { deliveries: {}, failedDeliveries: {}, audit: [] },
+      actions: [
+        ...Array.from({ length: DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP + 2 }, (_, i) => ({
+          type: 'escalate' as const,
+          escalationClassId: SUBMIT_ESCALATION_CLASS_ID,
+          deliveryId: `bulk-a-${i}`,
+          sessionId: `bulk-a-${i}`,
+          failureKind: i % 2 === 0 ? 'send_failed' : 'draft_absent_or_changed',
+          reason: i % 2 === 0 ? 'send_failed' : 'draft_absent_or_changed',
+          diagnosis: `${OPERATOR_ESCALATION_PREFIX} class A ${i}`,
+        })),
+        ...Array.from({ length: 2 }, (_, i) => ({
+          type: 'escalate' as const,
+          escalationClassId: secondaryClassId,
+          deliveryId: `bulk-b-${i}`,
+          sessionId: `bulk-b-${i}`,
+          failureKind: 'send_failed',
+          reason: 'send_failed',
+          diagnosis: `${OPERATOR_ESCALATION_PREFIX} class B ${i}`,
+        })),
+      ],
     });
     const individual = escalationActions(result.actions);
-    const sendFailed = individual.filter((a) => a.failureKind === 'send_failed');
-    const draftAbsent = individual.filter((a) => a.failureKind === 'draft_absent_or_changed');
-    const digest = digestActions(result.actions)[0];
+    const primaryIndividual = individual.filter((a) => a.escalationClassId === SUBMIT_ESCALATION_CLASS_ID);
+    const secondaryIndividual = individual.filter((a) => a.escalationClassId === secondaryClassId);
+    const primaryDigest = digestActions(result.actions).find((a) => a.sourceEscalationClassId === SUBMIT_ESCALATION_CLASS_ID);
 
-    expect(sendFailed).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
-    expect(draftAbsent).toHaveLength(0);
+    expect(primaryIndividual).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
+    expect(secondaryIndividual).toHaveLength(2);
     expect(digestActions(result.actions)).toHaveLength(1);
-    expect(digest.count).toBe(4);
-    expect(digest.sourceFailureKinds).toEqual(['send_failed', 'draft_absent_or_changed']);
+    expect(primaryDigest?.count).toBe(2);
+    expect(primaryDigest?.sourceFailureKinds).toEqual(['send_failed', 'draft_absent_or_changed']);
   });
 
   it('terminalizes both individual and digest-coalesced deliveries in submit tracking', () => {
@@ -4284,6 +4313,7 @@ describe('issue #890 bulk escalation cap and digest coalescing', () => {
     const escalationCount = escalationActions(result.actions).length + digestActions(result.actions).length;
 
     expect(result.deliveryCount).toBe(234);
+    expect(new Set(Object.values(result.tracking.deliveries ?? {}).map((record) => record.sessionId)).size).toBe(20);
     expect(escalationActions(result.actions)).toHaveLength(DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP);
     expect(digestActions(result.actions)).toHaveLength(1);
     expect(escalationCount).toBeLessThan(21);

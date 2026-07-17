@@ -286,6 +286,15 @@ export declare function applySubmitOutcomes(
   nowMs: number,
 ): SubmitTrackingState;
 
+export declare function coalesceBulkEscalationActions(input: {
+  actions: WorkerMessageSubmitAction[];
+  tracking?: SubmitTrackingState;
+  nowMs: number;
+}): {
+  actions: WorkerMessageSubmitAction[];
+  bulkEscalationDigests?: Record<string, Record<string, unknown>>;
+};
+
 export declare function isSubmitEnterAuthorizedByAdoption(
   tracking?: SubmitTrackingState | Record<string, unknown>,
 ): boolean;

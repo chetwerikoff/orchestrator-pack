@@ -759,7 +759,7 @@ function mergeEscalationDigestSample(priorSample, newActions, limit) {
   return merged;
 }
 
-function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
+export function coalesceBulkEscalationActions({ actions, tracking, nowMs }) {
   const cap = DEFAULT_BULK_ESCALATION_INDIVIDUAL_CAP;
   const sampleSize = DEFAULT_BULK_ESCALATION_SAMPLE_SIZE;
   const digestState = { ...(tracking?.bulkEscalationDigests ?? {}) };

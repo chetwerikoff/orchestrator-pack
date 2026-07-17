@@ -15,6 +15,7 @@
   "generatedBacklog": {
     "count": 234,
     "sessionPrefix": "bulk-incident",
+    "repeatedSessionCount": 20,
     "startMs": 1717601000000
   }
 }
