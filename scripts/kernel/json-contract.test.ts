@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import '../fleet-liveness.cases.ts';
 import '../fleet-liveness-census.cases.ts';
+import '../review-ready-seed-liveness.test.ts';
 import {
   parseCaptureManifest,
   parseDaemonStatusCapture,
