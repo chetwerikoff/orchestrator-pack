@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   BINDING_SOURCE_BACKFILL_RESOLVER,
   BINDING_SOURCE_PUSH_REGISTER,
@@ -7,9 +10,11 @@ import {
   registerPrSessionBindingRecord,
   resolvePrSessionBindingCachePath,
   resolveSessionPrBindingForConsumer,
+  writePrSessionBindingCacheFile,
 } from '../../docs/pr-session-binding-cache.mjs';
 import { resolveSessionPrBinding } from '../../docs/session-pr-binding-resolver.mjs';
 import { resolveWorkerReportTrustedBindings } from '../../docs/worker-report-store.mjs';
+import { resolveWorkerStatusSessionBinding } from '../../scripts/lib/worker-status-store.mjs';
 
 const repoSlug = 'chetwerikoff/orchestrator-pack';
 const nowMs = Date.parse('2026-07-17T00:00:00Z');
@@ -32,6 +37,7 @@ assert.equal(resolveSessionPrBinding(session('empty', { prs: [] }), [pr(1)]).bou
 assert.equal(resolveSessionPrBinding(session('many', { prs: [url(1), url(2)] }), [pr(1), pr(2)]).deferReason, 'ambiguous_session_prs');
 assert.equal(resolveSessionPrBinding(session('retired', { displayName: '9', prNumber: 9, pr: '#9', prs: [] }), [pr(9)]).bound, false);
 
+// AC3 committed equivalence-class fixtures: cells 1 through 10.
 assert.equal(resolve(createDefaultPrSessionBindingCache(), session('c1'), []).reason, 'no_source');
 assert.equal(resolve(createDefaultPrSessionBindingCache(), session('c2', { prs: [url(2)] }), [pr(2)]).prNumber, 2);
 assert.equal(resolve(createDefaultPrSessionBindingCache(), session('c3', { prs: [url(3), url(30)] }), [pr(3), pr(30)]).reason, 'live_ambiguous');
@@ -54,4 +60,41 @@ assert.deepEqual(bulk.callCounts, { bulkSessionList: 1, sessionDetail: 0 });
 assert.equal(Object.keys(bulk.bindingByKey).length, 5);
 assert.equal(JSON.stringify(bulk).includes('trust_boundary_binding_unresolved'), false);
 assert.equal(resolvePrSessionBindingCachePath({ AO_REPORT_STATE_SEED_STATE: 'seed.json' }), 'pr-session-binding-cache.json');
+
+// Clause D / AC1: worker-status ignores retired AO row fields while preserving #891 arbitration.
+const workerStatusRoot = mkdtempSync(join(tmpdir(), 'opk-857-worker-status-'));
+try {
+  const cachePath = join(workerStatusRoot, 'binding-cache.json');
+  const cacheStore = cache('worker-status-cache', 201);
+  writePrSessionBindingCacheFile(cachePath, cacheStore);
+  const cacheResolution = resolveWorkerStatusSessionBinding({
+    session: session('worker-status-cache', { displayName: '999', prNumber: 999, pr: '#999', prs: [] }),
+    openPrs: [pr(201)],
+    repoSlug,
+    bindingCachePath: cachePath,
+    nowMs,
+    osLiveness: { dead: false },
+  });
+  assert.equal(cacheResolution.ok, true);
+  assert.equal(cacheResolution.prNumber, 201);
+  assert.equal(cacheResolution.bindingSource, 'binding_contract:cache');
+  assert.equal(cacheResolution.bindingCacheGeneration, cacheStore.generation);
+
+  const conflictStore = cache('different-owner', 202);
+  writePrSessionBindingCacheFile(cachePath, conflictStore);
+  const conflict = resolveWorkerStatusSessionBinding({
+    session: session('worker-status-conflict', { displayName: '202', prNumber: 202, prs: [url(202)] }),
+    openPrs: [pr(202)],
+    repoSlug,
+    bindingCachePath: cachePath,
+    nowMs,
+    osLiveness: { dead: false },
+  });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.reason, 'binding_cache_conflict');
+  assert.equal(conflict.bindingSource, 'binding_contract:cache');
+} finally {
+  rmSync(workerStatusRoot, { recursive: true, force: true });
+}
+
 console.log('Issue #857 Node contract matrix: PASS');
