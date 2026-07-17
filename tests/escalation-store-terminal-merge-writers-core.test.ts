@@ -15,6 +15,9 @@ type WriterCoreMatrix = {
   ackMidTickState: string;
   releaseWriterState: string;
   deleteWriterMissing: boolean;
+  publisherAckSuccessState: string;
+  publisherAckFailureState: string;
+  publisherDeleteMissing: boolean;
 };
 
 let root = '';
@@ -25,6 +28,9 @@ beforeAll(() => {
   const ackPath = join(root, 'ack.json');
   const releasePath = join(root, 'release.json');
   const deletePath = join(root, 'delete.json');
+  const publisherAckSuccessPath = join(root, 'publisher-ack-success.json');
+  const publisherAckFailurePath = join(root, 'publisher-ack-failure.json');
+  const publisherDeletePath = join(root, 'publisher-delete.json');
 
   const result = runProcessSync({
     command: 'pwsh',
@@ -82,11 +88,58 @@ beforeAll(() => {
         $deleteDisk = Get-MechanicalJsonStateFile -Path ${ps(deletePath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
         $deleteMerged = Merge-OrchestratorEscalationRouterWritebackState -State $deleteMemory -DiskState $deleteDisk -DirtyRecordKeys @('alpha') -SnapshotLoadedAtMs 1000
 
+        $script:PublisherDeliveryStatePath = ''
+        $script:PublisherDeliveryMode = ''
+        function Invoke-OrchestratorEscalationLlmDelivery {
+          param(
+            [Parameter(Mandatory = $true)]$Envelope,
+            [string]$OrchestratorSessionId = '',
+            [string]$AoPath = 'ao',
+            [switch]$DryRun
+          )
+
+          if ($script:PublisherDeliveryMode -eq 'delete') {
+            $deleteState = Get-MechanicalJsonStateFile -Path $script:PublisherDeliveryStatePath -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+            $deleteRecord = Sync-OrchestratorEscalationMutableRecord -State $deleteState -RecordKey ([string]$Envelope.escalation_id)
+            Resolve-OrchestratorEscalationTerminalState -Record $deleteRecord -TerminalState 'quarantined' -Now 1050 -Reason 'fixture_delete' | Out-Null
+            Set-MechanicalJsonStateFile -Path $script:PublisherDeliveryStatePath -State $deleteState -DefaultState $Script:OrchestratorEscalationDefaultState -JsonDepth 30
+            $deleteResult = Write-OrchestratorEscalationQuarantineAction -EscalationId ([string]$Envelope.escalation_id) -Action delete -StatePath $script:PublisherDeliveryStatePath -NowMs 1100
+            if (-not $deleteResult.ok) { throw "fixture delete failed: $($deleteResult.reason)" }
+            return @{ ok = $true; reason = 'fixture_delete' }
+          }
+
+          $ackResult = Write-OrchestratorEscalationAck -EscalationId ([string]$Envelope.escalation_id) -AckToken ([string]$Envelope.ack_token) -StatePath $script:PublisherDeliveryStatePath -NowMs 1100
+          if (-not $ackResult.ok) { throw "fixture ACK failed: $($ackResult.reason)" }
+          if ($script:PublisherDeliveryMode -eq 'ack-failure') { throw 'fixture delivery failed after ACK' }
+          return @{ ok = $true; reason = 'fixture_ack' }
+        }
+
+        Set-FixtureState -Path ${ps(publisherAckSuccessPath)} -Record (New-FixtureRecord)
+        $script:PublisherDeliveryStatePath = ${ps(publisherAckSuccessPath)}
+        $script:PublisherDeliveryMode = 'ack-success'
+        $null = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'publisher-success' -Payload @{ failure_kind = 'fixture' } -StatePath ${ps(publisherAckSuccessPath)} -OrchestratorSessionId 'fixture-session' -ReplayEscalationId 'alpha' -SkipWakeSuppression -NowMs 1000
+        $publisherAckSuccessDisk = Get-MechanicalJsonStateFile -Path ${ps(publisherAckSuccessPath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+
+        Set-FixtureState -Path ${ps(publisherAckFailurePath)} -Record (New-FixtureRecord)
+        $script:PublisherDeliveryStatePath = ${ps(publisherAckFailurePath)}
+        $script:PublisherDeliveryMode = 'ack-failure'
+        $null = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'publisher-failure' -Payload @{ failure_kind = 'fixture' } -StatePath ${ps(publisherAckFailurePath)} -OrchestratorSessionId 'fixture-session' -ReplayEscalationId 'alpha' -SkipWakeSuppression -NowMs 1000
+        $publisherAckFailureDisk = Get-MechanicalJsonStateFile -Path ${ps(publisherAckFailurePath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+
+        Set-FixtureState -Path ${ps(publisherDeletePath)} -Record (New-FixtureRecord)
+        $script:PublisherDeliveryStatePath = ${ps(publisherDeletePath)}
+        $script:PublisherDeliveryMode = 'delete'
+        $null = Publish-OrchestratorEscalation -EscalationClassId 'escalation-dead-worker-recovery' -CorrelationKey 'publisher-delete' -Payload @{ failure_kind = 'fixture' } -StatePath ${ps(publisherDeletePath)} -OrchestratorSessionId 'fixture-session' -ReplayEscalationId 'alpha' -SkipWakeSuppression -NowMs 1000
+        $publisherDeleteDisk = Get-MechanicalJsonStateFile -Path ${ps(publisherDeletePath)} -DefaultState $Script:OrchestratorEscalationDefaultState -ActionTracking
+
         [pscustomobject]@{
           ackMidTickOk = [bool]$ackMidTick.ok
           ackMidTickState = [string]$ackMerged.records['alpha'].terminalState
           releaseWriterState = [string]$releaseMerged.records['alpha'].terminalState
           deleteWriterMissing = -not $deleteMerged.records.ContainsKey('alpha')
+          publisherAckSuccessState = [string]$publisherAckSuccessDisk.records['alpha'].terminalState
+          publisherAckFailureState = [string]$publisherAckFailureDisk.records['alpha'].terminalState
+          publisherDeleteMissing = -not $publisherDeleteDisk.records.ContainsKey('alpha')
         } | ConvertTo-Json -Compress
       `,
     ],
@@ -108,4 +161,13 @@ describe('escalation-store ACK and quarantine writers', () => {
   });
   it('preserves an actual quarantine release', () => expect(matrix.releaseWriterState).toBe('open'));
   it('preserves an actual quarantine deletion', () => expect(matrix.deleteWriterMissing).toBe(true));
+  it('preserves an ACK written inside successful publisher delivery', () => {
+    expect(matrix.publisherAckSuccessState).toBe('acked');
+  });
+  it('preserves an ACK written before publisher delivery fails', () => {
+    expect(matrix.publisherAckFailureState).toBe('acked');
+  });
+  it('does not resurrect a record deleted inside publisher delivery', () => {
+    expect(matrix.publisherDeleteMissing).toBe(true);
+  });
 });
