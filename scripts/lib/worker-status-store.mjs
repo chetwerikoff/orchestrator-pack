@@ -9,6 +9,12 @@ import { normalizeSha, toArray } from '../../docs/review-reconcile-primitives.mj
 import { classifyRequiredCiLevel } from '../../docs/review-ready-stuck-guard.mjs';
 import { readStdinJson, runStdinJsonCli } from '../../docs/review-mechanical-cli.mjs';
 import { resolveSessionPrBinding } from '../../docs/session-pr-binding-resolver.mjs';
+import {
+  evictPrSessionBindings,
+  lookupBindingBySession,
+  readPrSessionBindingCacheFile,
+  resolvePrSessionBindingCachePath,
+} from '../../docs/pr-session-binding-cache.mjs';
 
 export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
@@ -266,6 +272,88 @@ function latestReport(input = {}) {
 }
 
 
+function resolveWorkerStatusBindingCachePath(input = {}, env = process.env) {
+  const explicit = String(input.bindingCachePath ?? '').trim();
+  if (explicit) return explicit;
+  if (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR) {
+    return join(String(env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR), 'pr-session-binding-cache.json');
+  }
+  return resolvePrSessionBindingCachePath(env);
+}
+
+function normalizeRepoSlug(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function resolveWorkerStatusBindingRepoSlug(input, session, openPrs, store, sessionId, env) {
+  const explicit = normalizeRepoSlug(
+    input.repoSlug
+      ?? session.repoSlug
+      ?? env.AO_REPO_SLUG
+      ?? env.GITHUB_REPOSITORY,
+  );
+  if (explicit) return { repoSlug: explicit, failureReason: '' };
+
+  const openPrRepo = toArray(openPrs)
+    .map((pr) => normalizeRepoSlug(pr?.repoSlug ?? pr?.repository))
+    .find(Boolean);
+  if (openPrRepo) return { repoSlug: openPrRepo, failureReason: '' };
+
+  const cacheRepos = new Set(
+    Object.values(store.records ?? {})
+      .filter((record) => !record?.superseded && sessionIdOf(record) === sessionId)
+      .map((record) => normalizeRepoSlug(record?.repoSlug))
+      .filter(Boolean),
+  );
+  if (cacheRepos.size === 1) {
+    return { repoSlug: [...cacheRepos][0], failureReason: '' };
+  }
+  if (cacheRepos.size > 1) {
+    return { repoSlug: '', failureReason: 'binding_cache_repo_ambiguous' };
+  }
+  return { repoSlug: '', failureReason: '' };
+}
+
+function resolveWorkerStatusCachedBinding(input, session, openPrs, headHint) {
+  const sessionId = sessionIdOf(session);
+  if (!sessionId) return { binding: null, failureReason: '' };
+
+  try {
+    const env = input.env ?? process.env;
+    const cachePath = resolveWorkerStatusBindingCachePath(input, env);
+    const store = readPrSessionBindingCacheFile(cachePath);
+    const repo = resolveWorkerStatusBindingRepoSlug(input, session, openPrs, store, sessionId, env);
+    if (!repo.repoSlug) return { binding: null, failureReason: repo.failureReason };
+
+    evictPrSessionBindings({
+      store,
+      openPrs,
+      nowMs: Number(input.nowMs ?? Date.now()),
+      openListAuthoritative: input.openListAuthoritative === true,
+      repoSlug: repo.repoSlug,
+    });
+    const record = lookupBindingBySession(store, repo.repoSlug, sessionId);
+    if (!record || Number(record.prNumber ?? 0) <= 0) {
+      return { binding: null, failureReason: '' };
+    }
+
+    const prNumber = Number(record.prNumber);
+    const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === prNumber);
+    return {
+      binding: {
+        ok: true,
+        prNumber,
+        headSha: normalizeSha(prRow?.headRefOid) || headHint || normalizeSha(record.headSha),
+        bindingSource: `binding_cache:${String(record.source ?? 'unknown')}`,
+        bindingCacheGeneration: Number(store.generation ?? 0),
+      },
+      failureReason: '',
+    };
+  } catch {
+    return { binding: null, failureReason: 'binding_cache_read_failed' };
+  }
+}
+
 export function resolveWorkerStatusSessionBinding(input = {}) {
   const session = input.session ?? {};
   const openPrs = toArray(input.openPrs ?? input.githubSnapshot?.openPrs);
@@ -280,6 +368,10 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       bindingSource: 'explicit_pr',
     };
   }
+
+  const cached = resolveWorkerStatusCachedBinding(input, session, openPrs, headHint);
+  if (cached.binding) return cached.binding;
+
   const binding = resolveSessionPrBinding(session, openPrs, {
     headSha: headHint || undefined,
     sessionDetail: input.sessionDetail ?? null,
@@ -293,11 +385,12 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       headSha: normalizeSha(prRow?.headRefOid) || headHint,
       bindingSource: binding.source,
       enriched: Boolean(binding.enriched),
+      bindingDiagnostic: cached.failureReason || undefined,
     };
   }
   return {
     ok: false,
-    reason: String(binding.deferReason ?? 'binding_miss'),
+    reason: String(cached.failureReason || binding.deferReason || 'binding_miss'),
     prNumber: 0,
     headSha: headHint,
     bindingSource: binding.source ?? 'none',
