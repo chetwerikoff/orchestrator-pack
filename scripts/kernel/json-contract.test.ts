@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import '../fleet-liveness.cases.ts';
+import '../fleet-liveness-census.cases.ts';
 import {
   parseCaptureManifest,
   parseDaemonStatusCapture,

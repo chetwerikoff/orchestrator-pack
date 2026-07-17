@@ -66,8 +66,8 @@ describe('pre-delete legacy captures', () => {
   });
 
   it('keeps real-tree PASS stdout byte-compatible with positive captures', () => {
-    const report = runGateRunner(repoRoot);
     const positives = golden.captures.filter((item) => item.case === 'real-clean-tree');
+    const report = runGateRunner(repoRoot, positives.map((item) => item.gateId));
     for (const item of positives) {
       const result = report.results.find((candidate) => candidate.gateId === item.gateId);
       expect(result?.status, item.gateId).toBe('PASS');

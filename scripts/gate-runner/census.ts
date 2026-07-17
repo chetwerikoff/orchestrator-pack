@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { failGate, passGate, type EvidenceObservation, type GateResult } from './contracts.ts';
-import { populationDigest } from './census-generator.ts';
+import { migrationOwnershipDigest, populationDigest } from './census-generator.ts';
+import { VERIFY_REQUIRED_FILES } from './bulk-declarative-gates.ts';
+import { VERIFY_CONTRACT_MARKERS, VERIFY_PROMPT_GLOB } from './custom/bulk-static-gates.ts';
+import {
+  WAVE_3B_MIGRATION_INVENTORY_PATH,
+  parseWave3bMigrationInventory,
+  validateWave3bMigrationInventory,
+} from './wave-3b-migration-inventory.ts';
 import type { SourceSnapshot } from './source-snapshot.ts';
 
 export const LEGACY_CENSUS_CLASSIFICATIONS = [
@@ -39,8 +46,21 @@ export const DEFERRED_WAVES = [
 
 export type CensusClassification = (typeof CENSUS_CLASSIFICATIONS)[number];
 export type DeferredWave = (typeof DEFERRED_WAVES)[number];
+export const PORTED_WAVES = ['3.a', '3.b'] as const;
+export type PortedWave = (typeof PORTED_WAVES)[number];
 export const CENSUS_SOURCE_KINDS = ['check-script', 'verify-script-member', 'verify-inline', 'check-reusable-behavior'] as const;
 export type CensusSourceKind = (typeof CENSUS_SOURCE_KINDS)[number];
+export const LEGACY_REFERENCE_KINDS = [
+  'verify-script-call',
+  'verify-inline-call',
+  'behavior-container',
+  'powershell-delegation',
+  'powershell-wrapper-binding',
+  'workflow-step',
+  'operator-command',
+  'test-invocation',
+] as const;
+export type LegacyReferenceKind = (typeof LEGACY_REFERENCE_KINDS)[number];
 
 export interface CensusEntry {
   readonly id: string;
@@ -49,7 +69,12 @@ export interface CensusEntry {
   readonly marker: string;
   readonly classification: CensusClassification;
   readonly gateIds?: readonly string[];
-  readonly legacyReference?: { readonly path: string; readonly marker: string };
+  readonly portedInWave?: PortedWave;
+  readonly legacyReference?: {
+    readonly path: string;
+    readonly marker: string;
+    readonly kind: LegacyReferenceKind;
+  };
   readonly deferredWave?: DeferredWave;
   readonly retirementJustification?: {
     readonly reasonCode: string;
@@ -63,12 +88,14 @@ export interface GateCensus {
   readonly issue: 830;
   readonly wave: '3.a' | '3.b';
   readonly migrationIssue?: 841;
+  readonly migrationInventoryPath?: typeof WAVE_3B_MIGRATION_INVENTORY_PATH;
   readonly baseCommitSha: string;
   readonly sourceHashes: Readonly<Record<string, string>>;
   readonly generation: {
     readonly tool: 'scripts/gate-runner/census-generator.ts';
     readonly baseCommitSha: string;
     readonly populationDigest: string;
+    readonly migrationOwnershipDigest: string;
   };
   readonly populationCount: number;
   readonly counts: Readonly<Record<string, number>>;
@@ -82,11 +109,13 @@ const VALID_RETIREMENT_CODES = new Set([
   'non-proving-observation',
 ]);
 const VALID_DEFERRED_WAVES = new Set<string>(DEFERRED_WAVES);
+const VALID_PORTED_WAVES = new Set<string>(PORTED_WAVES);
 
 export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json';
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
+const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'e72c1eb63da367470283a8f3f684f9b03f2eccd90fb68ddb40da337cc261f9f1';
 const EXPECTED_SOURCE_HASHES = {
   'scripts/verify.ps1': '6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9',
   'scripts/check-reusable.ps1': 'dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb',
@@ -129,6 +158,518 @@ function addMatches(target: Set<string>, text: string, pattern: RegExp, prefix: 
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function referencedScriptPath(marker: string): string {
+  return marker.startsWith('scripts/') ? marker : `scripts/${marker}`;
+}
+
+function assignedPathVariable(text: string, rootVariable: 'Root' | 'PSScriptRoot', path: string): string | undefined {
+  const match = new RegExp(
+    `\\$([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*Join-Path\\s+\\$${rootVariable}\\s+['\"]${escapeRegExp(path)}['\"]`,
+    'iu',
+  ).exec(text);
+  return match?.[1];
+}
+
+function invokesPowerShellVariable(text: string, variable: string): boolean {
+  return new RegExp(`&\\s+(?:pwsh\\s+-NoProfile\\s+-File\\s+)?\\$${escapeRegExp(variable)}\\b`, 'iu').test(text);
+}
+
+function hasVerifyScriptCall(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  const variable = assignedPathVariable(text, 'Root', target);
+  if (variable && invokesPowerShellVariable(text, variable)) return true;
+
+  const tableEntry = new RegExp(
+    `@\\{\\s*(?:Path|path)\\s*=\\s*['\"]${escapeRegExp(target)}['\"]`,
+    'iu',
+  ).test(text);
+  if (!tableEntry) return false;
+  const resolvesTablePath = /Join-Path\s+\$Root\s+\$check\.(?:Path|path)/iu.test(text);
+  const invokesResolvedPath = /&\s+\$(?:checkPath|full)\b/iu.test(text);
+  return resolvesTablePath && invokesResolvedPath;
+}
+
+function hasPowerShellDelegation(text: string, marker: string): boolean {
+  const bare = marker.replace(/^scripts\//u, '');
+  const direct = new RegExp(
+    `&\\s*\\(Join-Path\\s+\\$PSScriptRoot\\s+['\"]${escapeRegExp(bare)}['\"]\\)`,
+    'iu',
+  ).test(text);
+  if (direct) return true;
+  const variable = assignedPathVariable(text, 'PSScriptRoot', bare) ?? assignedPathVariable(text, 'Root', referencedScriptPath(marker));
+  return variable !== undefined && invokesPowerShellVariable(text, variable);
+}
+
+function hasPowerShellWrapperBinding(text: string, marker: string): boolean {
+  const bare = marker.replace(/^scripts\//u, '');
+  const variable = assignedPathVariable(text, 'PSScriptRoot', bare) ?? assignedPathVariable(text, 'Root', referencedScriptPath(marker));
+  if (!variable) return false;
+  return new RegExp(`['\"]--core['\"]\\s*,\\s*\\$${escapeRegExp(variable)}\\b`, 'iu').test(text);
+}
+
+function hasWorkflowStep(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  return new RegExp(`^\\s*run:\\s+[^\\r\\n]*(?:\\./)?${escapeRegExp(target)}(?:\\s|$)`, 'imu').test(text);
+}
+
+function hasOperatorCommand(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker);
+  return new RegExp(`pwsh(?:\\.exe)?\\s+-NoProfile\\s+-File\\s+(?:\\./)?${escapeRegExp(target)}(?:\\s|$)`, 'iu').test(text);
+}
+
+interface ParsedCall {
+  readonly name: string;
+  readonly arguments: readonly string[];
+  readonly start: number;
+  readonly end: number;
+}
+
+function isIdentifierStart(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z_$]/u.test(character);
+}
+
+function isIdentifierPart(character: string | undefined): boolean {
+  return character !== undefined && /[A-Za-z0-9_$]/u.test(character);
+}
+
+function skipLineComment(text: string, start: number): number {
+  const end = text.indexOf('\n', start + 2);
+  return end < 0 ? text.length : end + 1;
+}
+
+function skipBlockComment(text: string, start: number): number {
+  const end = text.indexOf('*/', start + 2);
+  return end < 0 ? text.length : end + 2;
+}
+
+function skipQuoted(text: string, start: number): number {
+  const quote = text[start];
+  let index = start + 1;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '\\') {
+      index += 2;
+      continue;
+    }
+    if (character === quote) return index + 1;
+    index += 1;
+  }
+  return text.length;
+}
+
+function skipTrivia(text: string, start: number): number {
+  let index = start;
+  while (index < text.length) {
+    if (/\s/u.test(text[index] ?? '')) {
+      index += 1;
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function matchingDelimiter(text: string, start: number): number {
+  const opening = text[start];
+  const closingByOpening: Readonly<Record<string, string>> = { '(': ')', '[': ']', '{': '}' };
+  const closing = opening ? closingByOpening[opening] : undefined;
+  if (!closing) return -1;
+  const stack = [closing];
+  let index = start + 1;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    const nestedClosing = character ? closingByOpening[character] : undefined;
+    if (nestedClosing) {
+      stack.push(nestedClosing);
+      index += 1;
+      continue;
+    }
+    if (character === stack.at(-1)) {
+      stack.pop();
+      if (stack.length === 0) return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+function splitTopLevel(text: string, separator = ','): string[] {
+  const values: string[] = [];
+  let start = 0;
+  let index = 0;
+  const closingByOpening: Readonly<Record<string, string>> = { '(': ')', '[': ']', '{': '}' };
+  const stack: string[] = [];
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    const closing = character ? closingByOpening[character] : undefined;
+    if (closing) {
+      stack.push(closing);
+      index += 1;
+      continue;
+    }
+    if (character === stack.at(-1)) {
+      stack.pop();
+      index += 1;
+      continue;
+    }
+    if (character === separator && stack.length === 0) {
+      values.push(text.slice(start, index).trim());
+      start = index + 1;
+    }
+    index += 1;
+  }
+  const tail = text.slice(start).trim();
+  if (tail.length > 0 || values.length > 0) values.push(tail);
+  return values;
+}
+
+function topLevelSeparator(text: string, separator: string): number {
+  let index = 0;
+  const closingByOpening: Readonly<Record<string, string>> = { '(': ')', '[': ']', '{': '}' };
+  const stack: string[] = [];
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    const closing = character ? closingByOpening[character] : undefined;
+    if (closing) {
+      stack.push(closing);
+      index += 1;
+      continue;
+    }
+    if (character === stack.at(-1)) {
+      stack.pop();
+      index += 1;
+      continue;
+    }
+    if (character === separator && stack.length === 0) return index;
+    index += 1;
+  }
+  return -1;
+}
+
+function parseCalls(text: string, acceptedNames: ReadonlySet<string>): ParsedCall[] {
+  const calls: ParsedCall[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"' || character === "'" || character === '`') {
+      index = skipQuoted(text, index);
+      continue;
+    }
+    if (text.startsWith('//', index)) {
+      index = skipLineComment(text, index);
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      index = skipBlockComment(text, index);
+      continue;
+    }
+    if (!isIdentifierStart(character)) {
+      index += 1;
+      continue;
+    }
+    const nameStart = index;
+    index += 1;
+    while (isIdentifierPart(text[index])) index += 1;
+    const name = text.slice(nameStart, index);
+    if (!acceptedNames.has(name)) continue;
+    const opening = skipTrivia(text, index);
+    if (text[opening] !== '(') continue;
+    const closing = matchingDelimiter(text, opening);
+    if (closing < 0) continue;
+    calls.push({ name, arguments: splitTopLevel(text.slice(opening + 1, closing)), start: nameStart, end: closing + 1 });
+    index = closing + 1;
+  }
+  return calls;
+}
+
+function parseStringLiteral(expression: string): string | undefined {
+  const trimmed = expression.trim();
+  const quote = trimmed[0];
+  if ((quote !== '"' && quote !== "'") || trimmed.at(-1) !== quote) return undefined;
+  let value = '';
+  for (let index = 1; index < trimmed.length - 1; index += 1) {
+    const character = trimmed[index];
+    if (character !== '\\') {
+      value += character;
+      continue;
+    }
+    index += 1;
+    const escaped = trimmed[index];
+    if (escaped === undefined) return undefined;
+    switch (escaped) {
+      case 'n': value += '\n'; break;
+      case 'r': value += '\r'; break;
+      case 't': value += '\t'; break;
+      case 'b': value += '\b'; break;
+      case 'f': value += '\f'; break;
+      case 'v': value += '\v'; break;
+      default: value += escaped; break;
+    }
+  }
+  return value;
+}
+
+function unwrapDelimited(expression: string, opening: string, closing: string): string | undefined {
+  const trimmed = expression.trim();
+  if (trimmed[0] !== opening) return undefined;
+  const end = matchingDelimiter(trimmed, 0);
+  if (end !== trimmed.length - 1 || trimmed[end] !== closing) return undefined;
+  return trimmed.slice(1, end);
+}
+
+function parseCallExpression(expression: string, acceptedNames: ReadonlySet<string>): ParsedCall | undefined {
+  const trimmed = expression.trim();
+  let index = 0;
+  let finalName: string | undefined;
+  while (index < trimmed.length) {
+    if (!isIdentifierStart(trimmed[index])) return undefined;
+    const start = index;
+    index += 1;
+    while (isIdentifierPart(trimmed[index])) index += 1;
+    finalName = trimmed.slice(start, index);
+    index = skipTrivia(trimmed, index);
+    if (trimmed[index] !== '.') break;
+    index = skipTrivia(trimmed, index + 1);
+  }
+  if (!finalName || !acceptedNames.has(finalName) || trimmed[index] !== '(') return undefined;
+  const closing = matchingDelimiter(trimmed, index);
+  if (closing < 0 || skipTrivia(trimmed, closing + 1) !== trimmed.length) return undefined;
+  return { name: finalName, arguments: splitTopLevel(trimmed.slice(index + 1, closing)), start: 0, end: trimmed.length };
+}
+
+function parseArrayExpression(expression: string): readonly string[] | undefined {
+  const contents = unwrapDelimited(expression, '[', ']');
+  return contents === undefined ? undefined : splitTopLevel(contents);
+}
+
+function parseObjectExpression(expression: string): ReadonlyMap<string, string> | undefined {
+  const contents = unwrapDelimited(expression, '{', '}');
+  if (contents === undefined) return undefined;
+  const properties = new Map<string, string>();
+  for (const property of splitTopLevel(contents)) {
+    if (property.startsWith('...')) continue;
+    const colon = topLevelSeparator(property, ':');
+    if (colon < 0) continue;
+    const rawName = property.slice(0, colon).trim();
+    const name = parseStringLiteral(rawName) ?? (/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(rawName) ? rawName : undefined);
+    if (name) properties.set(name, property.slice(colon + 1).trim());
+  }
+  return properties;
+}
+
+function normalizedRelativeLiteral(expression: string): string | undefined {
+  const literal = parseStringLiteral(expression);
+  if (literal === undefined) return undefined;
+  const normalized = literal.replaceAll('\\', '/').replace(/^\.\//u, '');
+  if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized) || normalized.split('/').includes('..')) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function isRepositoryRootExpression(expression: string): boolean {
+  const trimmed = expression.trim();
+  return trimmed === 'repoRoot' || trimmed === 'root';
+}
+
+function pathExpressionTargets(expression: string, target: string): boolean {
+  const literal = normalizedRelativeLiteral(expression);
+  if (literal !== undefined) return literal === target;
+  const call = parseCallExpression(expression, new Set(['join', 'resolve']));
+  if (!call || call.arguments.length < 2 || !isRepositoryRootExpression(call.arguments[0] ?? '')) return false;
+  const suffix: string[] = [];
+  for (const argument of call.arguments.slice(1)) {
+    const segment = normalizedRelativeLiteral(argument);
+    if (segment === undefined) return false;
+    suffix.push(segment.replace(/^\/+|\/+$/gu, ''));
+  }
+  return suffix.join('/') === target;
+}
+
+function invocationTargets(call: ParsedCall, target: string): boolean {
+  let executable: string | undefined;
+  let argv: readonly string[] | undefined;
+  if (call.name === 'spawnSync' || call.name === 'execFileSync') {
+    executable = call.arguments[0] ? parseStringLiteral(call.arguments[0])?.toLocaleLowerCase() : undefined;
+    argv = call.arguments[1] ? parseArrayExpression(call.arguments[1]) : undefined;
+  } else if (call.name === 'runProcessSync' && call.arguments[0]) {
+    const options = parseObjectExpression(call.arguments[0]);
+    const command = options?.get('command');
+    const args = options?.get('args');
+    executable = command ? parseStringLiteral(command)?.toLocaleLowerCase() : undefined;
+    argv = args ? parseArrayExpression(args) : undefined;
+  }
+  if ((executable !== 'pwsh' && executable !== 'pwsh.exe') || !argv) return false;
+  for (let index = 0; index < argv.length - 1; index += 1) {
+    const flag = argv[index];
+    const candidate = argv[index + 1];
+    if (!flag || !candidate || flag.trim().startsWith('...') || candidate.trim().startsWith('...')) continue;
+    if (parseStringLiteral(flag)?.toLocaleLowerCase() !== '-file') continue;
+    if (pathExpressionTargets(candidate, target)) return true;
+  }
+  return false;
+}
+
+function assignedIdentifier(text: string, call: ParsedCall): string | undefined {
+  const lineStart = text.lastIndexOf('\n', call.start - 1) + 1;
+  const prefix = text.slice(lineStart, call.start);
+  return /(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*$/u.exec(prefix)?.[1];
+}
+
+function statusIsAsserted(text: string, identifier: string): boolean {
+  const escaped = escapeRegExp(identifier);
+  return new RegExp(`expect\\(\\s*${escaped}\\.status(?:\\s*,[\\s\\S]*?)?\\)\\.toBe\\(`, 'u').test(text)
+    || new RegExp(`if\\s*\\([^)]*${escaped}\\.status[^)]*\\)\\s*\\{?[\\s\\S]{0,240}?throw\\b`, 'u').test(text);
+}
+
+function processResultIsFailClosed(text: string, identifier: string): boolean {
+  const escaped = escapeRegExp(identifier);
+  return new RegExp(`if\\s*\\(\\s*!\\s*${escaped}\\.ok\\s*\\)\\s*\\{[\\s\\S]{0,500}?throw\\b`, 'u').test(text)
+    || new RegExp(`expect\\(\\s*${escaped}\\.ok(?:\\s*,[\\s\\S]*?)?\\)\\.toBe\\(true\\)`, 'u').test(text)
+    || (new RegExp(`expect\\(\\s*${escaped}\\.outcome`, 'u').test(text)
+      && new RegExp(`expect\\(\\s*${escaped}\\.exitCode`, 'u').test(text));
+}
+
+function returnedHelperName(text: string, call: ParsedCall): string | undefined {
+  const prefix = text.slice(0, call.start);
+  const functionMatches = [...prefix.matchAll(/function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\([^)]*\)\s*\{/gu)];
+  const candidate = functionMatches.at(-1);
+  if (!candidate || candidate.index === undefined) return undefined;
+  const open = text.indexOf('{', candidate.index);
+  const close = matchingDelimiter(text, open);
+  if (open < 0 || close < call.end) return undefined;
+  if (!/return\s*$/u.test(text.slice(Math.max(open + 1, call.start - 40), call.start))) return undefined;
+  return candidate[1];
+}
+
+function helperStatusIsAsserted(text: string, helper: string): boolean {
+  const escaped = escapeRegExp(helper);
+  if (new RegExp(`expect\\(\\s*${escaped}\\([^)]*\\)\\.status(?:\\s*,[\\s\\S]*?)?\\)\\.toBe\\(`, 'u').test(text)) return true;
+  for (const match of text.matchAll(new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*${escaped}\\(`, 'gu'))) {
+    const identifier = match[1];
+    if (identifier && statusIsAsserted(text, identifier)) return true;
+  }
+  return false;
+}
+
+function execFileSyncFailureIsNotSwallowed(text: string, call: ParsedCall): boolean {
+  const before = text.slice(Math.max(0, call.start - 800), call.start);
+  const after = text.slice(call.end, Math.min(text.length, call.end + 800));
+  const lastTry = before.lastIndexOf('try');
+  const lastBrace = before.lastIndexOf('}');
+  return !(lastTry > lastBrace && /catch\s*(?:\([^)]*\))?\s*\{/u.test(after));
+}
+
+function invocationFailureIsFailClosed(text: string, call: ParsedCall): boolean {
+  if (call.name === 'execFileSync') return execFileSyncFailureIsNotSwallowed(text, call);
+  const identifier = assignedIdentifier(text, call);
+  if (call.name === 'runProcessSync') return identifier !== undefined && processResultIsFailClosed(text, identifier);
+  if (call.name === 'spawnSync') {
+    if (identifier && statusIsAsserted(text, identifier)) return true;
+    const helper = returnedHelperName(text, call);
+    return helper !== undefined && helperStatusIsAsserted(text, helper);
+  }
+  return false;
+}
+
+function hasTestInvocation(text: string, marker: string): boolean {
+  const target = referencedScriptPath(marker).replaceAll('\\', '/');
+  const calls = parseCalls(text, new Set(['spawnSync', 'execFileSync', 'runProcessSync']));
+  return calls.some((call) => invocationTargets(call, target) && invocationFailureIsFailClosed(text, call));
+}
+
+function hasBehaviorContainerReference(entry: CensusEntry, text: string): boolean {
+  switch (entry.id) {
+    case 'check-reusable:allow-no-git':
+      return /if\s*\(\$AllowNoGit\)\s*\{\s*exit\s+0\s*\}/iu.test(text);
+    case 'check-reusable:allowed-path-patterns':
+      return /\$allowedPathPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:allowed-root-patterns':
+      return /\$allowedRootPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:exception-patterns':
+      return /\$exceptionPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:forbidden-patterns':
+      return /\$forbiddenPatterns\s*=\s*@\(/iu.test(text);
+    case 'check-reusable:git-command-presence':
+      return /if\s*\(\s*-not\s*\(Get-Command\s+git\b[^)]*\)\s*\)\s*\{/iu.test(text)
+        && /Write-Host\s+['"]\[WARN\] git not found; cannot inspect tracked files\.['"]/iu.test(text);
+    case 'check-reusable:tracked-file-enumeration':
+      return /&\s+git\s+-C\s+\$Root\s+ls-files\b/iu.test(text);
+    case 'check-reusable:violation-aggregation':
+      return /if\s*\(\$Violations\.Count\s+-gt\s+0\)\s*\{/iu.test(text);
+    case 'check-reusable:worktree-detection':
+      return /&\s+git\s+-C\s+\$Root\s+rev-parse\s+--is-inside-work-tree\b/iu.test(text);
+    default:
+      return false;
+  }
+}
+
+
+function legacyReferenceIsWired(entry: CensusEntry, snapshot: SourceSnapshot): boolean {
+  const reference = entry.legacyReference;
+  if (!reference) return false;
+  const text = snapshot.files.get(reference.path);
+  if (text === undefined) return false;
+  switch (reference.kind) {
+    case 'verify-script-call': return hasVerifyScriptCall(text, reference.marker);
+    case 'verify-inline-call': return discoverVerifyInlineIds(text).has(entry.id);
+    case 'behavior-container': return hasBehaviorContainerReference(entry, text);
+    case 'powershell-delegation': return hasPowerShellDelegation(text, reference.marker);
+    case 'powershell-wrapper-binding': return hasPowerShellWrapperBinding(text, reference.marker);
+    case 'workflow-step': return hasWorkflowStep(text, reference.marker);
+    case 'operator-command': return hasOperatorCommand(text, reference.marker);
+    case 'test-invocation': return hasTestInvocation(text, entry.sourcePath);
+  }
+}
+
 export function discoverVerifyInlineIds(verify: string): Set<string> {
   const ids = new Set<string>();
   addMatches(ids, verify, /Test-CommandVersion\s+-Command\s+'([^']+)'/gu, 'verify-inline:command-version:');
@@ -155,6 +696,9 @@ function validateHeader(census: GateCensus, failures: string[]): void {
   if (census.version !== 2 || census.wave !== '3.b' || census.migrationIssue !== 841) {
     failures.push('schema v2 census must bind to migration issue 841 / wave 3.b while retaining issue 830 provenance');
   }
+  if (census.migrationInventoryPath !== WAVE_3B_MIGRATION_INVENTORY_PATH) {
+    failures.push(`schema v2 census must bind to ${WAVE_3B_MIGRATION_INVENTORY_PATH}`);
+  }
 }
 
 export function validateCensusSchema(census: GateCensus): string[] {
@@ -177,7 +721,11 @@ export function validateCensusSchema(census: GateCensus): string[] {
     }
 
     if (isDeferred(entry)) {
-      if (!entry.legacyReference?.path || !entry.legacyReference.marker) failures.push(`${entry.id}: deferred row lacks a cited legacy invocation`);
+      if (!entry.legacyReference?.path || !entry.legacyReference.marker || !entry.legacyReference.kind) {
+        failures.push(`${entry.id}: deferred row lacks a typed legacy invocation`);
+      } else if (!LEGACY_REFERENCE_KINDS.includes(entry.legacyReference.kind)) {
+        failures.push(`${entry.id}: invalid legacy reference kind ${String(entry.legacyReference.kind)}`);
+      }
       if (entry.classification === 'deferred-to-named-wave') {
         if (!entry.deferredWave || !VALID_DEFERRED_WAVES.has(entry.deferredWave)) failures.push(`${entry.id}: deferred row lacks a valid named sibling wave`);
       } else if (entry.deferredWave !== undefined) {
@@ -190,8 +738,21 @@ export function validateCensusSchema(census: GateCensus): string[] {
 
     if (isPorted(entry)) {
       if (!entry.gateIds || entry.gateIds.length === 0) failures.push(`${entry.id}: ported row lacks gateIds`);
-    } else if (entry.gateIds && entry.gateIds.length > 0) {
-      failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
+      if (census.version === 2 && (!entry.portedInWave || !VALID_PORTED_WAVES.has(entry.portedInWave))) {
+        failures.push(`${entry.id}: schema v2 ported row lacks a valid portedInWave owner`);
+      }
+      if (census.version === 1 && entry.portedInWave !== undefined) failures.push(`${entry.id}: schema v1 cannot claim portedInWave`);
+    } else {
+      if (entry.gateIds && entry.gateIds.length > 0) failures.push(`${entry.id}: non-ported row cannot be admitted to the runner`);
+      if (entry.portedInWave !== undefined) failures.push(`${entry.id}: non-ported row cannot claim portedInWave`);
+    }
+
+    if (isDeferred(entry) && entry.sourceKind === 'check-script'
+      && entry.legacyReference?.kind === 'test-invocation') {
+      const referencedTarget = referencedScriptPath(entry.legacyReference.marker);
+      if (referencedTarget !== entry.sourcePath) {
+        failures.push(`${entry.id}: test-backed legacy invocation must target the retained PowerShell wrapper ${entry.sourcePath}`);
+      }
     }
 
     if (isRetired(entry)) {
@@ -216,6 +777,13 @@ export function validateCensusSchema(census: GateCensus): string[] {
   if (census.generation?.baseCommitSha !== census.baseCommitSha) failures.push('census generation provenance is not bound to the frozen pre-change commit');
   const digest = populationDigest(census.entries);
   if (census.generation?.populationDigest !== digest) failures.push(`generated population digest drift: committed=${census.generation?.populationDigest ?? '<missing>'} actual=${digest}`);
+  const ownershipDigest = migrationOwnershipDigest(census.entries);
+  if (census.generation?.migrationOwnershipDigest !== ownershipDigest) {
+    failures.push(`generated migration ownership digest drift: committed=${census.generation?.migrationOwnershipDigest ?? '<missing>'} actual=${ownershipDigest}`);
+  }
+  if (ownershipDigest !== EXPECTED_MIGRATION_OWNERSHIP_DIGEST) {
+    failures.push(`frozen migration ownership digest drift: expected=${EXPECTED_MIGRATION_OWNERSHIP_DIGEST} actual=${ownershipDigest}`);
+  }
   for (const [path, hash] of Object.entries(census.sourceHashes)) {
     if (!path || !/^[0-9a-f]{64}$/u.test(hash)) failures.push(`invalid frozen source hash for ${path || '<empty>'}`);
   }
@@ -249,6 +817,26 @@ export function evaluateCensus(
   registeredGateIds: ReadonlySet<string>,
 ): GateResult {
   const failures = validateCensusSchema(census);
+  const inventoryText = snapshot.files.get(WAVE_3B_MIGRATION_INVENTORY_PATH);
+  if (inventoryText === undefined) {
+    failures.push(`Wave 3.b migration inventory is missing: ${WAVE_3B_MIGRATION_INVENTORY_PATH}`);
+  } else {
+    try {
+      const inventory = parseWave3bMigrationInventory(inventoryText);
+      failures.push(...validateWave3bMigrationInventory(
+        inventory,
+        census.entries,
+        registeredGateIds,
+        {
+          requiredFiles: VERIFY_REQUIRED_FILES,
+          contractMarkers: VERIFY_CONTRACT_MARKERS,
+          promptGlob: VERIFY_PROMPT_GLOB,
+        },
+      ));
+    } catch (error) {
+      failures.push(`Wave 3.b migration inventory is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const baselineScripts = new Map(
     census.entries
       .filter((entry) => entry.sourceKind === 'check-script')
@@ -285,8 +873,9 @@ export function evaluateCensus(
     if (deferred) {
       const reference = entry.legacyReference;
       if (!reference) continue;
-      const text = snapshot.files.get(reference.path);
-      if (text === undefined || !text.includes(reference.marker)) failures.push(`${entry.id}: cited legacy invocation is no longer wired at ${reference.path}`);
+      if (!legacyReferenceIsWired(entry, snapshot)) {
+        failures.push(`${entry.id}: typed legacy invocation is no longer executable at ${reference.path} (${reference.kind})`);
+      }
     }
   }
 
@@ -295,7 +884,7 @@ export function evaluateCensus(
   const allReusableRowsDeferred = reusableRows.length > 0 && reusableRows.every(isDeferred);
   if (allReusableRowsDeferred) {
     if (checkReusable === undefined) failures.push('scripts/check-reusable.ps1 is missing while its behaviors remain legacy-enforced');
-    else if (census.version === 1 && sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
+    else if (sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
       failures.push('scripts/check-reusable.ps1 behavior surface drifted without census reclassification');
     }
   } else {

@@ -158,7 +158,7 @@ function isGraphNode(rel) {
 }
 
 function isDeletionGraphNode(rel) {
-  if (!isGraphNode(rel) || isTestFile(rel)) return false;
+  if (!isGraphNode(rel) || isTestFile(rel) || rel.startsWith('scripts/fixtures/')) return false;
   if (/^docs\/[^/]+\.mjs$/i.test(rel)) return true;
   if (!rel.startsWith('scripts/')) return false;
   const ext = path.posix.extname(rel).toLowerCase();

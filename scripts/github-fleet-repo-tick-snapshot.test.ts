@@ -23,7 +23,7 @@ const REPO_TICK_CONSUMERS = buildGithubFleetWakeConsumers(repoRoot, {
 function withMultiPrHarness(prefix: string): FleetHarness {
   const harness = createGithubFleetCacheHarness(prefix);
   harness.env.GH_FLEET_TEST_LIST_JSON = multiPrList;
-  harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '30';
+  harness.env.GH_FLEET_REPO_TICK_INTERVAL_SECONDS = '300';
   harness.env.GH_FLEET_PR_VIEW_TTL_SECONDS = '15';
   harness.env.GH_FLEET_CI_CHECKS_TTL_SECONDS = '15';
   return harness;
@@ -217,16 +217,18 @@ Write-Output 'expired'
     expect(warm.status).toBe(0);
     const baselineList = countGithubFleetGhRoute(harness.auditFile, /\bpr list\b/);
 
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-
     const staleScript = `
 $ErrorActionPreference = 'Stop'
 . '${join(repoRoot, 'scripts/lib/Gh-FleetInventoryCache.ps1').replace(/'/g, "''")}'
 $paths = Get-GhFleetRepoTickPaths -RepoRoot '${repoRoot.replace(/'/g, "''")}'
+$record = Get-Content -LiteralPath $paths.GenerationPath -Raw | ConvertFrom-Json
+$record.storedAt = ([datetime]::UtcNow.AddSeconds(-5)).ToString('o')
+$record.expiresAt = ([datetime]::UtcNow.AddSeconds(-3)).ToString('o')
+$record | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $paths.GenerationPath -Encoding utf8NoBOM
 New-Item -ItemType File -Path $paths.LockPath -Force | Out-Null
 try {
-  $record = Ensure-GhFleetRepoTickSnapshot -RepoRoot '${repoRoot.replace(/'/g, "''")}' -Consumer 'stale-window-test' -DataClass 'open_pr_list'
-  if (-not $record.generation) { throw 'expected stale generation' }
+  $staleRecord = Ensure-GhFleetRepoTickSnapshot -RepoRoot '${repoRoot.replace(/'/g, "''")}' -Consumer 'stale-window-test' -DataClass 'open_pr_list'
+  if (-not $staleRecord.generation) { throw 'expected stale generation' }
   Write-Output 'stale-served'
 }
 finally {

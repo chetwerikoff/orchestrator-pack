@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "regressionAnchors": [
+    "review-ready-report-state-seed",
+    "review-trigger-reeval"
+  ],
+  "sharedTransports": {
+    "gh": "scripts/gh",
+    "ao": "scripts/lib/Orchestrator-SideProcessProgress.ps1",
+    "terminalOutcome": "scripts/lib/Orchestrator-SideProcessProgress.ps1",
+    "runtime": "scripts/kernel/side-process-liveness.ts"
+  },
+  "children": [
+    {
+      "id": "review-trigger-reconcile",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 120000,
+      "maxLocalComputeGapMs": 600000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/review-trigger-reconcile.ps1",
+        "scripts/orchestrator-wake-supervisor.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "review-trigger-reeval",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 8000,
+      "maxLocalComputeGapMs": 8000,
+      "localProgressMode": "external-call-checkpoints",
+      "evidence": [
+        "scripts/review-trigger-reeval.ps1",
+        "scripts/fleet-liveness.cases.ts",
+        "scripts/fleet-liveness-census.cases.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "review-ready-report-state-seed",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 8000,
+      "maxLocalComputeGapMs": 8000,
+      "localProgressMode": "existing-work-evidence-plus-external-call-checkpoints",
+      "evidence": [
+        "scripts/review-ready-report-state-seed.ps1",
+        "scripts/lib/Review-ReadyReportStateSeedProgress.ps1",
+        "scripts/fleet-liveness.cases.ts",
+        "scripts/fleet-liveness-census.cases.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "ci-green-wake-reconcile",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 60000,
+      "maxLocalComputeGapMs": 60000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/ci-green-wake-reconcile.ps1",
+        "scripts/orchestrator-wake-supervisor.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "dead-worker-reconcile",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 60000,
+      "maxLocalComputeGapMs": 60000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/dead-worker-reconcile.ps1",
+        "scripts/dead-worker-reconcile.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "worker-message-submit-reconcile",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 30000,
+      "maxLocalComputeGapMs": 30000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/worker-message-submit-reconcile.ps1",
+        "scripts/orchestrator-wake-supervisor.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "review-start-claim-reaper",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 30000,
+      "maxLocalComputeGapMs": 30000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/review-start-claim-reaper.ps1",
+        "scripts/review-start-claim.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "ci-failure-notification-reconcile",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 60000,
+      "maxLocalComputeGapMs": 60000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/ci-failure-notification-reconcile.ps1",
+        "scripts/orchestrator-wake-supervisor.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    },
+    {
+      "id": "escalation-router",
+      "mode": "wired",
+      "maxExternalCallTimeoutMs": 30000,
+      "maxLocalComputeGapMs": 30000,
+      "localProgressMode": "bounded-local-step",
+      "evidence": [
+        "scripts/orchestrator-escalation-router.ps1",
+        "scripts/orchestrator-wake-supervisor.test.ts"
+      ],
+      "externalCallKinds": [
+        "gh",
+        "ao"
+      ]
+    }
+  ]
+}

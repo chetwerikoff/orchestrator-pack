@@ -186,7 +186,7 @@ before commit):
 4. Run guards:
 
    ```powershell
-   pwsh -NoProfile -File scripts/check-external-output-shape-guard.ps1
+   node --experimental-strip-types scripts/gate-runner/runner.ts --gate external-output-shape-guard
    npx vitest run scripts/external-output-shape-guard.test.ts
    ```
 

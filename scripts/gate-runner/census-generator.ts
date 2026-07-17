@@ -2,13 +2,16 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isDirectExecution, readGitFile } from '#opk-toolchain/baseline-io';
 import { runProcess } from '#opk-kernel/subprocess';
-import type { CensusSourceKind } from './census.ts';
+import type { CensusClassification, CensusSourceKind, PortedWave } from './census.ts';
 
 export interface CensusPopulationEntry {
   readonly id: string;
   readonly sourceKind: CensusSourceKind;
   readonly sourcePath: string;
   readonly marker: string;
+  readonly classification?: CensusClassification;
+  readonly gateIds?: readonly string[];
+  readonly portedInWave?: PortedWave;
 }
 
 export interface PrechangeSourceSnapshot {
@@ -23,6 +26,7 @@ export interface GeneratedPopulationBaseline {
   readonly populationCount: number;
   readonly counts: Readonly<Record<CensusSourceKind, number>>;
   readonly populationDigest: string;
+  readonly migrationOwnershipDigest: string;
   readonly entries: readonly CensusPopulationEntry[];
 }
 
@@ -106,6 +110,20 @@ export function populationDigest(entries: readonly CensusPopulationEntry[]): str
   return sha256(`${payload}\n`);
 }
 
+export function migrationOwnershipDigest(entries: readonly CensusPopulationEntry[]): string {
+  const payload = entries
+    .map(({ id, classification, gateIds, portedInWave }) => ({
+      id,
+      classification: classification ?? null,
+      gateIds: [...(gateIds ?? [])].sort(compareOrdinal),
+      portedInWave: portedInWave ?? null,
+    }))
+    .sort((left, right) => compareOrdinal(left.id, right.id))
+    .map((entry) => JSON.stringify(entry))
+    .join('\n');
+  return sha256(`${payload}\n`);
+}
+
 export function generatePrechangePopulation(
   baseCommitSha: string,
   snapshot: PrechangeSourceSnapshot,
@@ -173,6 +191,7 @@ export function generatePrechangePopulation(
     populationCount: entries.length,
     counts,
     populationDigest: populationDigest(entries),
+    migrationOwnershipDigest: migrationOwnershipDigest(entries),
     entries,
   };
 }
