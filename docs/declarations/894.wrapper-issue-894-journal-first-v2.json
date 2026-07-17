@@ -1,0 +1,34 @@
+{
+  "issue_number": 894,
+  "iteration_id": "wrapper-issue-894-journal-first-v2",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "wrapper-issue-894-journal-first",
+  "created_at": "2026-07-17T15:20:00.000Z",
+  "baseline": {
+    "commit_sha": "0336ddac7f1c605ecf3279ee4b13dd3a9ccab952",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4bfcc314606cb8ef0c17abd319e0a0b08a157e7a9bf9422cc6017bfe789dc019"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/ao-0-10-review-trigger.test.ts",
+    "scripts/check-scripted-review-confirmed-delivery-gate.ps1",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1",
+    "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/pack-review-delivery.js",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/orchestrator-message-catalog.json",
+    "scripts/pack-review-delivery.test.ts",
+    "scripts/pack-review-entrypoint-decoupling.test.ts",
+    "scripts/pack-review-runner-severity.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

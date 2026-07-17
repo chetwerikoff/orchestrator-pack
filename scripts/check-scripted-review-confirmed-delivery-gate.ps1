@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: Issue #669 scripted review confirmed-delivery gate.
+  Regression guard: Issue #669 confirmed-delivery surfaces, updated by Issue #894 journal-first runner ownership.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -70,33 +70,54 @@ if ($ps1 -notmatch 'New-ScriptedReviewDeliveryGatePollStepPayload') {
 
 $runbookText = Get-Content -LiteralPath $runbook -Raw
 $invokePackReview = Join-Path $Root 'scripts/invoke-pack-review.ps1'
+$runnerPath = Join-Path $Root 'scripts/pack-review-runner.ts'
+$deliveryModulePath = Join-Path $Root 'scripts/lib/pack-review-delivery.ts'
 $postSubmitLib = Join-Path $Root 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'
 $postSubmitMjs = Join-Path $Root 'docs/scripted-review-post-submit-delivery.mjs'
-foreach ($path in @($invokePackReview, $postSubmitLib, $postSubmitMjs)) {
+foreach ($path in @($invokePackReview, $runnerPath, $deliveryModulePath, $postSubmitLib, $postSubmitMjs)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Write-Host "Missing required post-submit wiring file: $path"
+        Write-Host "Missing required delivery ownership file: $path"
         exit 1
     }
 }
 
 $invokeText = Get-Content -LiteralPath $invokePackReview -Raw
+$runnerText = Get-Content -LiteralPath $runnerPath -Raw
+$deliveryModuleText = Get-Content -LiteralPath $deliveryModulePath -Raw
 $postSubmitLibText = Get-Content -LiteralPath $postSubmitLib -Raw
 $postSubmitMjsText = Get-Content -LiteralPath $postSubmitMjs -Raw
-if ($invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDelivery\.ps1') {
-    Write-Host 'invoke-pack-review.ps1 must dot-source Invoke-ScriptedReviewPostSubmitDelivery.ps1'
+
+if ($invokeText -match 'Invoke-ScriptedReviewPostSubmitDelivery\.ps1' -or
+    $invokeText -match 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview') {
+    Write-Host 'invoke-pack-review.ps1 must not own post-verdict delivery after Issue #894'
     exit 1
 }
-$postSubmitCallCount = ([regex]::Matches($invokeText, 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview')).Count
-if ($postSubmitCallCount -lt 2) {
-    Write-Host 'invoke-pack-review.ps1 must invoke post-submit delivery on both successful wrapper branches'
+foreach ($requiredRunnerSymbol in @('deliverPackReviewVerdict', 'recordPackReviewPendingStatus', 'recordMalformedPackReviewStatus')) {
+    if ($runnerText -notmatch [regex]::Escape($requiredRunnerSymbol)) {
+        Write-Host "pack-review-runner.ts missing journal-first delivery symbol: $requiredRunnerSymbol"
+        exit 1
+    }
+}
+$deliveryStart = $deliveryModuleText.IndexOf('export async function deliverPackReviewVerdict')
+if ($deliveryStart -lt 0) {
+    Write-Host 'pack-review-delivery.ts missing deliverPackReviewVerdict'
     exit 1
 }
-if ($invokeText -notmatch 'invoke-scripted-review-post-submit-delivery\.ps1' -and $invokeText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview') {
-    Write-Host 'invoke-pack-review.ps1 must route through invoke-scripted-review-post-submit-delivery seam'
+$deliveryBody = $deliveryModuleText.Substring($deliveryStart)
+$journalIndex = $deliveryBody.IndexOf('await journalVerdict')
+$commentIndex = $deliveryBody.IndexOf('await options.postGithubComment')
+$statusIndex = $deliveryBody.IndexOf('await options.writeRequiredStatus')
+$workerIndex = $deliveryBody.IndexOf('await options.notifyWorker')
+if ($journalIndex -lt 0 -or $commentIndex -lt 0 -or $statusIndex -lt 0 -or $workerIndex -lt 0) {
+    Write-Host 'pack-review-delivery.ts missing one or more journal/delivery channel calls'
+    exit 1
+}
+if ($journalIndex -gt $commentIndex -or $journalIndex -gt $statusIndex -or $journalIndex -gt $workerIndex) {
+    Write-Host 'pack-review-delivery.ts must journal before every outbound delivery channel'
     exit 1
 }
 if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewStdoutDelivery') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must route stdout-first delivery (Issue #718)'
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must retain the isolated stdout-delivery adapter surface'
     exit 1
 }
 if ($postSubmitLibText -match 'Wait-ScriptedReviewSubmittedRun|submit_visibility_timeout') {
@@ -120,11 +141,7 @@ if ($postSubmitMjsText -notmatch 'ambiguous_overlapping_submits') {
     exit 1
 }
 if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalation') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate unattributed submit failures'
-    exit 1
-}
-if ($postSubmitLibText -notmatch 'Invoke-ScriptedReviewPostSubmitDeliveryEscalation') {
-    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must escalate delivery failures'
+    Write-Host 'Invoke-ScriptedReviewPostSubmitDelivery.ps1 must retain escalation for isolated adapter failures'
     exit 1
 }
 $registryPath = Join-Path $Root 'scripts/orchestrator-side-process-registry.json'
