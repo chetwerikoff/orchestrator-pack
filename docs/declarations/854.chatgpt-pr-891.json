@@ -1,0 +1,44 @@
+{
+  "issue_number": 854,
+  "iteration_id": "chatgpt-pr-891",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-17T02:55:00.000Z",
+  "baseline": {
+    "commit_sha": "7a08d345b03e6af87d6edcba6e531da9c71e8878",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:33d23ce2ce795d4c46a455d94455ba483999b8423bc94cab1f0c191ef6d53703"
+  },
+  "declared_paths": [
+    "scripts/lib/worker-status-store.d.mts",
+    "scripts/lib/worker-status-store.mjs",
+    "scripts/lib/WorkerStatusStore.ps1",
+    "scripts/worker-status-store.test.ts",
+    "tests/issue854-worker-status-binding-cache.mjs",
+    "tests/worker-status-store-issue854.test.ts",
+    "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:e31e131652f0a04d24b0ccd78bd0aa1923ec51cc48bb6380bc59826d3e07dc1c",
+      "new_active_scope_hash": "sha256:33d23ce2ce795d4c46a455d94455ba483999b8423bc94cab1f0c191ef6d53703",
+      "changed": {
+        "added": [
+          "scripts/lib/worker-status-store.d.mts",
+          "scripts/lib/WorkerStatusStore.ps1",
+          "scripts/worker-status-store.test.ts",
+          "tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1",
+          "tests/worker-status-store-issue854.test.ts"
+        ],
+        "removed": [
+          "tests/powershell/Issue854.WorkerStatusBindingCache.Tests.ps1"
+        ]
+      },
+      "reason": "Architect verify round 2 + Codex round 4: repoSlug seed path, mixed-generation tests, binding-result d.mts types, regression tests.",
+      "actor": "cursor-worker-140",
+      "timestamp": "2026-07-17T09:50:00.000Z",
+      "applied": true
+    }
+  ]
+}

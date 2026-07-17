@@ -8,7 +8,48 @@ import { homedir } from 'node:os';
 import { normalizeSha, toArray } from '../../docs/review-reconcile-primitives.mjs';
 import { classifyRequiredCiLevel } from '../../docs/review-ready-stuck-guard.mjs';
 import { readStdinJson, runStdinJsonCli } from '../../docs/review-mechanical-cli.mjs';
-import { resolveSessionPrBinding } from '../../docs/session-pr-binding-resolver.mjs';
+import {
+  readPrSessionBindingCacheFile,
+  resolveBindingRepoSlug,
+  resolvePrSessionBindingCachePath,
+  lookupBindingByPr,
+  lookupBindingBySession,
+  resolvePrSessionBindingForConsumer,
+} from '../../docs/pr-session-binding-cache.mjs';
+
+
+const UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS = new Set([
+  'binding_cache_conflict',
+  'head_owner_mismatch',
+]);
+
+const CACHE_GATED_TARGET_FAIL_CLOSED_REASONS = new Set([
+  'ambiguous_issue_pr_binding',
+  'ambiguous_pr_session_binding',
+]);
+
+function targetPrFailClosedBelongsToSession(store, repoSlug, sessionId, prNumber, resolution) {
+  if (!resolution?.failClosed) {
+    return false;
+  }
+  const reason = String(resolution.reason ?? '').trim();
+  if (UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS.has(reason)) {
+    return true;
+  }
+  if (!CACHE_GATED_TARGET_FAIL_CLOSED_REASONS.has(reason)) {
+    return false;
+  }
+  const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
+  if (resolvedSessionId && resolvedSessionId === sessionId) {
+    return true;
+  }
+  const prRecord = lookupBindingByPr(store, repoSlug, prNumber);
+  if (prRecord && String(prRecord.sessionId ?? '').trim() === sessionId) {
+    return true;
+  }
+  const sessionRecord = lookupBindingBySession(store, repoSlug, sessionId);
+  return Boolean(sessionRecord && Number(sessionRecord.prNumber ?? 0) === Number(prNumber));
+}
 
 export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
@@ -36,7 +77,6 @@ const REVIEW_DELIVERED_RE = new RegExp(`^(${REVIEW_DELIVERED_STATUSES.join('|')}
 const SUCCESS_CHECK_RE = /^(success|successful|passed|pass|neutral|skipped)$/i;
 const FAILURE_CHECK_RE = /^(failure|failed|fail|error|cancelled|timed_out|action_required)$/i;
 const PENDING_CHECK_RE = /^(pending|queued|in_progress|running|waiting|requested)$/i;
-
 export function resolveWorkerStatusStorePath(env = process.env) {
   if (env.AO_WORKER_STATUS_STORE) {
     return String(env.AO_WORKER_STATUS_STORE);
@@ -117,7 +157,8 @@ function asGenerationVector(value = {}) {
     repoTickGeneration: Number(value.repoTickGeneration ?? 0) || 0,
     reportStoreGeneration: Number(value.reportStoreGeneration ?? 0) || 0,
     reviewRunGeneration: Number(value.reviewRunGeneration ?? value.journalCursor ?? 0) || 0,
-    githubGeneration: Number(value.githubGeneration ?? value.bindingCacheGeneration ?? 0) || 0,
+    githubGeneration: Number(value.githubGeneration ?? 0) || 0,
+    bindingCacheGeneration: Number(value.bindingCacheGeneration ?? 0) || 0,
     writerSessionId: String(value.writerSessionId ?? '').trim(),
   };
 }
@@ -125,7 +166,7 @@ function asGenerationVector(value = {}) {
 function compareGenerationVector(a = {}, b = {}) {
   const left = asGenerationVector(a);
   const right = asGenerationVector(b);
-  for (const key of ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration']) {
+  for (const key of ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration', 'bindingCacheGeneration']) {
     if (left[key] < right[key]) return -1;
     if (left[key] > right[key]) return 1;
   }
@@ -133,7 +174,7 @@ function compareGenerationVector(a = {}, b = {}) {
 }
 
 function hasMixedOlderAndNewer(writer = {}, existing = {}) {
-  const keys = ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration'];
+  const keys = ['repoTickGeneration', 'reportStoreGeneration', 'reviewRunGeneration', 'githubGeneration', 'bindingCacheGeneration'];
   let older = false;
   let newer = false;
   for (const key of keys) {
@@ -178,15 +219,27 @@ export function shouldReloadMixedGeneration(existingRow, writerGenerationVector)
   return hasMixedOlderAndNewer(writer, existing);
 }
 
-const MERGE_GENERATION_VECTOR_KEYS = ['repoTickGeneration', 'reportStoreGeneration', 'journalCursor', 'bindingCacheGeneration'];
+const MERGE_GENERATION_VECTOR_KEYS = [
+  'repoTickGeneration',
+  'reportStoreGeneration',
+  'reviewRunGeneration',
+  'githubGeneration',
+  'bindingCacheGeneration',
+];
 
 export function mergeGenerationVectorMax(existingRow = {}, writerGenerationVector = {}) {
   const existingRaw = existingRow.generationVector ?? existingRow.sourceGeneration ?? existingRow.writerGenerationVector ?? existingRow;
   const writerRaw = writerGenerationVector ?? {};
+  const existing = asGenerationVector(existingRaw);
+  const writer = asGenerationVector(writerRaw);
   const merged = {};
   for (const key of MERGE_GENERATION_VECTOR_KEYS) {
-    merged[key] = Math.max(Number(existingRaw[key] ?? 0), Number(writerRaw[key] ?? 0));
+    merged[key] = Math.max(Number(existing[key] ?? 0), Number(writer[key] ?? 0));
   }
+  merged.journalCursor = Math.max(
+    Number(existingRaw.journalCursor ?? existing.reviewRunGeneration ?? 0),
+    Number(writerRaw.journalCursor ?? writer.reviewRunGeneration ?? 0),
+  );
   const writerSessionId = String(writerRaw.writerSessionId ?? existingRaw.writerSessionId ?? '').trim();
   if (writerSessionId) merged.writerSessionId = writerSessionId;
   return merged;
@@ -265,9 +318,70 @@ function latestReport(input = {}) {
     })[0] ?? null;
 }
 
+function normalizeRepoSlug(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function resolveWorkerStatusBindingRepoSlug(input, session, openPrs, env) {
+  const explicit = normalizeRepoSlug(
+    input.repoSlug
+      ?? session.repoSlug
+      ?? env.AO_REPO_SLUG
+      ?? env.GITHUB_REPOSITORY,
+  );
+  const openPrRepos = new Set(
+    toArray(openPrs)
+      .map((pr) => normalizeRepoSlug(pr?.repoSlug ?? pr?.repository))
+      .filter(Boolean),
+  );
+  if (!explicit && openPrRepos.size > 1) {
+    return { repoSlug: '', failureReason: 'binding_cache_repo_ambiguous' };
+  }
+  return {
+    repoSlug: resolveBindingRepoSlug(
+      { repoSlug: explicit },
+      openPrs,
+      env,
+      String(input.cwd ?? process.cwd()),
+    ),
+    failureReason: '',
+  };
+}
+
+function workerStatusBindingIsLive(input = {}) {
+  const session = input.session ?? {};
+  const os = input.osLiveness ?? {};
+  return (candidate) => {
+    const row = candidate ?? session;
+    const sessionStatus = String(row?.status ?? session?.status ?? '').toLowerCase();
+    if (os && typeof os === 'object') {
+      if (os.dead === true) return false;
+      if (os.dead === false) return true;
+      const osStatus = String(os.status ?? '').toLowerCase();
+      if (osStatus === 'pane-gone' || osStatus === 'gone') return false;
+      if (osStatus === 'pane-alive' || osStatus === 'live') return true;
+    }
+    if (typeof os === 'string') {
+      if (os === 'pane-gone' || os === 'gone') return false;
+      if (os === 'pane-alive' || os === 'live') return true;
+    }
+    return !TERMINAL_SESSION_RE.test(sessionStatus) && sessionStatus !== 'merged';
+  };
+}
+
+function workerStatusBindingFailure(reason, headSha, bindingSource = 'none') {
+  return {
+    ok: false,
+    reason,
+    prNumber: 0,
+    headSha,
+    bindingSource,
+  };
+}
 
 export function resolveWorkerStatusSessionBinding(input = {}) {
   const session = input.session ?? {};
+  const sessionId = sessionIdOf(session);
   const openPrs = toArray(input.openPrs ?? input.githubSnapshot?.openPrs);
   const explicitPr = Number(input.prNumber ?? session.prNumber ?? 0);
   const headHint = normalizeSha(input.headSha ?? input.githubHead ?? session.ownedHeadSha ?? session.headRefOid);
@@ -280,28 +394,85 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       bindingSource: 'explicit_pr',
     };
   }
-  const binding = resolveSessionPrBinding(session, openPrs, {
-    headSha: headHint || undefined,
-    sessionDetail: input.sessionDetail ?? null,
-  });
-  if (binding.bound && Number(binding.prNumber ?? 0) > 0) {
-    const prNumber = Number(binding.prNumber);
-    const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === prNumber);
+  if (!sessionId) {
+    return workerStatusBindingFailure('no_issue_binding', headHint);
+  }
+
+  const env = input.env ?? process.env;
+  const repo = resolveWorkerStatusBindingRepoSlug(input, session, openPrs, env);
+  if (repo.failureReason) {
+    return workerStatusBindingFailure(repo.failureReason, headHint);
+  }
+
+  const cachePath = String(input.bindingCachePath ?? '').trim() || resolvePrSessionBindingCachePath(env);
+  let store;
+  try {
+    store = readPrSessionBindingCacheFile(cachePath);
+  } catch {
+    return workerStatusBindingFailure('binding_cache_read_failed', headHint);
+  }
+
+  const sessionDetailsById = input.sessionDetail
+    ? { [sessionId]: input.sessionDetail }
+    : {};
+  const isLive = workerStatusBindingIsLive(input);
+  const matches = [];
+  for (const pr of openPrs) {
+    const prNumber = Number(pr?.number ?? 0);
+    if (prNumber <= 0) continue;
+    let resolution;
+    try {
+      resolution = resolvePrSessionBindingForConsumer({
+        cachePath,
+        store,
+        repoSlug: repo.repoSlug,
+        prNumber,
+        headSha: normalizeSha(pr?.headRefOid) || headHint,
+        sessions: [session],
+        openPrs,
+        sessionDetailsById,
+        nowMs: Number(input.nowMs ?? Date.now()),
+        writeBackfill: false,
+        isLive,
+      });
+    } catch {
+      return workerStatusBindingFailure('binding_cache_read_failed', headHint);
+    }
+    if (targetPrFailClosedBelongsToSession(store, repo.repoSlug, sessionId, prNumber, resolution)) {
+      const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
+      return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
+    }
+    const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
+    if (resolvedSessionId !== sessionId) {
+      continue;
+    }
+    if (resolution?.failClosed) {
+      const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
+      return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
+    }
+    matches.push({ pr, resolution });
+  }
+
+  if (matches.length > 1) {
+    return workerStatusBindingFailure('ambiguous_pr_session_binding', headHint, 'binding_contract:none');
+  }
+  if (matches.length === 1) {
+    const match = matches[0];
+    const bindingContractSource = String(match.resolution.source ?? 'unknown');
     return {
       ok: true,
-      prNumber,
-      headSha: normalizeSha(prRow?.headRefOid) || headHint,
-      bindingSource: binding.source,
-      enriched: Boolean(binding.enriched),
+      prNumber: Number(match.pr.number),
+      headSha: normalizeSha(match.pr.headRefOid) || headHint,
+      repoSlug: repo.repoSlug || undefined,
+      bindingSource: bindingContractSource === 'backfill_resolver'
+        ? 'issue_correlation'
+        : `binding_contract:${bindingContractSource}`,
+      bindingContractSource,
+      bindingCacheGeneration: Number(store.generation ?? 0),
     };
   }
-  return {
-    ok: false,
-    reason: String(binding.deferReason ?? 'binding_miss'),
-    prNumber: 0,
-    headSha: headHint,
-    bindingSource: binding.source ?? 'none',
-  };
+
+  return workerStatusBindingFailure('no_issue_binding', headHint, 'binding_contract:none');
 }
 
 export function fuseWorkerStatus(input = {}) {
@@ -386,16 +557,29 @@ export function isRowStale(row, nowMs = Date.now(), repoTickGeneration = 0) {
 }
 
 export function recomputeWorkerStatusRow(input = {}) {
-  const nowMs = Number(input.nowMs ?? Date.now());
-  const store = input.store ? createDefaultWorkerStatusStore(input.store) : null;
-  const sessionId = sessionIdOf(input.session ?? input);
+  // Binding is resolved upstream via resolveSessionBinding (Write-WorkerStatusRow ->
+  // Resolve-WorkerStatusSessionBinding). Recompute only fuses the pre-resolved
+  // binding; it must not re-resolve from cwd/env.
+  const binding = input.binding ?? { ok: false, reason: 'binding_miss', prNumber: 0, headSha: '' };
+  const effectiveInput = { ...input, binding };
+  const nowMs = Number(effectiveInput.nowMs ?? Date.now());
+  const store = effectiveInput.store ? createDefaultWorkerStatusStore(effectiveInput.store) : null;
+  const sessionId = sessionIdOf(effectiveInput.session ?? effectiveInput);
   const existing = store?.records?.[sessionId];
-  const writerVector = asGenerationVector(input.writerGenerationVector ?? input.generationVector ?? input.sourceGeneration ?? {});
+  const rawWriterVector = effectiveInput.writerGenerationVector ?? effectiveInput.generationVector ?? effectiveInput.sourceGeneration ?? {};
+  const bindingCacheGeneration = Number(binding.bindingCacheGeneration ?? rawWriterVector.bindingCacheGeneration ?? 0) || 0;
+  const writerVector = asGenerationVector({
+    ...rawWriterVector,
+    bindingCacheGeneration: Math.max(
+      Number(rawWriterVector.bindingCacheGeneration ?? 0),
+      bindingCacheGeneration,
+    ),
+  });
   const reloadedMixedGeneration = Boolean(existing && shouldReloadMixedGeneration(existing, writerVector));
   const effectiveVector = reloadedMixedGeneration
     ? mergeGenerationVectorMax(existing, writerVector)
     : writerVector;
-  const fusion = fuseWorkerStatus({ ...input, existingRow: existing, nowMs });
+  const fusion = fuseWorkerStatus({ ...effectiveInput, existingRow: existing, nowMs });
   if (existing && !reloadedMixedGeneration && shouldRefuseMonotonicWrite(existing, writerVector)) {
     return { ok: false, reason: 'monotonic_refused', store };
   }
@@ -416,10 +600,19 @@ export function recomputeWorkerStatusRow(input = {}) {
     missingReportObservedMs = anchorMs;
     lastUpdatedMs = anchorMs;
   }
+  const sourceGeneration = input.sourceGeneration && typeof input.sourceGeneration === 'object'
+    ? {
+        ...input.sourceGeneration,
+        bindingCacheGeneration: Math.max(
+          Number(input.sourceGeneration.bindingCacheGeneration ?? 0),
+          bindingCacheGeneration,
+        ),
+      }
+    : effectiveVector;
   const row = {
     schemaVersion: WORKER_STATUS_STORE_SCHEMA_VERSION,
     sessionId,
-    repoSlug: String(input.repoSlug ?? input.session?.repoSlug ?? '').trim().toLowerCase() || undefined,
+    repoSlug: String(effectiveInput.repoSlug ?? effectiveInput.session?.repoSlug ?? binding.repoSlug ?? '').trim().toLowerCase() || undefined,
     status: fusion.status,
     derivedStatus: fusion.derivedStatus ?? fusion.status,
     winningSource: fusion.winningSource,
@@ -431,7 +624,7 @@ export function recomputeWorkerStatusRow(input = {}) {
     freshnessBoundMs: freshnessMs,
     missingReportObservedMs,
     generationVector: effectiveVector,
-    sourceGeneration: input.sourceGeneration ?? effectiveVector,
+    sourceGeneration,
     reloadedMixedGeneration,
   };
   if (store) {

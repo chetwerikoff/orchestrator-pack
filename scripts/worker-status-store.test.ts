@@ -584,6 +584,8 @@ describe('worker-status mixed generation vector', () => {
       repoTickGeneration: 10,
       reportStoreGeneration: 10,
       journalCursor: 5,
+      reviewRunGeneration: 5,
+      githubGeneration: 0,
       bindingCacheGeneration: 5,
     });
   });
@@ -623,6 +625,8 @@ describe('worker-status mixed generation vector', () => {
       repoTickGeneration: 10,
       reportStoreGeneration: 10,
       journalCursor: 5,
+      reviewRunGeneration: 5,
+      githubGeneration: 0,
       bindingCacheGeneration: 5,
     });
     expect(result.store?.records['opk-c12b']?.generationVector?.repoTickGeneration).toBe(10);
