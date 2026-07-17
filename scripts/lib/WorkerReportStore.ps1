@@ -67,14 +67,14 @@ function Set-WorkerReportStoreState {
     )
 
     $default = @{
-        schemaVersion   = 2
-        lastUpdatedMs   = $null
-        generation      = 0
-        sourceRecords   = @{}
-        bindingByKey    = @{}
-        seededKeys      = @()
+        schemaVersion    = 2
+        lastUpdatedMs    = $null
+        generation       = 0
+        sourceRecords    = @{}
+        bindingByKey     = @{}
+        seededKeys       = @()
         deferredScanKeys = @()
-        githubSnapshot  = $null
+        githubSnapshot   = $null
     }
     Set-MechanicalJsonStateFile -Path $Path -State $State -DefaultState $default -JsonDepth 30
 }
@@ -100,7 +100,6 @@ function Update-WorkerReportStoreStateLocked {
     }
 }
 
-
 function Resolve-PackWorkerReportCallerSessionId {
     if ($env:AO_WORKER_SESSION_ID) {
         return [string]$env:AO_WORKER_SESSION_ID
@@ -110,7 +109,6 @@ function Resolve-PackWorkerReportCallerSessionId {
     }
     return ''
 }
-
 
 function Resolve-PackWorkerReportWorktreeHeadSha {
     param(
@@ -150,9 +148,10 @@ function Resolve-PackWorkerReportTrustedBinding {
     )
 
     $headSha = Resolve-PackWorkerReportWorktreeHeadSha -RepoRoot $RepoRoot -HeadSha $WorktreeHeadSha
+    $sessions = @()
     $session = $null
-    $sessionGetPayload = $null
     $openPrs = @()
+    $openListAuthoritative = $false
 
     $aoCli = Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1'
     if (Test-Path -LiteralPath $aoCli) {
@@ -160,45 +159,24 @@ function Resolve-PackWorkerReportTrustedBinding {
         try {
             $sessions = @(Get-AoStatusSessionsIncludingTerminated)
             foreach ($row in $sessions) {
-                $id = Get-AoSessionRowIdentifier -Row $row
-                if ($id -eq $SessionId) {
+                if ((Get-AoSessionRowIdentifier -Row $row) -eq $SessionId) {
                     $session = $row
                     break
                 }
             }
-            if ($session -and (Get-Command Test-AoSessionRowNeedsSessionGetDetail -ErrorAction SilentlyContinue)) {
-                if (Test-AoSessionRowNeedsSessionGetDetail -Row $session) {
-                    try {
-                        $sessionGetPayload = Get-AoSessionGetJson -SessionId $SessionId
-                    }
-                    catch {
-                        $sessionGetPayload = $null
-                    }
-                }
-            }
         }
         catch {
+            $sessions = @()
             $session = $null
         }
     }
 
     if (-not $session) {
-        $envPr = 0
-        if ($env:AO_PR_NUMBER) {
-            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$envPr)
+        return @{
+            ok        = $false
+            sessionId = $SessionId
+            reason    = 'no_source'
         }
-        if ($envPr -gt 0) {
-            $session = @{
-                id        = $SessionId
-                name      = $SessionId
-                sessionId = $SessionId
-                prNumber  = $envPr
-            }
-        }
-    }
-
-    if (-not $session) {
-        return @{ ok = $false; reason = 'trust_boundary_binding_unresolved' }
     }
 
     try {
@@ -207,43 +185,44 @@ function Resolve-PackWorkerReportTrustedBinding {
             . $ghPrChecks
         }
         $openPrs = @(Invoke-GhOpenPrList -RepoRoot $RepoRoot -Consumer 'pack-worker-report-trusted-binding')
+        $openListAuthoritative = $true
     }
     catch {
         $openPrs = @()
+        $openListAuthoritative = $false
     }
 
-    if ($openPrs.Count -eq 0 -and $headSha) {
-        $fallbackPr = 0
-        if ($null -ne $session.prNumber) {
-            [void][int]::TryParse([string]$session.prNumber, [ref]$fallbackPr)
-        }
-        if ($fallbackPr -le 0 -and $env:AO_PR_NUMBER) {
-            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$fallbackPr)
-        }
-        if ($fallbackPr -gt 0) {
-            $openPrs = @(@{ number = $fallbackPr; headRefOid = $headSha; state = 'open' })
+    $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($resolvedRepoSlug)) {
+        return @{
+            ok        = $false
+            sessionId = $SessionId
+            reason    = 'no_source'
+            diagnostic = 'missing_repo_slug'
         }
     }
 
     $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $session
-    $sessionGetHashtable = $null
-    if ($sessionGetPayload) {
-        $sessionGetHashtable = ConvertTo-MechanicalJsonStateHashtable -Value $sessionGetPayload
+    $sessionRowsPayload = @()
+    foreach ($row in $sessions) {
+        if ($null -eq $row) { continue }
+        $sessionRowsPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $row)
     }
     $openPrPayload = @()
     foreach ($pr in $openPrs) {
+        if ($null -eq $pr) { continue }
         $openPrPayload += (ConvertTo-MechanicalJsonStateHashtable -Value $pr)
     }
 
     return Invoke-WorkerReportStoreCli -Subcommand 'resolveTrustedBinding' -Payload @{
-        session           = $sessionPayload
-        openPrs           = $openPrPayload
-        worktreeHeadSha   = $headSha
-        sessionGetPayload = $sessionGetHashtable
+        session                = $sessionPayload
+        sessions               = $sessionRowsPayload
+        openPrs                = $openPrPayload
+        worktreeHeadSha        = $headSha
+        repoSlug               = [string]$resolvedRepoSlug
+        openListAuthoritative  = [bool]$openListAuthoritative
     }
 }
-
-
 
 function Resolve-PackWorkerReportDeliveryRunId {
     param(
@@ -349,7 +328,7 @@ function Write-PackWorkerReportRecord {
         $trustedBinding = ConvertTo-MechanicalJsonStateHashtable -Value $trustedBinding
     }
     if (-not $trustedBinding -or -not $trustedBinding.ok) {
-        $reason = if ($trustedBinding.reason) { [string]$trustedBinding.reason } else { 'trust_boundary_binding_unresolved' }
+        $reason = if ($trustedBinding.reason) { [string]$trustedBinding.reason } else { 'no_source' }
         throw "worker-report-store upsert failed: $reason"
     }
     $SessionId = [string]$callerSessionId

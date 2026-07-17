@@ -1,36 +1,16 @@
 /**
- * Shared session↔PR binding boundary for AO 0.10.2 list rows (Issue #699).
- * Vitest: scripts/session-pr-binding-resolver.test.ts
+ * Shared session↔PR binding boundary for AO 0.10.2 bulk-list rows.
+ * Issue #857 retires displayName/prNumber predicates and resolves from prs[]/branch.
  */
-import { toArray, normalizeSha } from './review-reconcile-primitives.mjs';
-import { isAoWorkerIterationBranch } from './dead-worker-reconciler.mjs';
 
-/** @typedef {{ number?: number, headRefOid?: string, headRefName?: string, head?: string, state?: string }} OpenPr */
-/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, issue?: string | number | null, issueId?: string | number | null, issueNumber?: number | null, displayName?: string, branch?: string, headBranch?: string, headRefName?: string, ownedHeadSha?: string, headRefOid?: string, status?: string }} AoSession */
-/** @typedef {'explicit_pr' | 'display_name' | 'issue_correlation' | 'none'} SessionPrBindingSource */
+/** @typedef {{ number?: number, headRefOid?: string, headRefName?: string, head?: string, state?: string, repoSlug?: string, repository?: string }} OpenPr */
+/** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, issue?: string | number | null, issueId?: string | number | null, issueNumber?: number | null, branch?: string, headBranch?: string, headRefName?: string, ownedHeadSha?: string, headRefOid?: string, status?: string, repoSlug?: string, prs?: unknown[] }} AoSession */
+/** @typedef {'issue_correlation' | 'none'} SessionPrBindingSource */
 
 export const DEFER_NO_ISSUE_BINDING = 'no_issue_binding';
 export const DEFER_AMBIGUOUS_ISSUE_PR_BINDING = 'ambiguous_issue_pr_binding';
 export const DEFER_AMBIGUOUS_PR_SESSION_BINDING = 'ambiguous_pr_session_binding';
-
-/**
- * @typedef {{
- *   bound: boolean,
- *   prNumber: number | null,
- *   source: SessionPrBindingSource,
- *   enriched: boolean,
- *   deferReason?: string,
- * }} SessionPrBinding
- */
-
-/**
- * @typedef {{
- *   sessionId: string | null,
- *   reason: string,
- *   failClosed: boolean,
- *   deferReason?: string,
- * }} PrSessionBindingResolution
- */
+export const DEFER_AMBIGUOUS_SESSION_PRS = 'ambiguous_session_prs';
 
 function numberOrZero(value) {
   const parsed = Number(value);
@@ -41,308 +21,284 @@ function normalizeString(value) {
   return String(value ?? '').trim();
 }
 
-/**
- * @param {AoSession | null | undefined} session
- */
-export function getSessionIssueNumber(session) {
-  const issue = numberOrZero(session?.issueNumber ?? session?.issue ?? session?.issueId);
-  return issue > 0 ? issue : 0;
+function normalizeRepoSlug(value) {
+  return normalizeString(value).toLowerCase();
 }
 
-/**
- * @param {AoSession | null | undefined} session
- */
-export function getExplicitSessionPrNumber(session) {
-  const pr = numberOrZero(session?.prNumber);
-  if (pr > 0) {
-    return pr;
-  }
-  const prField = normalizeString(session?.pr);
-  if (!prField) {
-    return 0;
-  }
-  const bare = prField.startsWith('#') ? prField.slice(1) : prField;
-  const parsed = numberOrZero(bare);
-  return parsed > 0 ? parsed : 0;
+function normalizeSha(value) {
+  const sha = normalizeString(value).toLowerCase();
+  return /^[0-9a-f]{7,64}$/.test(sha) ? sha : '';
+}
+
+function toArray(value) {
+  if (Array.isArray(value)) return value;
+  return value === undefined || value === null ? [] : [value];
 }
 
 function getSessionIdentifier(session) {
   return normalizeString(session?.sessionId ?? session?.id ?? session?.name) || null;
 }
 
-/**
- * @param {unknown} payload ao session get JSON ({ session: ... } or bare session row)
- */
-export function sessionDetailFromSessionGetPayload(payload) {
-  const session = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
-  const displayName = normalizeString(session?.displayName);
-  return displayName ? { displayName } : null;
-}
-
-/**
- * @param {AoSession | null | undefined} session
- */
-export function shouldEnrichSessionDetailFromGet(session) {
-  if (getExplicitSessionPrNumber(session) > 0) {
-    return false;
-  }
-  const rowDisplay = normalizeString(session?.displayName);
-  if (rowDisplay && /^\d+$/.test(rowDisplay)) {
-    return false;
-  }
-  const role = normalizeString(session?.role).toLowerCase();
-  if (role && role !== 'worker' && role !== 'coding') {
-    return false;
-  }
-  return Boolean(getSessionIdentifier(session));
-}
-
-/**
- * @param {AoSession[]} sessions
- * @param {Record<string, unknown>} [sessionGetsById]
- */
-export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
-  /** @type {Record<string, { displayName?: string }>} */
-  const details = {};
-  for (const session of toArray(sessions)) {
-    const sessionId = getSessionIdentifier(session);
-    if (!sessionId) {
-      continue;
-    }
-    const rowDisplay = normalizeString(session?.displayName);
-    const rowDetail = rowDisplay ? { displayName: rowDisplay } : null;
-    const getDetail = sessionGetsById[sessionId]
-      ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
-      : null;
-    const merged = getDetail ?? rowDetail;
-    if (merged) {
-      details[sessionId] = merged;
-    }
-  }
-  return details;
-}
-
 function getSessionBranch(session) {
   return normalizeString(session?.branch ?? session?.headBranch ?? session?.headRefName);
 }
 
-/**
- * @param {number} issueNumber
- */
-export function issueLinkedWorkerBranchLiterals(issueNumber) {
-  const issue = numberOrZero(issueNumber);
-  if (issue <= 0) {
-    return [];
-  }
-  return [`feat/${issue}`, `feat/issue-${issue}`, `opk-${issue}`];
+function getOpenPrRepoSlug(pr, fallback = '') {
+  return normalizeRepoSlug(pr?.repoSlug ?? pr?.repository ?? fallback);
+}
+
+function getSessionRepoSlug(session, fallback = '') {
+  return normalizeRepoSlug(session?.repoSlug ?? fallback);
+}
+
+function repoScopeMatches(candidate, expected) {
+  const candidateRepo = normalizeRepoSlug(candidate);
+  const expectedRepo = normalizeRepoSlug(expected);
+  return !expectedRepo || !candidateRepo || candidateRepo === expectedRepo;
+}
+
+function prIsTerminal(pr) {
+  const state = normalizeString(pr?.state).toLowerCase();
+  return state === 'closed' || state === 'merged' || pr?.merged === true || pr?.closed === true;
 }
 
 /**
- * @param {string} headRefName
- * @param {number} issueNumber
- * @param {AoSession | null | undefined} [session]
+ * Parse AO session prs[] entries. AO 0.10.2 emits full GitHub PR URLs.
+ * A small set of structured forms is accepted for forward compatibility; bare
+ * numbers are deliberately rejected so callers cannot accidentally revive the
+ * retired numeric-row contract.
  */
+export function parseSessionPrReference(value) {
+  if (value && typeof value === 'object') {
+    const nested = value.url ?? value.htmlUrl ?? value.html_url ?? value.prUrl ?? value.pullRequestUrl;
+    if (nested) return parseSessionPrReference(nested);
+    const repoSlug = normalizeRepoSlug(value.repoSlug ?? value.repository);
+    const prNumber = numberOrZero(value.number ?? value.prNumber);
+    return repoSlug && prNumber > 0 ? { repoSlug, prNumber } : null;
+  }
+  const text = normalizeString(value);
+  if (!text) return null;
+  const githubUrl = text.match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/i);
+  if (githubUrl) {
+    return {
+      repoSlug: normalizeRepoSlug(`${githubUrl[1]}/${githubUrl[2]}`),
+      prNumber: numberOrZero(githubUrl[3]),
+    };
+  }
+  const repoHash = text.match(/^([^/\s]+\/[^#\s]+)#(\d+)$/);
+  if (repoHash) {
+    return { repoSlug: normalizeRepoSlug(repoHash[1]), prNumber: numberOrZero(repoHash[2]) };
+  }
+  return null;
+}
+
+export function listSessionPrReferences(session, options = {}) {
+  const expectedRepo = normalizeRepoSlug(options.repoSlug ?? session?.repoSlug);
+  const seen = new Set();
+  const refs = [];
+  for (const raw of toArray(session?.prs)) {
+    const parsed = parseSessionPrReference(raw);
+    if (!parsed || parsed.prNumber <= 0 || !repoScopeMatches(parsed.repoSlug, expectedRepo)) continue;
+    const key = `${parsed.repoSlug}|${parsed.prNumber}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push(parsed);
+  }
+  return refs;
+}
+
+/** @param {AoSession | null | undefined} session */
+export function getSessionIssueNumber(session) {
+  const issue = numberOrZero(session?.issueNumber ?? session?.issue ?? session?.issueId);
+  return issue > 0 ? issue : 0;
+}
+
+/**
+ * Kept as a compatibility export only. The live resolver never reads the
+ * retired daemon-row PR aliases.
+ */
+export function getExplicitSessionPrNumber() {
+  return 0;
+}
+
+/** Per-session detail enrichment is retired: the bulk list already carries prs[]/branch. */
+export function sessionDetailFromSessionGetPayload() {
+  return null;
+}
+
+export function shouldEnrichSessionDetailFromGet() {
+  return false;
+}
+
+export function buildSessionDetailsById() {
+  return {};
+}
+
+export function issueLinkedWorkerBranchLiterals(issueNumber) {
+  const issue = numberOrZero(issueNumber);
+  if (issue <= 0) return [];
+  return [`feat/${issue}`, `feat/issue-${issue}`, `opk-${issue}`];
+}
+
+function isAoWorkerIterationBranch(branch) {
+  const value = normalizeString(branch);
+  return /^(?:opk-|issue-|feat\/issue-|agent\/issue-)/i.test(value);
+}
+
 export function headRefCorrelatesToIssue(headRefName, issueNumber, session = null) {
   const head = normalizeString(headRefName);
   const issue = numberOrZero(issueNumber);
-  if (!head || issue <= 0) {
-    return false;
-  }
-
+  if (!head || issue <= 0) return false;
   for (const literal of issueLinkedWorkerBranchLiterals(issue)) {
-    if (head === literal) {
-      return true;
-    }
+    if (head === literal) return true;
   }
-
   const issuePrefix = `issue-${issue}`;
   if (
     head === issuePrefix ||
     head.startsWith(`${issuePrefix}-`) ||
     new RegExp(`(?:^|/)${issuePrefix}(?:-|$)`).test(head)
-  ) {
-    return true;
-  }
-
-  const sessionBranch = getSessionBranch(session);
-  if (sessionBranch && sessionBranch === head && isAoWorkerIterationBranch(sessionBranch)) {
-    return true;
-  }
-
-  return false;
+  ) return true;
+  const branch = getSessionBranch(session);
+  return Boolean(branch && branch === head && isAoWorkerIterationBranch(branch));
 }
 
-/**
- * @param {number} issueNumber
- * @param {OpenPr[]} openPrs
- * @param {AoSession | null | undefined} [session]
- * @param {{ headSha?: string }} [options]
- */
 export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = null, options = {}) {
   const issue = numberOrZero(issueNumber);
-  if (issue <= 0) {
-    return [];
-  }
+  if (issue <= 0) return [];
   const targetHead = normalizeSha(options.headSha);
+  const expectedRepo = normalizeRepoSlug(options.repoSlug ?? session?.repoSlug);
   return toArray(openPrs).filter((pr) => {
+    if (prIsTerminal(pr)) return false;
+    if (!repoScopeMatches(getOpenPrRepoSlug(pr), expectedRepo)) return false;
     const headName = normalizeString(pr?.headRefName ?? pr?.head);
-    if (!headRefCorrelatesToIssue(headName, issue, session)) {
-      return false;
-    }
-    if (!targetHead) {
-      return true;
-    }
+    if (!headRefCorrelatesToIssue(headName, issue, session)) return false;
+    if (!targetHead) return true;
     const prHead = normalizeSha(pr?.headRefOid);
     return Boolean(prHead && prHead === targetHead);
   });
 }
 
-/**
- * Numeric displayName is enriched evidence only when available head/issue signals corroborate.
- *
- * @param {AoSession | null | undefined} session
- * @param {OpenPr} pr
- * @param {{ headSha?: string }} [options]
- */
-function numericDisplayNameCorroboratesPr(session, pr, options = {}) {
-  const issueNumber = getSessionIssueNumber(session);
-  const headSha = normalizeSha(options.headSha);
-  let hasSignal = false;
-  let corroborated = true;
-
-  if (headSha) {
-    hasSignal = true;
+function listDirectBranchMatches(session, openPrs, options = {}) {
+  const branch = getSessionBranch(session);
+  if (!branch) return [];
+  const expectedRepo = normalizeRepoSlug(options.repoSlug ?? session?.repoSlug);
+  const targetHead = normalizeSha(options.headSha);
+  return toArray(openPrs).filter((pr) => {
+    if (prIsTerminal(pr)) return false;
+    if (!repoScopeMatches(getOpenPrRepoSlug(pr), expectedRepo)) return false;
+    if (normalizeString(pr?.headRefName ?? pr?.head) !== branch) return false;
+    if (!targetHead) return true;
     const prHead = normalizeSha(pr?.headRefOid);
-    if (!prHead || prHead !== headSha) {
-      corroborated = false;
-    }
-  }
-
-  if (issueNumber > 0) {
-    hasSignal = true;
-    const headName = normalizeString(pr?.headRefName ?? pr?.head);
-    if (!headRefCorrelatesToIssue(headName, issueNumber, session)) {
-      corroborated = false;
-    }
-  }
-
-  return hasSignal && corroborated;
+    return Boolean(prHead && prHead === targetHead);
+  });
 }
 
-/**
- * @param {AoSession | null | undefined} session
- * @param {OpenPr[]} [openPrs]
- * @param {{ headSha?: string, sessionDetail?: { displayName?: string } | null }} [options]
- * @returns {SessionPrBinding}
- */
-export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
-  const prList = toArray(openPrs);
-  const explicitPr = getExplicitSessionPrNumber(session);
-  if (explicitPr > 0) {
-    return {
-      bound: true,
-      prNumber: explicitPr,
-      source: 'explicit_pr',
-      enriched: false,
-    };
-  }
-
-  const displayName = normalizeString(options.sessionDetail?.displayName ?? session?.displayName);
-  if (displayName && /^\d+$/.test(displayName)) {
-    const displayPr = numberOrZero(displayName);
-    const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
-    if (
-      displayPr > 0 &&
-      displayPrRow &&
-      numericDisplayNameCorroboratesPr(session, displayPrRow, options)
-    ) {
-      return {
-        bound: true,
-        prNumber: displayPr,
-        source: 'display_name',
-        enriched: true,
-      };
-    }
-  }
-
-  const issueNumber = getSessionIssueNumber(session);
-  if (issueNumber <= 0) {
-    return {
-      bound: false,
-      prNumber: null,
-      source: 'none',
-      enriched: false,
-      deferReason: DEFER_NO_ISSUE_BINDING,
-    };
-  }
-
-  const issueScoped = listIssueCorrelatedOpenPrs(issueNumber, prList, session);
-  if (issueScoped.length > 1) {
-    return {
-      bound: false,
-      prNumber: null,
-      source: 'none',
-      enriched: false,
-      deferReason: DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
-    };
-  }
-  const matches = options.headSha
-    ? listIssueCorrelatedOpenPrs(issueNumber, prList, session, {
-        headSha: options.headSha,
-      })
-    : issueScoped;
-  if (matches.length === 1) {
-    const prNumber = numberOrZero(matches[0]?.number);
-    if (prNumber > 0) {
-      return {
-        bound: true,
-        prNumber,
-        source: 'issue_correlation',
-        enriched: true,
-      };
-    }
-  }
-
+function unbound(deferReason, extra = {}) {
   return {
     bound: false,
     prNumber: null,
     source: 'none',
     enriched: false,
-    deferReason: DEFER_NO_ISSUE_BINDING,
+    deferReason,
+    ...extra,
   };
 }
 
 /**
- * @param {SessionPrBinding} binding
+ * Resolve the live side of the #857 contract from a single already-fetched row.
+ * Trust order on the live side: unambiguous prs[] > exact branch > issue heuristic.
  */
+export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
+  const prList = toArray(openPrs);
+  const expectedRepo = normalizeRepoSlug(options.repoSlug ?? session?.repoSlug);
+  const refs = listSessionPrReferences(session, { repoSlug: expectedRepo });
+  if (refs.length > 1) {
+    return unbound(DEFER_AMBIGUOUS_SESSION_PRS, {
+      liveSource: 'prs',
+      diagnostic: 'multiple_session_pr_references',
+      candidates: refs,
+    });
+  }
+  if (refs.length === 1) {
+    const ref = refs[0];
+    const row = prList.find((pr) => (
+      numberOrZero(pr?.number) === ref.prNumber &&
+      repoScopeMatches(getOpenPrRepoSlug(pr, ref.repoSlug), ref.repoSlug) &&
+      !prIsTerminal(pr)
+    ));
+    if (row || prList.length === 0 || options.openListAuthoritative !== true) {
+      return {
+        bound: true,
+        prNumber: ref.prNumber,
+        source: 'issue_correlation',
+        bindingSource: 'live_prs',
+        enriched: true,
+        liveSource: 'prs',
+        trustRank: 400,
+        repoSlug: ref.repoSlug || expectedRepo,
+      };
+    }
+  }
+
+  const branchMatches = listDirectBranchMatches(session, prList, options);
+  if (branchMatches.length > 1) {
+    return unbound(DEFER_AMBIGUOUS_ISSUE_PR_BINDING, {
+      liveSource: 'branch',
+      candidates: branchMatches.map((pr) => numberOrZero(pr?.number)).filter(Boolean),
+    });
+  }
+  if (branchMatches.length === 1) {
+    return {
+      bound: true,
+      prNumber: numberOrZero(branchMatches[0]?.number),
+      source: 'issue_correlation',
+      bindingSource: 'issue_correlation',
+      enriched: true,
+      liveSource: 'branch',
+      trustRank: 200,
+      repoSlug: getOpenPrRepoSlug(branchMatches[0], expectedRepo),
+    };
+  }
+
+  const issueNumber = getSessionIssueNumber(session);
+  if (issueNumber <= 0) return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
+  const issueScoped = listIssueCorrelatedOpenPrs(issueNumber, prList, session, {
+    ...options,
+    repoSlug: expectedRepo,
+  });
+  if (issueScoped.length > 1) {
+    return unbound(DEFER_AMBIGUOUS_ISSUE_PR_BINDING, {
+      liveSource: 'issue_correlation',
+      candidates: issueScoped.map((pr) => numberOrZero(pr?.number)).filter(Boolean),
+    });
+  }
+  if (issueScoped.length === 1) {
+    const prNumber = numberOrZero(issueScoped[0]?.number);
+    if (prNumber > 0) {
+      return {
+        bound: true,
+        prNumber,
+        source: 'issue_correlation',
+        bindingSource: 'issue_correlation',
+        enriched: true,
+        liveSource: 'issue_correlation',
+        trustRank: 200,
+        repoSlug: getOpenPrRepoSlug(issueScoped[0], expectedRepo),
+      };
+    }
+  }
+  return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
+}
+
 export function isEnrichedPrBinding(binding) {
   return Boolean(binding?.enriched);
 }
 
-/**
- * @param {AoSession | null | undefined} session
- * @param {number} prNumber
- * @param {OpenPr[]} [openPrs]
- * @param {{ headSha?: string, sessionDetail?: { displayName?: string } | null }} [options]
- */
 export function sessionMatchesPrBound(session, prNumber, openPrs = [], options = {}) {
   const binding = resolveSessionPrBinding(session, openPrs, options);
   return binding.bound && numberOrZero(binding.prNumber) === numberOrZero(prNumber);
 }
 
-/**
- * @param {AoSession[]} sessions
- * @param {number} prNumber
- * @param {OpenPr[]} [openPrs]
- * @param {{
- *   headSha?: string,
- *   requireLive?: boolean,
- *   sessionDetailsById?: Record<string, { displayName?: string }>,
- *   isLive?: (session: AoSession) => boolean,
- *   getSessionId?: (session: AoSession) => string | null,
- * }} [options]
- * @returns {PrSessionBindingResolution}
- */
 export function resolvePrOwningWorkerSessionBinding(
   sessions,
   prNumber,
@@ -353,44 +309,36 @@ export function resolvePrOwningWorkerSessionBinding(
   if (targetPr <= 0) {
     return { sessionId: null, reason: 'missing_pr_number', failClosed: false };
   }
-
   const isLive = options.isLive ?? (() => true);
-  const getSessionId =
-    options.getSessionId ??
-    ((session) => normalizeString(session?.sessionId ?? session?.id ?? session?.name) || null);
-  const sessionDetailsById = options.sessionDetailsById ?? {};
-
-  /** @type {Array<{ session: AoSession, binding: SessionPrBinding, sessionId: string }>} */
+  const getSessionId = options.getSessionId ?? getSessionIdentifier;
   const matches = [];
-  let sawIssueAmbiguityDefer = false;
+  const ambiguousSessions = [];
   for (const session of toArray(sessions)) {
-    const role = normalizeString(session?.role).toLowerCase();
-    if (role !== 'worker' && role !== 'coding') {
-      continue;
-    }
+    const role = normalizeString(session?.role ?? session?.kind).toLowerCase();
+    if (role && role !== 'worker' && role !== 'coding') continue;
     const sessionId = getSessionId(session);
-    if (!sessionId) {
-      continue;
-    }
+    if (!sessionId) continue;
+    if (options.requireLive !== false && !isLive(session)) continue;
     const binding = resolveSessionPrBinding(session, openPrs, {
       headSha: options.headSha,
-      sessionDetail: sessionDetailsById[sessionId] ?? null,
+      repoSlug: options.repoSlug,
+      openListAuthoritative: options.openListAuthoritative,
     });
-    if (binding.deferReason === DEFER_AMBIGUOUS_ISSUE_PR_BINDING) {
-      sawIssueAmbiguityDefer = true;
+    if (
+      binding.deferReason === DEFER_AMBIGUOUS_ISSUE_PR_BINDING ||
+      binding.deferReason === DEFER_AMBIGUOUS_SESSION_PRS
+    ) {
+      const candidates = toArray(binding.candidates).map((candidate) => numberOrZero(candidate?.prNumber ?? candidate));
+      if (candidates.length === 0 || candidates.includes(targetPr)) ambiguousSessions.push(sessionId);
     }
-    if (!binding.bound || numberOrZero(binding.prNumber) !== targetPr) {
-      continue;
+    if (binding.bound && numberOrZero(binding.prNumber) === targetPr) {
+      matches.push({ sessionId, binding });
     }
-    if (options.requireLive !== false && !isLive(session)) {
-      continue;
-    }
-    matches.push({ session, binding, sessionId });
   }
-
   if (matches.length > 1) {
     return {
       sessionId: null,
+      conflictingSessionIds: matches.map((row) => row.sessionId),
       reason: 'ambiguous_pr_session_binding',
       failClosed: true,
       deferReason: DEFER_AMBIGUOUS_PR_SESSION_BINDING,
@@ -401,17 +349,17 @@ export function resolvePrOwningWorkerSessionBinding(
       sessionId: matches[0].sessionId,
       reason: 'resolved',
       failClosed: false,
+      source: matches[0].binding.bindingSource ?? matches[0].binding.liveSource ?? matches[0].binding.source,
     };
   }
-
-  if (matches.length === 0 && sawIssueAmbiguityDefer) {
+  if (ambiguousSessions.length > 0) {
     return {
-      sessionId: null,
+      sessionId: ambiguousSessions.length === 1 ? ambiguousSessions[0] : null,
+      conflictingSessionIds: ambiguousSessions,
       reason: 'ambiguous_issue_pr_binding',
       failClosed: true,
       deferReason: DEFER_AMBIGUOUS_ISSUE_PR_BINDING,
     };
   }
-
   return { sessionId: null, reason: 'no_worker_session', failClosed: false };
 }

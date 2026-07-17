@@ -9,47 +9,10 @@ import { normalizeSha, toArray } from '../../docs/review-reconcile-primitives.mj
 import { classifyRequiredCiLevel } from '../../docs/review-ready-stuck-guard.mjs';
 import { readStdinJson, runStdinJsonCli } from '../../docs/review-mechanical-cli.mjs';
 import {
-  readPrSessionBindingCacheFile,
   resolveBindingRepoSlug,
   resolvePrSessionBindingCachePath,
-  lookupBindingByPr,
-  lookupBindingBySession,
-  resolvePrSessionBindingForConsumer,
+  resolveSessionPrBindingForConsumer,
 } from '../../docs/pr-session-binding-cache.mjs';
-
-
-const UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS = new Set([
-  'binding_cache_conflict',
-  'head_owner_mismatch',
-]);
-
-const CACHE_GATED_TARGET_FAIL_CLOSED_REASONS = new Set([
-  'ambiguous_issue_pr_binding',
-  'ambiguous_pr_session_binding',
-]);
-
-function targetPrFailClosedBelongsToSession(store, repoSlug, sessionId, prNumber, resolution) {
-  if (!resolution?.failClosed) {
-    return false;
-  }
-  const reason = String(resolution.reason ?? '').trim();
-  if (UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS.has(reason)) {
-    return true;
-  }
-  if (!CACHE_GATED_TARGET_FAIL_CLOSED_REASONS.has(reason)) {
-    return false;
-  }
-  const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
-  if (resolvedSessionId && resolvedSessionId === sessionId) {
-    return true;
-  }
-  const prRecord = lookupBindingByPr(store, repoSlug, prNumber);
-  if (prRecord && String(prRecord.sessionId ?? '').trim() === sessionId) {
-    return true;
-  }
-  const sessionRecord = lookupBindingBySession(store, repoSlug, sessionId);
-  return Boolean(sessionRecord && Number(sessionRecord.prNumber ?? 0) === Number(prNumber));
-}
 
 export const WORKER_STATUS_STORE_SCHEMA_VERSION = 1;
 export const PACK_WORKER_STATUS_STORE_SURFACE = 'pack-worker-status-store';
@@ -77,6 +40,7 @@ const REVIEW_DELIVERED_RE = new RegExp(`^(${REVIEW_DELIVERED_STATUSES.join('|')}
 const SUCCESS_CHECK_RE = /^(success|successful|passed|pass|neutral|skipped)$/i;
 const FAILURE_CHECK_RE = /^(failure|failed|fail|error|cancelled|timed_out|action_required)$/i;
 const PENDING_CHECK_RE = /^(pending|queued|in_progress|running|waiting|requested)$/i;
+
 export function resolveWorkerStatusStorePath(env = process.env) {
   if (env.AO_WORKER_STATUS_STORE) {
     return String(env.AO_WORKER_STATUS_STORE);
@@ -369,110 +333,116 @@ function workerStatusBindingIsLive(input = {}) {
   };
 }
 
-function workerStatusBindingFailure(reason, headSha, bindingSource = 'none') {
+function workerStatusBindingFailure(reason, headSha, bindingSource = 'none', details = {}) {
   return {
     ok: false,
     reason,
-    prNumber: 0,
+    prNumber: Number(details.prNumber ?? 0) || 0,
     headSha,
     bindingSource,
+    sessionId: String(details.sessionId ?? '').trim() || undefined,
+    deferReason: details.deferReason,
+    diagnostic: details.diagnostic,
+    diagnostics: toArray(details.diagnostics).filter(Boolean),
+    bindingCacheGeneration: Number(details.bindingCacheGeneration ?? 0) || 0,
   };
 }
 
+/**
+ * Fourth consumer of the shared PR↔session contract (Issue #857 amendment C).
+ * The daemon row's prNumber/displayName fields are intentionally ignored: AO 0.10.2
+ * emits branch + prs[] on the already-fetched bulk list instead.
+ */
 export function resolveWorkerStatusSessionBinding(input = {}) {
   const session = input.session ?? {};
   const sessionId = sessionIdOf(session);
+  const sessions = toArray(input.sessions).length > 0 ? toArray(input.sessions) : [session];
   const openPrs = toArray(input.openPrs ?? input.githubSnapshot?.openPrs);
-  const explicitPr = Number(input.prNumber ?? session.prNumber ?? 0);
+  const explicitPr = Number(input.prNumber ?? 0);
   const headHint = normalizeSha(input.headSha ?? input.githubHead ?? session.ownedHeadSha ?? session.headRefOid);
+
+  // Explicit input here comes from an accepted report/operator argument, not a daemon row.
   if (explicitPr > 0) {
     const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === explicitPr);
     return {
       ok: true,
+      sessionId: sessionId || undefined,
       prNumber: explicitPr,
       headSha: headHint || normalizeSha(prRow?.headRefOid),
-      bindingSource: 'explicit_pr',
+      bindingSource: 'explicit_input',
     };
   }
   if (!sessionId) {
-    return workerStatusBindingFailure('no_issue_binding', headHint);
+    return workerStatusBindingFailure('no_source', headHint);
   }
 
   const env = input.env ?? process.env;
   const repo = resolveWorkerStatusBindingRepoSlug(input, session, openPrs, env);
   if (repo.failureReason) {
-    return workerStatusBindingFailure(repo.failureReason, headHint);
+    return workerStatusBindingFailure(repo.failureReason, headHint, 'binding_contract:none', {
+      sessionId,
+    });
+  }
+  if (!repo.repoSlug) {
+    return workerStatusBindingFailure('no_source', headHint, 'binding_contract:none', {
+      sessionId,
+      diagnostic: 'missing_repo_slug',
+    });
   }
 
   const cachePath = String(input.bindingCachePath ?? '').trim() || resolvePrSessionBindingCachePath(env);
-  let store;
+  let resolution;
   try {
-    store = readPrSessionBindingCacheFile(cachePath);
-  } catch {
-    return workerStatusBindingFailure('binding_cache_read_failed', headHint);
+    resolution = resolveSessionPrBindingForConsumer({
+      cachePath,
+      repoSlug: repo.repoSlug,
+      session,
+      headSha: headHint,
+      openPrs,
+      nowMs: Number(input.nowMs ?? Date.now()),
+      writeBackfill: input.writeBackfill !== false,
+      isLive: workerStatusBindingIsLive(input),
+      openListAuthoritative: Boolean(input.openListAuthoritative ?? false),
+    });
+  } catch (error) {
+    return workerStatusBindingFailure('binding_cache_read_failed', headHint, 'binding_contract:none', {
+      sessionId,
+      diagnostic: String(error?.message ?? 'binding_cache_read_failed'),
+    });
   }
 
-  const sessionDetailsById = input.sessionDetail
-    ? { [sessionId]: input.sessionDetail }
-    : {};
-  const isLive = workerStatusBindingIsLive(input);
-  const matches = [];
-  for (const pr of openPrs) {
-    const prNumber = Number(pr?.number ?? 0);
-    if (prNumber <= 0) continue;
-    let resolution;
-    try {
-      resolution = resolvePrSessionBindingForConsumer({
-        cachePath,
-        store,
-        repoSlug: repo.repoSlug,
-        prNumber,
-        headSha: normalizeSha(pr?.headRefOid) || headHint,
-        sessions: [session],
-        openPrs,
-        sessionDetailsById,
-        nowMs: Number(input.nowMs ?? Date.now()),
-        writeBackfill: false,
-        isLive,
-      });
-    } catch {
-      return workerStatusBindingFailure('binding_cache_read_failed', headHint);
-    }
-    if (targetPrFailClosedBelongsToSession(store, repo.repoSlug, sessionId, prNumber, resolution)) {
-      const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
-      return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
-    }
-    const resolvedSessionId = String(resolution?.sessionId ?? '').trim();
-    if (resolvedSessionId !== sessionId) {
-      continue;
-    }
-    if (resolution?.failClosed) {
-      const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
-      return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
-    }
-    matches.push({ pr, resolution });
+  const bindingContractSource = String(resolution?.bindingSource ?? resolution?.source ?? 'none');
+  const resolvedSessionId = String(resolution?.sessionId ?? sessionId).trim();
+  const resolvedPrNumber = Number(resolution?.prNumber ?? 0);
+  if (resolution?.failClosed || resolvedPrNumber <= 0) {
+    return workerStatusBindingFailure(
+      String(resolution?.reason ?? 'no_source'),
+      headHint,
+      `binding_contract:${bindingContractSource}`,
+      {
+        sessionId: resolvedSessionId,
+        prNumber: resolvedPrNumber,
+        deferReason: resolution?.deferReason,
+        diagnostic: resolution?.diagnostic,
+        diagnostics: resolution?.diagnostics,
+        bindingCacheGeneration: resolution?.bindingCacheGeneration,
+      },
+    );
   }
 
-  if (matches.length > 1) {
-    return workerStatusBindingFailure('ambiguous_pr_session_binding', headHint, 'binding_contract:none');
-  }
-  if (matches.length === 1) {
-    const match = matches[0];
-    const bindingContractSource = String(match.resolution.source ?? 'unknown');
-    return {
-      ok: true,
-      prNumber: Number(match.pr.number),
-      headSha: normalizeSha(match.pr.headRefOid) || headHint,
-      repoSlug: repo.repoSlug || undefined,
-      bindingSource: bindingContractSource === 'backfill_resolver'
-        ? 'issue_correlation'
-        : `binding_contract:${bindingContractSource}`,
-      bindingContractSource,
-      bindingCacheGeneration: Number(store.generation ?? 0),
-    };
-  }
-
-  return workerStatusBindingFailure('no_issue_binding', headHint, 'binding_contract:none');
+  const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === resolvedPrNumber);
+  return {
+    ok: true,
+    sessionId: resolvedSessionId || sessionId,
+    prNumber: resolvedPrNumber,
+    headSha: normalizeSha(prRow?.headRefOid) || headHint,
+    repoSlug: repo.repoSlug,
+    bindingSource: `binding_contract:${bindingContractSource}`,
+    bindingContractSource,
+    reason: resolution.reason,
+    diagnostics: toArray(resolution.diagnostics),
+    bindingCacheGeneration: Number(resolution.bindingCacheGeneration ?? 0),
+  };
 }
 
 export function fuseWorkerStatus(input = {}) {
@@ -810,6 +780,10 @@ runStdinJsonCli('scripts/lib/worker-status-store.mjs', {
   evaluateKillSwitch: () => {
     const payload = readStdinJson();
     return evaluateWorkerStatusKillSwitch(payload.env ?? process.env);
+  },
+  resolveBindingCachePath: () => {
+    const payload = readStdinJson();
+    return { path: resolvePrSessionBindingCachePath(payload.env ?? process.env) };
   },
   resolveSessionBinding: () => resolveWorkerStatusSessionBinding(readStdinJson()),
   testSiblingReadiness: () => {

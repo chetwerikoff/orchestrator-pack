@@ -579,6 +579,53 @@ function Invoke-WorkerRecoverySpawn {
     }
 }
 
+function Resolve-WorkerRecoveryCleanupPrNumber {
+    param(
+        [string]$SessionId,
+        [int]$ExplicitPrNumber = 0,
+        [string]$RepoRoot = '',
+        [string]$HeadSha = '',
+        [switch]$FixtureMode
+    )
+
+    if ($ExplicitPrNumber -gt 0) {
+        return @{
+            ok        = $true
+            prNumber  = $ExplicitPrNumber
+            sessionId = $SessionId
+            reason    = 'explicit_pr_number'
+        }
+    }
+    if ($FixtureMode) {
+        return @{
+            ok        = $true
+            prNumber  = 0
+            sessionId = $SessionId
+            reason    = 'fixture_bypass'
+        }
+    }
+
+    $binding = Resolve-PackWorkerReportTrustedBinding -SessionId $SessionId `
+        -RepoRoot $RepoRoot -WorktreeHeadSha $HeadSha
+    if (-not $binding -or -not $binding.ok -or [int]$binding.prNumber -le 0) {
+        return @{
+            ok         = $false
+            prNumber   = 0
+            sessionId  = $SessionId
+            reason     = if ($binding.reason) { [string]$binding.reason } else { 'no_source' }
+            deferReason = [string]$binding.deferReason
+            diagnostic = [string]$binding.diagnostic
+        }
+    }
+    return @{
+        ok         = $true
+        prNumber   = [int]$binding.prNumber
+        sessionId  = if ($binding.sessionId) { [string]$binding.sessionId } else { $SessionId }
+        reason     = [string]$binding.reason
+        source     = [string]$binding.source
+    }
+}
+
 function Invoke-WorkerRecovery {
     param(
         [string]$Trigger = 'operator_request',
@@ -726,13 +773,13 @@ function Invoke-WorkerRecovery {
     $selectionWorktreeRecord = Get-WorkerRecoveryWorktreeRecordFromRepo -RepoRoot $RepoRoot `
         -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -FallbackRecord $WorktreeRecord -FixtureMode:$FixtureMode
     $selectionSnapshot = @{
-        canonicalPath  = $pathCanon.canonical
-        sessionId      = $SessionId
+        canonicalPath   = $pathCanon.canonical
+        sessionId       = $SessionId
         generationToken = $GenerationToken
-        session        = $Session
-        projectId      = $ProjectId
-        worktreeRecord = $selectionWorktreeRecord
-        aoBaseDir      = $aoBase
+        session         = $Session
+        projectId       = $ProjectId
+        worktreeRecord  = $selectionWorktreeRecord
+        aoBaseDir       = $aoBase
     }
     $currentSnapshot = Get-WorkerRecoveryPostClaimSnapshot -SessionId $SessionId `
         -CanonicalPath $pathCanon.canonical -ProjectId $ProjectId -AoBaseDir $aoBase -RepoRoot $RepoRoot `
@@ -799,10 +846,18 @@ function Invoke-WorkerRecovery {
         if ($selectionWorktreeRecord -and $selectionWorktreeRecord.head) {
             $gateHead = [string]$selectionWorktreeRecord.head
         }
-        $resolvedPrNumber = $PrNumber
-        if ($resolvedPrNumber -le 0 -and $Session -and $Session.prNumber) {
-            [void][int]::TryParse([string]$Session.prNumber, [ref]$resolvedPrNumber)
+        $cleanupBinding = Resolve-WorkerRecoveryCleanupPrNumber -SessionId $SessionId `
+            -ExplicitPrNumber $PrNumber -RepoRoot $RepoRoot -HeadSha $gateHead -FixtureMode:$FixtureMode
+        if (-not $cleanupBinding.ok) {
+            $null = Complete-WorkerRecoveryClaim -Namespace $claim.namespace -Path $claim.path -Record $claim.record -Outcome 'review_before_cleanup_blocked'
+            return @{
+                ok        = $false
+                outcome   = 'review_before_cleanup_blocked'
+                reason    = [string]$cleanupBinding.reason
+                sessionId = [string]$cleanupBinding.sessionId
+            }
         }
+        $resolvedPrNumber = [int]$cleanupBinding.prNumber
         try {
             if (-not $FixtureMode) {
                 Assert-ReviewBeforeCleanupGate -SessionId $SessionId -HeadSha $gateHead -PrNumber $resolvedPrNumber -Context 'worker_recovery_worktree_remove'

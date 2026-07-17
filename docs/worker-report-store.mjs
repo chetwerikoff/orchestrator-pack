@@ -1,669 +1,224 @@
-/**
- * Pack-owned worker report store (Issue #717).
- * Vitest: scripts/worker-report-store.test.ts
- */
-import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from 'node:fs';
+/** Pack-owned worker report store with the Issue #857 binding contract. */
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { normalizeSha, toArray } from './review-reconcile-primitives.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 import {
-  resolveSessionPrBinding,
-  sessionDetailFromSessionGetPayload,
-} from './session-pr-binding-resolver.mjs';
+  buildSessionBindingKey,
+  createDefaultPrSessionBindingCache,
+  readPrSessionBindingCacheFile,
+  resolveBindingRepoSlug,
+  resolvePrSessionBindingCachePath,
+  resolveSessionPrBindingForConsumer,
+  writePrSessionBindingCacheFile,
+} from './pr-session-binding-cache.mjs';
 import { isPendingWorkerDeliveryConfirmation } from './review-producer-contract.mjs';
 
+const array = (v) => Array.isArray(v) ? v : v == null ? [] : [v];
+const sessionIdOf = (s) => String(s?.sessionId ?? s?.id ?? s?.name ?? '').trim();
+const normalizeSha = (v) => /^[0-9a-f]{7,64}$/i.test(String(v ?? '').trim()) ? String(v).trim().toLowerCase() : '';
 export const WORKER_REPORT_STORE_SCHEMA_VERSION = 2;
 export const PACK_WORKER_REPORT_STORE_SURFACE = 'pack-worker-report-store';
 export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_NONTERMINAL_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+export const WORKER_REPORT_STATES = Object.freeze(['ready_for_review', 'fixing_ci', 'addressing_reviews', 'completed', 'blocked', 'pr_created', 'working', 'started']);
 
-/** @typedef {{ reportState?: string, accepted?: boolean, repoSlug?: string, sessionId?: string, prNumber?: number, headSha?: string, reportedAtMs?: number, lastObservedMs?: number, deliveryRunId?: string, note?: string, reason?: string, handoffKind?: string, degradedCiEscalation?: boolean }} WorkerReportRecord */
-
-export const WORKER_REPORT_STATES = Object.freeze([
-  'ready_for_review',
-  'fixing_ci',
-  'addressing_reviews',
-  'completed',
-  'blocked',
-  'pr_created',
-  'working',
-  'started',
-]);
-
-/**
- * @param {Record<string, unknown>} [env]
- */
 export function resolveWorkerReportStorePath(env = process.env) {
-  if (env.AO_WORKER_REPORT_STORE) {
-    return String(env.AO_WORKER_REPORT_STORE);
-  }
-  if (env.AO_REPORT_STATE_SEED_STATE) {
-    const seedPath = String(env.AO_REPORT_STATE_SEED_STATE);
-    const dir = dirname(seedPath);
-    return join(dir, 'worker-report-store.json');
-  }
+  if (env.AO_WORKER_REPORT_STORE) return String(env.AO_WORKER_REPORT_STORE);
+  if (env.AO_REPORT_STATE_SEED_STATE) return join(dirname(String(env.AO_REPORT_STATE_SEED_STATE)), 'worker-report-store.json');
   return join(homedir(), '.local', 'state', 'orchestrator-pack-wake-supervisor', 'worker-report-store.json');
 }
 
-/**
- * @param {Record<string, unknown>} record
- */
 export function buildWorkerReportRecordKey(record) {
-  const repoSlug = String(record?.repoSlug ?? '').trim().toLowerCase();
-  const sessionId = String(record?.sessionId ?? '').trim();
-  const prNumber = Number(record?.prNumber ?? 0);
-  const headSha = normalizeSha(record?.headSha);
-  const base = `${repoSlug}|${sessionId}|${prNumber}|${headSha}`;
-  const state = String(record?.reportState ?? '').toLowerCase();
-  if (state === 'addressing_reviews') {
-    const runId = String(record?.deliveryRunId ?? '').trim();
-    if (runId) {
-      return `${base}|ack|${runId}`;
-    }
-    const reportedAtMs = Number(record?.reportedAtMs ?? record?.lastObservedMs ?? 0);
-    if (reportedAtMs > 0) {
-      return `${base}|ack|${reportedAtMs}`;
-    }
-    return `${base}|ack`;
-  }
-  return base;
+  const base = `${String(record?.repoSlug ?? '').trim().toLowerCase()}|${String(record?.sessionId ?? '').trim()}|${Number(record?.prNumber ?? 0)}|${normalizeSha(record?.headSha)}`;
+  if (String(record?.reportState ?? '').toLowerCase() !== 'addressing_reviews') return base;
+  const suffix = String(record?.deliveryRunId ?? '').trim() || Number(record?.reportedAtMs ?? record?.lastObservedMs ?? 0) || '';
+  return `${base}|ack${suffix ? `|${suffix}` : ''}`;
 }
 
-/**
- * @param {Record<string, unknown>} [raw]
- */
 export function createDefaultWorkerReportStore(raw = {}) {
-  const seedFields = {
-    bindingByKey: raw.bindingByKey && typeof raw.bindingByKey === 'object' ? raw.bindingByKey : {},
+  return {
+    schemaVersion: 2, lastUpdatedMs: Number(raw.lastUpdatedMs ?? 0) || null, generation: Number(raw.generation ?? 0) || 0,
+    sourceRecords: raw.sourceRecords && typeof raw.sourceRecords === 'object' ? { ...raw.sourceRecords } : raw.records && typeof raw.records === 'object' ? { ...raw.records } : {},
+    bindingByKey: raw.bindingByKey && typeof raw.bindingByKey === 'object' ? { ...raw.bindingByKey } : {},
     seededKeys: Array.isArray(raw.seededKeys) ? [...raw.seededKeys] : [],
     deferredScanKeys: Array.isArray(raw.deferredScanKeys) ? [...raw.deferredScanKeys] : [],
     githubSnapshot: raw.githubSnapshot ?? null,
   };
-  return {
-    schemaVersion: WORKER_REPORT_STORE_SCHEMA_VERSION,
-    lastUpdatedMs: Number(raw.lastUpdatedMs ?? 0) || null,
-    generation: Number(raw.generation ?? 0) || 0,
-    sourceRecords: raw.sourceRecords && typeof raw.sourceRecords === 'object' ? { ...raw.sourceRecords } : (raw.records && typeof raw.records === 'object' ? { ...raw.records } : {}),
-    ...seedFields,
-  };
 }
+export const migrateLegacySeedStateToWorkerReportStore = (legacy) => createDefaultWorkerReportStore(legacy && typeof legacy === 'object' ? legacy : {});
+export const readWorkerReportStoreFile = (path) => existsSync(path) ? migrateLegacySeedStateToWorkerReportStore(JSON.parse(readFileSync(path, 'utf8'))) : createDefaultWorkerReportStore();
+export function writeWorkerReportStoreFile(path, store) { mkdirSync(dirname(path), { recursive: true }); const tmp = `${path}.tmp`; writeFileSync(tmp, `${JSON.stringify(store)}\n`, 'utf8'); renameSync(tmp, path); }
 
-/**
- * @param {Record<string, unknown>} legacy
- */
-export function migrateLegacySeedStateToWorkerReportStore(legacy) {
-  if (!legacy || typeof legacy !== 'object') {
-    return createDefaultWorkerReportStore();
-  }
-  const schemaVersion = Number(legacy.schemaVersion ?? 1);
-  if (schemaVersion >= WORKER_REPORT_STORE_SCHEMA_VERSION) {
-    return createDefaultWorkerReportStore(legacy);
-  }
-  const next = createDefaultWorkerReportStore({
-    bindingByKey: legacy.bindingByKey,
-    seededKeys: legacy.seededKeys,
-    deferredScanKeys: legacy.deferredScanKeys,
-    githubSnapshot: legacy.githubSnapshot,
-    lastUpdatedMs: legacy.lastUpdatedMs,
-    generation: legacy.generation ?? 0,
-    sourceRecords: legacy.sourceRecords,
-    records: legacy.records,
-  });
-  next.schemaVersion = WORKER_REPORT_STORE_SCHEMA_VERSION;
-  return next;
-}
-
-/**
- * @param {string} path
- */
-export function readWorkerReportStoreFile(path) {
-  if (!existsSync(path)) {
-    return createDefaultWorkerReportStore();
-  }
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
-  return migrateLegacySeedStateToWorkerReportStore(parsed);
-}
-
-/**
- * @param {string} path
- * @param {Record<string, unknown>} store
- */
-export function writeWorkerReportStoreFile(path, store) {
-  const dir = dirname(path);
-  mkdirSync(dir, { recursive: true });
-  const tempPath = `${path}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify(store)}\n`, 'utf8');
-  renameSync(tempPath, path);
-}
-
-/**
- * @param {Record<string, unknown>} store
- * @param {Record<string, unknown>} record
- * @param {number} nowMs
- */
-export function upsertWorkerReportRecord(store, record, nowMs) {
-  const key = buildWorkerReportRecordKey(record);
-  const existing = store.sourceRecords[key] ?? {};
+export function upsertWorkerReportRecord(store, input, nowMs) {
+  const key = buildWorkerReportRecordKey(input), old = store.sourceRecords[key] ?? {};
   store.sourceRecords[key] = {
-    ...existing,
-    reportState: String(record.reportState ?? existing.reportState ?? '').toLowerCase(),
-    accepted: record.accepted !== undefined ? Boolean(record.accepted) : Boolean(existing.accepted ?? true),
-    repoSlug: String(record.repoSlug ?? existing.repoSlug ?? '').trim(),
-    sessionId: String(record.sessionId ?? existing.sessionId ?? '').trim(),
-    prNumber: Number(record.prNumber ?? existing.prNumber ?? 0),
-    headSha: normalizeSha(record.headSha ?? existing.headSha),
-    reportedAtMs: Number(record.reportedAtMs ?? nowMs),
-    lastObservedMs: nowMs,
-    deliveryRunId: record.deliveryRunId ? String(record.deliveryRunId) : existing.deliveryRunId,
-    note: record.note !== undefined ? String(record.note) : existing.note,
-    reason: record.reason !== undefined ? String(record.reason) : existing.reason,
-    handoffKind: record.handoffKind !== undefined ? String(record.handoffKind) : existing.handoffKind,
-    degradedCiEscalation:
-      record.degradedCiEscalation !== undefined
-        ? Boolean(record.degradedCiEscalation)
-        : Boolean(existing.degradedCiEscalation ?? false),
+    ...old, reportState: String(input.reportState ?? old.reportState ?? '').toLowerCase(),
+    accepted: input.accepted !== undefined ? Boolean(input.accepted) : Boolean(old.accepted ?? true),
+    repoSlug: String(input.repoSlug ?? old.repoSlug ?? '').trim(), sessionId: String(input.sessionId ?? old.sessionId ?? '').trim(),
+    prNumber: Number(input.prNumber ?? old.prNumber ?? 0), headSha: normalizeSha(input.headSha ?? old.headSha),
+    reportedAtMs: Number(input.reportedAtMs ?? nowMs), lastObservedMs: nowMs,
+    deliveryRunId: input.deliveryRunId ? String(input.deliveryRunId) : old.deliveryRunId,
+    note: input.note !== undefined ? String(input.note) : old.note, reason: input.reason !== undefined ? String(input.reason) : old.reason,
+    handoffKind: input.handoffKind !== undefined ? String(input.handoffKind) : old.handoffKind,
+    degradedCiEscalation: input.degradedCiEscalation !== undefined ? Boolean(input.degradedCiEscalation) : Boolean(old.degradedCiEscalation ?? false),
   };
-  store.lastUpdatedMs = nowMs;
-  store.generation = Number(store.generation ?? 0) + 1;
+  store.lastUpdatedMs = nowMs; store.generation = Number(store.generation ?? 0) + 1;
   return { key, record: store.sourceRecords[key] };
 }
 
-/**
- * @param {Record<string, unknown>} store
- * @param {string} repoSlug
- * @param {string} sessionId
- */
 export function listWorkerReportRecordsForSession(store, repoSlug, sessionId) {
-  const repo = String(repoSlug ?? '').trim().toLowerCase();
-  const session = String(sessionId ?? '').trim();
-  return Object.values(store.sourceRecords ?? {}).filter((record) => {
-    return (
-      String(record?.repoSlug ?? '').trim().toLowerCase() === repo &&
-      String(record?.sessionId ?? '').trim() === session
-    );
-  });
+  const repo = String(repoSlug ?? '').trim().toLowerCase(), id = String(sessionId ?? '').trim();
+  return Object.values(store.sourceRecords ?? {}).filter((r) => String(r?.repoSlug ?? '').trim().toLowerCase() === repo && String(r?.sessionId ?? '').trim() === id);
 }
 
-/**
- * @param {WorkerReportRecord} record
- */
-export function workerReportRecordToSessionReportRow(record) {
-  const reportedAtMs = Number(record?.reportedAtMs ?? record?.lastObservedMs ?? 0);
+export function workerReportRecordToSessionReportRow(r) {
+  const ms = Number(r?.reportedAtMs ?? r?.lastObservedMs ?? 0);
   return {
-    reportState: String(record?.reportState ?? '').toLowerCase(),
-    accepted: Boolean(record?.accepted ?? true),
-    prNumber: Number(record?.prNumber ?? 0) || undefined,
-    headSha: normalizeSha(record?.headSha) || undefined,
-    repoSlug: String(record?.repoSlug ?? '').trim() || undefined,
-    deliveryRunId: record?.deliveryRunId ? String(record.deliveryRunId) : undefined,
-    note: record?.note ? String(record.note) : undefined,
-    reason: record?.reason ? String(record.reason) : undefined,
-    handoffKind: record?.handoffKind ? String(record.handoffKind) : undefined,
-    degradedCiEscalation:
-      record?.degradedCiEscalation !== undefined ? Boolean(record.degradedCiEscalation) : undefined,
-    reportedAt: reportedAtMs > 0 ? new Date(reportedAtMs).toISOString() : undefined,
-    timestamp: reportedAtMs > 0 ? new Date(reportedAtMs).toISOString() : undefined,
+    reportState: String(r?.reportState ?? '').toLowerCase(), accepted: Boolean(r?.accepted ?? true),
+    prNumber: Number(r?.prNumber ?? 0) || undefined, headSha: normalizeSha(r?.headSha) || undefined,
+    repoSlug: String(r?.repoSlug ?? '').trim() || undefined, deliveryRunId: r?.deliveryRunId ? String(r.deliveryRunId) : undefined,
+    note: r?.note ? String(r.note) : undefined, reason: r?.reason ? String(r.reason) : undefined,
+    handoffKind: r?.handoffKind ? String(r.handoffKind) : undefined,
+    degradedCiEscalation: r?.degradedCiEscalation !== undefined ? Boolean(r.degradedCiEscalation) : undefined,
+    reportedAt: ms > 0 ? new Date(ms).toISOString() : undefined, timestamp: ms > 0 ? new Date(ms).toISOString() : undefined,
     source: PACK_WORKER_REPORT_STORE_SURFACE,
   };
 }
 
-/**
- * @param {Record<string, unknown>[]} sessions
- * @param {Record<string, unknown>} store
- * @param {string} [repoSlug]
- */
 export function mergePackWorkerReportsIntoSessions(sessions, store, repoSlug = '') {
-  const repo = String(repoSlug ?? '').trim().toLowerCase();
-  return toArray(sessions).map((session) => {
-    const sessionId = String(session?.id ?? session?.name ?? session?.sessionId ?? '').trim();
-    const sessionRepo = String(session?.repoSlug ?? repo ?? '').trim().toLowerCase();
-    const records = listWorkerReportRecordsForSession(store, sessionRepo, sessionId)
-      .sort((a, b) => Number(b.reportedAtMs ?? 0) - Number(a.reportedAtMs ?? 0))
-      .map((record) => workerReportRecordToSessionReportRow(record));
-    if (records.length === 0) {
-      if (String(session?.reportSnapshotKind ?? '') === PACK_WORKER_REPORT_STORE_SURFACE) {
-        const next = { ...session };
-        delete next.reports;
-        delete next.reportSourcePath;
-        delete next.reportSnapshotKind;
-        return next;
-      }
-      return session;
+  const fallbackRepo = String(repoSlug ?? '').trim().toLowerCase();
+  return array(sessions).map((session) => {
+    const id = sessionIdOf(session), scope = String(session?.repoSlug ?? fallbackRepo).trim().toLowerCase();
+    const reports = listWorkerReportRecordsForSession(store, scope, id).sort((a, b) => Number(b.reportedAtMs ?? 0) - Number(a.reportedAtMs ?? 0)).map(workerReportRecordToSessionReportRow);
+    if (!reports.length) {
+      if (String(session?.reportSnapshotKind ?? '') !== PACK_WORKER_REPORT_STORE_SURFACE) return session;
+      const next = { ...session }; delete next.reports; delete next.reportSourcePath; delete next.reportSnapshotKind; return next;
     }
-    return {
-      ...session,
-      reports: records,
-      reportSourcePath: `pack-worker-report-store/${sessionRepo}/${sessionId}`,
-      reportSnapshotKind: PACK_WORKER_REPORT_STORE_SURFACE,
-    };
+    return { ...session, reports, reportSourcePath: `pack-worker-report-store/${scope}/${id}`, reportSnapshotKind: PACK_WORKER_REPORT_STORE_SURFACE };
   });
 }
 
-/**
- * @param {object} input
- * @param {Record<string, unknown>} input.store
- * @param {Array<{ number?: number, state?: string, merged?: boolean, closed?: boolean, headRefOid?: string }>} [input.openPrs]
- * @param {Record<string, string>} [input.currentHeadByPr]
- * @param {number} input.nowMs
- * @param {number} [input.maxAgeMs]
- * @param {number} [input.nonterminalMaxAgeMs]
- * @param {boolean} [input.openListAuthoritative]
- * @param {string} [input.repoSlug]
- */
-export function evictWorkerReportRecords({
-  store,
-  openPrs = [],
-  currentHeadByPr = {},
-  nowMs,
-  maxAgeMs = DEFAULT_MAX_AGE_MS,
-  nonterminalMaxAgeMs = DEFAULT_NONTERMINAL_MAX_AGE_MS,
-  openListAuthoritative = false,
-  repoSlug = '',
-}) {
-  const scopeRepo = String(repoSlug ?? '').trim().toLowerCase();
-  const openByRepoPr = new Map();
-  for (const pr of toArray(openPrs)) {
-    const prNumber = Number(pr?.number ?? 0);
-    if (prNumber <= 0) {
-      continue;
-    }
-    const prRepo = scopeRepo || String(pr?.repoSlug ?? pr?.repository ?? '').trim().toLowerCase();
-    if (prRepo) {
-      openByRepoPr.set(`${prRepo}|${prNumber}`, pr);
-    } else {
-      openByRepoPr.set(String(prNumber), pr);
-    }
+export function evictWorkerReportRecords({ store, openPrs = [], currentHeadByPr = {}, nowMs, maxAgeMs = DEFAULT_MAX_AGE_MS, nonterminalMaxAgeMs = DEFAULT_NONTERMINAL_MAX_AGE_MS, openListAuthoritative = false, repoSlug = '' }) {
+  const scope = String(repoSlug ?? '').trim().toLowerCase(), open = new Map();
+  for (const pr of array(openPrs)) {
+    const number = Number(pr?.number ?? 0), rowRepo = scope || String(pr?.repoSlug ?? pr?.repository ?? '').trim().toLowerCase();
+    if (number > 0) open.set(rowRepo ? `${rowRepo}|${number}` : String(number), pr);
   }
   let removed = 0;
   for (const [key, record] of Object.entries(store.sourceRecords ?? {})) {
-    const prNumber = Number(record?.prNumber ?? 0);
-    const recordRepo = String(record?.repoSlug ?? '').trim().toLowerCase();
-    const recordHead = normalizeSha(record?.headSha);
-    const prKey = recordRepo ? `${recordRepo}|${prNumber}` : String(prNumber);
-    const inScope = !scopeRepo || !recordRepo || recordRepo === scopeRepo;
-    const openPr = inScope
-      ? (openByRepoPr.get(prKey) ?? (scopeRepo ? undefined : openByRepoPr.get(String(prNumber))))
-      : undefined;
-    const currentHead = inScope
-      ? normalizeSha(
-        currentHeadByPr[prKey] ?? (scopeRepo ? undefined : currentHeadByPr[String(prNumber)]),
-      )
-      : undefined;
-    const prState = String(openPr?.state ?? '').toLowerCase();
-    const explicitlyTerminal = Boolean(openPr)
-      && (prState === 'closed' || prState === 'merged' || openPr?.merged === true || openPr?.closed === true);
-    const unlistedTerminal = openListAuthoritative && inScope && !openPr;
-    const terminal = explicitlyTerminal || unlistedTerminal;
-    const superseded = currentHead && recordHead && currentHead !== recordHead;
-    const lastObserved = Number(record?.lastObservedMs ?? record?.reportedAtMs ?? 0);
-    const stale = lastObserved > 0 && nowMs - lastObserved > (terminal ? maxAgeMs : nonterminalMaxAgeMs);
-    if (terminal || superseded || stale) {
-      delete store.sourceRecords[key];
-      removed += 1;
-    }
+    const number = Number(record?.prNumber ?? 0), rowRepo = String(record?.repoSlug ?? '').trim().toLowerCase();
+    const scoped = !scope || !rowRepo || rowRepo === scope, prKey = rowRepo ? `${rowRepo}|${number}` : String(number);
+    const pr = scoped ? (open.get(prKey) ?? (scope ? undefined : open.get(String(number)))) : undefined;
+    const state = String(pr?.state ?? '').toLowerCase(), terminal = Boolean(pr) && (['closed', 'merged'].includes(state) || pr?.merged === true || pr?.closed === true);
+    const absentTerminal = openListAuthoritative && scoped && !pr, current = scoped ? normalizeSha(currentHeadByPr[prKey] ?? currentHeadByPr[String(number)]) : '';
+    const staleHead = current && normalizeSha(record?.headSha) && current !== normalizeSha(record?.headSha), observed = Number(record?.lastObservedMs ?? record?.reportedAtMs ?? 0);
+    const stale = observed > 0 && nowMs - observed > ((terminal || absentTerminal) ? maxAgeMs : nonterminalMaxAgeMs);
+    if (terminal || absentTerminal || staleHead || stale) { delete store.sourceRecords[key]; removed += 1; }
   }
-  if (removed > 0) {
-    store.lastUpdatedMs = nowMs;
-    store.generation = Number(store.generation ?? 0) + 1;
-  }
+  if (removed) { store.lastUpdatedMs = nowMs; store.generation = Number(store.generation ?? 0) + 1; }
   return { removed, recordCount: Object.keys(store.sourceRecords ?? {}).length };
 }
 
-/**
- * @param {object} input
- * @param {string} input.callerSessionId
- * @param {Record<string, unknown>} input.record
- */
-/**
- * @param {object} input
- * @param {Record<string, unknown>} input.session
- * @param {Array<Record<string, unknown>>} [input.openPrs]
- * @param {string} [input.worktreeHeadSha]
- * @param {Record<string, unknown> | null} [input.sessionGetPayload]
- */
-export function resolveWorkerReportTrustedBinding({
-  session,
-  openPrs = [],
-  worktreeHeadSha = '',
-  sessionGetPayload = null,
-}) {
-  const headSha = normalizeSha(worktreeHeadSha);
-  if (!headSha) {
-    return { ok: false, reason: 'missing_worktree_head' };
-  }
-  const sessionDetail = sessionGetPayload
-    ? sessionDetailFromSessionGetPayload(sessionGetPayload)
-    : null;
-  const binding = resolveSessionPrBinding(session, toArray(openPrs), {
-    headSha,
-    sessionDetail,
-  });
-  if (!binding.bound || Number(binding.prNumber ?? 0) <= 0) {
-    return {
-      ok: false,
-      reason: binding.deferReason ?? 'trust_boundary_binding_unresolved',
-    };
-  }
-  const prNumber = Number(binding.prNumber);
-  const prRow = toArray(openPrs).find((pr) => Number(pr?.number ?? 0) === prNumber);
-  const openHead = normalizeSha(prRow?.headRefOid);
-  if (openHead && openHead !== headSha) {
-    return { ok: false, reason: 'trust_boundary_head_mismatch' };
-  }
-  return {
-    ok: true,
-    prNumber,
-    headSha,
-    bindingSource: binding.source,
-  };
+function getBindingStore(bindingStore, cachePath) {
+  if (bindingStore) return createDefaultPrSessionBindingCache(bindingStore);
+  try { return readPrSessionBindingCacheFile(cachePath ?? resolvePrSessionBindingCachePath()); }
+  catch { return createDefaultPrSessionBindingCache(); }
 }
 
-/**
- * @param {object} input
- * @param {string} input.callerSessionId
- * @param {Record<string, unknown>} input.record
- * @param {{ ok?: boolean, prNumber?: number, headSha?: string, reason?: string } | null} [input.trustedBinding]
- */
+export function resolveWorkerReportTrustedBinding({ session, openPrs = [], worktreeHeadSha = '', repoSlug = '', cachePath, bindingStore, nowMs = Date.now(), openListAuthoritative = false, writeBackfill = true }) {
+  const headSha = normalizeSha(worktreeHeadSha);
+  if (!headSha) return { ok: false, reason: 'missing_worktree_head', sessionId: sessionIdOf(session) || null };
+  const scope = resolveBindingRepoSlug({ repoSlug: repoSlug || session?.repoSlug }, openPrs);
+  if (!scope) return { ok: false, reason: 'missing_repo_slug', sessionId: sessionIdOf(session) || null };
+  const result = resolveSessionPrBindingForConsumer({
+    store: getBindingStore(bindingStore, cachePath), cachePath, repoSlug: scope, session, openPrs,
+    headSha, nowMs, openListAuthoritative, writeBackfill,
+  });
+  if (!result.bound) return { ok: false, ...result };
+  const pr = array(openPrs).find((row) => Number(row?.number ?? 0) === Number(result.prNumber));
+  const openHead = normalizeSha(pr?.headRefOid);
+  if (openHead && openHead !== headSha) return { ok: false, reason: 'trust_boundary_head_mismatch', sessionId: result.sessionId };
+  return { ok: true, prNumber: Number(result.prNumber), headSha, sessionId: result.sessionId, bindingSource: result.bindingSource ?? result.source, bindingReason: result.reason, bindingCacheGeneration: result.bindingCacheGeneration };
+}
+
+export function resolveWorkerReportTrustedBindings({ sessions = [], openPrs = [], repoSlug = '', cachePath, bindingStore, worktreeHeadSha = '', worktreeHeadBySession = {}, nowMs = Date.now(), openListAuthoritative = false, writeBackfill = true }) {
+  const scope = resolveBindingRepoSlug({ repoSlug }, openPrs), path = cachePath ?? resolvePrSessionBindingCachePath();
+  const store = getBindingStore(bindingStore, path), bindingByKey = {};
+  for (const session of array(sessions)) {
+    const id = sessionIdOf(session); if (!id) continue;
+    const result = resolveSessionPrBindingForConsumer({ store, repoSlug: scope || String(session?.repoSlug ?? ''), session, openPrs, headSha: worktreeHeadBySession[id] ?? worktreeHeadSha, nowMs, openListAuthoritative, writeBackfill: false });
+    bindingByKey[buildSessionBindingKey(scope || session?.repoSlug, id)] = result;
+  }
+  if (writeBackfill && cachePath && !bindingStore) writePrSessionBindingCacheFile(path, store);
+  return { bindingByKey, callCounts: { bulkSessionList: 1, sessionDetail: 0 }, cacheGeneration: Number(store.generation ?? 0) };
+}
+
 export function validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding = null }) {
-  const caller = String(callerSessionId ?? '').trim();
-  const target = String(record?.sessionId ?? '').trim();
-  if (!caller || !target || caller !== target) {
-    return { ok: false, reason: 'trust_boundary_session_mismatch' };
-  }
-  if (!String(record?.repoSlug ?? '').trim()) {
-    return { ok: false, reason: 'missing_repo_slug' };
-  }
-  if (Number(record?.prNumber ?? 0) <= 0) {
-    return { ok: false, reason: 'missing_pr_number' };
-  }
-  if (!normalizeSha(record?.headSha)) {
-    return { ok: false, reason: 'missing_head_sha' };
-  }
-  const state = String(record?.reportState ?? '').toLowerCase();
-  if (!WORKER_REPORT_STATES.includes(state)) {
-    return { ok: false, reason: 'invalid_report_state' };
-  }
-  if (!trustedBinding || trustedBinding.ok !== true) {
-    return {
-      ok: false,
-      reason: String(trustedBinding?.reason ?? 'trust_boundary_binding_unresolved'),
-    };
-  }
-  if (Number(record?.prNumber ?? 0) !== Number(trustedBinding.prNumber ?? 0)) {
-    return { ok: false, reason: 'trust_boundary_pr_mismatch' };
-  }
-  if (normalizeSha(record?.headSha) !== normalizeSha(trustedBinding.headSha)) {
-    return { ok: false, reason: 'trust_boundary_head_mismatch' };
-  }
+  const caller = String(callerSessionId ?? '').trim(), target = String(record?.sessionId ?? '').trim();
+  if (!caller || !target || caller !== target) return { ok: false, reason: 'trust_boundary_session_mismatch' };
+  if (!String(record?.repoSlug ?? '').trim()) return { ok: false, reason: 'missing_repo_slug' };
+  if (Number(record?.prNumber ?? 0) <= 0) return { ok: false, reason: 'missing_pr_number' };
+  if (!normalizeSha(record?.headSha)) return { ok: false, reason: 'missing_head_sha' };
+  if (!WORKER_REPORT_STATES.includes(String(record?.reportState ?? '').toLowerCase())) return { ok: false, reason: 'invalid_report_state' };
+  if (trustedBinding?.ok !== true) return { ok: false, reason: String(trustedBinding?.reason ?? 'no_source') };
+  if (Number(record.prNumber) !== Number(trustedBinding.prNumber)) return { ok: false, reason: 'trust_boundary_pr_mismatch' };
+  if (normalizeSha(record.headSha) !== normalizeSha(trustedBinding.headSha)) return { ok: false, reason: 'trust_boundary_head_mismatch' };
   return { ok: true };
 }
 
-/**
- * @param {Record<string, unknown>} session
- */
-export function sessionHasPackWorkerReportReceiptSurface(session) {
-  return (
-    String(session?.reportSnapshotKind ?? '') === PACK_WORKER_REPORT_STORE_SURFACE &&
-    toArray(session?.reports).length > 0
-  );
-}
-
-/**
- * Pack-store worker ack: addressing_reviews only, correlated to delivery head and timestamp.
- *
- * @param {Record<string, unknown>} session
- * @param {object} run
- * @param {number} sendObservedAtMs
- */
-
-/**
- * @param {object} input
- * @param {string} [input.reportState]
- * @param {string} [input.sessionId]
- * @param {number} [input.prNumber]
- * @param {string} [input.headSha]
- * @param {string} [input.deliveryRunId]
- * @param {Array<Record<string, unknown>>} [input.reviewRuns]
- */
-export function resolvePackWorkerReportDeliveryRunId({
-  reportState = '',
-  sessionId = '',
-  prNumber = 0,
-  headSha = '',
-  deliveryRunId = '',
-  reviewRuns = [],
-}) {
-  if (String(reportState ?? '').toLowerCase() !== 'addressing_reviews') {
-    return '';
-  }
-  const explicit = String(deliveryRunId ?? '').trim();
-  if (explicit) {
-    return explicit;
-  }
-  const session = String(sessionId ?? '').trim();
-  const pr = Number(prNumber ?? 0);
+export const sessionHasPackWorkerReportReceiptSurface = (session) => String(session?.reportSnapshotKind ?? '') === PACK_WORKER_REPORT_STORE_SURFACE && array(session?.reports).length > 0;
+export function resolvePackWorkerReportDeliveryRunId({ reportState = '', sessionId = '', prNumber = 0, headSha = '', deliveryRunId = '', reviewRuns = [] }) {
+  if (String(reportState).toLowerCase() !== 'addressing_reviews') return '';
+  if (String(deliveryRunId).trim()) return String(deliveryRunId).trim();
   const head = normalizeSha(headSha);
-  if (!session || pr <= 0) {
-    return '';
-  }
-  for (const run of toArray(reviewRuns)) {
-    const linked = String(run?.linkedSessionId ?? '').trim();
-    if (linked !== session) {
-      continue;
-    }
-    if (Number(run?.prNumber ?? 0) !== pr) {
-      continue;
-    }
-    const targetHead = normalizeSha(run?.targetSha);
-    if (head && targetHead && targetHead !== head) {
-      continue;
-    }
-    if (!isPendingWorkerDeliveryConfirmation(run)) {
-      continue;
-    }
-    const runId = String(run?.id ?? run?.reviewerSessionId ?? '').trim();
-    if (runId) {
-      return runId;
-    }
+  for (const run of array(reviewRuns)) {
+    if (String(run?.linkedSessionId ?? '').trim() !== String(sessionId).trim() || Number(run?.prNumber) !== Number(prNumber)) continue;
+    if (head && normalizeSha(run?.targetSha) && normalizeSha(run.targetSha) !== head) continue;
+    if (isPendingWorkerDeliveryConfirmation(run)) return String(run?.id ?? run?.reviewerSessionId ?? '').trim();
   }
   return '';
 }
 
 export function findPackWorkerAckReportAfterDelivery(session, run, sendObservedAtMs) {
-  if (!sessionHasPackWorkerReportReceiptSurface(session)) {
-    return null;
-  }
-  const runHead = normalizeSha(run?.targetSha);
-  const runId = String(run?.id ?? run?.reviewerSessionId ?? '').trim();
-  for (const report of toArray(session?.reports)) {
-    const state = String(report?.reportState ?? report?.report_state ?? '').toLowerCase();
-    if (state !== 'addressing_reviews') {
-      continue;
-    }
-    const reportHead = normalizeSha(report?.headSha ?? report?.headRefOid);
-    if (runHead && reportHead && reportHead !== runHead) {
-      continue;
-    }
-    const ts =
-      Date.parse(String(report?.reportedAt ?? report?.timestamp ?? report?.createdAt ?? '')) || 0;
-    if (ts <= sendObservedAtMs) {
-      continue;
-    }
-    if (runId) {
-      const reportRunId = String(report?.deliveryRunId ?? '').trim();
-      if (!reportRunId || reportRunId !== runId) {
-        continue;
-      }
-    }
-    return report;
-  }
-  return null;
+  if (!sessionHasPackWorkerReportReceiptSurface(session)) return null;
+  const head = normalizeSha(run?.targetSha), runId = String(run?.id ?? run?.reviewerSessionId ?? '').trim();
+  return array(session.reports).find((report) => {
+    if (String(report?.reportState ?? report?.report_state ?? '').toLowerCase() !== 'addressing_reviews') return false;
+    const reportHead = normalizeSha(report?.headSha ?? report?.headRefOid); if (head && reportHead && head !== reportHead) return false;
+    if ((Date.parse(String(report?.reportedAt ?? report?.timestamp ?? report?.createdAt ?? '')) || 0) <= sendObservedAtMs) return false;
+    return !runId || String(report?.deliveryRunId ?? '').trim() === runId;
+  }) ?? null;
 }
 
-/**
- * @param {object} input
- * @param {string} input.storePath
- * @param {Record<string, unknown>} input.record
- * @param {string} input.callerSessionId
- * @param {number} input.nowMs
- * @param {number} [input.expectedGeneration]
- */
 export function upsertWorkerReportRecordInMemory({ store, record, callerSessionId, nowMs, trustedBinding = null }) {
-  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding });
-  if (!trust.ok) {
-    return { ok: false, reason: trust.reason };
-  }
-  const normalized = createDefaultWorkerReportStore(store ?? {});
-  const result = upsertWorkerReportRecord(normalized, record, nowMs);
-  return {
-    ok: true,
-    store: normalized,
-    key: result.key,
-    record: result.record,
-    generation: normalized.generation,
-  };
+  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding }); if (!trust.ok) return trust;
+  const next = createDefaultWorkerReportStore(store ?? {}), result = upsertWorkerReportRecord(next, record, nowMs);
+  return { ok: true, store: next, key: result.key, record: result.record, generation: next.generation };
 }
-
-export function writeWorkerReportRecordWithCas({
-  storePath,
-  record,
-  callerSessionId,
-  nowMs,
-  expectedGeneration,
-  trustedBinding = null,
-}) {
-  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding });
-  if (!trust.ok) {
-    return { ok: false, reason: trust.reason };
-  }
-  if (expectedGeneration === undefined || expectedGeneration === null) {
-    return { ok: false, reason: 'missing_expected_generation' };
-  }
-  const store = readWorkerReportStoreFile(storePath);
-  if (Number(store.generation ?? 0) !== Number(expectedGeneration)) {
-    return { ok: false, reason: 'generation_mismatch', generation: store.generation };
-  }
-  const result = upsertWorkerReportRecord(store, record, nowMs);
-  writeWorkerReportStoreFile(storePath, store);
+export function writeWorkerReportRecordWithCas({ storePath, record, callerSessionId, nowMs, expectedGeneration, trustedBinding = null }) {
+  const trust = validateWorkerReportTrustBoundary({ callerSessionId, record, trustedBinding }); if (!trust.ok) return trust;
+  if (expectedGeneration == null) return { ok: false, reason: 'missing_expected_generation' };
+  const store = readWorkerReportStoreFile(storePath); if (Number(store.generation) !== Number(expectedGeneration)) return { ok: false, reason: 'generation_mismatch', generation: store.generation };
+  const result = upsertWorkerReportRecord(store, record, nowMs); writeWorkerReportStoreFile(storePath, store);
   return { ok: true, key: result.key, record: result.record, generation: store.generation };
 }
-
-/**
- * @param {Record<string, unknown>} store
- * @param {string} repoSlug
- * @param {number} prNumber
- * @param {string} headSha
- */
 export function seedShouldPromoteReadyForReview(store, repoSlug, prNumber, headSha, currentHeadSha) {
-  const repo = String(repoSlug ?? '').trim().toLowerCase();
-  const head = normalizeSha(headSha);
-  const current = normalizeSha(currentHeadSha);
-  if (current && head && current !== head) {
-    return { promote: false, reason: 'superseded_head' };
-  }
-  for (const record of Object.values(store.sourceRecords ?? {})) {
-    if (String(record?.repoSlug ?? '').trim().toLowerCase() !== repo) {
-      continue;
-    }
-    if (Number(record?.prNumber ?? 0) !== Number(prNumber)) {
-      continue;
-    }
-    if (normalizeSha(record?.headSha) !== head) {
-      continue;
-    }
-    if (String(record?.reportState ?? '').toLowerCase() === 'ready_for_review' && Boolean(record?.accepted ?? true)) {
-      return { promote: true, record };
-    }
-  }
-  return { promote: false, reason: 'no_ready_record' };
+  const scope = String(repoSlug ?? '').trim().toLowerCase(), head = normalizeSha(headSha), current = normalizeSha(currentHeadSha);
+  if (current && head && current !== head) return { promote: false, reason: 'superseded_head' };
+  const record = Object.values(store.sourceRecords ?? {}).find((r) => String(r?.repoSlug ?? '').trim().toLowerCase() === scope && Number(r?.prNumber) === Number(prNumber) && normalizeSha(r?.headSha) === head && String(r?.reportState ?? '').toLowerCase() === 'ready_for_review' && Boolean(r?.accepted ?? true));
+  return record ? { promote: true, record } : { promote: false, reason: 'no_ready_record' };
 }
 
 runStdinJsonCli('worker-report-store.mjs', {
   migrate: () => migrateLegacySeedStateToWorkerReportStore(readStdinJson()),
-  mergeIntoSessions: () => {
-    const payload = readStdinJson();
-    return mergePackWorkerReportsIntoSessions(
-      toArray(payload.sessions),
-      createDefaultWorkerReportStore(payload.store ?? {}),
-      String(payload.repoSlug ?? ''),
-    );
-  },
-  evict: () => {
-    const payload = readStdinJson();
-    const store = createDefaultWorkerReportStore(payload.store ?? {});
-    const result = evictWorkerReportRecords({
-      store,
-      openPrs: toArray(payload.openPrs),
-      currentHeadByPr: payload.currentHeadByPr ?? {},
-      nowMs: Number(payload.nowMs ?? Date.now()),
-      maxAgeMs: Number(payload.maxAgeMs ?? DEFAULT_MAX_AGE_MS),
-      nonterminalMaxAgeMs: Number(payload.nonterminalMaxAgeMs ?? DEFAULT_NONTERMINAL_MAX_AGE_MS),
-      openListAuthoritative: Boolean(payload.openListAuthoritative ?? false),
-      repoSlug: String(payload.repoSlug ?? ''),
-    });
-    return { ...result, store };
-  },
-  resolveDeliveryRunId: () => {
-    const payload = readStdinJson();
-    return {
-      deliveryRunId: resolvePackWorkerReportDeliveryRunId({
-        reportState: String(payload.reportState ?? ''),
-        sessionId: String(payload.sessionId ?? ''),
-        prNumber: Number(payload.prNumber ?? 0),
-        headSha: String(payload.headSha ?? ''),
-        deliveryRunId: String(payload.deliveryRunId ?? ''),
-        reviewRuns: toArray(payload.reviewRuns),
-      }),
-    };
-  },
-  resolveTrustedBinding: () => {
-    const payload = readStdinJson();
-    return resolveWorkerReportTrustedBinding({
-      session: payload.session ?? {},
-      openPrs: toArray(payload.openPrs),
-      worktreeHeadSha: String(payload.worktreeHeadSha ?? ''),
-      sessionGetPayload: payload.sessionGetPayload ?? null,
-    });
-  },
-  upsertRecord: () => {
-    const payload = readStdinJson();
-    return upsertWorkerReportRecordInMemory({
-      store: createDefaultWorkerReportStore(payload.store ?? {}),
-      record: payload.record ?? {},
-      callerSessionId: String(payload.callerSessionId ?? ''),
-      nowMs: Number(payload.nowMs ?? Date.now()),
-      trustedBinding: payload.trustedBinding ?? null,
-    });
-  },
-  writeRecord: () => {
-    const payload = readStdinJson();
-    return writeWorkerReportRecordWithCas({
-      storePath: String(payload.storePath ?? resolveWorkerReportStorePath()),
-      record: payload.record ?? {},
-      callerSessionId: String(payload.callerSessionId ?? ''),
-      nowMs: Number(payload.nowMs ?? Date.now()),
-      expectedGeneration: payload.expectedGeneration,
-      trustedBinding: payload.trustedBinding ?? null,
-    });
-  },
-  seedShouldPromote: () => {
-    const payload = readStdinJson();
-    const store = createDefaultWorkerReportStore(payload.store ?? {});
-    return seedShouldPromoteReadyForReview(
-      store,
-      String(payload.repoSlug ?? ''),
-      Number(payload.prNumber ?? 0),
-      String(payload.headSha ?? ''),
-      String(payload.currentHeadSha ?? ''),
-    );
-  },
-  findPackAck: () => {
-    const payload = readStdinJson();
-    return findPackWorkerAckReportAfterDelivery(
-      payload.session ?? {},
-      payload.run ?? {},
-      Number(payload.sendObservedAtMs ?? 0),
-    );
-  },
+  mergeIntoSessions: () => { const p = readStdinJson(); return mergePackWorkerReportsIntoSessions(array(p.sessions), createDefaultWorkerReportStore(p.store ?? {}), String(p.repoSlug ?? '')); },
+  evict: () => { const p = readStdinJson(), store = createDefaultWorkerReportStore(p.store ?? {}); return { ...evictWorkerReportRecords({ store, openPrs: array(p.openPrs), currentHeadByPr: p.currentHeadByPr ?? {}, nowMs: Number(p.nowMs ?? Date.now()), maxAgeMs: Number(p.maxAgeMs ?? DEFAULT_MAX_AGE_MS), nonterminalMaxAgeMs: Number(p.nonterminalMaxAgeMs ?? DEFAULT_NONTERMINAL_MAX_AGE_MS), openListAuthoritative: Boolean(p.openListAuthoritative), repoSlug: String(p.repoSlug ?? '') }), store }; },
+  resolveDeliveryRunId: () => { const p = readStdinJson(); return { deliveryRunId: resolvePackWorkerReportDeliveryRunId({ ...p, reviewRuns: array(p.reviewRuns) }) }; },
+  resolveTrustedBinding: () => { const p = readStdinJson(); return resolveWorkerReportTrustedBinding({ session: p.session ?? {}, openPrs: array(p.openPrs), worktreeHeadSha: String(p.worktreeHeadSha ?? ''), repoSlug: String(p.repoSlug ?? ''), cachePath: p.cachePath ? String(p.cachePath) : undefined, nowMs: Number(p.nowMs ?? Date.now()), openListAuthoritative: Boolean(p.openListAuthoritative), writeBackfill: p.writeBackfill !== false }); },
+  resolveTrustedBindings: () => { const p = readStdinJson(); return resolveWorkerReportTrustedBindings({ sessions: array(p.sessions), openPrs: array(p.openPrs), repoSlug: String(p.repoSlug ?? ''), cachePath: p.cachePath ? String(p.cachePath) : undefined, worktreeHeadSha: String(p.worktreeHeadSha ?? ''), worktreeHeadBySession: p.worktreeHeadBySession ?? {}, nowMs: Number(p.nowMs ?? Date.now()), openListAuthoritative: Boolean(p.openListAuthoritative), writeBackfill: p.writeBackfill !== false }); },
+  upsertRecord: () => { const p = readStdinJson(); return upsertWorkerReportRecordInMemory({ store: createDefaultWorkerReportStore(p.store ?? {}), record: p.record ?? {}, callerSessionId: String(p.callerSessionId ?? ''), nowMs: Number(p.nowMs ?? Date.now()), trustedBinding: p.trustedBinding ?? null }); },
+  writeRecord: () => { const p = readStdinJson(); return writeWorkerReportRecordWithCas({ storePath: String(p.storePath ?? resolveWorkerReportStorePath()), record: p.record ?? {}, callerSessionId: String(p.callerSessionId ?? ''), nowMs: Number(p.nowMs ?? Date.now()), expectedGeneration: p.expectedGeneration, trustedBinding: p.trustedBinding ?? null }); },
+  seedShouldPromote: () => { const p = readStdinJson(); return seedShouldPromoteReadyForReview(createDefaultWorkerReportStore(p.store ?? {}), String(p.repoSlug ?? ''), Number(p.prNumber ?? 0), String(p.headSha ?? ''), String(p.currentHeadSha ?? '')); },
+  findPackAck: () => { const p = readStdinJson(); return findPackWorkerAckReportAfterDelivery(p.session ?? {}, p.run ?? {}, Number(p.sendObservedAtMs ?? 0)); },
 });

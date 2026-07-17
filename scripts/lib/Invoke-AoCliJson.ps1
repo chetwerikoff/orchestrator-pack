@@ -3,6 +3,7 @@
 .SYNOPSIS
   Parse JSON from ao CLI commands that may prefix non-JSON log lines.
   AO 0.10 session/status facade (Issue #619).
+  Issue #857 retires per-session binding enrichment.
 #>
 
 $Script:AoSessionAdapterValidRoles = @('worker', 'orchestrator')
@@ -15,38 +16,22 @@ $Script:AoEventsDegradedClassification = $null
 
 function ConvertFrom-AoCliPrefixedOutput {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Text,
-        [Parameter(Mandatory = $true)]
-        [string]$FailureLabel
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$FailureLabel
     )
-
-    $label = [string]$FailureLabel
     $start = $Text.IndexOf('{')
-    if ($start -lt 0) {
-        throw "$label produced no JSON output"
-    }
-
-    $jsonText = $Text.Substring($start)
-    try {
-        return $jsonText | ConvertFrom-Json
-    }
-    catch {
-        $detail = $_.Exception.Message
-        throw "$label parse failed: $detail"
-    }
+    if ($start -lt 0) { throw "$FailureLabel produced no JSON output" }
+    try { return $Text.Substring($start) | ConvertFrom-Json }
+    catch { throw "$FailureLabel parse failed: $($_.Exception.Message)" }
 }
 
 function Invoke-AoCliJson {
     param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$AoArgs,
+        [Parameter(Mandatory = $true)][string[]]$AoArgs,
         [string]$FailureLabel = '',
         [string]$AoCommand = 'ao'
     )
-
     $label = if ($FailureLabel) { $FailureLabel } else { "$AoCommand $($AoArgs -join ' ')" }
-
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -55,64 +40,43 @@ function Invoke-AoCliJson {
             $text = ($raw | Out-String).Trim()
             throw "$label failed (exit $LASTEXITCODE): $text"
         }
-
         $text = ($raw | ForEach-Object {
                 if ($_ -is [string]) { $_ }
                 elseif ($null -ne $_) { $_.ToString() }
             }) -join "`n"
         return ConvertFrom-AoCliPrefixedOutput -Text $text -FailureLabel $label
     }
-    finally {
-        $ErrorActionPreference = $prevEap
-    }
+    finally { $ErrorActionPreference = $prevEap }
 }
 
 function Get-AoReviewRunsFromPayload {
-    param(
-        $Payload,
-        [string]$Project = ''
-    )
-
-    if ($null -eq $Payload) {
-        return @()
-    }
-
-    $runs = @()
-    if ($Payload -is [System.Array]) {
-        # Get-AoReviewRuns already returns normalized run rows (AO 0.10 fan-out).
-        $runs = @($Payload)
+    param($Payload, [string]$Project = '')
+    if ($null -eq $Payload) { return @() }
+    $runs = if ($Payload -is [System.Array]) {
+        @($Payload)
     }
     elseif ($Payload.PSObject.Properties.Name -contains 'runs') {
-        $runs = @($Payload.runs)
+        @($Payload.runs)
     }
     elseif ($Payload.PSObject.Properties.Name -contains 'data') {
-        $runs = @($Payload.data)
+        @($Payload.data)
     }
     else {
-        $runs = @($Payload)
+        @($Payload)
     }
-
-    if ($Project) {
-        $runs = @($runs | Where-Object { $_.projectId -eq $Project })
-    }
-
+    if ($Project) { $runs = @($runs | Where-Object { $_.projectId -eq $Project }) }
     return $runs
 }
 
 function Get-AoStatusSessionsFromPayload {
     param($Payload)
-
     $sessions = @($Payload.data)
-    if (-not $sessions -and $Payload.sessions) {
-        $sessions = @($Payload.sessions)
-    }
-
+    if (-not $sessions -and $Payload.sessions) { $sessions = @($Payload.sessions) }
     return $sessions
 }
 
 function Get-AoReviewRuns {
     param([string]$Project = '')
-
     if (-not (Get-Command Get-AoReviewRunsFromWorkerSessions -ErrorAction SilentlyContinue)) {
         . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
     }
@@ -127,31 +91,17 @@ function Get-AoBaseDir {
 }
 
 function Format-AoSessionReportSourcePath {
-    param(
-        [string]$SessionId,
-        [string]$SourceKind
-    )
-
-    $id = [string]$SessionId
-    if (-not $id) { $id = '<session>' }
+    param([string]$SessionId, [string]$SourceKind)
+    $id = if ($SessionId) { [string]$SessionId } else { '<session>' }
     switch ($SourceKind) {
-        'fixture-report-full' {
-            return "`$.data[?name==$id].reports[*] from fixture report-full"
-        }
-        'fixture-report-full-terminated' {
-            return "`$.data[?name==$id].reports[*] from fixture report-full-terminated"
-        }
-        default {
-            return "pack-worker-report-store:$id"
-        }
+        'fixture-report-full' { return "`$.data[?name==$id].reports[*] from fixture report-full" }
+        'fixture-report-full-terminated' { return "`$.data[?name==$id].reports[*] from fixture report-full-terminated" }
+        default { return "pack-worker-report-store:$id" }
     }
 }
 
 function New-AoEventsDegradedClassification {
-    param(
-        [string]$Reason = 'removed_cli_surface',
-        [string]$Detail = ''
-    )
+    param([string]$Reason = 'removed_cli_surface', [string]$Detail = '')
     return [pscustomobject]@{
         degraded = $true
         reason = $Reason
@@ -161,29 +111,20 @@ function New-AoEventsDegradedClassification {
 }
 
 function Set-AoEventsDegradedClassification {
-    param(
-        [string]$Reason = 'removed_cli_surface',
-        [string]$Detail = ''
-    )
+    param([string]$Reason = 'removed_cli_surface', [string]$Detail = '')
     $Script:AoEventsDegradedClassification = New-AoEventsDegradedClassification -Reason $Reason -Detail $Detail
     return $Script:AoEventsDegradedClassification
 }
 
 function Get-AoEventsDegradedClassification {
     if ($null -eq $Script:AoEventsDegradedClassification) {
-        return [pscustomobject]@{
-            degraded = $false
-            reason = ''
-            classification = ''
-            detail = ''
-        }
+        return [pscustomobject]@{ degraded = $false; reason = ''; classification = ''; detail = '' }
     }
     return $Script:AoEventsDegradedClassification
 }
 
 function Test-AoEventsRemovedCliSurfaceText {
     param([string]$Text)
-
     if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
     if ($Text -match 'unknown command "events" for "ao"') { return $true }
     return $Text -match '(?i)(unknown|unrecognized|invalid).*(command|subcommand).*"events"'
@@ -191,11 +132,7 @@ function Test-AoEventsRemovedCliSurfaceText {
 
 function Test-AoEventsCliAvailable {
     param([string]$AoCommand = 'ao')
-
-    if ($null -ne $Script:AoEventsCliProbeState) {
-        return [bool]$Script:AoEventsCliProbeState
-    }
-
+    if ($null -ne $Script:AoEventsCliProbeState) { return [bool]$Script:AoEventsCliProbeState }
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -222,32 +159,18 @@ function Test-AoEventsCliAvailable {
         $Script:AoEventsDegradedClassification = $null
         return $true
     }
-    catch {
-        throw
-    }
-    finally {
-        $ErrorActionPreference = $prevEap
-    }
+    finally { $ErrorActionPreference = $prevEap }
 }
 
-
 function Get-AoStatusSessionsWithReportsFromPayload {
-    param(
-        $Payload,
-        [string]$SourceKind = 'cli-report-full'
-    )
-
+    param($Payload, [string]$SourceKind = 'cli-report-full')
     $sessions = @(Get-AoStatusSessionsFromPayload -Payload $Payload)
     $decorated = @()
     foreach ($session in $sessions) {
         if (-not $session) { continue }
-        $sessionId = [string]$session.id
-        if (-not $sessionId) { $sessionId = [string]$session.name }
-        if (-not $sessionId) { $sessionId = [string]$session.sessionId }
+        $sessionId = Get-AoSessionRowIdentifier -Row $session
         $row = [ordered]@{}
-        foreach ($prop in $session.PSObject.Properties) {
-            $row[$prop.Name] = $prop.Value
-        }
+        foreach ($prop in $session.PSObject.Properties) { $row[$prop.Name] = $prop.Value }
         if (-not $row['reports']) { $row['reports'] = @() }
         $row['reportSourcePath'] = Format-AoSessionReportSourcePath -SessionId $sessionId -SourceKind $SourceKind
         $row['reportSnapshotKind'] = 'fixture-report-full'
@@ -256,28 +179,18 @@ function Get-AoStatusSessionsWithReportsFromPayload {
     return $decorated
 }
 
-
 function Get-AoDaemonHealthJson {
     param([string]$AoCommand = 'ao')
-
     return Invoke-AoCliJson -AoArgs @('status', '--json') -FailureLabel 'ao status' -AoCommand $AoCommand
 }
 
 function Assert-AoListPayloadShape {
-    param(
-        $Payload,
-        [string]$Label
-    )
-
-    if (-not $Payload) {
-        throw "${Label}: empty payload"
-    }
+    param($Payload, [string]$Label)
+    if (-not $Payload) { throw "${Label}: empty payload" }
     if ($Payload.PSObject.Properties.Name -notcontains 'data') {
         throw "${Label}: missing required top-level data[]"
     }
-    if ($null -eq $Payload.data) {
-        throw "${Label}: data must not be null"
-    }
+    if ($null -eq $Payload.data) { throw "${Label}: data must not be null" }
 }
 
 function Get-AoSessionLsJson {
@@ -286,7 +199,6 @@ function Get-AoSessionLsJson {
         [switch]$IncludeTerminated,
         [string]$AoCommand = 'ao'
     )
-
     $args = @('session', 'ls', '--json')
     if ($Project) { $args += @('-p', $Project) }
     if ($IncludeTerminated) { $args += '--include-terminated' }
@@ -297,51 +209,38 @@ function Get-AoSessionLsJson {
 
 function Get-AoOrchestratorLsJson {
     param([string]$AoCommand = 'ao')
-
-    $payload = Invoke-AoCliJson -AoArgs @('orchestrator', 'ls', '--json') -FailureLabel 'ao orchestrator ls' -AoCommand $AoCommand
+    $payload = Invoke-AoCliJson -AoArgs @('orchestrator', 'ls', '--json') `
+        -FailureLabel 'ao orchestrator ls' -AoCommand $AoCommand
     Assert-AoListPayloadShape -Payload $payload -Label 'ao orchestrator ls'
     return $payload
 }
 
 function Get-AoSessionGetJson {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$SessionId,
+        [Parameter(Mandatory = $true)][string]$SessionId,
         [string]$Project = '',
         [string]$AoCommand = 'ao'
     )
-
     $args = @('session', 'get', $SessionId, '--json')
     if ($Project) { $args += @('-p', $Project) }
     return Invoke-AoCliJson -AoArgs $args -FailureLabel 'ao session get' -AoCommand $AoCommand
 }
+
 function Get-AoSessionRowIdentifier {
     param($Row)
-
     if (-not $Row) { return '' }
     foreach ($key in @('sessionId', 'id', 'name')) {
         $value = [string]$Row.$key
-        if (-not [string]::IsNullOrWhiteSpace($value)) {
-            return $value.Trim()
-        }
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
     }
     return ''
 }
 
 function Test-AoSessionRowNeedsSessionGetDetail {
     param($Row)
-
-    if (-not $Row) { return $false }
-    $prNumber = 0
-    if ($null -ne $Row.prNumber) {
-        [void][int]::TryParse([string]$Row.prNumber, [ref]$prNumber)
-    }
-    if ($prNumber -gt 0) { return $false }
-    $displayName = [string]$Row.displayName
-    if ($displayName -match '^\d+$') { return $false }
-    $role = [string]$Row.role
-    if ($role -and $role -notin @('worker', 'coding')) { return $false }
-    return -not [string]::IsNullOrWhiteSpace((Get-AoSessionRowIdentifier -Row $Row))
+    # Binding evidence is already present on the bulk row (`branch`, `prs[]`).
+    # Returning false is the intentional Issue #857 contract: no N+1 detail calls.
+    return $false
 }
 
 function Build-AoSessionDetailsById {
@@ -350,70 +249,34 @@ function Build-AoSessionDetailsById {
         [string]$Project = 'orchestrator-pack',
         [string]$AoCommand = 'ao'
     )
-
-    $details = @{}
-    foreach ($row in @($Sessions)) {
-        if (-not (Test-AoSessionRowNeedsSessionGetDetail -Row $row)) {
-            $sessionId = Get-AoSessionRowIdentifier -Row $row
-            $displayName = [string]$row.displayName
-            if ($sessionId -and $displayName) {
-                $details[$sessionId] = @{ displayName = $displayName }
-            }
-            continue
-        }
-        $sessionId = Get-AoSessionRowIdentifier -Row $row
-        if (-not $sessionId) { continue }
-        try {
-            $payload = Get-AoSessionGetJson -SessionId $sessionId -Project $Project -AoCommand $AoCommand
-            $displayName = [string]$payload.session.displayName
-            if ($displayName) {
-                $details[$sessionId] = @{ displayName = $displayName }
-            }
-        }
-        catch {
-            continue
-        }
-    }
-    return $details
+    # Compatibility surface for existing callers. No daemon detail payload is
+    # necessary or trusted for PR↔session resolution.
+    return @{}
 }
 
-
 function Test-AoSessionRowProjectMatches {
-    param(
-        $Row,
-        [string]$Project
-    )
-
+    param($Row, [string]$Project)
     if (-not $Project) { return $true }
     $projectId = [string]$Row.projectId
     if ([string]::IsNullOrWhiteSpace($projectId)) { return $false }
-    return ($projectId -eq $Project)
+    return $projectId -eq $Project
 }
 
 function Normalize-AoSessionRow {
     param($Row)
-
     if (-not $Row) { return $null }
-
     $id = ''
     foreach ($key in @('id', 'name', 'sessionId')) {
         $value = [string]$Row.$key
-        if ($value) {
-            $id = $value.Trim()
-            break
-        }
+        if ($value) { $id = $value.Trim(); break }
     }
-
     $projectId = [string]$Row.projectId
     if ([string]::IsNullOrWhiteSpace($projectId)) {
         $legacyProject = [string]$Row.project
         if ($legacyProject) { $projectId = $legacyProject.Trim() }
     }
-
     $normalized = [ordered]@{}
-    foreach ($prop in $Row.PSObject.Properties) {
-        $normalized[$prop.Name] = $prop.Value
-    }
+    foreach ($prop in $Row.PSObject.Properties) { $normalized[$prop.Name] = $prop.Value }
     if ($id) {
         $normalized['id'] = $id
         if (-not $normalized['name']) { $normalized['name'] = $id }
@@ -426,34 +289,24 @@ function Normalize-AoSessionRow {
     if ($Row.issueId -and -not $normalized['issue']) {
         $normalized['issue'] = [string]$Row.issueId
     }
-
+    if ($normalized['prs'] -eq $null) { $normalized['prs'] = @() }
     return [pscustomobject]$normalized
 }
 
 function Test-AoSessionRowFacadeValid {
-    param(
-        $Row,
-        [switch]$RequireTerminatedFlag
-    )
-
-    if (-not $Row) {
-        throw 'ao session adapter: null session row'
-    }
-
+    param($Row, [switch]$RequireTerminatedFlag)
+    if (-not $Row) { throw 'ao session adapter: null session row' }
     $id = [string]$Row.id
     if ([string]::IsNullOrWhiteSpace($id)) {
         throw 'ao session adapter: session row missing non-empty id'
     }
-
     $role = [string]$Row.role
     if ([string]::IsNullOrWhiteSpace($role) -or ($Script:AoSessionAdapterValidRoles -notcontains $role)) {
         throw "ao session adapter: session row $id has invalid role '$role'"
     }
-
     if ($null -eq $Row.status -or [string]::IsNullOrWhiteSpace([string]$Row.status)) {
         throw "ao session adapter: session row $id missing status"
     }
-
     if ($RequireTerminatedFlag) {
         if ($Row.PSObject.Properties.Name -notcontains 'isTerminated') {
             throw "ao session adapter: session row $id missing isTerminated"
@@ -462,11 +315,9 @@ function Test-AoSessionRowFacadeValid {
             throw "ao session adapter: session row $id isTerminated must be boolean"
         }
     }
-
     if ($Row.PSObject.Properties.Name -contains 'reports') {
         throw "ao session adapter: session row $id must not carry reports field on AO 0.10"
     }
-
     return $true
 }
 
@@ -477,28 +328,21 @@ function Merge-AoStatusSessionRows {
         [string]$Project = '',
         [switch]$IncludeTerminated
     )
-
     $merged = @{}
     foreach ($row in @($WorkerRows) + @($OrchestratorRows)) {
         if (-not $row) { continue }
         $normalized = Normalize-AoSessionRow -Row $row
-        if (-not (Test-AoSessionRowProjectMatches -Row $normalized -Project $Project)) {
-            continue
-        }
-
+        if (-not (Test-AoSessionRowProjectMatches -Row $normalized -Project $Project)) { continue }
         if (-not $IncludeTerminated -and $normalized.PSObject.Properties.Name -contains 'isTerminated') {
             if ($normalized.isTerminated) { continue }
         }
-
         [void](Test-AoSessionRowFacadeValid -Row $normalized -RequireTerminatedFlag)
-
         $id = [string]$normalized.id
         if ($merged.ContainsKey($id)) {
             throw "ao session adapter: duplicate session id '$id' across worker and orchestrator lists"
         }
         $merged[$id] = $normalized
     }
-
     return @($merged.Values)
 }
 
@@ -510,16 +354,15 @@ function Get-AoMergedStatusSessions {
         $OrchestratorListPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
     try {
         if ($WorkerListPayload) {
             Assert-AoListPayloadShape -Payload $WorkerListPayload -Label 'fixture ao session ls'
             $workerPayload = $WorkerListPayload
         }
         else {
-            $workerPayload = Get-AoSessionLsJson -Project $Project -IncludeTerminated:$IncludeTerminated -AoCommand $AoCommand
+            $workerPayload = Get-AoSessionLsJson -Project $Project `
+                -IncludeTerminated:$IncludeTerminated -AoCommand $AoCommand
         }
-
         if ($OrchestratorListPayload) {
             Assert-AoListPayloadShape -Payload $OrchestratorListPayload -Label 'fixture ao orchestrator ls'
             $orchPayload = $OrchestratorListPayload
@@ -528,14 +371,10 @@ function Get-AoMergedStatusSessions {
             $orchPayload = Get-AoOrchestratorLsJson -AoCommand $AoCommand
         }
     }
-    catch {
-        throw "ao session adapter merge failed: $($_.Exception.Message)"
-    }
-
-    $workerRows = @($workerPayload.data)
-    $orchRows = @($orchPayload.data)
-    return Merge-AoStatusSessionRows -WorkerRows $workerRows -OrchestratorRows $orchRows `
-        -Project $Project -IncludeTerminated:$IncludeTerminated
+    catch { throw "ao session adapter merge failed: $($_.Exception.Message)" }
+    return Merge-AoStatusSessionRows -WorkerRows @($workerPayload.data) `
+        -OrchestratorRows @($orchPayload.data) -Project $Project `
+        -IncludeTerminated:$IncludeTerminated
 }
 
 function Get-AoStatusSessions {
@@ -545,7 +384,6 @@ function Get-AoStatusSessions {
         $OrchestratorListPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
     return Get-AoMergedStatusSessions -Project $Project `
         -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
         -AoCommand $AoCommand
@@ -558,7 +396,6 @@ function Get-AoStatusSessionsIncludingTerminated {
         $OrchestratorListPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
     return Get-AoMergedStatusSessions -Project $Project -IncludeTerminated `
         -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
         -AoCommand $AoCommand
@@ -573,11 +410,10 @@ function Get-AoStatusSessionsWithReports {
         $ReportFullPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
     if ($ReportFullPayload) {
-        return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $ReportFullPayload -SourceKind 'fixture-report-full')
+        return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $ReportFullPayload `
+                -SourceKind 'fixture-report-full')
     }
-
     $sessions = @(Get-AoStatusSessions -Project $Project `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
             -AoCommand $AoCommand)
@@ -594,12 +430,10 @@ function Get-AoStatusSessionsWithReportsIncludingTerminated {
         $ReportFullPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
     if ($ReportFullPayload) {
         return @(Get-AoStatusSessionsWithReportsFromPayload -Payload $ReportFullPayload `
                 -SourceKind 'fixture-report-full-terminated')
     }
-
     $sessions = @(Get-AoStatusSessionsIncludingTerminated -Project $Project `
             -WorkerListPayload $WorkerListPayload -OrchestratorListPayload $OrchestratorListPayload `
             -AoCommand $AoCommand)
@@ -614,15 +448,11 @@ function Get-AoOrchestratorSessions {
         $OrchestratorListPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
     if ($OrchestratorListPayload) {
         Assert-AoListPayloadShape -Payload $OrchestratorListPayload -Label 'fixture ao orchestrator ls'
         $orchPayload = $OrchestratorListPayload
     }
-    else {
-        $orchPayload = Get-AoOrchestratorLsJson -AoCommand $AoCommand
-    }
-
+    else { $orchPayload = Get-AoOrchestratorLsJson -AoCommand $AoCommand }
     $rows = @()
     foreach ($row in @($orchPayload.data)) {
         $normalized = Normalize-AoSessionRow -Row $row
@@ -642,38 +472,25 @@ function Resolve-AoOrchestratorSessionId {
         $OrchestratorListPayload = $null,
         [string]$AoCommand = 'ao'
     )
-
-    if ($Override) {
-        return @{ Id = $Override.Trim(); Source = 'override' }
-    }
-
-    $rows = @(Get-AoOrchestratorSessions -Project $Project `
-            -OrchestratorListPayload $OrchestratorListPayload -AoCommand $AoCommand)
-    $pick = $rows | Select-Object -First 1
+    if ($Override) { return @{ Id = $Override.Trim(); Source = 'override' } }
+    $pick = @(Get-AoOrchestratorSessions -Project $Project `
+            -OrchestratorListPayload $OrchestratorListPayload -AoCommand $AoCommand) |
+        Select-Object -First 1
     if (-not $pick) { return $null }
     return @{ Id = [string]$pick.id; Source = 'ao_orchestrator_ls' }
 }
 
 function Get-AoEventsSince {
-    param(
-        [int]$SinceMinutes = 30,
-        [string]$AoCommand = 'ao'
-    )
-
+    param([int]$SinceMinutes = 30, [string]$AoCommand = 'ao')
     if (-not (Test-AoEventsCliAvailable -AoCommand $AoCommand)) {
         $classification = Get-AoEventsDegradedClassification
         if ($classification.degraded) {
             $detail = [string]$classification.detail
-            if ($detail) {
-                Write-Host "[ao-events] removed_cli_surface: $detail"
-            }
-            else {
-                Write-Host '[ao-events] removed_cli_surface: ao events list unavailable'
-            }
+            if ($detail) { Write-Host "[ao-events] removed_cli_surface: $detail" }
+            else { Write-Host '[ao-events] removed_cli_surface: ao events list unavailable' }
         }
         return @()
     }
-
     $payload = Invoke-AoCliJson -AoArgs @(
         'events', 'list', '--since', "${SinceMinutes}m", '--limit', '500', '--json'
     ) -FailureLabel 'ao events list' -AoCommand $AoCommand
