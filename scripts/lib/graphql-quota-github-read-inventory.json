@@ -190,6 +190,12 @@
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}pulls/[^/\\s]+/reviews(?:\\s|$)",
       "ownerIssue": 569
+    },
+    {
+      "id": "rest-repos-statuses-sha",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}statuses/[^/\\s]+(?:\\s|$)",
+      "ownerIssue": 894
     }
   ]
 }
