@@ -6,6 +6,9 @@ BeforeAll {
     $WorkerReportPath = Join-Path $RepoRoot 'scripts/lib/WorkerReportStore.ps1'
     $WorkerRecoveryPath = Join-Path $RepoRoot 'scripts/lib/Worker-Recovery.ps1'
     $WorkerStatusNodePath = Join-Path $RepoRoot 'scripts/lib/worker-status-store.mjs'
+    $WorkerStatusPsPath = Join-Path $RepoRoot 'scripts/lib/WorkerStatusStore.ps1'
+    $ResolverDeclarationPath = Join-Path $RepoRoot 'docs/session-pr-binding-resolver.d.mts'
+    $CacheDeclarationPath = Join-Path $RepoRoot 'docs/pr-session-binding-cache.d.mts'
     $NodeMatrixPath = Join-Path $PSScriptRoot 'Issue857.PrSessionBindingContract.Node.mjs'
 
     . $InvokeAoPath
@@ -96,13 +99,35 @@ Describe 'Issue #857 PowerShell binding dispatch' {
         $text | Should -Not -Match '\$Session\.prNumber'
     }
 
-    It 'keeps the already-shipped worker-status consumer on the shared resolver' {
+    It 'keeps worker-status minimal, contract-bound, and compatible with issue 891' {
         $statusNodeText = Get-Content -LiteralPath $WorkerStatusNodePath -Raw -Encoding UTF8
+        $statusPsText = Get-Content -LiteralPath $WorkerStatusPsPath -Raw -Encoding UTF8
         $reportText = Get-Content -LiteralPath $WorkerReportPath -Raw -Encoding UTF8
         $invokeText = Get-Content -LiteralPath $InvokeAoPath -Raw -Encoding UTF8
 
         $statusNodeText | Should -Match 'resolvePrSessionBindingForConsumer'
+        $statusNodeText | Should -Not -Match '(?i)\bsession\.prNumber\b'
+        $statusNodeText | Should -Not -Match '(?i)\bsession\.displayName\b'
+        $statusPsText | Should -Not -Match '(?i)\$(?:session|Session)\.prNumber\b'
+        $statusPsText | Should -Not -Match '(?i)\$(?:session|Session)\.displayName\b'
+        $statusPsText | Should -Match "-Subcommand 'resolveBindingCachePath'"
         $reportText | Should -Not -Match '\$session\.prNumber'
         $invokeText | Should -Match 'return \$false'
+    }
+
+    It 'keeps declaration surfaces synchronized with the post-displayName contract' {
+        $resolverDeclaration = Get-Content -LiteralPath $ResolverDeclarationPath -Raw -Encoding UTF8
+        $cacheDeclaration = Get-Content -LiteralPath $CacheDeclarationPath -Raw -Encoding UTF8
+        $aoSessionBlock = [regex]::Match(
+            $resolverDeclaration,
+            'export interface AoSession\s*\{[\s\S]*?\n\}',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        ).Value
+
+        $resolverDeclaration | Should -Not -Match "'display_name'"
+        $aoSessionBlock | Should -Not -Match '\bprNumber\??\s*:'
+        $aoSessionBlock | Should -Not -Match '\bdisplayName\??\s*:'
+        $cacheDeclaration | Should -Match 'resolveSessionPrBindingForConsumer'
+        $cacheDeclaration | Should -Match 'PR_SESSION_BINDING_FAIL_CLOSED_REASONS'
     }
 }
