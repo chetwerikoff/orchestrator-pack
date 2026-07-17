@@ -66,7 +66,7 @@ Describe 'Issue #854 worker-status binding cache wiring' {
         $sessionId = 'orchestrator-pack-137'
         $prNumber = 887
         $headSha = 'head887'
-        $nowMs = 1700000000000
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $record = [ordered]@{
             schemaVersion = 1
             sessionId = $sessionId
@@ -96,10 +96,12 @@ Describe 'Issue #854 worker-status binding cache wiring' {
         $oldBindingCache = $env:AO_PR_SESSION_BINDING_CACHE
         $oldStateDir = $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
         $oldSideEffectDir = $env:AO_SIDE_PROCESS_STATE_DIR
+        $oldGithubRepository = $env:GITHUB_REPOSITORY
         try {
             $env:AO_PR_SESSION_BINDING_CACHE = $cachePath
             $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $dir
             $env:AO_SIDE_PROCESS_STATE_DIR = $dir
+            $env:GITHUB_REPOSITORY = $repo
 
             $result = Write-WorkerStatusRow -RecomputeInput @{
                 session = [pscustomobject]@{
@@ -153,6 +155,8 @@ Describe 'Issue #854 worker-status binding cache wiring' {
             else { $env:ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR = $oldStateDir }
             if ($null -eq $oldSideEffectDir) { Remove-Item Env:AO_SIDE_PROCESS_STATE_DIR -ErrorAction SilentlyContinue }
             else { $env:AO_SIDE_PROCESS_STATE_DIR = $oldSideEffectDir }
+            if ($null -eq $oldGithubRepository) { Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue }
+            else { $env:GITHUB_REPOSITORY = $oldGithubRepository }
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
