@@ -1,0 +1,47 @@
+name: Issue 857 compatibility transform diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-857-binding-contract-v2
+    paths:
+      - .github/workflows/issue857-compat-diagnostic.yml
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+          fetch-depth: 0
+      - name: Reproduce transform
+        shell: bash
+        run: |
+          set +e
+          git checkout 6dd428a9f70d82231388173ccb6eaa5f0a47bce5 -- scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
+          awk '
+            /^          python - <<.PY./ { capture=1; next }
+            capture && /^          PY$/ { capture=0; exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/issue857-redeclare.yml > /tmp/issue857-compat.py
+          python /tmp/issue857-compat.py > /tmp/issue857-compat.log 2>&1
+          echo "$?" > /tmp/issue857-compat.status
+          git diff --check >> /tmp/issue857-compat.log 2>&1
+          git diff --stat >> /tmp/issue857-compat.log 2>&1
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue857-compat-transform
+          path: |
+            /tmp/issue857-compat.log
+            /tmp/issue857-compat.status
+            /tmp/issue857-compat.py
+          if-no-files-found: error
