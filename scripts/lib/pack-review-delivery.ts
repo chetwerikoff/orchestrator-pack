@@ -64,6 +64,16 @@ export interface PackReviewGithubCommentResult {
   event: 'COMMENT';
 }
 
+export interface PackReviewDeliveryResult {
+  ok: true;
+  reason: 'completed' | 'completed_with_delivery_failures' | 'journal_write_failed';
+  status: Extract<PackReviewRunStatus, 'up_to_date' | 'commented' | 'changes_requested'>;
+  run: PackReviewRunRecord | null;
+  journalOutcome: PackReviewJournalOutcome;
+  githubReviewId?: number | string;
+  githubReviewUrl?: string;
+}
+
 interface PackReviewVerdictClassification {
   terminalStatus: Extract<PackReviewRunStatus, 'up_to_date' | 'commented' | 'changes_requested'>;
   requiredStatus: Extract<PackReviewRequiredStatusState, 'success' | 'failure'>;
@@ -78,6 +88,7 @@ interface DeliverPackReviewVerdictOptions extends PackReviewStoreOptions {
   writeRequiredStatus: PackReviewRequiredStatusWriter;
   notifyWorker: PackReviewWorkerNotifier;
   journalWriter?: PackReviewJournalWriter;
+  resumeFromJournal?: boolean;
   clock?: () => Date;
 }
 
@@ -138,6 +149,57 @@ export function classifyPackReviewPayload(payload: PackReviewTerminalPayload): P
     description: 'Pack review completed with non-blocking findings.',
     blocking: false,
   };
+}
+
+function githubCommentIdempotencyKey(run: PackReviewRunRecord): string {
+  return `github-comment:${run.id}:${run.targetSha}`;
+}
+
+function requiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
+  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}`;
+}
+
+function workerNotificationIdempotencyKey(run: PackReviewRunRecord): string {
+  return `worker-notification:${run.id}:${run.targetSha}`;
+}
+
+export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReviewTerminalPayload | null {
+  if (run.journalOutcome?.state !== 'persisted') return null;
+  if (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings') return null;
+  if (!Number.isInteger(run.findingCount) || Number(run.findingCount) < 0) return null;
+  const findings = Array.isArray(run.findings) ? [...run.findings] : [];
+  if (Number(run.findingCount) !== findings.length) return null;
+  return {
+    verdict: run.reviewVerdict,
+    findingCount: Number(run.findingCount),
+    findings,
+  };
+}
+
+function completedChannelOutcome(
+  run: PackReviewRunRecord,
+  channel: PackReviewDeliveryChannel,
+  idempotencyKey: string,
+): boolean {
+  const value = run.deliveryOutcomes?.[channel];
+  if (!value || value.idempotencyKey !== idempotencyKey) return false;
+  if (channel === 'githubComment') {
+    return value.state === 'succeeded'
+      && run.githubReviewId !== undefined
+      && run.githubReviewReconciliation?.phase === 'complete';
+  }
+  if (channel === 'requiredStatus') return value.state === 'succeeded';
+  return value.state === 'delivered';
+}
+
+export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean {
+  const payload = packReviewJournaledPayload(run);
+  if (!payload) return false;
+  const classification = classifyPackReviewPayload(payload);
+  if (run.status !== classification.terminalStatus) return true;
+  return !completedChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
+    || !completedChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run))
+    || !completedChannelOutcome(run, 'workerNotification', workerNotificationIdempotencyKey(run));
 }
 
 function outcome(
@@ -257,17 +319,18 @@ async function journalVerdict(
   return { ok: false, outcome: failed };
 }
 
-export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdictOptions): Promise<{
-  ok: true;
-  reason: 'completed' | 'completed_with_delivery_failures' | 'journal_write_failed';
-  status: Extract<PackReviewRunStatus, 'up_to_date' | 'commented' | 'changes_requested'>;
-  run: PackReviewRunRecord | null;
-  journalOutcome: PackReviewJournalOutcome;
-  githubReviewId?: number | string;
-  githubReviewUrl?: string;
-}> {
-  const classification = classifyPackReviewPayload(options.payload);
-  const journal = await journalVerdict(options, classification);
+export async function deliverPackReviewVerdict(
+  options: DeliverPackReviewVerdictOptions,
+): Promise<PackReviewDeliveryResult> {
+  const resumedPayload = options.resumeFromJournal ? packReviewJournaledPayload(options.run) : null;
+  if (options.resumeFromJournal && !resumedPayload) {
+    throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
+  }
+  const payload = resumedPayload ?? options.payload;
+  const classification = classifyPackReviewPayload(payload);
+  const journal = options.resumeFromJournal
+    ? { ok: true as const, run: options.run, outcome: options.run.journalOutcome! }
+    : await journalVerdict(options, classification);
   if (!journal.ok) {
     return {
       ok: true,
@@ -278,55 +341,75 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
     };
   }
 
-  const githubKey = `github-comment:${options.run.id}:${options.run.targetSha}`;
-  const statusKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${options.run.targetSha}`;
-  const workerKey = `worker-notification:${options.run.id}:${options.run.targetSha}`;
-  let githubReview: PackReviewGithubCommentResult | undefined;
+  const githubKey = githubCommentIdempotencyKey(options.run);
+  const statusKey = requiredStatusIdempotencyKey(options.run);
+  const workerKey = workerNotificationIdempotencyKey(options.run);
+  const deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>> = {
+    ...(options.resumeFromJournal ? options.run.deliveryOutcomes : {}),
+  };
   let deliveryFailed = false;
-  const deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>> = {};
   const recordChannelOutcome = (channel: PackReviewDeliveryChannel, value: PackReviewDeliveryOutcome): void => {
     deliveryOutcomes[channel] = value;
     if (!persistChannelOutcome(options.run.id, channel, value, options)) deliveryFailed = true;
   };
 
-  try {
-    githubReview = await options.postGithubComment();
-    recordChannelOutcome('githubComment', outcome('succeeded', 'comment_posted', githubKey, options.clock));
-  } catch (error) {
-    deliveryFailed = true;
-    recordChannelOutcome('githubComment', outcome('failed', describeError(error), githubKey, options.clock));
+  const githubComplete = options.resumeFromJournal
+    && completedChannelOutcome(options.run, 'githubComment', githubKey);
+  let githubReview: PackReviewGithubCommentResult | undefined = githubComplete
+    ? {
+        id: options.run.githubReviewId!,
+        url: trim(options.run.githubReviewUrl),
+        event: 'COMMENT',
+      }
+    : undefined;
+  if (!githubComplete) {
+    try {
+      githubReview = await options.postGithubComment();
+      recordChannelOutcome('githubComment', outcome('succeeded', 'comment_posted', githubKey, options.clock));
+    } catch (error) {
+      deliveryFailed = true;
+      recordChannelOutcome('githubComment', outcome('failed', describeError(error), githubKey, options.clock));
+    }
   }
 
-  try {
-    await options.writeRequiredStatus({
-      state: classification.requiredStatus,
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: classification.description,
-      idempotencyKey: statusKey,
-    });
-    recordChannelOutcome('requiredStatus', outcome('succeeded', `status_${classification.requiredStatus}`, statusKey, options.clock));
-  } catch (error) {
-    deliveryFailed = true;
-    recordChannelOutcome('requiredStatus', outcome('failed', describeError(error), statusKey, options.clock));
+  const requiredStatusComplete = options.resumeFromJournal
+    && completedChannelOutcome(options.run, 'requiredStatus', statusKey);
+  if (!requiredStatusComplete) {
+    try {
+      await options.writeRequiredStatus({
+        state: classification.requiredStatus,
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description: classification.description,
+        idempotencyKey: statusKey,
+      });
+      recordChannelOutcome('requiredStatus', outcome('succeeded', `status_${classification.requiredStatus}`, statusKey, options.clock));
+    } catch (error) {
+      deliveryFailed = true;
+      recordChannelOutcome('requiredStatus', outcome('failed', describeError(error), statusKey, options.clock));
+    }
   }
 
-  try {
-    const notified = await options.notifyWorker({
-      message: [
-        `Pack review completed for PR #${options.run.prNumber}.`,
-        `Run: ${options.run.id}`,
-        `Head: ${options.run.targetSha}`,
-        `Verdict: ${options.payload.verdict}`,
-        `Findings: ${options.payload.findingCount}`,
-        `Merge status: ${classification.requiredStatus}`,
-      ].join('\n'),
-      idempotencyKey: workerKey,
-    });
-    if (notified.state !== 'delivered') deliveryFailed = true;
-    recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
-  } catch (error) {
-    deliveryFailed = true;
-    recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
+  const workerNotificationComplete = options.resumeFromJournal
+    && completedChannelOutcome(options.run, 'workerNotification', workerKey);
+  if (!workerNotificationComplete) {
+    try {
+      const notified = await options.notifyWorker({
+        message: [
+          `Pack review completed for PR #${options.run.prNumber}.`,
+          `Run: ${options.run.id}`,
+          `Head: ${options.run.targetSha}`,
+          `Verdict: ${payload.verdict}`,
+          `Findings: ${payload.findingCount}`,
+          `Merge status: ${classification.requiredStatus}`,
+        ].join('\n'),
+        idempotencyKey: workerKey,
+      });
+      if (notified.state !== 'delivered') deliveryFailed = true;
+      recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
+    } catch (error) {
+      deliveryFailed = true;
+      recordChannelOutcome('workerNotification', outcome('failed', describeError(error), workerKey, options.clock));
+    }
   }
 
   let terminalRun: PackReviewRunRecord | null = null;
@@ -352,6 +435,20 @@ export async function deliverPackReviewVerdict(options: DeliverPackReviewVerdict
     journalOutcome: journal.outcome,
     ...(githubReview ? { githubReviewId: githubReview.id, githubReviewUrl: githubReview.url } : {}),
   };
+}
+
+export async function resumePackReviewVerdictDelivery(
+  options: Omit<DeliverPackReviewVerdictOptions, 'payload' | 'journalWriter' | 'resumeFromJournal'>,
+): Promise<PackReviewDeliveryResult> {
+  const payload = packReviewJournaledPayload(options.run);
+  if (!payload) {
+    throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
+  }
+  return deliverPackReviewVerdict({
+    ...options,
+    payload,
+    resumeFromJournal: true,
+  });
 }
 
 export async function recordPackReviewPendingStatus(

@@ -6,7 +6,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import './pack-review-delivery.cases.js';
 import {
   emitAoReviewPayload,
@@ -17,13 +17,21 @@ import { parseCodexReviewOutput } from '../plugins/ao-codex-pr-reviewer/lib/revi
 import { scopeUnavailableWarningFinding } from '../plugins/ao-codex-pr-reviewer/lib/scope_context.js';
 import type { StructuredFinding } from '../plugins/ao-codex-pr-reviewer/lib/types.js';
 import { startPackReview } from './pack-review-runner.js';
+import { PACK_REVIEW_REQUIRED_STATUS_CONTEXT } from './lib/pack-review-delivery.js';
 import {
   selectActiveSameActorBlockingReviewIds,
   type GithubReviewCaptureAction,
   type GithubReviewSummary,
   type GithubReviewTransport,
 } from './lib/github-review-reconciliation.js';
-import { listPackReviewRuns } from './lib/pack-review-run-store.js';
+import {
+  createPackReviewRun,
+  getPackReviewRun,
+  listPackReviewRuns,
+  updatePackReviewRun,
+  type PackReviewDeliveryOutcome,
+  type PackReviewRunRecord,
+} from './lib/pack-review-run-store.js';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempRoots: string[] = [];
@@ -426,6 +434,144 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
     const final = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0];
     expect(final).toMatchObject({ status: 'commented', githubReviewEvent: 'COMMENT' });
     expect(final?.githubReviewReconciliation).toMatchObject({ phase: 'complete' });
+  });
+
+  it.each([
+    ['after verdict journaling', 'journal', 1, 1, 1],
+    ['after COMMENT completion', 'comment', 0, 1, 1],
+    ['after required-status publication', 'status', 0, 0, 1],
+  ] as const)('resumes every missing delivery channel %s without rerunning the reviewer', async (
+    _label,
+    stage,
+    expectedPosts,
+    expectedStatusWrites,
+    expectedWorkerNotifications,
+  ) => {
+    const storeRoot = tempRoot(`opk-journal-resume-${stage}-`);
+    const actor = 'pack-reviewer';
+    const now = '2026-07-17T12:00:00.000Z';
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 866,
+      headSha: HEAD_SHA,
+      linkedSessionId: 'worker-894-resume',
+      startReason: 'fixture-crash-recovery',
+      surface: 'pack-review-runner-severity-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+    }).run;
+    const findings = [{ title: 'Advisory', severity: 'warning' }];
+    const body = [
+      '## Pack review — findings',
+      '',
+      `Run: \`${created.id}\``,
+      `Head: \`${HEAD_SHA}\``,
+      '',
+      '### Advisory',
+      '',
+      '---',
+      '_Automated review by orchestrator-pack pack-owned runner_',
+    ].join('\n');
+    const githubKey = `github-comment:${created.id}:${HEAD_SHA}`;
+    const statusKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}`;
+    const deliveryOutcomes: Partial<Record<'githubComment' | 'requiredStatus' | 'workerNotification', PackReviewDeliveryOutcome>> = {};
+    const fields: Partial<PackReviewRunRecord> = {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+      runnerPid: 0,
+      reviewVerdict: 'findings',
+      findingCount: findings.length,
+      findings,
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: now,
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${created.id}:${HEAD_SHA}`,
+        attempts: 1,
+      },
+      deliveryOutcomes,
+    };
+    const reviewId = 89477;
+    if (stage === 'comment' || stage === 'status') {
+      fields.githubReviewId = reviewId;
+      fields.githubReviewUrl = `fixture://review/${reviewId}`;
+      fields.githubReviewEvent = 'COMMENT';
+      fields.githubReviewReconciliation = {
+        schemaVersion: 1,
+        event: 'COMMENT',
+        phase: 'complete',
+        actorLogin: actor,
+        commentBody: body,
+        commentReviewId: reviewId,
+        commentReviewUrl: `fixture://review/${reviewId}`,
+        pendingDismissalReviewIds: [],
+        dismissedReviewIds: [],
+        preparedAtUtc: now,
+        updatedAtUtc: now,
+      };
+      deliveryOutcomes.githubComment = {
+        state: 'succeeded',
+        recordedAtUtc: now,
+        reason: 'comment_posted',
+        idempotencyKey: githubKey,
+      };
+    }
+    if (stage === 'status') {
+      deliveryOutcomes.requiredStatus = {
+        state: 'succeeded',
+        recordedAtUtc: now,
+        reason: 'status_success',
+        idempotencyKey: statusKey,
+      };
+    }
+    const journaled = updatePackReviewRun(created.id, fields, { projectId: 'orchestrator-pack', storeRoot });
+    const transport = new FaultInjectingGithubTransport(actor, stage === 'journal'
+      ? []
+      : [reviewSummary(reviewId, 'COMMENTED', actor, now, body)]);
+    const writeRequiredStatus = vi.fn(async () => undefined);
+    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'fixture_dispatched' }));
+    process.env.OPK_VITEST_HARNESS = '1';
+    process.env.AO_BASE_DIR = path.join(storeRoot, 'ao-base');
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 866,
+      headSha: HEAD_SHA,
+      claimMode: 'acquire',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureGithubReviewTransport: transport,
+      fixtureRequiredStatusWriter: writeRequiredStatus,
+      fixtureWorkerNotifier: notifyWorker,
+      fixtureReviewStdout: 'reviewer_must_not_restart',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      created: false,
+      reused: true,
+      recovered: true,
+      reason: 'resumed_journaled_delivery',
+      runId: journaled.id,
+      status: 'commented',
+    });
+    expect(transport.actions.filter((action) => action.kind === 'post')).toHaveLength(expectedPosts);
+    expect(writeRequiredStatus).toHaveBeenCalledTimes(expectedStatusWrites);
+    expect(notifyWorker).toHaveBeenCalledTimes(expectedWorkerNotifications);
+    const runs = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot });
+    expect(runs).toHaveLength(1);
+    expect(getPackReviewRun(journaled.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'commented',
+      reviewVerdict: 'findings',
+      deliveryOutcomes: {
+        githubComment: { state: 'succeeded', idempotencyKey: githubKey },
+        requiredStatus: { state: 'succeeded', idempotencyKey: statusKey },
+        workerNotification: { state: 'delivered' },
+      },
+    });
+    expect(transport.reviews.filter((review) => review.body.includes(`Run: \`${journaled.id}\``))).toHaveLength(1);
   });
 
   it('maps an unrecognized reviewer severity to error and a blocking status', async () => {
