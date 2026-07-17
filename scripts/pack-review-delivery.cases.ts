@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import './pack-review-worker-notification.cases.js';
 import {
   classifyPackReviewPayload,
   deliverPackReviewVerdict,
