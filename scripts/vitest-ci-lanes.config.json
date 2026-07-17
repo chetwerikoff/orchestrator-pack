@@ -1,6 +1,7 @@
 {
   "issue": 694,
   "lightMaxWorkers": 2,
+  "lightShardCount": 2,
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
   "heavyPerTestIsolate": [

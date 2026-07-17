@@ -76,6 +76,8 @@ export interface HeavyTopologyArtifact {
   heavyShardCount: number;
   heavyShardIndices: number[];
   heavyShardMatrix: number[];
+  lightShardCount?: number;
+  lightShardMatrix?: number[];
   fallbackClassification: string;
   targetShardSeconds: number;
   heavyLaneTotalWeightSeconds: number;

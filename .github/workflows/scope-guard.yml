@@ -229,14 +229,18 @@ jobs:
         run: ./scripts/check-review-start-claim-guard.ps1
 
   test-vitest-light:
-    name: Vitest light lane
-    needs: classify-pr-changes
+    name: Vitest light lane ${{ matrix.shard }}/${{ needs.plan-vitest-ci-topology.outputs.light_shard_count }}
+    needs: [classify-pr-changes, plan-vitest-ci-topology]
     if: |
       !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan-vitest-ci-topology.outputs.light_shard_matrix) }}
     permissions:
       contents: read
     steps:
@@ -256,7 +260,7 @@ jobs:
 
       - name: Run Vitest light lane
         shell: pwsh
-        run: ./scripts/run-vitest-light-lane.ps1
+        run: ./scripts/run-vitest-light-lane.ps1 -Shard ${{ matrix.shard }}
 
   plan-vitest-ci-topology:
     name: Plan Vitest heavy topology
@@ -270,6 +274,8 @@ jobs:
     outputs:
       heavy_shard_count: ${{ steps.plan.outputs.heavy_shard_count }}
       heavy_shard_matrix: ${{ steps.plan.outputs.heavy_shard_matrix }}
+      light_shard_count: ${{ steps.plan.outputs.light_shard_count }}
+      light_shard_matrix: ${{ steps.plan.outputs.light_shard_matrix }}
       fallback_classification: ${{ steps.plan.outputs.fallback_classification }}
     permissions:
       contents: read

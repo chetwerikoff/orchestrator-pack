@@ -72,12 +72,16 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
   }
   const raw = JSON.parse(readFileSync(path, 'utf8'));
   const lightMaxWorkers = Number(raw.lightMaxWorkers);
+  const lightShardCount = Number(raw.lightShardCount ?? 1);
   const heavyDefaultRuntimeMs = Number(raw.heavyDefaultRuntimeMs);
   const topologyPolicy = parseTopologyPolicy(raw);
   const policyErrors = validateTopologyPolicy(topologyPolicy);
   const heavyForkPoolMinRuntimeMs = Number(raw.heavyForkPoolMinRuntimeMs ?? heavyDefaultRuntimeMs);
   if (!Number.isFinite(lightMaxWorkers) || lightMaxWorkers < 1 || lightMaxWorkers > 4) {
     throw new Error('vitest-ci-lanes.config.json lightMaxWorkers must be 1..4');
+  }
+  if (!Number.isInteger(lightShardCount) || lightShardCount < 1 || lightShardCount > 2) {
+    throw new Error('vitest-ci-lanes.config.json lightShardCount must be 1..2');
   }
   if (!Number.isFinite(heavyDefaultRuntimeMs) || heavyDefaultRuntimeMs <= 0) {
     throw new Error('vitest-ci-lanes.config.json heavyDefaultRuntimeMs must be positive');
@@ -107,6 +111,7 @@ export function loadLanesConfig(repoRoot = defaultRepoRoot) {
       : { trackingIssue: 694, trackingNote: '', files: [] };
   return {
     lightMaxWorkers,
+    lightShardCount,
     heavyDefaultRuntimeMs,
     heavyTopology: topologyPolicy,
     heavyForkPoolMinRuntimeMs,
@@ -325,6 +330,10 @@ export function assignHeavyShards(heavyFiles, runtimeHistory, shardCount, defaul
   return shards;
 }
 
+export function assignLightShards(lightFiles, runtimeHistory, shardCount, defaultRuntimeMs) {
+  return assignHeavyShards(lightFiles, runtimeHistory, shardCount, defaultRuntimeMs);
+}
+
 export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
   const topologyResult = buildHeavyTopology(repoRoot, options);
   if (!topologyResult.ok) {
@@ -353,6 +362,12 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
     topology.heavyShardCount,
     lanesConfig.heavyDefaultRuntimeMs,
   );
+  const lightShards = assignLightShards(
+    light,
+    runtimeHistory,
+    lanesConfig.lightShardCount,
+    lanesConfig.heavyDefaultRuntimeMs,
+  );
 
   return {
     ok: true,
@@ -363,6 +378,7 @@ export function buildLanePlan(repoRoot = defaultRepoRoot, options = {}) {
     heavy,
     postMergeWallclock,
     parked,
+    lightShards,
     heavyShards,
     runtimeHistory,
     topology,
