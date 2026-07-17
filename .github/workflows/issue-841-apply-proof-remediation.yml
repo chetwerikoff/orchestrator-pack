@@ -7,7 +7,7 @@ permissions:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - name: Check out implementation branch
         uses: actions/checkout@v4
@@ -21,22 +21,18 @@ jobs:
           git checkout origin/main -- docs/review-start-preflight-shield.mjs
       - name: Install dependencies
         run: npm ci
-      - name: Run focused review regressions
-        run: npm test -- scripts/gate-runner/census-generator.test.ts scripts/gate-runner/census.test.ts scripts/gate-runner/custom/bulk-cli-parity.test.ts
-      - name: Run gate runner selftest
-        run: npm run gate-runner-selftest
-      - name: Run foundation typecheck
-        run: npm run typecheck:foundation
-      - name: Commit actual implementation and remove transport
+      - name: Capture foundation typecheck
+        id: typecheck
+        continue-on-error: true
         run: |
-          git checkout -- plugins || true
-          git rm -f --ignore-unmatch \
-            .github/issue-841-apply.py \
-            .github/workflows/issue-841-export-d32-pr.yml \
-            .github/workflows/issue-841-apply-proof-remediation.yml
-          rm -rf .github/issue-841-payload
-          git add -A
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'fix: close PR 860 proof gaps'
-          git push origin HEAD:agent/issue-841-bulk-gate-port
+          set -o pipefail
+          npm run typecheck:foundation 2>&1 | tee /tmp/issue-841-typecheck.log
+      - name: Upload typecheck diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-841-typecheck-log
+          path: /tmp/issue-841-typecheck.log
+          retention-days: 1
+      - name: Fail when typecheck failed
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
