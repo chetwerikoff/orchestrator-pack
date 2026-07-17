@@ -208,7 +208,11 @@ const ambiguous = (binding) => [DEFER_AMBIGUOUS_SESSION_PRS, DEFER_AMBIGUOUS_ISS
 const unbound = (reason, sessionId, extra = {}) => ({ bound: false, ok: false, failClosed: true, sessionId: sessionId || null, reason, ...extra });
 
 function loadStore(input) {
-  if (input.store) return { store: createDefaultPrSessionBindingCache(input.store), cachePath: input.cachePath, readFailed: false };
+  if (input.store) {
+    if (!input.store.records || typeof input.store.records !== 'object') input.store.records = {};
+    if (!Number.isFinite(Number(input.store.generation))) input.store.generation = 0;
+    return { store: input.store, cachePath: input.cachePath, readFailed: false };
+  }
   const cachePath = input.cachePath ?? resolvePrSessionBindingCachePath(input.env);
   try { return { store: readPrSessionBindingCacheFile(cachePath), cachePath, readFailed: false }; }
   catch (error) { return { store: createDefaultPrSessionBindingCache(), cachePath, readFailed: true, error }; }
