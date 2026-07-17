@@ -212,13 +212,13 @@ afterEach(() => {
 });
 
 describe('severity-aware pack GitHub review events (Issue #866)', () => {
-  it('keeps a clean zero-finding payload as APPROVE', async () => {
+  it('posts a clean zero-finding payload as COMMENT', async () => {
     const posted = await captureReview(JSON.stringify({
       verdict: 'clean',
       findingCount: 0,
       findings: [],
     }));
-    expect(posted.event).toBe('APPROVE');
+    expect(posted.event).toBe('COMMENT');
     expect(posted.status).toBe('up_to_date');
   });
 
@@ -245,9 +245,9 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
       findings: [{ severity: 'warning' }, { severity: 'error' }],
     }],
     ['an empty findings verdict', { verdict: 'findings', findingCount: 0, findings: [] }],
-  ])('fails closed to REQUEST_CHANGES for %s', async (_label, payload) => {
+  ])('posts COMMENT while preserving blocking status for %s', async (_label, payload) => {
     const posted = await captureReview(JSON.stringify(payload));
-    expect(posted.event).toBe('REQUEST_CHANGES');
+    expect(posted.event).toBe('COMMENT');
     expect(posted.status).toBe('changes_requested');
   });
 
@@ -261,7 +261,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
       findingCount: 1,
       findings: [finding],
     }));
-    expect(posted.event).toBe('REQUEST_CHANGES');
+    expect(posted.event).toBe('COMMENT');
     expect(posted.status).toBe('changes_requested');
     expect(posted.body).toContain('### Malformed finding payload at index 1');
     expect(posted.body).toContain('The reviewer emitted a non-object finding; it was treated as blocking.');
@@ -281,7 +281,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
       structuredFinding('blocking', 'Action required'),
     ]));
     const posted = await captureReview(stdout);
-    expect(posted.event).toBe('REQUEST_CHANGES');
+    expect(posted.event).toBe('COMMENT');
   });
 
   it('posts a clean verdict with the real scope-unavailable warning shape as COMMENT', async () => {
@@ -374,10 +374,11 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
       findingCount: 1,
       findings: [{ severity: 'warning' }],
     }));
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: true, status: 'commented', reason: 'completed_with_delivery_failures' });
     expect(transport.activeBlockingIds()).toEqual([200]);
     const run = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0];
     expect(run?.githubReviewReconciliation).toMatchObject({ phase: 'prepared', event: 'COMMENT' });
+    expect(run?.deliveryOutcomes?.githubComment).toMatchObject({ state: 'failed' });
   });
 
   it('recovers an accepted COMMENT from an invalid response before dismissing blockers', async () => {
@@ -412,7 +413,7 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
       findings: [{ severity: 'warning' }],
     });
     const first = await runWithTransport(storeRoot, transport, stdout);
-    expect(first.ok).toBe(false);
+    expect(first).toMatchObject({ ok: true, status: 'commented', reason: 'completed_with_delivery_failures' });
     expect(transport.activeBlockingIds()).toEqual([400]);
     const pending = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0];
     expect(pending?.githubReviewReconciliation).toMatchObject({ phase: 'prepared', event: 'COMMENT' });
@@ -426,16 +427,16 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
     expect(final?.githubReviewReconciliation).toMatchObject({ phase: 'complete' });
   });
 
-  it('maps an unrecognized reviewer severity to error and REQUEST_CHANGES', async () => {
+  it('maps an unrecognized reviewer severity to error and a blocking status', async () => {
     const findings = toAoFindings([
       structuredFinding('unexpected-severity', 'Unknown reviewer severity'),
     ]);
     expect(findings[0]?.severity).toBe('error');
     const posted = await captureReview(emitAoReviewPayload(findings));
-    expect(posted.event).toBe('REQUEST_CHANGES');
+    expect(posted.event).toBe('COMMENT');
   });
 
-  it('maps a JSONL finding without priority or bracket to blocking and REQUEST_CHANGES', async () => {
+  it('maps a JSONL finding without priority or bracket to a blocking status', async () => {
     const parsed = parseCodexReviewOutput({
       findings: [{
         title: 'Finding without priority',
@@ -449,6 +450,6 @@ describe('severity-aware pack GitHub review events (Issue #866)', () => {
     const wireFindings = toAoFindings(parsed.findings);
     expect(wireFindings[0]?.severity).toBe('error');
     const posted = await captureReview(emitAoReviewPayload(wireFindings));
-    expect(posted.event).toBe('REQUEST_CHANGES');
+    expect(posted.event).toBe('COMMENT');
   });
 });

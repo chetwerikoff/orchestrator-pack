@@ -261,7 +261,7 @@ describe('pack-owned review runner/store (Issue #839)', () => {
     expect(() => listPackReviewRuns({ storeRoot })).toThrow('multiple active records');
   });
 
-  it('completes without ao review submit and records an APPROVE GitHub review', async () => {
+  it('completes without ao review submit and records a COMMENT GitHub review', async () => {
     const storeRoot = tempRoot('opk-review-clean-');
     const capture = path.join(storeRoot, 'github-review.json');
     process.env.OPK_VITEST_HARNESS = '1';
@@ -281,7 +281,7 @@ describe('pack-owned review runner/store (Issue #839)', () => {
     expect(JSON.parse(readFileSync(capture, 'utf8'))).toMatchObject({
       prNumber: 839,
       commitId: HEAD_A,
-      event: 'APPROVE',
+      event: 'COMMENT',
     });
     expect(listPackReviewRuns({ storeRoot })[0]).toMatchObject({ status: 'up_to_date', exitCode: 0 });
   });

@@ -1,7 +1,5 @@
 # Reviewer-agnostic AO review entrypoint (Issue #86).
 # REVIEW_COMMAND names this script only; PACK_REVIEWER selects claude | codex.
-# After a successful wrapper (ao review submit inside), post-submit delivery runs
-# invoke-scripted-review-post-submit-delivery.ps1 → confirmed-delivery gate (Issue #669).
 #Requires -Version 5.1
 param()
 
@@ -11,7 +9,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-FailureEvidence.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1')
 
 Clear-StalePackReviewerProcessScope
 $reviewer = Get-PackReviewerFromSelector
@@ -64,24 +61,10 @@ try {
         if ($wrapperResult.exitCode -eq 0 -and $evidenceHandle.ok) {
             Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'normal_completion' | Out-Null
         }
-        if ($wrapperResult.exitCode -eq 0) {
-            $delivery = Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview `
-                -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode
-            if (-not $delivery.skipped -and -not $delivery.ok -and $env:AO_SCRIPTED_REVIEW_DELIVERY_DEBUG) {
-                [Console]::Error.WriteLine("scripted-review post-submit delivery failed: $($delivery.reason)")
-            }
-        }
         exit $wrapperResult.exitCode
     }
 
     $wrapperResult = Invoke-PackReviewWrapperWithFailureEvidence -WrapperPath $wrapperPath -WrapperArgs $wrapperArgs -EvidenceHandle $null
-    if ($wrapperResult.exitCode -eq 0) {
-        $delivery = Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview `
-            -RepoRoot $resolvedRoot -WrapperStdout ([string]$wrapperResult.stdout) -WrapperExitCode $wrapperResult.exitCode
-        if (-not $delivery.skipped -and -not $delivery.ok -and $env:AO_SCRIPTED_REVIEW_DELIVERY_DEBUG) {
-            [Console]::Error.WriteLine("scripted-review post-submit delivery failed: $($delivery.reason)")
-        }
-    }
     exit $wrapperResult.exitCode
 }
 catch {

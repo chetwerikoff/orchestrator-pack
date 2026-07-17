@@ -29,9 +29,18 @@ import {
   reconcileGithubCommentReview,
   recoverIncompleteGithubCommentReviewForHead,
   writeGithubReviewCapture,
-  type GithubReviewEvent,
   type GithubReviewTransport,
 } from './lib/github-review-reconciliation.js';
+import {
+  deliverPackReviewVerdict,
+  publishPackReviewRequiredStatus,
+  recordMalformedPackReviewStatus,
+  recordPackReviewPendingStatus,
+  sendPackReviewWorkerNotification,
+  type PackReviewJournalWriter,
+  type PackReviewRequiredStatusWriter,
+  type PackReviewWorkerNotifier,
+} from './lib/pack-review-delivery.js';
 
 interface StartInput {
   projectId?: string;
@@ -53,6 +62,9 @@ interface StartInput {
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
   fixtureGithubReviewTransport?: GithubReviewTransport;
+  fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+  fixtureWorkerNotifier?: PackReviewWorkerNotifier;
+  fixtureJournalWriter?: PackReviewJournalWriter;
 }
 
 interface ListInput {
@@ -296,18 +308,8 @@ function asReviewPayloadFinding(value: unknown): ReviewPayloadFinding | null {
     : null;
 }
 
-function selectGithubReviewEvent(payload: ReviewPayload): GithubReviewEvent {
-  if (payload.findings.length === 0) {
-    return payload.verdict === 'clean' && payload.findingCount === 0
-      ? 'APPROVE'
-      : 'REQUEST_CHANGES';
-  }
-
-  const allNonBlocking = payload.findings.every((value) => {
-    const finding = asReviewPayloadFinding(value);
-    return finding?.severity === 'warning' || finding?.severity === 'info';
-  });
-  return allNonBlocking ? 'COMMENT' : 'REQUEST_CHANGES';
+function selectGithubReviewEvent(_payload: ReviewPayload): 'COMMENT' {
+  return 'COMMENT';
 }
 
 function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload): string {
@@ -351,40 +353,17 @@ async function postGithubReview(options: {
 }): Promise<{
   id: number | string;
   url: string;
-  event: GithubReviewEvent;
+  event: 'COMMENT';
   dismissedReviewIds: Array<number | string>;
 }> {
   const event = selectGithubReviewEvent(options.payload);
   const body = formatGithubReviewBody(options.run, options.payload);
-  if (event === 'COMMENT') {
-    const reconciled = await reconcileGithubCommentReview({
-      run: options.run,
-      body,
-      transport: options.transport,
-      projectId: options.projectId,
-      storeRoot: options.storeRoot,
-    });
-    writeGithubReviewCapture({
-      repoSlug: options.repoSlug,
-      prNumber: options.prNumber,
-      commitId: options.headSha,
-      event,
-      body,
-      dismissedReviewIds: reconciled.dismissedReviewIds,
-      transport: options.transport,
-    });
-    return {
-      id: reconciled.id,
-      url: reconciled.url,
-      event,
-      dismissedReviewIds: reconciled.dismissedReviewIds,
-    };
-  }
-
-  const posted = await options.transport.postReview({
-    event,
+  const reconciled = await reconcileGithubCommentReview({
+    run: options.run,
     body,
-    commitId: options.headSha,
+    transport: options.transport,
+    projectId: options.projectId,
+    storeRoot: options.storeRoot,
   });
   writeGithubReviewCapture({
     repoSlug: options.repoSlug,
@@ -392,10 +371,15 @@ async function postGithubReview(options: {
     commitId: options.headSha,
     event,
     body,
-    dismissedReviewIds: [],
+    dismissedReviewIds: reconciled.dismissedReviewIds,
     transport: options.transport,
   });
-  return { ...posted, event, dismissedReviewIds: [] };
+  return {
+    id: reconciled.id,
+    url: reconciled.url,
+    event,
+    dismissedReviewIds: reconciled.dismissedReviewIds,
+  };
 }
 
 async function ensureCommitAvailable(repoRoot: string, headSha: string): Promise<void> {
@@ -705,6 +689,18 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       return { ok: true, created: false, reused: true, reason: created.reason, runId: run.id, httpStatus: 200, status: run.status };
     }
 
+    await recordPackReviewPendingStatus({
+      run,
+      projectId,
+      storeRoot,
+      writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        headSha: target.headSha,
+        request,
+      })),
+    });
+
     updatePackReviewRun(run.id, {
       status: 'preparing',
       latestRunStatus: 'preparing',
@@ -764,33 +760,69 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       throw new Error(`reviewer process failed (exit ${String(result.exitCode)})`);
     }
 
-    const payload = parseReviewPayload(result.stdout);
-    updatePackReviewRun(run.id, {
-      status: 'reviewing',
-      latestRunStatus: 'reviewing',
-    }, { projectId, storeRoot });
-    const githubReview = await postGithubReview({
-      repoRoot: target.sourceRepoRoot,
-      repoSlug: target.repoSlug,
-      prNumber: target.prNumber,
-      headSha: target.headSha,
-      run,
+    let payload: ReviewPayload;
+    try {
+      payload = parseReviewPayload(result.stdout);
+    } catch (error) {
+      const malformed = await recordMalformedPackReviewStatus({
+        run,
+        failureReason: describeError(error),
+        projectId,
+        storeRoot,
+        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          headSha: target.headSha,
+          request,
+        })),
+      });
+      terminal = true;
+      const runs = listPackReviewRuns({ projectId, storeRoot });
+      if (claimLease) await claimLease.release('run_started', runs);
+      return {
+        ok: false,
+        created: true,
+        reused: false,
+        reason: malformed.reason,
+        runId: run.id,
+        status: malformed.status,
+        httpStatus: 422,
+      };
+    }
+
+    const deliveryRun = run;
+    const delivered = await deliverPackReviewVerdict({
+      run: deliveryRun,
       payload,
       projectId,
       storeRoot,
-      transport: githubReviewTransport,
+      journalWriter: input.fixtureJournalWriter,
+      postGithubComment: async () => {
+        const posted = await postGithubReview({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          prNumber: target.prNumber,
+          headSha: target.headSha,
+          run: deliveryRun,
+          payload,
+          projectId,
+          storeRoot,
+          transport: githubReviewTransport,
+        });
+        return { id: posted.id, url: posted.url, event: 'COMMENT' };
+      },
+      writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: target.sourceRepoRoot,
+        repoSlug: target.repoSlug,
+        headSha: target.headSha,
+        request,
+      })),
+      notifyWorker: input.fixtureWorkerNotifier ?? ((request) => sendPackReviewWorkerNotification({
+        trustedPackRoot: trusted.trustedPackRoot,
+        sessionId: target.sessionId,
+        request,
+      })),
     });
-    const status: PackReviewRunStatus = githubReview.event === 'APPROVE'
-      ? 'up_to_date'
-      : githubReview.event === 'COMMENT'
-        ? 'commented'
-        : 'changes_requested';
-    setPackReviewRunTerminal(run.id, status, {
-      exitCode: 0,
-      githubReviewId: githubReview.id,
-      githubReviewUrl: githubReview.url,
-      githubReviewEvent: githubReview.event,
-    }, { projectId, storeRoot });
     terminal = true;
     const runs = listPackReviewRuns({ projectId, storeRoot });
     if (claimLease) await claimLease.release('run_started', runs);
@@ -798,12 +830,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       ok: true,
       created: true,
       reused: false,
-      reason: 'completed',
+      reason: delivered.reason,
       runId: run.id,
-      status,
+      status: delivered.status,
       httpStatus: 201,
-      githubReviewId: githubReview.id,
-      githubReviewUrl: githubReview.url,
+      ...(delivered.githubReviewId !== undefined ? { githubReviewId: delivered.githubReviewId } : {}),
+      ...(delivered.githubReviewUrl ? { githubReviewUrl: delivered.githubReviewUrl } : {}),
     };
   } catch (error) {
     if (run && !terminal) {

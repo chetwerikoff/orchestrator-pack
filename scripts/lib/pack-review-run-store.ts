@@ -56,6 +56,24 @@ export interface GithubCommentReviewReconciliation {
   lastError?: string;
 }
 
+export type PackReviewDeliveryChannel = 'githubComment' | 'requiredStatus' | 'workerNotification';
+export type PackReviewDeliveryState = 'succeeded' | 'delivered' | 'failed' | 'escalated';
+
+export interface PackReviewDeliveryOutcome {
+  state: PackReviewDeliveryState;
+  recordedAtUtc: string;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface PackReviewJournalOutcome {
+  state: 'persisted' | 'journal_write_failed';
+  recordedAtUtc: string;
+  reason: string;
+  idempotencyKey: string;
+  attempts: number;
+}
+
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
@@ -84,6 +102,11 @@ export interface PackReviewRunRecord {
   githubReviewUrl?: string;
   githubReviewEvent?: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
   githubReviewReconciliation?: GithubCommentReviewReconciliation;
+  reviewVerdict?: 'clean' | 'findings';
+  findingCount?: number;
+  findings: unknown[];
+  journalOutcome?: PackReviewJournalOutcome;
+  deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   stale?: boolean;
 }
 
@@ -331,6 +354,17 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     createdAt,
     updatedAt,
     heartbeatAtUtc: String(raw.heartbeatAtUtc ?? updatedAt),
+    reviewVerdict: raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
+      ? raw.reviewVerdict
+      : undefined,
+    findingCount: Number.isInteger(raw.findingCount) ? Number(raw.findingCount) : undefined,
+    findings: Array.isArray(raw.findings) ? [...raw.findings] : [],
+    journalOutcome: raw.journalOutcome && typeof raw.journalOutcome === 'object' && !Array.isArray(raw.journalOutcome)
+      ? raw.journalOutcome as unknown as PackReviewJournalOutcome
+      : undefined,
+    deliveryOutcomes: raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
+      ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
+      : {},
   };
 }
 
@@ -458,6 +492,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       createdAt: now,
       updatedAt: now,
       heartbeatAtUtc: now,
+      findings: [],
+      deliveryOutcomes: {},
     };
     writeRecordUnlocked(storeRoot, record, true);
     return { created: true, reused: false, reason: 'created', run: record, storeRoot };

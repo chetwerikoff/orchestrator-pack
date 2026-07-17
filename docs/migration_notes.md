@@ -2536,3 +2536,13 @@ for this repo. Entirely opt-in — nothing in CI or worker lifecycle depends on 
    back to a different interpreter.
 
 See `scripts/graphify/README.md` for build/refresh/query usage once bootstrapped.
+
+
+## 2026-07-17 — Pack review journal-first delivery (#894)
+
+- The pack-owned TypeScript runner now persists the terminal verdict and full findings list before attempting any outbound delivery. GitHub review comments, the required commit status, and worker notification are independent, non-fatal channels with durable per-channel outcomes.
+- GitHub PR review posts are always COMMENT. Merge authority moved to the exact-head commit status context `orchestrator-pack/pack-review`: `pending` when a run is admitted for the current head, `success` for clean or non-blocking-only findings, `failure` for blocking findings, and `error` for malformed terminal output.
+- Repository operators must add `orchestrator-pack/pack-review` to branch protection as a required status check. Until configured, GitHub review comments remain advisory; once configured, a missing status blocks merge fail-closed.
+- `invoke-pack-review.ps1` no longer invokes post-submit delivery in-process, so wrapper stdout and exit code are unaffected by delivery failures. The existing PowerShell worker-send path remains only as the isolated adapter invoked by TypeScript.
+- `AO_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` remains recognized by the legacy adapter as an operator kill-switch, but the main entrypoint no longer depends on the adapter or the flag.
+- The direct REST inventory includes the exact-head commit-status write shape `repos/{owner}/{repo}/statuses/{sha}`; it uses the same existing `gh` authentication as COMMENT review posting.

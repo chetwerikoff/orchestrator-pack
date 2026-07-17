@@ -10,6 +10,22 @@ function Write-ScriptedReviewStdoutDeliveryLog {
     }
 }
 
+function ConvertTo-ScriptedReviewParsedStdoutHashtable {
+    param([Parameter(Mandatory = $true)][object]$ParsedStdout)
+
+    $findings = @($ParsedStdout.findings)
+    if (-not $findings -and $ParsedStdout.rawFindings) {
+        $findings = @($ParsedStdout.rawFindings)
+    }
+    return @{
+        ok          = [bool]$ParsedStdout.ok
+        gateVerdict = [string]$ParsedStdout.gateVerdict
+        packVerdict = [string]$ParsedStdout.packVerdict
+        findings    = @($findings)
+        rawFindings = @($ParsedStdout.rawFindings)
+    }
+}
+
 function Set-ScriptedReviewStdoutDeliveryLifecycleEntry {
     param(
         [Parameter(Mandatory = $true)][string]$DeliveryKey,
@@ -266,7 +282,7 @@ function Invoke-ScriptedReviewStdoutDelivery {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$WrapperStdout,
-        [Parameter(Mandatory = $true)][hashtable]$ParsedStdout,
+        [Parameter(Mandatory = $true)][object]$ParsedStdout,
         [Parameter(Mandatory = $true)][int]$PrNumber,
         [Parameter(Mandatory = $true)][string]$TargetSha,
         [string]$ProjectId = 'orchestrator-pack',
@@ -285,6 +301,7 @@ function Invoke-ScriptedReviewStdoutDelivery {
     . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewDeliveryEscalation.ps1')
     . (Join-Path $PSScriptRoot 'Worker-NudgeClaim.ps1')
 
+    $ParsedStdout = ConvertTo-ScriptedReviewParsedStdoutHashtable -ParsedStdout $ParsedStdout
     $findings = @($ParsedStdout.findings)
     if (-not $findings -and $ParsedStdout.rawFindings) {
         $findings = @($ParsedStdout.rawFindings)
@@ -473,12 +490,7 @@ function Resume-ScriptedReviewStdoutDeliveryFromLifecycle {
     if (-not $parsedObj.ok) {
         return @{ ok = $false; reason = [string]$parsedObj.reason }
     }
-    $parsed = @{
-        ok          = $true
-        gateVerdict = [string]$parsedObj.gateVerdict
-        packVerdict = [string]$parsedObj.packVerdict
-        findings    = @($parsedObj.findings)
-    }
+    $parsed = ConvertTo-ScriptedReviewParsedStdoutHashtable -ParsedStdout $parsedObj
 
     return Invoke-ScriptedReviewStdoutDelivery -RepoRoot $RepoRoot -WrapperStdout $stdout `
         -ParsedStdout $parsed -PrNumber ([int]$entry.prNumber) -TargetSha ([string]$entry.headSha) `
