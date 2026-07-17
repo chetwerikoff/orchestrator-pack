@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - agent/issue-857-binding-contract-v2
-    paths:
-      - .github/workflows/issue857-minimize-worker-status.yml
 
 permissions:
   contents: write
@@ -17,165 +15,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-857-binding-contract-v2
-          fetch-depth: 0
-      - name: Restore baseline and apply Clause D patch
+          fetch-depth: 2
+      - name: Apply verified Clause D patch
         shell: bash
         run: |
           set -euo pipefail
+          git show HEAD^:.github/workflows/issue857-minimize-worker-status.yml > /tmp/issue857-previous.yml
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/issue857-previous.yml').read_text()
+          marker = "          git apply <<'PATCH'\n"
+          start = text.index(marker) + len(marker)
+          end = text.index("          PATCH\n", start)
+          lines = text[start:end].splitlines()
+          patch = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          Path('/tmp/issue857-minimal.patch').write_text(patch)
+          PY
           git checkout 6dd428a9f70d82231388173ccb6eaa5f0a47bce5 -- scripts/lib/worker-status-store.mjs scripts/lib/WorkerStatusStore.ps1
-          git apply <<'PATCH'
-          diff --git a/scripts/lib/worker-status-store.mjs b/scripts/lib/worker-status-store.mjs
-          --- a/scripts/lib/worker-status-store.mjs
-          +++ b/scripts/lib/worker-status-store.mjs
-          @@ -383,7 +383,7 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
-             const session = input.session ?? {};
-             const sessionId = sessionIdOf(session);
-             const openPrs = toArray(input.openPrs ?? input.githubSnapshot?.openPrs);
-          -  const explicitPr = Number(input.prNumber ?? session.prNumber ?? 0);
-          +  const explicitPr = Number(input.prNumber ?? 0);
-             const headHint = normalizeSha(input.headSha ?? input.githubHead ?? session.ownedHeadSha ?? session.headRefOid);
-             if (explicitPr > 0) {
-               const prRow = openPrs.find((pr) => Number(pr?.number ?? 0) === explicitPr);
-          @@ -412,9 +412,6 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
-               return workerStatusBindingFailure('binding_cache_read_failed', headHint);
-             }
-          
-          -  const sessionDetailsById = input.sessionDetail
-          -    ? { [sessionId]: input.sessionDetail }
-          -    : {};
-             const isLive = workerStatusBindingIsLive(input);
-             const matches = [];
-             for (const pr of openPrs) {
-          @@ -430,7 +427,6 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
-                   headSha: normalizeSha(pr?.headRefOid) || headHint,
-                   sessions: [session],
-                   openPrs,
-          -        sessionDetailsById,
-                   nowMs: Number(input.nowMs ?? Date.now()),
-                   writeBackfill: false,
-                   isLive,
-          @@ -811,6 +807,10 @@ runStdinJsonCli('scripts/lib/worker-status-store.mjs', {
-               const payload = readStdinJson();
-               return evaluateWorkerStatusKillSwitch(payload.env ?? process.env);
-             },
-          +  resolveBindingCachePath: () => {
-          +    const payload = readStdinJson();
-          +    return { path: resolvePrSessionBindingCachePath(payload.env ?? process.env) };
-          +  },
-             resolveSessionBinding: () => resolveWorkerStatusSessionBinding(readStdinJson()),
-             testSiblingReadiness: () => {
-               const payload = readStdinJson();
-          diff --git a/scripts/lib/WorkerStatusStore.ps1 b/scripts/lib/WorkerStatusStore.ps1
-          --- a/scripts/lib/WorkerStatusStore.ps1
-          +++ b/scripts/lib/WorkerStatusStore.ps1
-          @@ -122,12 +122,6 @@ function Get-WorkerStatusTrackedPrNumbers {
-          
-              $tracked = @()
-              foreach ($session in @($Sessions)) {
-          -        if ($null -ne $session.prNumber) {
-          -            $pr = 0
-          -            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
-          -                $tracked += $pr
-          -            }
-          -        }
-                  foreach ($report in @($session.reports)) {
-                      if ($null -eq $report) { continue }
-                      $reportPr = 0
-          @@ -144,12 +138,8 @@ function Test-WorkerStatusSessionsNeedPackBindingResolution {
-              param([object[]]$Sessions = @())
-          
-              foreach ($session in @($Sessions)) {
-          -        if ($null -ne $session.prNumber) {
-          -            $pr = 0
-          -            if ([int]::TryParse([string]$session.prNumber, [ref]$pr) -and $pr -gt 0) {
-          -                continue
-          -            }
-          -        }
-          +        $role = [string]$session.role
-          +        if ($role -and $role -notin @('worker', 'coding')) { continue }
-                  $hasReportPr = $false
-                  foreach ($report in @($session.reports)) {
-                      if ($null -eq $report) { continue }
-          @@ -159,12 +149,7 @@ function Test-WorkerStatusSessionsNeedPackBindingResolution {
-                          break
-                      }
-                  }
-          -        if ($hasReportPr) { continue }
-          -        if ($null -ne $session.issueId -or $null -ne $session.issueNumber) {
-          -            return $true
-          -        }
-          -        $displayName = [string]$session.displayName
-          -        if ($displayName -and $displayName -match '^\d+$') {
-          +        if (-not $hasReportPr) {
-                      return $true
-                  }
-              }
-          @@ -259,17 +244,12 @@ function Resolve-WorkerStatusSessionGithubBlock {
-                  return $null
-              }
-              if (-not $PrNumber) {
-          -        if ($null -ne $Session.prNumber) {
-          -            $PrNumber = [int]$Session.prNumber
-          -        }
-          -        else {
-          -            foreach ($report in @($Session.reports)) {
-          -                if ($null -eq $report) { continue }
-          -                $reportPr = 0
-          -                if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
-          -                    $PrNumber = $reportPr
-          -                    break
-          -                }
-          +        foreach ($report in @($Session.reports)) {
-          +            if ($null -eq $report) { continue }
-          +            $reportPr = 0
-          +            if ([int]::TryParse([string]$report.prNumber, [ref]$reportPr) -and $reportPr -gt 0) {
-          +                $PrNumber = $reportPr
-          +                break
-                      }
-                  }
-              }
-          @@ -404,18 +384,13 @@ function Test-WorkerStatusSiblingReadiness {
-          
-          
-          function Get-WorkerStatusPrSessionBindingCachePath {
-          -    if ($env:AO_PR_SESSION_BINDING_CACHE) {
-          -        return [string]$env:AO_PR_SESSION_BINDING_CACHE
-          -    }
-          -    if ($env:AO_REPORT_STATE_SEED_STATE) {
-          -        $seedPath = [string]$env:AO_REPORT_STATE_SEED_STATE
-          -        $parent = Split-Path -Parent $seedPath
-          -        if (-not $parent) {
-          -            return 'pr-session-binding-cache.json'
-          +    $result = Invoke-WorkerStatusStoreCli -Subcommand 'resolveBindingCachePath' -Payload @{
-          +        env = @{
-          +            AO_PR_SESSION_BINDING_CACHE = $env:AO_PR_SESSION_BINDING_CACHE
-          +            AO_REPORT_STATE_SEED_STATE  = $env:AO_REPORT_STATE_SEED_STATE
-                  }
-          -        return (Join-Path $parent 'pr-session-binding-cache.json')
-              }
-          -    return (Join-Path $HOME '.local/state/orchestrator-pack-wake-supervisor/pr-session-binding-cache.json')
-          +    return [string]$result.path
-           }
-          
-           function Get-WorkerStatusWriterGenerationVector {
-          @@ -536,10 +511,7 @@ function Write-WorkerStatusRow {
-              }
-          
-              $prNumber = 0
-          -    if ($null -ne $session.prNumber) {
-          -        $prNumber = [int]$session.prNumber
-          -    }
-          -    elseif ($report -and $null -ne $report.prNumber) {
-          +    if ($report -and $null -ne $report.prNumber) {
-                  $prNumber = [int]$report.prNumber
-              }
-              else {
-          PATCH
+          git apply /tmp/issue857-minimal.patch
           node --check scripts/lib/worker-status-store.mjs
           ! grep -Eq '\bsession\.prNumber\b|\bsession\.displayName\b' scripts/lib/worker-status-store.mjs
           ! grep -Eiq '\$(session|Session)\.(prNumber|displayName)\b' scripts/lib/WorkerStatusStore.ps1
-          grep -q "resolveBindingCachePath" scripts/lib/worker-status-store.mjs
-          grep -q "resolveBindingCachePath" scripts/lib/WorkerStatusStore.ps1
+          grep -q 'targetPrFailClosedBelongsToSession' scripts/lib/worker-status-store.mjs
+          grep -q 'bindingCacheGeneration: Number(store.generation' scripts/lib/worker-status-store.mjs
+          grep -q 'resolveBindingCachePath' scripts/lib/worker-status-store.mjs
+          grep -q 'resolveBindingCachePath' scripts/lib/WorkerStatusStore.ps1
           test "$(git hash-object scripts/lib/WorkerStatusStore.ps1)" = "78eaa738c21f9426cf351929d432fb609b51669e"
           git diff --check
           rm -f .github/workflows/issue857-minimize-worker-status.yml
