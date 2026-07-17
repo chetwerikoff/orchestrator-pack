@@ -38,6 +38,8 @@ npm test -- scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts
 
 The foundation suite imports the Issue #853 pure TypeScript cases and covers both named regression anchors, bounded timeout/degraded routing, redaction, atomic progress publication, fleet census drift, and the seed-to-trigger acceptance path. It also reruns the existing hang, livelock, identity, dead-process, overlap, and lock-safety matrix.
 
+Every Issue #853 runtime `expected:` label is checked against one of two proof sources: a new Issue #853 case for behavior introduced by this contract, or a named deterministic Issue #473 fixture for unchanged supervisor behavior. The mapping fails closed when a label is missing, and the long-running seed and re-evaluation anchors feed TypeScript-produced schema-v2 records through the production PowerShell freshness verdict rather than duplicating that verdict in test code.
+
 ## Fleet census
 
 `scripts/gate-runner/fleet-liveness-census.ts` reads the canonical side-process registry and fails closed when:
