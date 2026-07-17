@@ -12,6 +12,12 @@ import {
 } from './pack-review-run-store.js';
 
 export type GithubReviewEvent = 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
+export type GithubReviewPostOutcome = 'not_attempted' | 'definitely_rejected' | 'ambiguous' | 'accepted';
+
+type DurableGithubCommentReviewReconciliation = GithubCommentReviewReconciliation & {
+  postOutcome?: GithubReviewPostOutcome;
+  postAttemptedAtUtc?: string;
+};
 
 export interface GithubReviewSummary {
   id: number | string;
@@ -28,6 +34,20 @@ export interface GithubReviewCaptureAction {
   reviewId?: number | string;
   event: 'DISMISS' | GithubReviewEvent;
   body?: string;
+}
+
+export class GithubReviewPostError extends Error {
+  readonly outcome: Extract<GithubReviewPostOutcome, 'definitely_rejected' | 'ambiguous'>;
+
+  constructor(
+    outcome: Extract<GithubReviewPostOutcome, 'definitely_rejected' | 'ambiguous'>,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'GithubReviewPostError';
+    this.outcome = outcome;
+  }
 }
 
 export interface GithubReviewTransport {
@@ -64,12 +84,37 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function processFailureMessage(result: ProcessResult, label: string): string {
+  const detail = trim(result.stderr || result.error || result.stdout);
+  return `${label} failed${detail ? `: ${detail}` : ''}`;
+}
+
 export async function requireProcess(result: ProcessResult, label: string): Promise<string> {
-  if (!result.ok) {
-    const detail = trim(result.stderr || result.error || result.stdout);
-    throw new Error(`${label} failed${detail ? `: ${detail}` : ''}`);
-  }
+  if (!result.ok) throw new Error(processFailureMessage(result, label));
   return result.stdout.trim();
+}
+
+function classifyPostProcessFailure(
+  result: ProcessResult,
+): Extract<GithubReviewPostOutcome, 'definitely_rejected' | 'ambiguous'> {
+  if (result.outcome === 'spawn-failure') return 'definitely_rejected';
+  const detail = trim(result.stderr || result.error || result.stdout);
+  const status = Number(detail.match(/\bHTTP\s+(\d{3})\b/i)?.[1] ?? NaN);
+  if (result.outcome === 'exit'
+    && Number.isInteger(status)
+    && status >= 400
+    && status < 500
+    && status !== 408
+    && status !== 429) {
+    return 'definitely_rejected';
+  }
+  return 'ambiguous';
+}
+
+function classifyPostError(
+  error: unknown,
+): Extract<GithubReviewPostOutcome, 'definitely_rejected' | 'ambiguous'> {
+  return error instanceof GithubReviewPostError ? error.outcome : 'ambiguous';
 }
 
 function numericReviewId(value: number | string): bigint | null {
@@ -174,24 +219,34 @@ function reconciliationMarker(runId: string): string {
   return `Run: \`${runId}\``;
 }
 
-function findPostedComment(
+function findUniquePostedComment(
   reviews: GithubReviewSummary[],
   actorLogin: string,
   run: PackReviewRunRecord,
 ): GithubReviewSummary | null {
   const marker = reconciliationMarker(run.id);
-  return [...reviews]
+  const candidates = reviews
     .filter((review) => review.userLogin.toLowerCase() === actorLogin.toLowerCase()
       && review.state === 'COMMENTED'
-      && review.body.includes(marker)
-      && (!review.commitId || review.commitId === run.targetSha))
-    .sort(compareReviewOrder)
-    .at(-1) ?? null;
+      && review.body.includes(marker))
+    .sort(compareReviewOrder);
+  if (candidates.length > 1) {
+    throw new Error(`ambiguous GitHub COMMENT recovery found ${candidates.length} matching reviews for ${run.id}`);
+  }
+  const candidate = candidates[0];
+  if (!candidate) return null;
+  if (candidate.commitId !== run.targetSha) {
+    const evidence = candidate.commitId || '<missing>';
+    throw new Error(
+      `GitHub COMMENT recovery for ${run.id} has target commit '${evidence}', expected '${run.targetSha}'`,
+    );
+  }
+  return candidate;
 }
 
 function requireConfirmedCommentReview(
   reviews: GithubReviewSummary[],
-  state: GithubCommentReviewReconciliation,
+  state: DurableGithubCommentReviewReconciliation,
   run: PackReviewRunRecord,
 ): GithubReviewSummary {
   const commentReviewId = state.commentReviewId;
@@ -207,14 +262,14 @@ function requireConfirmedCommentReview(
   if (review.userLogin.toLowerCase() !== state.actorLogin.toLowerCase()
     || review.state !== 'COMMENTED'
     || !review.body.includes(marker)
-    || (review.commitId && review.commitId !== run.targetSha)) {
+    || review.commitId !== run.targetSha) {
     throw new Error(`GitHub COMMENT review ${commentReviewId} does not match reconciliation ${run.id}`);
   }
   return review;
 }
 
-function normalizedState(run: PackReviewRunRecord): GithubCommentReviewReconciliation | null {
-  const raw = run.githubReviewReconciliation;
+function normalizedState(run: PackReviewRunRecord): DurableGithubCommentReviewReconciliation | null {
+  const raw = run.githubReviewReconciliation as DurableGithubCommentReviewReconciliation | undefined;
   if (!raw) return null;
   if (raw.schemaVersion !== 1 || raw.event !== 'COMMENT') {
     throw new Error(`corrupt GitHub review reconciliation state for ${run.id}`);
@@ -222,8 +277,18 @@ function normalizedState(run: PackReviewRunRecord): GithubCommentReviewReconcili
   if (!trim(raw.actorLogin) || !trim(raw.commentBody)) {
     throw new Error(`incomplete GitHub review reconciliation state for ${run.id}`);
   }
+  const postOutcome = raw.postOutcome
+    ?? (raw.phase === 'prepared' ? 'ambiguous' : 'accepted');
+  if (!['not_attempted', 'definitely_rejected', 'ambiguous', 'accepted'].includes(postOutcome)) {
+    throw new Error(`corrupt GitHub COMMENT POST outcome for ${run.id}`);
+  }
+  if ((raw.phase !== 'prepared' && postOutcome !== 'accepted')
+    || (raw.phase === 'prepared' && postOutcome === 'accepted')) {
+    throw new Error(`inconsistent GitHub COMMENT POST outcome for ${run.id}`);
+  }
   return {
     ...raw,
+    postOutcome,
     pendingDismissalReviewIds: [...(raw.pendingDismissalReviewIds ?? [])],
     dismissedReviewIds: [...(raw.dismissedReviewIds ?? [])],
   };
@@ -231,10 +296,10 @@ function normalizedState(run: PackReviewRunRecord): GithubCommentReviewReconcili
 
 function persistState(
   runId: string,
-  state: GithubCommentReviewReconciliation,
+  state: DurableGithubCommentReviewReconciliation,
   options: PackReviewStoreOptions,
-): GithubCommentReviewReconciliation {
-  const next = {
+): DurableGithubCommentReviewReconciliation {
+  const next: DurableGithubCommentReviewReconciliation = {
     ...state,
     updatedAtUtc: new Date().toISOString(),
   };
@@ -254,6 +319,24 @@ function uniqueIds(values: Array<number | string>): Array<number | string> {
   return result;
 }
 
+async function listReviewsForRecovery(
+  options: CommentReconciliationOptions,
+  current: PackReviewRunRecord,
+  state: DurableGithubCommentReviewReconciliation,
+  storeOptions: PackReviewStoreOptions,
+  prefix: string,
+): Promise<{ reviews: GithubReviewSummary[]; state: DurableGithubCommentReviewReconciliation }> {
+  try {
+    return { reviews: await options.transport.listReviews(), state };
+  } catch (error) {
+    const next = persistState(current.id, {
+      ...state,
+      lastError: `${prefix}: ${describeError(error)}`,
+    }, storeOptions);
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { reconciliation: next });
+  }
+}
+
 export async function reconcileGithubCommentReview(
   options: CommentReconciliationOptions,
 ): Promise<{
@@ -265,7 +348,6 @@ export async function reconcileGithubCommentReview(
   const storeOptions = { projectId: options.projectId, storeRoot: options.storeRoot };
   const current = getPackReviewRun(options.run.id, storeOptions) ?? options.run;
   let state = normalizedState(current);
-  const resumingPrepared = state?.phase === 'prepared';
   if (!state) {
     const actorLogin = trim(await options.transport.resolveActorLogin());
     if (!actorLogin) throw new Error('GitHub authenticated actor lookup returned no login');
@@ -276,6 +358,7 @@ export async function reconcileGithubCommentReview(
       phase: 'prepared',
       actorLogin,
       commentBody: options.body,
+      postOutcome: 'not_attempted',
       pendingDismissalReviewIds: [],
       dismissedReviewIds: [],
       preparedAtUtc: now,
@@ -287,54 +370,76 @@ export async function reconcileGithubCommentReview(
 
   if (state.phase === 'prepared') {
     let posted: { id: number | string; url: string } | null = null;
-    if (resumingPrepared) {
-      try {
-        const observed = findPostedComment(
-          await options.transport.listReviews(),
-          state.actorLogin,
-          current,
-        );
-        if (observed) posted = { id: observed.id, url: observed.url };
-      } catch (listError) {
-        state = persistState(current.id, {
-          ...state,
-          lastError: `recovery lookup failed: ${describeError(listError)}`,
-        }, storeOptions);
-        throw listError;
+
+    if (state.postOutcome === 'ambiguous') {
+      const listed = await listReviewsForRecovery(
+        options,
+        current,
+        state,
+        storeOptions,
+        'ambiguous POST recovery lookup failed',
+      );
+      state = listed.state;
+      const observed = findUniquePostedComment(listed.reviews, state.actorLogin, current);
+      if (!observed) {
+        const message = `GitHub COMMENT POST outcome remains ambiguous for ${current.id}; accepted review is not yet observable`;
+        state = persistState(current.id, { ...state, lastError: message }, storeOptions);
+        throw new Error(message);
       }
-    }
-    try {
-      if (!posted) posted = await options.transport.postReview({
-        event: 'COMMENT',
-        body: state.commentBody,
-        commitId: current.targetSha,
-      });
-    } catch (postError) {
+      posted = { id: observed.id, url: observed.url };
+    } else {
+      const attemptedAtUtc = new Date().toISOString();
+      state = persistState(current.id, {
+        ...state,
+        postOutcome: 'ambiguous',
+        postAttemptedAtUtc: attemptedAtUtc,
+        lastError: undefined,
+      }, storeOptions);
       try {
-        const observed = findPostedComment(
-          await options.transport.listReviews(),
-          state.actorLogin,
-          current,
-        );
-        if (observed) posted = { id: observed.id, url: observed.url };
-      } catch (listError) {
+        posted = await options.transport.postReview({
+          event: 'COMMENT',
+          body: state.commentBody,
+          commitId: current.targetSha,
+        });
+      } catch (postError) {
+        const postOutcome = classifyPostError(postError);
         state = persistState(current.id, {
           ...state,
-          lastError: `${describeError(postError)}; recovery lookup failed: ${describeError(listError)}`,
-        }, storeOptions);
-        throw postError;
-      }
-      if (!posted) {
-        state = persistState(current.id, {
-          ...state,
+          postOutcome,
           lastError: describeError(postError),
         }, storeOptions);
-        throw postError;
+        if (postOutcome === 'definitely_rejected') throw postError;
+
+        let reviews: GithubReviewSummary[];
+        try {
+          reviews = await options.transport.listReviews();
+        } catch (listError) {
+          state = persistState(current.id, {
+            ...state,
+            lastError: `${describeError(postError)}; recovery lookup failed: ${describeError(listError)}`,
+          }, storeOptions);
+          throw postError;
+        }
+
+        let observed: GithubReviewSummary | null;
+        try {
+          observed = findUniquePostedComment(reviews, state.actorLogin, current);
+        } catch (observationError) {
+          state = persistState(current.id, {
+            ...state,
+            lastError: `${describeError(postError)}; ${describeError(observationError)}`,
+          }, storeOptions);
+          throw observationError;
+        }
+        if (!observed) throw postError;
+        posted = { id: observed.id, url: observed.url };
       }
     }
+
     state = persistState(current.id, {
       ...state,
       phase: 'comment_posted',
+      postOutcome: 'accepted',
       commentReviewId: posted.id,
       commentReviewUrl: posted.url,
       lastError: undefined,
@@ -342,7 +447,7 @@ export async function reconcileGithubCommentReview(
   }
 
   const commentReviewId = state.commentReviewId;
-  if (!commentReviewId) {
+  if (commentReviewId === undefined) {
     throw new Error(`GitHub COMMENT reconciliation has no posted review id for ${current.id}`);
   }
 
@@ -551,14 +656,26 @@ export function createGithubReviewTransport(options: CreateGithubReviewTransport
         allowEmptyStdout: false,
         timeoutMs: 60_000,
       });
-      const stdout = await requireProcess(result, 'GitHub PR review post');
+      if (!result.ok) {
+        throw new GithubReviewPostError(
+          classifyPostProcessFailure(result),
+          processFailureMessage(result, 'GitHub PR review post'),
+        );
+      }
+      const stdout = result.stdout.trim();
       let parsed: { id?: number | string; html_url?: string };
       try {
         parsed = JSON.parse(stdout) as { id?: number | string; html_url?: string };
       } catch (error) {
-        throw new Error(`GitHub PR review post returned invalid JSON: ${describeError(error)}`);
+        throw new GithubReviewPostError(
+          'ambiguous',
+          `GitHub PR review post returned invalid JSON: ${describeError(error)}`,
+          { cause: error },
+        );
       }
-      if (!parsed.id) throw new Error('GitHub PR review post returned no review id');
+      if (!parsed.id) {
+        throw new GithubReviewPostError('ambiguous', 'GitHub PR review post returned no review id');
+      }
       return { id: parsed.id, url: trim(parsed.html_url) };
     },
     async dismissReview(reviewId) {
