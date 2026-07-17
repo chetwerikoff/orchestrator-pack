@@ -133,6 +133,7 @@ function Get-WorkerStatusTrackedPrNumbers {
     return @($tracked | Sort-Object -Unique)
 }
 
+
 function Test-WorkerStatusSessionsNeedPackBindingResolution {
     param([object[]]$Sessions = @())
 
@@ -165,6 +166,9 @@ function Resolve-WorkerStatusSessionBinding {
         [object]$OsLiveness = $null
     )
 
+    if ($PrNumber -gt 0) {
+        return @{ ok = $true; prNumber = $PrNumber; headSha = $HeadSha }
+    }
     $openPrPayload = @()
     if ($GithubSnapshot -and $GithubSnapshot.openPrs) {
         foreach ($pr in @($GithubSnapshot.openPrs)) {
@@ -173,12 +177,10 @@ function Resolve-WorkerStatusSessionBinding {
     }
     $sessionPayload = ConvertTo-MechanicalJsonStateHashtable -Value $Session
     $payload = @{
-        session               = $sessionPayload
-        sessions              = @($sessionPayload)
-        openPrs               = $openPrPayload
-        headSha               = $HeadSha
-        prNumber              = $PrNumber
-        openListAuthoritative = [bool]($GithubSnapshot -and -not $GithubSnapshot.degraded)
+        session  = $sessionPayload
+        openPrs  = $openPrPayload
+        headSha  = $HeadSha
+        prNumber = $PrNumber
     }
     if ($RepoSlug) { $payload.repoSlug = [string]$RepoSlug }
     if ($null -ne $OsLiveness) { $payload.osLiveness = (ConvertTo-MechanicalJsonStateHashtable -Value $OsLiveness) }
@@ -269,7 +271,7 @@ function Resolve-WorkerStatusSessionGithubBlock {
         ciChecks                  = if ($prKey) { @($Snapshot.ciChecksByPr[$prKey]) } else { @() }
         requiredCheckNames        = if ($prKey) { @($Snapshot.requiredCheckNamesByPr[$prKey]) } else { @() }
         requiredCheckLookupFailed = if ($snapshotDegraded) { $true } elseif ($prKey) { [bool]$Snapshot.requiredCheckLookupFailedByPr[$prKey] } else { $false }
-        unavailable               = $snapshotDegraded
+        unavailable                  = $snapshotDegraded
         degraded                  = $snapshotDegraded
     }
 }
@@ -379,6 +381,7 @@ function Test-WorkerStatusSiblingReadiness {
     }
     return $result
 }
+
 
 function Get-WorkerStatusPrSessionBindingCachePath {
     $result = Invoke-WorkerStatusStoreCli -Subcommand 'resolveBindingCachePath' -Payload @{
@@ -561,11 +564,10 @@ function Write-WorkerStatusRow {
         $bindingReason = 'binding_miss'
         if ($binding.reason) { $bindingReason = [string]$binding.reason }
         $binding = @{
-            ok        = $false
-            reason    = $bindingReason
-            sessionId = $sessionId
-            prNumber  = $prNumber
-            headSha   = $headSha
+            ok       = $false
+            reason   = $bindingReason
+            prNumber = $prNumber
+            headSha  = $headSha
         }
     }
 
