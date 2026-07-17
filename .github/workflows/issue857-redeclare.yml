@@ -28,40 +28,30 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci --include=dev
-      - name: Capture pre-declare status
+      - name: Restore tracked npm lifecycle changes
         shell: bash
-        run: git status --porcelain=v1 --untracked-files=all > /tmp/issue857-status-before.txt
+        run: |
+          git restore --source=HEAD --worktree -- .
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Generate declaration through ao-declare
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set +e
+          set -euo pipefail
           npx tsx plugins/ao-task-declaration/bin/declare.ts \
             --issue 857 \
             --iteration-id chatgpt-pr-896-clause-d-tests \
             --repo-root "$GITHUB_WORKSPACE" \
             --declared-paths 'docs/pr-session-binding-cache.d.mts,docs/pr-session-binding-cache.mjs,docs/session-pr-binding-resolver.d.mts,docs/session-pr-binding-resolver.mjs,docs/worker-report-store.mjs,scripts/lib/Invoke-AoCliJson.ps1,scripts/lib/Worker-Recovery.ps1,scripts/lib/WorkerReportStore.ps1,scripts/lib/WorkerStatusStore.ps1,scripts/lib/worker-status-store.mjs,scripts/pr-session-binding-cache.test.ts,scripts/session-pr-binding-resolver.test.ts,tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1,tests/powershell/Issue857.PrSessionBindingContract.Node.mjs,tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1' \
             > /tmp/issue857-declare.log 2>&1
-          echo "$?" > /tmp/issue857-declare.status
-          exit 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue857-declare-diagnostics
-          path: |
-            /tmp/issue857-declare.log
-            /tmp/issue857-declare.status
-            /tmp/issue857-status-before.txt
-          if-no-files-found: error
-      - name: Validate and commit generated snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(cat /tmp/issue857-declare.status)" = '0' || { cat /tmp/issue857-status-before.txt; cat /tmp/issue857-declare.log; exit 1; }
           test -f docs/declarations/857.chatgpt-pr-896-clause-d-tests.json
           node -e "const s=require('./docs/declarations/857.chatgpt-pr-896-clause-d-tests.json'); if(s.iteration_id_source!=='wrapper_generated'||s.supersedes!=='chatgpt-pr-896'||s.declared_paths.length!==15||s.amendments.length!==0) process.exit(1)"
           rm -f .ao/declarations/857.chatgpt-pr-896-clause-d-tests.json
           git diff --check
+      - name: Commit generated snapshot
+        shell: bash
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/declarations/857.chatgpt-pr-896-clause-d-tests.json
