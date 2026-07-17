@@ -225,7 +225,7 @@ pwsh -NoProfile -File scripts/review-bulk-send-diagnose.ps1 -FixturePath scripts
 Flagged kinds: `bulk_send_trap`, `stuck_open`, `multi_open_awaiting_dispatch`. Use when
 `needs_triage` / `waiting_update` runs keep `openFindingCount > 0` but per-finding routing
 is expected — bulk send ships all open findings; partial send can leave remainder stuck
-without CLI dismiss/backlog (**A′** blocked). **Do not** hand-edit `code-reviews/findings/`
+without CLI dismiss/backlog (**A′** blocked. **Do not** hand-edit `code-reviews/findings/`
 (#122 class). Until upstream **A + A′** land (pipeline #1631/#1346 preferred, legacy #2088),
 treat flagged runs as upstream-blocked, not worker defects. Delivery trust still requires
 #1943 / #614 before prod `forward` acceptance (shared invariant #1).
@@ -384,15 +384,19 @@ classification, committed runtime history, or the runtime-history refresh workfl
 hash/history-freshness work and any future shard-count policy changes remain owned by a separate
 follow-up, not this relocation.
 
-### Escalation-store router writeback is conflict-aware (Issue #889)
+### Shared-store writeback must preserve terminal-state precedence (Issue #889)
 
 Decision adopted 2026-07-17: atomic JSON replacement protects file integrity, but it is not a
-concurrency policy. The escalation router therefore resolves every dirty record against a fresh
-disk reread at both replay reconciliation and final tick writeback. The tick captures one
-`snapshotLoadedAtMs` token immediately before its initial state read and carries that token through
-both merge points.
+concurrency policy. Writeback-merge of any shared store must preserve terminal-state precedence
+and explicit one-way writer markers; a stale in-memory snapshot must not resurrect a deleted key,
+reverse a terminal transition, or erase an acknowledged action merely because it is dirty.
 
-The per-record conflict order is:
+This PR applies the class-level rule to the escalation router. It resolves every dirty record
+against a fresh disk reread at both replay reconciliation and final tick writeback. The tick
+captures one `snapshotLoadedAtMs` token immediately before its initial state read and carries that
+token through both merge points.
+
+The escalation-store per-record conflict order is:
 
 - a record deleted by an out-of-band writer stays deleted; stale memory cannot recreate it;
 - a disk terminal state beats a non-terminal memory state regardless of `updatedAtMs`;
@@ -408,5 +412,6 @@ The per-record conflict order is:
   advances `updatedAtMs`.
 
 The replay merge delegates to the same record resolver as final writeback so an ACK, release, or
-delete observed at either reread cannot be undone later in the same tick. No lock, schema change,
-or sibling-store policy is implied by this decision.
+delete observed at either reread cannot be undone later in the same tick. No lock or schema change
+is introduced. The sibling stores audited in the PR body remain out of scope for code changes and
+require separate tasks before this class-level rule is implemented there.
