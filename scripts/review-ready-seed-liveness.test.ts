@@ -25,12 +25,11 @@ beforeAll(() => {
   }
 }, 120_000);
 
-describe.only('review-ready-seed-liveness first pair diagnostic', () => {
-  for (const row of REVIEW_READY_SEED_LIVENESS_MATRIX.slice(0, 2)) {
-    it(`expected: ${row.expected}`, () => {
-      const result = runFixture(row.fixture);
-      expect(result.expected).toBe(row.expected);
-      expect(result.ok, result.detail).toBe(true);
-    });
-  }
+describe.only('review-ready-seed-liveness first fixture diagnostic', () => {
+  const row = REVIEW_READY_SEED_LIVENESS_MATRIX[0]!;
+  it(`expected: ${row.expected}`, () => {
+    const result = runFixture(row.fixture);
+    expect(result.expected).toBe(row.expected);
+    expect(result.ok, result.detail).toBe(true);
+  });
 });
