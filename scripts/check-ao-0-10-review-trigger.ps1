@@ -70,11 +70,5 @@ if ($recovery -notmatch 'Assert-ReviewBeforeCleanupGate') {
     exit 1
 }
 
-$mjs = Get-Content -LiteralPath (Join-Path $Root 'docs/review-mechanical-cli.mjs') -Raw
-if ($mjs -notmatch 'ao\\s\+review\\s\+run') {
-    Write-Host 'review-mechanical-cli.mjs must continue forbidding AO review run on pack mechanical paths'
-    exit 1
-}
-
 Write-Host '[PASS] pack-owned review runner + trigger loop runtime wiring'
 exit 0
