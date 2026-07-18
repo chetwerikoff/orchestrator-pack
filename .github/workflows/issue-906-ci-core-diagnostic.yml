@@ -1,0 +1,51 @@
+name: issue-906-ci-core-diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-906-estate-cut
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-906-estate-cut
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Restore focused CI closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout f10fd0051dd28f4cea865e4859b495e369219698 -- scripts/check-ci-pipeline-split-core.ps1
+          npm ci --ignore-scripts
+
+      - name: Run focused diagnostic
+        shell: bash
+        run: |
+          set +e
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > "$RUNNER_TEMP/issue-906-ci-core.log" 2>&1
+          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-906-ci-core.log"
+          cat "$RUNNER_TEMP/issue-906-ci-core.log"
+          exit 0
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-906-ci-core-diagnostic
+          path: ${{ runner.temp }}/issue-906-ci-core.log
+          retention-days: 1
