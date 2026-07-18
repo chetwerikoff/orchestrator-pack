@@ -10,6 +10,7 @@ import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
   recordMalformedPackReviewStatus,
   recordPackReviewPendingStatus,
+  resumePackReviewVerdictDelivery,
   type PackReviewRequiredStatusRequest,
   type PackReviewTerminalPayload,
 } from './lib/pack-review-delivery.js';
@@ -165,6 +166,103 @@ describe('pack review journal-first delivery (Issue #894)', () => {
         githubComment: { state: 'succeeded' },
         requiredStatus: { state: 'succeeded' },
         workerNotification: { state: 'delivered' },
+      },
+    });
+  });
+
+  it('persists a recovered GitHub outcome when reconciliation completed before the channel write', async () => {
+    const storeRoot = tempRoot('opk-review-comment-outcome-recovery-');
+    const run = createRun(storeRoot);
+    const recoveredAt = '2026-07-18T05:10:00.000Z';
+    const reviewId = 89405;
+    const githubKey = `github-comment:${run.id}:${HEAD_SHA}`;
+    const statusKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}`;
+    const workerKey = `worker-notification:${run.id}:${HEAD_SHA}`;
+    const journaled = updatePackReviewRun(run.id, {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-07-18T05:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
+        attempts: 1,
+      },
+      githubReviewId: reviewId,
+      githubReviewUrl: `fixture://review/${reviewId}`,
+      githubReviewEvent: 'COMMENT',
+      githubReviewReconciliation: {
+        schemaVersion: 1,
+        event: 'COMMENT',
+        phase: 'complete',
+        actorLogin: 'pack-reviewer',
+        commentBody: 'fixture recovered comment',
+        commentReviewId: reviewId,
+        commentReviewUrl: `fixture://review/${reviewId}`,
+        pendingDismissalReviewIds: [],
+        dismissedReviewIds: [],
+        preparedAtUtc: '2026-07-18T05:00:00.000Z',
+        updatedAtUtc: '2026-07-18T05:00:01.000Z',
+      },
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'succeeded',
+          recordedAtUtc: '2026-07-18T05:00:02.000Z',
+          reason: 'status_success',
+          idempotencyKey: statusKey,
+        },
+        workerNotification: {
+          state: 'delivered',
+          recordedAtUtc: '2026-07-18T05:00:03.000Z',
+          reason: 'fixture_dispatched',
+          idempotencyKey: workerKey,
+        },
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    expect(journaled.deliveryOutcomes.githubComment).toBeUndefined();
+
+    const postGithubComment = vi.fn(async () => ({
+      id: 89406,
+      url: 'fixture://review/89406',
+      event: 'COMMENT' as const,
+    }));
+    const writeRequiredStatus = vi.fn(async () => undefined);
+    const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected_retry' }));
+
+    const result = await resumePackReviewVerdictDelivery({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: journaled,
+      postGithubComment,
+      writeRequiredStatus,
+      notifyWorker,
+      clock: () => new Date(recoveredAt),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reason: 'completed',
+      status: 'up_to_date',
+      githubReviewId: reviewId,
+      githubReviewUrl: `fixture://review/${reviewId}`,
+    });
+    expect(postGithubComment).not.toHaveBeenCalled();
+    expect(writeRequiredStatus).not.toHaveBeenCalled();
+    expect(notifyWorker).not.toHaveBeenCalled();
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'up_to_date',
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded',
+          recordedAtUtc: recoveredAt,
+          reason: 'comment_recovered',
+          idempotencyKey: githubKey,
+        },
+        requiredStatus: { state: 'succeeded', idempotencyKey: statusKey },
+        workerNotification: { state: 'delivered', idempotencyKey: workerKey },
       },
     });
   });
