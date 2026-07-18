@@ -1,3 +1,4 @@
+# Temporary read-only diagnostic; remove after artifact capture.
 name: Issue 857 final CI diagnostic
 
 on:
