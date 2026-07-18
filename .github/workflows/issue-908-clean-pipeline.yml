@@ -9,79 +9,32 @@ on:
       - main
 
 permissions:
-  contents: write
-  issues: read
+  contents: read
 
 jobs:
-  publish:
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/scope-guard-pr-files-pagination
           fetch-depth: 0
-
-      - name: Materialize final prerequisite artifacts
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import json
-          path = Path('scripts/vitest-runtime-history.json')
-          data = json.loads(path.read_text())
-          data['dataChangedAt'] = '2026-07-18T17:20:00Z'
-          data['files']['scripts/pr-scope-check-pagination.test.ts'] = 45000
-          data['files'] = dict(sorted(data['files'].items()))
-          data['provenance']['scripts/pr-scope-check-pagination.test.ts'] = 'measured'
-          data['provenance'] = dict(sorted(data['provenance'].items()))
-          path.write_text(json.dumps(data, indent=2) + '\n')
-          PY
-
-          gh api "repos/${GITHUB_REPOSITORY}/issues/908" --jq .body > /tmp/issue-908-body.md
-          node --experimental-strip-types --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
-          const constraints = parseIssueBody(readFileSync('/tmp/issue-908-body.md', 'utf8'));
-          const declaredPaths = [
-            'scripts/pr-scope-check-pagination.test.ts',
-            'scripts/pr-scope-check.ps1',
-            'scripts/vitest-ci-lanes.config.json',
-            'scripts/vitest-runtime-history.json',
-          ];
-          const payload = {
-            declared_paths: declaredPaths,
-            declared_globs: [],
-            issue_denylist: [...constraints.denylist].sort(),
-          };
-          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
-          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
-          const snapshot = JSON.parse(readFileSync('docs/declarations/908.scope-pagination.json', 'utf8'));
-          snapshot.created_at = new Date().toISOString();
-          snapshot.baseline.active_scope_hash = activeScopeHash;
-          snapshot.declared_paths = declaredPaths;
-          snapshot.declared_globs = [];
-          snapshot.amendments = [];
-          writeFileSync('docs/declarations/908.scope-pagination.json', `${JSON.stringify(snapshot, null, 2)}\n`);
-          NODE
-
-          rm -f .github/workflows/issue-908-runtime-history.yml
-
-      - name: Publish clean target tree
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Run exact light lane 1
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/declarations/908.scope-pagination.json scripts/vitest-runtime-history.json
-          git add -u .github/workflows/issue-908-runtime-history.yml || true
-          if git diff --cached --quiet; then
-            echo "Target branch already contains final artifacts"
-            exit 0
-          fi
-          git commit -m "fix: record scope pagination test runtime"
-          git push origin HEAD:fix/scope-guard-pr-files-pagination
+          set +e
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1 > "$RUNNER_TEMP/issue-908-light-1.log" 2>&1
+          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-908-light-1.log"
+          tail -n 300 "$RUNNER_TEMP/issue-908-light-1.log"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-908-light-1
+          path: ${{ runner.temp }}/issue-908-light-1.log
+          retention-days: 1
