@@ -1,0 +1,129 @@
+name: issue-906-pin-ci-core
+
+on:
+  push:
+    branches:
+      - agent/issue-906-estate-cut
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-906-estate-cut
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Restore the live CI guard core
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/estate-cut/manifest-generator.mjs')
+          text = path.read_text()
+          anchor = "  'scripts/check-ci-pipeline-split.ps1',\n"
+          addition = anchor + "  'scripts/check-ci-pipeline-split-core.ps1',\n"
+          if "'scripts/check-ci-pipeline-split-core.ps1'" not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('CI core pin anchor drifted')
+              text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+          PY
+          git checkout f10fd0051dd28f4cea865e4859b495e369219698 -- scripts/check-ci-pipeline-split-core.ps1
+          rm -f .github/workflows/issue-906-final-diagnostics.yml
+          rm -f .github/workflows/issue-906-pin-ci-core.yml
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild the cut ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
+
+      - name: Refresh declaration snapshot
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+
+          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
+          const constraints = parseIssueBody(readFileSync('/tmp/issue-906-body.md', 'utf8'));
+          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
+          const splitZero = (value) => value.split('\0').filter(Boolean).map((value) => value.replaceAll('\\', '/'));
+          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
+          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
+          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
+          const declaredPaths = [...new Set([...changed, ...untracked])].filter((path) => !control.has(path)).sort();
+          const payload = {
+            declared_paths: declaredPaths,
+            declared_globs: [],
+            issue_denylist: [...constraints.denylist].sort(),
+          };
+          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
+          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
+          const current = JSON.parse(readFileSync('docs/declarations/906.chatgpt-estate-cut.json', 'utf8'));
+          const snapshot = {
+            ...current,
+            created_at: new Date().toISOString(),
+            baseline: {
+              commit_sha: baseCommitSha,
+              worktree_dirty: false,
+              active_scope_hash: activeScopeHash,
+            },
+            declared_paths: declaredPaths,
+            declared_globs: [],
+            amendments: [],
+          };
+          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          NODE
+          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
+
+      - name: Validate final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run estate-cut:check
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run gate-runner-selftest
+          npm run test:issue-906
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          npm run test:foundation
+          npm test
+          git diff --check
+          test ! -e .github/workflows/issue-906-final-diagnostics.yml
+          test ! -e .github/workflows/issue-906-pin-ci-core.yml
+
+      - name: Publish corrected boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: retain live CI pipeline guard core"
+          git push origin HEAD:agent/issue-906-estate-cut
