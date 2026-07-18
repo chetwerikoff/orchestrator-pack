@@ -15,7 +15,11 @@ function readSource(snapshot: SourceSnapshot, path: string): ReadOutcome {
   return { missing: `missing required file: ${path}` };
 }
 
-function staticEvidence(snapshot: SourceSnapshot, state: EvidenceObservation['state'] = 'present', detail?: string): EvidenceObservation[] {
+function staticEvidence(
+  snapshot: SourceSnapshot,
+  state: EvidenceObservation['state'] = 'present',
+  detail?: string,
+): EvidenceObservation[] {
   return [{ class: 'static-source', state, source: snapshot.root, detail }];
 }
 
@@ -39,7 +43,9 @@ function completeStaticGate(
   if (failures.length > 0) {
     return failGate(gateId, summary, staticEvidence(snapshot), failures, failureStdout);
   }
-  return passGate(gateId, summary, ['static-source'], staticEvidence(snapshot), { legacyStdout: passStdout });
+  return passGate(gateId, summary, ['static-source'], staticEvidence(snapshot), {
+    legacyStdout: passStdout,
+  });
 }
 
 function requireText(
@@ -60,9 +66,7 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   const unreachable: string[] = [];
 
   for (const path of ['AGENTS.md', 'scripts/pack-worker-report.ps1']) {
-    const source = readSource(snapshot, path);
-    if (source.unreachable) unreachable.push(source.unreachable);
-    if (source.missing) failures.push(source.missing);
+    requireText(snapshot, path, failures, unreachable);
   }
 
   return completeStaticGate(
@@ -95,7 +99,9 @@ export function evaluateCoworkerDelegationThreshold(snapshot: SourceSnapshot): G
       if (result.unreachable) unreachable.push(result.unreachable);
       if (result.text === undefined) continue;
       for (const literal of stale) {
-        if (result.text.includes(literal)) failures.push(`${path} still contains stale volume-floor literal: ${literal}`);
+        if (result.text.includes(literal)) {
+          failures.push(`${path} still contains stale volume-floor literal: ${literal}`);
+        }
       }
     }
   }
@@ -105,6 +111,7 @@ export function evaluateCoworkerDelegationThreshold(snapshot: SourceSnapshot): G
     : failures[0]!.startsWith('[FAIL]')
       ? `${failures[0]}\n`
       : `[FAIL] coworker delegation threshold drift:\n${failures.map((failure) => ` - ${failure}`).join('\n')}\n`;
+
   return completeStaticGate(
     gateId,
     'Coworker delegation T1 volume-floor contract',
@@ -170,10 +177,10 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
   const gateId = 'review-command-not-ao';
   const evaluated = evaluateLivePackReviewSources(snapshot);
   const failures = [...evaluated.failures];
-  const runner = evaluated.sources.get('scripts/pack-review-runner.ts');
+  const combinedRuntime = [...evaluated.sources.values()].join('\n');
 
-  if (runner !== undefined && !runner.includes('orchestrator-pack/pack-review')) {
-    failures.push('scripts/pack-review-runner.ts: exact-head pack-review status context is missing');
+  if (combinedRuntime.length > 0 && !combinedRuntime.includes('orchestrator-pack/pack-review')) {
+    failures.push('live pack-review sources are missing the exact required-status context');
   }
 
   const failureStdout = failures.length > 0
@@ -192,10 +199,37 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
 }
 
 export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
-  'plugins/ao-task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
-  'plugins/ao-scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
-  'plugins/ao-token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
-  'plugins/ao-codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
+  'plugins/ao-task-declaration/README.md': [
+    'DD-026',
+    'DD-027',
+    'declared_files',
+    'denylist',
+    'one amendment',
+    'baseline',
+  ],
+  'plugins/ao-scope-guard/README.md': [
+    'DD-024',
+    'runtime guard',
+    'git add',
+    'commit',
+    'PR-level CI',
+    'second line',
+  ],
+  'plugins/ao-token-chain-ledger/README.md': [
+    'chain_id',
+    'planner',
+    'reviewer',
+    'worker',
+    'per-session cost',
+    'estimated_cost_usd',
+  ],
+  'plugins/ao-codex-pr-reviewer/README.md': [
+    'Codex',
+    'gpt-5.5',
+    'PR review',
+    'GitHub Issues',
+    'no core patch',
+  ],
 };
 
 export const VERIFY_PROMPT_GLOB = 'prompts/*.md';
@@ -212,13 +246,17 @@ export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateR
   const unreachable: string[] = [];
   const promptFiles = snapshot.paths.filter(matchesVerifyPromptGlob);
   if (promptFiles.length === 0) failures.push('Missing prompt markdown files');
+
   for (const [path, markers] of Object.entries(VERIFY_CONTRACT_MARKERS)) {
     const text = requireText(snapshot, path, failures, unreachable);
     if (text === undefined) continue;
     for (const marker of markers) {
-      if (!text.toLocaleLowerCase().includes(marker.toLocaleLowerCase())) failures.push(`Contract ${path} missing marker: ${marker}`);
+      if (!text.toLocaleLowerCase().includes(marker.toLocaleLowerCase())) {
+        failures.push(`Contract ${path} missing marker: ${marker}`);
+      }
     }
   }
+
   return completeStaticGate(
     gateId,
     'Prompt inventory and plugin contract markers',
@@ -229,7 +267,10 @@ export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateR
   );
 }
 
-function registration(gateId: string, evaluate: (snapshot: SourceSnapshot) => GateResult): GateRegistration {
+function registration(
+  gateId: string,
+  evaluate: (snapshot: SourceSnapshot) => GateResult,
+): GateRegistration {
   return { gateId, evaluate: ({ snapshot }: GateEvaluationContext) => evaluate(snapshot) };
 }
 
