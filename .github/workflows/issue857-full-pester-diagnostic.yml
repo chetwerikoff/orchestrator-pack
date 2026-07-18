@@ -1,0 +1,37 @@
+name: Issue 857 full Pester diagnostic
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Run full Pester track
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $log = '/tmp/issue857-full-pester.log'
+          & ./scripts/test-all.ps1 -SkipNpm *> $log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath $log -Tail 250
+          if ($code -ne 0) { exit $code }
+      - name: Upload full Pester log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue857-full-pester-${{ github.run_id }}
+          path: /tmp/issue857-full-pester.log
+          if-no-files-found: error
