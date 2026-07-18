@@ -1,0 +1,80 @@
+name: Issue 857 synthetic compatibility fix v2
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Apply base candidate and PR-link correction
+        shell: bash
+        run: |
+          awk '/python - <<'"'"'PY'"'"'/{capture=1; next} capture && /^          PY$/{exit} capture {sub(/^          /, ""); print}' \
+            .github/workflows/issue857-synthetic-compat-fix.yml | python -
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('docs/session-pr-binding-resolver.mjs')
+          text = path.read_text()
+          old = """      if (
+                syntheticPr > 0 &&
+                requestedHead &&
+                openPrHead === requestedHead &&
+                (!sessionHead || sessionHead === requestedHead)
+              ) {
+          """
+          new = """      const headCorroborated = !requestedHead || (
+                openPrHead === requestedHead &&
+                (!sessionHead || sessionHead === requestedHead)
+              );
+              if (
+                syntheticPr > 0 &&
+                syntheticRow &&
+                headCorroborated
+              ) {
+          """
+          if text.count(old) != 1:
+            raise SystemExit(f'head corroboration block count={text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Validate affected surfaces
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --check docs/session-pr-binding-resolver.mjs
+          npm test -- \
+            scripts/session-pr-binding-resolver.test.ts \
+            scripts/review-finding-delivery-submit.test.ts \
+            scripts/review-ready-stuck-guard.test.ts \
+            scripts/worker-report-store.test.ts \
+            scripts/worker-status-store.test.ts
+          npx tsc --project tsconfig.base.json --noEmit
+          node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+          pwsh -NoLogo -NoProfile -File ./scripts/install-pester-ci.ps1
+          pwsh -NoLogo -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
+          git diff --check
+      - name: Commit validated compatibility
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/session-pr-binding-resolver.mjs docs/session-pr-binding-resolver.d.mts scripts/session-pr-binding-resolver.test.ts
+          git commit -m 'Preserve head-corroborated synthetic binding compatibility'
+          git push origin HEAD:agent/issue-857-binding-contract-v2
