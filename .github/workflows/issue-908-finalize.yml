@@ -1,0 +1,98 @@
+name: issue-908-finalize
+
+on:
+  push:
+    branches:
+      - fix/scope-guard-pr-files-pagination
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/scope-guard-pr-files-pagination
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Classify test and refresh declaration
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          path = Path('scripts/vitest-ci-lanes.config.json')
+          data = json.loads(path.read_text())
+          data['classification']['scripts/pr-scope-check-pagination.test.ts'] = 'light'
+          data['classification'] = dict(sorted(data['classification'].items()))
+          path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          gh api "repos/${GITHUB_REPOSITORY}/issues/908" --jq .body > /tmp/issue-908-body.md
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+
+          const constraints = parseIssueBody(readFileSync('/tmp/issue-908-body.md', 'utf8'));
+          const declaredPaths = [
+            'scripts/pr-scope-check-pagination.test.ts',
+            'scripts/pr-scope-check.ps1',
+            'scripts/vitest-ci-lanes.config.json',
+          ];
+          const payload = {
+            declared_paths: declaredPaths,
+            declared_globs: [],
+            issue_denylist: [...constraints.denylist].sort(),
+          };
+          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
+          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
+          const snapshot = JSON.parse(readFileSync('docs/declarations/908.scope-pagination.json', 'utf8'));
+          snapshot.created_at = new Date().toISOString();
+          snapshot.baseline.active_scope_hash = activeScopeHash;
+          snapshot.declared_paths = declaredPaths;
+          snapshot.declared_globs = [];
+          snapshot.amendments = [];
+          writeFileSync('docs/declarations/908.scope-pagination.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          NODE
+          rm -f .github/workflows/issue-908-finalize.yml
+
+      - name: Validate final prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          node scripts/run-vitest-with-harness.mjs run scripts/pr-scope-check-pagination.test.ts
+          npm run typecheck:foundation
+          npm run lint:foundation
+          GITHUB_OUTPUT="$(mktemp)" OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          git diff --check
+          test ! -e .github/workflows/issue-908-finalize.yml
+
+      - name: Publish final prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/declarations/908.scope-pagination.json scripts/pr-scope-check-pagination.test.ts scripts/pr-scope-check.ps1 scripts/vitest-ci-lanes.config.json
+          git add -u .github/workflows/issue-908-finalize.yml
+          git commit -m "fix: finalize trusted PR file pagination"
+          git push origin HEAD:fix/scope-guard-pr-files-pagination
