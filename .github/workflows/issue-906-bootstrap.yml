@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: issue-906-finalize
@@ -42,14 +44,34 @@ jobs:
           tar -xzf /tmp/issue-906-bootstrap.tgz
           python - <<'PY'
           from pathlib import Path
-          path = Path('scripts/estate-cut/manifest-generator.mjs')
-          text = path.read_text()
+
+          generator = Path('scripts/estate-cut/manifest-generator.mjs')
+          text = generator.read_text()
           old = """  if (args.has('--apply')) {\n    applyTree(built);\n    built = await buildIssue906Manifest();\n  }\n"""
           new = """  if (args.has('--apply')) {\n    applyTree(built);\n    if (!fileExists(MANIFEST)) writeFileSync(path.join(repoRoot, MANIFEST), '');\n    built = await buildIssue906Manifest();\n  }\n"""
           if text.count(old) != 1:
               raise SystemExit('issue-906 first-run patch target drifted')
-          path.write_text(text.replace(old, new))
+          text = text.replace(old, new)
+
+          old = """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n"""
+          new = """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n  'docs/declarations/906.chatgpt-estate-cut.json',\n"""
+          if text.count(old) != 1:
+              raise SystemExit('issue-906 declaration artifact patch target drifted')
+          generator.write_text(text.replace(old, new))
+
+          vitest = Path('vitest.config.ts')
+          text = vitest.read_text()
+          for retired in (
+              "    globalSetup: ['scripts/vitest-global-setup.ts'],\n",
+              "      'scripts/vitest-testmode-fleet-progress.ts',\n",
+          ):
+              if text.count(retired) != 1:
+                  raise SystemExit(f'issue-906 vitest retirement target drifted: {retired.strip()}')
+              text = text.replace(retired, '')
+          vitest.write_text(text)
           PY
+          mkdir -p docs/declarations
+          printf '{}\n' > docs/declarations/906.chatgpt-estate-cut.json
           rm -rf .issue-906-bootstrap
 
       - name: Install dependencies
@@ -68,6 +90,57 @@ jobs:
           name: issue-906-apply-diagnostics
           path: /tmp/issue-906-apply.log
           retention-days: 1
+
+      - name: Generate declaration snapshot
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+
+          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
+          const issueBody = readFileSync('/tmp/issue-906-body.md', 'utf8');
+          const constraints = parseIssueBody(issueBody);
+          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
+          const splitZero = (value) => value.split('\0').filter(Boolean).map((path) => path.replaceAll('\\', '/'));
+          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
+          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
+          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
+          const declaredPaths = [...new Set([...changed, ...untracked])]
+            .filter((path) => !control.has(path) && path !== '.github/workflows/issue-906-bootstrap.yml' && !path.startsWith('.issue-906-bootstrap/'))
+            .sort();
+          const declaredGlobs = [];
+          const payload = {
+            declared_paths: declaredPaths,
+            declared_globs: declaredGlobs,
+            issue_denylist: [...constraints.denylist].sort(),
+          };
+          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
+          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
+          const snapshot = {
+            issue_number: 906,
+            iteration_id: 'chatgpt-estate-cut',
+            iteration_id_source: 'wrapper_generated',
+            supersedes: null,
+            created_at: new Date().toISOString(),
+            baseline: {
+              commit_sha: baseCommitSha,
+              worktree_dirty: false,
+              active_scope_hash: activeScopeHash,
+            },
+            declared_paths: declaredPaths,
+            declared_globs: declaredGlobs,
+            amendments: [],
+          };
+          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          console.log(`issue-906 declaration generated: ${declaredPaths.length} scoped paths`);
+          NODE
 
       - name: Validate implementation
         shell: bash
