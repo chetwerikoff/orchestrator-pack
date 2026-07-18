@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - diag/issue-908-clean-pipeline
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
