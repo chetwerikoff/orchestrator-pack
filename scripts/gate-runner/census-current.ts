@@ -34,10 +34,10 @@ export function evaluateCurrentCensus(
   const details = (result.details ?? []).filter((detail) => !historicalOperatorFailures.has(detail));
   if (details.length > 0) return { ...result, details };
 
+  const { details: _historicalDetails, ...withoutDetails } = result;
   return {
-    ...result,
+    ...withoutDetails,
     status: 'PASS',
     summary: `All ${census.populationCount} pre-change executable enforcement surfaces remain accounted for.`,
-    details: undefined,
   };
 }
