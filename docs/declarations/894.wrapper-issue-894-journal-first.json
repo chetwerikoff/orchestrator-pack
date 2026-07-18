@@ -1,0 +1,47 @@
+{
+  "issue_number": 894,
+  "iteration_id": "wrapper-issue-894-journal-first",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-17T12:30:00.000Z",
+  "baseline": {
+    "commit_sha": "6dd428a9f70d82231388173ccb6eaa5f0a47bce5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4bdd7b77d3e104ad64aa0acfe7f6625b836f5f8745f55b35ee5613eecf1de631"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/ao-0-10-review-trigger.test.ts",
+    "scripts/invoke-pack-review.ps1",
+    "scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1",
+    "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
+    "scripts/lib/github-review-reconciliation.ts",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/pack-review-delivery.js",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-delivery.test.ts",
+    "scripts/pack-review-entrypoint-decoupling.test.ts",
+    "scripts/pack-review-runner-severity.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f48f312da831d2dae7a2f5f53ce708be948102e6fed02e42a436f0c6c0f32277",
+      "new_active_scope_hash": "sha256:4bdd7b77d3e104ad64aa0acfe7f6625b836f5f8745f55b35ee5613eecf1de631",
+      "changed": {
+        "added": [
+          "scripts/vitest-ci-lanes.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "Classify the two new Issue #894 Vitest files in the mandatory lane inventory.",
+      "actor": "chatgpt-github-finalizer",
+      "timestamp": "2026-07-17T14:25:00.000Z",
+      "applied": true
+    }
+  ]
+}

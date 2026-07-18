@@ -2,10 +2,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.js';
 import {
+  describePackReviewError as describeError,
   getPackReviewRun,
   listPackReviewRuns,
   setPackReviewRunTerminal,
   updatePackReviewRun,
+  trimPackReviewValue as trim,
   type GithubCommentReviewReconciliation,
   type PackReviewRunRecord,
   type PackReviewStoreOptions,
@@ -74,14 +76,6 @@ interface CommentReconciliationOptions extends PackReviewStoreOptions {
   run: PackReviewRunRecord;
   body: string;
   transport: GithubReviewTransport;
-}
-
-function trim(value: unknown): string {
-  return String(value ?? '').trim();
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function processFailureMessage(result: ProcessResult, label: string): string {
@@ -516,7 +510,7 @@ export async function recoverIncompleteGithubCommentReviewForHead(options: {
     .filter((run) => run.prNumber === options.prNumber
       && run.targetSha === options.headSha
       && run.githubReviewReconciliation
-      && (run.githubReviewReconciliation.phase !== 'complete' || run.status !== 'commented'));
+      && (run.githubReviewReconciliation.phase !== 'complete' || run.githubReviewId === undefined));
   if (candidates.length > 1) {
     throw new Error(`ambiguous incomplete GitHub COMMENT reconciliations for PR #${options.prNumber} head ${options.headSha}`);
   }
@@ -531,12 +525,36 @@ export async function recoverIncompleteGithubCommentReviewForHead(options: {
     projectId: options.projectId,
     storeRoot: options.storeRoot,
   });
-  return setPackReviewRunTerminal(run.id, 'commented', {
+  const findings = run.findings ?? [];
+  const hasBlockingFinding = findings.length > 0
+    ? findings.some((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return true;
+      const severity = trim((value as Record<string, unknown>).severity).toLowerCase();
+      return severity !== 'warning' && severity !== 'info' && severity !== 'non-blocking';
+    })
+    : run.reviewVerdict === 'findings';
+  const recoveredStatus = run.status === 'up_to_date' || run.status === 'commented' || run.status === 'changes_requested'
+    ? run.status
+    : hasBlockingFinding
+      ? 'changes_requested'
+      : run.reviewVerdict === 'clean' && findings.length === 0
+        ? 'up_to_date'
+        : 'commented';
+  return setPackReviewRunTerminal(run.id, recoveredStatus, {
     exitCode: 0,
     githubReviewId: result.id,
     githubReviewUrl: result.url,
     githubReviewEvent: 'COMMENT',
     githubReviewReconciliation: result.reconciliation,
+    deliveryOutcomes: {
+      ...(run.deliveryOutcomes ?? {}),
+      githubComment: {
+        state: 'succeeded',
+        recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_recovered',
+        idempotencyKey: 'github-comment:' + run.id + ':' + run.targetSha,
+      },
+    },
   }, { projectId: options.projectId, storeRoot: options.storeRoot });
 }
 

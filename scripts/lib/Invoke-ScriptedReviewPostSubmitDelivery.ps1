@@ -95,8 +95,9 @@ function Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview {
     }
 
     . (Join-Path $PSScriptRoot 'Invoke-ScriptedReviewStdoutDelivery.ps1')
+    $normalizedParsed = ConvertTo-ScriptedReviewParsedStdoutHashtable -ParsedStdout $parsed
     $delivery = Invoke-ScriptedReviewStdoutDelivery -RepoRoot $RepoRoot -WrapperStdout $WrapperStdout `
-        -ParsedStdout $parsed -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId -DryRun:$DryRun
+        -ParsedStdout $normalizedParsed -PrNumber $prNumber -TargetSha $targetSha -ProjectId $ProjectId -DryRun:$DryRun
 
     if ($delivery.escalated) {
         return @{

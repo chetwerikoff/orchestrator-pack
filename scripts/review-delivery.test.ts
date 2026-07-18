@@ -215,7 +215,7 @@ describe('review delivery lifecycle crash resume', () => {
   it('review delivery lifecycle crash resume: C4a escalates without send when verdict snapshot missing', () => {
     const script = [
       `. ${psString(path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1'))}`,
-      "$parsed = @{ ok = $true; gateVerdict = 'approved'; packVerdict = 'clean'; findings = @() }",
+      `$parsed = '{"ok":true,"gateVerdict":"approved","packVerdict":"clean","findings":[]}' | ConvertFrom-Json`,
       `$result = Invoke-ScriptedReviewStdoutDelivery -RepoRoot ${psString(repoRoot)} -WrapperStdout ${psString(cleanStdout)} -ParsedStdout $parsed -PrNumber ${prNumber} -TargetSha ${psString(headSha)} -SimulateCrashBeforeVerdictPersist`,
       '$result | ConvertTo-Json -Compress',
     ].join('\n');

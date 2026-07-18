@@ -379,13 +379,14 @@ describe('post-submit seam wiring', () => {
     expect(gate).toMatch(/Exit-ScriptedReviewDeliveryGateAfterExplicitSend/);
   });
 
-  it('invoke-pack-review wires post-submit delivery after successful wrapper', () => {
-    const text = readFileSync(path.join(repoRoot, 'scripts/invoke-pack-review.ps1'), 'utf8');
-    expect(text).toMatch(/Invoke-ScriptedReviewPostSubmitDelivery\.ps1/);
-    expect(text).toMatch(/Invoke-PackReviewWrapperWithFailureEvidence/);
-    expect(text.match(/Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview/g)?.length).toBe(2);
-  });
-
+  it('keeps post-submit delivery out of invoke-pack-review and in the TypeScript runner', () => {
+  const entrypoint = readFileSync(path.join(repoRoot, 'scripts/invoke-pack-review.ps1'), 'utf8');
+  const runner = readFileSync(path.join(repoRoot, 'scripts/pack-review-runner.ts'), 'utf8');
+  expect(entrypoint).toMatch(/Invoke-PackReviewWrapperWithFailureEvidence/);
+  expect(entrypoint).not.toMatch(/Invoke-ScriptedReviewPostSubmitDelivery\.ps1/);
+  expect(entrypoint).not.toMatch(/Invoke-ScriptedReviewPostSubmitDeliveryFromPackReview/);
+  expect(runner).toMatch(/deliverPackReviewVerdict/);
+});
   it('post-submit lib forwards to invoke-scripted-review-post-submit-delivery seam', () => {
     const text = readFileSync(
       path.join(repoRoot, 'scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1'),

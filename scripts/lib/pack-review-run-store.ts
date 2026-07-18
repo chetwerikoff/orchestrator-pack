@@ -35,6 +35,12 @@ export type PackReviewRunStatus =
   | 'timed_out'
   | 'cancelled';
 
+const PACK_REVIEW_VERDICT_TERMINAL_STATUSES = new Set<PackReviewRunStatus>([
+  'up_to_date',
+  'commented',
+  'changes_requested',
+]);
+
 export type GithubCommentReviewReconciliationPhase =
   | 'prepared'
   | 'comment_posted'
@@ -54,6 +60,24 @@ export interface GithubCommentReviewReconciliation {
   preparedAtUtc: string;
   updatedAtUtc: string;
   lastError?: string;
+}
+
+export type PackReviewDeliveryChannel = 'githubComment' | 'requiredStatus' | 'workerNotification';
+export type PackReviewDeliveryState = 'succeeded' | 'delivered' | 'failed' | 'escalated';
+
+export interface PackReviewDeliveryOutcome {
+  state: PackReviewDeliveryState;
+  recordedAtUtc: string;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface PackReviewJournalOutcome {
+  state: 'persisted' | 'journal_write_failed';
+  recordedAtUtc: string;
+  reason: string;
+  idempotencyKey: string;
+  attempts: number;
 }
 
 export interface PackReviewRunRecord {
@@ -84,6 +108,11 @@ export interface PackReviewRunRecord {
   githubReviewUrl?: string;
   githubReviewEvent?: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
   githubReviewReconciliation?: GithubCommentReviewReconciliation;
+  reviewVerdict?: 'clean' | 'findings';
+  findingCount?: number;
+  findings: unknown[];
+  journalOutcome?: PackReviewJournalOutcome;
+  deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   stale?: boolean;
 }
 
@@ -148,6 +177,14 @@ function renameRecordWithRetry(temp: string, path: string): void {
       sleepSync(RECORD_RENAME_BACKOFF_MS * attempt);
     }
   }
+}
+
+export function trimPackReviewValue(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+export function describePackReviewError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -331,6 +368,17 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     createdAt,
     updatedAt,
     heartbeatAtUtc: String(raw.heartbeatAtUtc ?? updatedAt),
+    reviewVerdict: raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
+      ? raw.reviewVerdict
+      : undefined,
+    findingCount: Number.isInteger(raw.findingCount) ? Number(raw.findingCount) : undefined,
+    findings: Array.isArray(raw.findings) ? [...raw.findings] : [],
+    journalOutcome: raw.journalOutcome && typeof raw.journalOutcome === 'object' && !Array.isArray(raw.journalOutcome)
+      ? raw.journalOutcome as unknown as PackReviewJournalOutcome
+      : undefined,
+    deliveryOutcomes: raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
+      ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
+      : {},
   };
 }
 
@@ -381,6 +429,14 @@ function consumerRow(record: PackReviewRunRecord, now = new Date()): PackReviewR
     failureReason: 'runner_disappeared_stale',
     stale: true,
   };
+}
+
+function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
+  return record.journalOutcome?.state === 'persisted'
+    && (record.reviewVerdict === 'clean' || record.reviewVerdict === 'findings')
+    && Number.isInteger(record.findingCount)
+    && Number(record.findingCount) >= 0
+    && record.findings.length === Number(record.findingCount);
 }
 
 function writeRecordUnlocked(storeRoot: string, record: PackReviewRunRecord, createOnly = false): void {
@@ -436,6 +492,15 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
+    const completed = records
+      .filter((record) => record.key === key
+        && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
+        && hasPersistedPackReviewVerdict(record))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    if (completed.length > 0) {
+      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
+    }
+
     const now = (input.now ?? new Date()).toISOString();
     const runId = `prr-${randomUUID().replaceAll('-', '')}`;
     const record: PackReviewRunRecord = {
@@ -458,6 +523,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       createdAt: now,
       updatedAt: now,
       heartbeatAtUtc: now,
+      findings: [],
+      deliveryOutcomes: {},
     };
     writeRecordUnlocked(storeRoot, record, true);
     return { created: true, reused: false, reason: 'created', run: record, storeRoot };
