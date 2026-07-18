@@ -7,15 +7,29 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    shell: pwsh
-
 jobs:
-  light-1:
+  consumer:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: review-head-ready
+            file: scripts/review-head-ready.test.ts
+          - id: ci-green-wake
+            file: scripts/ci-green-wake-reconcile.test.ts
+          - id: review-finding-delivery
+            file: scripts/review-finding-delivery-submit.test.ts
+          - id: worker-recovery
+            file: scripts/worker-recovery.test.ts
+          - id: ao-review-trigger
+            file: scripts/ao-0-10-review-trigger.test.ts
+          - id: review-delivery
+            file: scripts/review-delivery.test.ts
+          - id: review-ready-stuck
+            file: scripts/review-ready-stuck-guard.test.ts
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,67 +39,18 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci --include=dev
-      - name: Capture light 1
-        continue-on-error: true
+      - name: Capture consumer suite
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force diagnostics | Out-Null
-          & ./scripts/run-vitest-light-lane.ps1 -Shard 1 *> diagnostics/light-1.log
-          "exit=$LASTEXITCODE" | Add-Content diagnostics/light-1.log
+          set +e
+          mkdir -p diagnostics
+          npm test -- "${{ matrix.file }}" > "diagnostics/${{ matrix.id }}.log" 2>&1
+          status=$?
+          echo "exit=$status" >> "diagnostics/${{ matrix.id }}.log"
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: issue857-light-1-${{ github.run_id }}
-          path: diagnostics/light-1.log
-
-  heavy-2:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Capture heavy 2
-        continue-on-error: true
-        run: |
-          New-Item -ItemType Directory -Force diagnostics | Out-Null
-          & ./scripts/run-vitest-heavy-shard.ps1 -Shard 2 *> diagnostics/heavy-2.log
-          "exit=$LASTEXITCODE" | Add-Content diagnostics/heavy-2.log
-          exit 0
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: issue857-heavy-2-${{ github.run_id }}
-          path: diagnostics/heavy-2.log
-
-  heavy-3:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Capture heavy 3
-        continue-on-error: true
-        run: |
-          New-Item -ItemType Directory -Force diagnostics | Out-Null
-          & ./scripts/run-vitest-heavy-shard.ps1 -Shard 3 *> diagnostics/heavy-3.log
-          "exit=$LASTEXITCODE" | Add-Content diagnostics/heavy-3.log
-          exit 0
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: issue857-heavy-3-${{ github.run_id }}
-          path: diagnostics/heavy-3.log
+          name: issue857-${{ matrix.id }}-${{ github.run_id }}
+          path: diagnostics/${{ matrix.id }}.log
+          if-no-files-found: error
