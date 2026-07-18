@@ -30,7 +30,6 @@ jobs:
 
           path = Path('scripts/pr-session-binding-cache.test.ts')
           text = path.read_text()
-
           replacements = [
               (
                   "const repoSlug = 'org/orchestrator-pack';\n",
@@ -63,13 +62,11 @@ jobs:
                   1,
               ),
           ]
-
           for old, new, expected in replacements:
               actual = text.count(old)
               if actual != expected:
                   raise SystemExit(f'expected {expected} occurrences, found {actual}: {old}')
               text = text.replace(old, new)
-
           path.write_text(text)
           PY
       - name: Generate wrapper-style declaration iteration
@@ -79,11 +76,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           export BASELINE_SHA="$(git rev-parse HEAD)"
-          npx tsx <<'TS'
+          cat > .issue857-redeclare.ts <<'TS'
           import { execFileSync } from 'node:child_process';
           import { readFileSync, writeFileSync } from 'node:fs';
           import { computeActiveScopeHash } from './plugins/ao-task-declaration/lib/baseline.ts';
-          import { validateDeclaredScope, normalizeIssueConstraints } from './plugins/ao-task-declaration/lib/validate.ts';
+          import { normalizeIssueConstraints, validateDeclaredScope } from './plugins/ao-task-declaration/lib/validate.ts';
           import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
 
           const issueBody = execFileSync(
@@ -129,6 +126,8 @@ jobs:
             `${JSON.stringify(snapshot, null, 2)}\n`,
           );
           TS
+          npx tsx .issue857-redeclare.ts
+          rm -f .issue857-redeclare.ts
       - name: Validate TypeScript and migrated suites
         shell: bash
         run: |
