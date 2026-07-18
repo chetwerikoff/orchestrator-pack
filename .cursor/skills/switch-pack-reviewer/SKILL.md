@@ -1,13 +1,10 @@
 ---
 name: switch-pack-reviewer
 description: >-
-  Switch local pack PR reviewer between Codex and Claude via PACK_REVIEWER. Use
-  when the user asks to switch reviewer, set codex/claude for review, fix wrong
-  reviewer running, or avoid Process overriding User env — e.g. «переключи
-  ревьюера», «поставь codex», «используется claude вместо codex»,
-  «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude». Runs checklist,
-  applies User scope, clears Process override, restarts AO, and verifies
-  effective reviewer with show-pack-reviewer-status.ps1.
+  Switch the pack-owned local PR reviewer between Codex and Claude through
+  PACK_REVIEWER, restart the pack side-process supervisor when needed, and
+  verify the effective selector and wrapper. Use for reviewer switching, quota
+  fallback, or Process/User selector drift.
 ---
 
 Read and execute [`.claude/skills/switch-pack-reviewer/SKILL.md`](../../../.claude/skills/switch-pack-reviewer/SKILL.md) in full. Do not re-derive the workflow inline.
