@@ -1,0 +1,35 @@
+name: Issue 857 fix OpenPr fixture
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+      - name: Remove foreign OpenPr field
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/session-pr-binding-resolver.test.ts')
+          text = path.read_text()
+          old = "openPrs: [{ number: 55, headRefOid: headSha, headRefName: 'issue-55', repoSlug }],"
+          new = "openPrs: [{ number: 55, headRefOid: headSha, headRefName: 'issue-55' }],"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one fixture, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/session-pr-binding-resolver.test.ts
+          git commit -m 'Fix resolver OpenPr fixture typing'
+          git push origin HEAD:agent/issue-857-binding-contract-v2
