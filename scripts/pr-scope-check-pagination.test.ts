@@ -5,6 +5,7 @@ const source = readFileSync(new URL('./pr-scope-check.ps1', import.meta.url), 'u
 
 describe('trusted PR scope path enumeration', () => {
   it('uses the paginated Pull Request Files API instead of the 300-file diff endpoint', () => {
+    // `--paginate` is the contract that prevents silent truncation after page three.
     expect(source).not.toContain('gh pr diff');
     expect(source).toContain("pulls/$PrNumber/files?per_page=100");
     expect(source).toContain("'--paginate'");
