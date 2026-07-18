@@ -1,139 +1,110 @@
 ---
 name: switch-pack-reviewer
 description: >-
-  Switch local pack PR reviewer between Codex and Claude via PACK_REVIEWER.
-  Use when the user asks to switch reviewer, set codex/claude for review,
-  fix wrong reviewer running, or avoid Process overriding User env — e.g.
-  «переключи ревьюера», «поставь codex», «используется claude вместо codex»,
-  «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude».
-  Runs checklist, applies User scope, clears Process override, restarts AO,
-  and verifies effective reviewer with show-pack-reviewer-status.ps1.
+  Switch the pack-owned local PR reviewer between Codex and Claude through
+  PACK_REVIEWER, restart the pack side-process supervisor when needed, and verify
+  the effective selector and wrapper. Use for reviewer switching, quota fallback,
+  or Process/User selector drift.
 ---
 
-# Switch pack reviewer (PACK_REVIEWER)
-
-Operator workflow for **local** AO pack review (`invoke-pack-review.ps1`).  
-**REVIEW_COMMAND in YAML does not change** when switching — only `PACK_REVIEWER`.
+# Switch pack reviewer (`PACK_REVIEWER`)
 
 Canonical docs: [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switch-runbook.md).
+Review runtime: [`docs/pack-review-runbook.md`](../../../docs/pack-review-runbook.md).
 
-## Triggers
+## Contract
 
-- User names target: **codex** or **claude**
-- User reports mismatch: global User is one value, reviews use another
-- User asks to «переключить ревьюера», «поставь codex/claude», «fix PACK_REVIEWER»
+- `scripts/pack-review-runner.ts` owns review invocation.
+- `scripts/invoke-pack-review.ps1` owns reviewer-agnostic dispatch.
+- `PACK_REVIEWER=codex|claude` selects the wrapper.
+- AO does not spawn the pack reviewer.
+- Supported Linux/WSL selection is inherited from the process environment of the
+  pack side-process supervisor.
+- Windows compatibility may resolve Process → User → Machine layers.
 
-**Skip** when the ask is only architectural (issue draft) with no machine change.
+## Procedure
 
-## Core rule (tell the user if confused)
-
-- **User** = permanent operator choice (User-level env var / shell profile).
-- **Process** = sticker on this terminal/session; **wins over User** while set.
-- **Do not** copy User → Process on every boot — clear Process instead.
-- **Do not** set `$env:PACK_REVIEWER` in profiles/IDE unless intentional one-shot override.
-
-## Checklist — apply switch
-
-Target reviewer: `codex` or `claude` (from user message; if unclear, ask once).
-
-### 1. Record baseline
-
-From pack repo root:
+### 1. Inspect
 
 ```powershell
 pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
 ```
 
-Note Process / User / Machine and **Effective**. If Process differs from User, warn before proceeding.
+Record Process/User/Machine and the effective wrapper. Warn when Process scope
+unexpectedly overrides a persistent Windows User value.
 
-### 2. Apply (preferred — one command)
-
-```powershell
-pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer <codex|claude> -RestartAo
-```
-
-This script:
-
-- Sets **User** `PACK_REVIEWER` via `[Environment]::SetEnvironmentVariable(..., 'User')`
-- Clears **Process** in the current session (`Remove-Item Env:PACK_REVIEWER`)
-- Restarts AO (`ao stop` → `ao start orchestrator-pack`) when `-RestartAo` is passed
-
-**Manual equivalent** (only if scripts unavailable):
+### 2. Apply
 
 ```powershell
-[Environment]::SetEnvironmentVariable('PACK_REVIEWER', '<codex|claude>', 'User')
-Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
-ao stop
-ao start orchestrator-pack
+pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 \
+  -Reviewer <codex|claude> \
+  -RestartSupervisor
 ```
 
-### 3. Session hygiene (prevent recurrence)
+This sets the appropriate environment layer, restarts the pack supervisor, and
+verifies the result. `-RestartAo` is a deprecated compatibility alias that must
+restart the pack supervisor only.
 
-- Do **not** leave `$env:PACK_REVIEWER = 'claude'` after a Codex quota workaround — remove when done.
-- Do **not** add `PACK_REVIEWER` to PowerShell profile, Cursor `terminal.integrated.env`, or project `.env`.
-- Tell the user to **close and reopen** other IDE terminals still open from before the switch (they keep old Process env until closed).
+### 3. Preflight the selected CLI
 
-### 4. Verify effective reviewer (required)
+Codex:
 
-`set-pack-reviewer.ps1` verifies in a child `pwsh` with process scope cleared (Cursor/agent parents often inject `PACK_REVIEWER`).
+```bash
+codex --version
+```
 
-Standalone check:
+Claude:
+
+```bash
+claude --version
+```
+
+### 4. Verify selector
 
 ```powershell
-pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <codex|claude>
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 \
+  -Expected <codex|claude>
 ```
 
-The status script clears process scope before resolving so **User** wins when global is set.
+Pass means the effective selector and wrapper match.
 
-**PASS** = exit code 0, line `Effective` matches target, no override warning.
+### 5. Optional exact-head smoke
 
-If FAIL:
-
-| Symptom | Fix |
-|---------|-----|
-| Process still set to other value | `Remove-Item Env:PACK_REVIEWER`; re-run status |
-| Effective unset | Set User again; new shell from `set-pack-reviewer.ps1` |
-| User wrong | Re-run `set-pack-reviewer.ps1` |
-
-### 5. Verify AO path (when `ao` on PATH)
-
-After `-RestartAo`, optional smoke:
-
-```powershell
-ao review list orchestrator-pack --json
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts start \
+  --session-id <worker-session-id>
+node --experimental-strip-types scripts/pack-review-runner.ts list \
+  --project-id orchestrator-pack
 ```
 
-On next review failure, `terminationReason` should name:
+Inspect pack-store/log evidence for the expected wrapper. Do not rely on retired AO
+review-session state as proof.
 
-| Target | Wrapper in terminationReason |
-|--------|------------------------------|
-| codex | `run-pack-review.ps1` |
-| claude | `run-pack-review-claude.ps1` |
+## Failure handling
 
-Strict gate (optional):
+| Symptom | Action |
+| --- | --- |
+| Effective unset | Set the selector in the environment that starts the supervisor |
+| Wrong model on Linux/WSL | Restart the pack supervisor after changing process scope |
+| Wrong model on Windows | Clear stale Process scope; verify User value |
+| Codex quota/auth failure | Switch to Claude and start a new current-head run |
+| Claude unavailable | Install/configure Claude or switch to Codex |
+| Delivery failed after verdict | Inspect pack-store channel outcomes; resume journaled delivery instead of recomputing review |
 
-```powershell
-pwsh -NoProfile -File scripts/orchestrator-diagnose.ps1 -Strict
-```
+## Report
 
-### 6. Report to user
+Tell the user:
 
-Include:
+- selected reviewer;
+- effective layer/value;
+- whether the pack supervisor was restarted;
+- selector verification result;
+- smoke run ID/status when a smoke was requested;
+- any old terminals that still need reopening.
 
-- Table: Process / User / Machine / **Effective**
-- Whether AO was restarted
-- PASS or FAIL from step 4
-- Reminder: other open terminals may still override until reopened
+## Forbidden
 
-## Quick reference
-
-| Goal | Command |
-|------|---------|
-| Status only | `pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1` |
-| Switch + verify + restart AO | `pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer codex -RestartAo` |
-| Clear session override only | `Remove-Item Env:PACK_REVIEWER` then status script |
-
-## Related
-
-- [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switch-runbook.md)
-- [`scripts/lib/Resolve-PackReviewer.ps1`](../../../scripts/lib/Resolve-PackReviewer.ps1)
+- Do not edit a YAML reviewer command to switch models.
+- Do not restart AO as reviewer adoption.
+- Do not invoke per-reviewer wrappers directly as the live trigger.
+- Do not treat a delivery-channel failure as proof that reviewer computation failed.
