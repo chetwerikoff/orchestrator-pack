@@ -365,8 +365,19 @@ ao session restore <orchestrator-session-id> -p orchestrator-pack
 pwsh -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId <orchestrator-session-id> -ProjectId orchestrator-pack
 ```
 
-Use your orchestrator id from `ao orchestrator ls --json`. AO 0.10.2 applies
-ProjectConfig env/PATH/agent settings when the session is created/restored.
+Use your orchestrator id from `ao orchestrator ls --json`. AO documents ProjectConfig
+env/PATH/agent resolution on session **spawn**; restore-based re-resolution is
+undocumented on 0.10.3 — verify changed settings directly after a restore instead of
+assuming adoption.
+
+**Deleted workspace under a live session** (orchestrator row non-terminated but
+`~/.ao/data/worktrees/<project>/orchestrator/…` is gone from disk — the 0.10.3
+`ao session cleanup` workspace-reclaim aliasing class, incident 2026-07-17): this same
+kill + restore sequence is the recovery path. Restore **re-materializes** the missing
+workspace, but at a **stale HEAD** (verified 2026-07-18) — after
+`wait-orchestrator-launch` succeeds, fast-forward the recreated worktree
+(`git -C <worktree> fetch origin main`, then `git -C <worktree> merge --ff-only
+origin/main`) before relying on its contents.
 
 ### Before
 
@@ -866,13 +877,16 @@ delivery fails silently or errors; the worker will never see those findings.
 
 ### CLI-first recovery (canonical)
 
-1. **Rebind the PR** to the new live worker session:
+1. **Rebind the PR** to the new live worker session (AO 0.10.3 argv order:
+   session id first, then the PR ref — verify against `ao session claim-pr --help`
+   on upgrade):
 
    ```powershell
-   ao session claim-pr <pr-number> <new-worker-session-id>
+   ao session claim-pr <new-worker-session-id> <pr-number>
    ```
 
-   Example: `ao session claim-pr 97 op-3` after `op-1` died and `op-3` replaced it.
+   Example: `ao session claim-pr op-3 97` after `op-1` died and `op-3` replaced it.
+   Add `--no-takeover` to refuse when another active session owns the PR.
 
 2. **Clear stale reviewer workspace** when the last failed run shows
    `worktree add` / `already exists` in `terminationReason`:

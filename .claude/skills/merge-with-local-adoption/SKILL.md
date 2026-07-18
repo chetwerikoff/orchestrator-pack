@@ -22,21 +22,46 @@ worktree probes run from the operator terminal only — never inside AO-managed 
 
 `N` in the trigger («мерж 385») is an issue **or** PR number — resolve in Step 2.
 
-## AO 0.10.2 facts (steps rely on these; stated once)
+## AO 0.10.3 facts (steps rely on these; stated once)
 
-- `agent-orchestrator.yaml` / `.example` are **not** live runtime config (legacy-import
-  only). Live config = per-project ProjectConfig: `ao project get/set-config`; it resolves
-  when a session spawns/restores — not on daemon restart. `ao start` has no project operand.
+AO ships its own CLI catalog at `~/.ao/data/skills/using-ao/commands/*.md` — treat it as
+the authoritative source for command shapes; re-verify this section on every AO upgrade.
+
+- `agent-orchestrator.yaml` is **not** live runtime config (legacy-import only; pack
+  scripts still read `.example` as pack-side config — do not delete it). Live daemon
+  config = per-project ProjectConfig: `ao project get/set-config`; the daemon documents it
+  as resolved when a session **spawns** (restore is documented only as relaunch — do not
+  treat a successful restore alone as proof that config changes were adopted). `ao start`
+  has no project operand and on 0.10.3 no longer runs a daemon: it opens the installed
+  desktop app (path from `~/.ao/app-state.json`) and exits; the app owns the daemon.
+- `ao project set-config` is **whole-config REPLACE**, not merge: a bare field-flag call
+  (e.g. `--env KEY=VALUE`) rewrites the entire config object and silently drops
+  everything not repeated in the same call. Only `--config-json` with the full merged
+  object is non-clobbering (see Step 8c).
 - PR review is run by the **pack-owned runner**, not by AO. Manual invocation is `node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>`; operational status comes from `scripts/pack-review-runner.ts list` or the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict; the pack-side run/status store is operational state only. Never use daemon review HTTP or `ao review submit` as a fallback or dual-write path.
 - Send shape: `ao send --session <id> --message "<text>"` (what
   `scripts/journaled-worker-send.ps1` calls).
-- `ao status --json` = daemon health only; never parse it for sessions.
-- `ao session restore` does **not** fast-forward the session worktree to `main`.
-- Worker-normative rules = `AGENTS.md` + `.cursor/rules/*.mdc`, injected verbatim into
-  `cursor-agent -p` workers.
+- `ao status --json` = daemon health only; never parse it for sessions. `ao doctor
+  --json` (new on 0.10.3) runs local health checks.
+- `ao session restore` does **not** fast-forward the session worktree to `main`. If the
+  workspace directory is missing on disk, restore **re-materializes** it — but at a stale
+  HEAD (verified live 2026-07-18): always follow a restore with the Step 6e `--ff-only`
+  sync before trusting worktree contents.
+- No session JSON shape carries a PR number: `ao session ls --json` rows expose
+  `issueId`/`role` (no `prNumber`, no branch), `ao session get` returns
+  `{"session":{...,"kind":...}}` (`kind`, not `role`). The daemon stores PR↔session
+  bindings (`ao session claim-pr <session-id> <pr-ref>`, `ao spawn --claim-pr`) but does
+  not expose them in ls/get output — the pack binding cache is the readable source.
+- Worker-normative rules = `AGENTS.md` + `.cursor/rules/*.mdc`, delivered via tracked
+  worktree files (native harness pickup — recycle sessions so worktrees carry the new
+  files).
 - Orchestrator runtime worktree is a separate clone that never auto-syncs:
   `~/.ao/data/worktrees/orchestrator-pack/orchestrator/orchestrator-orchestrator/`
-  (often **not** `$WT_BASE/<session-id>/`).
+  (often **not** `$WT_BASE/<session-id>/`). Every orchestrator generation aliases this
+  **same** path in daemon state; `ao session cleanup` workspace reclaim evaluates
+  eligibility per terminated session row without a path-level liveness check, so it can
+  delete this directory out from under a live orchestrator (incident 2026-07-17, RCA
+  2026-07-18) — see Step 9c preconditions.
 - `jq` is not installed on this machine — parse JSON with `node -e`.
 
 ## Rule zero — never destroy local work
@@ -155,8 +180,10 @@ explicitly asked not to update the local tree **and** no adoption needs it.
 - **6a:** `git fetch origin`; record `ORIGIN_MAIN="$(git rev-parse origin/main)"`.
 - **6b (clean tree):** `git checkout main && git pull --no-rebase origin main`.
 - **6c (dirty tree):** try `git checkout main 2>&1 || true`. If refused: stay on branch —
-  `git branch -f main origin/main` (only if NOT on main) or `git merge --no-edit
-  origin/main`. If you must be on `main`:
+  `git branch -f main origin/main` **only if NOT on main and only after**
+  `git merge-base --is-ancestor main origin/main` exits 0 (local `main` has no unique
+  commits; if it fails — stop and report the divergent commits, never force the ref), or
+  `git merge --no-edit origin/main`. If you must be on `main`:
 
   ```bash
   git stash push -u -m "merge-with-local-adoption preserve $(date -u +%FT%TZ)"
@@ -206,8 +233,20 @@ done
   for(let i=0;i<L.length;i++){const m=L[i].match(/^worktree (.+)$/);if(!m)continue;
     const b=(L[i+2]||"").startsWith("branch refs/heads/")?L[i+2].slice(18):"";
     if(m[1].includes("/worktrees/orchestrator-pack/orchestrator/")||b==="ao/opk-orchestrator"||b.startsWith("orchestrator/")){console.log(m[1]);process.exit(0)}}
-  process.exit(2)')" || { echo "6e: orchestrator worktree not found — stop, do not guess" >&2; }
+  process.exit(2)')" || { echo "6e: orchestrator worktree not found — stop, do not guess" >&2; exit 2; }
 ```
+
+The final fallback **must terminate** (non-zero) when nothing resolves — never continue
+with an empty `$WT` (later `git -C "$WT"` calls would run against the wrong directory).
+
+**Live row, workspace missing** (non-terminated orchestrator row exists but no candidate
+has `.git` and the `git worktree` fallback finds nothing): the orchestrator workspace was
+deleted on disk under a live session — the known 0.10.3 cleanup-aliasing class (see
+facts). This is **not** the legitimate skip case and **not** a reason to block a merge
+that already happened. Recovery (verified 2026-07-18): recovery-runbook Step 3 —
+`ao session kill "$S"` + `ao session restore "$S"` re-materializes the workspace at a
+stale HEAD; then **mandatorily** run the 6e sanctioned fast-forward and re-probe. Record
+the occurrence as a runtime-adoption defect in the report.
 
 Probe (both must exit 0):
 
@@ -218,8 +257,10 @@ git merge-base --is-ancestor "$MERGE_SHA" "$ORIGIN_MAIN"  # origin/main has it
 ```
 
 **Stale worktree** (first check fails): require `git -C "$WT" status --porcelain` empty,
-then the sanctioned fast-forward — `git -C "$WT" fetch origin main && git -C "$WT" pull
---no-rebase origin main` — and re-probe. **Dirty / pull fails / still stale:** no
+then the sanctioned fast-forward — `git -C "$WT" fetch origin main` followed by
+`git -C "$WT" merge --ff-only origin/main` (a clean tree is not proof of
+fast-forwardability; `--ff-only` stops on divergence instead of minting a merge commit
+inside the runtime worktree) — and re-probe. **Dirty / pull fails / still stale:** no
 `reset`/`checkout`/`clean` inside `$WT`; run `scripts/orchestrator-worktree-preflight.ps1`
 only when spawn logs show `branch_collision`/`EPERM`; classify the merge runtime-sensitive
 retroactively (run Step 8 after a successful sync); escalate
@@ -251,11 +292,19 @@ runbook «After manual PR merge».
 - **8b — baseline (save output):** `ORIGIN_MAIN`, `MERGE_SHA`, `WT_BEFORE_HEAD="$(git -C
   "$WT" rev-parse HEAD)"`, `ao orchestrator ls --json`, `ao session get "$S" --json -p
   orchestrator-pack`.
-- **8c — apply config, recycle:** only when Step 4 found a real ProjectConfig requirement:
-  `ao project set-config orchestrator-pack --env KEY=VALUE --json` (also
-  `--orchestrator-agent` / `--worker-agent`); don't clear unrelated config. Process-only
-  change → restart that process per its runbook, no ProjectConfig mutation. Then recycle
-  when the surface affects the orchestrator session/env/prompts:
+- **8c — apply config, recycle:** only when Step 4 found a real ProjectConfig
+  requirement. **`set-config` is whole-config REPLACE (facts): never adopt a value with a
+  bare field flag** — a lone `--env KEY=VALUE` (or `--worker-agent`, `--model`, …) wipes
+  PACK_REVIEWER, the PATH prepend, and every other key not repeated in the same call. The
+  only sanctioned form is read → merge → write:
+  1. snapshot: `ao project get orchestrator-pack --json` (keep the output for the report);
+  2. merge the new keys into the **full** existing config object locally (`node -e`);
+  3. write back: `ao project set-config orchestrator-pack --config-json '<full merged
+     object>' --json`;
+  4. re-read and diff against the snapshot — unrelated keys must be unchanged.
+  Never `--clear` here. Process-only change → restart that process per its runbook, no
+  ProjectConfig mutation. Then recycle when the surface affects the orchestrator
+  session/env/prompts:
 
   ```bash
   ao session kill "$S" -p orchestrator-pack
@@ -263,8 +312,12 @@ runbook «After manual PR merge».
   pwsh -NoProfile -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId "$S" -ProjectId orchestrator-pack
   ```
 
-  Worker-only env changes: record that ProjectConfig applies to newly spawned/restored
-  workers; don't kill active workers to prove it. If adoption needs a path
+  A successful restore alone is **not** proof the config change was adopted (0.10.3
+  documents config resolution on **spawn** only — facts): after the recycle, verify each
+  changed env/agent value directly in the relaunched session's environment or behavior
+  before claiming adoption in 8f. Worker-only env changes: record that ProjectConfig
+  applies to newly spawned workers (restore-based re-resolution is undocumented — verify
+  before relying on it); don't kill active workers to prove it. If adoption needs a path
   set-config/restore can't cover → stop, report a contract gap or defer to
   `change-orchestrator-runtime`.
 - **8d — re-probe:** re-resolve `S`/`WT`; record `WT_AFTER_HEAD`, `WT_AFTER_BRANCH`,
@@ -299,27 +352,38 @@ runbook «After manual PR merge».
 
 From the operator terminal, after Step 7 (and Step 8 when it ran).
 
-- **9a — resolve worker for PR `P`** from live AO state only (never infer from
-  issue/branch/title):
+- **9a — resolve worker for PR `P`** (no session JSON shape carries a PR number — facts —
+  so never filter sessions by `P` directly, and never infer from branch/title):
 
-  ```bash
-  W="$(ao session ls --json -p orchestrator-pack --include-terminated | node -e '
-    const d=JSON.parse(require("fs").readFileSync(0,"utf8")).data||[];const P=+process.argv[1];
-    const ids=[...new Set(d.filter(r=>r&&(r.role==="worker"||r.role==="coding")&&!r.isTerminated
-      &&(r.prNumber===P||r.issueId===String(P))).map(r=>r.id))];
-    if(ids.length!==1){console.error("candidates: "+(ids.join(", ")||"none"));process.exit(2)}
-    console.log(ids[0])' "$P")"
-  ```
+  1. **Cache-first (canonical):** look up PR `P` in the pack PR↔session binding cache
+     (`docs/pr-session-binding-cache.mjs` — `lookupBindingByPr`; sources include
+     `push_register` and `claim_pr`). A bound, non-terminated session id is `W`.
+  2. **Fallback (linked issue only):** filter `ao session ls --json -p orchestrator-pack
+     --include-terminated` rows by `(r.role==="worker"||r.role==="coding") &&
+     !r.isTerminated && r.issueId===String(I)` — `I` is the **linked issue** resolved in
+     Step 2, **never** the PR number `P` (an unrelated session whose `issueId` collides
+     with `P` would be killed otherwise).
 
-  Zero → record «worker not found», skip 9b, still run 9c. Multiple → **stop**, list, ask
-  once. **Hard guard:** `W` must not be orchestrator-shaped (`ao session get "$W" --json`).
+  Zero candidates → record «worker not found», skip 9b, continue to 9c. More than one →
+  **stop**, list, ask once. **Hard guard:** `ao session get "$W" --json -p
+  orchestrator-pack` must show `session.kind` of `worker`/`coding` — the get shape uses
+  `kind`, not `role`; abort 9b on anything orchestrator-shaped.
 - **9b — kill:** `ao session kill "$W" -p orchestrator-pack`; verify it's gone
   (re-list, expect no non-terminated row with id `W`). Failure → record, continue to 9c,
   no kill loops.
-- **9c — cleanup:** `ao session cleanup -p orchestrator-pack -y`; record stdout. Never
-  kill the orchestrator manually — cleanup targets eligible workers/reviewers only.
-- **9d — post-check:** `ao session ls --json -p orchestrator-pack` — no worker row with
-  `prNumber == P`; orchestrator row remains.
+- **9c — cleanup (guarded):** on 0.10.3 `ao session cleanup` reclaims eligible
+  **workspaces** project-wide, and its per-row eligibility check does not protect a
+  workspace path shared with a live session — terminated orchestrator generations alias
+  the live orchestrator's directory, so an unguarded cleanup can delete it under the
+  running session (incident 2026-07-17). Preconditions, both mandatory:
+  1. a non-terminated orchestrator row exists (`ao orchestrator ls --json`), **and**
+  2. its workspace directory resolves on disk (6e candidates; `.git` present).
+  Then run `ao session cleanup -p orchestrator-pack -y`; record stdout (including the
+  skipped-sessions list). **After** cleanup, re-probe the orchestrator workspace (quick
+  6e re-check) — if it vanished, treat as the live-row/workspace-missing state in 6e and
+  recover before ending the run. Never kill the orchestrator manually in this step.
+- **9d — post-check:** `ao session ls --json -p orchestrator-pack` — no non-terminated
+  row with id `W` (the id resolved in 9a); orchestrator row remains.
 
 ## Step 10 — Final report (required, user's language)
 
