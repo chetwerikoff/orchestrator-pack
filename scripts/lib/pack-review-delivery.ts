@@ -176,7 +176,7 @@ export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReview
   };
 }
 
-function completedChannelOutcome(
+function completedResumeChannelOutcome(
   run: PackReviewRunRecord,
   channel: PackReviewDeliveryChannel,
   idempotencyKey: string,
@@ -189,7 +189,9 @@ function completedChannelOutcome(
       && run.githubReviewReconciliation?.phase === 'complete';
   }
   if (channel === 'requiredStatus') return value.state === 'succeeded';
-  return value.state === 'delivered';
+  return value.state === 'delivered'
+    || value.state === 'failed'
+    || value.state === 'escalated';
 }
 
 export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean {
@@ -197,9 +199,9 @@ export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean
   if (!payload) return false;
   const classification = classifyPackReviewPayload(payload);
   if (run.status !== classification.terminalStatus) return true;
-  return !completedChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
-    || !completedChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run))
-    || !completedChannelOutcome(run, 'workerNotification', workerNotificationIdempotencyKey(run));
+  return !completedResumeChannelOutcome(run, 'githubComment', githubCommentIdempotencyKey(run))
+    || !completedResumeChannelOutcome(run, 'requiredStatus', requiredStatusIdempotencyKey(run))
+    || !completedResumeChannelOutcome(run, 'workerNotification', workerNotificationIdempotencyKey(run));
 }
 
 function outcome(
@@ -354,7 +356,7 @@ export async function deliverPackReviewVerdict(
   };
 
   const githubComplete = options.resumeFromJournal
-    && completedChannelOutcome(options.run, 'githubComment', githubKey);
+    && completedResumeChannelOutcome(options.run, 'githubComment', githubKey);
   let githubReview: PackReviewGithubCommentResult | undefined = githubComplete
     ? {
         id: options.run.githubReviewId!,
@@ -373,7 +375,7 @@ export async function deliverPackReviewVerdict(
   }
 
   const requiredStatusComplete = options.resumeFromJournal
-    && completedChannelOutcome(options.run, 'requiredStatus', statusKey);
+    && completedResumeChannelOutcome(options.run, 'requiredStatus', statusKey);
   if (!requiredStatusComplete) {
     try {
       await options.writeRequiredStatus({
@@ -390,7 +392,7 @@ export async function deliverPackReviewVerdict(
   }
 
   const workerNotificationComplete = options.resumeFromJournal
-    && completedChannelOutcome(options.run, 'workerNotification', workerKey);
+    && completedResumeChannelOutcome(options.run, 'workerNotification', workerKey);
   if (!workerNotificationComplete) {
     try {
       const notified = await options.notifyWorker({
@@ -427,9 +429,12 @@ export async function deliverPackReviewVerdict(
     terminalRun = safeGetPackReviewRun(options.run.id, options);
   }
 
+  const finalDeliveryFailed = deliveryFailed
+    || Object.values(deliveryOutcomes).some((value) => value?.state === 'failed' || value?.state === 'escalated');
+
   return {
     ok: true,
-    reason: deliveryFailed ? 'completed_with_delivery_failures' : 'completed',
+    reason: finalDeliveryFailed ? 'completed_with_delivery_failures' : 'completed',
     status: classification.terminalStatus,
     run: terminalRun,
     journalOutcome: journal.outcome,
