@@ -191,9 +191,6 @@ describe('pack review journal-first delivery (Issue #894)', () => {
         idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
         attempts: 1,
       },
-      githubReviewId: reviewId,
-      githubReviewUrl: `fixture://review/${reviewId}`,
-      githubReviewEvent: 'COMMENT',
       githubReviewReconciliation: {
         schemaVersion: 1,
         event: 'COMMENT',
@@ -254,6 +251,9 @@ describe('pack review journal-first delivery (Issue #894)', () => {
     expect(notifyWorker).not.toHaveBeenCalled();
     expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
       status: 'up_to_date',
+      githubReviewId: reviewId,
+      githubReviewUrl: `fixture://review/${reviewId}`,
+      githubReviewEvent: 'COMMENT',
       deliveryOutcomes: {
         githubComment: {
           state: 'succeeded',
