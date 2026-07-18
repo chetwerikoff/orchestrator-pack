@@ -4,8 +4,9 @@ description: >-
   Merge a ready PR, safely pull main in the live checkout, and apply documented
   local operator adoption; verify the AO orchestrator runtime worktree contains
   the merge commit (Step 6e), recycle affected sessions for runtime-sensitive
-  merges (Step 8), then kill the merged PR's worker session and run ao session
-  cleanup. Use when the user asks to merge a finished task — «мерж», «мерж 385»,
+  merges (Step 8), then kill the merged PR's worker session (no blanket ao session
+  cleanup while the orchestrator is live — Step 9c). Use when the user asks to merge a
+  finished task — «мерж», «мерж 385»,
   «мерж и пул», «смерж», «merge», «merge and pull» — or clearly wants a ready
   PR merged after review/CI. If CI is red or the branch is behind base, delegate
   the fix to the PR worker (Step 3b) and merge only after CI is green. Operates
@@ -59,9 +60,10 @@ the authoritative source for command shapes; re-verify this section on every AO 
   `~/.ao/data/worktrees/orchestrator-pack/orchestrator/orchestrator-orchestrator/`
   (often **not** `$WT_BASE/<session-id>/`). Every orchestrator generation aliases this
   **same** path in daemon state; `ao session cleanup` workspace reclaim evaluates
-  eligibility per terminated session row without a path-level liveness check, so it can
-  delete this directory out from under a live orchestrator (incident 2026-07-17, RCA
-  2026-07-18) — see Step 9c preconditions.
+  eligibility per terminated session row without a path-level liveness check **and keeps
+  the terminated rows afterwards**, so the deletion is deterministic and repeats on every
+  blanket cleanup while an orchestrator is live (incident 2026-07-17, RCA 2026-07-18,
+  controlled re-run 2026-07-18) — see Step 9c.
 - `jq` is not installed on this machine — parse JSON with `node -e`.
 
 ## Rule zero — never destroy local work
@@ -371,19 +373,22 @@ From the operator terminal, after Step 7 (and Step 8 when it ran).
 - **9b — kill:** `ao session kill "$W" -p orchestrator-pack`; verify it's gone
   (re-list, expect no non-terminated row with id `W`). Failure → record, continue to 9c,
   no kill loops.
-- **9c — cleanup (guarded):** on 0.10.3 `ao session cleanup` reclaims eligible
-  **workspaces** project-wide, and its per-row eligibility check does not protect a
-  workspace path shared with a live session — terminated orchestrator generations alias
-  the live orchestrator's directory, so an unguarded cleanup can delete it under the
-  running session (incident 2026-07-17). Preconditions, both mandatory:
-  1. a non-terminated orchestrator row exists (`ao orchestrator ls --json`), **and**
-  2. its workspace directory resolves on disk (6e candidates; `.git` present).
-  Then run `ao session cleanup -p orchestrator-pack -y`; record stdout (including the
-  skipped-sessions list). **After** cleanup, re-probe the orchestrator workspace (quick
-  6e re-check) — if it vanished, treat as the live-row/workspace-missing state in 6e and
-  recover before ending the run. Never kill the orchestrator manually in this step.
+- **9c — NO blanket cleanup while an orchestrator is live:** on 0.10.3 `ao session
+  cleanup` reclaims eligible **workspaces** project-wide but **keeps the terminated
+  session rows**, so the orchestrator-generation aliasing never clears — every blanket
+  cleanup with a non-terminated orchestrator row deletes the live orchestrator's
+  workspace out from under it (incident 2026-07-17; confirmed deterministic by a
+  controlled re-run 2026-07-18: workspace present + rows aliased → deleted again).
+  Merged-PR teardown is the targeted 9b kill **only** — do not run `ao session cleanup`
+  as a routine merge step. Sanctioned maintenance path (outside merge runs, or when
+  worker-workspace debt genuinely needs reclaiming): run cleanup only when either
+  (a) no non-terminated orchestrator row exists, or (b) you deliberately pair it with the
+  immediate recovery — `ao session kill "$S"` + `ao session restore "$S"` +
+  `wait-orchestrator-launch.ps1` + the 6e `--ff-only` sync — and record both halves in
+  the report. Never leave the run with the orchestrator workspace missing.
 - **9d — post-check:** `ao session ls --json -p orchestrator-pack` — no non-terminated
-  row with id `W` (the id resolved in 9a); orchestrator row remains.
+  row with id `W` (the id resolved in 9a); orchestrator row remains and its workspace
+  still resolves on disk (quick 6e re-check).
 
 ## Step 10 — Final report (required, user's language)
 
