@@ -47,6 +47,7 @@ jobs:
 
           generator = Path('scripts/estate-cut/manifest-generator.mjs')
           text = generator.read_text()
+
           old = """  if (args.has('--apply')) {\n    applyTree(built);\n    built = await buildIssue906Manifest();\n  }\n"""
           new = """  if (args.has('--apply')) {\n    applyTree(built);\n    if (!fileExists(MANIFEST)) writeFileSync(path.join(repoRoot, MANIFEST), '');\n    built = await buildIssue906Manifest();\n  }\n"""
           if text.count(old) != 1:
@@ -57,18 +58,47 @@ jobs:
           new = """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n  'docs/declarations/906.chatgpt-estate-cut.json',\n"""
           if text.count(old) != 1:
               raise SystemExit('issue-906 declaration artifact patch target drifted')
-          generator.write_text(text.replace(old, new))
+          text = text.replace(old, new)
+
+          old = """  'scripts/check-review-delivery-no-visibility-poll.ps1',\n"""
+          new = old + """  'scripts/check-scripted-review-confirmed-delivery-gate.ps1',\n"""
+          if text.count(old) != 1:
+              raise SystemExit('issue-906 live guard pin target drifted')
+          text = text.replace(old, new, 1)
+
+          old = """  const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));\n  const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));\n"""
+          new = """  const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));\n  const retiredInlineMarkers = new Set([\n    'verify-runtime/autonomous-spawn-budget-vitest',\n    'verify-runtime/autonomous-spawn-policy-vitest',\n  ]);\n  const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));\n"""
+          if text.count(old) != 1:
+              raise SystemExit('issue-906 inline retirement declaration target drifted')
+          text = text.replace(old, new, 1)
+
+          old = """    const line = lines[index];\n    if (!containsDeletedCheck(line)) {\n      output.push(line);\n"""
+          new = """    const line = lines[index];\n    if ([...retiredInlineMarkers].some((marker) => line.includes(`Write-Check '${marker}'`))) {\n      index += 1;\n      continue;\n    }\n    if (!containsDeletedCheck(line)) {\n      output.push(line);\n"""
+          if text.count(old) != 1:
+              raise SystemExit('issue-906 inline retirement loop target drifted')
+          text = text.replace(old, new, 1)
+
+          old = """  generation.migrationOwnershipDigest = migrationOwnershipDigest(transformedCensus.entries);\n  writeFileSync(generationPath, stable(generation));\n  pruneSupervisorRegistry();\n"""
+          new = """  generation.migrationOwnershipDigest = migrationOwnershipDigest(transformedCensus.entries);\n  writeFileSync(generationPath, stable(generation));\n  const censusSourcePath = path.join(repoRoot, 'scripts/gate-runner/census.ts');\n  const censusSource = readFileSync(censusSourcePath, 'utf8');\n  const digestPattern = /const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '[a-f0-9]{64}';/u;\n  if (!digestPattern.test(censusSource)) throw new Error('census ownership digest constant missing');\n  writeFileSync(censusSourcePath, censusSource.replace(digestPattern, `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${generation.migrationOwnershipDigest}';`));\n  pruneSupervisorRegistry();\n"""
+          if text.count(old) != 1:
+              raise SystemExit('issue-906 census digest patch target drifted')
+          generator.write_text(text.replace(old, new, 1))
+
+          Path('scripts/vitest-global-setup.ts').write_text("""import { applyOpkVitestHarnessEscalationEnv } from './test-harness-escalation-env.js';
+
+          export default function setup(): void {
+            applyOpkVitestHarnessEscalationEnv();
+          }
+          """)
 
           vitest = Path('vitest.config.ts')
           text = vitest.read_text()
-          for retired in (
-              "    globalSetup: ['scripts/vitest-global-setup.ts'],\n",
-              "      'scripts/vitest-testmode-fleet-progress.ts',\n",
-          ):
-              if text.count(retired) != 1:
-                  raise SystemExit(f'issue-906 vitest retirement target drifted: {retired.strip()}')
-              text = text.replace(retired, '')
-          vitest.write_text(text)
+          retired = "      'scripts/vitest-testmode-fleet-progress.ts',\n"
+          if text.count(retired) != 1:
+              raise SystemExit('issue-906 fleet progress setup target drifted')
+          if "globalSetup: ['scripts/vitest-global-setup.ts']" not in text:
+              raise SystemExit('issue-906 lightweight global setup wiring missing')
+          vitest.write_text(text.replace(retired, '', 1))
           PY
           mkdir -p docs/declarations
           printf '{}\n' > docs/declarations/906.chatgpt-estate-cut.json
