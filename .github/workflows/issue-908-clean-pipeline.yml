@@ -25,13 +25,26 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Capture clean pipeline guard
+      - name: Capture clean pipeline guard and unresolved weights
         shell: bash
         run: |
           set +e
-          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > "$RUNNER_TEMP/issue-908-clean-pipeline.log" 2>&1
-          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-908-clean-pipeline.log"
-          cat "$RUNNER_TEMP/issue-908-clean-pipeline.log"
+          log="$RUNNER_TEMP/issue-908-clean-pipeline.log"
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > "$log" 2>&1
+          printf '\npipeline_exit=%s\n' "$?" >> "$log"
+
+          output="$(mktemp)"
+          GITHUB_OUTPUT="$output" OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 \
+            node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard >> "$log" 2>&1
+          printf '\ntopology_exit=%s\n' "$?" >> "$log"
+          node --input-type=module <<'NODE' >> "$log" 2>&1
+          import { readFileSync } from 'node:fs';
+          const plan = JSON.parse(readFileSync('scripts/vitest-heavy-topology.plan.json', 'utf8'));
+          const rows = plan?.topology?.unresolvedGuardWeights ?? plan?.unresolvedGuardWeights ?? [];
+          console.log(`unresolved_count=${rows.length}`);
+          for (const row of rows) console.log(`${row.file}\t${row.reason ?? ''}`);
+          NODE
+          cat "$log"
           exit 0
       - uses: actions/upload-artifact@v4
         with:
