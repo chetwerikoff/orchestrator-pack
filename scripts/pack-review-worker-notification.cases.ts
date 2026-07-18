@@ -112,7 +112,7 @@ describe('pack review worker notification admission (Issue #894)', () => {
       writeFileSync(fakeAo, [
         '#!/usr/bin/env node',
         "const { appendFileSync } = require('node:fs');",
-        "appendFileSync(process.env.PACK_REVIEW_FAKE_AO_LOG, process.argv.slice(2).join(' ') + '\\n');",
+        "appendFileSync(process.env.PACK_REVIEW_FAKE_AO_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');",
         '',
       ].join('\n'), 'utf8');
       chmodSync(fakeAo, 0o755);
@@ -155,11 +155,13 @@ describe('pack review worker notification admission (Issue #894)', () => {
         reason: 'journal_duplicate_no_op',
       });
 
-      const sends = readFileSync(aoLog, 'utf8')
+      const invocations = readFileSync(aoLog, 'utf8')
         .split(/\r?\n/)
-        .filter((line) => line.startsWith('send ')
-          && line.includes('--session')
-          && line.includes('--message'));
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+      const sends = invocations.filter((args) => args[0] === 'send'
+        && args.includes('--session')
+        && args.includes('--message'));
       expect(sends).toHaveLength(1);
       expect(readFileSync(dispatchJournal, 'utf8')).toContain(deliveryKey);
     },
