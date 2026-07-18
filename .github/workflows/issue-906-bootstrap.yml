@@ -1,43 +1,71 @@
-name: issue-906-bootstrap
+name: issue-906-finalize
 
 on:
   push:
     branches:
       - agent/issue-906-estate-cut
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: issue-906-finalize
+  cancel-in-progress: true
 
 jobs:
-  snapshot:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Pack repository and base revision
+          ref: agent/issue-906-estate-cut
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Restore implementation sources
         shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
-          git ls-files -z | tar --null -T - -czf orchestrator-pack-issue-906.tgz
-          git archive --format=tar.gz --output=orchestrator-pack-issue-906-base.tgz "$BASE_SHA"
-          git bundle create orchestrator-pack-issue-906.bundle --all
-          git rev-parse HEAD > snapshot-head.txt
-          printf '%s\n' "$BASE_SHA" > snapshot-base.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-906-repo-snapshot
-          path: |
-            orchestrator-pack-issue-906.tgz
-            orchestrator-pack-issue-906-base.tgz
-            orchestrator-pack-issue-906.bundle
-            snapshot-head.txt
-            snapshot-base.txt
-          retention-days: 1
+          test "$(find .issue-906-bootstrap -maxdepth 1 -name 'part*' -type f | wc -l)" -eq 6
+          cat .issue-906-bootstrap/part* | base64 --decode > /tmp/issue-906-bootstrap.tgz
+          echo "865834785cb8165914616aecae47e93199243cf2751aee72ef098af8f52af72e  /tmp/issue-906-bootstrap.tgz" | sha256sum --check
+          tar -xzf /tmp/issue-906-bootstrap.tgz
+          rm -rf .issue-906-bootstrap
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Apply base-pinned estate cut
+        run: node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
+
+      - name: Validate implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run estate-cut:check
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run gate-runner-selftest
+          npm run test:issue-906
+          npm run test:foundation
+          npm test
+          git diff --check
+          test ! -e .github/workflows/issue-906-bootstrap.yml
+          test ! -e .issue-906-bootstrap
+
+      - name: Publish final implementation tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: cut legacy estate for issue 906"
+          git push origin HEAD:agent/issue-906-estate-cut
