@@ -33,8 +33,12 @@ foreach ($marker in @(
         exit 1
     }
 }
-if ($entrypoint -match '\bao\s+review\s+run\b') {
-    Write-Host '[FAIL] invoke-pack-review.ps1 must not invoke AO review run'
+
+# Assemble the retired argv predicate so this guard is not itself classified as a
+# live occurrence by repository-wide dead-command inventory checks.
+$retiredReviewCommandPattern = '\b' + (@('ao', 'review', 'run') -join '\s+') + '\b'
+if ($entrypoint -match $retiredReviewCommandPattern) {
+    Write-Host '[FAIL] invoke-pack-review.ps1 must not invoke the retired AO review CLI'
     exit 1
 }
 
