@@ -15,6 +15,7 @@ export const agentRulesGrepGate: DeclarativeGateDefinition = {
       new RegExp(`(?<![\\w/\\\\])${RETIRED_AGENT_RULES_PATTERN}`, 'u'),
     ],
     excludePrefixes: [
+      'docs/archive/',
       'docs/declarations/',
       'docs/issues_drafts/',
       '.ao/',
