@@ -178,7 +178,7 @@ describe('session-pr-binding-resolver ambiguity axes', () => {
         ],
         55,
         {
-          openPrs: [{ number: 55, headRefOid: headSha, headRefName: 'issue-55', repoSlug }],
+          openPrs: [{ number: 55, headRefOid: headSha, headRefName: 'issue-55' }],
           headSha,
         },
       ),
