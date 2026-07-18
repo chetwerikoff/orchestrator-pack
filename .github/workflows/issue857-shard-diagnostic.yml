@@ -23,7 +23,7 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci --include=dev
-      - name: Restore synthetic non-daemon PR compatibility
+      - name: Restore head-corroborated synthetic session compatibility
         shell: bash
         run: |
           python - <<'PY'
@@ -37,7 +37,21 @@ jobs:
           """
           replacement = """  if (!hasDaemonPrListField(session)) {
             const explicitPr = getExplicitSessionPrNumber(session);
-            if (explicitPr > 0) {
+            const explicitSessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+            const requestedHead = normalizeSha(options.headSha);
+            const explicitPrRow = prList.find((pr) => (
+              numberOrZero(pr?.number) === explicitPr &&
+              repoScopeMatches(getOpenPrRepoSlug(pr), expectedRepo) &&
+              !prIsTerminal(pr)
+            ));
+            const explicitPrHead = normalizeSha(explicitPrRow?.headRefOid);
+            const headCorroborated = Boolean(
+              explicitPr > 0 &&
+              explicitSessionHead &&
+              (!requestedHead || explicitSessionHead === requestedHead) &&
+              (!explicitPrHead || explicitSessionHead === explicitPrHead)
+            );
+            if (headCorroborated) {
               return {
                 bound: true,
                 prNumber: explicitPr,
@@ -96,5 +110,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/session-pr-binding-resolver.mjs
-          git commit -m 'Preserve non-daemon session ownership compatibility'
+          git commit -m 'Preserve head-corroborated session compatibility'
           git push origin HEAD:agent/issue-857-binding-contract-v2
