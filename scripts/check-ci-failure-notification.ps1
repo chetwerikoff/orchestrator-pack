@@ -1,13 +1,55 @@
 #requires -Version 7.0
+<#
+.SYNOPSIS
+  Regression guard: CI-failure notification runtime wiring.
+#>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+
 $required = @(
-  (Join-Path $Root 'docs/ci-failure-notification.mjs'),
-  (Join-Path $Root 'scripts/ci-failure-notification.ps1')
+    'docs/ci-failure-notification.mjs',
+    'scripts/ci-failure-notification.ps1',
+    'scripts/ci-failure-notification-reconcile.ps1',
+    'scripts/orchestrator-side-process-registry.json',
+    'scripts/lib/Record-WorkerMessageDispatch.ps1'
 )
-foreach ($p in $required) { if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw "Missing $p" } }
-$example = Get-Content -LiteralPath (Join-Path $Root 'agent-orchestrator.yaml.example') -Raw
-foreach ($phrase in @('CI FAILURE DISCIPLINE', 'ci-failure-notification.ps1', 'reaction.action_succeeded', 'reactionKey=ci-failed', 'episode key', 'ci-failure-notification-reconcile.ps1', 'ci-failure-notification-reaction.ps1', 'workerState', 'suppressed-live-worker', 'phase=record')) {
-  if ($example -notlike "*$phrase*") { throw "agent-orchestrator.yaml.example missing $phrase" }
+foreach ($rel in $required) {
+    $path = Join-Path $Root $rel
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Host "Missing required runtime file: $rel"
+        exit 1
+    }
 }
-Write-Host '[PASS] CI failure notification predicate, reconcile surface, and orchestrator rule reference (Issues #283 / #342)'
+
+$registry = Get-Content -LiteralPath (Join-Path $Root 'scripts/orchestrator-side-process-registry.json') -Raw | ConvertFrom-Json
+if ($registry.requiredChildIds -notcontains 'ci-failure-notification-reconcile') {
+    Write-Host 'side-process registry must require ci-failure-notification-reconcile'
+    exit 1
+}
+if ($registry.requiredChildIds -contains 'ci-failure-notification-reaction') {
+    Write-Host 'retired ci-failure-notification-reaction must not be a required child'
+    exit 1
+}
+
+$reconcile = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notification-reconcile.ps1') -Raw
+foreach ($marker in @('Get-AoStatusSessions', 'Register-WorkerMessageDispatch')) {
+    if ($reconcile -notmatch [regex]::Escape($marker)) {
+        Write-Host "ci-failure-notification-reconcile.ps1 missing runtime marker: $marker"
+        exit 1
+    }
+}
+if ($reconcile -match 'ci-failure-notification-reaction\.ps1') {
+    Write-Host 'live CI-failure reconcile path must not invoke the retired reaction script'
+    exit 1
+}
+
+$wrapper = Get-Content -LiteralPath (Join-Path $Root 'scripts/ci-failure-notification.ps1') -Raw
+foreach ($marker in @('docs/ci-failure-notification.mjs', "'init-gate'", "'pre-send-recheck'", "'SEND','SUPPRESS'")) {
+    if ($wrapper -notmatch [regex]::Escape($marker)) {
+        Write-Host "ci-failure-notification.ps1 missing runtime marker: $marker"
+        exit 1
+    }
+}
+
+Write-Host '[PASS] CI-failure notification runtime wiring'
+exit 0
