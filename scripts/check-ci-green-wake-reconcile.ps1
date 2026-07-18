@@ -23,9 +23,43 @@ if ($mjs -notmatch 'DEFAULT_CI_GREEN_WAKE_INTERVAL_MS = 60 \* 1000') {
     exit 1
 }
 
+foreach ($marker in @(
+        'lib/Ci-Green-Wake-MechanicalForbiddenCommand.ps1',
+        'Test-CiGreenWakeMechanicalForbiddenCommand -CommandLine $commandLine'
+    )) {
+    if ($scriptText -notmatch [regex]::Escape($marker)) {
+        Write-Host "ci-green wake production path missing mechanical command fence: $marker"
+        exit 1
+    }
+}
+
+$tokens = $null
+$parseErrors = $null
+[void][System.Management.Automation.Language.Parser]::ParseInput(
+    $scriptText,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if (@($parseErrors).Count -gt 0) {
+    Write-Host 'ci-green wake production path could not be parsed for forbidden commands'
+    exit 1
+}
+
+# Preserve executable strings and command text, but remove comments so an explicit
+# safety statement such as "never ao spawn" cannot trip the runtime guard.
+$codeChars = $scriptText.ToCharArray()
+foreach ($token in @($tokens | Where-Object {
+            $_.Kind -eq [System.Management.Automation.Language.TokenKind]::Comment
+        })) {
+    for ($index = $token.Extent.StartOffset; $index -lt $token.Extent.EndOffset; $index++) {
+        $codeChars[$index] = ' '
+    }
+}
+$codeText = -join $codeChars
+
 foreach ($forbidden in @('ao spawn', '--claim-pr', 'ao session kill')) {
-    if ($scriptText -match [regex]::Escape($forbidden)) {
-        Write-Host "ci-green wake production path contains forbidden command: $forbidden"
+    if ($codeText -match [regex]::Escape($forbidden)) {
+        Write-Host "ci-green wake executable path contains forbidden command: $forbidden"
         exit 1
     }
 }
