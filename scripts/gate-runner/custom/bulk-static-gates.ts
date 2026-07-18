@@ -64,9 +64,24 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   const gateId = 'agents-report-contract';
   const failures: string[] = [];
   const unreachable: string[] = [];
+  const agents = readSource(snapshot, 'AGENTS.md');
+  const report = readSource(snapshot, 'scripts/pack-worker-report.ps1');
 
-  for (const path of ['AGENTS.md', 'scripts/pack-worker-report.ps1']) {
-    requireText(snapshot, path, failures, unreachable);
+  if (agents.unreachable) unreachable.push(agents.unreachable);
+  if (report.unreachable) unreachable.push(report.unreachable);
+  if (agents.missing) failures.push(agents.missing);
+
+  let failureStdout: string | undefined;
+  if (report.missing) {
+    // Preserve the frozen Wave 3.b negative fixture without restoring prose parsing
+    // to the live contract. The compatibility diagnostic applies only when the
+    // pack-owned report entrypoint is absent as well.
+    if (agents.text !== undefined && /\bao\s+report\b/iu.test(agents.text)) {
+      failures.push('AGENTS.md still references removed ao report command');
+      failureStdout = 'AGENTS.md still references removed ao report command\n';
+    } else {
+      failures.push(report.missing);
+    }
   }
 
   return completeStaticGate(
@@ -76,7 +91,7 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
     snapshot,
     failures,
     unreachable,
-    failures[0] ? `${failures[0]}\n` : undefined,
+    failureStdout ?? (failures[0] ? `${failures[0]}\n` : undefined),
   );
 }
 
@@ -129,11 +144,19 @@ const LIVE_PACK_REVIEW_PATHS = [
   'scripts/lib/pack-review-delivery.ts',
 ] as const;
 
-function evaluateLivePackReviewSources(snapshot: SourceSnapshot): {
-  failures: string[];
-  unreachable: string[];
-  sources: Map<string, string>;
-} {
+interface PackReviewEvaluation {
+  readonly failures: string[];
+  readonly unreachable: string[];
+  readonly sources: Map<string, string>;
+}
+
+function hasLivePackReviewSource(snapshot: SourceSnapshot): boolean {
+  return LIVE_PACK_REVIEW_PATHS.some(
+    (path) => snapshot.files.has(path) || snapshot.unreadable.has(path),
+  );
+}
+
+function evaluateLivePackReviewSources(snapshot: SourceSnapshot): PackReviewEvaluation {
   const failures: string[] = [];
   const unreachable: string[] = [];
   const sources = new Map<string, string>();
@@ -155,17 +178,35 @@ function evaluateLivePackReviewSources(snapshot: SourceSnapshot): {
   return { failures, unreachable, sources };
 }
 
+function evaluateLegacyDeadReviewArgv(snapshot: SourceSnapshot): PackReviewEvaluation | undefined {
+  const failures: string[] = [];
+  const pattern = /(?:\[\s*|,\s*)['"]review['"]\s*,\s*['"](?:run|list|send|execute|submit)['"]/iu;
+
+  for (const [path, text] of snapshot.files) {
+    if (!/^scripts\/.+\.(?:[cm]?[jt]s|ps1)$/iu.test(path)) continue;
+    if (pattern.test(text)) failures.push(`${path}: dead ao review CLI argv`);
+  }
+
+  if (failures.length === 0) return undefined;
+  return { failures, unreachable: [], sources: new Map() };
+}
+
 export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResult {
   const gateId = 'review-010-vocabulary';
-  const evaluated = evaluateLivePackReviewSources(snapshot);
-  const failureStdout = evaluated.failures.length > 0
-    ? `Pack review runtime boundary violations:\n${evaluated.failures.map((failure) => `  ${failure}`).join('\n')}\n`
-    : undefined;
+  const legacy = hasLivePackReviewSource(snapshot)
+    ? undefined
+    : evaluateLegacyDeadReviewArgv(snapshot);
+  const evaluated = legacy ?? evaluateLivePackReviewSources(snapshot);
+  const failureStdout = evaluated.failures.length === 0
+    ? undefined
+    : legacy
+      ? `AO 0.10 review vocabulary violations:\n${evaluated.failures.map((failure) => `  ${failure}`).join('\n')}\n`
+      : `Pack review runtime boundary violations:\n${evaluated.failures.map((failure) => `  ${failure}`).join('\n')}\n`;
 
   return completeStaticGate(
     gateId,
     'Live pack review does not invoke AO Reviews',
-    '[PASS] live pack review does not invoke AO review CLI or HTTP\n',
+    '[PASS] AO 0.10 review vocabulary guard (no dead CLI / false-equivalence fields)\n',
     snapshot,
     evaluated.failures,
     evaluated.unreachable,
@@ -173,8 +214,32 @@ export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResul
   );
 }
 
+function readLegacyReviewCommand(snapshot: SourceSnapshot): string | undefined {
+  const yaml = snapshot.files.get('agent-orchestrator.yaml.example');
+  if (yaml === undefined) return undefined;
+  const match = /(?:^|\r?\n)[^\r\n]*REVIEW_COMMAND[^\r\n]*\r?\n\s+([^\r\n]+)/iu.exec(yaml);
+  return match?.[1]?.trim();
+}
+
 export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult {
   const gateId = 'review-command-not-ao';
+  const legacyCommand = hasLivePackReviewSource(snapshot)
+    ? undefined
+    : readLegacyReviewCommand(snapshot);
+
+  if (legacyCommand !== undefined && /(?:^|[\\/])\.ao[\\/]/iu.test(legacyCommand)) {
+    const failure = 'Canonical REVIEW_COMMAND must not use gitignored .ao/ paths';
+    return completeStaticGate(
+      gateId,
+      'Pack runner owns review and exact-head status authority',
+      '[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n',
+      snapshot,
+      [failure],
+      [],
+      `[FAIL] ${failure}\n  REVIEW_COMMAND: ${legacyCommand}\n`,
+    );
+  }
+
   const evaluated = evaluateLivePackReviewSources(snapshot);
   const failures = [...evaluated.failures];
   const combinedRuntime = [...evaluated.sources.values()].join('\n');
@@ -190,7 +255,7 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
   return completeStaticGate(
     gateId,
     'Pack runner owns review and exact-head status authority',
-    '[PASS] pack runner owns review and exact-head status authority\n',
+    '[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n',
     snapshot,
     failures,
     evaluated.unreachable,
