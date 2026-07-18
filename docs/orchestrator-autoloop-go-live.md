@@ -1,181 +1,188 @@
 # Autonomous review loop — operator go-live
 
-One checklist to turn on the review loop that is **already implemented** in this
-repo (Issues #28 / #39 / #60 — merged as PRs #42, #47, #65). AO does **not** run
-Codex review when a worker spawns; the **orchestrator** and side-process scripts drive
-`ao-review run` → auto-delivery on submit → worker `addressing_reviews` → re-review.
+This checklist enables the side-process review/CI loop on AO 0.10.2 with the
+pack-owned reviewer. Review commands and authority:
+[`pack-review-runbook.md`](pack-review-runbook.md).
 
-State-derived review reconciliation ([#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163),
-[#195](https://github.com/chetwerikoff/orchestrator-pack/issues/195)) runs via
-`scripts/review-trigger-reconcile.ps1` (low-frequency, review-run only when the head is
-**ready for review**).
-The retired heartbeat and loopback listener are no longer part of the live loop. Periodic
-registry children provide review and CI coverage; see the Issue #745 fleet reference below.
+## Live architecture
 
-**AO 0.10 adoption (#623 / #625):** use `scripts/orchestrator-wake-supervisor.ps1` to supervise
-all reconcile children; restart the supervisor (or `ao stop` / `ao start` when registry changes)
-after merging harness updates. Live procedure is `AGENTS.md` + side-process scripts —
-`orchestratorRules` in live YAML is legacy-import reference only.
+- AO provides project/session lifecycle and worker terminals.
+- `AGENTS.md` provides worker policy.
+- Pack side processes observe worker reports, GitHub PRs, CI, and local stores.
+- All review starts converge on `scripts/pack-review-runner.ts`.
+- The pack review-run store records lifecycle, durable verdict/findings, and delivery
+  outcomes.
+- GitHub COMMENT is presentation; `orchestrator-pack/pack-review` is exact-head merge
+  authority.
+- Workers are notified through an independent journaled channel.
+- The LLM orchestrator does not manually drive routine review rounds.
 
-After each merged worker PR, run that PR's **`## Operator adoption`** checklist
-and the matching steps in
-[`docs/migration_notes.md`](migration_notes.md#operator-adoption-contract)
-(three-role contract — architect specs, worker documents, operator executes).
+## Prerequisites
 
-## What is already in the repo
-
-| Capability | Where |
-|------------|--------|
-| Autonomous loop rules (legacy reference) | `agent-orchestrator.yaml.example` → `orchestratorRules` |
-| Live worker + orchestrator review contract | `AGENTS.md` |
-| Pack review command | `scripts/invoke-pack-review.ps1` (**REVIEW_COMMAND**; **PACK_REVIEWER** selects wrapper) |
-| AO 0.10 review shim | `scripts/ao-review.ps1` (`run` / `list`; `send`/`execute` REMOVED) |
-| Switch Codex ↔ Claude Sonnet | Set `PACK_REVIEWER` — [`reviewer-switch-runbook.md`](reviewer-switch-runbook.md) |
-| Side-process supervisor (all autoloop children) | `scripts/orchestrator-wake-supervisor.ps1`, `scripts/orchestrator-side-process-registry.json` (Issues #168, #202, #205) |
-| Wake ingress | **REMOVED by Issues #721 / #745** — no listener, heartbeat, port, or webhook contract |
-| Review-trigger reconcile | `scripts/review-trigger-reconcile.ps1`, `docs/review-trigger-reconcile.mjs`, `docs/review-head-ready.mjs` (Issues #163, #195) |
-| CI-green worker wake | `scripts/ci-green-wake-reconcile.ps1`, `docs/ci-green-wake-reconcile.mjs` (Issue #191) |
-| First-send review delivery reconcile | **REMOVED on AO 0.10** — `scripts/review-send-reconcile.ps1` stub only (Issue #202 / #625) |
-| Worker message submit reconcile | `scripts/worker-message-submit-reconcile.ps1`, `docs/worker-message-submit-reconcile.mjs` (Issue #232) |
-| Terminal mux flood detect | `scripts/terminal-flood-detect.ps1`, `docs/terminal-flood-detect.mjs` (Issue #173; upstream [#2094](https://github.com/ComposioHQ/agent-orchestrator/issues/2094)) |
-| Review-ready false stuck guard | `docs/review-ready-stuck-guard.mjs` (Issue #174; rules in prompts + example YAML) |
-| Recovery when stuck | [`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md) |
-| Wake wiring | [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md) |
-
-## Every session — two operator processes (plus optional watcher)
-
-**Terminal A — AO**
-
-```powershell
-cd <orchestrator-pack-root>
-ao start orchestrator-pack
+```bash
+node --version
+git --version
+gh auth status
+pwsh --version
+codex --version   # or claude --version
 ```
 
-**Terminal B — side-process supervisor** (preferred — Issues #168, #202, #205)
-
-Starts the nine side-processes in
-`scripts/orchestrator-side-process-registry.json` as separate managed children:
-review-trigger reconcile/reeval, ready-report seed, CI-green and CI-failure reconcile,
-worker-message submit, review-start claim reaper, dead-worker reconcile, and escalation-router.
-The retired listener, heartbeat, review-send reconcile, and four PR-A vestigial children are not
-started. The supervisor resolves the orchestrator session id for session-bound children, restarts
-registered children on exit or stall, and debounces confirmed session-id changes. Logs:
-`%LOCALAPPDATA%/orchestrator-pack-wake-supervisor/` (Linux:
-`$XDG_STATE_HOME/orchestrator-pack-wake-supervisor/`).
+Verify selector:
 
 ```powershell
-cd <orchestrator-pack-root>
-# Optional: pin session id instead of auto-resolve from ao status
-# $env:AO_ORCHESTRATOR_SESSION_ID = 'op-orchestrator'
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
 ```
 
-Status and stop:
+Verify pack:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
-Optional env (safe defaults when unset): `AO_WAKE_SUPERVISOR_WAIT_SECONDS` (default
-120 — bounded wait for orchestrator session before exit), `AO_WAKE_SUPERVISOR_POLL_SECONDS`
-(supervisor poll, default 5), `AO_WAKE_SUPERVISOR_STATE_DIR`, `AO_WAKE_SUPERVISOR_PROJECT_ID`
-(default `orchestrator-pack`). See [`orchestrator-wake-runbook.md`](orchestrator-wake-runbook.md).
+## Operator processes
 
-**Manual fallback — per-process launches** (when debugging one path in isolation):
+### AO
 
-- Escalation router: `scripts/orchestrator-escalation-router.ps1 -Once` with
-  `AO_ORCHESTRATOR_SESSION_ID` set when testing orchestrator-facing delivery.
-- Review-trigger reconcile: `scripts/review-trigger-reconcile.ps1` (default 10 min).
-- CI-green wake: `scripts/ci-green-wake-reconcile.ps1` (default 1 min).
-- Worker message submit: `scripts/worker-message-submit-reconcile.ps1` (default 30 s).
+Start AO for the intended repository/project using the supported AO 0.10.2 command
+shape. ProjectConfig, not the example YAML, is live runtime configuration.
 
-Each supports `-Once -DryRun` for fixture/contract checks without live `ao`/`gh`.
-
-**Terminal E — worktree trust watcher** (Windows Cursor; avoids blocking
-`Workspace Trust Required` on each new `op-*` worktree)
+### Pack side-process supervisor
 
 ```powershell
-cd <orchestrator-pack-root>
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-worktree-trust-watcher.ps1
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
 ```
 
-One-shot trust for an existing session worktree:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/trust-ao-worktree.ps1 -SessionId op-35
-```
-
-Verify:
+Status/stop:
 
 ```powershell
 pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
-pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
 ```
 
-Expect the nine-child registry roster and no listener/heartbeat process. Trust watcher should log
-`trusted: ...\worktrees\op-*` when a worker spawns.
+The registry owns the current reconcile, CI, worker-message, recovery, and escalation
+children. Deleted listener/heartbeat/finding-confirm paths are not started.
 
-## Live config (`agent-orchestrator.yaml`, gitignored)
-
-AO 0.10.2 ProjectConfig and native `AGENTS.md` pickup remain authoritative. The retired loopback
-listener does not require `notifiers.webhook`, `notificationRouting`, port 17487, or a repository
-YAML edit. During operator cleanup, remove local webhook routing that existed only for that
-listener.
-
-Keep worker permissions, reviewer command configuration, pack `scripts/` PATH adoption, and
-worktree trust setup aligned with the current ProjectConfig. Restart the side-process supervisor
-after registry or harness changes:
+After changing a process-scoped `PACK_REVIEWER` value on Linux/WSL, restart this
+supervisor so children inherit the new environment:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
+pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 \
+  -Reviewer <codex|claude> -RestartSupervisor
 ```
 
-## How the loop is supposed to run
+## Review loop
 
 ```text
-worker PR/report/CI state
-    → periodic registry children reconcile current GitHub + AO state
-    → review-trigger-reconcile / review-trigger-reeval / ready-report seed
-    → ao-review run <worker> when the exact head is eligible and uncovered
-    → changes_requested + auto-delivery → worker addressing_reviews → …
+worker implements issue
+  -> pushes PR linked with Closes/Fixes/Resolves #N
+  -> fixes required CI
+  -> pack-worker-report ready_for_review on current green head
+  -> side-process readiness/coverage/claim recheck
+  -> pack-review-runner exact-head review
+  -> durable verdict/findings journal
+  -> GitHub COMMENT + required status + worker notification
+  -> findings: worker addressing_reviews -> fixes -> new head -> repeat
+  -> clean/non-blocking + green required CI: operator merge decision
 ```
 
-**Gaps operators hit:**
+## Automatic review starters
 
-- Ready-for-review metadata alone does not create a webhook turn. Coverage now comes from the
-  surviving script-side reconcile/seed/reeval children, not listener or heartbeat paths.
-- Orchestrator `stuck` / `probe_failure` — no shell actions run; use
-  [recovery runbook](orchestrator-recovery-runbook.md) step 1 before kill/restart.
+The low-frequency review reconcile is the zero-signal backstop. Deferred-head
+re-evaluation and report-state seed provide additional current-head coverage. Every
+starter uses the shared readiness predicate and per-(PR, head) claim.
 
-## Verification (pass / fail)
+No starter may:
 
-| Check | Command / signal | Pass |
-|-------|------------------|------|
-| Fleet status | `orchestrator-wake-supervisor.ps1 -Action Status` | Nine registry children healthy |
-| Listener retired | `check-vestigial-fleet-children-retired.ps1 -Json` | `status: pass` |
-| Orchestrator alive | `ao status` | Not `stuck` / `probe_failure` on orchestrator row |
-| Review started | `Get-AoReviewRuns` / `ao-review list <session> --json` | New run after worker `ready_for_review` |
-| Command correct | `latestRun.body` (failure detail) on failed runs | Names wrapper matching `PACK_REVIEWER` (`run-pack-review.ps1` or `run-pack-review-claude.ps1`), not bare `review.ps1` alone |
-| Strict gate (operator) | `pwsh -File scripts/orchestrator-diagnose.ps1 -Strict` | Exit 0 before human merge when AO is running |
-| Harness guard | `pwsh -File scripts/check-ao-0-10-review-trigger.ps1` | Exit 0 |
-| Vocabulary guard | `node --experimental-strip-types scripts/gate-runner/runner.ts --gate review-010-vocabulary` | Exit 0 |
+- create an independent reviewer session;
+- bypass exact-head validation;
+- start two active same-head runs;
+- infer review readiness from worker text alone;
+- merge the PR.
 
-## Troubleshooting routing
+## Manual review
 
-| Symptom | Open |
-|---------|------|
-| Retired child appears in status | Stop the supervisor, remove identity-matched old-generation processes, and restart from the updated checkout |
-| Orchestrator `stuck`, zero review runs | [Recovery runbook](orchestrator-recovery-runbook.md) step 1 ping |
-| Review runs `failed`, `findingCount: 0` (empty failed review) | `.\scripts\orchestrator-diagnose.ps1 -Strict`; [migration_notes.md](migration_notes.md) § Issue #60 empty-review trap; [reviewer-switch-runbook.md](reviewer-switch-runbook.md) if Codex quota |
-| Change reviewer (Codex / Sonnet) | [reviewer-switch-runbook.md](reviewer-switch-runbook.md) |
-| Worker dies in ~1 min, no PR | [migration_notes.md](migration_notes.md) § Issue #63 |
+Use a manual start only for an explicit operator action or safe smoke test. The
+canonical command forms and status query live in
+[`pack-review-runbook.md`](pack-review-runbook.md#manual-start). Manual operation
+shares the trusted runner, exact-head checks, store, journal, and delivery state
+machine with automatic starts.
 
-## Related issues
+## Worker states
 
-- [#68](https://github.com/chetwerikoff/orchestrator-pack/issues/68) — this checklist in-repo
-- [#163](https://github.com/chetwerikoff/orchestrator-pack/issues/163) — `review-trigger-reconcile.ps1` (state-derived review trigger)
-- [#59](https://github.com/chetwerikoff/orchestrator-pack/issues/59) — heartbeat backstop (`orchestrator-wake-heartbeat.ps1`)
-- [#623](https://github.com/chetwerikoff/orchestrator-pack/issues/623) — AO 0.10 review harness + trigger loop
-- [#625](https://github.com/chetwerikoff/orchestrator-pack/issues/625) — review vocabulary migration
+Expected progression:
+
+- `working` / `pr_created` while implementation or CI work remains;
+- `fixing_ci` while required checks are not green;
+- `ready_for_review` only for the current green head;
+- `addressing_reviews` after findings are delivered;
+- `completed` only for terminal non-review work or the explicit degraded-CI handoff
+  contract; never as a substitute for open review findings.
+
+Worker state comes from the pack worker-report/status stores. Stale or ambiguous
+ownership fails closed.
+
+## Review result interpretation
+
+A run can have:
+
+- reviewer-process failure or timeout;
+- malformed terminal payload;
+- durable clean/findings verdict;
+- independent success/failure for GitHub comment, required status, and worker
+  notification.
+
+Delivery failure after a valid durable verdict does not mean the reviewer failed.
+Inspect the run's journal and channel outcomes and resume missing same-head delivery.
+
+## Merge readiness
+
+Before merge verify on the same current head:
+
+1. `orchestrator-pack/pack-review` is successful;
+2. required CI is green;
+3. the PR is open and mergeable;
+4. no other blocking review remains;
+5. the durable pack run corresponds to the exact head;
+6. operator-adoption requirements are understood.
+
+The visible GitHub COMMENT is not merge authority by itself.
+
+## Recovery
+
+- No run after handoff: inspect readiness, exact-head ownership, CI, claim, and
+  supervisor health.
+- Reviewer failed: inspect stored stdout/stderr and selector/tool authentication.
+- Run stale: verify the runner PID/heartbeat and allow the stale-claim policy to
+  reclaim only when safe.
+- Delivery incomplete: start the same PR/head again to resume journaled channels;
+  do not force a duplicate reviewer computation.
+- Worker idle after findings: inspect worker-notification outcome and dispatch
+  journal, then use the normal journaled worker nudge/escalation path.
+
+Detailed commands and forbidden shortcuts:
+[`orchestrator-recovery-runbook.md`](orchestrator-recovery-runbook.md).
+
+## Post-merge adoption
+
+For every merged pack PR:
+
+1. pull merged `main` in the operator checkout;
+2. read its `## Operator adoption` instructions;
+3. update ProjectConfig/environment if required;
+4. restart affected pack side processes;
+5. recycle worker/orchestrator sessions whose tracked rules or runtime worktrees must
+   contain the merge;
+6. apply branch-protection changes such as requiring
+   `orchestrator-pack/pack-review` when specified;
+7. verify current-head review/CI behavior on a safe open PR.
+
+## Go-live evidence
+
+Record supervisor health, the selected reviewer, one current-head pack run, the
+required-status result, and any channel outcome needed for the adoption record. Use
+the canonical runbook for review status and the recovery runbook for diagnostics;
+do not introduce a parallel command checklist here.
+
+Historical AO review commands and deleted script paths are not current recovery or
+operator procedures.

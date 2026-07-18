@@ -58,22 +58,16 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
   const gateId = 'agents-report-contract';
   const failures: string[] = [];
   const unreachable: string[] = [];
-  const source = readSource(snapshot, 'AGENTS.md');
-  if (source.unreachable) unreachable.push(source.unreachable);
-  if (source.missing) {
-    failures.push('Missing AGENTS.md');
-  } else if (source.text !== undefined) {
-    if (/(?<![A-Za-z0-9_-])ao report(?![A-Za-z0-9_-])/u.test(source.text)) {
-      failures.push('AGENTS.md still references removed ao report command');
-    } else if (!/pack-worker-report/iu.test(source.text)) {
-      failures.push('AGENTS.md must reference pack-worker-report command');
-    } else if (!/skip silently/iu.test(source.text)) {
-      failures.push('AGENTS.md must include skip silently rule for unavailable report command');
-    }
+
+  for (const path of ['AGENTS.md', 'scripts/pack-worker-report.ps1']) {
+    const source = readSource(snapshot, path);
+    if (source.unreachable) unreachable.push(source.unreachable);
+    if (source.missing) failures.push(source.missing);
   }
+
   return completeStaticGate(
     gateId,
-    'AGENTS.md worker-report contract',
+    'Worker instructions and pack-owned report entrypoint exist',
     'check-agents-report-contract: PASS\n',
     snapshot,
     failures,
@@ -122,89 +116,77 @@ export function evaluateCoworkerDelegationThreshold(snapshot: SourceSnapshot): G
   );
 }
 
-const REVIEW_010_ALLOWLIST = new Set([
-  'scripts/ao-review.ps1',
-  'scripts/check-review-producer-contract.ps1',
-  'scripts/check-ao-0-10-review-trigger.ps1',
-  'scripts/patch-codex-review4.ps1',
-  'scripts/check-review-send-reconcile.ps1',
-  'scripts/check-review-start-claim-guard.ps1',
-  'scripts/check-review-trigger-reconcile.ps1',
-  'scripts/check-review-wake-trigger.ps1',
-  'scripts/check-review-cycle-cap.ps1',
-  'scripts/check-merge-triage-gate.ps1',
-  'scripts/lib/Review-MechanicalForbiddenCommand.ps1',
-  'scripts/lib/Review-Send-MechanicalForbiddenCommand.ps1',
-  'scripts/review-send-reconcile.ps1',
-  'docs/ao-0-10-review-api.mjs',
-  'docs/review-mechanical-cli.mjs',
-]);
+const LIVE_PACK_REVIEW_PATHS = [
+  'scripts/pack-review-runner.ts',
+  'scripts/invoke-pack-review.ps1',
+  'scripts/lib/pack-review-delivery.ts',
+] as const;
+
+function evaluateLivePackReviewSources(snapshot: SourceSnapshot): {
+  failures: string[];
+  unreachable: string[];
+  sources: Map<string, string>;
+} {
+  const failures: string[] = [];
+  const unreachable: string[] = [];
+  const sources = new Map<string, string>();
+
+  for (const path of LIVE_PACK_REVIEW_PATHS) {
+    const text = requireText(snapshot, path, failures, unreachable);
+    if (text !== undefined) sources.set(path, text);
+  }
+
+  for (const [path, text] of sources) {
+    if (/\bao\s+review\s+(?:run|list|send|execute|submit)\b/iu.test(text)) {
+      failures.push(`${path}: live pack-review path invokes AO review CLI`);
+    }
+    if (/Invoke-AoReviewApi|POST\s+\/reviews\/trigger|GET\s+\/reviews/iu.test(text)) {
+      failures.push(`${path}: live pack-review path depends on AO review HTTP`);
+    }
+  }
+
+  return { failures, unreachable, sources };
+}
 
 export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResult {
   const gateId = 'review-010-vocabulary';
-  const failures: string[] = [];
-  const unreachable: string[] = [];
-  const predicates = [
-    { regex: /\bao\s+review\s+(run|list|send|execute)\b/iu, reason: 'dead ao review CLI verb' },
-    { regex: /\[\s*['"]review['"]\s*,\s*['"](run|list|send|execute)['"]/iu, reason: 'dead ao review CLI argv' },
-    { regex: /\b(needs_triage|sentFindingCount|terminationReason)\b/iu, reason: 'false-equivalence field name' },
-  ];
-  for (const path of snapshot.paths) {
-    if (!/^(?:scripts|docs)\//u.test(path) || !/\.(?:ps1|mjs)$/u.test(path)) continue;
-    if (REVIEW_010_ALLOWLIST.has(path) || path.startsWith('scripts/fixtures/') || path.startsWith('tests/')) continue;
-    const text = requireText(snapshot, path, failures, unreachable);
-    if (text === undefined) continue;
-    for (const predicate of predicates) {
-      predicate.regex.lastIndex = 0;
-      if (predicate.regex.test(text)) failures.push(`${path}: ${predicate.reason}`);
-    }
-  }
-  const failureStdout = failures.length > 0
-    ? `AO 0.10 review vocabulary violations:\n${failures.map((failure) => `  ${failure}`).join('\n')}\n`
+  const evaluated = evaluateLivePackReviewSources(snapshot);
+  const failureStdout = evaluated.failures.length > 0
+    ? `Pack review runtime boundary violations:\n${evaluated.failures.map((failure) => `  ${failure}`).join('\n')}\n`
     : undefined;
+
   return completeStaticGate(
     gateId,
-    'AO 0.10 review vocabulary guard',
-    '[PASS] AO 0.10 review vocabulary guard (no dead CLI / false-equivalence fields)\n',
+    'Live pack review does not invoke AO Reviews',
+    '[PASS] live pack review does not invoke AO review CLI or HTTP\n',
     snapshot,
-    failures,
-    unreachable,
+    evaluated.failures,
+    evaluated.unreachable,
     failureStdout,
   );
 }
 
-function extractNamedReviewCommand(yaml: string): string | undefined {
-  const match = /NAMED\s+REVIEW_COMMAND[^\r\n]*\r?\n\s+(.+?)(?:\r?\n\s+Alternate|\r?\n\s+RUNTIME|\r?\n\s+[A-Z]{2,})/isu.exec(yaml);
-  return match?.[1]?.trim().split(/\r?\n/u)[0]?.trim();
-}
-
 export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult {
   const gateId = 'review-command-not-ao';
-  const failures: string[] = [];
-  const unreachable: string[] = [];
-  let failureStdout: string | undefined;
-  const source = readSource(snapshot, 'agent-orchestrator.yaml.example');
-  if (source.unreachable) unreachable.push(source.unreachable);
-  if (source.missing) {
-    failures.push('NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example');
-    failureStdout = '[FAIL] NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example\n';
-  } else if (source.text !== undefined) {
-    const command = extractNamedReviewCommand(source.text);
-    if (!command) {
-      failures.push('NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example');
-      failureStdout = '[FAIL] NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example\n';
-    } else if (/(^|[\s"'`])\.ao\/|\\\.ao\\/iu.test(command)) {
-      failures.push(`Canonical REVIEW_COMMAND must not use gitignored .ao/ paths: ${command}`);
-      failureStdout = `[FAIL] Canonical REVIEW_COMMAND must not use gitignored .ao/ paths\n  REVIEW_COMMAND: ${command}\n`;
-    }
+  const evaluated = evaluateLivePackReviewSources(snapshot);
+  const failures = [...evaluated.failures];
+  const runner = evaluated.sources.get('scripts/pack-review-runner.ts');
+
+  if (runner !== undefined && !runner.includes('orchestrator-pack/pack-review')) {
+    failures.push('scripts/pack-review-runner.ts: exact-head pack-review status context is missing');
   }
+
+  const failureStdout = failures.length > 0
+    ? `[FAIL] pack review runtime authority:\n${failures.map((failure) => ` - ${failure}`).join('\n')}\n`
+    : undefined;
+
   return completeStaticGate(
     gateId,
-    'Example REVIEW_COMMAND path contract',
-    '[PASS] example REVIEW_COMMAND does not use .ao/ as primary path\n',
+    'Pack runner owns review and exact-head status authority',
+    '[PASS] pack runner owns review and exact-head status authority\n',
     snapshot,
     failures,
-    unreachable,
+    evaluated.unreachable,
     failureStdout,
   );
 }

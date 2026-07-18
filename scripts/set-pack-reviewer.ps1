@@ -1,17 +1,22 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Set PACK_REVIEWER for pack review (User scope on Win32NT; Process scope elsewhere).
+  Set PACK_REVIEWER for pack-owned review (User scope on Win32NT; Process scope elsewhere).
 .PARAMETER Reviewer
   codex | claude
+.PARAMETER RestartSupervisor
+  Restart scripts/orchestrator-wake-supervisor.ps1 so supported Linux/WSL child
+  processes inherit the changed process-scoped selector.
 .PARAMETER RestartAo
-  Run ao stop / ao start orchestrator-pack when ao is on PATH.
+  Deprecated compatibility alias. It restarts the pack supervisor, not AO.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('codex', 'claude')]
     [string]$Reviewer,
+
+    [switch]$RestartSupervisor,
 
     [switch]$RestartAo
 )
@@ -26,33 +31,31 @@ if (Test-PackReviewerPersistentLayersAvailable) {
 }
 else {
     $env:PACK_REVIEWER = $Reviewer
-    Write-Host "Set Process PACK_REVIEWER=$Reviewer for this session (non-Win32NT: process-only per architecture section N)."
-    Write-Host 'For persistence across shells, export PACK_REVIEWER in your shell profile or service unit (see docs/reviewer-switch-runbook.md).'
+    Write-Host "Set Process PACK_REVIEWER=$Reviewer for this session (non-Win32NT: process-only)."
+    Write-Host 'For persistence across shells, export PACK_REVIEWER in the shell/service environment that starts the pack supervisor.'
 }
 
+$restartRequested = [bool]($RestartSupervisor -or $RestartAo)
 if ($RestartAo) {
-    if (-not (Get-Command ao -ErrorAction SilentlyContinue)) {
-        Write-Warning 'ao not on PATH — skipped ao stop/start. Run manually after opening a fresh shell.'
+    Write-Warning '-RestartAo is deprecated. Pack review is not daemon-spawned; restarting the pack side-process supervisor instead.'
+}
+
+if ($restartRequested) {
+    $supervisorScript = Join-Path $PSScriptRoot 'orchestrator-wake-supervisor.ps1'
+    if (-not (Test-Path -LiteralPath $supervisorScript -PathType Leaf)) {
+        Write-Warning "Pack supervisor script not found at $supervisorScript — selector was set, but no process was restarted."
     }
     else {
-        Write-Host 'Restarting AO (orchestrator-pack)...'
-        & ao stop 2>&1 | ForEach-Object { Write-Host $_ }
-        Start-Sleep -Seconds 2
-        $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-        $escapedRoot = $repoRoot.Replace("'", "''")
-        if (Test-PackReviewerPersistentLayersAvailable) {
-            $startCommand = "Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+        Write-Host 'Restarting orchestrator-pack side-process supervisor...'
+        & pwsh -NoProfile -File $supervisorScript -Action Stop
+        if ($LASTEXITCODE -ne 0) {
+            throw "orchestrator-wake-supervisor Stop failed (exit $LASTEXITCODE)"
         }
-        else {
-            $escapedReviewer = $Reviewer.Replace("'", "''")
-            $startCommand = "`$env:PACK_REVIEWER='$escapedReviewer'; Set-Location '$escapedRoot'; ao start orchestrator-pack"
+        & pwsh -NoProfile -File $supervisorScript -Action Start
+        if ($LASTEXITCODE -ne 0) {
+            throw "orchestrator-wake-supervisor Start failed (exit $LASTEXITCODE)"
         }
-        Start-Process -FilePath 'pwsh' -ArgumentList @(
-            '-NoProfile',
-            '-Command',
-            $startCommand
-        ) -WorkingDirectory $repoRoot | Out-Null
-        Write-Host 'AO start launched in background via clean shell (dashboard may take a few seconds).'
+        Write-Host 'Pack side-process supervisor restarted with the selected reviewer environment.'
     }
 }
 

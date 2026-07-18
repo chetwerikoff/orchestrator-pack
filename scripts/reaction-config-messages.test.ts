@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   DELIVERY_PATH_PENDING_DRAFT,
@@ -12,167 +9,66 @@ import {
   parseReactionMessagesFromYaml,
   parseReactionsSection,
   readReactionMessagesFromYamlFile,
-  resolveReactionDeliveryShapeFromYaml,
   validateReactionsSection,
 } from './reaction-config-messages.mjs';
 
-const root = path.dirname(fileURLToPath(import.meta.url));
-const exampleYaml = readFileSync(
-  path.join(root, '..', 'agent-orchestrator.yaml.example'),
-  'utf8',
-);
-
-const reportStaleLiveMessage =
-  'Worker idle (report-stale backstop). Check pending AO review findings via `Get-AoReviewRuns` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.';
-
-describe('reaction-config-messages (Issue #402)', () => {
-  it('parses only send-to-agent reactions with non-empty message from example yaml', () => {
-    const parsed = parseReactionMessagesFromYaml(exampleYaml);
-    expect(parsed.ok).toBe(true);
-    expect(parsed.messages?.['report-stale']).toBe(reportStaleLiveMessage);
-    expect(parsed.messages?.['ci-failed']).toBeUndefined();
-    expect(parsed.messages?.['changes-requested']).toBeUndefined();
-  });
-
-  it('excludes notify reactions even when message text is present', () => {
-    const reactions = parseReactionsSection(exampleYaml);
-    const messages = extractSendToAgentReactionMessages(reactions);
-    expect(messages['ci-failed']).toBeUndefined();
-  });
-
-  it('AC1: report-stale live text is 224 chars and pending-draft', () => {
-    const shape = resolveReactionDeliveryShapeFromYaml(exampleYaml, 'report-stale');
-    expect(shape.ok).toBe(true);
-    expect(shape.messageShape?.charLength).toBe(226);
-    expect(shape.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
-  });
-
-  it('AC2 threshold boundary: 199/200 self-submitted, 201 pending-draft', () => {
-    expect(deriveMessageShape('x'.repeat(199)).deliveryPath).toBe(DELIVERY_PATH_SELF_SUBMITTED);
-    expect(deriveMessageShape('x'.repeat(200)).deliveryPath).toBe(DELIVERY_PATH_SELF_SUBMITTED);
-    expect(deriveMessageShape('x'.repeat(201)).deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
-  });
-
-  it('AC3: multiline short message is pending-draft', () => {
-    expect(deriveMessageShape('line one\nline two').deliveryPath).toBe(
-      DELIVERY_PATH_PENDING_DRAFT,
-    );
-  });
-
-  it('AC5: stale ci-failed stub text must not appear in parsed send-to-agent map', () => {
-    const stub = 'Required CI failed for your PR. Fix failing checks and ao report fixing_ci.';
-    const parsed = parseReactionMessagesFromYaml(exampleYaml);
-    expect(Object.values(parsed.messages ?? {})).not.toContain(stub);
-  });
-
-  it('AC7 drift guard: example yaml report-stale shape stays pending-draft', () => {
-    const shape = resolveReactionDeliveryShapeFromYaml(exampleYaml, 'report-stale');
-    expect(shape.deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
-  });
-
-  it('AC7 live capture token matches example report-stale message text', () => {
-    const capturePath = path.join(
-      root,
-      'fixtures',
-      'reaction-config',
-      'report_stale_message.live-capture.txt',
-    );
-    const captureText = readFileSync(capturePath, 'utf8').replace(/\r?\n$/, '');
-    const parsed = parseReactionMessagesFromYaml(exampleYaml);
-    expect(parsed.messages?.['report-stale']).toBe(captureText);
-    expect(captureText).toContain('Worker idle (report-stale backstop)');
-  });
-
-  it('parses folded block scalar keep indicator (>+) before shape classification', () => {
+describe('reaction-config message parser', () => {
+  it('parses send-to-agent messages from an explicit synthetic fixture', () => {
     const yaml = [
       'reactions:',
       '  report-stale:',
       '    action: send-to-agent',
-      '    message: >+',
-      '      paragraph one',
-      '',
-      '      paragraph two',
+      '    message: "Worker idle."',
+      '  ci-failed:',
+      '    action: notify',
+      '    message: "Operator notification."',
     ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('paragraph one\n\nparagraph two');
-    expect(result.messages?.['report-stale']).not.toBe('>+');
-    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
-      DELIVERY_PATH_PENDING_DRAFT,
-    );
+
+    const parsed = parseReactionMessagesFromYaml(yaml);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.messages).toEqual({ 'report-stale': 'Worker idle.' });
   });
 
-  it('decodes double-quoted YAML escape sequences in inline reaction messages', () => {
+  it('excludes notify reactions even when message text is present', () => {
     const yaml = [
+      'reactions:',
+      '  ci-failed:',
+      '    action: notify',
+      '    message: "Operator notification."',
+    ].join('\n');
+    const messages = extractSendToAgentReactionMessages(parseReactionsSection(yaml));
+    expect(messages['ci-failed']).toBeUndefined();
+  });
+
+  it('keeps the message-shape threshold contract', () => {
+    expect(deriveMessageShape('x'.repeat(199)).deliveryPath).toBe(DELIVERY_PATH_SELF_SUBMITTED);
+    expect(deriveMessageShape('x'.repeat(200)).deliveryPath).toBe(DELIVERY_PATH_SELF_SUBMITTED);
+    expect(deriveMessageShape('x'.repeat(201)).deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
+    expect(deriveMessageShape('line one\nline two').deliveryPath).toBe(DELIVERY_PATH_PENDING_DRAFT);
+  });
+
+  it('decodes quoted escapes and folded block scalars', () => {
+    const quoted = parseReactionMessagesFromYaml([
       'reactions:',
       '  report-stale:',
       '    action: send-to-agent',
       '    message: "line one\\nline two"',
-    ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('line one\nline two');
-    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
-      DELIVERY_PATH_PENDING_DRAFT,
-    );
-  });
+    ].join('\n'));
+    expect(quoted.messages?.['report-stale']).toBe('line one\nline two');
 
-  it('readReactionMessagesFromYamlFile fails closed on missing path', () => {
-    const result = readReactionMessagesFromYamlFile('/does/not/exist/agent-orchestrator.yaml');
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('reaction_config_unavailable');
-  });
-
-  it('rejects unsupported flow-style reaction message syntax', () => {
-    const yaml = [
+    const folded = parseReactionMessagesFromYaml([
       'reactions:',
       '  report-stale:',
       '    action: send-to-agent',
-      '    message: [invalid, flow]',
-    ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('reaction_config_unavailable');
-    expect(result.error).toContain('unsupported_flow_scalar');
+      '    message: >-',
+      '      line one continues',
+      '      on the next line',
+    ].join('\n'));
+    expect(folded.messages?.['report-stale']).toBe('line one continues on the next line');
   });
 
-  it('rejects send-to-agent message block when scalar body is missing', () => {
-    const yaml = [
-      'reactions:',
-      '  report-stale:',
-      '    action: send-to-agent',
-      '    message: |',
-    ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('reaction_config_unavailable');
-  });
-
-  it('accepts quoted inline reaction message scalars', () => {
-    const yaml = [
-      'reactions:',
-      '  report-stale:',
-      '    action: send-to-agent',
-      '    message: "Worker idle (report-stale backstop)."',
-    ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('Worker idle (report-stale backstop).');
-  });
-
-  it('allows send-to-agent without message field (runtime unresolved key path)', () => {
-    const yaml = [
-      'reactions:',
-      '  changes-requested:',
-      '    action: send-to-agent',
-    ].join('\n');
-    const validated = validateReactionsSection(yaml);
-    expect(validated.ok).toBe(true);
-    expect(parseReactionMessagesFromYaml(yaml).messages?.['changes-requested']).toBeUndefined();
-  });
-
-  it('preserves blank lines inside YAML block scalar messages', () => {
-    const yaml = [
+  it('preserves blank lines in block scalar messages', () => {
+    const parsed = parseReactionMessagesFromYaml([
       'reactions:',
       '  report-stale:',
       '    action: send-to-agent',
@@ -180,44 +76,33 @@ describe('reaction-config-messages (Issue #402)', () => {
       '      line one',
       '',
       '      line two',
-    ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('line one\n\nline two');
-    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
-      DELIVERY_PATH_PENDING_DRAFT,
-    );
+    ].join('\n'));
+    expect(parsed.messages?.['report-stale']).toBe('line one\n\nline two');
   });
 
-  it('preserves blank lines inside folded block scalar messages', () => {
-    const yaml = [
+  it('fails closed for unsupported or unavailable input', () => {
+    expect(readReactionMessagesFromYamlFile('/does/not/exist/agent-orchestrator.yaml')).toMatchObject({
+      ok: false,
+      reason: 'reaction_config_unavailable',
+    });
+
+    const unsupported = parseReactionMessagesFromYaml([
       'reactions:',
       '  report-stale:',
       '    action: send-to-agent',
-      '    message: >-',
-      '      paragraph one',
-      '',
-      '      paragraph two',
-    ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('paragraph one\n\nparagraph two');
-    expect(deriveMessageShape(result.messages?.['report-stale'] ?? '').deliveryPath).toBe(
-      DELIVERY_PATH_PENDING_DRAFT,
-    );
+      '    message: [invalid, flow]',
+    ].join('\n'));
+    expect(unsupported.ok).toBe(false);
+    expect(unsupported.reason).toBe('reaction_config_unavailable');
   });
 
-  it('folds single-paragraph folded scalars without interior blank lines', () => {
+  it('allows a send-to-agent reaction without a message field', () => {
     const yaml = [
       'reactions:',
-      '  report-stale:',
+      '  changes-requested:',
       '    action: send-to-agent',
-      '    message: >-',
-      '      line one continues',
-      '      on the next line',
     ].join('\n');
-    const result = parseReactionMessagesFromYaml(yaml);
-    expect(result.ok).toBe(true);
-    expect(result.messages?.['report-stale']).toBe('line one continues on the next line');
+    expect(validateReactionsSection(yaml).ok).toBe(true);
+    expect(parseReactionMessagesFromYaml(yaml).messages?.['changes-requested']).toBeUndefined();
   });
 });

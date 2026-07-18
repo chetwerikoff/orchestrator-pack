@@ -1,1 +1,1 @@
-Worker idle (report-stale backstop). Check pending AO review findings via `Get-AoReviewRuns` and report `ao report addressing_reviews`, or report a terminal failure with a reason. Do not stay silent after review findings land.
+Historical fixture retired from live YAML-policy testing. Pack-review lifecycle messaging is owned by pack side processes; agent-orchestrator.yaml.example is not a live reactions source.

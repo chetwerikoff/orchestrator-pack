@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: pack-owned review runner + trigger loop wiring (Issues #623/#839).
+  Regression guard: pack-owned review runner + trigger loop wiring.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -15,10 +15,8 @@ $required = @(
     'docs/ao-0-10-review-api.mjs',
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
     'scripts/review-trigger-reconcile.ps1',
-    'scripts/lib/Invoke-ReviewTriggerReeval.ps1',
-    'docs/ao-0-10-review-harness-adoption.md'
+    'scripts/lib/Invoke-ReviewTriggerReeval.ps1'
 )
-
 Assert-RequiredPathsExist -Paths @($required | ForEach-Object { Join-Path $Root $_ })
 
 $retiredShim = Join-Path $Root 'scripts/ao-review.ps1'
@@ -41,7 +39,7 @@ foreach ($marker in @(
     }
 }
 if ($adapter -match '/api/v1/sessions/.*/reviews(?:/trigger)?' -or $adapter -match 'POST\s+/reviews/trigger') {
-    Write-Host 'Invoke-AoReviewApi.ps1 must not retain daemon session-review trigger/list paths'
+    Write-Host 'Invoke-AoReviewApi.ps1 must not retain daemon review trigger/list paths'
     exit 1
 }
 
@@ -50,7 +48,6 @@ $triggerScripts = @(
     'scripts/review-trigger-reconcile.ps1',
     'scripts/lib/Invoke-ReviewTriggerReeval.ps1'
 )
-
 foreach ($rel in $triggerScripts) {
     $text = Get-Content -LiteralPath (Join-Path $Root $rel) -Raw
     if ($text -notmatch 'Invoke-AoReviewTriggerForWorker') {
@@ -58,23 +55,11 @@ foreach ($rel in $triggerScripts) {
         exit 1
     }
     if ($text -match "@\('review',\s*'run'" -or $text -match '&\s+ao\s+@runArgs') {
-        Write-Host "$rel must not retain ao review run argv invocation"
+        Write-Host "$rel must not invoke the pack-retired AO review command"
         exit 1
     }
     if ($text -notmatch 'Get-ReviewTriggerInvocationLine') {
         Write-Host "$rel must log the pack-runner invocation line"
-        exit 1
-    }
-}
-
-$adoption = Get-Content -LiteralPath (Join-Path $Root 'docs/ao-0-10-review-harness-adoption.md') -Raw
-foreach ($marker in @(
-        'Pack-owned review runner adoption',
-        'GitHub PR review is the authoritative verdict record',
-        'Do not use daemon review endpoints or `ao review submit`'
-    )) {
-    if ($adoption -notmatch [regex]::Escape($marker)) {
-        Write-Host "review-runner adoption guide missing marker: $marker"
         exit 1
     }
 }
@@ -87,9 +72,9 @@ if ($recovery -notmatch 'Assert-ReviewBeforeCleanupGate') {
 
 $mjs = Get-Content -LiteralPath (Join-Path $Root 'docs/review-mechanical-cli.mjs') -Raw
 if ($mjs -notmatch 'ao\\s\+review\\s\+run') {
-    Write-Host 'review-mechanical-cli.mjs must forbid ao review run on mechanical paths'
+    Write-Host 'review-mechanical-cli.mjs must continue forbidding AO review run on pack mechanical paths'
     exit 1
 }
 
-Write-Host '[PASS] pack-owned review runner + trigger loop wiring (Issues #623/#839)'
+Write-Host '[PASS] pack-owned review runner + trigger loop runtime wiring'
 exit 0

@@ -15,15 +15,15 @@ paraphrase the full policy in this file. Fan-out surfaces: §S in
 
 ## Review wiring
 
-Local Codex PR review **is active** and **pack-owned** — not driven by AO's CLI or YAML
-reactions. On AO 0.10.2 the loop is workspace-visible prompts plus **side-process scripts**
-supervised by `scripts/orchestrator-wake-supervisor.ps1`. Trigger/discover via the pack
-wrapper `scripts/ao-review.ps1` (`run`/`list`, backed directly by AO's HTTP API) — the real
-`ao review` CLI subcommand has only `submit` (records an already-computed verdict back to
-AO; `send`/`execute`/`list` are removed on AO 0.10.2). `orchestratorRules` in
-`agent-orchestrator.yaml` is **legacy-import-only** on AO 0.10.2 and does not drive live
-orchestration. See [`AGENTS.md`](AGENTS.md) (§ Review / CI / Handoff worker contract) and
-[`docs/architecture.md`](docs/architecture.md#review-paths).
+PR review is pack-owned. `PACK_REVIEWER` selects Codex or Claude,
+`scripts/pack-review-runner.ts` starts the review, and
+`scripts/invoke-pack-review.ps1` is the reviewer wrapper. Do not recreate review,
+binding, delivery, retry, switching, or merge rules here; use the complete current
+contract in [`docs/pack-review-runbook.md`](docs/pack-review-runbook.md).
+
+AO review surfaces remain available upstream in AO 0.10.3, but this pack does not use
+them as invocation, status, delivery, fallback, dual-write, or merge-authority paths.
+Routine rounds are driven by pack side processes, not an architect turn or YAML policy.
 
 ## Role
 
@@ -98,7 +98,8 @@ what gets built, in what order, with what boundaries. The planner
 - Prescribe file names, function shapes, library versions, or internal
   layout. The planner's `ao-declare` declares files; you bound via
   `denylist` + `allowed_roots`.
-- Bypass the review loop (`gh pr merge` without Codex review completing).
+- Bypass the review loop (`gh pr merge` without the current-head pack-review
+  required status and CI completing).
 - Touch `packages/core/**` or `vendor/**`.
 - Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.
   Fix the spec or `AGENTS.md` instead.
@@ -109,10 +110,9 @@ what gets built, in what order, with what boundaries. The planner
 2. **`docs/issue_queue_index.md`** — draft path ↔ GitHub Issue map (no live status).
 3. **`docs/issues_drafts/`** — canonical local drafts (edit here first).
 4. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
-5. **`agent-orchestrator.yaml`** (local, gitignored) — current AO wiring.
+5. **ProjectConfig** — current AO 0.10.3 supported runtime wiring.
 6. **`AGENTS.md`** — universal worker/agent rules (Cursor + Codex workers).
-7. **`scripts/ao-review.ps1 list`** (pack wrapper; `ao review` CLI is submit-only) +
-   `code-reviews/findings/` — freshest reviewer signal.
+7. **`docs/pack-review-runbook.md` + pack review-run store + current GitHub head/status** — current review contract and evidence.
 
 ## Planner freedom (non-negotiable)
 
@@ -138,7 +138,7 @@ executor with acceptable risk, given tests + Codex review as the safety net."**
 When a Codex finding catches a class of bug, a loop sticks, or a spec
 produces churn:
 
-1. Reproduce from existing artifacts (review-run JSON, PR diff, ledger
+1. Reproduce from existing artifacts (pack review-run record, PR diff, ledger
    event, planner log).
 2. Apply **5 Whys** to find the spec-level cause.
 3. Fix at the spec / contract / rule level. The planner re-converges on

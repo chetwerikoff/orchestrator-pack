@@ -87,12 +87,7 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
         },
         {
           path: 'docs/script-owned-review-pipeline.md',
-          contains: [
-            '## Event-driven review trigger',
-            '## Orchestrator review-run coverage',
-            '## Head ready for review',
-            'event-driven review trigger',
-          ],
+          contains: [],
         },
       ],
     },

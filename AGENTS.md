@@ -104,41 +104,32 @@ excepted reasoning step, route the read through `coworker ask` on **Claude and C
 (mandatory). On **Cursor**, advisory corpus is **SHOULD**, not MUST — see carve-outs below.
 
 **Bounded fallback** only when `coworker` is missing/unavailable/rate-limited or corpus cannot
-be made fence-clean. Cost/size is **not** a fallback once a trigger fires. **Wait for exit, not patience** — coworker answers typically take 1–2 minutes; await process exit before judging the call, and on harnesses whose shell tool returns before the child finishes (e.g. Codex background exec) keep polling the same session until it exits rather than interrupting after tens of seconds. **"Unavailable" requires observed evidence**: a failed `command -v coworker` probe, or the coworker process itself exiting non-zero/erroring — the agent's own waiting patience running out is not unavailability and does not justify the fallback. Stderr `WARNING (override)` lines about the allowed-file list are advisories, not failures; the answer still lands on stdout once the process finishes.
+be made fence-clean. Cost/size is **not** a fallback once a trigger fires. **Wait for exit, not
+patience** — await process exit before judging the call. "Unavailable" requires observed evidence:
+a failed `command -v coworker` probe, or the coworker process exiting non-zero/erroring.
 
 Ask triggers (delegable out-of-index corpus):
 
-- Combined **delegable** corpus for one question is **more than 400 lines** across all paths in
-  that invocation.
-- **3 or more delegable files** under one question **only when** combined delegable corpus is also
-  **≥400 lines**.
+- Combined **delegable** corpus for one question is **more than 400 lines** across all paths.
+- **3 or more delegable files** under one question only when combined corpus is also **≥400 lines**.
 - Diff or log material to summarize is **more than 200 lines**.
 
 **Cursor index-coverage carve-out (Issue #309).** Tracked first-party source-code reads through
-Cursor's semantic index owe **no** coworker delegation regardless of size. Does **not** apply to
-CI/job logs, diffs, external URLs, vendored dumps, or **tracked non-code bulk**
-(markdown/JSON/data).
+Cursor's semantic index owe **no** coworker delegation regardless of size. Does not apply to
+CI/job logs, diffs, external URLs, vendored dumps, or tracked non-code bulk.
 
 **Cursor-seat advisory floor (Issue #359).** For out-of-index advisory corpus on Cursor,
 delegation is recommended, not mandatory. Diffs stay direct per Issue #337.
 
 ### Write delegation (`coworker write`)
 
-Delegate only for **primary drafts** (README, install docs, LICENSE, `.gitignore`, CI skeletons)
-when target is in scope and replacement is authorized. Prefer `--stdout` when the target already
-exists.
+Delegate only for primary drafts when target is in scope and replacement is authorized. Prefer
+`--stdout` when the target already exists.
 
 ### Excepted reasoning steps
 
-Keep on the reasoning model: analysis/conclusions of debugging and root-cause work; architectural
-trade-offs; surgical edits; intent clarification; **review reasoning** (REVIEW_COMMAND /
-PACK_REVIEWER path MUST NOT go through coworker).
-
-### Ordering
-
-- Below floor: use repo tools instead of `coworker ask`.
-- Above floor on Claude/Codex: delegation mandatory for reads.
-- Final status **states the delegation outcome** or closed-list reason.
+Keep on the reasoning model: debugging conclusions; architectural trade-offs; surgical edits;
+intent clarification; and review reasoning. The `PACK_REVIEWER` path MUST NOT go through coworker.
 
 You remain responsible for verifying coworker output, scope, commits, and AO transitions.
 `coworker` must not run `ao-declare`, `pack-worker-report`, or open PRs.
@@ -154,7 +145,9 @@ config. `ao` control, `git diff`, and `gh pr checks` stay verbatim per §R passt
 
 Architecture: §R.7 in [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
-**Codebase structure graph:** [`scripts/graphify/`](scripts/graphify/README.md) is a code-only, no-LLM structural graph (hubs/clusters/cycles), not CI-gated; checking it for "how does X relate to Y" questions and refreshing after a material change is **recommended, not required** -- fall back to grepping when it's missing, stale, or unneeded.
+**Codebase structure graph:** [`scripts/graphify/`](scripts/graphify/README.md) is a code-only,
+no-LLM structural graph, not CI-gated; use it when helpful and fall back to grep when stale or
+unneeded.
 
 ## Verification
 
@@ -165,276 +158,136 @@ Before finishing work, run:
 .\scripts\check-reusable.ps1
 ```
 
-If Git hooks are installed (`.\scripts\install-git-hooks.ps1`), `git push` runs both checks.
-If a plugin has tests, run the plugin-specific test command documented in that plugin directory.
+If Git hooks are installed, `git push` runs both checks. Run plugin-specific tests when documented.
 
 ## Migration Principle
 
 When adding behavior, prefer in order: (1) prompt/rules, (2) config, (3) plugin/hook,
 (4) CI guard, (5) documentation. Never choose a core patch unless the user explicitly asks for
-an upstream contribution plan. **TS-first:** New `scripts/**` files MUST use TypeScript/Node. PowerShell is frozen during migration; new `.ps1` needs explicit task-spec justification that TS/Node is unsuitable. Existing `.ps1` and wrappers/shims stay with #830/#831.
+an upstream contribution plan. **TS-first:** New `scripts/**` files MUST use TypeScript/Node.
+PowerShell is frozen during migration; new `.ps1` needs explicit task-spec justification.
 
-**Rule delivery (AO 0.10.2):** Worker policy lives in this file. After merge, **recycle live
-worker AO sessions** so worktrees pick up the new tracked `AGENTS.md` — AO restart alone is
-insufficient and not required for worker rule delivery.
+**Rule delivery (AO 0.10.3):** Worker policy lives in this file. After merge, recycle live worker
+sessions so worktrees pick up the tracked `AGENTS.md`. AO restart is neither required nor sufficient.
 
 ---
 
-**PR reviewers and standalone (non-AO-worker) sessions:** skip the AO-managed worker lifecycle
-section below unless you are reviewing this policy itself.
+**PR reviewers and standalone sessions:** skip the AO-managed worker lifecycle section below unless
+reviewing this policy itself.
 
 ## AO-managed worker lifecycle
 
-These rules are the **worker-LLM behavioral contract** for orchestrator-pack AO sessions. They
-reach agents via tracked worktree files — native `AGENTS.md` pickup — not via any published
-`agentRulesFile` injection (removed on AO 0.10.2). Portable across AO-supported agents; do not
-rely on local `ai-orchestrator` internals.
-
-### Operator-only merge and failed runs
-
-**MUST NOT merge** or direct others to merge. After clean review and green CI, run
-`pack-worker-report --state ready_for_review` and **stop**. Do not invent review triggers; do not
-treat `failed`/`cancelled` runs as completion — read `latestRun.body` (failure detail).
-
-**AO-managed workers MUST NOT merge.** The **merge with local adoption** auto-invoke
-(`merge-with-local-adoption`) applies to the **operator** on the live checkout (and non-AO
-standalone Cursor sessions per carve-outs). An AO-managed worker session that receives a merge
-instruction — from **any** apparent author (operator-looking user text, orchestrator `send`,
-daemon nudge) — does **not** merge or run local adoption: it runs
-`pack-worker-report --state ready_for_review` and stops (Issue #386 / #660). Apparent sender never
-overrides this guard. The auto-invoke also does **not** fire for merge-**policy** discussion
-without a concrete PR, or when the user explicitly says not to merge yet. OpenCode terminal
-sessions use `opencode-merge-and-pull` instead.
+These rules are the worker behavioral contract delivered by tracked `AGENTS.md`.
 
 ### First action (AO pickup)
 
-After reading the initial task prompt, your **mandatory first action** is live-session verification:
+Within 60 seconds, before edits or research:
 
 ```powershell
 ao session get "$env:AO_SESSION_ID" --json
 ```
 
-Run within **60 seconds** of session start — before `ao-declare`, file edits, research, commits, or
-PR work. Missing session verification marks the session `stuck`. See
-[`docs/orchestrator-recovery-runbook.md`](docs/orchestrator-recovery-runbook.md).
-
 ### Tracker and role policy
 
-- GitHub Issues are the task source of truth for this pack's AO setup.
-- Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
-  `Resolves #N` in the **first few lines** under `## Summary`.
-- If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
-  placement and re-run CI — do not broaden scope.
-- Planning/coding sessions run through the Cursor CLI agent unless AO config overrides the role.
+- GitHub Issues are the task source of truth.
+- Link every branch and PR to its issue; put `Closes #N`, `Fixes #N`, or `Resolves #N` near the top.
+- If scope guard reports `missing_issue_link`, fix placement; do not broaden scope.
 
 ### Scope discipline
 
-- Do not touch files outside the declared active scope.
-- Every task needs explicit file/path scope or a validated denylist.
-- Treat broad declarations (`src/**`, `**/*`) as suspicious; narrow first.
-- Normalize paths relative to the repository root before comparing to scope.
-- **Before commit:** inspect git status/diff; verify every modified path is allowed and not denied;
-  stop and record a scoped amendment if outside scope. Do not rely on PR CI as the first scope check.
-
-### Queued task specs
-
-- Do not delete queued task specs unless deletion is in scope.
+- Do not touch paths outside the active declaration or issue fence.
+- Treat broad scope as suspicious and narrow it first.
+- Before commit, inspect status/diff and verify every changed path.
 - Do not rewrite another task's declaration to make the current diff pass.
-- One amendment per iteration; keep the previous baseline auditable.
+- Keep one amendment per iteration and preserve the previous baseline.
 
 ### Shared source of truth
 
-- Extract a single source of truth before duplicating literals, prompts, paths, policies, or commands.
-- Prefer generation or shared data files over paired script/template edits.
+Extract one source of truth before duplicating literals, prompts, paths, policies, or commands.
+Prefer generation or shared data over paired manual edits.
 
 ### Upgrade-safe AO usage
 
-- Prefer plugin, config, prompt, wrapper, hook, or CI extensions over AO core patches.
-- Do not edit upstream `packages/core/`. Write a contract or wrapper first.
+Prefer pack prompts, config, plugins, wrappers, hooks, and CI over AO core patches. Never edit
+upstream `packages/core/**`.
 
-### Build the minimum (no unrequested abstraction)
+### Build the minimum
 
-Build the **smallest** implementation that satisfies acceptance criteria. Avoid **unrequested
-abstraction** unless justified by an acceptance criterion, public boundary, cross-platform need,
-generated-drift prevention, risky-seam testability, or upgrade-safety. Rigor is not optional:
-validation, data-loss prevention, security, and required tests are never skimped for minimalism.
-
-This clause governs the AO **worker surface** only — rules in this file (`AGENTS.md`).
+Build the smallest implementation that satisfies acceptance criteria. Avoid unrequested
+abstraction, but never omit validation, data-loss prevention, security, or required tests.
 
 ### `gh` wrapper transport
 
-On Linux-hosted surfaces with pack `scripts/` on PATH, **every GitHub read** MUST go through pack
-`scripts/gh` using **inventory-listed canonical forms** (auto-REST). **Forbidden transports:**
-agents MUST NOT improvise raw `curl` to `api.github.com`, `gh api graphql`, throwaway temporary
-`gh` shims (including `/tmp/gh-rest-bin/gh`), or `unset GH_WRAPPER_ACTIVE` to bypass the wrapper.
-Uncovered argv: report for inventory extension via `scripts/check-gh-inventory-static.ps1`.
-
-Before recommending new pack-owned `gh` read argv shapes, verify classification via
-`scripts/check-gh-inventory-static.ps1`. Uncovered executable reads are an **inventory-extension
-report**, not permission to bypass the wrapper.
+On Linux-hosted surfaces with pack `scripts/` on `PATH`, every GitHub read MUST use pack
+`scripts/gh` with an inventory-listed canonical form. Do not use raw GitHub API `curl`,
+direct GraphQL bypasses, temporary `gh` shims, `/tmp/gh-rest-bin/gh`, or
+`unset GH_WRAPPER_ACTIVE` workarounds.
 
 ### Command-runtime bootstrap
 
-Before autonomous orchestrator command turns run side-effecting workflows, pass
-`scripts/orchestrator-command-runtime-preflight.ps1`. Missing `pwsh`/`node`/pack `scripts/gh` on
-PATH must **fail closed** — no dotfile edits or temp wrappers. Structured wrappers parse **stdout
-JSON only**. Uncovered `gh` reads: report and fail closed. Do not author `/tmp/gh-rest-bin/gh`,
-direct bash REST branches in `scripts/gh`, raw `curl api.github.com`, `gh api graphql`, or
-`unset GH_WRAPPER_ACTIVE` workarounds. Recovery belongs to Issues **#522/#527** — do not improvise
-alternate recipes.
+Before autonomous side-effecting command turns, pass
+`scripts/orchestrator-command-runtime-preflight.ps1`. Missing `pwsh`, `node`, or pack `scripts/gh`
+must fail closed. Do not repair the environment by editing dotfiles or creating temporary wrappers.
 
-### Review / CI / Handoff worker contract
+### Review / CI / handoff
 
-Local Codex PR review **is active**. On AO 0.10 the loop is **workspace-visible prompts** plus
-**side-process scripts** supervised by `scripts/orchestrator-wake-supervisor.ps1` — not
-AO-injected `orchestratorRules`.
+- PR review is pack-owned. Workers do not call `ao review run`, use AO review state, or invent a
+  review trigger.
+- AO review surfaces still exist upstream in AO 0.10.3 but are retired by this pack.
+- The runner and wrapper are `scripts/pack-review-runner.ts` and
+  `scripts/invoke-pack-review.ps1`; the complete contract is
+  [`docs/pack-review-runbook.md`](docs/pack-review-runbook.md).
+- Durable PR ↔ session binding is pack-owned. Do not infer it from AO review state or assume bulk
+  `ao session ls --json` contains `branch`, `prs[]`, `prNumber`, `.pr`, or `ownedHeadSha`.
+- Never merge from an AO-managed worker. Only the operator merges.
+- Use `pack-worker-report` for worker lifecycle state; do not use the retired pack use of
+  `ao report` or substitute comments.
+- `ready_for_review` requires green required CI on the current head. Red or pending CI stays
+  `fixing_ci`; self-fix is primary.
+- After current-head findings, report `addressing_reviews`, fix them, restore green CI, then report
+  `ready_for_review` for the new head. Do not idle or report `completed` with open findings.
+- Inspect the pack run journal and current GitHub COMMENT/status. Never use a different-head result.
+- Reviewer selection and supervisor adoption are operator-only. Workers must not restart AO or the
+  pack supervisor.
 
-- **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational
-  status comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the
-  authoritative verdict.
-- Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
-  AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
-  are not fallback or dual-write paths.
-- **Pack review stdout (issue #663):** On exit 0, `REVIEW_COMMAND` stdout is non-empty terminal
-  verdict JSON — see the behavior table in `plugins/ao-codex-pr-reviewer/README.md`. Zero-length
-  stdout on exit 0 is not a valid success signal; when stdout parses as `verdict: clean`, treat the
-  review as terminal success and do not re-invoke on the same PR head.
+### Worker pre-flight (blocking)
 
-**Orchestrator escalation ack (issue #641):** invoke `scripts/lib/Orchestrator-Escalation.ps1` with
-validated tokens from the wake JSON.
-
-#### Required CI (CI green)
-
-One definition for worker `ready_for_review` and orchestrator CI pings:
-
-- **Preferred:** GitHub **required status checks** for the PR base branch.
-- **Fallback:** all pack merge-contract checks on the PR head (`scope-guard` workflows) when branch
-  protection lists none.
-
-Inspect with
-`gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow,description`
-against the **current PR head**. Not CI-green while any required check is `fail`, `pending`, or
-missing.
-
-#### Worker report store
-
-Worker lifecycle reports use the pack-owned command on PATH:
-
-```powershell
-pack-worker-report --state <ready_for_review|fixing_ci|addressing_reviews|completed|blocked>
-```
-
-`pack-worker-report` writes durable JSON under
-`~/.local/state/orchestrator-pack-wake-supervisor`; workers MUST NOT use removed AO report surfaces
-or `.agent-report-audit` files. If the command cannot determine the current repo/session/PR/head
-binding, skip silently for the report write only and continue the required task work. Do not
-substitute PR comments or issue comments for worker report state.
-
-#### Worker CI gate (`ready_for_review` and self-fix)
-
-**Self-fix is primary.** Do **not** run `pack-worker-report --state ready_for_review` while required
-CI is not green.
-Before every report, check the **current** head; stale green on an earlier head does not count.
-**Red:** fix and stay in `fixing_ci`. **Pending:** stay in `fixing_ci` and remain engaged until
-green, red, or degraded-CI escalation. If CI fails after `ready_for_review`, immediately run
-`pack-worker-report --state fixing_ci`.
-
-#### PR created hand-off (initial path)
-
-**Worker self-drive is primary.** `pr_created` is transient — drive to hand-off before idling.
-**Stop categories:** (A) `ready_for_review` with green required CI, or terminal failure with
-reason; (B) evidence-backed degraded-CI escalation via the #641 escalation router (`scripts/lib/Orchestrator-Escalation.ps1` / catalogued `llm-orchestrator` delivery), not a raw worker `ao send`. Dot-source `scripts/lib/Invoke-WorkerDegradedCiHandoff.ps1` and call `Invoke-WorkerDegradedCiHandoff -PrNumber <N> -PrHeadSha <sha> -WorkerSessionId <id> -Reason "<required-check reason>"` to emit the escalation, then run `pack-worker-report --state completed` to record the terminal report. Green CI alone is not exit.
-Forbidden: silent disengagement while PR lacks hand-off for current head.
-
-#### Review feedback and AO review response
-
-On delivered findings, **must not** idle: use `addressing_reviews` → optional `fixing_ci` → `ready_for_review` after CI is green; never report `completed` with open findings. Inspect current-head pack-store/GitHub review.
-
-Script-owned orchestrator review starters and predicates:
-[`docs/script-owned-review-pipeline.md`](docs/script-owned-review-pipeline.md).
-
-#### Review delivery telemetry (Issue #718)
-
-Trust reviewer terminal JSON, the current-head GitHub review, and dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are REMOVED. On telemetry failure, skip silently—never post substitute notifications or synthesize findings from store rows.
-**Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
-#### Review-cycle cap (Issue #646)
-
-Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on
-reconcile/reeval/wake/turn surfaces; uses #611 pre-fetched runs only. Tier caps T1=2/T2=4/T3=8
-(default T2): first clean head → `clean_early_stop`; at cap with findings → `at_cap_open_findings`
-(Brief B triage).
-
-#### At-cap merge triage (Issue #648)
-
-When `at_cap_open_findings` is latched, merge eligibility consults `docs/merge-triage-gate.mjs` /
-`scripts/lib/Merge-TriageGate.ps1`. Merge may proceed only on current-head `clean_early_stop` or
-validated `merge_triage_cleared` with matching marker-list and open-finding snapshot hashes; BLOCK
-and pending architect/operator adjudication deny merge. This helper is read-only merge policy
-input, not a merge executor.
-
-#### Worker pre-flight (blocking)
-
-Before implementation, **re-run the tier marker check with fresh eyes**. If reality exceeds the
-assigned tier, **stop and escalate upward** — never silently proceed. Full rubric and draft-author
-ceremony: [`docs/tiering.md`](docs/tiering.md). Guard: `scripts/check-tier-calibration-consistency.ps1`.
+Re-run the tier marker check before implementation. If reality exceeds the assigned tier, stop and
+escalate. See [`docs/tiering.md`](docs/tiering.md).
 
 ### Managed session constraints
 
-Managed sessions MUST NOT run `ao stop`, `ao start`, `ao restart`, or edit user shell dotfiles.
-PACK_REVIEWER and AO restarts are operator-only.
-
-### Task complexity tiering
-
-Architect/draft-author tier rubric and per-tier draft-review flow live in
-[`docs/tiering.md`](docs/tiering.md). Workers use **Worker pre-flight (blocking)** above before
-implementation.
+Managed sessions MUST NOT run `ao stop`, `ao start`, `ao restart`, restart the pack supervisor, or
+edit user shell dotfiles. `PACK_REVIEWER` and process/session adoption are operator-only.
 
 ### Operator adoption handoff
 
-When a task changes **operator-facing surfaces** — `agent-orchestrator.yaml.example`, runbooks
-introducing listeners/watchers, documented operator env vars, or `orchestratorRules` / `reactions`
-requiring `ao stop` / `ao start` for **yaml runtime** — before reporting completion:
-
-- Add **`## Operator adoption`** to the PR body with the post-merge checklist.
-- Add or update **`docs/migration_notes.md`**.
-- Do **not** run `pack-worker-report --state completed` while adoption docs are missing when
-  required.
-
-Workers **document** adoption; they do **not** execute it by default. Do not merge live yaml or
-start listeners from an AO worktree unless the issue explicitly asks in the primary checkout.
-
-Cosmetic-only `.example` edits may use: `No operator adoption required`. See
-`docs/migration_notes.md` and `docs/orchestrator-autoloop-go-live.md`.
+When a task changes operator-facing surfaces, add `## Operator adoption` to the PR body and update
+`docs/migration_notes.md` when required. Workers document adoption; they do not modify live
+ProjectConfig, restart pack processes, or recycle sessions unless explicitly authorized.
 
 ## Auto-invoke skills
 
-On a trigger below (substring or clear paraphrase — best-effort discovery, not a deterministic
-gate) follow the named skill immediately; no skill name required. Every skill has loader wrappers
-at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
-**Routing when several could match:** «с кодексом» / «придирчиво» → `adversarial-draft-review`;
-«с gpt» / «с гпт» → `discuss-with-gpt`; plain «создай драфт» → `create-issue-draft`.
+On a trigger below, follow the named skill immediately; no skill name is required. Every skill has
+loader wrappers at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
 
-| Skill | Triggers (substring / paraphrase) | Action |
+| Skill | Triggers | Action |
 |---|---|---|
-| `investigate-root-cause` | «разобраться с причиной», «в чём причина», «что это», «разберись», «почему упал», «что сломалось», «отладь», «что случилось», «почему не работает»; «root cause», «why did», «figure out why», «investigate the cause», «wtf» | follow [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md); skip pure implementation / external adoption |
-| `merge-with-local-adoption` | «мерж», «мерж 385», «мерж и пул», «смерж», «смержи», «замержи»; «merge», «merge 307», «merge and pull», «merge the PR» | operator executes merge + safe pull + local adoption on the live checkout — **see Operator-only merge above** |
-| `adversarial-draft-review` | «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход»; «draft with codex», «adversarial draft», «challenge the approach» | author draft → Codex challenge loop |
-| `discuss-with-gpt` | «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; «draft with gpt», «discuss with gpt», «challenge with gpt» | author draft → GPT challenge loop |
-| `create-issue-draft` | authoring or rewriting `docs/issues_drafts/NN-*.md`, or syncing a new Issue spec | full create-issue-draft procedure |
-| `study-external-source` | «изучи <URL>», research an external repo/URL for adoption | external-source adoption triage |
-| `publish-issue-draft` | «опубликуй драфт», «закоммить драфт», «pr для драфта», «обнови драфт/issue и опубликуй», «смержи драфт»; «publish draft», «publish/update this draft»; after `create-issue-draft` | default **sync-only**; commit / PR / merge to `main` only on explicit ask |
-| `switch-pack-reviewer` | «переключи ревьюера», «поставь codex», «поставь claude», «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude», «используется claude вместо codex», «глобально codex» | switch pack reviewer / fix `PACK_REVIEWER` drift |
-| `change-orchestrator-runtime` | «поменяй модель оркестратора», «смени промпт оркестратора», «другой оркестратор»; «change orchestrator model», «edit orchestrator rules», «switch orchestrator runtime» | change orchestrator model/prompt/runtime **and** apply the daemon-cache + session-restore steps |
+| `investigate-root-cause` | cause/failure/recurrence investigation | follow `prompts/investigate_root_cause.md` |
+| `merge-with-local-adoption` | concrete merge request | operator merge + safe pull + adoption; never AO worker |
+| `adversarial-draft-review` | draft with Codex / adversarial challenge | author draft → Codex challenge loop |
+| `discuss-with-gpt` | draft/discussion with GPT | author draft → GPT challenge loop |
+| `create-issue-draft` | author or rewrite an issue draft | full create-issue-draft procedure |
+| `study-external-source` | research an external repo/URL | external-source adoption triage |
+| `publish-issue-draft` | publish/sync a draft | sync-only by default; git publication only on explicit ask |
+| `switch-pack-reviewer` | change `PACK_REVIEWER` | switch reviewer and adopt through pack supervisor |
+| `change-orchestrator-runtime` | change orchestrator model/runtime | use the dedicated runtime-change procedure |
 
 ## RCA spec discipline
 
 Workers and architects share RCA invariants. Full procedure:
-[`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md) (**recurrence-diagnostic**,
-**5-Whys stop condition**). Authoring: `create-issue-draft` / `publish-issue-draft`
-(**behavior-kind**, **positive-outcome**, **parked-root-cause** fences). Cursor mirror:
-[`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-discipline.mdc). Architecture: §T
-in [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
+[`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md). Authoring uses
+`create-issue-draft` / `publish-issue-draft`; Cursor mirror:
+[`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-discipline.mdc).
 
-**Publish is cross-entrypoint:** `publish-issue-draft` lives under `.claude/` but Claude, Codex,
-Cursor, and Hermes sessions that read this `AGENTS.md` use that same canonical skill; do not
-re-derive a Codex- or Hermes-specific publish flow.
+`publish-issue-draft` is cross-entrypoint; do not re-derive tool-specific publish flows.

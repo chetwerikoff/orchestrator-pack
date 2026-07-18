@@ -1,11 +1,13 @@
-# GitHub Issues + Cursor planner/worker + Codex reviewer setup
+# GitHub Issues + Cursor planner/worker + pack-owned reviewer setup
 
-This pack is configured for GitHub Issues as the task source of truth and Cursor
-CLI as the AO planning/coding agent.
+This pack uses GitHub Issues as the task source of truth, Cursor CLI for planning
+and coding, and the pack-owned runner for local PR review.
 
-## Supported directly by current AO schema
+Canonical review operations: [`pack-review-runbook.md`](pack-review-runbook.md).
 
-Current upstream AO config supports these role-specific overrides:
+## AO project roles
+
+Current AO project configuration supports role-specific agent overrides:
 
 ```yaml
 defaults:
@@ -32,71 +34,120 @@ projects:
 
 Meaning:
 
-- planner/orchestrator: Cursor CLI
-- coder/worker: Cursor CLI
-- task tracker: GitHub Issues
-- PR/CI/review state: GitHub SCM
-- workspace isolation: git worktrees
-- Windows runtime: process/ConPTY
+- planner/orchestrator: Cursor CLI;
+- coder/worker: Cursor CLI;
+- task tracker: GitHub Issues;
+- PR/CI state: GitHub;
+- worker isolation: git worktrees.
 
-## Reviewer policy
+Worker policy is loaded from tracked `AGENTS.md`. On AO 0.10.2, live runtime
+configuration is ProjectConfig rather than the example YAML file.
 
-Local Codex PR review **is active**. AO drives it through the first-class
-`ao review` CLI (`run`, `send`, `list`, `execute`). Orchestration and the
-autonomous review loop live in `orchestratorRules` in `agent-orchestrator.yaml`
-(see `agent-orchestrator.yaml.example`). Discover current runs with
-`ao review list <project>` and the AO dashboard Reviews board.
+## Local reviewer policy
 
-Reviewer: Codex CLI with `gpt-5.5`, authenticated via **ChatGPT OAuth**
-(`codex login`).
+AO does not spawn the local pack reviewer. Manual and automatic starts enter:
 
-See also: [`README.md`](../README.md#local-codex-review-active),
-[`AGENTS.md`](../AGENTS.md), and
-[`docs/architecture.md`](architecture.md#review-paths).
-
-On AO 0.9.x there is no `reviewer:` YAML role that AO reads — if you add
-`reviewer:` to YAML, AO parses it without error or warning but silently ignores
-it; wire review through `orchestratorRules` and `ao review`, not a `reviewer:`
-key.
-
-### Primary path — AO built-in local review
-
-AO 0.9.2 includes a built-in Codex review pipeline. When a worker session creates
-a PR, AO automatically calls `codex exec review` **on the local machine** and
-shows results in the dashboard Reviews board.
-
-On Windows with AO 0.9.2, this is broken upstream (wrong subcommand + Windows
-shell argument splitting). Apply the patch once after installing AO:
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
+```text
+scripts/pack-review-runner.ts
 ```
 
-Re-run this after every `npm install -g @aoagents/ao` upgrade.
+The runner invokes trusted:
 
-Prerequisites: Codex CLI installed and authenticated (`codex login`).
+```text
+scripts/invoke-pack-review.ps1
+```
 
-### Alternative path — GitHub Actions CI review
+`PACK_REVIEWER` selects `codex` or `claude` behind that common entrypoint.
 
-A reusable workflow at `.github/workflows/codex-pr-review.yml` runs Codex in CI
-and can post review findings as GitHub PR comments. Useful when you want review
-output visible on the GitHub PR rather than only in the local AO dashboard.
+Manual start:
 
-See `plugins/ao-codex-pr-reviewer/README.md` for the full wiring and secret setup.
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts start \
+  --session-id <worker-session-id>
+```
 
-Do not patch `packages/core/**` to add reviewer routing.
+Status:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts list \
+  --project-id orchestrator-pack
+```
+
+The retired AO review commands, session-review HTTP, and the deleted pack shim are
+legacy only. Do not use them as a fallback.
+
+## Review authority
+
+The live result is separated into distinct surfaces:
+
+- reviewer computation: terminal JSON from the selected wrapper;
+- durable result: pack review-run record with verdict and findings;
+- presentation: GitHub COMMENT review;
+- merge authority: exact-head required status `orchestrator-pack/pack-review`;
+- worker continuation: independent worker-notification delivery outcome;
+- operations: pack-store status, heartbeat, logs, and channel outcomes.
+
+Repository branch protection must require `orchestrator-pack/pack-review` after the
+journal-first delivery change is adopted.
+
+## Reviewer prerequisites
+
+For Codex:
+
+```bash
+codex --version
+codex login
+```
+
+For Claude:
+
+```bash
+claude --version
+```
+
+For both:
+
+```bash
+node --version
+git --version
+gh auth status
+pwsh --version
+```
+
+The old native-Windows AO patch is historical and not part of the supported
+Ubuntu/WSL pack-owned path.
+
+## Select Codex or Claude
+
+```powershell
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
+pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 \
+  -Reviewer <codex|claude> \
+  -RestartSupervisor
+```
+
+On supported Linux/WSL, `PACK_REVIEWER` is process-scoped and a running pack
+side-process supervisor must be restarted to inherit the change. Windows
+compatibility can resolve persistent User/Machine layers. Restarting the AO daemon
+is not reviewer adoption.
+
+## Optional GitHub Actions review
+
+The reusable workflow `.github/workflows/codex-pr-review.yml` remains available for
+external repositories that need CI-hosted review. It uses the same prompt, scope,
+parser, and finding schema, but it is not the local invocation path.
 
 ## GitHub Issue task convention
 
 Every issue intended for AO should include:
 
-- clear title;
-- acceptance criteria;
-- explicit path scope or denylist;
-- test/verification command when known;
-- any files that must not be touched.
+- a clear title and goal;
+- testable acceptance criteria;
+- explicit path scope, `allowed-roots`, or a denylist;
+- verification commands when known;
+- files or behavior that must not change.
 
-Every PR created from an issue should link back to the issue:
+Every PR must link its task issue near the top of the body:
 
 ```text
 Closes #123
@@ -108,35 +159,18 @@ or:
 Fixes #123
 ```
 
-## Local prerequisites
-
-Verify tools:
+## Local verification
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -StrictPrereqs
+pwsh -NoProfile -File scripts/verify.ps1 -StrictPrereqs
 ```
 
-Additional expected local CLIs for this profile:
-
-```powershell
-cursor --version
-codex --version
-ao --version
-gh auth status
-```
+Use the repository's normal verification suite for documentation and contract
+changes; this setup does not define a separate review-documentation checker.
 
 ## Start AO
 
-Do not start AO without an explicit target repository. After copying the example
-config to a local ignored `agent-orchestrator.yaml` and replacing the project
-block, start one target repo explicitly:
+Start AO only for an explicit target repository. Live review remains pack-owned and
+is started by the pack side-process fleet or the manual runner command above.
 
-```powershell
-ao start C:\Users\che\Documents\Projects\your-target-repo
-```
-
-or:
-
-```powershell
-ao start https://github.com/your-org/your-repo
-```
+Do not patch `packages/core/**` to add reviewer routing.

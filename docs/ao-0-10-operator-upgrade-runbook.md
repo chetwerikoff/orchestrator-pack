@@ -1,146 +1,85 @@
-# AO 0.10.x operator upgrade runbook (Issue #590)
+# AO 0.10.x operator upgrade runbook
 
-Operator guide for moving a **live** Agent Orchestrator installation from **0.9.5**
-to the current stable **0.10.x** release while preserving pack spawn safety and
-`PACK_REVIEWER` / `REVIEW_COMMAND` review driving.
+Operator guide for upgrading the live AO binary while preserving pack worker/session
+safety and the independent pack-owned review pipeline.
 
-> **Scope boundary.** This document and the companion preflight script record
-> release facts, install paths, output-shape gates, rollback steps, and the live
-> operator checklist. **CI and a merged PR do not upgrade the operator's AO
-> binary.** The install, restart, and `ao --version` proof happen **after merge**
-> from an **operator terminal** — never from an AO-managed worker session.
+Review operations: [`pack-review-runbook.md`](pack-review-runbook.md).
 
-## Prerequisite
+## Boundary
 
-- **Issue #589** (spawn `--project` / `--name` prerequisite) must be **merged and
-  adopted** before the live binary upgrade. See
-  [`docs/migration_notes.md`](migration_notes.md) § AO 0.10.x runnable `ao spawn`
-  shape.
-- Pack review driving stays on **`PACK_REVIEWER`** / **`REVIEW_COMMAND`** through
-  `scripts/invoke-pack-review.ps1`. Do **not** switch to AO typed `reviewers`
-  config or a top-level YAML `reviewer:` block — those paths are out of scope
-  for this pack.
+- Installing/upgrading AO is operator work after merge.
+- CI cannot change the operator's binary.
+- Live AO configuration is ProjectConfig and session state.
+- Pack review is not an AO reviewer harness. It is invoked by
+  `scripts/pack-review-runner.ts` and selected with `PACK_REVIEWER`.
+- Upgrading AO must not reintroduce daemon review invocation/status as a fallback.
 
-## Selected target (implementation-time capture)
+## Select the target release
 
-Facts below were captured on **2026-07-05** against upstream
-[`AgentWrapper/agent-orchestrator`](https://github.com/AgentWrapper/agent-orchestrator).
-Machine-readable copy:
-[`scripts/fixtures/ao-operator-upgrade/v0.10.2-release-facts.json`](../scripts/fixtures/ao-operator-upgrade/v0.10.2-release-facts.json).
+At execution time, resolve the newest acceptable stable upstream GitHub release and
+verify whether the matching npm/platform package is actually published. Do not rely
+on an old captured “latest” value.
 
-| Field | Value |
-|-------|-------|
-| **Selected stable release** | `v0.10.2` |
-| **Published** | 2026-07-03T20:39:51Z |
-| **Selection basis** | Latest non-prerelease tag on GitHub releases |
-| **Newer non-stable observed** | `v0.10.3-nightly.202607041403` (nightly only — not selected) |
+Use the pack `gh` wrapper for GitHub reads and record:
 
-**Re-check before you install.** If a newer **stable** tag exists, prefer it
-unless the operator explicitly holds at `v0.10.2`. Refresh facts with:
+- tag and publication time;
+- asset names/platform/architecture;
+- upstream checksums/signatures when available;
+- package-registry availability;
+- current installed binary path/version;
+- rollback artifact or install method.
+
+Abort when an asset lacks required integrity evidence unless the operator explicitly
+accepts the documented upstream gap.
+
+## Pre-upgrade snapshot
 
 ```bash
-export PATH="/path/to/orchestrator-pack/scripts:$PATH"
-which gh   # must resolve to orchestrator-pack/scripts/gh
-gh api repos/AgentWrapper/agent-orchestrator/releases --paginate --jq '.[].tag_name'
+command -v ao
+ao --version
+type ao
 ```
-
-## npm installability
-
-GitHub releases are the binding source for **0.10.2** adoption while npm lags.
-
-| Package | Latest on npm (2026-07-05) | Target `0.10.2` installable? |
-|---------|---------------------------|------------------------------|
-| `@aoagents/ao` | `0.10.0` | **No** (`npm view @aoagents/ao@0.10.2` → E404) |
-| `@aoagents/ao-linux-x64` | `0.10.0` | **No** |
-
-**Therefore:** use a **GitHub release asset** for the live upgrade. Do **not**
-run `npm install -g @aoagents/ao@0.10.2` — it will fail or silently pin an
-older line.
-
-Verify at upgrade time:
 
 ```bash
-npm view @aoagents/ao versions --json
-npm view @aoagents/ao-linux-x64 versions --json
+ao status --json
+ao orchestrator ls --json
+ao session ls --json -p orchestrator-pack --all
 ```
-
-## GitHub release asset install (Linux / WSL2 x86_64)
-
-Primary assets for Ubuntu 22.04+ / WSL2 on **amd64**:
-
-| Asset | URL | Size (bytes) | Checksum / signature on release |
-|-------|-----|--------------|--------------------------------|
-| `.deb` | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator_0.10.2_amd64.deb | 93 231 416 | **None published** — operator acknowledgement required |
-| AppImage (checksum-backed) | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/Agent.Orchestrator-0.10.2.AppImage | 120 483 726 | **sha512** in `latest-linux.yml` (see below) |
-| `.rpm` | https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator-0.10.2-1.x86_64.rpm | 91 955 233 | **None published** — operator acknowledgement required |
-
-### AppImage integrity (upstream-published)
-
-Use the asset named in `latest-linux.yml` — **`Agent.Orchestrator-0.10.2.AppImage`**
-(not the lowercase `agent-orchestrator-linux-x64.AppImage` alias, which has no
-published checksum on the release).
-
-```bash
-curl -fsSL -o /tmp/latest-linux.yml \
-  "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/latest-linux.yml"
-curl -fL -o /tmp/Agent.Orchestrator-0.10.2.AppImage \
-  "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/Agent.Orchestrator-0.10.2.AppImage"
-# Expect sha512 for Agent.Orchestrator-0.10.2.AppImage:
-# I5FUlUuOPfEPvEfKXcqfP3SHrUj2XMH/0hL+g5KgDBnXCc3Es1YlFwG8WP7VSKZ4kRbdo8XqP53NNTfKnTSSXg==
-```
-
-After download, verify size **120 483 726** and compare your local sha512 before
-install. **Abort** on mismatch.
-
-### `.deb` install (recommended on Ubuntu / WSL2)
-
-```bash
-curl -fL -o /tmp/agent-orchestrator_0.10.2_amd64.deb \
-  "https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.2/agent-orchestrator_0.10.2_amd64.deb"
-# No upstream checksum — record file size 93231416 and your own sha256 before proceeding:
-sha256sum /tmp/agent-orchestrator_0.10.2_amd64.deb
-sudo dpkg -i /tmp/agent-orchestrator_0.10.2_amd64.deb
-```
-
-**Absent checksum acknowledgement:** upstream publishes **no** detached checksum
-or signature for the `.deb` or `.rpm` assets. The operator must explicitly
-acknowledge that gap before `dpkg -i` / `rpm -i`.
-
-## Hard pre-upgrade gates (fail closed)
-
-Complete **all** gates before changing the live AO binary. Abort and roll back
-(see below) on any failure.
-
-### 1. Pack prerequisite #589 adopted
 
 ```powershell
-pwsh -NoProfile -File scripts/check-ao-spawn-shape.ps1
-npx vitest run scripts/ao-spawn-shape.test.ts
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
+pwsh -NoProfile -File scripts/verify.ps1
 ```
 
-Live `agent-orchestrator.yaml` must teach
-`ao spawn --project <project> --name "<label>" --issue <N> --prompt "<task text>"` (not bare `ao spawn`). Restart
-AO after yaml edits **before** the binary upgrade.
-
-### 2. Repo-side preflight (safe in any checkout)
-
-```powershell
-pwsh -NoProfile -File scripts/check-ao-operator-upgrade-preflight.ps1
-```
-
-### 3. Target spawn `--help` confirms `--name` contract
-
-Run against the **target** binary once installed (or a throwaway test install):
+Also record open PRs/current heads and pack review runs:
 
 ```bash
-BIN=ao
-$BIN spawn --help | grep -E -- '--name|--project'
+node --experimental-strip-types scripts/pack-review-runner.ts list \
+  --project-id orchestrator-pack
 ```
 
-Expect both flags documented. Missing `--name` → **abort**; do not point live
-`PATH` at that binary.
+## Hard gates
 
-### 4. Review selector unchanged
+### Spawn/session command shape
+
+Verify the target binary supports the project/name/session commands used by current
+pack recovery and worker orchestration. Missing required flags blocks adoption.
+
+### JSON output shape
+
+Capture and compare the current commands actually parsed by the pack, including:
+
+- daemon health;
+- orchestrator list;
+- project session list;
+- project config reads/writes;
+- any other live command named by the changed version's adoption issue.
+
+Do not require or capture retired daemon review-session rows as an upgrade gate.
+Pack review status comes from the pack store.
+
+### Pack-owned reviewer
 
 ```powershell
 pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
@@ -148,149 +87,128 @@ pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
 
 Confirm:
 
-- Live **`REVIEW_COMMAND`** dispatches `scripts/invoke-pack-review.ps1` (see
-  `agent-orchestrator.yaml.example`).
-- Effective **`PACK_REVIEWER`** is `codex` or `claude` — not unset.
-- Live yaml has **no** top-level `reviewer:` block and **no** typed `reviewers:`
-  project config relied on by pack scripts.
+- effective selector is `codex` or `claude`;
+- selected CLI exists on `PATH` in the environment inherited by the pack supervisor;
+- `scripts/pack-review-runner.ts` and trusted reviewer entrypoint are present;
+- the pack supervisor can be restarted independently of AO;
+- branch protection requires `orchestrator-pack/pack-review` when the journal-first
+  review delivery contract has been adopted.
 
-See [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
+The example YAML is not reviewer configuration, and an AO daemon restart is not
+reviewer adoption.
 
-### 5. Output-shape compatibility sweep (#223 / draft 76)
+### Repository verification
 
-The pack parses AO CLI JSON in trigger tests and review/reconcile paths. A
-two-minor jump can break wrappers even when `ao --version` looks healthy.
-
-**Minimum commands to capture against the target AO binary** (scrub secrets/ids
-before commit):
-
-| Command | Variant reference family |
-|---------|-------------------------|
-| `ao review list <project> --json` | `tests/external-output-references/variants/ao-review-run/` |
-| `ao status --json --reports full` | `tests/external-output-references/variants/ao-status-session/` |
-| Review/reconcile-path captures used by spawn-budget and seed-liveness suites | `tests/external-output-references/captures/` per-suite manifests |
-
-**Sweep procedure:**
-
-1. Install target AO in an isolated shell or operator staging path (not from a
-   managed worker session).
-2. Capture redacted JSON for each row above; compare field shapes to the
-   anchored variants under `tests/external-output-references/`.
-3. Refresh captures when shapes are compatible but version-stale:
-
-   ```bash
-   # After updating scrubbed *.json under tests/external-output-references/captures/
-   node scripts/generate-capture-manifest.mjs --repo-root .
-   ```
-
-4. Run guards:
-
-   ```powershell
-   node --experimental-strip-types scripts/gate-runner/runner.ts --gate external-output-shape-guard
-   npx vitest run scripts/external-output-shape-guard.test.ts
-   ```
-
-5. **Drift policy:** if the target AO emits fields no variant allows, or drops
-   required fields pack scripts parse, **block the live upgrade** and open a
-   follow-up issue to adopt fixtures/checks first. Do not weaken the guard to
-   force an upgrade.
-
-## Rollback and abort path
-
-### Before changing anything — capture baseline
-
-```bash
-command -v ao
-ao --version          # expect 0.9.5 today
-type ao               # npm global vs pack shim vs .deb path
-npm list -g @aoagents/ao 2>/dev/null || true
+```powershell
+pwsh -NoProfile -File scripts/check-ao-operator-upgrade-preflight.ps1
+pwsh -NoProfile -File scripts/verify.ps1
+pwsh -NoProfile -File scripts/check-reusable.ps1
 ```
 
-Record the install method (npm global, `.deb`, AppImage, etc.) in your operator
-notes.
+These normal repository checks are the complete verification set for this runbook;
+do not introduce a separate documentation-only checker.
 
-### Known-good 0.9.5 reinstall (npm path)
+## Install
+
+Use the verified package/asset for the operator platform. Keep the previous binary
+or a reproducible rollback method until all post-upgrade checks pass.
+
+After install:
 
 ```bash
-npm install -g @aoagents/ao@0.9.5
 ao --version
+command -v ao
 ```
 
-For `.deb` rollback, keep the previously installed package or re-fetch the last
-known 0.9.5 asset from GitHub release history if you used a package install.
+## Adopt live runtime
 
-### Abort triggers
-
-Stop and **do not** point production `PATH` at the new binary when:
-
-- GitHub asset size or AppImage sha512 mismatch
-- spawn `--help` output missing `--name` / `--project`
-- Output-shape sweep fails or shows unparsed drift
-- `PACK_REVIEWER` / `REVIEW_COMMAND` no longer resolves (fail-closed selector)
-- Post-upgrade verification below fails
-
-### After a failed upgrade
-
-1. Reinstall or repoint `PATH` to the captured 0.9.5 binary.
-2. Operator restart: `ao stop` then `ao start <project>` (operator terminal
-   only — not from managed sessions).
-3. Rerun pack checks:
+1. Apply any required ProjectConfig changes.
+2. Restore/recycle only sessions that must inherit changed AO configuration.
+3. Restart the pack side-process supervisor when its executable path, environment,
+   registry, or `PACK_REVIEWER` inheritance changed:
 
    ```powershell
-   pwsh -NoProfile -File scripts/verify.ps1
-   pwsh -NoProfile -File scripts/check-reusable.ps1
+   pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Stop
+   pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Start
    ```
 
-## Live operator post-merge checklist
+4. Do not overwrite a local ignored configuration file from the example.
+5. Do not discard unknown worktree changes.
 
-> **Operator work only — not CI acceptance.** Complete after this runbook merges
-> to `main`.
+Restart AO only when daemon health/install adoption requires it. Use the AO 0.10
+supported start command shape; there is no reviewer-specific project-start step.
 
-- [ ] Merge pack PR for Issue #590 and pull `main` in the **operator** checkout
-      (not only the AO worktree).
-- [ ] Re-run release/npm fact checks if more than a few days passed since merge.
-- [ ] Confirm Issue #589 adoption steps in
-      [`docs/migration_notes.md`](migration_notes.md) are done on live yaml.
-- [ ] Run `pwsh -NoProfile -File scripts/check-ao-operator-upgrade-preflight.ps1`.
-- [ ] Install **v0.10.2** (or newer stable) via GitHub asset; acknowledge missing
-      `.deb`/`.rpm` checksums if using those formats.
-- [ ] Verify through the **pack-resolved** command path:
+## Post-upgrade verification
 
-  ```bash
-  ao --version    # expect 0.10.2+
-  BIN=ao
-  $BIN spawn --help | grep -E -- '--name|--project'
-  ```
+### AO/session health
 
-- [ ] Run the **output-shape sweep** (§5) against the live binary; adopt fixture
-      drift in a follow-up PR if needed before relying on autonomous review/spawn.
-- [ ] Operator restart AO: `ao stop` / `ao start orchestrator-pack` (or your
-      project name).
-- [ ] `pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1` — effective
-      reviewer matches intent.
-- [ ] **Stale-session smoke** (bounded; do not disrupt real work):
-      - Kill a disposable test worker session; confirm one-shot restore markers
-        behave per upstream PR #2320 (no stale resurrection).
-      - Restart AO while a harmless test session is alive; confirm upgrade-safe
-        adoption per upstream PR #2350 (alive sessions survive; truly dead
-        sessions stay dead).
-- [ ] `pwsh -NoProfile -File scripts/verify.ps1` on the operator pack checkout.
+```bash
+ao status --json
+ao orchestrator ls --json
+ao session ls --json -p orchestrator-pack --all
+```
 
-## Related docs
+### Pack side-process health
 
-- [`docs/migration_notes.md`](migration_notes.md) — § Issue #589 spawn shape, §
-  Issue #590 adoption summary
-- [`docs/ubuntu-setup-runbook.md`](ubuntu-setup-runbook.md) — first-time Linux/WSL2
-  setup (npm prefix, `PATH`)
-- [`docs/reviewer-switch-runbook.md`](reviewer-switch-runbook.md) —
-  `PACK_REVIEWER` / `REVIEW_COMMAND`
-- [`docs/issues_drafts/76-golden-sample-fixtures-field-shape-guard.md`](issues_drafts/76-golden-sample-fixtures-field-shape-guard.md)
-  — field-shape guard design (#223)
-- [`README.md`](../README.md) — pack overview and verification commands
+```powershell
+pwsh -NoProfile -File scripts/orchestrator-wake-supervisor.ps1 -Action Status
+pwsh -NoProfile -File scripts/check-vestigial-fleet-children-retired.ps1 -Json
+```
 
-## Historical naming note
+### Pack review smoke
 
-Older pack docs reference `ComposioHQ/agent-orchestrator`. Upstream stable
-releases for this upgrade live under **`AgentWrapper/agent-orchestrator`**. If
-an old bookmark 404s, use the AgentWrapper repository for release assets and
-tags.
+On a safe open PR/current head:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts start \
+  --session-id <worker-session-id>
+node --experimental-strip-types scripts/pack-review-runner.ts list \
+  --project-id orchestrator-pack
+```
+
+Verify:
+
+- exact current head binding;
+- expected reviewer wrapper;
+- durable verdict/findings journal;
+- GitHub COMMENT outcome;
+- `orchestrator-pack/pack-review` exact-head status outcome;
+- worker-notification outcome;
+- no duplicate reviewer computation on same-head delivery resume.
+
+### Worker/session smoke
+
+Use disposable or harmless sessions to confirm:
+
+- truly dead sessions do not resurrect incorrectly;
+- restore uses current ProjectConfig;
+- live sessions are not killed by stale reconciliation;
+- worktree isolation remains intact.
+
+## Rollback
+
+Rollback when:
+
+- binary/asset integrity fails;
+- required command or JSON shapes are missing;
+- ProjectConfig/session restore breaks;
+- the pack supervisor cannot run current children;
+- the pack reviewer cannot resolve selector/trusted root/store;
+- exact-head review/status behavior fails.
+
+Restore the captured previous binary/install method, restore prior ProjectConfig if
+changed, recycle only affected sessions/processes, and rerun the complete verification
+set. Do not weaken guards or resurrect retired review paths to make the upgrade pass.
+
+## Operator record
+
+Record:
+
+- old/new binary versions and paths;
+- release/asset/checksum evidence;
+- ProjectConfig changes;
+- sessions/processes recycled;
+- pack supervisor status;
+- reviewer selector and smoke run ID;
+- rollback readiness;
+- any follow-up issue needed for output-shape drift.

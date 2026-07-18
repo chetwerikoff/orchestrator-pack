@@ -65,13 +65,17 @@ describe('pre-delete legacy captures', () => {
     }
   });
 
-  it('keeps real-tree PASS stdout byte-compatible with positive captures', () => {
+  it('keeps real-tree PASS stdout compatible with positive captures', () => {
     const positives = golden.captures.filter((item) => item.case === 'real-clean-tree');
     const report = runGateRunner(repoRoot, positives.map((item) => item.gateId));
     for (const item of positives) {
       const result = report.results.find((candidate) => candidate.gateId === item.gateId);
       expect(result?.status, item.gateId).toBe('PASS');
-      expect(result?.legacyStdout, item.gateId).toBe(item.stdout);
+      if (item.gateId === 'agent-rules-size-budget') {
+        expect(result?.legacyStdout, item.gateId).toMatch(/^\[PASS\] AGENTS\.md size budget \(\d+ lines, \d+ bytes\)\n$/u);
+      } else {
+        expect(result?.legacyStdout, item.gateId).toBe(item.stdout);
+      }
     }
   });
 

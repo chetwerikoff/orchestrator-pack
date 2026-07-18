@@ -1,34 +1,30 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: orchestratorRules require pack-owned review-run idempotency (Issue #98, #189, #625, #839).
+  Regression guard: pack-owned exact-head review idempotency runtime surfaces.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$example = Join-Path $Root 'agent-orchestrator.yaml.example'
-$text = Get-Content -LiteralPath $example -Raw
 
-$required = @(
-    'REVIEW RUN IDEMPOTENCY',
-    'current PR head sha',
-    'do not spawn a new run',
-    'covered terminal',
-    'up_to_date',
-    'changes_requested',
-    'PRE-RUN COVERAGE RE-CHECK',
-    'pack review runner',
-    'pack-side run/status store',
-    'Get-AoReviewRuns pack-store view'
-)
-
-$missing = @($required | Where-Object { $text -notlike "*$_*" })
-if ($text -like '*ao-review list*' -or $text -like '*Get-AoReviewRuns fan-out*') {
-    $missing += 'retired daemon review-list wording still present'
+$runnerPath = Join-Path $Root 'scripts/pack-review-runner.ts'
+$storePath = Join-Path $Root 'scripts/lib/pack-review-run-store.ts'
+foreach ($path in @($runnerPath, $storePath)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Host "Missing required runtime path: $path"
+        exit 1
+    }
 }
-if ($missing.Count -gt 0) {
-    Write-Host ("agent-orchestrator.yaml.example missing pack-owned idempotency phrases: {0}" -f ($missing -join ', '))
+
+$runner = Get-Content -LiteralPath $runnerPath -Raw
+$store = Get-Content -LiteralPath $storePath -Raw
+if ($runner -notmatch 'startPackReview' -or $store -notmatch 'createPackReviewRun') {
+    Write-Host 'pack runner/store idempotency surfaces are incomplete'
+    exit 1
+}
+if ($runner -match '\bao\s+review\s+run\b') {
+    Write-Host 'pack-review-runner.ts must not invoke AO review run'
     exit 1
 }
 
-Write-Host '[PASS] orchestratorRules documents pack-store review idempotency before pack review runner start'
+Write-Host '[PASS] pack-owned exact-head runner/store idempotency surfaces exist'
 exit 0
