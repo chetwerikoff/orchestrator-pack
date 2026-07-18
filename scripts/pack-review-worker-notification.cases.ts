@@ -9,13 +9,15 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   packReviewDeliveryNeedsResume,
+  resumePackReviewVerdictDelivery,
   sendPackReviewWorkerNotification,
 } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
+  getPackReviewRun,
   updatePackReviewRun,
   type PackReviewDeliveryOutcome,
   type PackReviewRunRecord,
@@ -35,7 +37,7 @@ function tempRoot(prefix: string): string {
 function deliveryOutcome(
   state: PackReviewDeliveryOutcome['state'],
   idempotencyKey: string,
-  reason = state,
+  reason: string = state,
 ): PackReviewDeliveryOutcome {
   return {
     state,
@@ -45,8 +47,39 @@ function deliveryOutcome(
   };
 }
 
+function createRun(storeRoot: string): PackReviewRunRecord {
+  return createPackReviewRun({
+    projectId: 'orchestrator-pack',
+    storeRoot,
+    prNumber: 894,
+    headSha: HEAD_SHA,
+    linkedSessionId: 'worker-894',
+    startReason: 'test',
+    surface: 'pack-review-worker-notification-test',
+    trustedPackRoot: repoRoot,
+    sourceRepoRoot: repoRoot,
+  }).run;
+}
+
+function journalFields(run: PackReviewRunRecord): Pick<PackReviewRunRecord,
+  'reviewVerdict' | 'findingCount' | 'findings' | 'journalOutcome'> {
+  return {
+    reviewVerdict: 'findings',
+    findingCount: 1,
+    findings: [{ severity: 'error' }],
+    journalOutcome: {
+      state: 'persisted',
+      recordedAtUtc: '2026-07-17T12:00:00.000Z',
+      reason: 'verdict_persisted',
+      idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
+      attempts: 1,
+    },
+  };
+}
+
 afterEach(() => {
   process.env = { ...originalEnv };
+  vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -55,30 +88,11 @@ describe('pack review worker notification admission (Issue #894)', () => {
     'treats terminal %s worker outcomes as complete instead of automatic resume',
     (workerState) => {
       const storeRoot = tempRoot(`opk-worker-terminal-${workerState}-`);
-      const run = createPackReviewRun({
-        projectId: 'orchestrator-pack',
-        storeRoot,
-        prNumber: 894,
-        headSha: HEAD_SHA,
-        linkedSessionId: 'worker-894',
-        startReason: 'test',
-        surface: 'pack-review-worker-notification-test',
-        trustedPackRoot: repoRoot,
-        sourceRepoRoot: repoRoot,
-      }).run;
+      const run = createRun(storeRoot);
       const terminal = updatePackReviewRun(run.id, {
         status: 'changes_requested',
         latestRunStatus: 'changes_requested',
-        reviewVerdict: 'findings',
-        findingCount: 1,
-        findings: [{ severity: 'error' }],
-        journalOutcome: {
-          state: 'persisted',
-          recordedAtUtc: '2026-07-17T12:00:00.000Z',
-          reason: 'verdict_persisted',
-          idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
-          attempts: 1,
-        },
+        ...journalFields(run),
         githubReviewId: 89401,
         githubReviewReconciliation: {
           phase: 'complete',
@@ -97,6 +111,133 @@ describe('pack review worker notification admission (Issue #894)', () => {
       }, { projectId: 'orchestrator-pack', storeRoot });
 
       expect(packReviewDeliveryNeedsResume(terminal)).toBe(false);
+    },
+  );
+
+  it.each(['failed', 'escalated'] as const)(
+    'preserves terminal %s worker outcome while another channel resumes',
+    async (workerState) => {
+      const storeRoot = tempRoot(`opk-worker-terminal-other-channel-${workerState}-`);
+      const run = createRun(storeRoot);
+      const workerOutcome = deliveryOutcome(
+        workerState,
+        `worker-notification:${run.id}:${HEAD_SHA}`,
+        `worker_${workerState}`,
+      );
+      const journaled = updatePackReviewRun(run.id, {
+        status: 'changes_requested',
+        latestRunStatus: 'changes_requested',
+        ...journalFields(run),
+        deliveryOutcomes: {
+          githubComment: deliveryOutcome(
+            'failed',
+            `github-comment:${run.id}:${HEAD_SHA}`,
+            'comment_channel_down',
+          ),
+          requiredStatus: deliveryOutcome(
+            'succeeded',
+            `required-status:orchestrator-pack/pack-review:${HEAD_SHA}`,
+          ),
+          workerNotification: workerOutcome,
+        },
+      }, { projectId: 'orchestrator-pack', storeRoot });
+      const postGithubComment = vi.fn(async () => {
+        updatePackReviewRun(run.id, {
+          githubReviewId: 89402,
+          githubReviewUrl: 'fixture://review/89402',
+          githubReviewEvent: 'COMMENT',
+          githubReviewReconciliation: {
+            phase: 'complete',
+          } as PackReviewRunRecord['githubReviewReconciliation'],
+        }, { projectId: 'orchestrator-pack', storeRoot });
+        return { id: 89402, url: 'fixture://review/89402', event: 'COMMENT' as const };
+      });
+      const writeRequiredStatus = vi.fn(async () => undefined);
+      const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected_retry' }));
+
+      expect(packReviewDeliveryNeedsResume(journaled)).toBe(true);
+      const result = await resumePackReviewVerdictDelivery({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        run: journaled,
+        postGithubComment,
+        writeRequiredStatus,
+        notifyWorker,
+      });
+
+      expect(result).toMatchObject({ ok: true, status: 'changes_requested' });
+      expect(postGithubComment).toHaveBeenCalledTimes(1);
+      expect(writeRequiredStatus).not.toHaveBeenCalled();
+      expect(notifyWorker).not.toHaveBeenCalled();
+      expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+        status: 'changes_requested',
+        deliveryOutcomes: {
+          githubComment: { state: 'succeeded' },
+          requiredStatus: { state: 'succeeded' },
+          workerNotification: workerOutcome,
+        },
+      });
+    },
+  );
+
+  it.each(['failed', 'escalated'] as const)(
+    'terminalizes a reviewing run after persisted %s worker outcome without retrying any channel',
+    async (workerState) => {
+      const storeRoot = tempRoot(`opk-worker-terminal-before-run-terminal-${workerState}-`);
+      const run = createRun(storeRoot);
+      const workerOutcome = deliveryOutcome(
+        workerState,
+        `worker-notification:${run.id}:${HEAD_SHA}`,
+        `worker_${workerState}`,
+      );
+      const journaled = updatePackReviewRun(run.id, {
+        status: 'reviewing',
+        latestRunStatus: 'reviewing',
+        ...journalFields(run),
+        githubReviewId: 89403,
+        githubReviewUrl: 'fixture://review/89403',
+        githubReviewEvent: 'COMMENT',
+        githubReviewReconciliation: {
+          phase: 'complete',
+        } as PackReviewRunRecord['githubReviewReconciliation'],
+        deliveryOutcomes: {
+          githubComment: deliveryOutcome('succeeded', `github-comment:${run.id}:${HEAD_SHA}`),
+          requiredStatus: deliveryOutcome(
+            'succeeded',
+            `required-status:orchestrator-pack/pack-review:${HEAD_SHA}`,
+          ),
+          workerNotification: workerOutcome,
+        },
+      }, { projectId: 'orchestrator-pack', storeRoot });
+      const postGithubComment = vi.fn(async () => ({
+        id: 89404,
+        url: 'fixture://review/89404',
+        event: 'COMMENT' as const,
+      }));
+      const writeRequiredStatus = vi.fn(async () => undefined);
+      const notifyWorker = vi.fn(async () => ({ state: 'delivered' as const, reason: 'unexpected_retry' }));
+
+      expect(packReviewDeliveryNeedsResume(journaled)).toBe(true);
+      const result = await resumePackReviewVerdictDelivery({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        run: journaled,
+        postGithubComment,
+        writeRequiredStatus,
+        notifyWorker,
+      });
+
+      expect(result).toMatchObject({ ok: true, status: 'changes_requested' });
+      expect(postGithubComment).not.toHaveBeenCalled();
+      expect(writeRequiredStatus).not.toHaveBeenCalled();
+      expect(notifyWorker).not.toHaveBeenCalled();
+      expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+        status: 'changes_requested',
+        latestRunStatus: 'changes_requested',
+        deliveryOutcomes: {
+          workerNotification: workerOutcome,
+        },
+      });
     },
   );
 
