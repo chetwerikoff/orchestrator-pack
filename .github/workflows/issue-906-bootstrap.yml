@@ -1,0 +1,31 @@
+name: issue-906-bootstrap
+
+on:
+  push:
+    branches:
+      - agent/issue-906-estate-cut
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pack tracked repository snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z | tar --null -T - -czf orchestrator-pack-issue-906.tgz
+          git rev-parse HEAD > snapshot-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-906-repo-snapshot
+          path: |
+            orchestrator-pack-issue-906.tgz
+            snapshot-head.txt
+          retention-days: 1
