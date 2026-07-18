@@ -73,16 +73,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run estate-cut:check
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run gate-runner-selftest
-          npm run test:issue-906
-          npm run test:foundation
-          npm test
-          git diff --check
-          test ! -e .github/workflows/issue-906-bootstrap.yml
-          test ! -e .issue-906-bootstrap
+          : > /tmp/issue-906-validation.log
+          run_step() {
+            printf '\n===== %s =====\n' "$*" | tee -a /tmp/issue-906-validation.log
+            "$@" 2>&1 | tee -a /tmp/issue-906-validation.log
+          }
+          run_step npm run estate-cut:check
+          run_step npm run typecheck:foundation
+          run_step npm run lint:foundation
+          run_step npm run gate-runner-selftest
+          run_step npm run test:issue-906
+          run_step npm run test:foundation
+          run_step npm test
+          run_step git diff --check
+          run_step test ! -e .github/workflows/issue-906-bootstrap.yml
+          run_step test ! -e .issue-906-bootstrap
+
+      - name: Upload validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-906-validation-diagnostics
+          path: /tmp/issue-906-validation.log
+          retention-days: 1
 
       - name: Publish final implementation tree
         shell: bash
