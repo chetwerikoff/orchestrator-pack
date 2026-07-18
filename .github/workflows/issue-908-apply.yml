@@ -120,11 +120,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm ci --ignore-scripts
-          npx vitest run scripts/pr-scope-check-pagination.test.ts
-          npm run typecheck:foundation
-          npm run lint:foundation
-          git diff --check
+          : > /tmp/issue-908-validation.log
+          run_step() {
+            printf '\n===== %s =====\n' "$*" | tee -a /tmp/issue-908-validation.log
+            "$@" 2>&1 | tee -a /tmp/issue-908-validation.log
+          }
+          run_step npm ci --ignore-scripts
+          run_step npx vitest run scripts/pr-scope-check-pagination.test.ts
+          run_step npm run typecheck:foundation
+          run_step npm run lint:foundation
+          run_step git diff --check
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-908-validation
+          path: /tmp/issue-908-validation.log
+          retention-days: 1
 
       - name: Publish
         shell: bash
