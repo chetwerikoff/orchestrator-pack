@@ -1,7 +1,8 @@
 import { resolve } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import { aggregateLane, type GateResult } from './contracts.ts';
-import { evaluateCensus, loadCensus } from './census.ts';
+import { loadCensus } from './census.ts';
+import { evaluateCurrentCensus } from './census-current.ts';
 import { evaluateDeclarativeGate } from './declarative.ts';
 import { representativeDeclarativeGates } from './representative-gates.ts';
 import { captureSourceSnapshot } from './source-snapshot.ts';
@@ -57,7 +58,7 @@ export function runGateRunner(repoRootInput: string, requestedGateIds?: readonly
   const selected = selectGateRegistrations(gateRegistrations, requestedGateIds);
   const results = selected.map((registration) => registration.evaluate(context));
   if (requestedGateIds === undefined || requestedGateIds.length === 0 || requestedGateIds.includes('gate-census')) {
-    results.push(evaluateCensus(loadCensus(repoRoot), snapshot, registeredGateIds));
+    results.push(evaluateCurrentCensus(loadCensus(repoRoot), snapshot, registeredGateIds));
   }
   return { results, aggregate: aggregateLane(results) };
 }
