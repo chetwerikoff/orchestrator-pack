@@ -1,31 +1,139 @@
-name: Issue 857 candidate source export
+name: Issue 857 candidate publisher
 
 on:
   pull_request:
     types: [synchronize]
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 jobs:
-  export:
+  publish:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-857-binding-contract-v2
-      - name: Apply base candidate patch
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Restore and finalize exact candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/issue857-candidate
+          mkdir -p /tmp/issue857-candidate
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/8426864990/zip" > /tmp/issue857-candidate.zip
+          unzip -q -o /tmp/issue857-candidate.zip -d /tmp/issue857-candidate
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          root = Path('/tmp/issue857-candidate')
+          runtime = root / 'docs/session-pr-binding-resolver.mjs'
+          text = runtime.read_text()
+          text = text.replace("const LEGACY_DISPLAY_KEY = ['display', 'Name'].join('');\n", '')
+          old = """    if (
+                syntheticPr > 0 &&
+                requestedHead &&
+                openPrHead === requestedHead &&
+                (!sessionHead || sessionHead === requestedHead)
+              ) {
+          """
+          new = """    const headCorroborated = !requestedHead || (
+                openPrHead === requestedHead &&
+                (!sessionHead || sessionHead === requestedHead)
+              );
+              if (
+                syntheticPr > 0 &&
+                syntheticRow &&
+                headCorroborated
+              ) {
+          """
+          if text.count(old) != 1:
+              raise SystemExit(f'runtime finalization anchor count={text.count(old)}')
+          runtime.write_text(text.replace(old, new))
+
+          test_path = root / 'scripts/session-pr-binding-resolver.test.ts'
+          tests = test_path.read_text()
+          old_test = """  it('accepts only head-corroborated synthetic prNumber rows without a prs field', () => {
+              const synthetic = {
+                name: 'synthetic-linked-worker',
+                sessionId: 'synthetic-linked-worker',
+                role: 'worker',
+                status: 'working',
+                prNumber: 690,
+              };
+              const binding = resolveSessionPrBinding(synthetic, [openPr690], { headSha, repoSlug });
+              expect(binding.bound).toBe(true);
+              expect(binding.prNumber).toBe(690);
+              expect(binding.bindingSource).toBe('issue_correlation');
+              expect(binding.enriched).toBe(false);
+          """
+          new_test = """  it('accepts exact-PR synthetic rows and requires head corroboration for head-bound calls', () => {
+              const synthetic = {
+                name: 'synthetic-linked-worker',
+                sessionId: 'synthetic-linked-worker',
+                role: 'worker',
+                status: 'working',
+                prNumber: 690,
+              };
+              const prLink = resolveSessionPrBinding(synthetic, [openPr690], { repoSlug });
+              expect(prLink.bound).toBe(true);
+              expect(prLink.prNumber).toBe(690);
+              expect(prLink.bindingSource).toBe('issue_correlation');
+              expect(prLink.enriched).toBe(false);
+
+              const headBound = resolveSessionPrBinding(synthetic, [openPr690], { headSha, repoSlug });
+              expect(headBound.bound).toBe(true);
+              expect(headBound.prNumber).toBe(690);
+          """
+          if tests.count(old_test) != 1:
+              raise SystemExit(f'test finalization anchor count={tests.count(old_test)}')
+          test_path.write_text(tests.replace(old_test, new_test))
+
+          expected = {
+              'docs/session-pr-binding-resolver.mjs': 'dee56a9c653602d293ec7e292147b09a1c5b89ce8f0d7fd60200d9e265d32940',
+              'docs/session-pr-binding-resolver.d.mts': '0fbaf893e5bdde99e1592668734cf5605f9e8cd8219e18cc3eb93597449191f7',
+              'scripts/session-pr-binding-resolver.test.ts': 'e6f3f55c16cb7a2bb7ab913851b57859e37b6c6379cf8abe7cbbf4c9ab5acc05',
+          }
+          for rel, digest in expected.items():
+              actual = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+              if actual != digest:
+                  raise SystemExit(f'{rel}: sha256 {actual} != {digest}')
+              target = Path(rel)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes((root / rel).read_bytes())
+          PY
+      - name: Validate exact candidate
         shell: bash
         run: |
-          awk '/python - <<'"'"'PY'"'"'/{capture=1; next} capture && /^          PY$/{exit} capture {sub(/^          /, ""); print}' \
-            .github/workflows/issue857-synthetic-compat-fix.yml | python -
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue857-candidate-source-${{ github.run_id }}
-          path: |
-            docs/session-pr-binding-resolver.mjs
-            docs/session-pr-binding-resolver.d.mts
-            scripts/session-pr-binding-resolver.test.ts
-          if-no-files-found: error
+          set -euo pipefail
+          node --check docs/session-pr-binding-resolver.mjs
+          npm test -- \
+            scripts/session-pr-binding-resolver.test.ts \
+            scripts/review-finding-delivery-submit.test.ts \
+            scripts/review-ready-stuck-guard.test.ts \
+            scripts/worker-report-store.test.ts \
+            scripts/worker-status-store.test.ts
+          npx tsc --project tsconfig.base.json --noEmit
+          node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+          pwsh -NoLogo -NoProfile -File ./scripts/install-pester-ci.ps1
+          pwsh -NoLogo -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
+          git diff --check
+      - name: Commit exact candidate
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/session-pr-binding-resolver.mjs docs/session-pr-binding-resolver.d.mts scripts/session-pr-binding-resolver.test.ts
+          git commit -m 'Preserve head-corroborated synthetic binding compatibility'
+          git push origin HEAD:agent/issue-857-binding-contract-v2
