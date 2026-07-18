@@ -179,6 +179,13 @@ jobs:
             gh pr comment 896 --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue857-comment.md
             exit "$status"
           fi
+      - name: Upload validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue857-clause-d-validation-${{ github.run_id }}
+          path: /tmp/issue857-validation.log
+          if-no-files-found: error
       - name: Commit migrated tests and declaration
         shell: bash
         run: |
