@@ -7,11 +7,27 @@
   "baseline": {
     "commit_sha": "4edefffd59371a5c608e0c80639250bc0d7f6637",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:6c1c1249d5ab99a05616d6520bdabb089ddaaf141cd7daebc1983240d20756c5"
+    "active_scope_hash": "sha256:bf9ee0a2fa005b888881947b3d3ecf8f9d8934adf0e71a591d74c8c5566f1685"
   },
   "declared_paths": [
-    ".claude/skills/merge-with-local-adoption/SKILL.md"
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:6c1c1249d5ab99a05616d6520bdabb089ddaaf141cd7daebc1983240d20756c5",
+      "new_active_scope_hash": "sha256:bf9ee0a2fa005b888881947b3d3ecf8f9d8934adf0e71a591d74c8c5566f1685",
+      "changed": {
+        "added": [
+          ".cursor/skills/merge-with-local-adoption/SKILL.md"
+        ],
+        "removed": []
+      },
+      "reason": "skill-pointer drift guard requires regenerating the generated .cursor mirror of the edited skill",
+      "actor": "architect",
+      "timestamp": "2026-07-18T12:28:57.987Z",
+      "applied": true
+    }
+  ]
 }
