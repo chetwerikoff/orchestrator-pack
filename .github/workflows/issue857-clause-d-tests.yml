@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   issues: read
+  pull-requests: write
 
 jobs:
   migrate:
@@ -138,12 +139,46 @@ jobs:
           PY
       - name: Validate TypeScript and migrated suites
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          npx tsc --project tsconfig.base.json --noEmit
-          npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
-          node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
-          git diff --check
+          set +e
+          log=/tmp/issue857-validation.log
+          : > "$log"
+          status=0
+
+          echo '$ npx tsc --project tsconfig.base.json --noEmit' >> "$log"
+          npx tsc --project tsconfig.base.json --noEmit >> "$log" 2>&1 || status=$?
+
+          if [ "$status" -eq 0 ]; then
+            echo '$ npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts' >> "$log"
+            npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts >> "$log" 2>&1 || status=$?
+          fi
+
+          if [ "$status" -eq 0 ]; then
+            echo '$ node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs' >> "$log"
+            node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs >> "$log" 2>&1 || status=$?
+          fi
+
+          if [ "$status" -eq 0 ]; then
+            echo '$ git diff --check' >> "$log"
+            git diff --check >> "$log" 2>&1 || status=$?
+          fi
+
+          cat "$log"
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '## Issue 857 Clause D validation failure'
+              echo
+              echo "Head: \`$(git rev-parse HEAD)\`"
+              echo
+              echo '```text'
+              tail -n 180 "$log"
+              echo '```'
+            } > /tmp/issue857-comment.md
+            gh pr comment 896 --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue857-comment.md
+            exit "$status"
+          fi
       - name: Commit migrated tests and declaration
         shell: bash
         run: |
