@@ -446,6 +446,11 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
       return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
     }
+    // Preserve #891 admission: resolve conflict attribution through the shared
+    // contract, but accept a successful worker-status binding only from durable cache.
+    if (String(resolution?.source ?? '') !== 'cache') {
+      continue;
+    }
     matches.push({ pr, resolution });
   }
 
@@ -464,7 +469,7 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
         ? 'issue_correlation'
         : `binding_contract:${bindingContractSource}`,
       bindingContractSource,
-      bindingCacheGeneration: Number(match.resolution.bindingCacheGeneration ?? store.generation ?? 0),
+      bindingCacheGeneration: Number(store.generation ?? 0),
     };
   }
 
