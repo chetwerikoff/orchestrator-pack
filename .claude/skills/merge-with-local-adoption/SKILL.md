@@ -420,6 +420,7 @@ Never claim CI/adoption/recycle succeeded without the commands actually run.
   because CI is green; skip Step 6e/9 after a successful merge.
 - `git push --force` to main; fix red CI from the architect session when a PR worker
   exists (unless `direct-fix-checklist` authorized).
-- `ao session kill` the orchestrator outside Step 8 / recovery runbook; Step 9 kills only
-  the merged PR's worker.
+- `ao session kill` the orchestrator outside Step 8, the recovery runbook, or the 9c
+  maintenance sequence (kill → cleanup → restore → wait → sync); in a merge run Step 9
+  kills only the merged PR's worker.
 - Skip 8e guards when the merge touches send/journaling/worker-nudge code.
