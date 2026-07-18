@@ -60,6 +60,14 @@ function requireText(
   return result.text;
 }
 
+function withoutComments(text: string): string {
+  return text
+    .replace(/<#[\s\S]*?#>/gu, '')
+    .replace(/^\s*#.*$/gmu, '')
+    .replace(/\/\*[\s\S]*?\*\//gu, '')
+    .replace(/^\s*\/\/.*$/gmu, '');
+}
+
 export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResult {
   const gateId = 'agents-report-contract';
   const failures: string[] = [];
@@ -154,23 +162,15 @@ function hasLivePackReviewSource(snapshot: SourceSnapshot): boolean {
 }
 
 function executableReviewInvocation(text: string): boolean {
-  const withoutComments = text
-    .replace(/<#[\s\S]*?#>/gu, '')
-    .replace(/^\s*#.*$/gmu, '')
-    .replace(/\/\*[\s\S]*?\*\//gu, '')
-    .replace(/^\s*\/\/.*$/gmu, '');
-  return /(?:^|[;&|]\s*|\b(?:exec|spawn|spawnSync|runProcess|runProcessSync)\s*\([^\n]*)\bao\s+review\s+(?:run|list|send|execute|submit)\b/iu.test(withoutComments)
-    || /&\s*(?:\$[A-Za-z_][A-Za-z0-9_]*|ao)\s+@?\([^\n]*['"]review['"][^\n]*['"](?:run|list|send|execute|submit)['"]/iu.test(withoutComments);
+  const source = withoutComments(text);
+  return /\bao\s+review\s+(?:run|list|send|execute|submit)\b/iu.test(source)
+    || /['"]review['"]\s*,\s*['"](?:run|list|send|execute|submit)['"]/iu.test(source);
 }
 
 function executableAoReviewApiInvocation(text: string): boolean {
-  const withoutComments = text
-    .replace(/<#[\s\S]*?#>/gu, '')
-    .replace(/^\s*#.*$/gmu, '')
-    .replace(/\/\*[\s\S]*?\*\//gu, '')
-    .replace(/^\s*\/\/.*$/gmu, '');
-  return /(?:^|[;&|]\s*)Invoke-AoReviewApi\b/mu.test(withoutComments)
-    || /(?:fetch|request|Invoke-RestMethod)\s*\([^\n]*(?:\/reviews\/trigger|\/reviews\b)/iu.test(withoutComments);
+  const source = withoutComments(text);
+  return /\bInvoke-AoReviewApi\b/u.test(source)
+    || /(?:\/reviews\/trigger|\/reviews\b)/iu.test(source);
 }
 
 function evaluateLivePackReviewSources(snapshot: SourceSnapshot): PackReviewEvaluation {
