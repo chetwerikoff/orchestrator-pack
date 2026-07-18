@@ -21,6 +21,15 @@ function verifyFixture(overrides: Readonly<Record<string, string>> = {}) {
   return memorySnapshot({ ...files, ...overrides });
 }
 
+function reviewRuntimeFixture(overrides: Readonly<Record<string, string>> = {}) {
+  return memorySnapshot({
+    'scripts/pack-review-runner.ts': 'export function startPackReview() {}',
+    'scripts/invoke-pack-review.ps1': 'param()\n',
+    'scripts/lib/pack-review-delivery.ts': "export const context = 'orchestrator-pack/pack-review';",
+    ...overrides,
+  });
+}
+
 describe('Wave 3.b bulk static gate ports', () => {
   it('passes every registered port against the live/no-override repository path', () => {
     const snapshot = captureSourceSnapshot(repoRoot);
@@ -30,10 +39,13 @@ describe('Wave 3.b bulk static gate ports', () => {
     }
   });
 
-  it('preserves the AGENTS report predicate and catches the removed command', () => {
-    const clean = memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\n' });
+  it('requires worker instructions and the pack-owned report entrypoint without parsing prose', () => {
+    const clean = memorySnapshot({
+      'AGENTS.md': 'worker policy',
+      'scripts/pack-worker-report.ps1': 'param()',
+    });
     expect(evaluateAgentsReportContract(clean).status).toBe('PASS');
-    expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'pack-worker-report\nskip silently\nao report\n' })).status).toBe('FAIL');
+    expect(evaluateAgentsReportContract(memorySnapshot({ 'AGENTS.md': 'worker policy' })).status).toBe('FAIL');
   });
 
   it('enforces the coworker 400-line floor and stale 600-literal exclusion', () => {
@@ -43,18 +55,21 @@ describe('Wave 3.b bulk static gate ports', () => {
     expect(failed.legacyStdout).toBe('[FAIL] coworker delegation threshold drift:\n - CLAUDE.md still contains stale volume-floor literal: more than 600 lines\n');
   });
 
-  it('detects dead AO review vocabulary outside the explicit compatibility allowlist', () => {
-    expect(evaluateReview010Vocabulary(memorySnapshot({ 'scripts/clean.mjs': 'export const ok = true;' })).status).toBe('PASS');
-    const failed = evaluateReview010Vocabulary(memorySnapshot({ 'scripts/bad.mjs': 'const argv = ["review", "run"];' }));
+  it('rejects AO Reviews invocation only in live pack-review runtime paths', () => {
+    expect(evaluateReview010Vocabulary(reviewRuntimeFixture()).status).toBe('PASS');
+    const failed = evaluateReview010Vocabulary(reviewRuntimeFixture({
+      'scripts/pack-review-runner.ts': "const command = 'ao review run';",
+    }));
     expect(failed.status).toBe('FAIL');
-    expect(failed.legacyStdout).toBe('AO 0.10 review vocabulary violations:\n  scripts/bad.mjs: dead ao review CLI argv\n');
+    expect(failed.details?.join('\n')).toContain('invokes AO review CLI');
   });
 
-  it('parses the named review command and rejects .ao paths', () => {
-    const clean = 'NAMED REVIEW_COMMAND\n  pwsh scripts/invoke-pack-review.ps1\n  RUNTIME';
-    expect(evaluateReviewCommandNotAo(memorySnapshot({ 'agent-orchestrator.yaml.example': clean })).status).toBe('PASS');
-    const bad = 'NAMED REVIEW_COMMAND\n  pwsh .ao/review.ps1\n  RUNTIME';
-    expect(evaluateReviewCommandNotAo(memorySnapshot({ 'agent-orchestrator.yaml.example': bad })).status).toBe('FAIL');
+  it('requires exact status authority and rejects AO review invocation', () => {
+    expect(evaluateReviewCommandNotAo(reviewRuntimeFixture()).status).toBe('PASS');
+    const missingStatus = reviewRuntimeFixture({ 'scripts/lib/pack-review-delivery.ts': 'export const ok = true;' });
+    expect(evaluateReviewCommandNotAo(missingStatus).status).toBe('FAIL');
+    const aoInvocation = reviewRuntimeFixture({ 'scripts/invoke-pack-review.ps1': 'ao review run' });
+    expect(evaluateReviewCommandNotAo(aoInvocation).status).toBe('FAIL');
   });
 
   it('ports prompt inventory and contract-marker checks with positive and negative fixtures', () => {
