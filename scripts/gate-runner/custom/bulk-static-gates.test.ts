@@ -11,14 +11,24 @@ import {
 
 const repoRoot = process.cwd();
 
-function verifyFixture(overrides: Readonly<Record<string, string>> = {}) {
-  const files: Record<string, string> = {};
-  files['prompts/self_architect_check.md'] = 'prompt';
-  files['plugins/ao-task-declaration/README.md'] = 'DD-026 DD-027 declared_files denylist one amendment baseline';
-  files['plugins/ao-scope-guard/README.md'] = 'DD-024 runtime guard git add commit PR-level CI second line';
-  files['plugins/ao-token-chain-ledger/README.md'] = 'chain_id planner reviewer worker per-session cost estimated_cost_usd';
-  files['plugins/ao-codex-pr-reviewer/README.md'] = 'Codex gpt-5.5 PR review GitHub Issues no core patch';
-  return memorySnapshot({ ...files, ...overrides });
+function verifyFixture(
+  overrides: Readonly<Record<string, string>> = {},
+  removed: readonly string[] = [],
+) {
+  const files: Record<string, string> = {
+    'prompts/self_architect_check.md': 'prompt',
+    'plugins/ao-task-declaration/README.md': 'documentation',
+    'plugins/ao-task-declaration/package.json': '{}',
+    'plugins/ao-scope-guard/README.md': 'documentation',
+    'scripts/pr-scope-check.ts': 'export {}',
+    'plugins/ao-token-chain-ledger/README.md': 'documentation',
+    'plugins/ao-token-chain-ledger/package.json': '{}',
+    'plugins/ao-codex-pr-reviewer/README.md': 'documentation',
+    'plugins/ao-codex-pr-reviewer/bin/review.ts': 'export {}',
+    ...overrides,
+  };
+  for (const path of removed) delete files[path];
+  return memorySnapshot(files);
 }
 
 function reviewRuntimeFixture(overrides: Readonly<Record<string, string>> = {}) {
@@ -72,10 +82,13 @@ describe('Wave 3.b bulk static gate ports', () => {
     expect(evaluateReviewCommandNotAo(aoInvocation).status).toBe('FAIL');
   });
 
-  it('ports prompt inventory and contract-marker checks with positive and negative fixtures', () => {
+  it('requires executable plugin/runtime artifacts without parsing README wording', () => {
     expect(evaluateVerifyStructureContract(verifyFixture()).status).toBe('PASS');
-    const missing = evaluateVerifyStructureContract(verifyFixture({ 'plugins/ao-scope-guard/README.md': 'DD-024' }));
-    expect(missing.status).toBe('FAIL');
-    expect(missing.details?.join('\n')).toContain('runtime guard');
+    expect(evaluateVerifyStructureContract(verifyFixture({
+      'plugins/ao-scope-guard/README.md': 'any documentation wording',
+    })).status).toBe('PASS');
+    const failed = evaluateVerifyStructureContract(verifyFixture({}, ['scripts/pr-scope-check.ts']));
+    expect(failed.status).toBe('FAIL');
+    expect(failed.details?.join('\n')).toContain('scripts/pr-scope-check.ts');
   });
 });
