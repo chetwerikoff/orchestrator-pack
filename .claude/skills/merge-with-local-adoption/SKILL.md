@@ -381,11 +381,12 @@ From the operator terminal, after Step 7 (and Step 8 when it ran).
   controlled re-run 2026-07-18: workspace present + rows aliased → deleted again).
   Merged-PR teardown is the targeted 9b kill **only** — do not run `ao session cleanup`
   as a routine merge step. Sanctioned maintenance path (outside merge runs, or when
-  worker-workspace debt genuinely needs reclaiming): run cleanup only when either
-  (a) no non-terminated orchestrator row exists, or (b) you deliberately pair it with the
-  immediate recovery — `ao session kill "$S"` + `ao session restore "$S"` +
-  `wait-orchestrator-launch.ps1` + the 6e `--ff-only` sync — and record both halves in
-  the report. Never leave the run with the orchestrator workspace missing.
+  worker-workspace debt genuinely needs reclaiming): either (a) no non-terminated
+  orchestrator row exists — run cleanup directly; or (b) an orchestrator is live — run
+  strictly in this order, never with cleanup before the kill or after the restore:
+  `ao session kill "$S"` → `ao session cleanup -p orchestrator-pack -y` → `ao session
+  restore "$S"` → `wait-orchestrator-launch.ps1` → the 6e `--ff-only` sync. Record every
+  step in the report. Never leave the run with the orchestrator workspace missing.
 - **9d — post-check:** `ao session ls --json -p orchestrator-pack` — no non-terminated
   row with id `W` (the id resolved in 9a); orchestrator row remains and its workspace
   still resolves on disk (quick 6e re-check).
