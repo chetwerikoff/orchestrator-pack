@@ -229,6 +229,7 @@ describe('session-pr-binding-resolver retired prNumber regression', () => {
       displayName: '690',
       status: 'working',
       repoSlug,
+      prs: [],
     };
     expect(
       resolveHeadOwningWorkerSessionId([retiredOnly], 690, headSha, [openPr690], headOwnerOptions()),
@@ -238,6 +239,31 @@ describe('session-pr-binding-resolver retired prNumber regression', () => {
     const live = { ...retiredOnly, prs: [prUrl(690)], ownedHeadSha: headSha };
     expect(resolveHeadOwningWorkerSessionId([live], 690, headSha, [openPr690], headOwnerOptions())).toBe('opk-explicit');
     expect(sessionOwnsRunHead(live, 690, headSha, [openPr690])).toBe(true);
+  });
+
+  it('accepts exact-PR synthetic rows and requires head corroboration for head-bound calls', () => {
+    const synthetic = {
+      name: 'synthetic-linked-worker',
+      sessionId: 'synthetic-linked-worker',
+      role: 'worker',
+      status: 'working',
+      prNumber: 690,
+    };
+    const prLink = resolveSessionPrBinding(synthetic, [openPr690], { repoSlug });
+    expect(prLink.bound).toBe(true);
+    expect(prLink.prNumber).toBe(690);
+    expect(prLink.bindingSource).toBe('issue_correlation');
+    expect(prLink.enriched).toBe(false);
+
+    const headBound = resolveSessionPrBinding(synthetic, [openPr690], { headSha, repoSlug });
+    expect(headBound.bound).toBe(true);
+    expect(headBound.prNumber).toBe(690);
+
+    expect(resolveSessionPrBinding({ ...synthetic, prs: [] }, [openPr690], { headSha, repoSlug }).bound).toBe(false);
+    expect(resolveSessionPrBinding(synthetic, [openPr690], {
+      headSha: 'cccccccccccccccccccccccccccccccccccccccc',
+      repoSlug,
+    }).bound).toBe(false);
   });
 });
 

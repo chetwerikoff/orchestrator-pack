@@ -83,8 +83,8 @@ export declare function listSessionPrReferences(
   options?: { repoSlug?: string },
 ): SessionPrReference[];
 export declare function getSessionIssueNumber(session: AoSession | null | undefined): number;
-/** Compatibility export; any argument is ignored and retired daemon-row aliases are never read. */
-export declare function getExplicitSessionPrNumber(ignoredSession?: unknown): 0;
+/** Pack-owned synthetic-row compatibility; live AO rows with `prs` never read aliases. */
+export declare function getExplicitSessionPrNumber(syntheticSession?: unknown): number;
 /** Per-session detail enrichment is retired; compatibility arguments are ignored. */
 export declare function sessionDetailFromSessionGetPayload(ignoredPayload?: unknown): null;
 export declare function shouldEnrichSessionDetailFromGet(ignoredSession?: unknown): false;

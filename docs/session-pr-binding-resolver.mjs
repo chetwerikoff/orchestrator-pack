@@ -112,7 +112,6 @@ export function getSessionIssueNumber(session) {
 
 const LEGACY_PR_NUMBER_KEY = ['pr', 'Number'].join('');
 const LEGACY_PR_KEY = 'pr';
-const LEGACY_DISPLAY_KEY = ['display', 'Name'].join('');
 
 function hasDaemonPrListField(session) {
   return Boolean(
@@ -137,21 +136,12 @@ export function getExplicitSessionPrNumber(session) {
   return parsed > 0 ? parsed : 0;
 }
 
-export function sessionDetailFromSessionGetPayload(payload) {
-  const row = payload && typeof payload === 'object' && payload.session ? payload.session : payload;
-  if (!row || typeof row !== 'object' || hasDaemonPrListField(row)) return null;
-  const value = normalizeString(row[LEGACY_DISPLAY_KEY]);
-  return value ? { [LEGACY_DISPLAY_KEY]: value } : null;
+export function sessionDetailFromSessionGetPayload(_ignoredPayload) {
+  return null;
 }
 
-export function shouldEnrichSessionDetailFromGet(session) {
-  if (!session || typeof session !== 'object' || hasDaemonPrListField(session)) return false;
-  if (getExplicitSessionPrNumber(session) > 0) return false;
-  const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
-  if (rowDisplay && /^\d+$/.test(rowDisplay)) return false;
-  const role = normalizeString(session?.role).toLowerCase();
-  if (role && role !== 'worker' && role !== 'coding') return false;
-  return Boolean(getSessionIdentifier(session));
+export function shouldEnrichSessionDetailFromGet(_ignoredSession) {
+  return false;
 }
 
 export function buildSessionDetailsById(_ignoredSessions, _ignoredSessionGetsById = {}) {
@@ -184,24 +174,6 @@ export function headRefCorrelatesToIssue(headRefName, issueNumber, session = nul
   ) return true;
   const branch = getSessionBranch(session);
   return Boolean(branch && branch === head && isAoWorkerIterationBranch(branch));
-}
-
-function numericLegacyDisplayCorroboratesPr(session, pr, options = {}) {
-  const issueNumber = getSessionIssueNumber(session);
-  const targetHead = normalizeSha(options.headSha);
-  let hasSignal = false;
-  let corroborated = true;
-  if (targetHead) {
-    hasSignal = true;
-    const prHead = normalizeSha(pr?.headRefOid);
-    if (!prHead || prHead !== targetHead) corroborated = false;
-  }
-  if (issueNumber > 0) {
-    hasSignal = true;
-    const headName = normalizeString(pr?.headRefName ?? pr?.head);
-    if (!headRefCorrelatesToIssue(headName, issueNumber, session)) corroborated = false;
-  }
-  return hasSignal && corroborated;
 }
 
 export function listIssueCorrelatedOpenPrs(issueNumber, openPrs = [], session = null, options = {}) {
@@ -278,19 +250,37 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
     }
   }
 
-  const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
-  ? options.sessionDetail[LEGACY_DISPLAY_KEY]
-  : undefined;
-  const explicitSessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
-  if (detailValue && /^\d+$/.test(normalizeString(detailValue)) && explicitSessionHead) {
-    const displayPr = numberOrZero(detailValue);
-    const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
-    if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(
-      session,
-      displayPrRow,
-      { ...options, headSha: explicitSessionHead },
-    )) {
-      return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
+  // Compatibility for pack-owned synthetic rows only. AO daemon list rows always
+  // own the `prs` field, including the explicit empty-array UNBOUND case.
+  if (!hasDaemonPrListField(session)) {
+    const syntheticPr = getExplicitSessionPrNumber(session);
+    const requestedHead = normalizeSha(options.headSha);
+    const syntheticRow = prList.find((pr) => (
+      numberOrZero(pr?.number) === syntheticPr &&
+      repoScopeMatches(getOpenPrRepoSlug(pr), expectedRepo) &&
+      !prIsTerminal(pr)
+    ));
+    const openPrHead = normalizeSha(syntheticRow?.headRefOid);
+    const sessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+    const headCorroborated = !requestedHead || (
+      openPrHead === requestedHead &&
+      (!sessionHead || sessionHead === requestedHead)
+    );
+    if (
+      syntheticPr > 0 &&
+      syntheticRow &&
+      headCorroborated
+    ) {
+      return {
+        bound: true,
+        prNumber: syntheticPr,
+        source: 'issue_correlation',
+        bindingSource: 'issue_correlation',
+        enriched: false,
+        liveSource: 'issue_correlation',
+        trustRank: 300,
+        repoSlug: getOpenPrRepoSlug(syntheticRow, expectedRepo),
+      };
     }
   }
 
