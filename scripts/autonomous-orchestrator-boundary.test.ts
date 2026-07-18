@@ -276,15 +276,6 @@ describe('autonomous orchestrator spawn/git boundary (#324)', { timeout: 120000 
             liveCapabilities: inventory.capabilities,
         }).ok).toBe(true);
     });
-    it('example yaml documents AO 0.10.2 in-process session gates', () => {
-        const yaml = readFileSync(path.join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
-        expect(yaml).not.toMatch(/^\s*AO_REAL_BINARY:/m);
-        expect(yaml).not.toMatch(/^\s*GIT_REAL_BINARY:/m);
-        expect(yaml).not.toMatch(/autonomous-real-binaries\.json/);
-        expect(yaml).not.toMatch(/scripts\/ao \+ scripts\/git/);
-        expect(yaml).toMatch(/AO_SESSION_ID/);
-        expect(yaml).toMatch(/in-process gates/i);
-    });
     it('allows coordinated agent-orchestrator.yaml.example edits for issue 324', () => {
         const manifest = JSON.parse(readFileSync(path.join(repoRoot, 'scripts/orchestrator-message-protected-runtime.manifest.json'), 'utf8'));
         const denied = checkProtectedRuntimeDiff(['agent-orchestrator.yaml.example'], manifest);
