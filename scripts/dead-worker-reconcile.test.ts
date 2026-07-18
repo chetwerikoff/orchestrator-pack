@@ -535,13 +535,18 @@ describe('dead-worker-reconciler (Issue #593)', () => {
     expect(resolved.bounds?.backoffMs).toBe(120000);
   });
 
-  it('requires adopted orchestratorRules before allowing runtime policy', () => {
+  it('requires explicit live runtime-policy markers without reading tracked YAML', () => {
     const denied = evaluateDeadWorkerRuntimeAdoption({ orchestratorRules: '' });
     expect(denied.ok).toBe(false);
     expect(denied.effectiveRuntimePolicy).toBe('deny');
 
-    const exampleRules = readFileSync(join(repoRoot, 'agent-orchestrator.yaml.example'), 'utf8');
-    const adopted = evaluateDeadWorkerRuntimeAdoption({ orchestratorRules: exampleRules });
+    const liveRuntimePolicy = [
+      'DEAD WORKER RECONCILE',
+      'dead-worker-reconcile.ps1',
+      'allowReconcileDeadWorkerRespawn',
+      '-ProbedDeadEvidence',
+    ].join('\n');
+    const adopted = evaluateDeadWorkerRuntimeAdoption({ orchestratorRules: liveRuntimePolicy });
     expect(adopted.ok).toBe(true);
     expect(adopted.effectiveRuntimePolicy).toBe('allow');
   });
@@ -724,7 +729,7 @@ describe('dead-worker-reconciler (Issue #593)', () => {
       bootstrapPath,
       [
         reconcileSource.replace(/\$intervalMs =[\s\S]*$/, ''),
-        `function Invoke-DeadWorkerPlannerCli { param([string]$Subcommand, [hashtable]$Payload) if ($Subcommand -eq 'resolve-bounds') { return @{ ok = $true; bounds = @{ maxAttempts = 3; backoffMs = 60000; concurrency = 1 } } }; if ($Subcommand -ne 'plan') { throw \"unexpected planner subcommand: $Subcommand\" }; return '${JSON.stringify({ actions: [plannedAction], tracking: { attempts: {}, leases: {}, audit: [], pendingActions: {}, quarantinedActions: {} } }).replace(/'/g, "''")}' | ConvertFrom-Json }`,
+        `function Invoke-DeadWorkerPlannerCli { param([string]$Subcommand, [hashtable]$Payload) if ($Subcommand -eq 'resolve-bounds') { return @{ ok = $true; bounds = @{ maxAttempts = 3; backoffMs = 60000; concurrency = 1 } } }; if ($Subcommand -ne 'plan') { throw "unexpected planner subcommand: $Subcommand" }; return '${JSON.stringify({ actions: [plannedAction], tracking: { attempts: {}, leases: {}, audit: [], pendingActions: {}, quarantinedActions: {} } }).replace(/'/g, "''")}' | ConvertFrom-Json }`,
         "function Commit-DeadWorkerAction { param([object]$State, [object]$Action, [long]$NowMs) $audit = @($State.audit); $audit += @{ key = [string]$Action.key; outcome = [string]$Action.outcome; reason = [string]$Action.reason; recordedAtMs = $NowMs }; $State.audit = $audit; return $State }",
         "function Test-DeadWorkerPreKillRevalidation { param([object]$Action) return @{ ok = $true; session = @{ sessionId = [string]$Action.sessionId } } }",
         "function Invoke-DeadWorkerRecovery { param([object]$Action, [switch]$DryRunMode) throw 'simulated_recovery_crash' }",
