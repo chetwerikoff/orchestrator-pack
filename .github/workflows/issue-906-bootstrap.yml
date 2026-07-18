@@ -52,8 +52,8 @@ jobs:
               ),
               (
                   """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n""",
-                  """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n  'docs/declarations/906.chatgpt-estate-cut.json',\n""",
-                  'declaration artifact',
+                  """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n  'docs/declarations/906.chatgpt-estate-cut.json',\n  'scripts/vitest-surviving-store-isolation.ts',\n""",
+                  'new artifacts',
               ),
               (
                   """  'scripts/check-review-delivery-no-visibility-poll.ps1',\n""",
@@ -93,7 +93,12 @@ jobs:
           retired = "      'scripts/vitest-testmode-fleet-progress.ts',\n"
           if text.count(retired) != 1:
               raise SystemExit('issue-906 fleet progress setup target drifted')
-          vitest.write_text(text.replace(retired, '', 1))
+          text = text.replace(retired, '', 1)
+          needle = "      'scripts/vitest-live-store-preload.mjs',\n"
+          replacement = needle + "      'scripts/vitest-surviving-store-isolation.ts',\n"
+          if text.count(needle) != 1:
+              raise SystemExit('issue-906 surviving store setup target drifted')
+          vitest.write_text(text.replace(needle, replacement, 1))
           PY
           mkdir -p docs/declarations
           printf '{}\n' > docs/declarations/906.chatgpt-estate-cut.json
