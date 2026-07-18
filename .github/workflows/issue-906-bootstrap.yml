@@ -46,7 +46,18 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Apply base-pinned estate cut
-        run: node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
+        shell: bash
+        run: |
+          set -o pipefail
+          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check 2>&1 | tee /tmp/issue-906-apply.log
+
+      - name: Upload apply diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-906-apply-diagnostics
+          path: /tmp/issue-906-apply.log
+          retention-days: 1
 
       - name: Validate implementation
         shell: bash
