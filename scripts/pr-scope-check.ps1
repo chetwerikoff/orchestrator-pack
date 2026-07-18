@@ -230,7 +230,7 @@ function Get-PrChangedPaths {
         -ExpectedRoot 'array' `
         -WorkingDirectory $WorkingDirectory
     if (-not $filesRead.ok) {
-        Write-Error "failed to enumerate PR files for PR #$PrNumber: $(Format-GhSignalFailureDetail -Result $filesRead)"
+        Write-Error "failed to enumerate PR files for PR #${PrNumber}: $(Format-GhSignalFailureDetail -Result $filesRead)"
     }
 
     $paths = [System.Collections.Generic.List[string]]::new()
