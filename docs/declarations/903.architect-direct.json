@@ -1,0 +1,17 @@
+{
+  "issue_number": 903,
+  "iteration_id": "architect-direct",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-18T10:03:57.485Z",
+  "baseline": {
+    "commit_sha": "4edefffd59371a5c608e0c80639250bc0d7f6637",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:6c1c1249d5ab99a05616d6520bdabb089ddaaf141cd7daebc1983240d20756c5"
+  },
+  "declared_paths": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
