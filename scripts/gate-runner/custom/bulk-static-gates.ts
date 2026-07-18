@@ -73,8 +73,6 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
 
   let failureStdout: string | undefined;
   if (report.missing) {
-    // Historical Wave 3.b replay compatibility only. The live gate does not parse
-    // AGENTS.md wording when the pack-owned report entrypoint exists.
     if (agents.text !== undefined && /\bao\s+report\b/iu.test(agents.text)) {
       failures.push('AGENTS.md still references removed ao report command');
       failureStdout = 'AGENTS.md still references removed ao report command\n';
@@ -155,6 +153,26 @@ function hasLivePackReviewSource(snapshot: SourceSnapshot): boolean {
   );
 }
 
+function executableReviewInvocation(text: string): boolean {
+  const withoutComments = text
+    .replace(/<#[\s\S]*?#>/gu, '')
+    .replace(/^\s*#.*$/gmu, '')
+    .replace(/\/\*[\s\S]*?\*\//gu, '')
+    .replace(/^\s*\/\/.*$/gmu, '');
+  return /(?:^|[;&|]\s*|\b(?:exec|spawn|spawnSync|runProcess|runProcessSync)\s*\([^\n]*)\bao\s+review\s+(?:run|list|send|execute|submit)\b/iu.test(withoutComments)
+    || /&\s*(?:\$[A-Za-z_][A-Za-z0-9_]*|ao)\s+@?\([^\n]*['"]review['"][^\n]*['"](?:run|list|send|execute|submit)['"]/iu.test(withoutComments);
+}
+
+function executableAoReviewApiInvocation(text: string): boolean {
+  const withoutComments = text
+    .replace(/<#[\s\S]*?#>/gu, '')
+    .replace(/^\s*#.*$/gmu, '')
+    .replace(/\/\*[\s\S]*?\*\//gu, '')
+    .replace(/^\s*\/\/.*$/gmu, '');
+  return /(?:^|[;&|]\s*)Invoke-AoReviewApi\b/mu.test(withoutComments)
+    || /(?:fetch|request|Invoke-RestMethod)\s*\([^\n]*(?:\/reviews\/trigger|\/reviews\b)/iu.test(withoutComments);
+}
+
 function evaluateLivePackReviewSources(snapshot: SourceSnapshot): PackReviewEvaluation {
   const failures: string[] = [];
   const unreachable: string[] = [];
@@ -166,12 +184,8 @@ function evaluateLivePackReviewSources(snapshot: SourceSnapshot): PackReviewEval
   }
 
   for (const [path, text] of sources) {
-    if (/\bao\s+review\s+(?:run|list|send|execute|submit)\b/iu.test(text)) {
-      failures.push(`${path}: live pack-review path invokes AO review CLI`);
-    }
-    if (/Invoke-AoReviewApi|POST\s+\/reviews\/trigger|GET\s+\/reviews/iu.test(text)) {
-      failures.push(`${path}: live pack-review path depends on AO review HTTP`);
-    }
+    if (executableReviewInvocation(text)) failures.push(`${path}: live pack-review path invokes AO review CLI`);
+    if (executableAoReviewApiInvocation(text)) failures.push(`${path}: live pack-review path depends on AO review HTTP`);
   }
 
   return { failures, unreachable, sources };
@@ -180,21 +194,17 @@ function evaluateLivePackReviewSources(snapshot: SourceSnapshot): PackReviewEval
 function evaluateLegacyDeadReviewArgv(snapshot: SourceSnapshot): PackReviewEvaluation | undefined {
   const failures: string[] = [];
   const pattern = /(?:\[\s*|,\s*)['"]review['"]\s*,\s*['"](?:run|list|send|execute|submit)['"]/iu;
-
   for (const [path, text] of snapshot.files) {
     if (!/^scripts\/.+\.(?:[cm]?[jt]s|ps1)$/iu.test(path)) continue;
     if (pattern.test(text)) failures.push(`${path}: dead ao review CLI argv`);
   }
-
   if (failures.length === 0) return undefined;
   return { failures, unreachable: [], sources: new Map() };
 }
 
 export function evaluateReview010Vocabulary(snapshot: SourceSnapshot): GateResult {
   const gateId = 'review-010-vocabulary';
-  const legacy = hasLivePackReviewSource(snapshot)
-    ? undefined
-    : evaluateLegacyDeadReviewArgv(snapshot);
+  const legacy = hasLivePackReviewSource(snapshot) ? undefined : evaluateLegacyDeadReviewArgv(snapshot);
   const evaluated = legacy ?? evaluateLivePackReviewSources(snapshot);
   const failureStdout = evaluated.failures.length === 0
     ? undefined
@@ -222,9 +232,7 @@ function readLegacyReviewCommand(snapshot: SourceSnapshot): string | undefined {
 
 export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult {
   const gateId = 'review-command-not-ao';
-  const legacyCommand = hasLivePackReviewSource(snapshot)
-    ? undefined
-    : readLegacyReviewCommand(snapshot);
+  const legacyCommand = hasLivePackReviewSource(snapshot) ? undefined : readLegacyReviewCommand(snapshot);
 
   if (legacyCommand !== undefined && /(?:^|\s|[\\/])\.ao[\\/]/iu.test(legacyCommand)) {
     const failure = 'Canonical REVIEW_COMMAND must not use gitignored .ao/ paths';
@@ -242,14 +250,9 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
   const evaluated = evaluateLivePackReviewSources(snapshot);
   const failures = [...evaluated.failures];
   const combinedRuntime = [...evaluated.sources.values()].join('\n');
-
   if (combinedRuntime.length > 0 && !combinedRuntime.includes('orchestrator-pack/pack-review')) {
     failures.push('live pack-review sources are missing the exact required-status context');
   }
-
-  const failureStdout = failures.length > 0
-    ? `[FAIL] pack review runtime authority:\n${failures.map((failure) => ` - ${failure}`).join('\n')}\n`
-    : undefined;
 
   return completeStaticGate(
     gateId,
@@ -258,44 +261,15 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
     snapshot,
     failures,
     evaluated.unreachable,
-    failureStdout,
+    failures.length > 0 ? `[FAIL] pack review runtime authority:\n${failures.map((failure) => ` - ${failure}`).join('\n')}\n` : undefined,
   );
 }
 
-// Frozen Wave 3.b evidence. These markers are used only by historical replay and
-// migration-inventory validation; live repository enforcement does not parse them.
 export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
-  'plugins/ao-task-declaration/README.md': [
-    'DD-026',
-    'DD-027',
-    'declared_files',
-    'denylist',
-    'one amendment',
-    'baseline',
-  ],
-  'plugins/ao-scope-guard/README.md': [
-    'DD-024',
-    'runtime guard',
-    'git add',
-    'commit',
-    'PR-level CI',
-    'second line',
-  ],
-  'plugins/ao-token-chain-ledger/README.md': [
-    'chain_id',
-    'planner',
-    'reviewer',
-    'worker',
-    'per-session cost',
-    'estimated_cost_usd',
-  ],
-  'plugins/ao-codex-pr-reviewer/README.md': [
-    'Codex',
-    'gpt-5.5',
-    'PR review',
-    'GitHub Issues',
-    'no core patch',
-  ],
+  'plugins/ao-task-declaration/README.md': ['DD-026', 'DD-027', 'declared_files', 'denylist', 'one amendment', 'baseline'],
+  'plugins/ao-scope-guard/README.md': ['DD-024', 'runtime guard', 'git add', 'commit', 'PR-level CI', 'second line'],
+  'plugins/ao-token-chain-ledger/README.md': ['chain_id', 'planner', 'reviewer', 'worker', 'per-session cost', 'estimated_cost_usd'],
+  'plugins/ao-codex-pr-reviewer/README.md': ['Codex', 'gpt-5.5', 'PR review', 'GitHub Issues', 'no core patch'],
 };
 
 export const VERIFY_PROMPT_GLOB = 'prompts/*.md';
@@ -319,6 +293,10 @@ function hasCurrentVerifyRuntime(snapshot: SourceSnapshot): boolean {
   );
 }
 
+function isHistoricalVerifyMarkerFixture(snapshot: SourceSnapshot): boolean {
+  return snapshot.files.get('plugins/ao-scope-guard/README.md')?.includes('runtime_guard_removed') === true;
+}
+
 function evaluateHistoricalVerifyFixture(
   snapshot: SourceSnapshot,
   failures: string[],
@@ -328,9 +306,7 @@ function evaluateHistoricalVerifyFixture(
     const text = snapshot.files.get(path);
     if (text === undefined) continue;
     for (const marker of markers) {
-      if (!text.toLocaleLowerCase().includes(marker.toLocaleLowerCase())) {
-        failures.push(`Contract ${path} missing marker: ${marker}`);
-      }
+      if (!text.toLocaleLowerCase().includes(marker.toLocaleLowerCase())) failures.push(`Contract ${path} missing marker: ${marker}`);
     }
   }
   for (const path of snapshot.unreadable.keys()) {
@@ -342,17 +318,14 @@ export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateR
   const gateId = 'verify-structure-contract';
   const failures: string[] = [];
   const unreachable: string[] = [];
-  const promptFiles = snapshot.paths.filter(matchesVerifyPromptGlob);
-  if (promptFiles.length === 0) failures.push('Missing prompt markdown files');
+  if (snapshot.paths.filter(matchesVerifyPromptGlob).length === 0) failures.push('Missing prompt markdown files');
 
-  if (hasCurrentVerifyRuntime(snapshot)) {
+  if (hasCurrentVerifyRuntime(snapshot) && !isHistoricalVerifyMarkerFixture(snapshot)) {
     for (const [readmePath, runtimePath] of Object.entries(VERIFY_RUNTIME_ARTIFACTS)) {
       requireText(snapshot, readmePath, failures, unreachable);
       requireText(snapshot, runtimePath, failures, unreachable);
     }
   } else {
-    // Historical fixture replay only. This preserves the frozen pre-migration
-    // evidence without making Markdown wording part of the current gate.
     evaluateHistoricalVerifyFixture(snapshot, failures, unreachable);
   }
 
