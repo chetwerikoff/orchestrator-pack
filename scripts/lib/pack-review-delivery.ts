@@ -187,15 +187,12 @@ function completedResumeChannelOutcome(
   idempotencyKey: string,
 ): boolean {
   if (channel === 'githubComment') {
-    if (completedGithubCommentReview(run)) return true;
-    const value = run.deliveryOutcomes?.githubComment;
     const reconciliation = run.githubReviewReconciliation as
       | (NonNullable<PackReviewRunRecord['githubReviewReconciliation']> & { postOutcome?: unknown })
       | undefined;
-    return value?.idempotencyKey === idempotencyKey
-      && value.state === 'failed'
-      && reconciliation?.phase === 'prepared'
-      && reconciliation.postOutcome === 'definitely_rejected';
+    return completedGithubCommentReview(run)
+      || (reconciliation?.phase === 'prepared'
+        && reconciliation.postOutcome === 'definitely_rejected');
   }
 
   const value = run.deliveryOutcomes?.[channel];
