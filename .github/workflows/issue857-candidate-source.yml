@@ -1,0 +1,31 @@
+name: Issue 857 candidate source export
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+      - name: Apply base candidate patch
+        shell: bash
+        run: |
+          awk '/python - <<'"'"'PY'"'"'/{capture=1; next} capture && /^          PY$/{exit} capture {sub(/^          /, ""); print}' \
+            .github/workflows/issue857-synthetic-compat-fix.yml | python -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue857-candidate-source-${{ github.run_id }}
+          path: |
+            docs/session-pr-binding-resolver.mjs
+            docs/session-pr-binding-resolver.d.mts
+            scripts/session-pr-binding-resolver.test.ts
+          if-no-files-found: error
