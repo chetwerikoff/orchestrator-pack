@@ -12,14 +12,18 @@ import {
 } from '../docs/ao-spawn-shape.mjs';
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const exampleYaml = readFileSync(
-  path.join(rootDir, 'agent-orchestrator.yaml.example'),
-  'utf8',
-);
 const runbook = readFileSync(
   path.join(rootDir, 'docs/orchestrator-recovery-runbook.md'),
   'utf8',
 );
+
+const syntheticRecoveryPolicy = [
+  'Recovery operator command:',
+  '  ao spawn --project orchestrator-pack --name "Claim PR" --claim-pr <PR>',
+].join('\n');
+
+const syntheticSafetyPolicy =
+  'This legacy fixture is not runtime policy. Safety: never ao spawn, never --claim-pr.';
 
 describe('validateRunnableSpawnCommand', () => {
   it('accepts AO 0.10.x claim-pr respawn shape', () => {
@@ -115,8 +119,8 @@ describe('tokenizeSpawnArgv', () => {
 });
 
 describe('findRunnableSpawnCommands', () => {
-  it('detects indented respawn discipline command lines', () => {
-    const matches = findRunnableSpawnCommands(exampleYaml);
+  it('detects an indented synthetic recovery command', () => {
+    const matches = findRunnableSpawnCommands(syntheticRecoveryPolicy);
     expect(matches.some((match) => match.command.includes('--claim-pr'))).toBe(true);
     expect(
       matches.find((match) => match.command.includes('--claim-pr'))?.command,
@@ -126,11 +130,9 @@ describe('findRunnableSpawnCommands', () => {
     ).toMatch(/--name\b/);
   });
 
-  it('ignores never-ao-spawn safety prose in the example yaml', () => {
-    const matches = findRunnableSpawnCommands(exampleYaml);
-    expect(
-      matches.every((match) => !/\bnever\b/i.test(match.command)),
-    ).toBe(true);
+  it('ignores explicit never-spawn safety prose', () => {
+    const matches = findRunnableSpawnCommands(syntheticSafetyPolicy);
+    expect(matches).toEqual([]);
   });
 
   it('detects operator runbook claim-pr templates while skipping negated mentions', () => {
