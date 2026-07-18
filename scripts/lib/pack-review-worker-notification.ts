@@ -2,17 +2,11 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.js';
-import {
-  packReviewDeliveryNeedsResume as basePackReviewDeliveryNeedsResume,
-} from './pack-review-delivery.ts';
 import type {
   PackReviewWorkerNotificationRequest,
   PackReviewWorkerNotificationResult,
 } from './pack-review-delivery.ts';
-import {
-  trimPackReviewValue as trim,
-  type PackReviewRunRecord,
-} from './pack-review-run-store.js';
+import { trimPackReviewValue as trim } from './pack-review-run-store.js';
 
 interface WorkerNotificationOptions {
   trustedPackRoot: string;
@@ -191,21 +185,4 @@ export async function sendPackReviewWorkerNotification(
     state: result.timedOut || result.cancelled ? 'escalated' : 'failed',
     reason,
   };
-}
-
-export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean {
-  const worker = run.deliveryOutcomes?.workerNotification;
-  const expectedKey = `worker-notification:${run.id}:${run.targetSha}`;
-  if (!worker
-    || worker.idempotencyKey !== expectedKey
-    || (worker.state !== 'failed' && worker.state !== 'escalated')) {
-    return basePackReviewDeliveryNeedsResume(run);
-  }
-  return basePackReviewDeliveryNeedsResume({
-    ...run,
-    deliveryOutcomes: {
-      ...run.deliveryOutcomes,
-      workerNotification: { ...worker, state: 'delivered' },
-    },
-  });
 }
