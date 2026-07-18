@@ -1,0 +1,147 @@
+name: Issue 857 Clause D test migration
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-857-binding-contract-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Update existing cache regressions without shrink
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/pr-session-binding-cache.test.ts')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  "const repoSlug = 'org/orchestrator-pack';\n",
+                  "const repoSlug = 'org/orchestrator-pack';\nconst prUrl = (number: number) => `https://github.com/${repoSlug}/pull/${number}`;\n",
+                  1,
+              ),
+              (
+                  "{ classId: 'B', description: 'backfill with displayName present' },",
+                  "{ classId: 'B', description: 'backfill with bulk prs[] present' },",
+                  1,
+              ),
+              (
+                  "{ classId: 'C', description: 'backfill with displayName absent via issue correlation' },",
+                  "{ classId: 'C', description: 'backfill via branch or issue correlation' },",
+                  1,
+              ),
+              (
+                  "liveWorker('opk-a', 719, { prNumber: 88 })",
+                  "liveWorker('opk-a', 719, { prs: [prUrl(88)] })",
+                  2,
+              ),
+              (
+                  "liveWorker('opk-b', 720, { prNumber: 88 })",
+                  "liveWorker('opk-b', 720, { prs: [prUrl(88)] })",
+                  2,
+              ),
+              (
+                  "liveWorker('opk-stale', 501, { prNumber: 501, ownedHeadSha: 'oldhead' })",
+                  "liveWorker('opk-stale', 501, { prs: [prUrl(501)], ownedHeadSha: 'oldhead' })",
+                  1,
+              ),
+          ]
+
+          for old, new, expected in replacements:
+              actual = text.count(old)
+              if actual != expected:
+                  raise SystemExit(f'expected {expected} occurrences, found {actual}: {old}')
+              text = text.replace(old, new)
+
+          path.write_text(text)
+          PY
+      - name: Generate wrapper-style declaration iteration
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          export BASELINE_SHA="$(git rev-parse HEAD)"
+          npx tsx <<'TS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { computeActiveScopeHash } from './plugins/ao-task-declaration/lib/baseline.ts';
+          import { validateDeclaredScope, normalizeIssueConstraints } from './plugins/ao-task-declaration/lib/validate.ts';
+          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+
+          const issueBody = execFileSync(
+            'gh',
+            ['issue', 'view', '857', '--repo', process.env.REPOSITORY!, '--json', 'body', '--jq', '.body'],
+            { encoding: 'utf8' },
+          );
+          const constraints = normalizeIssueConstraints(parseIssueBody(issueBody));
+          const previous = JSON.parse(readFileSync('docs/declarations/857.chatgpt-pr-896.json', 'utf8'));
+          const declaredPaths = [...new Set([
+            ...previous.declared_paths,
+            'scripts/pr-session-binding-cache.test.ts',
+            'scripts/session-pr-binding-resolver.test.ts',
+          ])].sort();
+          const validated = validateDeclaredScope(
+            { declared_paths: declaredPaths, declared_globs: [] },
+            constraints,
+          );
+          if (!validated.ok) throw new Error(validated.errors.join('; '));
+          const activeScopeHash = computeActiveScopeHash({
+            declared_paths: validated.declared_paths,
+            declared_globs: validated.declared_globs,
+            issue_denylist: constraints.denylist,
+            issue_allowed_roots: constraints.allowed_roots,
+          });
+          const snapshot = {
+            issue_number: 857,
+            iteration_id: 'chatgpt-pr-896-r2',
+            iteration_id_source: 'wrapper_generated',
+            supersedes: 'chatgpt-pr-896',
+            created_at: new Date().toISOString(),
+            baseline: {
+              commit_sha: process.env.BASELINE_SHA,
+              worktree_dirty: false,
+              active_scope_hash: activeScopeHash,
+            },
+            declared_paths: validated.declared_paths,
+            declared_globs: validated.declared_globs,
+            amendments: [],
+          };
+          writeFileSync(
+            'docs/declarations/857.chatgpt-pr-896-r2.json',
+            `${JSON.stringify(snapshot, null, 2)}\n`,
+          );
+          TS
+      - name: Validate TypeScript and migrated suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx tsc --project tsconfig.base.json --noEmit
+          npx vitest run scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts
+          node tests/powershell/Issue857.PrSessionBindingContract.Node.mjs
+          git diff --check
+      - name: Commit migrated tests and declaration
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/session-pr-binding-resolver.test.ts scripts/pr-session-binding-cache.test.ts docs/declarations/857.chatgpt-pr-896-r2.json
+          git commit -m 'Migrate existing binding regressions to bulk prs contract'
+          git push origin HEAD:agent/issue-857-binding-contract-v2
