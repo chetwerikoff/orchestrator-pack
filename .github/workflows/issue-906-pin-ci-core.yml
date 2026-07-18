@@ -46,6 +46,7 @@ jobs:
           PY
           git checkout f10fd0051dd28f4cea865e4859b495e369219698 -- scripts/check-ci-pipeline-split-core.ps1
           rm -f .github/workflows/issue-906-final-diagnostics.yml
+          rm -f .github/workflows/issue-906-ci-core-diagnostic.yml
           rm -f .github/workflows/issue-906-pin-ci-core.yml
 
       - name: Install dependencies
@@ -116,6 +117,7 @@ jobs:
           npm test
           git diff --check
           test ! -e .github/workflows/issue-906-final-diagnostics.yml
+          test ! -e .github/workflows/issue-906-ci-core-diagnostic.yml
           test ! -e .github/workflows/issue-906-pin-ci-core.yml
 
       - name: Publish corrected boundary
