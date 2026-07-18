@@ -73,9 +73,8 @@ export function evaluateAgentsReportContract(snapshot: SourceSnapshot): GateResu
 
   let failureStdout: string | undefined;
   if (report.missing) {
-    // Preserve the frozen Wave 3.b negative fixture without restoring prose parsing
-    // to the live contract. The compatibility diagnostic applies only when the
-    // pack-owned report entrypoint is absent as well.
+    // Historical Wave 3.b replay compatibility only. The live gate does not parse
+    // AGENTS.md wording when the pack-owned report entrypoint exists.
     if (agents.text !== undefined && /\bao\s+report\b/iu.test(agents.text)) {
       failures.push('AGENTS.md still references removed ao report command');
       failureStdout = 'AGENTS.md still references removed ao report command\n';
@@ -263,6 +262,8 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
   );
 }
 
+// Frozen Wave 3.b evidence. These markers are used only by historical replay and
+// migration-inventory validation; live repository enforcement does not parse them.
 export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>> = {
   'plugins/ao-task-declaration/README.md': [
     'DD-026',
@@ -299,10 +300,42 @@ export const VERIFY_CONTRACT_MARKERS: Readonly<Record<string, readonly string[]>
 
 export const VERIFY_PROMPT_GLOB = 'prompts/*.md';
 
+const VERIFY_RUNTIME_ARTIFACTS: Readonly<Record<string, string>> = {
+  'plugins/ao-task-declaration/README.md': 'plugins/ao-task-declaration/package.json',
+  'plugins/ao-scope-guard/README.md': 'scripts/pr-scope-check.ts',
+  'plugins/ao-token-chain-ledger/README.md': 'plugins/ao-token-chain-ledger/package.json',
+  'plugins/ao-codex-pr-reviewer/README.md': 'plugins/ao-codex-pr-reviewer/bin/review.ts',
+};
+
 function matchesVerifyPromptGlob(path: string): boolean {
   const [prefix = '', suffix = ''] = VERIFY_PROMPT_GLOB.split('*', 2);
   if (!path.startsWith(prefix) || !path.endsWith(suffix)) return false;
   return !path.slice(prefix.length, path.length - suffix.length).includes('/');
+}
+
+function hasCurrentVerifyRuntime(snapshot: SourceSnapshot): boolean {
+  return Object.values(VERIFY_RUNTIME_ARTIFACTS).some(
+    (path) => snapshot.files.has(path) || snapshot.unreadable.has(path),
+  );
+}
+
+function evaluateHistoricalVerifyFixture(
+  snapshot: SourceSnapshot,
+  failures: string[],
+  unreachable: string[],
+): void {
+  for (const [path, markers] of Object.entries(VERIFY_CONTRACT_MARKERS)) {
+    const text = snapshot.files.get(path);
+    if (text === undefined) continue;
+    for (const marker of markers) {
+      if (!text.toLocaleLowerCase().includes(marker.toLocaleLowerCase())) {
+        failures.push(`Contract ${path} missing marker: ${marker}`);
+      }
+    }
+  }
+  for (const path of snapshot.unreadable.keys()) {
+    if (path in VERIFY_CONTRACT_MARKERS) unreachable.push(`${path}: ${snapshot.unreadable.get(path)}`);
+  }
 }
 
 export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateResult {
@@ -312,19 +345,20 @@ export function evaluateVerifyStructureContract(snapshot: SourceSnapshot): GateR
   const promptFiles = snapshot.paths.filter(matchesVerifyPromptGlob);
   if (promptFiles.length === 0) failures.push('Missing prompt markdown files');
 
-  for (const [path, markers] of Object.entries(VERIFY_CONTRACT_MARKERS)) {
-    const text = requireText(snapshot, path, failures, unreachable);
-    if (text === undefined) continue;
-    for (const marker of markers) {
-      if (!text.toLocaleLowerCase().includes(marker.toLocaleLowerCase())) {
-        failures.push(`Contract ${path} missing marker: ${marker}`);
-      }
+  if (hasCurrentVerifyRuntime(snapshot)) {
+    for (const [readmePath, runtimePath] of Object.entries(VERIFY_RUNTIME_ARTIFACTS)) {
+      requireText(snapshot, readmePath, failures, unreachable);
+      requireText(snapshot, runtimePath, failures, unreachable);
     }
+  } else {
+    // Historical fixture replay only. This preserves the frozen pre-migration
+    // evidence without making Markdown wording part of the current gate.
+    evaluateHistoricalVerifyFixture(snapshot, failures, unreachable);
   }
 
   return completeStaticGate(
     gateId,
-    'Prompt inventory and plugin contract markers',
+    'Prompt inventory and executable plugin/runtime artifacts',
     '[PASS] verify prompt inventory and plugin contract markers\n',
     snapshot,
     failures,
