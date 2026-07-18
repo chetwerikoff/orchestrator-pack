@@ -35,6 +35,12 @@ export type PackReviewRunStatus =
   | 'timed_out'
   | 'cancelled';
 
+const PACK_REVIEW_VERDICT_TERMINAL_STATUSES = new Set<PackReviewRunStatus>([
+  'up_to_date',
+  'commented',
+  'changes_requested',
+]);
+
 export type GithubCommentReviewReconciliationPhase =
   | 'prepared'
   | 'comment_posted'
@@ -425,6 +431,14 @@ function consumerRow(record: PackReviewRunRecord, now = new Date()): PackReviewR
   };
 }
 
+function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
+  return record.journalOutcome?.state === 'persisted'
+    && (record.reviewVerdict === 'clean' || record.reviewVerdict === 'findings')
+    && Number.isInteger(record.findingCount)
+    && Number(record.findingCount) >= 0
+    && record.findings.length === Number(record.findingCount);
+}
+
 function writeRecordUnlocked(storeRoot: string, record: PackReviewRunRecord, createOnly = false): void {
   const path = recordPath(storeRoot, record.id);
   if (createOnly && existsSync(path)) throw new Error(`pack review run already exists: ${record.id}`);
@@ -476,6 +490,15 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     if (active.length > 1) throw new Error(`ambiguous pack review run store: multiple active records for ${key}`);
     if (active.length === 1) {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
+    }
+
+    const completed = records
+      .filter((record) => record.key === key
+        && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
+        && hasPersistedPackReviewVerdict(record))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    if (completed.length > 0) {
+      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
     }
 
     const now = (input.now ?? new Date()).toISOString();
