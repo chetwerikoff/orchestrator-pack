@@ -73,6 +73,9 @@ const EXPLICIT_DELETE = new Set([
   'docs/ao-reviews-board-runbook.md',
   'tests/fixtures/reviews-board-seven-columns.json',
   'docs/github-fleet-cache-measurement.md',
+  'scripts/testmode-fleet-harness.ts',
+  'scripts/testmode-fleet-reaper.shared.ts',
+  'scripts/vitest-testmode-fleet-progress.ts',
 ]);
 const ARCHIVE_MOVES = new Map([
   ['docs/github-fleet-cache-measurement.md', 'docs/archive/issue-906/github-fleet-cache-measurement.md'],
@@ -144,6 +147,16 @@ function subjectPath(entry) {
 function stable(value) { return `${JSON.stringify(value, null, 2)}\n`; }
 function fileExists(rel) { return existsSync(path.join(repoRoot, rel)); }
 function readCurrent(rel) { return readFileSync(path.join(repoRoot, rel)); }
+async function buildReachabilityWithoutGeneratedManifest() {
+  const full = path.join(repoRoot, MANIFEST);
+  const bytes = existsSync(full) ? readFileSync(full) : null;
+  if (bytes) rmSync(full, { force: true });
+  try {
+    return await buildReachabilityManifest(repoRoot);
+  } finally {
+    if (bytes) writeFileSync(full, bytes);
+  }
+}
 function pathCategory(rel, rootClosure, dynamicHeld) {
   if (anchor.keepCoreTests.includes(rel) || rel.startsWith('scripts/gate-runner/') || rel.startsWith('scripts/kernel/')) return 'G';
   if (rel.startsWith('plugins/ao-scope-guard/') || rel.startsWith('plugins/ao-codex-pr-reviewer/') || rel.startsWith('.github/workflows/')) return 'D';
@@ -292,18 +305,45 @@ function pruneJsonPathReferences(value, deletedSet) {
   }
   return value;
 }
+function pruneDeletedPowerShellPathEntries(text, deletedSet) {
+  const lines = text.split(/\r?\n/u).filter((line) => {
+    const match = /^\s*'([^']+)'\s*,?\s*$/u.exec(line);
+    return !(match && deletedSet.has(normalize(match[1])));
+  });
+  const rewritten = lines.join('\n')
+    .replace(/,\n(\s*\))/gu, '\n$1')
+    .trimEnd();
+  return `${rewritten}\n`;
+}
 function removeDeletedVerifyMembers(text, deletedSet) {
-  const lines = text.split(/\r?\n/u);
-  const output = [];
+  const originalLines = text.split(/\r?\n/u);
   const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));
+  const heading = /^\s*Write-Host\s+['"]==.*==['"]\s*$/u;
+  const sectionStarts = originalLines
+    .map((line, index) => heading.test(line) ? index : -1)
+    .filter((index) => index >= 0);
+  sectionStarts.push(originalLines.length);
+  const removedLineIndexes = new Set();
+  for (let sectionIndex = 0; sectionIndex < sectionStarts.length - 1; sectionIndex += 1) {
+    const sectionStart = sectionStarts[sectionIndex];
+    const sectionEnd = sectionStarts[sectionIndex + 1];
+    const refs = new Set((originalLines.slice(sectionStart, sectionEnd).join('\n')
+      .match(/scripts\/check-[A-Za-z0-9._-]+\.ps1/gu) ?? []));
+    if (refs.size > 0 && [...refs].every((rel) => deletedSet.has(rel))) {
+      for (let index = sectionStart; index < sectionEnd; index += 1) removedLineIndexes.add(index);
+    }
+  }
+
+  const lines = originalLines.filter((_, index) => !removedLineIndexes.has(index));
+  const output = [];
   const retiredInlineMarkers = new Set([
     'verify-runtime/autonomous-spawn-budget-vitest',
     'verify-runtime/autonomous-spawn-policy-vitest',
   ]);
   const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));
   const braceDelta = (line) => (line.match(/\{/gu) ?? []).length - (line.match(/\}/gu) ?? []).length;
-  const skipBalancedBlock = (start) => {
-    let index = start;
+  const skipBalancedBlock = (blockStart) => {
+    let index = blockStart;
     let depth = 0;
     let opened = false;
     while (index < lines.length) {
@@ -328,13 +368,11 @@ function removeDeletedVerifyMembers(text, deletedSet) {
       index += 1;
       continue;
     }
-
     const isAssignment = /^\s*\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*Join-Path\b/u.test(line);
     if (!isAssignment) {
       index += 1;
       continue;
     }
-
     index += 1;
     while (index < lines.length && /^\s*$/u.test(lines[index])) index += 1;
     if (index < lines.length && /^\s*if\b/u.test(lines[index])) {
@@ -343,7 +381,11 @@ function removeDeletedVerifyMembers(text, deletedSet) {
       if (index < lines.length && /^\s*else\b/u.test(lines[index])) index = skipBalancedBlock(index);
     }
   }
-  return `${output.join('\n').replace(/\n{4,}/gu, '\n\n\n').trimEnd()}\n`;
+  const rewritten = output.join('\n')
+    .replace(/,\n(\s*\)\)\s*\{)/gu, '\n$1')
+    .replace(/\n{4,}/gu, '\n\n\n')
+    .trimEnd();
+  return `${rewritten}\n`;
 }
 function verifyAnchor() {
   const failures = [];
@@ -368,7 +410,7 @@ export async function buildIssue906Manifest() {
   const survivingSet = new Set(baseFiles.filter((rel) => !deletedSet.has(rel)));
   for (const rel of currentFiles) if (!baseSet.has(rel)) survivingSet.add(rel);
 
-  const reachability = await buildReachabilityManifest(repoRoot);
+  const reachability = await buildReachabilityWithoutGeneratedManifest();
   const allowedKinds = new Set(['module-import', 'top-level-dot-source', 'direct-call-operator', 'node-child-process-literal-argument', 'node-script', 'node-child-process-argument', 'pwsh-file', 'shell-direct-invocation']);
   const roots = rootRecords(baseSet);
   const rootClosure = closure(roots.map((row) => row.path), reachability.trustedEdges.filter((edge) => allowedKinds.has(edge.kind) && edge.source !== 'scripts/verify.ps1' && edge.source !== 'scripts/check-reusable.ps1'));
@@ -486,7 +528,12 @@ function applyTree({ transformedCensus, deletedSet }) {
   if (!baseVerify) throw new Error('base verify.ps1 is missing during apply');
   writeFileSync(verifyPath, removeDeletedVerifyMembers(baseVerify.toString('utf8'), deletedSet));
 
-  for (const rel of ['scripts/vitest-ci-lanes.config.json', 'scripts/vitest-heavy-topology.plan.json', 'scripts/vitest-runtime-history.json', 'scripts/vitest-wallclock-e2e-split.pre-move-manifest.json', 'scripts/toolchain/powershell-child-tests.json', 'scripts/toolchain/raw-child-process-baseline.json']) {
+  const deadArgvPath = path.join(repoRoot, 'scripts/check-ao-dead-argv-bypass.ps1');
+  if (existsSync(deadArgvPath)) {
+    writeFileSync(deadArgvPath, pruneDeletedPowerShellPathEntries(readFileSync(deadArgvPath, 'utf8'), deletedSet));
+  }
+
+  for (const rel of ['scripts/vitest-ci-lanes.config.json', 'scripts/vitest-heavy-topology.plan.json', 'scripts/vitest-runtime-history.json', 'scripts/vitest-wallclock-e2e-split.pre-move-manifest.json', 'scripts/toolchain/powershell-child-tests.json', 'scripts/toolchain/raw-child-process-baseline.json', 'scripts/launch-argv-test-exclusions.manifest.json']) {
     const full = path.join(repoRoot, rel);
     if (!existsSync(full)) continue;
     const pruneSet = rel.startsWith('scripts/toolchain/')

@@ -1164,62 +1164,6 @@
       "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
     },
     {
-      "path": "scripts/testmode-fleet-harness.ts",
-      "api": "spawnSync",
-      "fingerprint": "27ff1be53d5a5475bed1",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-harness.ts",
-      "api": "spawnSync",
-      "fingerprint": "598a80b6459ee674c70b",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-harness.ts",
-      "api": "spawnSync",
-      "fingerprint": "b8073b12e895fe5c7c82",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-harness.ts",
-      "api": "spawnSync",
-      "fingerprint": "da1e570fbebd399954f2",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-reaper.shared.ts",
-      "api": "spawn",
-      "fingerprint": "9cbfba0f7cf628721e0d",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-reaper.shared.ts",
-      "api": "spawn",
-      "fingerprint": "9f8dc5dd0ad1a9931f2d",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-reaper.shared.ts",
-      "api": "spawnSync",
-      "fingerprint": "7333780275ec37ee9b1c",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
-      "path": "scripts/testmode-fleet-reaper.shared.ts",
-      "api": "spawnSync",
-      "fingerprint": "a4017eabe653f9d8f18e",
-      "ordinal": 1,
-      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
-    },
-    {
       "path": "scripts/vitest-runtime-history-delivery.mjs",
       "api": "spawnSync",
       "fingerprint": "bb6ce1bb7658e48176aa",

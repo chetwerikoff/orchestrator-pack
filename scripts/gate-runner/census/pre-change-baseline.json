@@ -1767,16 +1767,24 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "contract-evidence/manifest-integrity",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:draft-discipline/surfaces",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "draft-discipline/surfaces",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:gh auth status",
@@ -1850,24 +1858,36 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/orchestrator-command-runtime-preflight.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:scripts/orchestrator-review-start-preflight.ps1",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/orchestrator-review-start-preflight.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:scripts/worker-nudge-gate-preflight.ps1",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/worker-nudge-gate-preflight.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:strict review gate scripts",
@@ -1882,16 +1902,24 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/ao-spawn-shape-vitest",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/autonomous-interposer-vitest",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/autonomous-interposer-vitest",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/autonomous-spawn-budget-vitest",
@@ -1922,16 +1950,24 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/autonomous-spawn-worktree-vitest",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/contract-evidence-vitest",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/contract-evidence-vitest",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/cursor-agent-tui-shim-vitest",
@@ -1962,16 +1998,24 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/github-fleet-cache-vitest",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/review-pipeline-spawn-budget-vitest",
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "verify-runtime/review-pipeline-spawn-budget-vitest",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-inline:write-check:verify-runtime/test-backed-smoke",
@@ -1986,8 +2030,12 @@
       "sourceKind": "verify-inline",
       "sourcePath": "scripts/verify.ps1",
       "marker": "worker-launch-failure/quote-dense-body",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #906 removes the legacy PowerShell enforcement subject scripts/verify.ps1 as part of the base-pinned bulk estate cut after explicit target-cycle, CI, operator-recovery, and safety-plugin root analysis.",
+        "replacement": "The surviving TypeScript gate runner, protected review-cycle runtime, and vertical-slice acceptance test provide the replacement acceptance boundary; the removed legacy check is not independently executed."
+      }
     },
     {
       "id": "verify-script:scripts/check-agent-rules-grep-inventory.ps1",
