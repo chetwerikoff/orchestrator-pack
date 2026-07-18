@@ -65,6 +65,18 @@ assert.equal(resolvePrSessionBindingCachePath({ AO_REPORT_STATE_SEED_STATE: 'see
 const workerStatusRoot = mkdtempSync(join(tmpdir(), 'opk-857-worker-status-'));
 try {
   const cachePath = join(workerStatusRoot, 'binding-cache.json');
+  writePrSessionBindingCacheFile(cachePath, createDefaultPrSessionBindingCache());
+  const liveOnlyResolution = resolveWorkerStatusSessionBinding({
+    session: session('worker-status-live-only', { branch: 'issue-200', prs: [url(200)] }),
+    openPrs: [pr(200)],
+    repoSlug,
+    bindingCachePath: cachePath,
+    nowMs,
+    osLiveness: { dead: false },
+  });
+  assert.equal(liveOnlyResolution.ok, false);
+  assert.equal(liveOnlyResolution.reason, 'no_issue_binding');
+
   const cacheStore = cache('worker-status-cache', 201);
   writePrSessionBindingCacheFile(cachePath, cacheStore);
   const cacheResolution = resolveWorkerStatusSessionBinding({
