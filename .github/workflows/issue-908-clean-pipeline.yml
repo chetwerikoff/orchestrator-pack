@@ -10,31 +10,27 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: eede7b99d82da69b5f0e0bece49c5edbf9ce8e31
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - name: Run merge-ref light lane 1
+      - name: Download exact failed job logs
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set +e
-          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1 > "$RUNNER_TEMP/issue-908-merge-light-1.log" 2>&1
-          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-908-merge-light-1.log"
-          tail -n 400 "$RUNNER_TEMP/issue-908-merge-light-1.log"
-          exit 0
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88108026831/logs" > "$RUNNER_TEMP/light-1-failed.log"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88106927905/logs" > "$RUNNER_TEMP/light-2-failed.log"
+          tail -n 250 "$RUNNER_TEMP/light-1-failed.log"
+          tail -n 250 "$RUNNER_TEMP/light-2-failed.log"
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-908-merge-light-1
-          path: ${{ runner.temp }}/issue-908-merge-light-1.log
+          name: issue-908-failed-light-logs
+          path: |
+            ${{ runner.temp }}/light-1-failed.log
+            ${{ runner.temp }}/light-2-failed.log
           retention-days: 1
