@@ -16,6 +16,10 @@ import {
   lookupBindingBySession,
   resolvePrSessionBindingForConsumer,
 } from '../../docs/pr-session-binding-cache.mjs';
+import {
+  getSessionIssueNumber,
+  headRefCorrelatesToIssue,
+} from '../../docs/session-pr-binding-resolver.mjs';
 
 
 const UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS = new Set([
@@ -446,9 +450,16 @@ export function resolveWorkerStatusSessionBinding(input = {}) {
       const reason = String(resolution.reason ?? 'binding_miss_after_backfill');
       return workerStatusBindingFailure(reason, headHint, `binding_contract:${String(resolution.source ?? 'none')}`);
     }
-    // Preserve #891 admission: resolve conflict attribution through the shared
-    // contract, but accept a successful worker-status binding only from durable cache.
-    if (String(resolution?.source ?? '') !== 'cache') {
+    // Preserve #891 admission for arbitrary branch-only matches. A unique
+    // issue-correlated PR with an explicit head hint remains the pre-existing P1 path.
+    const resolutionSource = String(resolution?.source ?? '');
+    const issueNumber = getSessionIssueNumber(session);
+    const prHeadName = String(pr?.headRefName ?? pr?.head ?? '').trim();
+    const issueCorrelatedFallback = resolutionSource === 'backfill_resolver'
+      && Boolean(headHint)
+      && issueNumber > 0
+      && headRefCorrelatesToIssue(prHeadName, issueNumber, session);
+    if (resolutionSource !== 'cache' && !issueCorrelatedFallback) {
       continue;
     }
     matches.push({ pr, resolution });

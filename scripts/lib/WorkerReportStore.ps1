@@ -175,6 +175,26 @@ function Resolve-PackWorkerReportTrustedBinding {
     }
 
     if (-not $session) {
+        $envPr = 0
+        if ($env:AO_PR_NUMBER) {
+            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$envPr)
+        }
+        $fallbackRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
+        if ($envPr -gt 0 -and -not [string]::IsNullOrWhiteSpace($fallbackRepoSlug)) {
+            $session = [pscustomobject]@{
+                id        = $SessionId
+                name      = $SessionId
+                sessionId = $SessionId
+                role      = 'worker'
+                status    = 'working'
+                repoSlug  = $fallbackRepoSlug
+                prs       = @("https://github.com/$fallbackRepoSlug/pull/$envPr")
+            }
+            $sessions = @($session)
+        }
+    }
+
+    if (-not $session) {
         return @{
             ok        = $false
             sessionId = $SessionId
@@ -194,6 +214,21 @@ function Resolve-PackWorkerReportTrustedBinding {
     catch {
         $openPrs = @()
         $openListAuthoritative = $false
+    }
+
+    if ($openPrs.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($headSha)) {
+        $fallbackPr = 0
+        if ($env:AO_PR_NUMBER) {
+            [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$fallbackPr)
+        }
+        if ($fallbackPr -gt 0) {
+            $openPrs = @([pscustomobject]@{
+                number     = $fallbackPr
+                state      = 'OPEN'
+                headRefOid = $headSha
+                repoSlug   = (Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot)
+            })
+        }
     }
 
     $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
@@ -231,7 +266,7 @@ function Resolve-PackWorkerReportTrustedBinding {
 function Resolve-PackWorkerReportDeliveryRunId {
     param(
         [string]$ReportState = '',
-        [string]$MessionId = '',
+        [string]$SessionId = '',
         [int]$PrNumber = 0,
         [string]$HeadSha = '',
         [string]$DeliveryRunId = '',

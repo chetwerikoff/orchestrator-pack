@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
+import { normalizeSha } from './review-reconcile-primitives.mjs';
 import {
   buildSessionBindingKey,
   createDefaultPrSessionBindingCache,
@@ -16,7 +17,6 @@ import { isPendingWorkerDeliveryConfirmation } from './review-producer-contract.
 
 const array = (v) => Array.isArray(v) ? v : v == null ? [] : [v];
 const sessionIdOf = (s) => String(s?.sessionId ?? s?.id ?? s?.name ?? '').trim();
-const normalizeSha = (v) => /^[0-9a-f]{7,64}$/i.test(String(v ?? '').trim()) ? String(v).trim().toLowerCase() : '';
 export const WORKER_REPORT_STORE_SCHEMA_VERSION = 2;
 export const PACK_WORKER_REPORT_STORE_SURFACE = 'pack-worker-report-store';
 export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -129,6 +129,25 @@ function getBindingStore(bindingStore, cachePath) {
 export function resolveWorkerReportTrustedBinding({ session, openPrs = [], worktreeHeadSha = '', repoSlug = '', cachePath, bindingStore, nowMs = Date.now(), openListAuthoritative = false, writeBackfill = true }) {
   const headSha = normalizeSha(worktreeHeadSha);
   if (!headSha) return { ok: false, reason: 'missing_worktree_head', sessionId: sessionIdOf(session) || null };
+  const hasBulkPrList = Object.prototype.hasOwnProperty.call(session ?? {}, 'prs');
+  const explicitCallerPr = !hasBulkPrList && !session?.role && !session?.status
+    ? Number(session?.prNumber ?? 0)
+    : 0;
+  if (explicitCallerPr > 0) {
+    const explicitRow = array(openPrs).find((row) => Number(row?.number ?? 0) === explicitCallerPr);
+    const explicitHead = normalizeSha(explicitRow?.headRefOid);
+    if (explicitHead && explicitHead !== headSha) {
+      return { ok: false, reason: 'trust_boundary_head_mismatch', sessionId: sessionIdOf(session) || null };
+    }
+    return {
+      ok: true,
+      prNumber: explicitCallerPr,
+      headSha,
+      sessionId: sessionIdOf(session) || null,
+      bindingSource: 'explicit_caller',
+      bindingReason: 'explicit_caller',
+    };
+  }
   const scope = resolveBindingRepoSlug({ repoSlug: repoSlug || session?.repoSlug }, openPrs);
   if (!scope) return { ok: false, reason: 'missing_repo_slug', sessionId: sessionIdOf(session) || null };
   const result = resolveSessionPrBindingForConsumer({

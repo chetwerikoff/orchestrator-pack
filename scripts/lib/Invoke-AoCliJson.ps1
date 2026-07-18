@@ -330,9 +330,22 @@ function Get-AoSessionRowIdentifier {
 function Test-AoSessionRowNeedsSessionGetDetail {
     param($Row)
 
-    # Issue #857: bulk session-list rows already carry branch + prs[].
-    # Per-session detail enrichment is structurally retired.
-    return $false
+    if (-not $Row) { return $false }
+    $hasBulkPrList = if ($Row -is [System.Collections.IDictionary]) {
+        $Row.Contains('prs')
+    }
+    else {
+        $Row.PSObject.Properties.Name -contains 'prs'
+    }
+    # AO 0.10.2 bulk rows always carry prs[] (including an empty array), so
+    # production consumers never fan out. Rows without prs are legacy or
+    # bounded diagnostic fixtures and retain refresh-only telemetry.
+    if ($hasBulkPrList) { return $false }
+    $role = [string]$Row.role
+    if ($role -and $role.ToLowerInvariant() -ne 'worker' -and $role.ToLowerInvariant() -ne 'coding') {
+        return $false
+    }
+    return -not [string]::IsNullOrWhiteSpace((Get-AoSessionRowIdentifier -Row $Row))
 }
 
 function Build-AoSessionDetailsById {

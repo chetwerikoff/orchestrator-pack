@@ -3,6 +3,8 @@
  * Issue #857 retires displayName/prNumber predicates and resolves from prs[]/branch.
  */
 
+import { normalizeSha } from './review-reconcile-primitives.mjs';
+
 /** @typedef {{ number?: number, headRefOid?: string, headRefName?: string, head?: string, state?: string, repoSlug?: string, repository?: string }} OpenPr */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, issue?: string | number | null, issueId?: string | number | null, issueNumber?: number | null, branch?: string, headBranch?: string, headRefName?: string, ownedHeadSha?: string, headRefOid?: string, status?: string, repoSlug?: string, prs?: unknown[] }} AoSession */
 /** @typedef {'issue_correlation' | 'none'} SessionPrBindingSource */
@@ -23,11 +25,6 @@ function normalizeString(value) {
 
 function normalizeRepoSlug(value) {
   return normalizeString(value).toLowerCase();
-}
-
-function normalizeSha(value) {
-  const sha = normalizeString(value).toLowerCase();
-  return /^[0-9a-f]{7,64}$/.test(sha) ? sha : '';
 }
 
 function toArray(value) {
@@ -157,21 +154,8 @@ export function shouldEnrichSessionDetailFromGet(session) {
   return Boolean(getSessionIdentifier(session));
 }
 
-export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
-  const details = {};
-  for (const session of toArray(sessions)) {
-    if (hasDaemonPrListField(session)) continue;
-    const sessionId = getSessionIdentifier(session);
-    if (!sessionId) continue;
-    const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
-    const rowDetail = rowDisplay ? { [LEGACY_DISPLAY_KEY]: rowDisplay } : null;
-    const getDetail = sessionGetsById[sessionId]
-      ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
-      : null;
-    const merged = getDetail ?? rowDetail;
-    if (merged) details[sessionId] = merged;
-  }
-  return details;
+export function buildSessionDetailsById(_ignoredSessions, _ignoredSessionGetsById = {}) {
+  return {};
 }
 
 export function issueLinkedWorkerBranchLiterals(issueNumber) {
@@ -286,7 +270,7 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
         prNumber: ref.prNumber,
         source: 'issue_correlation',
         bindingSource: 'live_prs',
-        enriched: false,
+        enriched: true,
         liveSource: 'prs',
         trustRank: 400,
         repoSlug: ref.repoSlug || expectedRepo,
@@ -294,33 +278,41 @@ export function resolveSessionPrBinding(session, openPrs = [], options = {}) {
     }
   }
 
-  if (!hasDaemonPrListField(session)) {
-  const explicitPr = getExplicitSessionPrNumber(session);
-  if (explicitPr > 0) {
-    return { bound: true, prNumber: explicitPr, source: 'explicit_pr', enriched: false };
-  }
   const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
-    ? options.sessionDetail[LEGACY_DISPLAY_KEY]
-    : undefined;
-  const displayName = normalizeString(detailValue ?? legacySessionField(session, LEGACY_DISPLAY_KEY));
-  if (displayName && /^\d+$/.test(displayName)) {
-    const displayPr = numberOrZero(displayName);
+  ? options.sessionDetail[LEGACY_DISPLAY_KEY]
+  : undefined;
+  const explicitSessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
+  if (detailValue && /^\d+$/.test(normalizeString(detailValue)) && explicitSessionHead) {
+    const displayPr = numberOrZero(detailValue);
     const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
-    if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(session, displayPrRow, options)) {
+    if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(
+      session,
+      displayPrRow,
+      { ...options, headSha: explicitSessionHead },
+    )) {
       return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
     }
-    const issueNumber = getSessionIssueNumber(session);
-    const displayHead = normalizeString(displayPrRow?.headRefName ?? displayPrRow?.head);
-    const targetHead = normalizeSha(options.headSha);
-    const displayHeadSha = normalizeSha(displayPrRow?.headRefOid);
-    if (
-      displayPrRow && issueNumber > 0 && targetHead && displayHeadSha && displayHeadSha !== targetHead &&
-      headRefCorrelatesToIssue(displayHead, issueNumber, session)
-    ) {
-      return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
-    }
   }
-}
+
+  const packReportPr = String(session?.reportSnapshotKind ?? '') === 'pack-worker-report-store'
+    ? numberOrZero(session?.prNumber)
+    : 0;
+  const requestedHead = normalizeSha(options.headSha);
+  const packReportCoversHead = !requestedHead || toArray(session?.reports).some((report) => (
+    normalizeSha(report?.headSha ?? report?.headRefOid) === requestedHead
+  ));
+  if (packReportPr > 0 && packReportCoversHead) {
+    return {
+      bound: true,
+      prNumber: packReportPr,
+      source: 'issue_correlation',
+      bindingSource: 'issue_correlation',
+      enriched: false,
+      liveSource: 'issue_correlation',
+      trustRank: 250,
+      repoSlug: expectedRepo,
+    };
+  }
 
   const branchMatches = listDirectBranchMatches(session, prList, options);
   if (branchMatches.length > 1) {
