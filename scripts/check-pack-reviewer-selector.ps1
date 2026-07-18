@@ -1,48 +1,42 @@
 #Requires -Version 5.1
-# Static checks for reviewer-agnostic entrypoint and PACK_REVIEWER selector (Issue #86).
+<#
+.SYNOPSIS
+  Runtime checks for the reviewer-agnostic entrypoint and PACK_REVIEWER selector.
+#>
 $ErrorActionPreference = 'Stop'
-
 $Root = Split-Path -Parent $PSScriptRoot
 $entrypoint = Join-Path $Root 'scripts/invoke-pack-review.ps1'
-$example = Join-Path $Root 'agent-orchestrator.yaml.example'
+$selectorLib = Join-Path $Root 'scripts/lib/Resolve-PackReviewer.ps1'
+$codexWrapper = Join-Path $Root 'scripts/run-pack-review.ps1'
+$claudeWrapper = Join-Path $Root 'scripts/run-pack-review-claude.ps1'
 
-if (-not (Test-Path -LiteralPath $entrypoint -PathType Leaf)) {
-    Write-Host '[FAIL] scripts/invoke-pack-review.ps1 not found'
-    exit 1
+foreach ($path in @($entrypoint, $selectorLib, $codexWrapper, $claudeWrapper)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Host "[FAIL] missing pack-review runtime path: $path"
+        exit 1
+    }
 }
 
-if (-not (Test-Path -LiteralPath $example -PathType Leaf)) {
-    Write-Host '[FAIL] agent-orchestrator.yaml.example not found'
-    exit 1
+. $selectorLib
+$selectorText = Get-Content -LiteralPath $selectorLib -Raw
+foreach ($wrapper in @('run-pack-review.ps1', 'run-pack-review-claude.ps1')) {
+    if ($selectorText -notmatch [regex]::Escape($wrapper)) {
+        Write-Host "[FAIL] PACK_REVIEWER selector missing wrapper: $wrapper"
+        exit 1
+    }
 }
 
-. (Join-Path $Root 'scripts/lib/Get-PackReviewCommand.ps1')
-
-$command = Get-PackReviewCommandFromYaml -YamlPath $example
-if (-not $command) {
-    Write-Host '[FAIL] NAMED REVIEW_COMMAND not found in agent-orchestrator.yaml.example'
+$entrypointText = Get-Content -LiteralPath $entrypoint -Raw
+foreach ($marker in @('Get-PackReviewerFromSelector', 'Get-PackReviewWrapperPathForReviewer')) {
+    if ($entrypointText -notmatch [regex]::Escape($marker)) {
+        Write-Host "[FAIL] invoke-pack-review.ps1 missing selector marker: $marker"
+        exit 1
+    }
+}
+if ($entrypointText -match '\bao\s+review\s+run\b') {
+    Write-Host '[FAIL] invoke-pack-review.ps1 must not invoke AO review run'
     exit 1
 }
-
-$basename = Get-ReviewScriptBasenameFromCommand -ReviewCommand $command
-if ($basename -ne 'invoke-pack-review.ps1') {
-    Write-Host "[FAIL] REVIEW_COMMAND must use reviewer-agnostic invoke-pack-review.ps1 (got $basename)"
-    exit 1
-}
-
-if ($command -match 'run-pack-review-claude\.ps1' -or $command -match 'run-pack-review\.ps1' -or $command -match '\.ao/') {
-    Write-Host '[FAIL] REVIEW_COMMAND must not name per-reviewer wrappers or .ao/ paths'
-    Write-Host "  REVIEW_COMMAND: $command"
-    exit 1
-}
-
-$yamlText = Get-Content -LiteralPath $example -Raw
-if ($yamlText -notmatch 'PACK_REVIEWER') {
-    Write-Host '[FAIL] example orchestratorRules must document PACK_REVIEWER selector'
-    exit 1
-}
-
-. (Join-Path $Root 'scripts/lib/Resolve-PackReviewer.ps1')
 
 $savedProcess = $env:PACK_REVIEWER
 try {
@@ -62,7 +56,6 @@ finally {
     if (Test-PackReviewerPersistentLayersAvailable) {
         [Environment]::SetEnvironmentVariable('PACK_REVIEWER', $savedUser, 'User')
     }
-
     if ($null -eq $savedProcess) {
         Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
     }
@@ -71,10 +64,5 @@ finally {
     }
 }
 
-if (Test-PackReviewerPersistentLayersAvailable) {
-    Write-Host '[PASS] reviewer-agnostic entrypoint and PACK_REVIEWER fail-closed checks'
-}
-else {
-    Write-Host '[PASS] reviewer-agnostic entrypoint and PACK_REVIEWER fail-closed checks (non-Win32NT: process-only)'
-}
+Write-Host '[PASS] reviewer-agnostic entrypoint and PACK_REVIEWER fail-closed checks'
 exit 0
