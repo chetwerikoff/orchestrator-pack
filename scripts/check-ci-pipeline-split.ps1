@@ -25,10 +25,10 @@ if (-not (Test-Path -LiteralPath $core -PathType Leaf)) {
     throw "missing CI pipeline split prerequisite: $core"
 }
 
-$argsList = @('-RepoRoot', $RepoRoot)
 if ($SkipLiveCoverage) {
-    $argsList += '-SkipLiveCoverage'
+    & $core -RepoRoot $RepoRoot -SkipLiveCoverage
 }
-
-& $core @argsList
+else {
+    & $core -RepoRoot $RepoRoot
+}
 exit $LASTEXITCODE
