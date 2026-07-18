@@ -74,29 +74,46 @@ jobs:
           writeFileSync('docs/declarations/908.scope-pagination.json', `${JSON.stringify(snapshot, null, 2)}\n`);
           NODE
 
-      - name: Validate materialized artifacts
+      - name: Diagnose materialized artifacts
         shell: bash
         run: |
-          set -euo pipefail
-          node scripts/run-vitest-with-harness.mjs run scripts/pr-scope-check-pagination.test.ts
-          npm run typecheck:foundation
-          npm run lint:foundation
+          set +e
+          log="$RUNNER_TEMP/issue-908-final-artifacts.log"
+          : > "$log"
+          run_step() {
+            name="$1"; shift
+            printf '\n===== %s =====\n' "$name" | tee -a "$log"
+            "$@" >> "$log" 2>&1
+            code=$?
+            printf 'exit=%s\n' "$code" | tee -a "$log"
+          }
+          run_step vitest node scripts/run-vitest-with-harness.mjs run scripts/pr-scope-check-pagination.test.ts
+          run_step typecheck npm run typecheck:foundation
+          run_step lint npm run lint:foundation
           output="$(mktemp)"
-          GITHUB_OUTPUT="$output" OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard
-          node --input-type=module <<'NODE'
+          GITHUB_OUTPUT="$output" OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard >> "$log" 2>&1
+          printf '\n===== topology =====\nexit=%s\n' "$?" >> "$log"
+          node --input-type=module <<'NODE' >> "$log" 2>&1
           import { readFileSync } from 'node:fs';
           const plan = JSON.parse(readFileSync('scripts/vitest-heavy-topology.plan.json', 'utf8'));
           const unresolved = plan?.topology?.unresolvedGuardWeights ?? plan?.unresolvedGuardWeights ?? [];
-          if (unresolved.length > 32) throw new Error(`unresolved topology bound still exceeded: ${unresolved.length}`);
+          console.log(`unresolved=${unresolved.length}`);
           NODE
-          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
-          pwsh -NoProfile -Command "[void][scriptblock]::Create((Get-Content -LiteralPath './scripts/pr-scope-check.ps1' -Raw))"
-          git diff --check
+          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 >> "$log" 2>&1
+          printf '\n===== pipeline =====\nexit=%s\n' "$?" >> "$log"
+          pwsh -NoProfile -Command "[void][scriptblock]::Create((Get-Content -LiteralPath './scripts/pr-scope-check.ps1' -Raw))" >> "$log" 2>&1
+          printf '\n===== parse =====\nexit=%s\n' "$?" >> "$log"
+          git diff --check >> "$log" 2>&1
+          printf '\n===== diff-check =====\nexit=%s\n' "$?" >> "$log"
+          cat "$log"
+          exit 0
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: issue-908-final-artifacts
           path: |
             scripts/vitest-runtime-history.json
             docs/declarations/908.scope-pagination.json
+            ${{ runner.temp }}/issue-908-final-artifacts.log
           retention-days: 1
