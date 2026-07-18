@@ -1,0 +1,30 @@
+{
+  "issue_number": 857,
+  "iteration_id": "chatgpt-pr-896-r2",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chatgpt-pr-896",
+  "created_at": "2026-07-18T03:14:18.708Z",
+  "baseline": {
+    "commit_sha": "5127b684cdc339286223f8f589fbb5a48a310d98",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7bdfd7e0d39b9bc06226442fe1ce64215efa8f046d6dd6d1c027391736fe43e7"
+  },
+  "declared_paths": [
+    "docs/pr-session-binding-cache.d.mts",
+    "docs/pr-session-binding-cache.mjs",
+    "docs/session-pr-binding-resolver.d.mts",
+    "docs/session-pr-binding-resolver.mjs",
+    "docs/worker-report-store.mjs",
+    "scripts/lib/Invoke-AoCliJson.ps1",
+    "scripts/lib/Worker-Recovery.ps1",
+    "scripts/lib/WorkerReportStore.ps1",
+    "scripts/lib/WorkerStatusStore.ps1",
+    "scripts/lib/worker-status-store.mjs",
+    "scripts/pr-session-binding-cache.test.ts",
+    "scripts/session-pr-binding-resolver.test.ts",
+    "tests/powershell/Issue857.PrSessionBindingContract.Node.mjs",
+    "tests/powershell/Issue857.PrSessionBindingContract.Tests.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}

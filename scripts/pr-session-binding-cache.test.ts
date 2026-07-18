@@ -38,6 +38,7 @@ function repoRootFromTest() {
 }
 
 const repoSlug = 'org/orchestrator-pack';
+const prUrl = (number: number) => `https://github.com/${repoSlug}/pull/${number}`;
 const nowMs = Date.parse('2026-07-09T12:00:00.000Z');
 
 function liveWorker(sessionId: string, issueNumber = 719, extra: Record<string, unknown> = {}) {
@@ -89,8 +90,8 @@ function seedStore(record: {
  */
 const MATRIX: Array<{ classId: string; description: string }> = [
   { classId: 'A', description: 'cache hit resolves binding' },
-  { classId: 'B', description: 'backfill with displayName present' },
-  { classId: 'C', description: 'backfill with displayName absent via issue correlation' },
+  { classId: 'B', description: 'backfill with bulk prs[] present' },
+  { classId: 'C', description: 'backfill via branch or issue correlation' },
   { classId: 'D', description: 'cache miss + backfill miss fail closed' },
   { classId: 'E', description: 'ambiguous issue to PRs' },
   { classId: 'F', description: 'ambiguous PR to sessions' },
@@ -511,8 +512,8 @@ describe('pr-session-binding-cache ambiguity', () => {
   it('Codex: cache hit fails closed when live corpus has PR-to-many-session ambiguity', () => {
     const store = seedStore({ sessionId: 'opk-a', prNumber: 88, headSha: 'shared' });
     const sessions = [
-      liveWorker('opk-a', 719, { prNumber: 88 }),
-      liveWorker('opk-b', 720, { prNumber: 88 }),
+      liveWorker('opk-a', 719, { prs: [prUrl(88)] }),
+      liveWorker('opk-b', 720, { prs: [prUrl(88)] }),
     ];
     const openPrs = [openPr(88, 'shared')];
 
@@ -534,7 +535,7 @@ describe('pr-session-binding-cache ambiguity', () => {
 
   it('Codex: backfill does not write stale head when session lacks head ownership', () => {
     const cachePath = tempCachePath();
-    const sessions = [liveWorker('opk-stale', 501, { prNumber: 501, ownedHeadSha: 'oldhead' })];
+    const sessions = [liveWorker('opk-stale', 501, { prs: [prUrl(501)], ownedHeadSha: 'oldhead' })];
     const openPrs = [openPr(501, 'newhead')];
 
     const resolution = resolvePrSessionBindingForConsumer({
@@ -556,8 +557,8 @@ describe('pr-session-binding-cache ambiguity', () => {
   it('AC#5 class F: ambiguous PR to sessions fail closed', () => {
     const cachePath = tempCachePath();
     const sessions = [
-      liveWorker('opk-a', 719, { prNumber: 88 }),
-      liveWorker('opk-b', 720, { prNumber: 88 }),
+      liveWorker('opk-a', 719, { prs: [prUrl(88)] }),
+      liveWorker('opk-b', 720, { prs: [prUrl(88)] }),
     ];
     const openPrs = [openPr(88, 'shared')];
 
