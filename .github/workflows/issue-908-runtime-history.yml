@@ -28,7 +28,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Add measured runtime history and refresh declaration
+      - name: Build the final prerequisite commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,8 +78,13 @@ jobs:
           NODE
 
           git rm -f .github/workflows/issue-908-runtime-history.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/declarations/908.scope-pagination.json scripts/pr-scope-check-pagination.test.ts scripts/pr-scope-check.ps1 scripts/vitest-ci-lanes.config.json scripts/vitest-runtime-history.json
+          git add -u .github/workflows/issue-908-runtime-history.yml
+          git commit -m "fix: record scope pagination test runtime"
 
-      - name: Validate final prerequisite
+      - name: Validate the final commit
         shell: bash
         run: |
           set -euo pipefail
@@ -98,16 +103,11 @@ jobs:
           OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
           pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
           pwsh -NoProfile -File ./scripts/check-reusable.ps1
-          git diff --check
+          git diff --check HEAD^
           test ! -e .github/workflows/issue-908-runtime-history.yml
 
       - name: Publish final prerequisite
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/declarations/908.scope-pagination.json scripts/pr-scope-check-pagination.test.ts scripts/pr-scope-check.ps1 scripts/vitest-ci-lanes.config.json scripts/vitest-runtime-history.json
-          git add -u .github/workflows/issue-908-runtime-history.yml
-          git commit -m "fix: record scope pagination test runtime"
           git push origin HEAD:fix/scope-guard-pr-files-pagination
