@@ -8,11 +8,15 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
-  diagnose:
+  structure:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,19 +26,64 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci --include=dev
-      - name: Capture failing checks
-        shell: pwsh
+      - name: Capture structure policy
         run: |
           $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
           & ./scripts/check-ci-pipeline-split.ps1 *> diagnostics/structure.log
           "exit=$LASTEXITCODE" | Add-Content diagnostics/structure.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue857-structure-${{ github.run_id }}
+          path: diagnostics/structure.log
+          if-no-files-found: error
+
+  light-1:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture light shard 1
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
           & ./scripts/run-vitest-light-lane.ps1 -Shard 1 *> diagnostics/light-1.log
           "exit=$LASTEXITCODE" | Add-Content diagnostics/light-1.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue857-light-1-${{ github.run_id }}
+          path: diagnostics/light-1.log
+          if-no-files-found: error
+
+  light-2:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture light shard 2
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
           & ./scripts/run-vitest-light-lane.ps1 -Shard 2 *> diagnostics/light-2.log
           "exit=$LASTEXITCODE" | Add-Content diagnostics/light-2.log
       - uses: actions/upload-artifact@v4
         with:
-          name: issue857-final-ci-diagnostics-${{ github.run_id }}
-          path: diagnostics/*.log
+          name: issue857-light-2-${{ github.run_id }}
+          path: diagnostics/light-2.log
           if-no-files-found: error
