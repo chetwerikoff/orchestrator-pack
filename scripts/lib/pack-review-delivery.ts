@@ -176,19 +176,33 @@ export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReview
   };
 }
 
+function completedGithubCommentReview(run: PackReviewRunRecord): boolean {
+  return run.githubReviewId !== undefined
+    && run.githubReviewReconciliation?.phase === 'complete';
+}
+
 function completedResumeChannelOutcome(
   run: PackReviewRunRecord,
   channel: PackReviewDeliveryChannel,
   idempotencyKey: string,
 ): boolean {
+  if (channel === 'githubComment') {
+    if (completedGithubCommentReview(run)) return true;
+    const value = run.deliveryOutcomes?.githubComment;
+    const reconciliation = run.githubReviewReconciliation as
+      | (NonNullable<PackReviewRunRecord['githubReviewReconciliation']> & { postOutcome?: unknown })
+      | undefined;
+    return value?.idempotencyKey === idempotencyKey
+      && value.state === 'failed'
+      && reconciliation?.phase === 'prepared'
+      && reconciliation.postOutcome === 'definitely_rejected';
+  }
+
   const value = run.deliveryOutcomes?.[channel];
   if (!value || value.idempotencyKey !== idempotencyKey) return false;
-  if (channel === 'githubComment') {
-    return value.state === 'succeeded'
-      && run.githubReviewId !== undefined
-      && run.githubReviewReconciliation?.phase === 'complete';
+  if (channel === 'requiredStatus') {
+    return value.state === 'succeeded' || value.state === 'failed';
   }
-  if (channel === 'requiredStatus') return value.state === 'succeeded';
   return value.state === 'delivered'
     || value.state === 'failed'
     || value.state === 'escalated';
@@ -357,7 +371,8 @@ export async function deliverPackReviewVerdict(
 
   const githubComplete = options.resumeFromJournal
     && completedResumeChannelOutcome(options.run, 'githubComment', githubKey);
-  let githubReview: PackReviewGithubCommentResult | undefined = githubComplete
+  let githubReview: PackReviewGithubCommentResult | undefined = options.resumeFromJournal
+    && completedGithubCommentReview(options.run)
     ? {
         id: options.run.githubReviewId!,
         url: trim(options.run.githubReviewUrl),
