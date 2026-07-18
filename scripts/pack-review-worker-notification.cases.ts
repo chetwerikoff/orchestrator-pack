@@ -155,7 +155,11 @@ describe('pack review worker notification admission (Issue #894)', () => {
         reason: 'journal_duplicate_no_op',
       });
 
-      const sends = readFileSync(aoLog, 'utf8').split(/\r?\n/).filter(Boolean);
+      const sends = readFileSync(aoLog, 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('send ')
+          && line.includes('--session')
+          && line.includes('--message'));
       expect(sends).toHaveLength(1);
       expect(readFileSync(dispatchJournal, 'utf8')).toContain(deliveryKey);
     },
