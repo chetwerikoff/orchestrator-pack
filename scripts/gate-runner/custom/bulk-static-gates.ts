@@ -227,7 +227,7 @@ export function evaluateReviewCommandNotAo(snapshot: SourceSnapshot): GateResult
     ? undefined
     : readLegacyReviewCommand(snapshot);
 
-  if (legacyCommand !== undefined && /(?:^|[\\/])\.ao[\\/]/iu.test(legacyCommand)) {
+  if (legacyCommand !== undefined && /(?:^|\s|[\\/])\.ao[\\/]/iu.test(legacyCommand)) {
     const failure = 'Canonical REVIEW_COMMAND must not use gitignored .ao/ paths';
     return completeStaticGate(
       gateId,
