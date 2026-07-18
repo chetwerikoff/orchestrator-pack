@@ -32,6 +32,7 @@ $root = [string]$env:PACK_REVIEW_TRUSTED_ROOT
 if (-not $root) { throw 'PACK_REVIEW_TRUSTED_ROOT is required' }
 . (Join-Path $root 'scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1')
 . (Join-Path $root 'scripts/lib/Review-DeliveryLifecycle.ps1')
+. (Join-Path $root 'scripts/lib/Record-WorkerMessageDispatch.ps1')
 
 $sessionId = [string]$payload.sessionId
 $projectId = [string]$payload.projectId
@@ -71,6 +72,23 @@ if (-not $delivery.ok) {
     @{ ok = $false; sent = $false; terminal = 'escalated'; reason = [string]$delivery.reason } |
         ConvertTo-Json -Compress -Depth 8
     exit 0
+}
+
+$journalPath = Get-WorkerMessageDispatchJournalPath
+$journal = Get-WorkerMessageDispatchJournal -Path $journalPath
+if (Test-MechanicalJsonStateFencesTrusted -State $journal) {
+    $admission = Invoke-DispatchJournalCli -Subcommand 'deterministic-admit' -Payload @{
+        journal = $journal
+        incoming = @{
+            deterministicKey = $deliveryKey
+            findingsHash = $findingsHash
+        }
+    }
+    if ($admission.action -eq 'no_op_terminal') {
+        @{ ok = $true; sent = $false; skipped = $true; terminal = 'delivered'; reason = 'journal_duplicate_no_op' } |
+            ConvertTo-Json -Compress -Depth 8
+        exit 0
+    }
 }
 
 $result = Invoke-ScriptedReviewStdoutDeliverySend -SessionId $sessionId -MessageText $message -DeliveryKey $deliveryKey -DeliveryId ([string]$delivery.deliveryId) -PrNumber $prNumber -TargetSha $headSha -ProjectId $projectId -FindingsHash $findingsHash -WorkerTarget $workerTarget -OpenPrs $openPrs
