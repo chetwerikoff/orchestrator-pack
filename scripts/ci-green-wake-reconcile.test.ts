@@ -715,15 +715,14 @@ describe('fixture payloads', () => {
   });
 });
 
-describe('backstop preserved (AC6)', () => {
-  it('example yaml still wires report-stale and ci-failed reactions', () => {
+describe('tracked YAML boundary', () => {
+  it('does not source CI-green wake lifecycle from legacy reactions', () => {
     const example = readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), '../agent-orchestrator.yaml.example'),
       'utf8',
     );
-    expect(example).toMatch(/ci-failed:[\s\S]*action:\s*send-to-agent/);
-    expect(example).toMatch(/report-stale:[\s\S]*action:\s*send-to-agent/);
-    expect(example).toContain('ci-green-wake-reconcile.ps1');
+    expect(example).not.toMatch(/^\s*reactions:\s*$/mu);
+    expect(example).not.toContain('ci-failure-notification-reaction.ps1');
   });
 });
 
