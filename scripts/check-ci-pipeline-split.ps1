@@ -1,14 +1,12 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Run the CI pipeline-split guard with merge-context parity checks and a bounded same-run topology overlay.
+  Run the surviving CI pipeline-split guard.
 
 .DESCRIPTION
-  Issue #823's audit and run-twice fixture execute before the topology wrapper so a
-  PR-only leniency branch or self-referential push base cannot silently reappear.
-  The committed runtime-history artifact remains untouched. The topology wrapper
-  measures stale changed Vitest files, materializes an ephemeral overlay, invokes
-  the original guard core, and restores the artifact byte-for-byte in finally.
+  Issue #906 retires the merge-blind parity/audit wrappers together with their
+  removed legacy subjects. The static/live pipeline-split core remains
+  load-bearing because the protected scope-guard workflow invokes this entrypoint.
 #>
 [CmdletBinding()]
 param(
@@ -21,31 +19,16 @@ if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
-$wrapper = Join-Path $PSScriptRoot 'lib/ci-pipeline-split-pre-topology-wrapper.mjs'
 $core = Join-Path $PSScriptRoot 'check-ci-pipeline-split-core.ps1'
-$audit = Join-Path $PSScriptRoot 'check-merge-blind-ci-gates.mjs'
-$parityFixture = Join-Path $PSScriptRoot 'fixtures/merge-blind-ci-gates/parity.mjs'
 
-foreach ($required in @($wrapper, $core, $audit, $parityFixture)) {
-    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-        throw "missing CI pipeline split prerequisite: $required"
-    }
+if (-not (Test-Path -LiteralPath $core -PathType Leaf)) {
+    throw "missing CI pipeline split prerequisite: $core"
 }
 
-& node $audit $RepoRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& node $parityFixture $RepoRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-$argsList = @(
-    $wrapper,
-    '--repo-root', $RepoRoot,
-    '--core', $core
-)
+$argsList = @('-RepoRoot', $RepoRoot)
 if ($SkipLiveCoverage) {
-    $argsList += '--skip-live-coverage'
+    $argsList += '-SkipLiveCoverage'
 }
 
-& node @argsList
+& $core @argsList
 exit $LASTEXITCODE
