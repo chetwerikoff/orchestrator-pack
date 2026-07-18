@@ -141,6 +141,10 @@ jobs:
           console.log(`issue-906 declaration generated: ${declaredPaths.length} scoped paths`);
           NODE
 
+      - name: Stabilize manifest after declaration
+        shell: bash
+        run: node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
+
       - name: Validate trusted-CI compatibility
         shell: bash
         env:
