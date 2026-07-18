@@ -47,7 +47,7 @@ jobs:
           ln -s "$PWD/trusted-scope-guard/node_modules" node_modules
 
       - name: Run focused diagnostics
-        shell: pwsh
+        shell: bash
         env:
           PR_NUMBER: '907'
           PR_SCOPE_REPO_ROOT: ${{ github.workspace }}
@@ -59,37 +59,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Continue'
-          $scopeLog = Join-Path $env:RUNNER_TEMP 'issue-906-scope.log'
-          $pipelineLog = Join-Path $env:RUNNER_TEMP 'issue-906-pipeline.log'
+          set +e
+          scope_log="$RUNNER_TEMP/issue-906-scope.log"
+          pipeline_log="$RUNNER_TEMP/issue-906-pipeline.log"
 
-          Push-Location (Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard')
-          try {
-            & (Join-Path $PWD 'scripts/pr-scope-check.ps1') *>&1 | Tee-Object -FilePath $scopeLog
-            "scope_exit=$LASTEXITCODE" | Add-Content -LiteralPath $scopeLog
-          }
-          catch {
-            $_ | Out-String | Add-Content -LiteralPath $scopeLog
-            "scope_exception=1" | Add-Content -LiteralPath $scopeLog
-          }
-          finally {
-            Pop-Location
-          }
+          (
+            cd trusted-scope-guard
+            pwsh -NoProfile -File ./scripts/pr-scope-check.ps1
+          ) >"$scope_log" 2>&1
+          scope_exit=$?
+          printf '\nscope_exit=%s\n' "$scope_exit" >>"$scope_log"
 
-          try {
-            & (Join-Path $env:GITHUB_WORKSPACE 'scripts/check-ci-pipeline-split.ps1') *>&1 | Tee-Object -FilePath $pipelineLog
-            "pipeline_exit=$LASTEXITCODE" | Add-Content -LiteralPath $pipelineLog
-          }
-          catch {
-            $_ | Out-String | Add-Content -LiteralPath $pipelineLog
-            "pipeline_exception=1" | Add-Content -LiteralPath $pipelineLog
-          }
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 >"$pipeline_log" 2>&1
+          pipeline_exit=$?
+          printf '\npipeline_exit=%s\n' "$pipeline_exit" >>"$pipeline_log"
+
+          cat "$scope_log"
+          cat "$pipeline_log"
+          exit 0
 
       - name: Upload diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: issue-906-final-diagnostics
           path: |
             ${{ runner.temp }}/issue-906-scope.log
             ${{ runner.temp }}/issue-906-pipeline.log
+          if-no-files-found: error
           retention-days: 1
