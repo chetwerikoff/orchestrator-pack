@@ -207,6 +207,20 @@ describe('pack review journal-first delivery (Issue #894)', () => {
       journalOutcome: { state: 'journal_write_failed' },
       deliveryOutcomes: {},
     });
+
+    const retry = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 894,
+      headSha: HEAD_SHA,
+      linkedSessionId: 'worker-894-retry',
+      startReason: 'journal-retry',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+    });
+    expect(retry).toMatchObject({ created: true, reused: false, reason: 'created' });
+    expect(retry.run.id).not.toBe(run.id);
   });
 
   it('publishes pending for the admitted exact head without terminating the run', async () => {
