@@ -40,6 +40,16 @@ jobs:
           cat .issue-906-bootstrap/part* | base64 --decode > /tmp/issue-906-bootstrap.tgz
           echo "865834785cb8165914616aecae47e93199243cf2751aee72ef098af8f52af72e  /tmp/issue-906-bootstrap.tgz" | sha256sum --check
           tar -xzf /tmp/issue-906-bootstrap.tgz
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/estate-cut/manifest-generator.mjs')
+          text = path.read_text()
+          old = """  if (args.has('--apply')) {\n    applyTree(built);\n    built = await buildIssue906Manifest();\n  }\n"""
+          new = """  if (args.has('--apply')) {\n    applyTree(built);\n    if (!fileExists(MANIFEST)) writeFileSync(path.join(repoRoot, MANIFEST), '');\n    built = await buildIssue906Manifest();\n  }\n"""
+          if text.count(old) != 1:
+              raise SystemExit('issue-906 first-run patch target drifted')
+          path.write_text(text.replace(old, new))
+          PY
           rm -rf .issue-906-bootstrap
 
       - name: Install dependencies
