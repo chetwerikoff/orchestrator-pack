@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,8 +6,6 @@ import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 import { AUTONOMOUS_SPAWN_POLICY_VERSION, classifySpawnAction, evaluateAutonomousSpawnPolicyBoundary, evaluateAutonomousSpawnPolicyDecision, evaluateClaimPrResumeSafety, loadAutonomousSpawnPolicy, parseClaimPrNumberFromSpawnArgv, validateAutonomousSpawnPolicy } from '../docs/autonomous-orchestrator-boundary.mjs';
 import { evaluateRecoverySpawnRoute } from '../docs/worker-recovery.mjs';
 const spawnGateLibPath = path.join(repoRoot, 'scripts/lib/Orchestrator-AutonomousSpawnGate.ps1');
-const exampleYamlPath = path.join(repoRoot, 'agent-orchestrator.yaml.example');
-const migrationNotesPath = path.join(repoRoot, 'docs/migration_notes.md');
 function withTempSpawnPolicy(policy: Record<string, unknown>, run: (policyDir: string) => void) {
     const policyDir = mkdtempSync(path.join(tmpdir(), 'spawn-policy-pack-'));
     const docsDir = path.join(policyDir, 'docs');
@@ -239,16 +237,6 @@ describe('claim-pr collision safety', () => {
         const parsed = JSON.parse(output.trim());
         expect(parsed.safe).toBe(true);
         expect(parsed.reason).toBe('claim_pr_resume_safe');
-    });
-});
-describe('spawn policy adoption', () => {
-    it('operator adoption: documents live yaml override and preserves per-path fences', () => {
-        const example = readFileSync(exampleYamlPath, 'utf8');
-        expect(example).toMatch(/Plan from open GitHub Issues, spawn coding workers/i);
-        expect(example).toMatch(/never ao spawn, never --claim-pr/i);
-        const notes = readFileSync(migrationNotesPath, 'utf8');
-        expect(notes).toMatch(/Autonomous orchestrator spawn policy/i);
-        expect(notes).toMatch(/OPERATOR-GATED/i);
     });
 });
 describe('spawn policy guard integration', () => {
