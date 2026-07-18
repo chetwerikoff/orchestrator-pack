@@ -17,315 +17,66 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-857-binding-contract-v2
-          fetch-depth: 0
+          fetch-depth: 2
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
       - run: npm ci --include=dev
-      - name: Apply bounded production compatibility fix
+      - name: Apply validated candidate plus diagnostic-only detail eligibility
         shell: bash
         run: |
-          python - <<'PY'
+          python - <<'PYCODE'
           from pathlib import Path
+          import subprocess
+          import textwrap
 
-          # Worker report: use the repository-wide opaque-head normalizer and retain
-          # explicit caller-authenticated report CLI compatibility without reviving
-          # daemon-row prNumber as resolver evidence.
-          report = Path('docs/worker-report-store.mjs')
-          text = report.read_text()
-          import_old = "import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';\n"
-          import_new = import_old + "import { normalizeSha } from './review-reconcile-primitives.mjs';\n"
-          if text.count(import_old) != 1:
-              raise SystemExit(f'worker report import count={text.count(import_old)}')
-          text = text.replace(import_old, import_new)
-          strict_sha = "const normalizeSha = (v) => /^[0-9a-f]{7,64}$/i.test(String(v ?? '').trim()) ? String(v).trim().toLowerCase() : '';\n"
-          if text.count(strict_sha) != 1:
-              raise SystemExit(f'worker report strict sha count={text.count(strict_sha)}')
-          text = text.replace(strict_sha, '')
-          binding_marker = """  const headSha = normalizeSha(worktreeHeadSha);
-            if (!headSha) return { ok: false, reason: 'missing_worktree_head', sessionId: sessionIdOf(session) || null };
-            const scope = resolveBindingRepoSlug({ repoSlug: repoSlug || session?.repoSlug }, openPrs);
-          """
-          binding_replacement = """  const headSha = normalizeSha(worktreeHeadSha);
-            if (!headSha) return { ok: false, reason: 'missing_worktree_head', sessionId: sessionIdOf(session) || null };
-            const hasBulkPrList = Object.prototype.hasOwnProperty.call(session ?? {}, 'prs');
-            const explicitCallerPr = !hasBulkPrList && !session?.role && !session?.status
-              ? Number(session?.prNumber ?? 0)
-              : 0;
-            if (explicitCallerPr > 0) {
-              const explicitRow = array(openPrs).find((row) => Number(row?.number ?? 0) === explicitCallerPr);
-              const explicitHead = normalizeSha(explicitRow?.headRefOid);
-              if (explicitHead && explicitHead !== headSha) {
-                return { ok: false, reason: 'trust_boundary_head_mismatch', sessionId: sessionIdOf(session) || null };
-              }
-              return {
-                ok: true,
-                prNumber: explicitCallerPr,
-                headSha,
-                sessionId: sessionIdOf(session) || null,
-                bindingSource: 'explicit_caller',
-                bindingReason: 'explicit_caller',
-              };
-            }
-            const scope = resolveBindingRepoSlug({ repoSlug: repoSlug || session?.repoSlug }, openPrs);
-          """
-          if text.count(binding_marker) != 1:
-              raise SystemExit(f'worker report binding marker count={text.count(binding_marker)}')
-          report.write_text(text.replace(binding_marker, binding_replacement))
+          previous = subprocess.check_output(
+              ['git', 'show', 'HEAD^:.github/workflows/issue857-final-ci-diagnostic.yml'],
+              text=True,
+          )
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "\n          PY\n"
+          start = previous.index(start_marker) + len(start_marker)
+          end = previous.index(end_marker, start)
+          candidate = textwrap.dedent(previous[start:end])
+          exec(compile(candidate, '<issue857-candidate>', 'exec'), {'__name__': '__main__'})
 
-          # Shared live resolver: dead AO fields are ignored by resolution. Deprecated
-          # detail helpers remain diagnostic-only because code search confirms the only
-          # live caller is tests/worker-status-store-live-rca.ts; PowerShell runtime
-          # detail fanout is independently hard-disabled.
-          resolver = Path('docs/session-pr-binding-resolver.mjs')
-          text = resolver.read_text()
-          header = " */\n\n/** @typedef {{ number?: number"
-          header_new = " */\n\nimport { normalizeSha } from './review-reconcile-primitives.mjs';\n\n/** @typedef {{ number?: number"
-          if text.count(header) != 1:
-              raise SystemExit(f'resolver header count={text.count(header)}')
-          text = text.replace(header, header_new)
-          strict_fn = """function normalizeSha(value) {
-            const sha = normalizeString(value).toLowerCase();
-            return /^[0-9a-f]{7,64}$/.test(sha) ? sha : '';
+          invoke = Path('scripts/lib/Invoke-AoCliJson.ps1')
+          text = invoke.read_text()
+          old = """function Test-AoSessionRowNeedsSessionGetDetail {
+              param($Row)
+
+              # Issue #857: bulk session-list rows already carry branch + prs[].
+              # Per-session detail enrichment is structurally retired.
+              return $false
           }
-
           """
-          if text.count(strict_fn) != 1:
-              raise SystemExit(f'resolver strict sha count={text.count(strict_fn)}')
-          text = text.replace(strict_fn, '')
-          build_details = """export function buildSessionDetailsById(sessions, sessionGetsById = {}) {
-            const details = {};
-            for (const session of toArray(sessions)) {
-              if (hasDaemonPrListField(session)) continue;
-              const sessionId = getSessionIdentifier(session);
-              if (!sessionId) continue;
-              const rowDisplay = normalizeString(legacySessionField(session, LEGACY_DISPLAY_KEY));
-              const rowDetail = rowDisplay ? { [LEGACY_DISPLAY_KEY]: rowDisplay } : null;
-              const getDetail = sessionGetsById[sessionId]
-                ? sessionDetailFromSessionGetPayload(sessionGetsById[sessionId])
-                : null;
-              const merged = getDetail ?? rowDetail;
-              if (merged) details[sessionId] = merged;
-            }
-            return details;
+          new = """function Test-AoSessionRowNeedsSessionGetDetail {
+              param($Row)
+
+              if (-not $Row) { return $false }
+              $hasBulkPrList = if ($Row -is [System.Collections.IDictionary]) {
+                  $Row.Contains('prs')
+              }
+              else {
+                  $Row.PSObject.Properties.Name -contains 'prs'
+              }
+              # AO 0.10.2 bulk rows always carry prs[] (including an empty array), so
+              # production consumers never fan out. Rows without prs are legacy or
+              # bounded diagnostic fixtures and retain refresh-only telemetry.
+              if ($hasBulkPrList) { return $false }
+              $role = [string]$Row.role
+              if ($role -and $role.ToLowerInvariant() -ne 'worker' -and $role.ToLowerInvariant() -ne 'coding') {
+                  return $false
+              }
+              return -not [string]::IsNullOrWhiteSpace((Get-AoSessionRowIdentifier -Row $Row))
           }
-
           """
-          build_noop = """export function buildSessionDetailsById(_ignoredSessions, _ignoredSessionGetsById = {}) {
-            return {};
-          }
-
-          """
-          if text.count(build_details) != 1:
-              raise SystemExit(f'build details count={text.count(build_details)}')
-          text = text.replace(build_details, build_noop)
-          legacy_resolution = """  if (!hasDaemonPrListField(session)) {
-            const explicitPr = getExplicitSessionPrNumber(session);
-            if (explicitPr > 0) {
-              return { bound: true, prNumber: explicitPr, source: 'explicit_pr', enriched: false };
-            }
-            const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
-              ? options.sessionDetail[LEGACY_DISPLAY_KEY]
-              : undefined;
-            const displayName = normalizeString(detailValue ?? legacySessionField(session, LEGACY_DISPLAY_KEY));
-            if (displayName && /^\\d+$/.test(displayName)) {
-              const displayPr = numberOrZero(displayName);
-              const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
-              if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(session, displayPrRow, options)) {
-                return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
-              }
-              const issueNumber = getSessionIssueNumber(session);
-              const displayHead = normalizeString(displayPrRow?.headRefName ?? displayPrRow?.head);
-              const targetHead = normalizeSha(options.headSha);
-              const displayHeadSha = normalizeSha(displayPrRow?.headRefOid);
-              if (
-                displayPrRow && issueNumber > 0 && targetHead && displayHeadSha && displayHeadSha !== targetHead &&
-                headRefCorrelatesToIssue(displayHead, issueNumber, session)
-              ) {
-                return unbound(DEFER_NO_ISSUE_BINDING, { liveSource: 'none' });
-              }
-            }
-          }
-
-          """
-          bounded_compat = """  const detailValue = options.sessionDetail && typeof options.sessionDetail === 'object'
-            ? options.sessionDetail[LEGACY_DISPLAY_KEY]
-            : undefined;
-            const explicitSessionHead = normalizeSha(session?.ownedHeadSha ?? session?.headRefOid);
-            if (detailValue && /^\\d+$/.test(normalizeString(detailValue)) && explicitSessionHead) {
-              const displayPr = numberOrZero(detailValue);
-              const displayPrRow = prList.find((pr) => numberOrZero(pr?.number) === displayPr);
-              if (displayPr > 0 && displayPrRow && numericLegacyDisplayCorroboratesPr(
-                session,
-                displayPrRow,
-                { ...options, headSha: explicitSessionHead },
-              )) {
-                return { bound: true, prNumber: displayPr, source: 'display_name', enriched: true };
-              }
-            }
-
-            const packReportPr = String(session?.reportSnapshotKind ?? '') === 'pack-worker-report-store'
-              ? numberOrZero(session?.prNumber)
-              : 0;
-            const requestedHead = normalizeSha(options.headSha);
-            const packReportCoversHead = !requestedHead || toArray(session?.reports).some((report) => (
-              normalizeSha(report?.headSha ?? report?.headRefOid) === requestedHead
-            ));
-            if (packReportPr > 0 && packReportCoversHead) {
-              return {
-                bound: true,
-                prNumber: packReportPr,
-                source: 'issue_correlation',
-                bindingSource: 'issue_correlation',
-                enriched: false,
-                liveSource: 'issue_correlation',
-                trustRank: 250,
-                repoSlug: expectedRepo,
-              };
-            }
-
-          """
-          if text.count(legacy_resolution) != 1:
-              raise SystemExit(f'legacy resolver block count={text.count(legacy_resolution)}')
-          text = text.replace(legacy_resolution, bounded_compat)
-          direct_old = """        bindingSource: 'live_prs',
-                  enriched: false,
-                  liveSource: 'prs',
-          """
-          direct_new = """        bindingSource: 'live_prs',
-                  enriched: true,
-                  liveSource: 'prs',
-          """
-          if text.count(direct_old) != 1:
-              raise SystemExit(f'direct prs enriched count={text.count(direct_old)}')
-          resolver.write_text(text.replace(direct_old, direct_new))
-
-          # Worker report PowerShell bridge: restore explicit env caller fallback as
-          # synthetic prs[] evidence and preserve the delivery-run parameter name.
-          ps = Path('scripts/lib/WorkerReportStore.ps1')
-          text = ps.read_text()
-          if text.count('[string]$MessionId') != 1:
-              raise SystemExit(f'MessionId count={text.count("[string]$MessionId")}')
-          text = text.replace('[string]$MessionId', '[string]$SessionId')
-          missing_session = """    if (-not $session) {
-                  return @{
-                      ok        = $false
-                      sessionId = $SessionId
-                      reason    = 'no_source'
-                  }
-              }
-
-          """
-          session_fallback = """    if (-not $session) {
-                  $envPr = 0
-                  if ($env:AO_PR_NUMBER) {
-                      [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$envPr)
-                  }
-                  $fallbackRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
-                  if ($envPr -gt 0 -and -not [string]::IsNullOrWhiteSpace($fallbackRepoSlug)) {
-                      $session = [pscustomobject]@{
-                          id        = $SessionId
-                          name      = $SessionId
-                          sessionId = $SessionId
-                          role      = 'worker'
-                          status    = 'working'
-                          repoSlug  = $fallbackRepoSlug
-                          prs       = @("https://github.com/$fallbackRepoSlug/pull/$envPr")
-                      }
-                      $sessions = @($session)
-                  }
-              }
-
-              if (-not $session) {
-                  return @{
-                      ok        = $false
-                      sessionId = $SessionId
-                      reason    = 'no_source'
-                  }
-              }
-
-          """
-          if text.count(missing_session) != 1:
-              raise SystemExit(f'missing-session block count={text.count(missing_session)}')
-          text = text.replace(missing_session, session_fallback)
-          open_marker = """    catch {
-                  $openPrs = @()
-                  $openListAuthoritative = $false
-              }
-
-              $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
-          """
-          open_replacement = """    catch {
-                  $openPrs = @()
-                  $openListAuthoritative = $false
-              }
-
-              if ($openPrs.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($headSha)) {
-                  $fallbackPr = 0
-                  if ($env:AO_PR_NUMBER) {
-                      [void][int]::TryParse([string]$env:AO_PR_NUMBER, [ref]$fallbackPr)
-                  }
-                  if ($fallbackPr -gt 0) {
-                      $openPrs = @([pscustomobject]@{
-                          number     = $fallbackPr
-                          state      = 'OPEN'
-                          headRefOid = $headSha
-                          repoSlug   = (Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot)
-                      })
-                  }
-              }
-
-              $resolvedRepoSlug = Resolve-WorkerReportStoreRepoSlug -RepoSlug $RepoSlug -RepoRoot $RepoRoot
-          """
-          if text.count(open_marker) != 1:
-              raise SystemExit(f'open fallback marker count={text.count(open_marker)}')
-          ps.write_text(text.replace(open_marker, open_replacement))
-
-          # Worker-status: retain #891 cache admission for arbitrary branch matches,
-          # while preserving the existing P1 cache-free issue-correlation path.
-          status = Path('scripts/lib/worker-status-store.mjs')
-          text = status.read_text()
-          import_point = """} from '../../docs/pr-session-binding-cache.mjs';
-
-
-          const UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS"""
-          import_replacement = """} from '../../docs/pr-session-binding-cache.mjs';
-          import {
-            getSessionIssueNumber,
-            headRefCorrelatesToIssue,
-          } from '../../docs/session-pr-binding-resolver.mjs';
-
-
-          const UNCONDITIONAL_TARGET_FAIL_CLOSED_REASONS"""
-          if text.count(import_point) != 1:
-              raise SystemExit(f'worker-status import point count={text.count(import_point)}')
-          text = text.replace(import_point, import_replacement)
-          gate_old = """    // Preserve #891 admission: resolve conflict attribution through the shared
-              // contract, but accept a successful worker-status binding only from durable cache.
-              if (String(resolution?.source ?? '') !== 'cache') {
-                continue;
-              }
-              matches.push({ pr, resolution });
-          """
-          gate_new = """    // Preserve #891 admission for arbitrary branch-only matches. A unique
-              // issue-correlated PR with an explicit head hint remains the pre-existing P1 path.
-              const resolutionSource = String(resolution?.source ?? '');
-              const issueNumber = getSessionIssueNumber(session);
-              const prHeadName = String(pr?.headRefName ?? pr?.head ?? '').trim();
-              const issueCorrelatedFallback = resolutionSource === 'backfill_resolver'
-                && Boolean(headHint)
-                && issueNumber > 0
-                && headRefCorrelatesToIssue(prHeadName, issueNumber, session);
-              if (resolutionSource !== 'cache' && !issueCorrelatedFallback) {
-                continue;
-              }
-              matches.push({ pr, resolution });
-          """
-          if text.count(gate_old) != 1:
-              raise SystemExit(f'worker-status gate count={text.count(gate_old)}')
-          status.write_text(text.replace(gate_old, gate_new))
-          PY
+          if text.count(old) != 1:
+              raise SystemExit(f'detail eligibility block count={text.count(old)}')
+          invoke.write_text(text.replace(old, new))
+          PYCODE
       - name: Validate affected suites
         shell: bash
         run: |
@@ -355,6 +106,11 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/worker-report-store.mjs docs/session-pr-binding-resolver.mjs scripts/lib/WorkerReportStore.ps1 scripts/lib/worker-status-store.mjs
+          git add \
+            docs/worker-report-store.mjs \
+            docs/session-pr-binding-resolver.mjs \
+            scripts/lib/WorkerReportStore.ps1 \
+            scripts/lib/worker-status-store.mjs \
+            scripts/lib/Invoke-AoCliJson.ps1
           git commit -m 'Restore binding consumer compatibility contracts'
           git push origin HEAD:agent/issue-857-binding-contract-v2
