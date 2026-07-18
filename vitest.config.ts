@@ -15,7 +15,7 @@ export default defineConfig({
     globalSetup: ['scripts/vitest-global-setup.ts'],
     setupFiles: [
       'scripts/vitest-live-store-preload.mjs',
-      'scripts/vitest-testmode-fleet-progress.ts',
+      'scripts/vitest-surviving-store-isolation.ts',
     ],
     include: [
       'plugins/**/tests/**/*.test.ts',

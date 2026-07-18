@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "issue": 906,
+  "baseCommitSha": "f10fd0051dd28f4cea865e4859b495e369219698",
+  "pr2Owner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+  "keepCategories": {
+    "C": "target-review-cycle and protected runtime kernel",
+    "D": "CI, operator recovery, and safety-plugin roots",
+    "G": "keep-core tests, shared fixtures, and repository governance"
+  }
+}

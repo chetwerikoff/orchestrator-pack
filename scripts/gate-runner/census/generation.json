@@ -2,5 +2,5 @@
   "tool": "scripts/gate-runner/census-generator.ts",
   "baseCommitSha": "b7394065b9ee1b046abb4cf29aff456df1935571",
   "populationDigest": "427a91429a56f7236b67ea076f422263fc8ab31f76255e50c03383b910244ab1",
-  "migrationOwnershipDigest": "e72c1eb63da367470283a8f3f684f9b03f2eccd90fb68ddb40da337cc261f9f1"
+  "migrationOwnershipDigest": "7a6b9cf692cf904ad5ee2d3265444d011c9c1cce3c3557b86a0b7934d68ab766"
 }
