@@ -12,6 +12,7 @@ BeforeAll {
     $NodeMatrixPath = Join-Path $PSScriptRoot 'Issue857.PrSessionBindingContract.Node.mjs'
 
     . $InvokeAoPath
+    . $WorkerReportPath
 }
 
 Describe 'Issue #857 PowerShell binding dispatch' {
