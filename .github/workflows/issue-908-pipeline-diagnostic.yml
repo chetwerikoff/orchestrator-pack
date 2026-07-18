@@ -1,0 +1,41 @@
+name: issue-908-pipeline-diagnostic
+
+on:
+  push:
+    branches:
+      - fix/scope-guard-pr-files-pagination
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/scope-guard-pr-files-pagination
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Capture pipeline guard
+        shell: bash
+        run: |
+          set +e
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > "$RUNNER_TEMP/issue-908-pipeline.log" 2>&1
+          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-908-pipeline.log"
+          cat "$RUNNER_TEMP/issue-908-pipeline.log"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-908-pipeline-diagnostic
+          path: ${{ runner.temp }}/issue-908-pipeline.log
+          retention-days: 1
