@@ -152,3 +152,15 @@ lanes = json.loads(lanes_path.read_text())
 lanes['classification']['scripts/estate-cut/issue-906-vertical-slice.test.ts'] = 'light'
 lanes['classification'] = dict(sorted(lanes['classification'].items()))
 lanes_path.write_text(json.dumps(lanes, indent=2) + '\n')
+
+# Section-aware retirement removes 12 stale inline markers that the earlier
+# line rewrite accidentally preserved. Freeze the corrected terminal partition.
+census_test_path = repo / 'scripts/gate-runner/census.test.ts'
+census_test = census_test_path.read_text()
+old_retired = "toHaveLength(172);"
+old_pinned = "toHaveLength(60);"
+if census_test.count(old_retired) != 1 or census_test.count(old_pinned) != 1:
+    raise SystemExit('issue-906 census partition expectation drifted')
+census_test = census_test.replace(old_retired, "toHaveLength(184);", 1)
+census_test = census_test.replace(old_pinned, "toHaveLength(48);", 1)
+census_test_path.write_text(census_test)
