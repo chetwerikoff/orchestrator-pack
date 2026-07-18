@@ -1,0 +1,95 @@
+name: issue-906-final-diagnostics
+
+on:
+  push:
+    branches:
+      - agent/issue-906-estate-cut
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/issue-906-estate-cut
+
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
+        with:
+          ref: f10fd0051dd28f4cea865e4859b495e369219698
+          path: trusted-scope-guard
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: trusted-scope-guard/package-lock.json
+
+      - name: Install trusted dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix trusted-scope-guard ci --include=dev
+          rm -rf node_modules
+          ln -s "$PWD/trusted-scope-guard/node_modules" node_modules
+
+      - name: Run focused diagnostics
+        shell: pwsh
+        env:
+          PR_NUMBER: '907'
+          PR_SCOPE_REPO_ROOT: ${{ github.workspace }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_REPO_FORK: 'false'
+          PR_HEAD_REF: agent/issue-906-estate-cut
+          PR_HEAD_REPO_SAME: 'true'
+          SCOPE_GUARD_DEGRADED_LABEL: 'false'
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $scopeLog = Join-Path $env:RUNNER_TEMP 'issue-906-scope.log'
+          $pipelineLog = Join-Path $env:RUNNER_TEMP 'issue-906-pipeline.log'
+
+          Push-Location (Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard')
+          try {
+            & (Join-Path $PWD 'scripts/pr-scope-check.ps1') *>&1 | Tee-Object -FilePath $scopeLog
+            "scope_exit=$LASTEXITCODE" | Add-Content -LiteralPath $scopeLog
+          }
+          catch {
+            $_ | Out-String | Add-Content -LiteralPath $scopeLog
+            "scope_exception=1" | Add-Content -LiteralPath $scopeLog
+          }
+          finally {
+            Pop-Location
+          }
+
+          try {
+            & (Join-Path $env:GITHUB_WORKSPACE 'scripts/check-ci-pipeline-split.ps1') *>&1 | Tee-Object -FilePath $pipelineLog
+            "pipeline_exit=$LASTEXITCODE" | Add-Content -LiteralPath $pipelineLog
+          }
+          catch {
+            $_ | Out-String | Add-Content -LiteralPath $pipelineLog
+            "pipeline_exception=1" | Add-Content -LiteralPath $pipelineLog
+          }
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-906-final-diagnostics
+          path: |
+            ${{ runner.temp }}/issue-906-scope.log
+            ${{ runner.temp }}/issue-906-pipeline.log
+          retention-days: 1
