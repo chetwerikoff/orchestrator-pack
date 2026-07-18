@@ -37,6 +37,8 @@ export interface AoSession {
   status?: string;
   repoSlug?: string;
   prs?: unknown[];
+  /** AO transport rows may contain unrelated fields; binding reads only the fields above. */
+  [field: string]: unknown;
 }
 
 export interface SessionPrReference {
