@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-857-binding-contract-v2
-          fetch-depth: 0
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -76,58 +76,66 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           export BASELINE_SHA="$(git rev-parse HEAD)"
-          cat > .issue857-redeclare.ts <<'TS'
-          import { execFileSync } from 'node:child_process';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { computeActiveScopeHash } from './plugins/ao-task-declaration/lib/baseline.ts';
-          import { normalizeIssueConstraints, validateDeclaredScope } from './plugins/ao-task-declaration/lib/validate.ts';
-          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
 
-          const issueBody = execFileSync(
-            'gh',
-            ['issue', 'view', '857', '--repo', process.env.REPOSITORY!, '--json', 'body', '--jq', '.body'],
-            { encoding: 'utf8' },
-          );
-          const constraints = normalizeIssueConstraints(parseIssueBody(issueBody));
-          const previous = JSON.parse(readFileSync('docs/declarations/857.chatgpt-pr-896.json', 'utf8'));
-          const declaredPaths = [...new Set([
-            ...previous.declared_paths,
-            'scripts/pr-session-binding-cache.test.ts',
-            'scripts/session-pr-binding-resolver.test.ts',
-          ])].sort();
-          const validated = validateDeclaredScope(
-            { declared_paths: declaredPaths, declared_globs: [] },
-            constraints,
-          );
-          if (!validated.ok) throw new Error(validated.errors.join('; '));
-          const activeScopeHash = computeActiveScopeHash({
-            declared_paths: validated.declared_paths,
-            declared_globs: validated.declared_globs,
-            issue_denylist: constraints.denylist,
-            issue_allowed_roots: constraints.allowed_roots,
-          });
-          const snapshot = {
-            issue_number: 857,
-            iteration_id: 'chatgpt-pr-896-r2',
-            iteration_id_source: 'wrapper_generated',
-            supersedes: 'chatgpt-pr-896',
-            created_at: new Date().toISOString(),
-            baseline: {
-              commit_sha: process.env.BASELINE_SHA,
-              worktree_dirty: false,
-              active_scope_hash: activeScopeHash,
-            },
-            declared_paths: validated.declared_paths,
-            declared_globs: validated.declared_globs,
-            amendments: [],
-          };
-          writeFileSync(
-            'docs/declarations/857.chatgpt-pr-896-r2.json',
-            `${JSON.stringify(snapshot, null, 2)}\n`,
-          );
-          TS
-          npx tsx .issue857-redeclare.ts
-          rm -f .issue857-redeclare.ts
+          body = subprocess.check_output(
+              ['gh', 'issue', 'view', '857', '--repo', os.environ['REPOSITORY'], '--json', 'body', '--jq', '.body'],
+              text=True,
+          )
+          denylist = []
+          allowed_roots = []
+          saw_allowed = False
+          pattern = re.compile(r'```(denylist|allowed-roots)\s*\r?\n([\s\S]*?)```', re.I)
+          for label, block in pattern.findall(body):
+              lines = [line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith('#')]
+              if label.lower() == 'denylist':
+                  denylist.extend(lines)
+              else:
+                  saw_allowed = True
+                  allowed_roots.extend(lines)
+          if not denylist:
+              raise SystemExit('Issue #857 denylist fence was not found')
+          if not saw_allowed:
+              raise SystemExit('Issue #857 allowed-roots fence was not found')
+
+          previous = json.loads(Path('docs/declarations/857.chatgpt-pr-896.json').read_text())
+          declared_paths = sorted(set(previous['declared_paths']) | {
+              'scripts/pr-session-binding-cache.test.ts',
+              'scripts/session-pr-binding-resolver.test.ts',
+          })
+          canonical_payload = {
+              'declared_paths': sorted(declared_paths),
+              'declared_globs': [],
+              'issue_denylist': sorted(set(denylist)),
+              'issue_allowed_roots': sorted(set(allowed_roots)),
+          }
+          canonical = json.dumps(canonical_payload, separators=(',', ':'), ensure_ascii=False)
+          active_scope_hash = 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+          snapshot = {
+              'issue_number': 857,
+              'iteration_id': 'chatgpt-pr-896-r2',
+              'iteration_id_source': 'wrapper_generated',
+              'supersedes': 'chatgpt-pr-896',
+              'created_at': datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+              'baseline': {
+                  'commit_sha': os.environ['BASELINE_SHA'],
+                  'worktree_dirty': False,
+                  'active_scope_hash': active_scope_hash,
+              },
+              'declared_paths': declared_paths,
+              'declared_globs': [],
+              'amendments': [],
+          }
+          Path('docs/declarations/857.chatgpt-pr-896-r2.json').write_text(json.dumps(snapshot, indent=2) + '\n')
+          print(active_scope_hash)
+          PY
       - name: Validate TypeScript and migrated suites
         shell: bash
         run: |
