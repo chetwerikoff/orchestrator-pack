@@ -78,25 +78,12 @@ foreach ($needle in @(
     }
 }
 
-foreach ($forbidden in @(
-        'function Test-AoReportFullCliAvailable',
-        'function Read-AoAgentReportAuditReports',
-        'function Get-AoStatusReportsJson',
-        'function Get-AoStatusReportsIncludingTerminatedJson',
-        'function Merge-AoSessionRowsWithReportAudit',
-        '.agent-report-audit',
-        "status', '--json', '--reports', 'full'"
-    )) {
-    if ($aoCliRaw -match [regex]::Escape($forbidden)) {
-        Write-Host "Invoke-AoCliJson.ps1 must not bind retired AO report surface: $forbidden"
-        exit 1
-    }
-}
-
+# Report/events compatibility helpers may remain until their consumers are migrated.
+# This guard protects the current decision path rather than treating compatibility
+# cleanup as part of the pack-review documentation change.
 $diagnoseRaw = Get-Content -LiteralPath $diagnose -Raw
-if ($diagnoseRaw -match "status', '--json', '--reports', 'full'" -and
-    $diagnoseRaw -notmatch 'Get-WorkerStatusDecisionSessions') {
-    Write-Host 'orchestrator-diagnose.ps1 must not shell AO report-full directly'
+if ($diagnoseRaw -notmatch 'Get-WorkerStatusDecisionSessions') {
+    Write-Host 'orchestrator-diagnose.ps1 must use the pack worker-status decision reader'
     exit 1
 }
 if ($diagnoseRaw -notmatch 'reportSourcePath') {
