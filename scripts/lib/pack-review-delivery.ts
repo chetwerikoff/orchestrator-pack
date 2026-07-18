@@ -176,9 +176,16 @@ export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReview
   };
 }
 
-function completedGithubCommentReview(run: PackReviewRunRecord): boolean {
-  return run.githubReviewId !== undefined
-    && run.githubReviewReconciliation?.phase === 'complete';
+function completedGithubCommentReview(run: PackReviewRunRecord): PackReviewGithubCommentResult | null {
+  const reconciliation = run.githubReviewReconciliation;
+  if (reconciliation?.phase !== 'complete') return null;
+  const id = run.githubReviewId ?? reconciliation.commentReviewId;
+  if (id === undefined) return null;
+  return {
+    id,
+    url: trim(run.githubReviewUrl || reconciliation.commentReviewUrl),
+    event: 'COMMENT',
+  };
 }
 
 function completedResumeChannelOutcome(
@@ -190,7 +197,7 @@ function completedResumeChannelOutcome(
     const reconciliation = run.githubReviewReconciliation as
       | (NonNullable<PackReviewRunRecord['githubReviewReconciliation']> & { postOutcome?: unknown })
       | undefined;
-    return completedGithubCommentReview(run)
+    return completedGithubCommentReview(run) !== null
       || (reconciliation?.phase === 'prepared'
         && reconciliation.postOutcome === 'definitely_rejected');
   }
@@ -366,18 +373,13 @@ export async function deliverPackReviewVerdict(
     if (!persistChannelOutcome(options.run.id, channel, value, options)) deliveryFailed = true;
   };
 
-  const githubReviewCompleted = options.resumeFromJournal
-    && completedGithubCommentReview(options.run);
+  const recoveredGithubReview = options.resumeFromJournal
+    ? completedGithubCommentReview(options.run)
+    : null;
   const githubComplete = options.resumeFromJournal
     && completedResumeChannelOutcome(options.run, 'githubComment', githubKey);
-  let githubReview: PackReviewGithubCommentResult | undefined = githubReviewCompleted
-    ? {
-        id: options.run.githubReviewId!,
-        url: trim(options.run.githubReviewUrl),
-        event: 'COMMENT',
-      }
-    : undefined;
-  if (githubReviewCompleted) {
+  let githubReview: PackReviewGithubCommentResult | undefined = recoveredGithubReview ?? undefined;
+  if (recoveredGithubReview) {
     const recorded = options.run.deliveryOutcomes?.githubComment;
     if (!recorded || recorded.idempotencyKey !== githubKey || recorded.state !== 'succeeded') {
       recordChannelOutcome(
