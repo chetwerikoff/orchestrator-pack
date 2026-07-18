@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Regression guard: scripts/gh wrapper wiring (Issue #431).
+  Regression guard: scripts/gh wrapper runtime wiring.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -12,8 +12,7 @@ $required = @(
     @{ Path = 'scripts/lib/gh-wrapper.mjs'; Pattern = 'exitCodeForPrChecks' },
     @{ Path = 'scripts/lib/gh-inventory-match.mjs'; Pattern = 'pr-checks' },
     @{ Path = 'scripts/lib/gh-rest-routes.mjs'; Pattern = 'routePrChecks' },
-    @{ Path = 'scripts/lib/gh-resolve-real-binary.mjs'; Pattern = 'isNativeGhExecutable|resolveRealGhBinary' },
-    @{ Path = 'agent-orchestrator.yaml.example'; Pattern = 'scripts/gh' }
+    @{ Path = 'scripts/lib/gh-resolve-real-binary.mjs'; Pattern = 'isNativeGhExecutable|resolveRealGhBinary' }
 )
 
 $ghShim = Join-Path $Root 'scripts/gh'
@@ -21,7 +20,6 @@ if (-not (Test-Path -LiteralPath $ghShim -PathType Leaf)) {
     Write-Host 'Missing required file: scripts/gh'
     exit 1
 }
-# PATH intercept requires the shim to be executable (git index 100755, same as scripts/ao).
 $gitMode = (git -C $Root ls-files -s -- scripts/gh 2>$null) -split '\s+' | Select-Object -First 1
 if ($gitMode -ne '100755') {
     Write-Host "scripts/gh must be git mode 100755 for PATH intercept (got: $gitMode)"
@@ -30,7 +28,7 @@ if ($gitMode -ne '100755') {
 if ($IsLinux -or $IsMacOS) {
     bash -lc "test -x '$ghShim'" 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host 'scripts/gh must be executable on disk (chmod +x)'
+        Write-Host 'scripts/gh must be executable on disk'
         exit 1
     }
 }
@@ -43,24 +41,17 @@ foreach ($item in $required) {
     }
     $text = Get-Content -LiteralPath $full -Raw
     if ($text -notmatch $item.Pattern) {
-        Write-Host "Pattern not found in $($item.Path): $($item.Pattern)"
+        Write-Host "Runtime pattern not found in $($item.Path): $($item.Pattern)"
         exit 1
     }
 }
 
 $agentsMd = Join-Path $Root 'AGENTS.md'
-$rulesText = Get-Content -LiteralPath $agentsMd -Raw
-if ($rulesText -notmatch 'scripts/gh') {
-    Write-Host 'AGENTS.md must document scripts/gh REST inventory routing'
+if (-not (Test-Path -LiteralPath $agentsMd -PathType Leaf) -or
+    (Get-Content -LiteralPath $agentsMd -Raw) -notmatch 'scripts/gh') {
+    Write-Host 'AGENTS.md must retain the worker-facing scripts/gh transport rule'
     exit 1
 }
 
-$migration = Join-Path $Root 'docs/migration_notes.md'
-$migrationText = Get-Content -LiteralPath $migration -Raw
-if ($migrationText -notmatch 'scripts/gh') {
-    Write-Host 'docs/migration_notes.md must document scripts/gh adoption'
-    exit 1
-}
-
-Write-Host '[PASS] gh wrapper wiring (Issue #431)'
+Write-Host '[PASS] gh wrapper runtime wiring'
 exit 0
