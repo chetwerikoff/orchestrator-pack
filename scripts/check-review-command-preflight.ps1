@@ -1,63 +1,58 @@
 #Requires -Version 5.1
-# Fails when agent-orchestrator.yaml.example REVIEW_COMMAND regresses to wrapper-only (Issue #60).
+<#
+.SYNOPSIS
+  Regression guard: the live pack-review entrypoint resolves supported reviewer wrappers.
+
+.DESCRIPTION
+  Review policy no longer comes from agent-orchestrator.yaml.example. Validate the
+  executable pack-owned selector/wrapper path instead of requiring retired YAML prose.
+#>
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
-$ExamplePath = Join-Path $Root 'agent-orchestrator.yaml.example'
-if (-not (Test-Path -LiteralPath $ExamplePath -PathType Leaf)) {
-    Write-Host '[FAIL] agent-orchestrator.yaml.example not found'
-    exit 1
-}
+$entrypointPath = Join-Path $Root 'scripts/invoke-pack-review.ps1'
+$resolverPath = Join-Path $Root 'scripts/lib/Resolve-PackReviewer.ps1'
+$requiredWrappers = @(
+    'scripts/run-pack-review.ps1',
+    'scripts/run-pack-review-claude.ps1'
+)
 
-$Lines = Get-Content -LiteralPath $ExamplePath
-$inRules = $false
-$rulesLines = [System.Collections.Generic.List[string]]::new()
-
-for ($i = 0; $i -lt $Lines.Count; $i++) {
-    $line = $Lines[$i]
-    if ($line -match '^\s+orchestratorRules:\s*\|\s*$') {
-        $inRules = $true
-        continue
-    }
-    if ($inRules) {
-        if ($line -match '^\S') {
-            break
-        }
-        $rulesLines.Add($line) | Out-Null
+foreach ($path in @($entrypointPath, $resolverPath) + @($requiredWrappers | ForEach-Object { Join-Path $Root $_ })) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Host "[FAIL] missing live pack-review path: $path"
+        exit 1
     }
 }
 
-if ($rulesLines.Count -eq 0) {
-    Write-Host '[FAIL] orchestratorRules literal not found in example config'
+$entrypoint = Get-Content -LiteralPath $entrypointPath -Raw
+foreach ($marker in @(
+        'Resolve-PackReviewer.ps1',
+        'Get-PackReviewerFromSelector',
+        'Get-PackReviewWrapperPathForReviewer',
+        'Invoke-PackReviewWrapperWithFailureEvidence'
+    )) {
+    if ($entrypoint -notmatch [regex]::Escape($marker)) {
+        Write-Host "[FAIL] invoke-pack-review.ps1 missing live selector/wrapper marker: $marker"
+        exit 1
+    }
+}
+
+$resolver = Get-Content -LiteralPath $resolverPath -Raw
+foreach ($marker in @(
+        "codex  = 'run-pack-review.ps1'",
+        "claude = 'run-pack-review-claude.ps1'",
+        'PACK_REVIEWER'
+    )) {
+    if ($resolver -notmatch [regex]::Escape($marker)) {
+        Write-Host "[FAIL] Resolve-PackReviewer.ps1 missing live reviewer mapping: $marker"
+        exit 1
+    }
+}
+
+if ($entrypoint -match 'agent-orchestrator\.yaml\.example' -or $entrypoint -match '\borchestratorRules\b') {
+    Write-Host '[FAIL] live pack-review entrypoint must not read retired YAML review policy'
     exit 1
 }
 
-$rulesText = ($rulesLines -join "`n")
-
-$hasWrapper =
-    $rulesText -match 'review\.ps1' -or
-    $rulesText -match 'run-pack-review\.ps1' -or
-    $rulesText -match 'invoke-pack-review\.ps1'
-
-$hasPreflight =
-    $rulesText -match 'npm ci' -or
-    $rulesText -match 'run-pack-review\.ps1' -or
-    $rulesText -match 'invoke-pack-review\.ps1'
-
-if (-not $hasWrapper) {
-    Write-Host '[FAIL] orchestratorRules must name the pack review wrapper (review.ps1 or run-pack-review.ps1)'
-    exit 1
-}
-
-if (-not $hasPreflight) {
-    Write-Host '[FAIL] REVIEW_COMMAND must include dependency preflight (npm ci or scripts/run-pack-review.ps1)'
-    exit 1
-}
-
-if ($rulesText -match 'REVIEW_COMMAND' -and $rulesText -notmatch 'run-pack-review\.ps1' -and $rulesText -notmatch 'invoke-pack-review\.ps1' -and $rulesText -notmatch 'npm ci') {
-    Write-Host '[FAIL] REVIEW_COMMAND regressed to wrapper-only without documented preflight'
-    exit 1
-}
-
-Write-Host '[PASS] REVIEW_COMMAND includes pack wrapper and dependency preflight'
+Write-Host '[PASS] live pack-review entrypoint resolves both reviewer wrappers without YAML policy'
 exit 0
