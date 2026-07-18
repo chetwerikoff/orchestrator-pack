@@ -34,12 +34,6 @@ projects:
       agent: cursor
       agentConfig:
         permissions: permissionless
-    # Compatibility fixture for import/migration tooling only. This literal is not
-    # current AO or pack-review policy and must not be copied into a live project.
-    orchestratorRules: |
-      LEGACY MIGRATION FIXTURE ONLY — authoritative review behavior is in docs/pack-review-runbook.md.
-      NAMED REVIEW_COMMAND (historical compatibility shape):
-        pwsh -NoProfile -File scripts/invoke-pack-review.ps1 --repo-root . --base origin/main
 
 # Current pack-review authority:
 # - docs/pack-review-runbook.md: complete operator/runtime contract
