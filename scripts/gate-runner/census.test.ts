@@ -10,6 +10,7 @@ import {
   validateCensusSchema,
   type GateCensus,
 } from './census.ts';
+import { evaluateCurrentCensus } from './census-current.ts';
 import { registeredGateIds } from './runner.ts';
 import { captureSourceSnapshot, memorySnapshot } from './source-snapshot.ts';
 
@@ -25,8 +26,8 @@ function clone(census: GateCensus): GateCensus {
 }
 
 describe('frozen gate population census', () => {
-  it('reconciles the real final tree', () => {
-    const result = evaluateCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), registeredGateIds);
+  it('reconciles the real final tree using executable current semantics', () => {
+    const result = evaluateCurrentCensus(loadCensus(repoRoot), captureSourceSnapshot(repoRoot), registeredGateIds);
     expect(result.status, result.details?.join('\n')).toBe('PASS');
   });
 
@@ -68,7 +69,6 @@ describe('frozen gate population census', () => {
       .map((entry) => entry.deferredWave));
     expect([...owners].sort()).toEqual([...DEFERRED_WAVES].sort());
   });
-
 
   it('requires every schema v2 ported row to identify its migration wave', () => {
     const census = clone(loadCensus(repoRoot));
@@ -186,7 +186,6 @@ describe('frozen gate population census', () => {
     expect(result.details?.join('\n')).toContain('typed legacy invocation is no longer executable');
   });
 
-
   it('rejects an unrelated child call plus a disconnected target path literal', () => {
     const census = loadCensus(repoRoot);
     const row = census.entries.find((entry) => entry.legacyReference?.kind === 'test-invocation');
@@ -222,7 +221,6 @@ describe('frozen gate population census', () => {
     expect(result.status).toBe('FAIL');
     expect(result.details?.join('\n')).toContain(`${row!.id}: typed legacy invocation is no longer executable`);
   });
-
 
   it('rejects a suffix-matching path outside the repository-owned wrapper', () => {
     const census = loadCensus(repoRoot);
