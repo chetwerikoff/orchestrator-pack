@@ -655,32 +655,16 @@
       "inspection": "Manual inspection found no tracked repository target for this expression; it is an environment, executable, or fixture-local form."
     },
     {
-      "source": "scripts/check-ci-pipeline-split.ps1",
+      "source": "scripts/check-merge-blind-ci-gates.mjs",
       "line": 0,
       "kind": "live-literal-reference-not-proven-invocation",
-      "expression": "scripts/check-ci-pipeline-split-core.ps1",
+      "expression": "scripts/lib/resolve-merge-stable-ci-base.mjs",
       "possibleTargets": [
-        "scripts/check-ci-pipeline-split-core.ps1"
+        "scripts/lib/resolve-merge-stable-ci-base.mjs"
       ],
       "targetDispositions": [
         {
-          "path": "scripts/check-ci-pipeline-split-core.ps1",
-          "disposition": "deleted-now"
-        }
-      ],
-      "inspection": "Targets and resulting dispositions are bound above; no placeholder or implicit wildcard is used."
-    },
-    {
-      "source": "scripts/check-ci-pipeline-split.ps1",
-      "line": 0,
-      "kind": "live-literal-reference-not-proven-invocation",
-      "expression": "scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs",
-      "possibleTargets": [
-        "scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs"
-      ],
-      "targetDispositions": [
-        {
-          "path": "scripts/lib/ci-pipeline-split-pre-topology-wrapper.mjs",
+          "path": "scripts/lib/resolve-merge-stable-ci-base.mjs",
           "disposition": "kept"
         }
       ],
@@ -29484,6 +29468,7 @@
       "scripts/check-ci-failure-notification.ps1",
       "scripts/check-ci-green-wake-reconcile.ps1",
       "scripts/check-ci-pipeline-split-core.ps1",
+      "scripts/check-ci-pipeline-split.ps1",
       "scripts/check-ci-pipeline-split.test.ts",
       "scripts/check-command-runtime-bootstrap.ps1",
       "scripts/check-command-runtime-forbidden-workaround.ps1",
@@ -35954,7 +35939,10 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots"
+      "reason": "CI, operator recovery, and safety-plugin roots",
+      "attributes": [
+        "modified-in-pr1"
+      ]
     },
     {
       "path": "scripts/check-ci-pipeline-split.test.ts",
@@ -36096,8 +36084,8 @@
       "path": "scripts/check-merge-blind-ci-gates.mjs",
       "baseTracked": true,
       "terminalState": "kept",
-      "keepCategory": "C",
-      "reason": "target-review-cycle and protected runtime kernel"
+      "keepCategory": "G",
+      "reason": "keep-core tests, shared fixtures, and repository governance"
     },
     {
       "path": "scripts/check-merge-triage-gate.ps1",
@@ -36813,8 +36801,8 @@
       "path": "scripts/emit-vitest-heavy-topology.mjs",
       "baseTracked": true,
       "terminalState": "kept",
-      "keepCategory": "G",
-      "reason": "keep-core tests, shared fixtures, and repository governance"
+      "keepCategory": "C",
+      "reason": "target-review-cycle and protected runtime kernel"
     },
     {
       "path": "scripts/emit-wallclock-e2e-containment.mjs",
@@ -39681,8 +39669,8 @@
       "path": "scripts/lib/cli-guard-helpers.mjs",
       "baseTracked": true,
       "terminalState": "kept",
-      "keepCategory": "C",
-      "reason": "target-review-cycle and protected runtime kernel"
+      "keepCategory": "G",
+      "reason": "keep-core tests, shared fixtures, and repository governance"
     },
     {
       "path": "scripts/lib/command-runtime-bootstrap.d.mts",
@@ -40970,8 +40958,8 @@
       "path": "scripts/lib/vitest-json-report.mjs",
       "baseTracked": true,
       "terminalState": "kept",
-      "keepCategory": "G",
-      "reason": "keep-core tests, shared fixtures, and repository governance"
+      "keepCategory": "C",
+      "reason": "target-review-cycle and protected runtime kernel"
     },
     {
       "path": "scripts/lib/vitest-live-store-harness.d.mts",
