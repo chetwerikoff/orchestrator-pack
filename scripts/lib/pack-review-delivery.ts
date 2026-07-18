@@ -366,16 +366,26 @@ export async function deliverPackReviewVerdict(
     if (!persistChannelOutcome(options.run.id, channel, value, options)) deliveryFailed = true;
   };
 
+  const githubReviewCompleted = options.resumeFromJournal
+    && completedGithubCommentReview(options.run);
   const githubComplete = options.resumeFromJournal
     && completedResumeChannelOutcome(options.run, 'githubComment', githubKey);
-  let githubReview: PackReviewGithubCommentResult | undefined = options.resumeFromJournal
-    && completedGithubCommentReview(options.run)
+  let githubReview: PackReviewGithubCommentResult | undefined = githubReviewCompleted
     ? {
         id: options.run.githubReviewId!,
         url: trim(options.run.githubReviewUrl),
         event: 'COMMENT',
       }
     : undefined;
+  if (githubReviewCompleted) {
+    const recorded = options.run.deliveryOutcomes?.githubComment;
+    if (!recorded || recorded.idempotencyKey !== githubKey || recorded.state !== 'succeeded') {
+      recordChannelOutcome(
+        'githubComment',
+        outcome('succeeded', 'comment_recovered', githubKey, options.clock),
+      );
+    }
+  }
   if (!githubComplete) {
     try {
       githubReview = await options.postGithubComment();
