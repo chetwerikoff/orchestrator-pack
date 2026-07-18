@@ -8,7 +8,7 @@ npm run test:issue-906
 npm run gate-runner-selftest
 ```
 
-Before the final implementation tree was published, the cut was also validated with `npm run typecheck:foundation`, `npm run lint:foundation`, `npm run test:foundation`, the full `npm test` suite, and `git diff --check`.
+Before the final implementation tree was published, the cut was also validated with `npm run typecheck:foundation`, `npm run lint:foundation`, `npm run test:foundation`, the full `npm test` suite, `git diff --check`, and the surviving trusted PowerShell verification entry points.
 
 The surviving supervisor entry point remains `scripts/orchestrator-wake-supervisor.ps1`. Its registry now starts exactly:
 
