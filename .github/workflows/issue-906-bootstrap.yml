@@ -1,28 +1,22 @@
-name: issue-906-finalize
+name: issue-906-router-diagnostic
 
 on:
   push:
     branches:
       - agent/issue-906-estate-cut
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
-  contents: write
-  issues: read
-  pull-requests: read
+  contents: read
 
 concurrency:
-  group: issue-906-finalize
+  group: issue-906-router-diagnostic
   cancel-in-progress: true
 
 jobs:
-  finalize:
-    if: github.actor != 'github-actions[bot]'
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,42 +41,43 @@ jobs:
 
           generator = Path('scripts/estate-cut/manifest-generator.mjs')
           text = generator.read_text()
-
-          old = """  if (args.has('--apply')) {\n    applyTree(built);\n    built = await buildIssue906Manifest();\n  }\n"""
-          new = """  if (args.has('--apply')) {\n    applyTree(built);\n    if (!fileExists(MANIFEST)) writeFileSync(path.join(repoRoot, MANIFEST), '');\n    built = await buildIssue906Manifest();\n  }\n"""
-          if text.count(old) != 1:
-              raise SystemExit('issue-906 first-run patch target drifted')
-          text = text.replace(old, new)
-
-          old = """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n"""
-          new = """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n  'docs/declarations/906.chatgpt-estate-cut.json',\n"""
-          if text.count(old) != 1:
-              raise SystemExit('issue-906 declaration artifact patch target drifted')
-          text = text.replace(old, new)
-
-          old = """  'scripts/check-review-delivery-no-visibility-poll.ps1',\n"""
-          new = old + """  'scripts/check-scripted-review-confirmed-delivery-gate.ps1',\n"""
-          if text.count(old) != 1:
-              raise SystemExit('issue-906 live guard pin target drifted')
-          text = text.replace(old, new, 1)
-
-          old = """  const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));\n  const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));\n"""
-          new = """  const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));\n  const retiredInlineMarkers = new Set([\n    'verify-runtime/autonomous-spawn-budget-vitest',\n    'verify-runtime/autonomous-spawn-policy-vitest',\n  ]);\n  const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));\n"""
-          if text.count(old) != 1:
-              raise SystemExit('issue-906 inline retirement declaration target drifted')
-          text = text.replace(old, new, 1)
-
-          old = """    const line = lines[index];\n    if (!containsDeletedCheck(line)) {\n      output.push(line);\n"""
-          new = """    const line = lines[index];\n    if ([...retiredInlineMarkers].some((marker) => line.includes(`Write-Check '${marker}'`))) {\n      index += 1;\n      continue;\n    }\n    if (!containsDeletedCheck(line)) {\n      output.push(line);\n"""
-          if text.count(old) != 1:
-              raise SystemExit('issue-906 inline retirement loop target drifted')
-          text = text.replace(old, new, 1)
-
-          old = """  generation.migrationOwnershipDigest = migrationOwnershipDigest(transformedCensus.entries);\n  writeFileSync(generationPath, stable(generation));\n  pruneSupervisorRegistry();\n"""
-          new = """  generation.migrationOwnershipDigest = migrationOwnershipDigest(transformedCensus.entries);\n  writeFileSync(generationPath, stable(generation));\n  const censusSourcePath = path.join(repoRoot, 'scripts/gate-runner/census.ts');\n  const censusSource = readFileSync(censusSourcePath, 'utf8');\n  const digestPattern = /const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '[a-f0-9]{64}';/u;\n  if (!digestPattern.test(censusSource)) throw new Error('census ownership digest constant missing');\n  writeFileSync(censusSourcePath, censusSource.replace(digestPattern, `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${generation.migrationOwnershipDigest}';`));\n  pruneSupervisorRegistry();\n"""
-          if text.count(old) != 1:
-              raise SystemExit('issue-906 census digest patch target drifted')
-          generator.write_text(text.replace(old, new, 1))
+          replacements = [
+              (
+                  """  if (args.has('--apply')) {\n    applyTree(built);\n    built = await buildIssue906Manifest();\n  }\n""",
+                  """  if (args.has('--apply')) {\n    applyTree(built);\n    if (!fileExists(MANIFEST)) writeFileSync(path.join(repoRoot, MANIFEST), '');\n    built = await buildIssue906Manifest();\n  }\n""",
+                  'first-run manifest',
+              ),
+              (
+                  """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n""",
+                  """const NEW_ARTIFACTS = new Set([\n  CONFIG, ANCHOR, SCRIPT, MANIFEST,\n  'docs/declarations/906.chatgpt-estate-cut.json',\n""",
+                  'declaration artifact',
+              ),
+              (
+                  """  'scripts/check-review-delivery-no-visibility-poll.ps1',\n""",
+                  """  'scripts/check-review-delivery-no-visibility-poll.ps1',\n  'scripts/check-scripted-review-confirmed-delivery-gate.ps1',\n""",
+                  'live guard pin',
+              ),
+              (
+                  """  const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));\n  const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));\n""",
+                  """  const deletedChecks = [...deletedSet].filter((rel) => rel.startsWith('scripts/check-'));\n  const retiredInlineMarkers = new Set([\n    'verify-runtime/autonomous-spawn-budget-vitest',\n    'verify-runtime/autonomous-spawn-policy-vitest',\n  ]);\n  const containsDeletedCheck = (line) => deletedChecks.some((rel) => line.includes(rel));\n""",
+                  'inline retirement declaration',
+              ),
+              (
+                  """    const line = lines[index];\n    if (!containsDeletedCheck(line)) {\n      output.push(line);\n""",
+                  """    const line = lines[index];\n    if ([...retiredInlineMarkers].some((marker) => line.includes(`Write-Check '${marker}'`))) {\n      index += 1;\n      continue;\n    }\n    if (!containsDeletedCheck(line)) {\n      output.push(line);\n""",
+                  'inline retirement loop',
+              ),
+              (
+                  """  generation.migrationOwnershipDigest = migrationOwnershipDigest(transformedCensus.entries);\n  writeFileSync(generationPath, stable(generation));\n  pruneSupervisorRegistry();\n""",
+                  """  generation.migrationOwnershipDigest = migrationOwnershipDigest(transformedCensus.entries);\n  writeFileSync(generationPath, stable(generation));\n  const censusSourcePath = path.join(repoRoot, 'scripts/gate-runner/census.ts');\n  const censusSource = readFileSync(censusSourcePath, 'utf8');\n  const digestPattern = /const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '[a-f0-9]{64}';/u;\n  if (!digestPattern.test(censusSource)) throw new Error('census ownership digest constant missing');\n  writeFileSync(censusSourcePath, censusSource.replace(digestPattern, `const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '${generation.migrationOwnershipDigest}';`));\n  pruneSupervisorRegistry();\n""",
+                  'census digest',
+              ),
+          ]
+          for old, new, name in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'issue-906 patch target drifted: {name}')
+              text = text.replace(old, new, 1)
+          generator.write_text(text)
 
           Path('scripts/vitest-global-setup.ts').write_text("""import { applyOpkVitestHarnessEscalationEnv } from './test-harness-escalation-env.js';
 
@@ -90,14 +85,11 @@ jobs:
             applyOpkVitestHarnessEscalationEnv();
           }
           """)
-
           vitest = Path('vitest.config.ts')
           text = vitest.read_text()
           retired = "      'scripts/vitest-testmode-fleet-progress.ts',\n"
           if text.count(retired) != 1:
               raise SystemExit('issue-906 fleet progress setup target drifted')
-          if "globalSetup: ['scripts/vitest-global-setup.ts']" not in text:
-              raise SystemExit('issue-906 lightweight global setup wiring missing')
           vitest.write_text(text.replace(retired, '', 1))
           PY
           mkdir -p docs/declarations
@@ -108,104 +100,37 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Apply base-pinned estate cut
+        run: node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
+
+      - name: Instrument protected router test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/orchestrator-escalation-router.test.ts')
+          text = path.read_text()
+          needle = "    expect(router.status, `${router.stdout}\\n${router.stderr}`).toBe(0);"
+          replacement = "    console.log('ROUTER_DIAGNOSTIC', JSON.stringify({ stdout: router.stdout, stderr: router.stderr }, null, 2));\n" + needle
+          count = text.count(needle)
+          if count < 1:
+              raise SystemExit('router assertion target missing')
+          path.write_text(text.replace(needle, replacement))
+          print(f'instrumented {count} router assertions')
+          PY
+
+      - name: Run focused router diagnostic
         shell: bash
         run: |
           set -o pipefail
-          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check 2>&1 | tee /tmp/issue-906-apply.log
+          node scripts/run-vitest-with-harness.mjs run scripts/orchestrator-escalation-router.test.ts --reporter=verbose 2>&1 | tee /tmp/issue-906-router-debug.log || true
 
-      - name: Upload apply diagnostics
-        if: failure()
+      - name: Upload router diagnostic
         uses: actions/upload-artifact@v4
         with:
-          name: issue-906-apply-diagnostics
-          path: /tmp/issue-906-apply.log
+          name: issue-906-router-diagnostic
+          path: /tmp/issue-906-router-debug.log
           retention-days: 1
 
-      - name: Generate declaration snapshot
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
-          node --experimental-strip-types --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { execFileSync } from 'node:child_process';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
-
-          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
-          const issueBody = readFileSync('/tmp/issue-906-body.md', 'utf8');
-          const constraints = parseIssueBody(issueBody);
-          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
-          const splitZero = (value) => value.split('\0').filter(Boolean).map((path) => path.replaceAll('\\', '/'));
-          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
-          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
-          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
-          const declaredPaths = [...new Set([...changed, ...untracked])]
-            .filter((path) => !control.has(path) && path !== '.github/workflows/issue-906-bootstrap.yml' && !path.startsWith('.issue-906-bootstrap/'))
-            .sort();
-          const declaredGlobs = [];
-          const payload = {
-            declared_paths: declaredPaths,
-            declared_globs: declaredGlobs,
-            issue_denylist: [...constraints.denylist].sort(),
-          };
-          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
-          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
-          const snapshot = {
-            issue_number: 906,
-            iteration_id: 'chatgpt-estate-cut',
-            iteration_id_source: 'wrapper_generated',
-            supersedes: null,
-            created_at: new Date().toISOString(),
-            baseline: {
-              commit_sha: baseCommitSha,
-              worktree_dirty: false,
-              active_scope_hash: activeScopeHash,
-            },
-            declared_paths: declaredPaths,
-            declared_globs: declaredGlobs,
-            amendments: [],
-          };
-          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
-          console.log(`issue-906 declaration generated: ${declaredPaths.length} scoped paths`);
-          NODE
-
-      - name: Validate implementation
-        shell: bash
-        run: |
-          set -euo pipefail
-          : > /tmp/issue-906-validation.log
-          run_step() {
-            printf '\n===== %s =====\n' "$*" | tee -a /tmp/issue-906-validation.log
-            "$@" 2>&1 | tee -a /tmp/issue-906-validation.log
-          }
-          run_step npm run estate-cut:check
-          run_step npm run typecheck:foundation
-          run_step npm run lint:foundation
-          run_step npm run gate-runner-selftest
-          run_step npm run test:issue-906
-          run_step npm run test:foundation
-          run_step npm test
-          run_step git diff --check
-          run_step test ! -e .github/workflows/issue-906-bootstrap.yml
-          run_step test ! -e .issue-906-bootstrap
-
-      - name: Upload validation diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-906-validation-diagnostics
-          path: /tmp/issue-906-validation.log
-          retention-days: 1
-
-      - name: Publish final implementation tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat: cut legacy estate for issue 906"
-          git push origin HEAD:agent/issue-906-estate-cut
+      - name: Stop before publication
+        run: exit 1
