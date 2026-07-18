@@ -58,7 +58,30 @@ jobs:
           prune_new = "'scripts/toolchain/powershell-child-tests.json', 'scripts/toolchain/raw-child-process-baseline.json', 'scripts/launch-argv-test-exclusions.manifest.json'])"
           if text.count(prune_old) != 1:
               raise SystemExit('issue-906 JSON-prune anchor drifted')
-          generator.write_text(text.replace(prune_old, prune_new, 1))
+          text = text.replace(prune_old, prune_new, 1)
+
+          read_anchor = "function readCurrent(rel) { return readFileSync(path.join(repoRoot, rel)); }\n"
+          read_insert = read_anchor + """async function buildReachabilityWithoutGeneratedManifest() {
+            const full = path.join(repoRoot, MANIFEST);
+            const bytes = existsSync(full) ? readFileSync(full) : null;
+            if (bytes) rmSync(full, { force: true });
+            try {
+              return await buildReachabilityManifest(repoRoot);
+            } finally {
+              if (bytes) writeFileSync(full, bytes);
+            }
+          }
+          """
+          if text.count(read_anchor) != 1:
+              raise SystemExit('issue-906 reachability helper anchor drifted')
+          text = text.replace(read_anchor, read_insert, 1)
+
+          reachability_old = "  const reachability = await buildReachabilityManifest(repoRoot);\n"
+          reachability_new = "  const reachability = await buildReachabilityWithoutGeneratedManifest();\n"
+          if text.count(reachability_old) != 1:
+              raise SystemExit('issue-906 reachability call anchor drifted')
+          text = text.replace(reachability_old, reachability_new, 1)
+          generator.write_text(text)
 
           lanes_path = Path('scripts/vitest-ci-lanes.config.json')
           lanes = json.loads(lanes_path.read_text())
