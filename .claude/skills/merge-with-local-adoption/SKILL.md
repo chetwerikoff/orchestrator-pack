@@ -247,8 +247,10 @@ deleted on disk under a live session — the known 0.10.3 cleanup-aliasing class
 facts). This is **not** the legitimate skip case and **not** a reason to block a merge
 that already happened. Recovery (verified 2026-07-18): recovery-runbook Step 3 —
 `ao session kill "$S"` + `ao session restore "$S"` re-materializes the workspace at a
-stale HEAD; then **mandatorily** run the 6e sanctioned fast-forward and re-probe. Record
-the occurrence as a runtime-adoption defect in the report.
+stale HEAD; then **mandatorily** run the 6e sanctioned fast-forward and re-probe. If the
+fast-forward moved HEAD, recycle once more (kill + restore) — the restored session
+launched from the stale tree and does not reload rules/prompts when files change under
+it. Record the occurrence as a runtime-adoption defect in the report.
 
 Probe (both must exit 0):
 
@@ -383,10 +385,15 @@ From the operator terminal, after Step 7 (and Step 8 when it ran).
   as a routine merge step. Sanctioned maintenance path (outside merge runs, or when
   worker-workspace debt genuinely needs reclaiming): either (a) no non-terminated
   orchestrator row exists — run cleanup directly; or (b) an orchestrator is live — run
-  strictly in this order, never with cleanup before the kill or after the restore:
+  strictly in this order, never with cleanup before the kill or after a restore:
   `ao session kill "$S"` → `ao session cleanup -p orchestrator-pack -y` → `ao session
-  restore "$S"` → `wait-orchestrator-launch.ps1` → the 6e `--ff-only` sync. Record every
-  step in the report. Never leave the run with the orchestrator workspace missing.
+  restore "$S"` (re-materializes the workspace, possibly at a stale HEAD, and launches
+  the agent from it) → the 6e `--ff-only` sync → if the sync moved HEAD, recycle once
+  more (`ao session kill "$S"` + `ao session restore "$S"`) so the agent's startup
+  context loads from the synchronized worktree → `wait-orchestrator-launch.ps1`. A
+  session launched from a stale tree does not reload rules/prompts when files change
+  under it — never report recovery while the running session pre-dates the sync. Record
+  every step in the report. Never leave the run with the orchestrator workspace missing.
 - **9d — post-check:** `ao session ls --json -p orchestrator-pack` — no non-terminated
   row with id `W` (the id resolved in 9a); orchestrator row remains and its workspace
   still resolves on disk (quick 6e re-check).
