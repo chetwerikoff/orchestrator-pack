@@ -43,8 +43,8 @@ describe('agent rules relocation completeness', () => {
 });
 
 describe('agent rules live-reference gate', () => {
-  it('finds no live agent_rules.md references outside excluded paths', () => {
-    const excludedPrefixes = ['docs/declarations/', 'docs/issues_drafts/'];
+  it('finds no live agent_rules.md references outside excluded historical paths', () => {
+    const excludedPrefixes = ['docs/archive/', 'docs/declarations/', 'docs/issues_drafts/'];
     const retiredRef = /(?<![\w/\\])agent_rules\.md/;
     const offenders: string[] = [];
     const walk = (dir: string) => {
@@ -61,9 +61,7 @@ describe('agent rules live-reference gate', () => {
         if (rel === 'tests/agents-md-relocation.test.ts') continue;
         if (rel === 'tests/fixtures/agent-rules-relocation-musts.json') continue;
         const text = readFileSync(full, 'utf8');
-        if (retiredRef.test(text)) {
-          offenders.push(rel);
-        }
+        if (retiredRef.test(text)) offenders.push(rel);
       }
     };
     walk(repoRoot);
