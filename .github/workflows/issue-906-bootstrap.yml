@@ -81,6 +81,17 @@ jobs:
           if text.count(reachability_old) != 1:
               raise SystemExit('issue-906 reachability call anchor drifted')
           text = text.replace(reachability_old, reachability_new, 1)
+
+          verify_old = "  return `${output.join('\\n').replace(/\\n{4,}/gu, '\\n\\n\\n').trimEnd()}\\n`;\n"
+          verify_new = """  const rewritten = output.join('\\n')
+            .replace(/,\\n(\\s*\\)\\)\\s*\\{)/gu, '\\n$1')
+            .replace(/\\n{4,}/gu, '\\n\\n\\n')
+            .trimEnd();
+          return `${rewritten}\\n`;
+          """
+          if text.count(verify_old) != 1:
+              raise SystemExit('issue-906 verify-array normalization anchor drifted')
+          text = text.replace(verify_old, verify_new, 1)
           generator.write_text(text)
 
           lanes_path = Path('scripts/vitest-ci-lanes.config.json')
@@ -186,8 +197,7 @@ jobs:
           run_step npm run lint:foundation
           run_step npm run gate-runner-selftest
           run_step npm run test:issue-906
-          run_step npm run test:foundation
-          run_step npm test
+
           run_step pwsh -NoProfile -File ./scripts/verify.ps1
           run_step pwsh -NoProfile -File ./scripts/check-reusable.ps1
           run_step pwsh -NoProfile -File ./scripts/check-ci-cheap-wins.ps1
@@ -198,6 +208,8 @@ jobs:
             run_step node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard
           cat "$topology_output" | tee -a /tmp/issue-906-validation.log
 
+          run_step npm run test:foundation
+          run_step npm test
           run_step git diff --check
           run_step test ! -e .github/workflows/issue-906-bootstrap.yml
           run_step test ! -e scripts/testmode-fleet-harness.ts
