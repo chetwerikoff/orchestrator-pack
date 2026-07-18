@@ -18,23 +18,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/scope-guard-pr-files-pagination
+          ref: eede7b99d82da69b5f0e0bece49c5edbf9ce8e31
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Run exact light lane 2
+      - name: Run merge-ref light lane 1
         shell: bash
         run: |
           set +e
-          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 2 > "$RUNNER_TEMP/issue-908-light-2.log" 2>&1
-          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-908-light-2.log"
-          tail -n 300 "$RUNNER_TEMP/issue-908-light-2.log"
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1 > "$RUNNER_TEMP/issue-908-merge-light-1.log" 2>&1
+          printf '\nexit=%s\n' "$?" >> "$RUNNER_TEMP/issue-908-merge-light-1.log"
+          tail -n 400 "$RUNNER_TEMP/issue-908-merge-light-1.log"
           exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-908-light-2
-          path: ${{ runner.temp }}/issue-908-light-2.log
+          name: issue-908-merge-light-1
+          path: ${{ runner.temp }}/issue-908-merge-light-1.log
           retention-days: 1
