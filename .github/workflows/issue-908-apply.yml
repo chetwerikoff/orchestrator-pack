@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/scope-guard-pr-files-pagination
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
