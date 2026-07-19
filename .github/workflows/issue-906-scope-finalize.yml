@@ -119,3 +119,5 @@ EOF
           git add -A
           git commit -m "fix: align issue 906 declaration scope"
           git push origin HEAD:agent/issue-906-estate-cut
+
+# Second user commit triggers this pre-existing workflow.
