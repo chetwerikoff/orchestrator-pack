@@ -3,11 +3,11 @@
   "iteration_id": "chatgpt-estate-cut",
   "iteration_id_source": "wrapper_generated",
   "supersedes": null,
-  "created_at": "2026-07-19T05:01:45.658Z",
+  "created_at": "2026-07-19T05:29:19.079Z",
   "baseline": {
     "commit_sha": "42f3183bc334febd21c33ab2a053a8a0d8c6736e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:a50d4011c72823e3155aa51826b8a13da3d09e286e483cf257c10c330d9b81c4"
+    "active_scope_hash": "sha256:f31425e9e266f291f722d556144091528566199c9af4869d192cd5e728d05b40"
   },
   "declared_paths": [
     ".github/workflows/contract-evidence-legacy-list-guard.yml",
