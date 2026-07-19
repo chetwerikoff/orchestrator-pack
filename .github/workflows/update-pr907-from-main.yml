@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - ops/manual-pack-review-911-b997f2d
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
