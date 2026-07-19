@@ -147,13 +147,17 @@ describe('PowerShell must not duplicate closing-keyword regex', () => {
     );
   });
 
-  it('enumerates all PR file pages and fails closed on malformed entries', () => {
+  it('enumerates compact filename-only pages and fails closed at every boundary', () => {
     const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');
     expect(ps1).not.toContain('gh pr diff');
-    expect(ps1).toContain("pulls/$PrNumber/files?per_page=100");
-    expect(ps1).toContain("'--paginate'");
-    expect(ps1).toContain('foreach ($entry in @($filesRead.value))');
-    expect(ps1).toContain('$paths.Add($filename)');
+    expect(ps1).toContain('files?per_page=$pageSize&page=$page');
+    expect(ps1).toContain("'--jq', '[.[].filename]'");
+    expect(ps1).toContain("-ExpectedRoot 'array'");
+    expect(ps1).toContain('$pagePaths = @($filesRead.value)');
+    expect(ps1).toContain('if ($pagePaths.Count -lt $pageSize)');
+    expect(ps1).toContain('$page += 1');
+    expect(ps1).toContain('$maxPages = 30');
+    expect(ps1).toContain('3000-file API ceiling');
     expect(ps1).toContain('if (-not $filesRead.ok)');
     expect(ps1).toContain('Format-GhSignalFailureDetail -Result $filesRead');
     expect(ps1).toContain('[string]::IsNullOrWhiteSpace($filename)');
