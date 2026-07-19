@@ -95,12 +95,19 @@ jobs:
           name: issue-900-rework-validation
           path: /tmp/issue900-validation
           if-no-files-found: error
-      - name: Commit and push corrected implementation
+      - name: Commit and push corrected non-workflow implementation
         if: steps.validation.outcome == 'success'
         working-directory: target
         shell: bash
         run: |
           set -euo pipefail
+          git restore --staged --worktree -- \
+            .github/workflows/codex-pr-review.yml \
+            .github/workflows/read-delegation-audit.yml \
+            .github/workflows/scope-guard.yml \
+            .github/workflows/vitest-runtime-history-refresh.yml \
+            .github/workflows/vitest-wallclock-e2e.yml
+          test "$(git diff --cached --name-only | wc -l)" -eq 93
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix: complete Node 22 runtime normalization"
