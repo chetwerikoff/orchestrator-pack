@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: issue-900-rework-publisher
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   publish:
@@ -33,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           cat \
-            payload/scripts/toolchain/.issue900-rework-small-00.b64 \
+            payload/scripts/toolchain/.issue900-rework-patch-00.b64 \
             payload/scripts/toolchain/.issue900-rework-xz-01.b64 \
             payload/scripts/toolchain/.issue900-rework-patch-02.b64 \
             payload/scripts/toolchain/.issue900-rework-patch-03.b64 \
