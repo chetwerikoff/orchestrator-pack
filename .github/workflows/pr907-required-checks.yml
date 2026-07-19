@@ -20,23 +20,34 @@ jobs:
         with:
           ref: agent/issue-906-estate-cut
           fetch-depth: 0
-      - name: Inspect classification records
+      - name: Inspect manifest objects
         shell: bash
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/pr907-legacy-classification.txt"
-          {
-            echo 'run-contract entrypoint'
-            grep -n -F 'scripts/run-contract-evidence-legacy-list-guard.mjs' scripts/estate-cut/issue-906.manifest.json scripts/estate-cut/issue-906.config.json || true
-            echo 'legacy guard test'
-            grep -n -F 'scripts/contract-evidence-legacy-list-guard.test.ts' scripts/estate-cut/issue-906.manifest.json scripts/estate-cut/issue-906.config.json || true
-            echo 'legacy guard workflow'
-            grep -n -F '.github/workflows/contract-evidence-legacy-list-guard.yml' scripts/estate-cut/issue-906.manifest.json scripts/estate-cut/issue-906.config.json || true
-            echo 'config'
-            cat scripts/estate-cut/issue-906.config.json
-          } | tee "$out"
+          python - <<'PY' > "$RUNNER_TEMP/pr907-manifest-objects.txt"
+          import json
+          from pathlib import Path
+          targets = {
+              'scripts/run-contract-evidence-legacy-list-guard.mjs',
+              'scripts/contract-evidence-legacy-list-guard.test.ts',
+              '.github/workflows/contract-evidence-legacy-list-guard.yml',
+          }
+          data = json.loads(Path('scripts/estate-cut/issue-906.manifest.json').read_text())
+          def walk(value, trail='$'):
+              if isinstance(value, dict):
+                  if value.get('path') in targets:
+                      print(trail)
+                      print(json.dumps(value, indent=2, sort_keys=True))
+                  for key, child in value.items():
+                      walk(child, f'{trail}.{key}')
+              elif isinstance(value, list):
+                  for index, child in enumerate(value):
+                      walk(child, f'{trail}[{index}]')
+          walk(data)
+          PY
+          cat "$RUNNER_TEMP/pr907-manifest-objects.txt"
       - uses: actions/upload-artifact@v4
         with:
-          name: pr907-legacy-classification
-          path: ${{ runner.temp }}/pr907-legacy-classification.txt
+          name: pr907-manifest-objects
+          path: ${{ runner.temp }}/pr907-manifest-objects.txt
           retention-days: 1
