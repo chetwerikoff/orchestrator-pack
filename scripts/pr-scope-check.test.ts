@@ -147,6 +147,19 @@ describe('PowerShell must not duplicate closing-keyword regex', () => {
     );
   });
 
+  it('enumerates all PR file pages and fails closed on malformed entries', () => {
+    const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');
+    expect(ps1).not.toContain('gh pr diff');
+    expect(ps1).toContain("pulls/$PrNumber/files?per_page=100");
+    expect(ps1).toContain("'--paginate'");
+    expect(ps1).toContain('foreach ($entry in @($filesRead.value))');
+    expect(ps1).toContain('$paths.Add($filename)');
+    expect(ps1).toContain('if (-not $filesRead.ok)');
+    expect(ps1).toContain('Format-GhSignalFailureDetail -Result $filesRead');
+    expect(ps1).toContain('[string]::IsNullOrWhiteSpace($filename)');
+    expect(ps1).toContain('entry without filename');
+  });
+
   it('NON_CLOSING_ISSUE_REF_PATTERN stays aligned with documented Refs form', () => {
     expect(NON_CLOSING_ISSUE_REF_PATTERN.test('Refs #1')).toBe(true);
     expect(NON_CLOSING_ISSUE_REF_PATTERN.test('Closes #1')).toBe(false);

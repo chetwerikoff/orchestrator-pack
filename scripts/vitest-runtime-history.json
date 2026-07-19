@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-baseline-estimates",
-  "dataChangedAt": "2026-07-18T17:20:00Z",
+  "dataChangedAt": "2026-07-10T03:00:00Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -85,8 +85,8 @@
     "scripts/mechanical-reconcile-bounds.test.ts": 45000,
     "scripts/merge-triage.test.ts": 120000,
     "scripts/orchestrator-claimed-review-run.test.ts": 45000,
-    "scripts/orchestrator-escalation-router.test.ts": 45000,
     "scripts/orchestrator-escalation.test.ts": 45000,
+    "scripts/orchestrator-escalation-router.test.ts": 45000,
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": 90000,
     "scripts/orchestrator-message-registry.test.ts": 400000,
     "scripts/orchestrator-review-start-preflight-audit.test.ts": 45000,
@@ -98,12 +98,9 @@
     "scripts/orchestrator-wake-supervisor-orphan-identity.test.ts": 180000,
     "scripts/orchestrator-wake-supervisor-orphan-integration-reconcile.test.ts": 180000,
     "scripts/orchestrator-wake-supervisor-orphan-integration-stop.test.ts": 180000,
-    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000,
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 113999,
     "scripts/orchestrator-wake-supervisor-startup.test.ts": 168999,
-    "scripts/pr-scope-check-pagination.test.ts": 45000,
     "scripts/pr-scope-check.test.ts": 45000,
-    "scripts/pr-session-binding-cache.test.ts": 120000,
     "scripts/publish-issue-body-sync.test.ts": 45000,
     "scripts/reaction-config-messages.test.ts": 45000,
     "scripts/read-delegation-audit.test.ts": 45000,
@@ -176,8 +173,8 @@
     "scripts/supervisor-test-wait-race.fixture.test.ts": 45000,
     "scripts/terminal-flood-detect.test.ts": 45000,
     "scripts/test-runtime-budget.test.ts": 45000,
-    "scripts/testmode-fleet-reaper-wallclock.test.ts": 430000,
     "scripts/testmode-fleet-reaper.test.ts": 180000,
+    "scripts/testmode-fleet-reaper-wallclock.test.ts": 430000,
     "scripts/tier-gate-guard.test.ts": 45000,
     "scripts/trust-ao-worktree.test.ts": 45000,
     "scripts/worker-iteration-cycle.test.ts": 45000,
@@ -193,7 +190,9 @@
     "scripts/worker-status-store.test.ts": 45000,
     "scripts/worktree-gate-claim-completion-seam.test.ts": 45000,
     "tests/agents-md-relocation.test.ts": 45000,
-    "tests/agents-md-size-budget.test.ts": 45000
+    "tests/agents-md-size-budget.test.ts": 45000,
+    "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000,
+    "scripts/pr-session-binding-cache.test.ts": 120000
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -277,8 +276,8 @@
     "scripts/mechanical-reconcile-bounds.test.ts": "measured",
     "scripts/merge-triage.test.ts": "measured",
     "scripts/orchestrator-claimed-review-run.test.ts": "measured",
-    "scripts/orchestrator-escalation-router.test.ts": "measured",
     "scripts/orchestrator-escalation.test.ts": "measured",
+    "scripts/orchestrator-escalation-router.test.ts": "measured",
     "scripts/orchestrator-fleet-hygiene-sentinel.test.ts": "measured",
     "scripts/orchestrator-message-registry.test.ts": "measured",
     "scripts/orchestrator-review-start-preflight-audit.test.ts": "measured",
@@ -293,7 +292,6 @@
     "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": "measured",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "measured",
     "scripts/orchestrator-wake-supervisor-startup.test.ts": "measured",
-    "scripts/pr-scope-check-pagination.test.ts": "measured",
     "scripts/pr-scope-check.test.ts": "measured",
     "scripts/pr-session-binding-cache.test.ts": "measured",
     "scripts/publish-issue-body-sync.test.ts": "measured",
@@ -382,10 +380,10 @@
     "scripts/worker-recovery-spawn-argv.test.ts": "measured",
     "scripts/worker-recovery.test.ts": "measured",
     "scripts/worker-report-store.test.ts": "measured",
-    "scripts/worker-status-store.test.ts": "measured",
     "scripts/worktree-gate-claim-completion-seam.test.ts": "measured",
     "tests/agents-md-relocation.test.ts": "measured",
-    "tests/agents-md-size-budget.test.ts": "measured"
+    "tests/agents-md-size-budget.test.ts": "measured",
+    "scripts/worker-status-store.test.ts": "measured"
   },
   "recentSamples": {},
   "fileChangedAt": {}
