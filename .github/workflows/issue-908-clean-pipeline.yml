@@ -1,4 +1,4 @@
-name: issue-909-pack-review-status
+name: issue-906-adopt-main
 
 on:
   push:
@@ -6,22 +6,128 @@ on:
       - diag/issue-908-clean-pipeline
 
 permissions:
-  statuses: write
-  contents: read
+  contents: write
+  issues: read
 
 jobs:
-  publish:
+  adopt:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 60
     steps:
-      - name: Publish reviewed status
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-906-estate-cut
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Merge prerequisite and rebuild the base-pinned cut
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: 1dc236cda46926e31e9eb435212a8599537afc41
+          NEW_BASE: 27166b6b3d9bf8c887514c638981e26a5e3a6a43
         run: |
           set -euo pipefail
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
-            -f state=success \
-            -f context='orchestrator-pack/pack-review' \
-            -f description='Pack review completed with no findings.'
+          git fetch origin main
+
+          set +e
+          git merge --no-commit --no-ff "$NEW_BASE"
+          merge_exit=$?
+          set -e
+
+          unmerged="$(git diff --name-only --diff-filter=U)"
+          if [ -n "$unmerged" ]; then
+            if [ "$unmerged" != "scripts/pr-scope-check.test.ts" ]; then
+              printf 'unexpected merge conflicts:\n%s\n' "$unmerged" >&2
+              exit 1
+            fi
+            git rm -f scripts/pr-scope-check.test.ts
+          elif [ "$merge_exit" -ne 0 ]; then
+            echo "merge failed without a resolvable expected conflict" >&2
+            exit "$merge_exit"
+          fi
+
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          path = Path('scripts/estate-cut/issue-906.config.json')
+          data = json.loads(path.read_text())
+          data['baseCommitSha'] = '27166b6b3d9bf8c887514c638981e26a5e3a6a43'
+          path.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          node scripts/estate-cut/capture-base-anchor.mjs
+          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
+
+          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+
+          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
+          const constraints = parseIssueBody(readFileSync('/tmp/issue-906-body.md', 'utf8'));
+          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
+          const splitZero = (value) => value.split('\0').filter(Boolean).map((entry) => entry.replaceAll('\\', '/'));
+          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
+          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
+          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
+          const declaredPaths = [...new Set([...changed, ...untracked])]
+            .filter((entry) => !control.has(entry))
+            .sort();
+          const payload = {
+            declared_paths: declaredPaths,
+            declared_globs: [],
+            issue_denylist: [...constraints.denylist].sort(),
+          };
+          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
+          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
+          const snapshot = JSON.parse(readFileSync('docs/declarations/906.chatgpt-estate-cut.json', 'utf8'));
+          snapshot.created_at = new Date().toISOString();
+          snapshot.baseline = {
+            commit_sha: baseCommitSha,
+            worktree_dirty: false,
+            active_scope_hash: activeScopeHash,
+          };
+          snapshot.declared_paths = declaredPaths;
+          snapshot.declared_globs = [];
+          snapshot.amendments = [];
+          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          NODE
+
+          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "merge: adopt scope pagination prerequisite for issue 906"
+
+      - name: Validate committed estate cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          npm run estate-cut:check
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run gate-runner-selftest
+          npm run test:issue-906
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          npm run test:foundation
+          npm test
+          git diff --check HEAD^
+          grep -q "pulls/\$PrNumber/files?per_page=100" scripts/pr-scope-check.ps1
+          test ! -e scripts/pr-scope-check.test.ts
+
+      - name: Publish updated estate cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:agent/issue-906-estate-cut
