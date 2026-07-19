@@ -15,7 +15,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,10 +27,8 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
 
-      - name: Normalize issue scope and generated-census lint policy
+      - name: Retain branch-protected governance guard
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -38,52 +36,42 @@ jobs:
           git fetch origin main
 
           git checkout origin/main -- \
-            plugins/ao-codex-pr-reviewer/bin/review.ts \
-            plugins/ao-scope-guard/bin/agent-wrap.ts \
-            plugins/ao-scope-guard/bin/scope-check.ts \
-            plugins/ao-task-declaration/bin/declare.ts \
-            plugins/ao-token-chain-ledger/bin/ledger.mjs
+            .github/workflows/contract-evidence-legacy-list-guard.yml \
+            scripts/run-contract-evidence-legacy-list-guard.mjs \
+            scripts/contract-evidence-legacy-list-guard.test.ts
 
           python - <<'PY'
           from pathlib import Path
-          import json
 
-          path = Path('scripts/lint-self-architect.config.json')
-          config = json.loads(path.read_text())
-          exclusion = 'scripts/gate-runner/census/**'
-          if exclusion not in config['excludePaths']:
-              config['excludePaths'].append(exclusion)
-          path.write_text(json.dumps(config, indent=2) + '\n')
-          PY
+          path = Path('scripts/estate-cut/manifest-generator.mjs')
+          text = path.read_text()
+          text = text.replace("  '.github/workflows/contract-evidence-legacy-list-guard.yml',\n", '')
+          text = text.replace("  'scripts/run-contract-evidence-legacy-list-guard.mjs',\n", '')
+          marker = "const SHARED_TEST_SURVIVORS = new Set([\n"
+          entry = "  'scripts/contract-evidence-legacy-list-guard.test.ts',\n"
+          if entry not in text:
+              if marker not in text:
+                  raise SystemExit('shared-test survivor marker missing')
+              text = text.replace(marker, marker + entry, 1)
+          path.write_text(text)
 
-          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path('/tmp/issue-906-body.md')
-          body = path.read_text()
-          match = re.search(r'```allowed-roots\n(.*?)\n```', body, flags=re.S)
-          if not match:
-              raise SystemExit('issue 906 has no authoritative allowed-roots block')
-          rows = [line.strip() for line in match.group(1).splitlines() if line.strip()]
-          for row in ('package.json', 'vitest.config.ts', 'scripts/lint-self-architect.config.json'):
-              if row not in rows:
-                  rows.append(row)
-          replacement = '```allowed-roots\n' + '\n'.join(rows) + '\n```'
-          body = body[:match.start()] + replacement + body[match.end():]
-          body = re.sub(
-              r'\n## Issue #906 root-level integration amendment \(2026-07-19\).*?```allowed-roots\npackage\.json\nvitest\.config\.ts\n```\n?',
-              '\n',
-              body,
-              flags=re.S,
+          doc = Path('docs/issue-906-operator-adoption.md')
+          body = doc.read_text()
+          paragraph = (
+              'The branch-protected contract-evidence legacy-list anti-tamper guard remains '
+              'governance keep-core in PR 1. Retiring that guard requires a separate maintainer-owned '
+              'branch-protection and trust-root change; an ordinary estate-cut PR must not delete or '
+              'self-authorize it.\n\n'
           )
-          path.write_text(body)
+          anchor = 'The surviving supervisor entry point remains'
+          if paragraph not in body:
+              if anchor not in body:
+                  raise SystemExit('operator-adoption insertion anchor missing')
+              body = body.replace(anchor, paragraph + anchor, 1)
+          doc.write_text(body)
           PY
-          jq -n --rawfile body /tmp/issue-906-body.md '{body:$body}' | \
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/906" --input - >/dev/null
 
-      - name: Rebuild manifest and declaration from actual main diff
+      - name: Rebuild manifest and declaration
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,6 +105,11 @@ jobs:
           NODE
           node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
 
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: retain branch-protected legacy-list guard"
+          fi
+
       - name: Validate corrected target tree
         shell: bash
         run: |
@@ -131,24 +124,23 @@ jobs:
           pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
           pwsh -NoProfile -File ./scripts/check-reusable.ps1
           pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
+
+          git worktree add --detach /tmp/pr907-trusted-main origin/main
+          LEGACY_LIST_GUARD_BASE_SHA="$(git rev-parse origin/main)" \
+          LEGACY_LIST_GUARD_HEAD_SHA="$(git rev-parse HEAD)" \
+          LEGACY_LIST_GUARD_REPO_ROOT="$PWD" \
+          LEGACY_LIST_GUARD_TRUSTED_ROOT="/tmp/pr907-trusted-main" \
+            node /tmp/pr907-trusted-main/scripts/run-contract-evidence-legacy-list-guard.mjs
+          git worktree remove --force /tmp/pr907-trusted-main
+
           git diff --check
-          git diff --quiet origin/main -- \
-            plugins/ao-codex-pr-reviewer/bin/review.ts \
-            plugins/ao-scope-guard/bin/agent-wrap.ts \
-            plugins/ao-scope-guard/bin/scope-check.ts \
-            plugins/ao-task-declaration/bin/declare.ts \
-            plugins/ao-token-chain-ledger/bin/ledger.mjs
+          git status --short
+          test -z "$(git status --porcelain)"
 
       - name: Publish corrected PR 907 tree
         shell: bash
         run: |
           set -euo pipefail
-          git add -A
-          if git diff --cached --quiet; then
-            echo "PR 907 already has the corrected tree"
-            exit 0
-          fi
-          git commit -m "fix: exclude generated census artifacts from self-architect lint"
           git push origin HEAD:agent/issue-906-estate-cut
 
-# Trigger: self-architect lint finalization (active).
+# Trigger: retain branch-protected governance guard.
