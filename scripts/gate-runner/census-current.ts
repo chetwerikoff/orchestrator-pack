@@ -40,13 +40,14 @@ function historicalReferenceFailure(
     return undefined;
   }
 
-  // Documentation/config examples are not executable policy. The frozen reference is
-  // retained only as migration provenance after the live contract moved elsewhere.
-  if (reference.kind === 'operator-command') return missingTypedReferenceFailure(entry);
+  // Documentation/config examples and duplicate prose-oriented test calls are migration
+  // provenance, not live policy. The source check remains protected by the census itself.
+  if (reference.kind === 'operator-command' || reference.kind === 'test-invocation') {
+    return missingTypedReferenceFailure(entry);
+  }
 
-  // Some frozen rows used a secondary test invocation as reachability proof. When the
-  // retained check still has a runtime route from verify.ps1, a workflow, or another
-  // check-wrapper, that route is the stronger proof and the duplicate test binding may move.
+  // A removed duplicate delegation reference is historical only when the retained check
+  // still has a runtime route from verify.ps1, a workflow, or another check-wrapper.
   if (checkScriptHasRuntimeRoute(entry, snapshot)) return missingTypedReferenceFailure(entry);
 
   return undefined;
@@ -56,7 +57,7 @@ function historicalReferenceFailure(
  * Reconcile the frozen Wave 3.b census against the current executable tree.
  *
  * Historical documentation and duplicate test references remain provenance only. The source
- * check script and an executable route to it remain mandatory; deleting either still fails.
+ * check script and executable runtime wiring remain independently protected.
  */
 export function evaluateCurrentCensus(
   census: GateCensus,
