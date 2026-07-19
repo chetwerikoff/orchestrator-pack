@@ -21,5 +21,11 @@
       "vitest/globals"
     ],
     "allowImportingTsExtensions": true
-  }
+  },
+  "exclude": [
+    "plugins/**/tests/**",
+    "scripts/**/*.test.ts",
+    "scripts/**/*.spec.ts",
+    "tests/**"
+  ]
 }
