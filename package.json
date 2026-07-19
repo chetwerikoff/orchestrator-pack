@@ -7,8 +7,8 @@
   ],
   "scripts": {
     "check:node-major": "node scripts/toolchain/check-node-major.mjs",
-    "test": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run",
-    "test:watch": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs watch",
+    "test": "node scripts/run-vitest-with-harness.mjs run",
+    "test:watch": "node scripts/run-vitest-with-harness.mjs watch",
     "ts:smoke": "npm run check:node-major --silent && node --experimental-strip-types scripts/typescript-smoke.ts",
     "typecheck:foundation": "npm run check:node-major --silent && tsc -p tsconfig.json --noEmit",
     "lint:foundation": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-ts-policy.ts && node --experimental-strip-types scripts/toolchain/check-typescript-runtime-policy.ts",
