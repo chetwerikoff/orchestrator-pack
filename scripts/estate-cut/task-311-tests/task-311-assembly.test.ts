@@ -1,83 +1,65 @@
+import { rmSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { runClaimMatrix } from './task-311-claim.test-support.js';
 import {
   captureEvidenceDocument,
-  runClaimMatrix,
-  runDeliveryMatrix,
-  runRealAssembly,
-  runScopeGate,
+  installEgressTrap,
   runStaleHeadGate,
+  runThreeSubjectAssembly,
+  tempRoot,
   validateCompleteEvidence,
-  type MutationRecord,
-} from './task-311.test-support.js';
+  type AcceptanceEvidence,
+} from './task-311-common.test-support.js';
+import { runDeliveryMatrix } from './task-311-delivery.test-support.js';
+import { runScopeGate } from './task-311-scope.test-support.js';
 
-interface AcceptanceEvidence {
-  schemaVersion: 1;
-  issue: 918;
-  task: 311;
-  assembly?: Record<string, unknown>;
-  capture?: Record<string, unknown>;
-  claim?: Record<string, unknown>;
-  delivery?: Record<string, unknown>;
-  reviewStart?: Record<string, unknown>;
-  scope?: Record<string, unknown>;
-  mutationEvidence: Partial<Record<'AC1' | 'AC2' | 'AC3' | 'AC4' | 'AC5' | 'AC6', MutationRecord>>;
-}
+describe('TASK-311 real surviving review-cycle assembly gate', () => {
+  it('drives three real subjects, C1-C7 and J0-J6 with exact mutation and hermetic evidence', async () => {
+    const trapRoot = tempRoot('task-311-egress-');
+    const trap = installEgressTrap(trapRoot);
+    try {
+      expect(trap.active).toBe(true);
+      expect(trap.attempts()).toEqual([]);
 
-const evidence: AcceptanceEvidence = {
-  schemaVersion: 1,
-  issue: 918,
-  task: 311,
-  mutationEvidence: {},
-};
+      const assembled = await runThreeSubjectAssembly(trap);
+      const claim = runClaimMatrix();
+      const delivery = await runDeliveryMatrix();
+      const reviewStart = runStaleHeadGate();
+      expect(trap.attempts()).toEqual([]);
+      const scope = runScopeGate(trap);
 
-describe('task 311 real vertical-slice assembly gate', () => {
-  it('AC1-AC2 assembles real binding, cache, fresh-head, claim, runner, reviewer, journal and delivery boundaries', async () => {
-    const result = await runRealAssembly();
-    evidence.assembly = result.assembly;
-    evidence.capture = captureEvidenceDocument();
-    evidence.mutationEvidence.AC1 = result.mutations.AC1;
-    evidence.mutationEvidence.AC2 = result.mutations.AC2;
+      const evidence: AcceptanceEvidence = {
+        schemaVersion: 2,
+        issue: 918,
+        task: 311,
+        assembly: assembled.assembly,
+        capture: captureEvidenceDocument(),
+        claim: claim.claim,
+        delivery: delivery.delivery,
+        reviewStart: reviewStart.reviewStart,
+        scope: scope.scope,
+        mutationEvidence: {
+          AC1: assembled.mutations.AC1,
+          AC2: assembled.mutations.AC2,
+          AC3: claim.mutations,
+          AC4: delivery.mutations,
+          AC5: reviewStart.mutations,
+          AC6: scope.mutations,
+        },
+      };
 
-    expect(evidence.assembly.binding).toBeDefined();
-    expect((evidence.assembly as any).binding.consumer.source).toBe('cache');
-    expect((evidence.assembly as any).identity).toBe('one-pr-head-worker-chain');
-    expect((evidence.capture as any).data[0].id).toBe('orchestrator-pack-7');
-  }, 120_000);
-
-  it('AC3 exercises the real C1-C7 claim and reaper matrix', () => {
-    const result = runClaimMatrix();
-    evidence.claim = result.claim;
-    evidence.mutationEvidence.AC3 = result.mutation;
-
-    expect((evidence.claim as any).classes).toBe('C1-C7-pass');
-  }, 120_000);
-
-  it('AC4 exercises the real J0-J6 delivery crash matrix', async () => {
-    const result = await runDeliveryMatrix();
-    evidence.delivery = result.delivery;
-    evidence.mutationEvidence.AC4 = result.mutation;
-
-    expect((evidence.delivery as any).classes).toBe('J0-J6-pass');
-  }, 60_000);
-
-  it('AC5 denies stale-head review start before runner or delivery invocation', () => {
-    const result = runStaleHeadGate();
-    evidence.reviewStart = result.reviewStart;
-    evidence.mutationEvidence.AC5 = result.mutation;
-
-    expect((evidence.reviewStart as any).headDecision).toBe('stale-head-review-start-denied');
-    expect((evidence.reviewStart as any).runnerInvocations).toBe(0);
-    expect((evidence.reviewStart as any).deliveryInvocations).toBe(0);
-  });
-
-  it('AC6 validates add-only scope, capture provenance, offline boundaries and complete machine-readable evidence', () => {
-    const result = runScopeGate();
-    evidence.scope = result.scope;
-    evidence.mutationEvidence.AC6 = result.mutation;
-
-    validateCompleteEvidence(evidence);
-    expect((evidence.scope as any).result).toBe('test-only-offline-capture-backed');
-    process.stdout.write(`TASK311_ACCEPTANCE_EVIDENCE=${JSON.stringify(evidence)}\n`);
-  });
+      validateCompleteEvidence(evidence);
+      expect((evidence.assembly as any).binding.consumer.source).toBe('cache');
+      expect((evidence.assembly as any).identity).toBe('one-pr-head-worker-chain');
+      expect((evidence.claim as any).classes).toBe('C1-C7-pass');
+      expect((evidence.delivery as any).classes).toBe('J0-J6-pass');
+      expect((evidence.reviewStart as any).headDecision).toBe('stale-head-review-start-denied');
+      expect((evidence.scope as any).result).toBe('test-only-offline-capture-backed');
+      process.stdout.write(`TASK311_ACCEPTANCE_EVIDENCE=${JSON.stringify(evidence)}\n`);
+    } finally {
+      trap.restore();
+      rmSync(trapRoot, { recursive: true, force: true });
+    }
+  }, 300_000);
 });
