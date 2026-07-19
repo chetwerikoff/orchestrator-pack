@@ -122,3 +122,5 @@ EOF
           git add -A
           git commit -m "fix: align issue 906 declaration scope"
           git push origin HEAD:agent/issue-906-estate-cut
+
+# Trigger after pull_request workflow existed in the parent commit.
