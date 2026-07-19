@@ -54,23 +54,42 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: target/package-lock.json
-      - name: Validate corrected Issue 900 implementation
+      - name: Install dependencies
+        working-directory: target
+        run: npm ci
+      - name: Capture corrected Issue 900 validation
+        id: validation
         working-directory: target
         shell: bash
         run: |
-          set -euo pipefail
-          npm ci
-          npm run check:node-major
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run test:issue-900
-          npm run gate-runner-selftest
-          npx vitest run \
-            plugins/ao-codex-pr-reviewer \
-            plugins/ao-scope-guard \
-            plugins/ao-task-declaration \
-            plugins/ao-token-chain-ledger
+          set +e
+          mkdir -p /tmp/issue900-validation
+          failed=0
+          run_check() {
+            name="$1"
+            shift
+            echo "== $name ==" | tee "/tmp/issue900-validation/$name.log"
+            "$@" 2>&1 | tee -a "/tmp/issue900-validation/$name.log"
+            status=${PIPESTATUS[0]}
+            printf '%s=%s\n' "$name" "$status" | tee -a /tmp/issue900-validation/summary.txt
+            if [ "$status" -ne 0 ]; then failed=1; fi
+          }
+          run_check node-major npm run check:node-major
+          run_check typecheck npm run typecheck:foundation
+          run_check policy npm run lint:foundation
+          run_check issue900 npm run test:issue-900
+          run_check gate npm run gate-runner-selftest
+          run_check plugins npx vitest run plugins/ao-codex-pr-reviewer plugins/ao-scope-guard plugins/ao-task-declaration plugins/ao-token-chain-ledger
+          exit "$failed"
+      - name: Upload validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-900-rework-validation
+          path: /tmp/issue900-validation
+          if-no-files-found: error
       - name: Commit and push corrected implementation
+        if: steps.validation.outcome == 'success'
         working-directory: target
         shell: bash
         run: |
