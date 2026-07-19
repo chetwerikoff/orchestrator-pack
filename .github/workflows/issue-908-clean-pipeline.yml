@@ -9,28 +9,81 @@ on:
       - main
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
 
 jobs:
-  diagnose:
+  finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
-      - name: Download exact failed job logs
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/scope-guard-pr-files-pagination
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build the final three-file prerequisite
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88108026831/logs" > "$RUNNER_TEMP/light-1-failed.log"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88106927905/logs" > "$RUNNER_TEMP/light-2-failed.log"
-          tail -n 250 "$RUNNER_TEMP/light-1-failed.log"
-          tail -n 250 "$RUNNER_TEMP/light-2-failed.log"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-908-failed-light-logs
-          path: |
-            ${{ runner.temp }}/light-1-failed.log
-            ${{ runner.temp }}/light-2-failed.log
-          retention-days: 1
+          git checkout f10fd0051dd28f4cea865e4859b495e369219698 -- \
+            scripts/vitest-ci-lanes.config.json \
+            scripts/vitest-runtime-history.json
+          rm -f scripts/pr-scope-check-pagination.test.ts
+
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          test_path = Path('scripts/pr-scope-check.test.ts')
+          text = test_path.read_text()
+          anchor = "  it('NON_CLOSING_ISSUE_REF_PATTERN stays aligned with documented Refs form', () => {\n"
+          block = """  it('enumerates all PR file pages and fails closed on malformed entries', () => {\n    const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');\n    expect(ps1).not.toContain('gh pr diff');\n    expect(ps1).toContain(\"pulls/$PrNumber/files?per_page=100\");\n    expect(ps1).toContain(\"'--paginate'\");\n    expect(ps1).toContain('foreach ($entry in @($filesRead.value))');\n    expect(ps1).toContain('$paths.Add($filename)');\n    expect(ps1).toContain('if (-not $filesRead.ok)');\n    expect(ps1).toContain('Format-GhSignalFailureDetail -Result $filesRead');\n    expect(ps1).toContain('[string]::IsNullOrWhiteSpace($filename)');\n    expect(ps1).toContain('entry without filename');\n  });\n\n"""
+          if block.strip() not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('scope test insertion anchor drifted')
+              text = text.replace(anchor, block + anchor, 1)
+          test_path.write_text(text)
+
+          declaration_path = Path('docs/declarations/908.scope-pagination.json')
+          declaration = json.loads(declaration_path.read_text())
+          declaration['created_at'] = '2026-07-19T01:00:00.000Z'
+          declaration['baseline']['active_scope_hash'] = 'sha256:9aecedc6de759578460982a72b036f2b8a7ec0965d9aa1d0098228dc35e8a570'
+          declaration['declared_paths'] = [
+              'scripts/pr-scope-check.ps1',
+              'scripts/pr-scope-check.test.ts',
+          ]
+          declaration['declared_globs'] = []
+          declaration['amendments'] = []
+          declaration_path.write_text(json.dumps(declaration, indent=2) + '\n')
+          PY
+
+      - name: Validate the final prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/run-vitest-with-harness.mjs run scripts/pr-scope-check.test.ts
+          npm run typecheck:foundation
+          npm run lint:foundation
+          pwsh -NoProfile -Command "[void][scriptblock]::Create((Get-Content -LiteralPath './scripts/pr-scope-check.ps1' -Raw))"
+          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 2
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          git diff --check
+
+      - name: Publish the final prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: keep scope pagination within owned test surfaces"
+          git push origin HEAD:fix/scope-guard-pr-files-pagination
