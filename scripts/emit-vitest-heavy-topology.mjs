@@ -3,6 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +47,28 @@ function writeGhaOutput(topology) {
     outputPath,
     `fallback_classification=${topology.fallbackClassification}\n`,
   );
+}
+
+function captureGateRunnerDiagnostic(repoRoot) {
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-strip-types', 'scripts/gate-runner/runner.ts', '--repo-root', repoRoot, '--json'],
+    { cwd: repoRoot, encoding: 'utf8', env: process.env },
+  );
+  let report = null;
+  try {
+    report = JSON.parse(String(result.stdout ?? '').trim());
+  } catch {
+    // Preserve raw evidence when the diagnostic itself cannot emit structured JSON.
+  }
+  return {
+    exitCode: result.status,
+    signal: result.signal,
+    error: result.error?.message ?? null,
+    report,
+    stdout: report ? null : String(result.stdout ?? '').trim(),
+    stderr: String(result.stderr ?? '').trim(),
+  };
 }
 
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
@@ -106,6 +129,7 @@ if (diagnostic) {
     lightShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
     heavyShards: [{ shard: 1, files: [], totalRuntimeMs: 0 }],
     measurementDiagnostic: diagnostic,
+    gateRunnerDiagnostic: captureGateRunnerDiagnostic(repoRoot),
   };
   writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
   console.error(JSON.stringify(artifact));
@@ -135,6 +159,7 @@ const artifact = {
   lightShardMatrix: result.lightShards.map((entry) => entry.shard),
   lightShards: result.lightShards,
   heavyShards: result.heavyShards,
+  gateRunnerDiagnostic: captureGateRunnerDiagnostic(repoRoot),
 };
 writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
 
