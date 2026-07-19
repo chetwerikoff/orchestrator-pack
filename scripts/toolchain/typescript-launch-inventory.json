@@ -3,7 +3,7 @@
   "issue": "#900",
   "canonicalRuntime": {
     "nodeMajor": 22,
-    "versionFile": ".nvmrc",
+    "versionFile": "package.json",
     "nativeArgvPrefix": [
       "--experimental-strip-types"
     ]
@@ -13,7 +13,8 @@
     "powershell-bridge": "A PowerShell caller that obtains argv from Get-OpkTypeScriptNodeArguments after the canonical runtime preflight.",
     "test-framework-owned": "A Vitest-owned TypeScript execution path.",
     "historical-fixture-only": "A non-live example, archived document, declaration, test, or fixture.",
-    "invalid": "A live TypeScript launch that bypasses the Node 22 contract or selects compatibility machinery."
+    "invalid": "A live TypeScript launch that bypasses the Node 22 contract or selects compatibility machinery.",
+    "grandfathered-legacy-runtime": "A pre-existing TypeScript loader or alternate runtime launch outside Issue #900 toolchain scope, frozen by exact path, line, and evidence so it cannot grow."
   },
   "historicalPathPrefixes": [
     "docs/archive",
@@ -43,5 +44,48 @@
       "path": "agent-orchestrator.yaml.example",
       "classification": "native-node-22"
     }
-  ]
+  ],
+  "grandfatheredLegacyRuntime": {
+    "rationale": "Issue #900 is constrained to the standalone toolchain surface after the #906/#907 estate cut. These pre-existing launcher lines and plugin-local runtime dependencies are outside the issue allowed roots; exact path, line, and evidence entries freeze the debt and reject growth until their owning migrations remove it.",
+    "launchLines": [
+      { "path": ".github/workflows/codex-pr-review.yml", "line": 132, "evidence": "./node_modules/.bin/tsx plugins/ao-codex-pr-reviewer/bin/review.ts \\" },
+      { "path": "docs/issue_template_example.md", "line": 44, "evidence": "node --import tsx plugins/ao-scope-guard/bin/scope-check.ts --issue <n> --mode worktree" },
+      { "path": "docs/target_repo_setup.md", "line": 129, "evidence": "node --import tsx plugins/ao-scope-guard/bin/agent-wrap.ts `" },
+      { "path": "docs/target_repo_setup.md", "line": 206, "evidence": "node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `" },
+      { "path": "plugins/ao-codex-pr-reviewer/README.md", "line": 89, "evidence": "`./node_modules/.bin/tsx` inside the pack checkout so caller repos do not need" },
+      { "path": "plugins/ao-codex-pr-reviewer/README.md", "line": 146, "evidence": "\"node --import tsx plugins/ao-codex-pr-reviewer/bin/review.ts --repo-root . --base origin/main\"" },
+      { "path": "plugins/ao-codex-pr-reviewer/bin/review.ps1", "line": 12, "evidence": "node --import tsx $ReviewTs @args" },
+      { "path": "plugins/ao-codex-pr-reviewer/bin/review.ts", "line": 1, "evidence": "#!/usr/bin/env tsx" },
+      { "path": "plugins/ao-scope-guard/README.md", "line": 116, "evidence": "node --import tsx plugins/ao-scope-guard/bin/agent-wrap.ts `" },
+      { "path": "plugins/ao-scope-guard/README.md", "line": 136, "evidence": "node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `" },
+      { "path": "plugins/ao-scope-guard/README.md", "line": 140, "evidence": "node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `" },
+      { "path": "plugins/ao-scope-guard/bin/agent-wrap.ts", "line": 1, "evidence": "#!/usr/bin/env tsx" },
+      { "path": "plugins/ao-scope-guard/bin/scope-check.ts", "line": 1, "evidence": "#!/usr/bin/env tsx" },
+      { "path": "plugins/ao-scope-guard/hooks/pre-commit.ps1", "line": 27, "evidence": "& $node.Source --import tsx $scopeCheck `" },
+      { "path": "plugins/ao-task-declaration/bin/declare.ts", "line": 1, "evidence": "#!/usr/bin/env tsx" },
+      { "path": "plugins/ao-token-chain-ledger/bin/ledger.mjs", "line": 12, "evidence": "const tsxCli = require.resolve('tsx/cli');" },
+      { "path": "scripts/harness-review-bridge.ps1", "line": 42, "evidence": "& node --import tsx @args" },
+      { "path": "scripts/invoke-reviewer-contract-mapping.ps1", "line": 67, "evidence": "& node --import tsx @args" },
+      { "path": "scripts/invoke-reviewer-contract-mapping.ts", "line": 1, "evidence": "#!/usr/bin/env tsx" },
+      { "path": "scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1", "line": 37, "evidence": "$loader = Join-Path $depsRoot 'node_modules/tsx/dist/loader.mjs'" },
+      { "path": "scripts/lib/Invoke-DraftTextGuard.ps1", "line": 22, "evidence": "& node --import tsx $GuardScript `" },
+      { "path": "scripts/pr-scope-check.ps1", "line": 46, "evidence": "return node --import tsx $CheckScript --format-comment --input $payloadFile.FullName" },
+      { "path": "scripts/pr-scope-check.ps1", "line": 115, "evidence": "$output = node --import tsx $CheckScript --input $payloadFile.FullName" },
+      { "path": "scripts/pr-scope-check.ps1", "line": 160, "evidence": "$output = node --import tsx $CheckScript --resolve-issue-number --input $payloadFile.FullName" },
+      { "path": "scripts/pr-scope-check.ts", "line": 1, "evidence": "#!/usr/bin/env tsx" },
+      { "path": "scripts/publish-issue-body-sync.ps1", "line": 33, "evidence": "& node --import tsx $cli @args" },
+      { "path": "scripts/record-review-pipeline-spawn-tick.ps1", "line": 15, "evidence": "& npx tsx (Join-Path $PackRoot 'scripts/generate-review-pipeline-spawn-captures.ts')" },
+      { "path": "scripts/resolve-bound-issue-snapshot.ps1", "line": 38, "evidence": "& node --import tsx @args" },
+      { "path": "scripts/run-pack-review-claude.ps1", "line": 40, "evidence": "'--import', 'tsx', $reviewTs," },
+      { "path": "scripts/run-pack-review-claude.ps1", "line": 117, "evidence": "'--import', 'tsx', $fixtureRunner," },
+      { "path": "scripts/run-pack-review-fixture.mjs", "line": 6, "evidence": "* Usage: node --import tsx scripts/run-pack-review-fixture.mjs --fixture-file <path> [review.ts flags]" },
+      { "path": "scripts/run-reviewer-reverify-ao-review-command.ps1", "line": 39, "evidence": "& node --import tsx (Join-Path $packRoot 'scripts/bound-issue-snapshot-cli.ts') capture `" }
+    ],
+    "runtimeDependencies": [
+      { "path": "plugins/ao-codex-pr-reviewer/package.json", "package": "tsx" },
+      { "path": "plugins/ao-scope-guard/package.json", "package": "tsx" },
+      { "path": "plugins/ao-task-declaration/package.json", "package": "tsx" },
+      { "path": "plugins/ao-token-chain-ledger/package.json", "package": "tsx" }
+    ]
+  }
 }
