@@ -29423,16 +29423,13 @@
   "diffCompleteness": {
     "changedPaths": [
       ".github/workflows/contract-evidence-legacy-list-guard.yml",
+      ".github/workflows/issue-906-scope-finalize.yml",
+      ".github/workflows/typescript-foundation.yml",
       "docs/ao-reviews-board-runbook.md",
       "docs/archive/issue-906/github-fleet-cache-measurement.md",
       "docs/declarations/906.chatgpt-estate-cut.json",
       "docs/issue-906-operator-adoption.md",
       "package.json",
-      "plugins/ao-codex-pr-reviewer/bin/review.ts",
-      "plugins/ao-scope-guard/bin/agent-wrap.ts",
-      "plugins/ao-scope-guard/bin/scope-check.ts",
-      "plugins/ao-task-declaration/bin/declare.ts",
-      "plugins/ao-token-chain-ledger/bin/ledger.mjs",
       "scripts/_test-stub-pack-import-closure.test.ts",
       "scripts/ao-0-10-review-trigger.test.ts",
       "scripts/ao-events-correlation-degraded.test.ts",
@@ -29588,6 +29585,7 @@
       "scripts/harness-post-submit-pn-content-shape.test.ts",
       "scripts/harness-review-bridge.test.ts",
       "scripts/issue-821-gate-activation.test.ts",
+      "scripts/issue-906-final-artifacts.sh",
       "scripts/json-producers/golden-hygiene.test.ts",
       "scripts/json-producers/read-delegation-audit-stop.test.ts",
       "scripts/json-producers/retired-surfaces.json",
@@ -29757,7 +29755,7 @@
       "tests/worker-status-store-issue854.test.ts",
       "vitest.config.ts"
     ],
-    "rowCount": 2618
+    "rowCount": 2620
   },
   "rows": [
     {
@@ -30061,6 +30059,12 @@
       "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
+      "path": ".github/workflows/issue-906-scope-finalize.yml",
+      "baseTracked": false,
+      "terminalState": "pr1-artifact",
+      "reason": "new PR 1 path"
+    },
+    {
       "path": ".github/workflows/read-delegation-audit.yml",
       "baseTracked": true,
       "terminalState": "kept",
@@ -30079,7 +30083,10 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots"
+      "reason": "CI, operator recovery, and safety-plugin roots",
+      "attributes": [
+        "modified-in-pr1"
+      ]
     },
     {
       "path": ".github/workflows/vitest-runtime-history-delivery.yml",
@@ -34892,10 +34899,7 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots",
-      "attributes": [
-        "modified-in-pr1"
-      ]
+      "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
       "path": "plugins/ao-codex-pr-reviewer/lib/command_budget.ts",
@@ -35084,20 +35088,14 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots",
-      "attributes": [
-        "modified-in-pr1"
-      ]
+      "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
       "path": "plugins/ao-scope-guard/bin/scope-check.ts",
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots",
-      "attributes": [
-        "modified-in-pr1"
-      ]
+      "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
       "path": "plugins/ao-scope-guard/hooks/pre-commit",
@@ -35223,10 +35221,7 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots",
-      "attributes": [
-        "modified-in-pr1"
-      ]
+      "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
       "path": "plugins/ao-task-declaration/lib/amendment.ts",
@@ -35338,10 +35333,7 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots",
-      "attributes": [
-        "modified-in-pr1"
-      ]
+      "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
       "path": "plugins/ao-token-chain-ledger/bin/ledger.ts",
@@ -39229,6 +39221,12 @@
       "baseTracked": true,
       "terminalState": "deleted-now",
       "reason": "test removed with non-keep-core subject"
+    },
+    {
+      "path": "scripts/issue-906-final-artifacts.sh",
+      "baseTracked": false,
+      "terminalState": "pr1-artifact",
+      "reason": "new PR 1 path"
     },
     {
       "path": "scripts/journaled-worker-send.ps1",
