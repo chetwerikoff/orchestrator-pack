@@ -16,17 +16,8 @@ git checkout origin/main -- .github/workflows/typescript-foundation.yml \
 
 gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > "$ARTIFACT_DIR/issue-906-body.md"
 if ! grep -q 'Issue #906 root-level integration amendment' "$ARTIFACT_DIR/issue-906-body.md"; then
-  cat >> "$ARTIFACT_DIR/issue-906-body.md" <<'EOF'
-
-## Issue #906 root-level integration amendment (2026-07-19)
-
-The cut's generated verification entrypoints and surviving-store isolation require two exact root-level integration files. No broader root-level scope is authorized.
-
-```allowed-roots
-package.json
-vitest.config.ts
-```
-EOF
+  echo 'issue-906: required root-level integration amendment is missing from the linked issue body' >&2
+  exit 1
 fi
 
 node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
@@ -79,3 +70,9 @@ git diff --quiet origin/main -- .github/workflows/typescript-foundation.yml \
 
 cp scripts/estate-cut/issue-906.manifest.json "$ARTIFACT_DIR/scripts/estate-cut/issue-906.manifest.json"
 cp docs/declarations/906.chatgpt-estate-cut.json "$ARTIFACT_DIR/docs/declarations/906.chatgpt-estate-cut.json"
+
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+git add -A
+git commit -m "fix: align issue 906 declaration scope"
+git push origin HEAD:agent/issue-906-estate-cut
