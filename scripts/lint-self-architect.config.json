@@ -17,10 +17,27 @@
     "node_modules/**",
     "scripts/vitest-heavy-topology.plan.json",
     "scripts/contract-evidence-validator.mjs",
-    "scripts/contract-evidence-validator.d.mts"
+    "scripts/contract-evidence-validator.d.mts",
+    "scripts/gate-runner/census/**"
   ],
-  "scriptExtensions": [".ps1", ".sh", ".bash", ".js", ".ts", ".mjs", ".cjs"],
-  "templateExtensions": [".md", ".yaml", ".yml", ".json", ".example", ".template", ".tpl"],
+  "scriptExtensions": [
+    ".ps1",
+    ".sh",
+    ".bash",
+    ".js",
+    ".ts",
+    ".mjs",
+    ".cjs"
+  ],
+  "templateExtensions": [
+    ".md",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".example",
+    ".template",
+    ".tpl"
+  ],
   "duplicateLiteralMinLines": 10,
   "pairedEditMinLines": 8,
   "pairedLineStride": 2,

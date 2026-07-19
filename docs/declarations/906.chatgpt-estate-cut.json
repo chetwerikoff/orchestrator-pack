@@ -3,11 +3,11 @@
   "iteration_id": "chatgpt-estate-cut",
   "iteration_id_source": "wrapper_generated",
   "supersedes": null,
-  "created_at": "2026-07-19T05:29:19.079Z",
+  "created_at": "2026-07-19T05:48:03.478Z",
   "baseline": {
     "commit_sha": "42f3183bc334febd21c33ab2a053a8a0d8c6736e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f31425e9e266f291f722d556144091528566199c9af4869d192cd5e728d05b40"
+    "active_scope_hash": "sha256:ab256c6eec616bfd16dd0838a602840358c05f578abb6824cea2ae91574fde91"
   },
   "declared_paths": [
     ".github/workflows/contract-evidence-legacy-list-guard.yml",
@@ -179,6 +179,7 @@
     "scripts/json-producers/worker-status-report.test.ts",
     "scripts/launch-argv-inventory.test.ts",
     "scripts/launch-argv-test-exclusions.manifest.json",
+    "scripts/lint-self-architect.config.json",
     "scripts/mechanical-json-state.Tests.ps1",
     "scripts/mechanical-json-state.test.ts",
     "scripts/mechanical-reconcile-bounds.test.ts",

@@ -29592,6 +29592,7 @@
       "scripts/json-producers/worker-status-report.test.ts",
       "scripts/launch-argv-inventory.test.ts",
       "scripts/launch-argv-test-exclusions.manifest.json",
+      "scripts/lint-self-architect.config.json",
       "scripts/mechanical-json-state.Tests.ps1",
       "scripts/mechanical-json-state.test.ts",
       "scripts/mechanical-reconcile-bounds.test.ts",
@@ -41150,7 +41151,10 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "G",
-      "reason": "keep-core tests, shared fixtures, and repository governance"
+      "reason": "keep-core tests, shared fixtures, and repository governance",
+      "attributes": [
+        "modified-in-pr1"
+      ]
     },
     {
       "path": "scripts/lint-self-architect.diff-mode.Tests.ps1",
