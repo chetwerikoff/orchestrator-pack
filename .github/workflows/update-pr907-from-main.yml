@@ -9,117 +9,30 @@ on:
       - main
 
 permissions:
-  contents: write
-  issues: read
+  contents: read
+  actions: read
 
 jobs:
-  finalize:
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/issue-906-estate-cut
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci --ignore-scripts
-
-      - name: Merge main and select the estate-cut conflict resolution
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          MAIN_SHA="$(git rev-parse origin/main)"
-          echo "MAIN_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
-          export MAIN_SHA
-
-          set +e
-          git merge --no-commit --no-ff origin/main
-          merge_code=$?
-          set -e
-          if [ "$merge_code" -ne 0 ]; then
-            conflicts="$(git diff --name-only --diff-filter=U)"
-            test "$conflicts" = "scripts/pr-scope-check.test.ts"
-            git rm -f scripts/pr-scope-check.test.ts
-          fi
-
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          const path = 'scripts/estate-cut/issue-906.config.json';
-          const config = JSON.parse(readFileSync(path, 'utf8'));
-          config.baseCommitSha = process.env.MAIN_SHA;
-          writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
-          NODE
-
-      - name: Rebuild anchor, cut and declaration
+      - name: Extract failing finalizer output
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          node scripts/estate-cut/capture-base-anchor.mjs
-          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
-
-          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
-          node --experimental-strip-types --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { execFileSync } from 'node:child_process';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
-
-          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
-          const constraints = parseIssueBody(readFileSync('/tmp/issue-906-body.md', 'utf8'));
-          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
-          const splitZero = (value) => value.split('\0').filter(Boolean).map((value) => value.replaceAll('\\', '/'));
-          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
-          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
-          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
-          const declaredPaths = [...new Set([...changed, ...untracked])].filter((path) => !control.has(path)).sort();
-          const payload = {
-            declared_paths: declaredPaths,
-            declared_globs: [],
-            issue_denylist: [...constraints.denylist].sort(),
-          };
-          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
-          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
-          const snapshot = JSON.parse(readFileSync('docs/declarations/906.chatgpt-estate-cut.json', 'utf8'));
-          snapshot.created_at = new Date().toISOString();
-          snapshot.baseline = { commit_sha: baseCommitSha, worktree_dirty: false, active_scope_hash: activeScopeHash };
-          snapshot.declared_paths = declaredPaths;
-          snapshot.declared_globs = [];
-          snapshot.amendments = [];
-          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
-          NODE
-
-          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
-
-      - name: Validate final merge tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run estate-cut:check
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run gate-runner-selftest
-          npm run test:issue-906
-          npm run test:foundation
-          npm test
-          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
-          pwsh -NoProfile -File ./scripts/check-reusable.ps1
-          git diff --check
-          test ! -e scripts/pr-scope-check.test.ts
-
-      - name: Publish updated PR branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git add -A
-          git commit -m "Merge main into issue 906 estate cut"
-          git push origin HEAD:agent/issue-906-estate-cut
+          gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/88150455141/logs" > "$RUNNER_TEMP/pr907-finalizer.log"
+          {
+            echo "--- error markers ---"
+            grep -nEi "##\[error\]|FAIL|Error:|failed|issue-906:|AssertionError|Test Files|Tests" "$RUNNER_TEMP/pr907-finalizer.log" | tail -n 250 || true
+            echo "--- tail ---"
+            tail -n 400 "$RUNNER_TEMP/pr907-finalizer.log"
+          } > "$RUNNER_TEMP/pr907-finalizer-diagnostic.txt"
+          cat "$RUNNER_TEMP/pr907-finalizer-diagnostic.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr907-finalizer-diagnostic
+          path: ${{ runner.temp }}/pr907-finalizer-diagnostic.txt
+          retention-days: 1
