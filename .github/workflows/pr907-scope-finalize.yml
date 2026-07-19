@@ -38,7 +38,8 @@ jobs:
           git checkout origin/main -- \
             .github/workflows/contract-evidence-legacy-list-guard.yml \
             scripts/run-contract-evidence-legacy-list-guard.mjs \
-            scripts/contract-evidence-legacy-list-guard.test.ts
+            scripts/contract-evidence-legacy-list-guard.test.ts \
+            scripts/toolchain/raw-child-process-baseline.json
 
           python - <<'PY'
           from pathlib import Path
@@ -168,4 +169,4 @@ jobs:
           set -euo pipefail
           git push origin HEAD:agent/issue-906-estate-cut
 
-# Trigger: isolate foundation validation for branch-protected governance guard.
+# Trigger: restore retained guard raw-child-process baseline.
