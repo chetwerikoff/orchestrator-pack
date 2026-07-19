@@ -148,7 +148,8 @@ function packageViolations(root: string, allFiles: readonly string[], legacy: Le
   }
   const rootManifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as PackageManifest;
   for (const [name, command] of Object.entries(rootManifest.scripts ?? {})) {
-    if (name !== 'check:node-major' && (directLaunch(command) || /\bvitest\b/u.test(command)) && !command.includes('check:node-major'))
+    const testFrameworkOwned = /\bvitest\b/u.test(command) || command.includes('run-vitest-with-harness.mjs');
+    if (name !== 'check:node-major' && directLaunch(command) && !testFrameworkOwned && !command.includes('check:node-major'))
       violations.push({ path: 'package.json', line: 1, rule: 'node-contract', message: `npm script ${name} executes TypeScript without the canonical Node-major preflight.` });
   }
   return violations;
