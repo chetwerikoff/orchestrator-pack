@@ -44,6 +44,7 @@ jobs:
           grep -RInE --exclude-dir=node_modules --exclude-dir=.git -- '(--import[[:space:]]+tsx|--loader|ts-node|typescript-loader\.mjs|node[^[:cntrl:]]+\.[cm]?ts)' package.json scripts docs plugins tests > issue-900-launch-grep.log 2>&1 || true
           cp scripts/estate-cut/issue-906.manifest.json issue-900-estate-manifest.json
           printf 'policy_exit=%s\ntests_exit=%s\nverify_exit=%s\nfull_typecheck_exit=%s\ntopology_exit=%s\n' "$policy_exit" "$tests_exit" "$verify_exit" "$full_typecheck_exit" "$topology_exit" > issue-900-summary.txt
+          git archive --format=tar.gz --output=issue-900-repo-snapshot.tar.gz HEAD
           exit 0
       - name: Upload diagnostic logs
         if: always()
@@ -60,3 +61,11 @@ jobs:
             issue-900-estate-manifest.json
             issue-900-summary.txt
           if-no-files-found: error
+      - name: Upload repository snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-900-repo-snapshot
+          path: issue-900-repo-snapshot.tar.gz
+          if-no-files-found: error
+          compression-level: 0
