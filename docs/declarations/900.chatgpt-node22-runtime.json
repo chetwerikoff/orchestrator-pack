@@ -1,0 +1,35 @@
+{
+  "issue_number": 900,
+  "iteration_id": "chatgpt-node22-runtime",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-19T09:41:13.477Z",
+  "baseline": {
+    "commit_sha": "a0a42bb5e3958b24aa03a2e51d8eac6883901da9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:06b9be2b98f92939041f62f58c23253ec814c22ee704d3457e8b50a350ab92f4"
+  },
+  "declared_paths": [
+    "package.json",
+    "scripts/lib/Invoke-TypeScriptCli.ps1",
+    "scripts/toolchain/NODE_22_OPERATOR_RUNBOOK.md",
+    "scripts/toolchain/check-node-major.mjs",
+    "scripts/toolchain/check-node-major.ts",
+    "scripts/toolchain/check-typescript-runtime-policy.ts",
+    "scripts/toolchain/fixtures/erasable/import-assignment.ts.txt",
+    "scripts/toolchain/fixtures/erasable/parameter-property.ts.txt",
+    "scripts/toolchain/fixtures/erasable/positive.ts.txt",
+    "scripts/toolchain/fixtures/erasable/runtime-enum.ts.txt",
+    "scripts/toolchain/fixtures/erasable/runtime-namespace.ts.txt",
+    "scripts/toolchain/node-runtime-contract.d.mts",
+    "scripts/toolchain/node-runtime-contract.mjs",
+    "scripts/toolchain/node22-runtime-policy.spec.ts",
+    "scripts/toolchain/typescript-launch-inventory.json",
+    "scripts/toolchain/typescript-loader.mjs",
+    "scripts/toolchain/vitest-foundation.config.ts",
+    "tsconfig.base.json",
+    "tsconfig.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
