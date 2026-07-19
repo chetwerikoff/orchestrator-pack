@@ -19,7 +19,9 @@ function Invoke-DraftTextGuard {
 
     Push-Location $Root
     try {
-        & node --import tsx $GuardScript `
+        . (Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ps1')
+        $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $GuardScript
+        & node @nodeArgs `
             --text-file (Resolve-Path $DraftPath).Path `
             --draft-path (Resolve-Path $DraftPath).Path `
             --repo-root $Root

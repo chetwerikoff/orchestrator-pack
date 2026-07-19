@@ -36,7 +36,10 @@ $env:OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR = $boundSnapshotStore
 
 Push-Location $packRoot
 try {
-    & node --import tsx (Join-Path $packRoot 'scripts/bound-issue-snapshot-cli.ts') capture `
+    $boundCli = Join-Path $packRoot 'scripts/bound-issue-snapshot-cli.ts'
+    . (Join-Path $packRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+    $boundNodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $boundCli
+    & node @boundNodeArgs capture `
         --pr-number $e2ePrNumber `
         --pr-head-sha $e2eHeadSha `
         --issue-number $e2eIssueNumber `

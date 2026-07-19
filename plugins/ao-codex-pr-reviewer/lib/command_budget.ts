@@ -4,7 +4,7 @@ import {
   remainingReviewBudgetMs,
   remainingTestBudgetMs,
   type TestBudgetDecision,
-} from './reviewer_budget.js';
+} from './reviewer_budget.ts';
 
 export type ReviewCommandClass = 'cheap_targeted' | 'slow_test' | 'full_suite';
 

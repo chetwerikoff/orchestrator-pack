@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { attributeSpawnSourceClass } from '../docs/review-pipeline-spawn-budget.mjs';
-import { repoRoot } from './_test-pwsh-helpers.js';
+import { repoRoot } from './_test-pwsh-helpers.ts';
 
 type SpawnEvent = {
   atMs: number;

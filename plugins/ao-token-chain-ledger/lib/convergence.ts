@@ -1,4 +1,4 @@
-import { computeFindingSignature } from './finding_signature.js';
+import { computeFindingSignature } from './finding_signature.ts';
 import type {
   ConvergenceFinalState,
   ConvergenceReport,
@@ -8,7 +8,7 @@ import type {
   MissingDataReport,
   RepeatedSignatureReport,
   StructuredFinding,
-} from './types.js';
+} from './types.ts';
 
 const DEFAULT_REPEATED_SIGNATURE_ITERATION_THRESHOLD = 2;
 

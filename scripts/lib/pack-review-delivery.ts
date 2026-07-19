@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { runProcess } from '../kernel/subprocess.js';
+import { runProcess } from '../kernel/subprocess.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
@@ -13,7 +13,7 @@ import {
   type PackReviewRunRecord,
   type PackReviewRunStatus,
   type PackReviewStoreOptions,
-} from './pack-review-run-store.js';
+} from './pack-review-run-store.ts';
 
 export const PACK_REVIEW_REQUIRED_STATUS_CONTEXT = 'orchestrator-pack/pack-review';
 const JOURNAL_WRITE_ATTEMPTS = 3;

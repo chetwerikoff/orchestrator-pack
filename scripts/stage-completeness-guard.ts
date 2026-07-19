@@ -5,12 +5,12 @@
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
-} from './lib/stage-completeness-core.js';
-import { runDraftTextGuardCli } from './lib/draft-text-guard-cli.js';
+} from './lib/stage-completeness-core.ts';
+import { runDraftTextGuardCli } from './lib/draft-text-guard-cli.ts';
 import {
   isDirectCliExecution,
   runReviewerTsCli,
-} from './lib/reviewer-ts-cli.js';
+} from './lib/reviewer-ts-cli.ts';
 
 const GUARD_LABEL = 'stage-completeness guard';
 

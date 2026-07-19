@@ -39,7 +39,10 @@ if ($Source) { $args += @('--source', $Source) }
 
 Push-Location $trusted.Path
 try {
-    & node --import tsx @args
+        . (Join-Path $trusted.Path 'scripts/lib/Invoke-TypeScriptCli.ps1')
+    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $bridge
+    $forwardArgs = @($args | Select-Object -Skip 1)
+    & node @nodeArgs @forwardArgs
     exit $LASTEXITCODE
 }
 finally {

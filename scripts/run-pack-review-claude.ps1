@@ -8,6 +8,7 @@ $Script:WrapperName = 'run-pack-review-claude.ps1'
 . (Join-Path $PSScriptRoot 'lib/Parse-PackReviewCliArgs.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-AutoReviewPrContext.ps1')
 . (Join-Path $PSScriptRoot 'lib/Install-PackReviewDependencies.ps1')
+. (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
 
 $cli = Split-PackReviewCliArgs -Argv $args
 $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
@@ -36,8 +37,8 @@ Push-Location -LiteralPath $resolvedRoot
 try {
     Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
-    $promptArgs = @(
-        '--import', 'tsx', $reviewTs,
+    $promptArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $reviewTs)
+    $promptArgs += @(
         '--repo-root', $resolvedRoot,
         '--base', $cli.Base,
         '--prompt-only'
@@ -113,8 +114,8 @@ try {
 
         [System.IO.File]::WriteAllText($claudeFile, $claudeOut, [System.Text.UTF8Encoding]::new($false))
 
-        $parseArgs = @(
-            '--import', 'tsx', $fixtureRunner,
+        $parseArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $fixtureRunner)
+        $parseArgs += @(
             '--fixture-file', $claudeFile,
             '--repo-root', $resolvedRoot,
             '--base', $cli.Base

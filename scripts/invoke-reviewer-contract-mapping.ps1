@@ -64,7 +64,10 @@ if ($PreflightOnly) { $args += '--preflight-only' }
 
 Push-Location $packRoot
 try {
-    & node --import tsx @args
+        . (Join-Path $packRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $runner
+    $forwardArgs = @($args | Select-Object -Skip 1)
+    & node @nodeArgs @forwardArgs
     exit $LASTEXITCODE
 }
 finally {

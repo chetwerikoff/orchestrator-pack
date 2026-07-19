@@ -4,12 +4,12 @@ import { join } from 'node:path';
 import {
   findLatestMirrorIterationId,
   loadActiveDeclaration,
-} from '../../ao-scope-guard/lib/declaration_loader.js';
+} from '../../ao-scope-guard/lib/declaration_loader.ts';
 import { parseIssueBody, type IssueConstraints } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   extractLinkedIssueNumber,
   resolveLatestCommittedSnapshot,
-} from '../../../scripts/pr-scope-check.js';
+} from '../../../scripts/pr-scope-check.ts';
 
 export interface ResolvedScopeContext {
   issueNumber: number | null;
@@ -233,8 +233,8 @@ export function formatScopeSection(scope: ResolvedScopeContext): string {
 }
 
 export function scopeUnavailableWarningFinding(
-  source: import('./types.js').ReviewSource,
-): import('./types.js').StructuredFinding {
+  source: import('./types.ts').ReviewSource,
+): import('./types.ts').StructuredFinding {
   return {
     type: 'spec',
     code: 'scope-context-unavailable',

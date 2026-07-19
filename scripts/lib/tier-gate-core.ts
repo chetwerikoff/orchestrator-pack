@@ -1,10 +1,10 @@
 /**
  * Tier gate core: marker screen, fence parsing, stage selection, floor checks (Issue #576).
  */
-import { screenRedFlagMarkers } from './tier-marker-screen.js';
-import { checkNeverSkippedFloors } from './tier-gate-floor.js';
+import { screenRedFlagMarkers } from './tier-marker-screen.ts';
+import { checkNeverSkippedFloors } from './tier-gate-floor.ts';
 
-export { checkWorkerSafetyFloor } from './tier-gate-floor.js';
+export { checkWorkerSafetyFloor } from './tier-gate-floor.ts';
 
 export const VALID_TIERS = new Set(['T1', 'T2', 'T3']);
 export const FLOOR_CHECKS = [

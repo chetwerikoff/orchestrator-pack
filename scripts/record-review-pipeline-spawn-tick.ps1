@@ -12,7 +12,10 @@ $ErrorActionPreference = 'Stop'
 $PackRoot = if ($RepoRoot) { $RepoRoot } else { Split-Path -Parent $PSScriptRoot }
 Push-Location $PackRoot
 try {
-    & npx tsx (Join-Path $PackRoot 'scripts/generate-review-pipeline-spawn-captures.ts')
+    $runner = Join-Path $PackRoot 'scripts/generate-review-pipeline-spawn-captures.ts'
+    . (Join-Path $PackRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $runner
+    & node @nodeArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 finally {

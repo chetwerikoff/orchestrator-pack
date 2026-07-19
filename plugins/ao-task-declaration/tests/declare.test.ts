@@ -22,7 +22,7 @@ const workspaceBinScript = join(
 
 function expectHelpFailure(scriptPath: string): void {
   try {
-    execFileSync(process.execPath, ['--import', 'tsx', scriptPath, '--help'], {
+    execFileSync(process.execPath, ['--experimental-strip-types', scriptPath, '--help'], {
       encoding: 'utf8',
     });
     throw new Error(`expected ${scriptPath} --help to exit with code 1`);

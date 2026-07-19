@@ -18,7 +18,7 @@ import {
   isDirectExecution,
   parseArguments,
   readStdin,
-} from './cli.js';
+} from './cli.ts';
 
 export const READ_DELEGATION_STOP_WRAPPER = 'scripts/invoke-read-delegation-audit-stop.ps1';
 export const READ_DELEGATION_STOP_COMMAND_SHAPE =

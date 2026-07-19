@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,7 @@ import {
   evaluateNodeRuntimeContract,
   parseNodeVersionMajor,
 } from './node-runtime-contract.mjs';
-import { checkTypeScriptRuntimePolicy } from './check-typescript-runtime-policy.js';
+import { checkTypeScriptRuntimePolicy } from './check-typescript-runtime-policy.ts';
 
 const repoRoot = resolve(import.meta.dirname, '../..');
 const temporaryRoots: string[] = [];
@@ -42,17 +43,18 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-function fixtureInventory(): string {
+function fixtureInventory(workflowFiles: readonly string[] = []): string {
   return `${JSON.stringify({
     schemaVersion: 1,
     issue: '#900',
     canonicalRuntime: {
       nodeMajor: 22,
-      versionFile: 'package.json',
+      versionFile: 'scripts/toolchain/node-version.json',
       nativeArgvPrefix: ['--experimental-strip-types'],
     },
     classifications: {},
     historicalPathPrefixes: ['docs/archive', 'docs/declarations', 'docs/issues_drafts', 'scripts/fixtures'],
+    workflowFiles,
     requiredLiveSurfaces: [],
   }, null, 2)}\n`;
 }
@@ -64,10 +66,11 @@ function makePolicyFixture(): string {
     scripts: {
       'check:node-major': 'node scripts/toolchain/check-node-major.mjs',
       smoke: 'npm run check:node-major --silent && node --experimental-strip-types scripts/example.ts',
-      test: 'npm run check:node-major --silent && vitest run scripts/example.test.ts',
+      test: 'vitest run scripts/example.test.ts',
     },
     engines: { node: '22.x' },
   }, null, 2)}\n`);
+  write(join(root, 'scripts/toolchain/node-version.json'), '{"schemaVersion":1,"nodeMajor":22}\n');
   write(join(root, 'tsconfig.base.json'), `${JSON.stringify({
     compilerOptions: {
       module: 'NodeNext',
@@ -81,6 +84,7 @@ function makePolicyFixture(): string {
   }, null, 2)}\n`);
   write(join(root, 'scripts/toolchain/typescript-launch-inventory.json'), fixtureInventory());
   write(join(root, 'scripts/example.ts'), 'export const answer: number = 42;\n');
+  write(join(root, 'scripts/example.test.ts'), "import { answer } from './example.ts';\nvoid answer;\n");
   write(join(root, 'scripts/native.sh'), 'node --experimental-strip-types scripts/example.ts\n');
   write(join(root, 'scripts/wrapper.ps1'), '$args = Get-OpkTypeScriptNodeArguments -ScriptPath scripts/example.ts\n');
   return root;
@@ -123,27 +127,34 @@ afterEach(() => {
 });
 
 describe('Node 22 runtime contract', () => {
-  it('parses semantic versions and rejects malformed or unsupported versions before effects', () => {
+  it('parses semantic versions and rejects unsupported runtimes before effects', () => {
     expect(parseNodeVersionMajor('v22.16.0')).toBe(22);
     expect(() => parseNodeVersionMajor('twenty-two')).toThrow('OPK_NODE_RUNTIME_VERSION_MALFORMED');
 
     let businessEffect = false;
     expect(() => {
-      evaluateNodeRuntimeContract({ engineText: '22.x', actualVersion: 'v20.19.0' });
+      evaluateNodeRuntimeContract({ versionFileMajor: 22, engineText: '22.x', actualVersion: 'v20.19.0' });
       businessEffect = true;
     }).toThrow('OPK_NODE_RUNTIME_UNSUPPORTED');
     expect(businessEffect).toBe(false);
   });
 
-  it('rejects malformed and non-22 declarations', () => {
+  it('rejects malformed, non-22, and drifted declarations', () => {
     expect(() => evaluateNodeRuntimeContract({
+      versionFileMajor: 22,
       engineText: '>=22',
       actualVersion: 'v22.16.0',
-    })).toThrow('OPK_NODE_RUNTIME_DECLARATION_MALFORMED');
+    })).toThrow('OPK_NODE_RUNTIME_ENGINE_DECLARATION_MALFORMED');
     expect(() => evaluateNodeRuntimeContract({
+      versionFileMajor: 24,
       engineText: '24.x',
       actualVersion: 'v24.1.0',
     })).toThrow('OPK_NODE_RUNTIME_DECLARATION_UNSUPPORTED');
+    expect(() => evaluateNodeRuntimeContract({
+      versionFileMajor: 22,
+      engineText: '24.x',
+      actualVersion: 'v22.16.0',
+    })).toThrow('OPK_NODE_RUNTIME_DECLARATION_DRIFT');
   });
 });
 
@@ -163,7 +174,7 @@ describe('erasable TypeScript dialect', () => {
 });
 
 describe('launch inventory and fail-closed policy', () => {
-  it('accepts the canonical native, bridge, and Vitest classifications', () => {
+  it('accepts canonical native, bridge, and Vitest classifications', () => {
     const report = checkTypeScriptRuntimePolicy(makePolicyFixture());
     expect(report.violations).toEqual([]);
     expect(new Set(report.inventory.map((entry) => entry.classification))).toEqual(new Set([
@@ -189,21 +200,71 @@ describe('launch inventory and fail-closed policy', () => {
     expect(checkTypeScriptRuntimePolicy(root).violations.some((violation) => violation.rule === rule)).toBe(true);
   });
 
-  it('rejects runtime dependencies and version drift mutations', () => {
+  it('rejects a direct workspace runtime dependency', () => {
     const root = makePolicyFixture();
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, unknown>;
     manifest.devDependencies = { tsx: 'latest' };
     write(join(root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    manifest.engines = { node: '20.x' };
-    write(join(root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    const rules = new Set(checkTypeScriptRuntimePolicy(root).violations.map((violation) => violation.rule));
-    expect(rules.has('runtime-dependency')).toBe(true);
-    expect(rules.has('node-contract')).toBe(true);
+    expect(checkTypeScriptRuntimePolicy(root).violations.some((violation) => violation.rule === 'runtime-dependency')).toBe(true);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['malformed', '{not-json}\n'],
+    ['drifted', '{"schemaVersion":1,"nodeMajor":24}\n'],
+  ])('rejects a %s canonical version file', (_label, content) => {
+    const root = makePolicyFixture();
+    const path = join(root, 'scripts/toolchain/node-version.json');
+    if (content === undefined) unlinkSync(path);
+    else write(path, content);
+    expect(checkTypeScriptRuntimePolicy(root).violations.some((violation) => violation.rule === 'node-contract')).toBe(true);
+  });
+
+  it.each([
+    ['without a TypeScript launch', '      - run: node --version'],
+    ['beside a forbidden launcher', '      - run: node --import tsx scripts/example.ts'],
+  ])('checks every workflow Node declaration independently %s', (_label, runLine) => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/bad.yml';
+    write(join(root, workflow), [
+      'name: bad',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      "      - uses: actions/setup-node@v4",
+      "        with: { node-version: '20' }",
+      runLine,
+      '',
+    ].join('\n'));
+    write(join(root, 'scripts/toolchain/typescript-launch-inventory.json'), fixtureInventory([workflow]));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) => violation.rule === 'workflow-node-version' && violation.path === workflow)).toBe(true);
+  });
+
+  it.each([
+    ['static import', "import { value } from './dep.js';\nvoid value;\n"],
+    ['static export', "export { value } from './dep.js';\n"],
+    ['dynamic import', "void import('./dep.js');\n"],
+    ['require call', "const { value } = require('./dep.js');\nvoid value;\n"],
+  ])('rejects loader-dependent relative .js to .ts substitution in %s', (_label, source) => {
+    const root = makePolicyFixture();
+    write(join(root, 'scripts/dep.ts'), 'export const value = 1;\n');
+    write(join(root, 'scripts/bad.ts'), source);
+    expect(checkTypeScriptRuntimePolicy(root).violations.some((violation) =>
+      violation.rule === 'runtime-import-specifier' && violation.path === 'scripts/bad.ts')).toBe(true);
+  });
+
+  it('accepts explicit relative TypeScript source extensions', () => {
+    const root = makePolicyFixture();
+    write(join(root, 'scripts/dep.ts'), 'export const value = 1;\n');
+    write(join(root, 'scripts/good.ts'), "import { value } from './dep.ts';\nvoid value;\n");
+    expect(checkTypeScriptRuntimePolicy(root).violations.filter((violation) =>
+      violation.rule === 'runtime-import-specifier' && violation.path === 'scripts/good.ts')).toEqual([]);
   });
 });
 
 describe('representative real entrypoints', () => {
-  it('executes toolchain, gate, and supervised-child-facing paths under Node 22', async () => {
+  it('executes toolchain, gate, supervised-child, and plugin-bin paths under Node 22', async () => {
     const nodeCheck = await runNode(['scripts/toolchain/check-node-major.mjs']);
     expect(nodeCheck.ok, nodeCheck.stderr).toBe(true);
     expect(nodeCheck.stdout).toContain('Node.js 22.');
@@ -268,6 +329,11 @@ describe('representative real entrypoints', () => {
     const runner = await runNode(['--experimental-strip-types', 'scripts/pack-review-runner.ts', 'help']);
     expect(runner.ok, runner.stderr).toBe(true);
     expect(runner.stdout).toContain('Pack-owned review runner');
+
+    const plugin = await runNode(['--experimental-strip-types', 'plugins/ao-task-declaration/bin/declare.ts', '--help']);
+    expect(plugin.ok).toBe(false);
+    expect(plugin.stderr).toContain('Usage: ao-declare');
+    expect(plugin.stderr).not.toContain('tsx');
   }, 60_000);
 
   it.skipIf(!hasPowerShell)('executes the Wave B PowerShell bridge through the canonical runtime preflight', async () => {
@@ -297,13 +363,15 @@ describe('representative real entrypoints', () => {
     expect(existsSync(artifact)).toBe(true);
   }, 30_000);
 
-  it('has one bridge argv shape and no compatibility loader reference', () => {
+  it('has one bridge argv shape and no compatibility or CI toolcache branch', () => {
     const bridgeSource = readFileSync(join(repoRoot, 'scripts/lib/Invoke-TypeScriptCli.ps1'), 'utf8');
     const preflight = bridgeSource.indexOf('Invoke-OpkNodeRuntimePreflight -RepoRoot');
     const nativeArgv = bridgeSource.indexOf("return @('--experimental-strip-types', $ScriptPath)");
     expect(preflight).toBeGreaterThanOrEqual(0);
     expect(nativeArgv).toBeGreaterThan(preflight);
     expect(bridgeSource).not.toContain('--loader');
+    expect(bridgeSource).not.toContain('RUNNER_TOOL_CACHE');
+    expect(bridgeSource).not.toContain('OPK_VITEST_HARNESS');
     expect(existsSync(join(repoRoot, 'scripts/toolchain', ['typescript', 'loader.mjs'].join('-')))).toBe(false);
   });
 });

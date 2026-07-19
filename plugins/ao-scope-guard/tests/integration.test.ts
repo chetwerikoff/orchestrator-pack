@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSyntheticGitRepo } from '@orchestrator-pack/shared/lib/git_fixture.js';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
-import { runScopeCheck } from '../bin/scope-check.js';
+import { runScopeCheck } from '../bin/scope-check.ts';
 
 const scopeCheckScript = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -246,7 +246,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
 
   it('runs the scope-check CLI entrypoint', () => {
     try {
-      execFileSync(process.execPath, ['--import', 'tsx', scopeCheckScript, '--help'], {
+      execFileSync(process.execPath, ['--experimental-strip-types', scopeCheckScript, '--help'], {
         encoding: 'utf8',
       });
       throw new Error('expected scope-check --help to exit with code 1');

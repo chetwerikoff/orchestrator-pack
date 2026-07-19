@@ -23,8 +23,9 @@ if (-not (Test-Path -LiteralPath $scopeCheck -PathType Leaf)) {
     Write-Error "ao-scope-guard pre-commit: scope-check not found at $scopeCheck"
 }
 
-$node = Get-Command node -ErrorAction Stop
-& $node.Source --import tsx $scopeCheck `
+. (Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ps1')
+$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $scopeCheck
+& node @nodeArgs `
     --issue $issueNumber `
     --mode index `
     --repo-root $Root

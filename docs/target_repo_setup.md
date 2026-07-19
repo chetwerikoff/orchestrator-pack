@@ -39,7 +39,7 @@ Work through these steps in order.
 
 Install and verify:
 
-- **Node.js 20+**
+- **Node.js 22.x**
 - **Git 2.25+**
 - **GitHub CLI (`gh`)** authenticated for the target repository
 
@@ -126,7 +126,7 @@ guard):
 
 ```powershell
 $env:AO_ISSUE_NUMBER = '<issue-number>'
-node --import tsx plugins/ao-scope-guard/bin/agent-wrap.ts `
+node --experimental-strip-types plugins/ao-scope-guard/bin/agent-wrap.ts `
   --issue <issue-number> `
   -- cursor agent ...
 ```
@@ -203,7 +203,7 @@ Confirm the wrapper or pre-commit hook rejects paths outside the snapshot.
 ```powershell
 $env:AO_ISSUE_NUMBER = '<n>'
 # Edit a file outside declared scope, e.g. README.md, without amending the snapshot.
-node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `
+node --experimental-strip-types plugins/ao-scope-guard/bin/scope-check.ts `
   --issue <n> `
   --mode worktree
 ```

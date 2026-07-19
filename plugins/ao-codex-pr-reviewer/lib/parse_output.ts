@@ -1,4 +1,4 @@
-import type { StructuredFinding } from './types.js';
+import type { StructuredFinding } from './types.ts';
 
 export const NO_FINDINGS_TOKEN = 'NO_FINDINGS';
 

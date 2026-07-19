@@ -1,6 +1,8 @@
+#!/usr/bin/env -S node --experimental-strip-types
+
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
-import { aggregateChain, formatChainReport } from '../lib/aggregate.js';
-import { defaultLedgerPath, readLedgerRows } from '../lib/writer.js';
+import { aggregateChain, formatChainReport } from '../lib/aggregate.ts';
+import { defaultLedgerPath, readLedgerRows } from '../lib/writer.ts';
 
 interface ReportOptions {
   chainId: string;

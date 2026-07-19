@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve, sep } from 'node:path';
-import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from '../pr-scope-contract.js';
+import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from '../pr-scope-contract.ts';
 
 /** Fixed review-status vocabulary (Issue #362). */
 export const CONTRACT_MAPPING_STATUSES = [

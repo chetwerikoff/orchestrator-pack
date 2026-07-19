@@ -30,5 +30,7 @@ if ($Json) {
     $args += '--json'
 }
 
-& node --import tsx $cli @args
+. (Join-Path $packRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+& node @nodeArgs @args
 exit $LASTEXITCODE

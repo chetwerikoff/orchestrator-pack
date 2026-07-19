@@ -9,7 +9,10 @@ if (-not (Test-Path -LiteralPath $ReviewTs)) {
     Write-Error "review.ts not found at $ReviewTs"
 }
 
-node --import tsx $ReviewTs @args
+$PackRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+. (Join-Path $PackRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+$nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $ReviewTs
+& node @nodeArgs @args
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

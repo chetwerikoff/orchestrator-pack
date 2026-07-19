@@ -73,6 +73,7 @@ detail: $Detail
         $scriptBootstrap = Import-TrustedReverifyBootstrap -ReviewTargetRoot $reviewTargetRoot -TrustedBaseRoot $TrustedBaseRoot
         $disposableScriptBootstrapRoot = [bool]$scriptBootstrap.DisposableBootstrapRoot
         . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1')
+        . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
         . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
 
         if ($disposableScriptBootstrapRoot) {
@@ -161,8 +162,10 @@ detail: $Detail
 
         Push-Location $reviewTargetRoot
         try {
-            $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $effectiveTrustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1'
-            & node --import $tsxImport @args
+            Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $effectiveTrustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1' | Out-Null
+            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $runner
+            $forwardArgs = @($args | Select-Object -Skip 1)
+            & node @nodeArgs @forwardArgs
         }
         finally {
             Pop-Location

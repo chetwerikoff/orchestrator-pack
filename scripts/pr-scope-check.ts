@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env -S node --experimental-strip-types
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,14 +11,14 @@ import {
   parseIssueBody,
   type IssueConstraints,
 } from '@orchestrator-pack/shared/lib/issue_parser.js';
-import { classifyScopedPaths } from '../plugins/ao-scope-guard/lib/check.js';
-import { pathMatchesAnyPattern } from '../plugins/ao-task-declaration/lib/glob_match.js';
-import { partitionControlArtifacts } from '../plugins/ao-scope-guard/lib/control_artifacts.js';
-import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.js';
+import { classifyScopedPaths } from '../plugins/ao-scope-guard/lib/check.ts';
+import { pathMatchesAnyPattern } from '../plugins/ao-task-declaration/lib/glob_match.ts';
+import { partitionControlArtifacts } from '../plugins/ao-scope-guard/lib/control_artifacts.ts';
+import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.ts';
 import {
   normalizeIssueConstraints,
   validateDeclaredScope,
-} from '../plugins/ao-task-declaration/lib/validate.js';
+} from '../plugins/ao-task-declaration/lib/validate.ts';
 import {
   classifyNoCeremonyPaths,
   classifySpecDocsPaths,
@@ -32,9 +32,9 @@ import {
   NO_CEREMONY_MARKDOWN_GLOBS,
   resolveIssueNumberForFetch,
   SPEC_DOCS_ALLOWLIST,
-} from './pr-scope-contract.js';
+} from './pr-scope-contract.ts';
 
-export { resolveIssueNumberForFetch } from './pr-scope-contract.js';
+export { resolveIssueNumberForFetch } from './pr-scope-contract.ts';
 
 const SNAPSHOT_DIR = join('docs', 'declarations');
 const DECLARATION_SNAPSHOT_SAMPLE = join('docs', 'declarations', '0.sample.json');
@@ -96,7 +96,7 @@ function classifyDenylistedPrPaths(
 export {
   extractClosingIssueNumber as extractLinkedIssueNumber,
   ISSUE_LINK_PATTERN,
-} from './pr-scope-contract.js';
+} from './pr-scope-contract.ts';
 
 export interface PrScopeCheckInput {
   repoRoot: string;

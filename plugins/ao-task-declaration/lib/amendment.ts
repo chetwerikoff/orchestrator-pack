@@ -3,8 +3,8 @@ import type {
   DeclarationSnapshot,
 } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import type { IssueConstraints } from '@orchestrator-pack/shared/lib/issue_parser.js';
-import { computeActiveScopeHash } from './baseline.js';
-import { validateDeclaredScope } from './validate.js';
+import { computeActiveScopeHash } from './baseline.ts';
+import { validateDeclaredScope } from './validate.ts';
 
 export interface AmendmentInput {
   declared_paths: string[];

@@ -1,7 +1,7 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env -S node --experimental-strip-types
 
 import { execFileSync } from 'node:child_process';
-import { readLines, readText } from './lib/reviewer-cli-io.js';
+import { readLines, readText } from './lib/reviewer-cli-io.ts';
 import {
   buildStructuredStatusRecord,
   computeBoundDiffArtifactHash,
@@ -16,12 +16,12 @@ import {
   type ContractMappingStatusRecord,
   type ContractSpecMember,
   type MappingLedger,
-} from './lib/reviewer-contract-mapping.js';
+} from './lib/reviewer-contract-mapping.ts';
 import {
   captureBoundIssueSnapshotsFromPreflight,
   resolveDefaultAoProjectId,
   type BoundIssueSnapshotCaptureResult,
-} from './lib/reverify-bound-issue-snapshot.js';
+} from './lib/reverify-bound-issue-snapshot.ts';
 
 interface CliOptions {
   prBodyFile: string | null;

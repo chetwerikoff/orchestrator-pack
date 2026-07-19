@@ -4,13 +4,13 @@ import {
   formatReviewerReverifySummary,
   runContractEvidenceReverify,
   DEFAULT_REVERIFY_MANIFEST_PATH,
-} from './lib/contract-evidence-reverify.js';
+} from './lib/contract-evidence-reverify.ts';
 import {
   loadValidatedBoundSnapshotBody,
   resolveDefaultAoProjectId,
-} from './lib/reverify-bound-issue-snapshot.js';
-import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.js';
-import { dispatchDefaultCliArg, isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.js';
+} from './lib/reverify-bound-issue-snapshot.ts';
+import { readLines, readText, resolveHeadSha } from './lib/reviewer-cli-io.ts';
+import { dispatchDefaultCliArg, isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts';
 
 function usage(): string {
   return [

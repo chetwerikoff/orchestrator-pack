@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { getAoProjectDir } from '../../docs/review-run-liveness.mjs';
-import { hashIssueBodySnapshot } from './reviewer-contract-mapping.js';
+import { hashIssueBodySnapshot } from './reviewer-contract-mapping.ts';
 
 export const BOUND_ISSUE_SNAPSHOT_SCHEMA_VERSION = 1;
 export const BOUND_ISSUE_SNAPSHOT_STORE_REL = 'code-reviews/bound-issue-snapshots';

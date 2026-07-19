@@ -1,6 +1,14 @@
 # Migration notes
 
 
+## Node 22 single-runtime normalization (Issue #900)
+
+The canonical runtime declaration is `scripts/toolchain/node-version.json`; it must agree with `package.json.engines.node` (`22.x`). All live workflow Node declarations select Node 22. Live TypeScript launchers use native `--experimental-strip-types`, PowerShell callers use `Get-OpkTypeScriptNodeArguments`, plugin bins execute natively, and workspace packages have no direct `tsx` or `ts-node` dependency.
+
+Before adoption, run `npm run check:node-major` and the production-shaped bridge proof in `scripts/toolchain/NODE_22_OPERATOR_RUNBOOK.md` from the environment inherited by side processes. Restart the wake supervisor, AO sessions/services, scheduled jobs, shells, and tmux sessions so they inherit the Node 22 `PATH`. CI does not replace sanitized live-host evidence. Emergency rollback is one revert of the Issue #900 PR.
+
+
+
 ## Pack-owned review runner cutover (Issue #839)
 
 After merge, clear the live AO project `reviewers` harness configuration, recycle the affected daemon project session, and remove the documented pre-cutover zombie reviewer sessions. Validate one manual and one automatic real-head run through `scripts/pack-review-runner.ts`; GitHub PR review is authoritative and the pack-side store is operational status only. Do not run daemon review endpoints or `ao review submit` in parallel. Full procedure: [`ao-0-10-review-harness-adoption.md`](ao-0-10-review-harness-adoption.md).
@@ -1009,8 +1017,7 @@ Regression guard: `scripts/check-orchestrator-rules-quotes.ps1` (also run from
 ### AO local review preflight and failed runs (Issue #60)
 
 AO reviewer workspaces (`code-reviews/workspaces/op-rev-*`) are fresh git
-checkouts without `node_modules`. The pack wrapper needs `tsx` from the reviewed
-repo root.
+checkouts without `node_modules`. The pack wrapper requires the repository-owned Node 22 native TypeScript runtime and installed workspace dependencies.
 
 **Canonical review command.** Copy **REVIEW_COMMAND** from
 `agent-orchestrator.yaml.example` — it runs `scripts/run-pack-review.ps1`, which

@@ -3,7 +3,7 @@
  * Run pack review parsing on captured reviewer stdout (Claude bridge path).
  * Invoked from scripts/run-pack-review-claude.ps1 to avoid argv limits on --fixture-stdout.
  *
- * Usage: node --import tsx scripts/run-pack-review-fixture.mjs --fixture-file <path> [review.ts flags]
+ * Usage: node scripts/run-pack-review-fixture.mjs --fixture-file <path> [review.ts flags]
  */
 import { readFileSync } from 'node:fs';
 import { executeReview } from '../plugins/ao-codex-pr-reviewer/lib/review_core.ts';

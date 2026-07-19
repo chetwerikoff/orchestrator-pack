@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { runProcess } from '../kernel/subprocess.js';
+import { runProcess } from '../kernel/subprocess.ts';
 import type {
   PackReviewWorkerNotificationRequest,
   PackReviewWorkerNotificationResult,
 } from './pack-review-delivery.ts';
-import { trimPackReviewValue as trim } from './pack-review-run-store.js';
+import { trimPackReviewValue as trim } from './pack-review-run-store.ts';
 
 interface WorkerNotificationOptions {
   trustedPackRoot: string;

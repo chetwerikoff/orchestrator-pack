@@ -7,16 +7,16 @@ import {
   checkTierGateGuard,
   formatTierGatePassMessage,
   selectAuthoringReviewStages,
-} from './lib/tier-gate-core.js';
+} from './lib/tier-gate-core.ts';
 import {
   createDraftTextGuardBaseOptions,
   parseDraftTextGuardArgv,
   type DraftTextGuardBaseOptions,
-} from './lib/draft-text-guard-cli.js';
+} from './lib/draft-text-guard-cli.ts';
 import {
   isDirectCliExecution,
   runReviewerTsCli,
-} from './lib/reviewer-ts-cli.js';
+} from './lib/reviewer-ts-cli.ts';
 
 interface CliOptions extends DraftTextGuardBaseOptions {
   tier: string | null;

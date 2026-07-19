@@ -43,7 +43,10 @@ function Format-ScopeGuardComment {
         $Result | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
         Push-Location $TrustedRoot
         try {
-            return node --import tsx $CheckScript --format-comment --input $payloadFile.FullName
+            . (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $CheckScript
+            $output = & node @nodeArgs --format-comment --input $payloadFile.FullName
+            return $output
         }
         finally {
             Pop-Location
@@ -112,7 +115,9 @@ function Invoke-PrScopeCheckCore {
         $InputJson | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
         Push-Location $TrustedRoot
         try {
-            $output = node --import tsx $CheckScript --input $payloadFile.FullName
+            . (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $CheckScript
+            $output = node @nodeArgs --input $payloadFile.FullName
         }
         finally {
             Pop-Location
@@ -157,7 +162,9 @@ function Get-ScopeGuardIssueNumber {
         (@{ prBody = $Body } | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
         Push-Location $TrustedRoot
         try {
-            $output = node --import tsx $CheckScript --resolve-issue-number --input $payloadFile.FullName
+            . (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
+            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $CheckScript
+            $output = node @nodeArgs --resolve-issue-number --input $payloadFile.FullName
         }
         finally {
             Pop-Location

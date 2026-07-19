@@ -2,7 +2,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
-import type { ResolvedAllowlistedCommand } from './reverify-command-resolution.js';
+import type { ResolvedAllowlistedCommand } from './reverify-command-resolution.ts';
 
 export interface CommandRunResult {
   ok: boolean;
