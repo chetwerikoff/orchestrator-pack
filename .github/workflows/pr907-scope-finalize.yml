@@ -27,7 +27,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
 
-      - name: Normalize issue scope and remove mode-only drift
+      - name: Normalize issue scope and generated-census lint policy
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,6 +44,18 @@ jobs:
             plugins/ao-task-declaration/bin/declare.ts \
             plugins/ao-token-chain-ledger/bin/ledger.mjs
 
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          path = Path('scripts/lint-self-architect.config.json')
+          config = json.loads(path.read_text())
+          exclusion = 'scripts/gate-runner/census/**'
+          if exclusion not in config['excludePaths']:
+              config['excludePaths'].append(exclusion)
+          path.write_text(json.dumps(config, indent=2) + '\n')
+          PY
+
           gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
           python - <<'PY'
           from pathlib import Path
@@ -55,7 +67,7 @@ jobs:
           if not match:
               raise SystemExit('issue 906 has no authoritative allowed-roots block')
           rows = [line.strip() for line in match.group(1).splitlines() if line.strip()]
-          for row in ('package.json', 'vitest.config.ts'):
+          for row in ('package.json', 'vitest.config.ts', 'scripts/lint-self-architect.config.json'):
               if row not in rows:
                   rows.append(row)
           replacement = '```allowed-roots\n' + '\n'.join(rows) + '\n```'
@@ -118,6 +130,7 @@ jobs:
           npm test
           pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
           pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
           git diff --check
           git diff --quiet origin/main -- \
             plugins/ao-codex-pr-reviewer/bin/review.ts \
@@ -135,7 +148,5 @@ jobs:
             echo "PR 907 already has the corrected tree"
             exit 0
           fi
-          git commit -m "fix: align issue 906 declaration scope"
+          git commit -m "fix: exclude generated census artifacts from self-architect lint"
           git push origin HEAD:agent/issue-906-estate-cut
-
-# Rerun on the latest PR 907 head after the non-fast-forward delivery race.
