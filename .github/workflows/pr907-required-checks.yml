@@ -6,176 +6,25 @@ on:
       - main
 
 permissions:
-  contents: write
-
-concurrency:
-  group: pr907-legacy-guard-finalizer
-  cancel-in-progress: true
+  actions: read
+  contents: read
 
 jobs:
-  finalize:
+  diagnose:
     if: github.head_ref == 'diag/pr907-required-checks'
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Download failed inventory-aware finalizer log
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/88167031834/logs" > "$RUNNER_TEMP/pr907-inventory-finalizer.log"
+          tail -n 350 "$RUNNER_TEMP/pr907-inventory-finalizer.log"
+      - uses: actions/upload-artifact@v4
         with:
-          ref: agent/issue-906-estate-cut
-          path: target
-          fetch-depth: 0
-      - uses: actions/checkout@v4
-        with:
-          ref: 42f3183bc334febd21c33ab2a053a8a0d8c6736e
-          path: trusted
-          fetch-depth: 1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install dependencies
-        working-directory: target
-        run: npm ci --ignore-scripts
-
-      - name: Retain governed legacy-list guard closure and inventories
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          surface = [
-              'scripts/run-contract-evidence-legacy-list-guard.mjs',
-              'scripts/contract-evidence-legacy-list-guard.test.ts',
-              '.github/workflows/contract-evidence-legacy-list-guard.yml',
-          ]
-          surface_array = "const LEGACY_LIST_GUARD_SURFACE = [\n" + ''.join(f"  '{p}',\n" for p in surface) + "];\n\n"
-          surface_set = "const LEGACY_LIST_GUARD_SURFACE = new Set([\n" + ''.join(f"  '{p}',\n" for p in surface) + "]);\n"
-
-          capture_path = Path('scripts/estate-cut/capture-base-anchor.mjs')
-          capture = capture_path.read_text()
-          if 'const LEGACY_LIST_GUARD_SURFACE = [' not in capture:
-              capture = capture.replace('const KEEP_CORE_PATHS = [\n', surface_array + 'const KEEP_CORE_PATHS = [\n', 1)
-          if 'const KEEP_CORE_PATHS = [\n  ...LEGACY_LIST_GUARD_SURFACE,' not in capture:
-              capture = capture.replace('const KEEP_CORE_PATHS = [\n', 'const KEEP_CORE_PATHS = [\n  ...LEGACY_LIST_GUARD_SURFACE,\n', 1)
-          old_safety = "  'safety-plugins': [\n    'plugins/ao-scope-guard',\n    'plugins/ao-codex-pr-reviewer',\n  ],"
-          new_safety = "  'safety-plugins': [\n    'plugins/ao-scope-guard',\n    'plugins/ao-codex-pr-reviewer',\n    ...LEGACY_LIST_GUARD_SURFACE,\n  ],"
-          safety_tail = capture.split("'safety-plugins':", 1)[1]
-          if '...LEGACY_LIST_GUARD_SURFACE' not in safety_tail:
-              if old_safety not in capture:
-                  raise SystemExit('capture safety-plugin block not found')
-              capture = capture.replace(old_safety, new_safety, 1)
-          capture_path.write_text(capture)
-
-          generator_path = Path('scripts/estate-cut/manifest-generator.mjs')
-          generator = generator_path.read_text()
-          if 'const LEGACY_LIST_GUARD_SURFACE = new Set([' not in generator:
-              generator = generator.replace('const PINNED_LEGACY_SUBJECTS = new Set([\n', surface_set + 'const PINNED_LEGACY_SUBJECTS = new Set([\n', 1)
-          generator = generator.replace("  '.github/workflows/contract-evidence-legacy-list-guard.yml',\n", '')
-          generator = generator.replace("  'scripts/run-contract-evidence-legacy-list-guard.mjs',\n", '')
-          category_needle = 'function pathCategory(rel, rootClosure, dynamicHeld) {\n'
-          category_line = "  if (LEGACY_LIST_GUARD_SURFACE.has(rel)) return 'D';\n"
-          if category_line not in generator:
-              if category_needle not in generator:
-                  raise SystemExit('pathCategory function not found')
-              generator = generator.replace(category_needle, category_needle + category_line, 1)
-
-          helper = r'''function containsRestoredInventoryPath(value) {
-            if (typeof value === 'string') return LEGACY_LIST_GUARD_SURFACE.has(normalize(value));
-            if (Array.isArray(value)) return value.some((entry) => containsRestoredInventoryPath(entry));
-            if (value && typeof value === 'object') {
-              return Object.entries(value).some(([key, entry]) => LEGACY_LIST_GUARD_SURFACE.has(normalize(key)) || containsRestoredInventoryPath(entry));
-            }
-            return false;
-          }
-          function mergeRestoredInventoryEntries(currentValue, baseValue) {
-            if (Array.isArray(currentValue) && Array.isArray(baseValue)) {
-              const merged = [...currentValue];
-              const seen = new Set(currentValue.map((entry) => JSON.stringify(entry)));
-              for (const entry of baseValue) {
-                const identity = JSON.stringify(entry);
-                if (containsRestoredInventoryPath(entry) && !seen.has(identity)) {
-                  merged.push(entry);
-                  seen.add(identity);
-                }
-              }
-              return merged;
-            }
-            if (currentValue && baseValue && typeof currentValue === 'object' && typeof baseValue === 'object') {
-              const merged = { ...currentValue };
-              for (const [key, entry] of Object.entries(baseValue)) {
-                if (Object.hasOwn(merged, key)) merged[key] = mergeRestoredInventoryEntries(merged[key], entry);
-                else if (LEGACY_LIST_GUARD_SURFACE.has(normalize(key)) || containsRestoredInventoryPath(entry)) merged[key] = entry;
-              }
-              return merged;
-            }
-            return currentValue;
-          }
-          '''
-          helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines()) + '\n'
-          helper_anchor = 'function pruneJsonPathReferences(value, deletedSet) {\n'
-          if 'function mergeRestoredInventoryEntries(' not in generator:
-              if helper_anchor not in generator:
-                  raise SystemExit('inventory prune helper anchor not found')
-              generator = generator.replace(helper_anchor, helper + helper_anchor, 1)
-
-          old_write = "    try { writeFileSync(full, stable(pruneJsonPathReferences(JSON.parse(readFileSync(full, 'utf8')), pruneSet))); } catch { /* non-JSON or unrelated */ }"
-          new_write = """    try {
-              const currentJson = JSON.parse(readFileSync(full, 'utf8'));
-              const baseBytes = readAt(config.baseCommitSha, rel);
-              const seededJson = baseBytes
-                ? mergeRestoredInventoryEntries(currentJson, JSON.parse(baseBytes.toString('utf8')))
-                : currentJson;
-              writeFileSync(full, stable(pruneJsonPathReferences(seededJson, pruneSet)));
-            } catch { /* non-JSON or unrelated */ }"""
-          if old_write in generator:
-              generator = generator.replace(old_write, new_write, 1)
-          elif 'mergeRestoredInventoryEntries(currentJson' not in generator:
-              raise SystemExit('inventory write statement not found')
-          generator_path.write_text(generator)
-          PY
-
-          git checkout 42f3183bc334febd21c33ab2a053a8a0d8c6736e -- \
-            scripts/run-contract-evidence-legacy-list-guard.mjs \
-            scripts/contract-evidence-legacy-list-guard.test.ts \
-            .github/workflows/contract-evidence-legacy-list-guard.yml
-          node scripts/estate-cut/capture-base-anchor.mjs
-          node scripts/estate-cut/manifest-generator.mjs --apply --write --check
-          git diff --check
-
-      - name: Commit final tree locally
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: retain governed legacy-list guard closure"
-
-      - name: Validate final commit
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run estate-cut:check
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run gate-runner-selftest
-          npm run test:issue-906
-          npm run test:foundation
-          npm test
-          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
-          pwsh -NoProfile -File ./scripts/check-reusable.ps1
-          LEGACY_LIST_GUARD_BASE_SHA=42f3183bc334febd21c33ab2a053a8a0d8c6736e \
-          LEGACY_LIST_GUARD_HEAD_SHA="$(git rev-parse HEAD)" \
-          LEGACY_LIST_GUARD_REPO_ROOT="$GITHUB_WORKSPACE/target" \
-          LEGACY_LIST_GUARD_TRUSTED_ROOT="$GITHUB_WORKSPACE/trusted" \
-            node "$GITHUB_WORKSPACE/trusted/scripts/run-contract-evidence-legacy-list-guard.mjs"
-          git diff --check HEAD^
-
-      - name: Publish PR 907 fix
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:agent/issue-906-estate-cut
+          name: pr907-inventory-finalizer-log
+          path: ${{ runner.temp }}/pr907-inventory-finalizer.log
+          retention-days: 1
