@@ -21,3 +21,4 @@ No machine-local state is migrated. Existing `.ao/**`, state directories, journa
 The former GitHub fleet cache measurement note is preserved as historical evidence at `docs/archive/issue-906/github-fleet-cache-measurement.md`. It is not a migration instruction and does not authorize reactivating the deleted owner.
 
 To roll back the repository cut, revert the Issue #906 merge commit as one unit. Do not selectively restore deleted scripts or tests: the manifest, census terminal classifications, pruned supervisor registry, and verification inventories are one atomic compatibility boundary.
+
