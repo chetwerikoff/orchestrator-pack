@@ -1,12 +1,16 @@
 name: issue-900-rework-snapshot
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/issue-900-rework-snapshot
+      - main
 
 permissions:
   contents: write
+
+concurrency:
+  group: issue-900-rework-publisher
+  cancel-in-progress: false
 
 jobs:
   publish:
