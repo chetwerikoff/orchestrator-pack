@@ -29423,8 +29423,6 @@
   "diffCompleteness": {
     "changedPaths": [
       ".github/workflows/contract-evidence-legacy-list-guard.yml",
-      ".github/workflows/issue-906-scope-finalize.yml",
-      ".github/workflows/typescript-foundation.yml",
       "docs/ao-reviews-board-runbook.md",
       "docs/archive/issue-906/github-fleet-cache-measurement.md",
       "docs/declarations/906.chatgpt-estate-cut.json",
@@ -29585,7 +29583,6 @@
       "scripts/harness-post-submit-pn-content-shape.test.ts",
       "scripts/harness-review-bridge.test.ts",
       "scripts/issue-821-gate-activation.test.ts",
-      "scripts/issue-906-final-artifacts.sh",
       "scripts/json-producers/golden-hygiene.test.ts",
       "scripts/json-producers/read-delegation-audit-stop.test.ts",
       "scripts/json-producers/retired-surfaces.json",
@@ -29755,7 +29752,7 @@
       "tests/worker-status-store-issue854.test.ts",
       "vitest.config.ts"
     ],
-    "rowCount": 2620
+    "rowCount": 2618
   },
   "rows": [
     {
@@ -30059,12 +30056,6 @@
       "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
-      "path": ".github/workflows/issue-906-scope-finalize.yml",
-      "baseTracked": false,
-      "terminalState": "pr1-artifact",
-      "reason": "new PR 1 path"
-    },
-    {
       "path": ".github/workflows/read-delegation-audit.yml",
       "baseTracked": true,
       "terminalState": "kept",
@@ -30083,10 +30074,7 @@
       "baseTracked": true,
       "terminalState": "kept",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots",
-      "attributes": [
-        "modified-in-pr1"
-      ]
+      "reason": "CI, operator recovery, and safety-plugin roots"
     },
     {
       "path": ".github/workflows/vitest-runtime-history-delivery.yml",
@@ -39221,12 +39209,6 @@
       "baseTracked": true,
       "terminalState": "deleted-now",
       "reason": "test removed with non-keep-core subject"
-    },
-    {
-      "path": "scripts/issue-906-final-artifacts.sh",
-      "baseTracked": false,
-      "terminalState": "pr1-artifact",
-      "reason": "new PR 1 path"
     },
     {
       "path": "scripts/journaled-worker-send.ps1",
