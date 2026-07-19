@@ -6,109 +6,41 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: issue-900-rework-publisher
+  group: issue-900-final-policy-diagnostic
   cancel-in-progress: true
 
 jobs:
-  publish:
+  policy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
-      - name: Checkout transfer payload
-        uses: actions/checkout@v4
-        with:
-          path: payload
-          fetch-depth: 1
-      - name: Checkout exact PR branch
+      - name: Checkout final PR branch
         uses: actions/checkout@v4
         with:
           ref: agent/issue-900-node22-runtime
-          path: target
           fetch-depth: 0
-      - name: Reconstruct and validate patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat \
-            payload/scripts/toolchain/.issue900-rework-patch-00.b64 \
-            payload/scripts/toolchain/.issue900-rework-patch-01.b64 \
-            payload/scripts/toolchain/.issue900-rework-patch-02.b64 \
-            payload/scripts/toolchain/.issue900-rework-patch-03.b64 \
-            payload/scripts/toolchain/.issue900-rework-patch-04.b64 \
-            > /tmp/issue900-rework.patch.xz.b64
-          test "$(wc -c < /tmp/issue900-rework.patch.xz.b64)" -eq 51184
-          base64 --decode /tmp/issue900-rework.patch.xz.b64 > /tmp/issue900-rework.patch.xz
-          echo "0cc862f2721fd73a9ae7b0d2a4c7de3cde9bda4d73607ff9ae75e48ad63cd96a  /tmp/issue900-rework.patch.xz" | sha256sum --check --strict
-          xz --decompress --stdout /tmp/issue900-rework.patch.xz > /tmp/issue900-rework.patch
-          cd target
-          test "$(git rev-parse HEAD)" = "3fd8b7e0a4fc55ac6b31831e45a6e92f69d58d4f"
-          git apply --check /tmp/issue900-rework.patch
-          git apply --index /tmp/issue900-rework.patch
-          cat > scripts/toolchain/node-version.json <<'JSON'
-          {
-            "schemaVersion": 1,
-            "nodeMajor": 22
-          }
-          JSON
-          git add scripts/toolchain/node-version.json
-          test "$(git diff --cached --name-only | wc -l)" -eq 98
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: target/package-lock.json
-      - name: Install dependencies
-        working-directory: target
-        run: npm ci
-      - name: Capture corrected Issue 900 validation
-        id: validation
-        working-directory: target
+      - run: npm ci
+      - name: Capture policy output
+        id: policy
         shell: bash
         run: |
           set +e
-          mkdir -p /tmp/issue900-validation
-          failed=0
-          run_check() {
-            name="$1"
-            shift
-            echo "== $name ==" | tee "/tmp/issue900-validation/$name.log"
-            "$@" 2>&1 | tee -a "/tmp/issue900-validation/$name.log"
-            status=${PIPESTATUS[0]}
-            printf '%s=%s\n' "$name" "$status" | tee -a /tmp/issue900-validation/summary.txt
-            if [ "$status" -ne 0 ]; then failed=1; fi
-          }
-          run_check node-major npm run check:node-major
-          run_check typecheck npm run typecheck:foundation
-          run_check policy npm run lint:foundation
-          run_check issue900 npm run test:issue-900
-          run_check gate npm run gate-runner-selftest
-          run_check plugins node scripts/run-vitest-with-harness.mjs run plugins/ao-codex-pr-reviewer plugins/ao-scope-guard plugins/ao-task-declaration plugins/ao-token-chain-ledger
-          exit "$failed"
-      - name: Upload validation diagnostics
+          npm run lint:foundation > issue-900-final-policy.log 2>&1
+          status=$?
+          cat issue-900-final-policy.log
+          exit "$status"
+      - name: Upload policy output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-900-rework-validation
-          path: /tmp/issue900-validation
+          name: issue-900-final-policy
+          path: issue-900-final-policy.log
           if-no-files-found: error
-      - name: Commit and push corrected non-workflow implementation
-        if: steps.validation.outcome == 'success'
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          git restore --staged --worktree -- \
-            .github/workflows/codex-pr-review.yml \
-            .github/workflows/read-delegation-audit.yml \
-            .github/workflows/scope-guard.yml \
-            .github/workflows/vitest-runtime-history-refresh.yml \
-            .github/workflows/vitest-wallclock-e2e.yml
-          test "$(git diff --cached --name-only | wc -l)" -eq 93
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: complete Node 22 runtime normalization"
-          git push origin HEAD:agent/issue-900-node22-runtime
