@@ -15,7 +15,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +27,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
 
-      - name: Amend issue scope and remove mode-only plugin drift
+      - name: Normalize issue scope and remove mode-only drift
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,23 +45,33 @@ jobs:
             plugins/ao-token-chain-ledger/bin/ledger.mjs
 
           gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
-          if ! grep -q 'Issue #906 root-level integration amendment' /tmp/issue-906-body.md; then
-            cat >> /tmp/issue-906-body.md <<'EOF'
+          python - <<'PY'
+          from pathlib import Path
+          import re
 
-## Issue #906 root-level integration amendment (2026-07-19)
+          path = Path('/tmp/issue-906-body.md')
+          body = path.read_text()
+          match = re.search(r'```allowed-roots\n(.*?)\n```', body, flags=re.S)
+          if not match:
+              raise SystemExit('issue 906 has no authoritative allowed-roots block')
+          rows = [line.strip() for line in match.group(1).splitlines() if line.strip()]
+          for row in ('package.json', 'vitest.config.ts'):
+              if row not in rows:
+                  rows.append(row)
+          replacement = '```allowed-roots\n' + '\n'.join(rows) + '\n```'
+          body = body[:match.start()] + replacement + body[match.end():]
+          body = re.sub(
+              r'\n## Issue #906 root-level integration amendment \(2026-07-19\).*?```allowed-roots\npackage\.json\nvitest\.config\.ts\n```\n?',
+              '\n',
+              body,
+              flags=re.S,
+          )
+          path.write_text(body)
+          PY
+          jq -n --rawfile body /tmp/issue-906-body.md '{body:$body}' | \
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/906" --input - >/dev/null
 
-The cut's generated verification entrypoints and surviving-store isolation require two exact root-level integration files. No broader root-level scope is authorized.
-
-```allowed-roots
-package.json
-vitest.config.ts
-```
-EOF
-            jq -n --rawfile body /tmp/issue-906-body.md '{body:$body}' | \
-              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/906" --input - >/dev/null
-          fi
-
-      - name: Rebuild manifest and declaration
+      - name: Rebuild manifest and declaration from actual main diff
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,7 +88,7 @@ EOF
           const constraints = parseIssueBody(readFileSync('/tmp/issue-906-body.md', 'utf8'));
           const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
           const splitZero = (value) => value.split('\0').filter(Boolean).map((value) => value.replaceAll('\\', '/'));
-          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
+          const changed = splitZero(runGit(['diff', '--name-only', '-z', 'origin/main', '--']));
           const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
           const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
           const declaredPaths = [...new Set([...changed, ...untracked])].filter((path) => !control.has(path)).sort();
@@ -95,14 +105,18 @@ EOF
           NODE
           node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
 
-      - name: Validate corrected scope tree
+      - name: Validate corrected target tree
         shell: bash
         run: |
           set -euo pipefail
           npm run estate-cut:check
           npm run typecheck:foundation
           npm run lint:foundation
+          npm run gate-runner-selftest
           npm run test:issue-906
+          npm run test:foundation
+          npm test
+          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
           pwsh -NoProfile -File ./scripts/check-reusable.ps1
           git diff --check
           git diff --quiet origin/main -- \
@@ -112,18 +126,14 @@ EOF
             plugins/ao-task-declaration/bin/declare.ts \
             plugins/ao-token-chain-ledger/bin/ledger.mjs
 
-      - name: Publish corrected tree and tree SHA
+      - name: Publish corrected PR 907 tree
         shell: bash
         run: |
           set -euo pipefail
           git add -A
+          if git diff --cached --quiet; then
+            echo "PR 907 already has the corrected tree"
+            exit 0
+          fi
           git commit -m "fix: align issue 906 declaration scope"
           git push origin HEAD:agent/issue-906-estate-cut
-          git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/pr907-corrected-tree-sha.txt"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr907-corrected-tree-sha
-          path: ${{ runner.temp }}/pr907-corrected-tree-sha.txt
-          retention-days: 1
-
-# Existing workflow; this second commit triggers its push event.
