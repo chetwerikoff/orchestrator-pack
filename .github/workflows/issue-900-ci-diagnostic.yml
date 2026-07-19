@@ -16,22 +16,34 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Capture policy, tests, and launch inventory evidence
+      - name: Capture policy, tests, verifier, typecheck, and topology evidence
         shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set +e
           npm run lint:foundation > issue-900-policy.log 2>&1
           policy_exit=$?
           npm run test:foundation > issue-900-tests.log 2>&1
           tests_exit=$?
+          pwsh -NoProfile -File ./scripts/verify.ps1 > issue-900-verify.log 2>&1
+          verify_exit=$?
+          npx tsc --project tsconfig.base.json --noEmit > issue-900-full-typecheck.log 2>&1
+          full_typecheck_exit=$?
+          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
+          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1 node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard > issue-900-topology.log 2>&1
+          topology_exit=$?
           grep -RInE --exclude-dir=node_modules --exclude-dir=.git -- '(--import[[:space:]]+tsx|--loader|ts-node|typescript-loader\.mjs|node[^[:cntrl:]]+\.[cm]?ts)' package.json scripts docs plugins tests > issue-900-launch-grep.log 2>&1 || true
           cp scripts/estate-cut/issue-906.manifest.json issue-900-estate-manifest.json
-          printf 'policy_exit=%s\ntests_exit=%s\n' "$policy_exit" "$tests_exit" > issue-900-summary.txt
+          printf 'policy_exit=%s\ntests_exit=%s\nverify_exit=%s\nfull_typecheck_exit=%s\ntopology_exit=%s\n' "$policy_exit" "$tests_exit" "$verify_exit" "$full_typecheck_exit" "$topology_exit" > issue-900-summary.txt
           exit 0
       - name: Upload diagnostic logs
         if: always()
@@ -41,6 +53,9 @@ jobs:
           path: |
             issue-900-policy.log
             issue-900-tests.log
+            issue-900-verify.log
+            issue-900-full-typecheck.log
+            issue-900-topology.log
             issue-900-launch-grep.log
             issue-900-estate-manifest.json
             issue-900-summary.txt
