@@ -1,6 +1,6 @@
 # Issue #906 operator adoption
 
-Issue #906 removes the legacy estate in one revertible cut. The generated manifest at `scripts/estate-cut/issue-906.manifest.json` is the authoritative base-pinned disposition record. Reproduce it with:
+Issue #906 removes the legacy estate in one revertible cut. The generated manifest at `scripts/estate-cut/issue-906.manifest.json` is the authoritative base-pinned disposition record. Reproduce the final checks with:
 
 ```text
 npm run estate-cut:check
