@@ -1,0 +1,33 @@
+name: issue-912-open-pr
+
+on:
+  push:
+    branches:
+      - diag/issue-908-clean-pipeline
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open prerequisite PR if absent
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing="$(gh api 'repos/chetwerikoff/orchestrator-pack/pulls?state=open&head=chetwerikoff:fix/issue-912-compact-pr-file-pages&base=main' --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "PR already open: #$existing"
+            exit 0
+          fi
+          gh api --method POST 'repos/chetwerikoff/orchestrator-pack/pulls' \
+            -f title='[T1] Bound scope pagination to filename-only pages' \
+            -f head='fix/issue-912-compact-pr-file-pages' \
+            -f base='main' \
+            -f body=$'Closes #912.\n\nUse explicit compact filename-only REST pages for trusted PR scope enumeration. Preserve fail-closed validation and the existing scope-check test surface.' \
+            --jq '{number,html_url,state,title}'
