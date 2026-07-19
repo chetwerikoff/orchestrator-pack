@@ -129,14 +129,21 @@ jobs:
             node /tmp/pr907-trusted-main/scripts/run-contract-evidence-legacy-list-guard.mjs
           git worktree remove --force /tmp/pr907-trusted-main
 
-      - name: Validate TypeScript foundation
+      - name: Validate foundation typecheck
         shell: bash
-        run: |
-          set -euo pipefail
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run gate-runner-selftest
-          npm run test:foundation
+        run: npm run typecheck:foundation
+
+      - name: Validate foundation policy lint
+        shell: bash
+        run: npm run lint:foundation
+
+      - name: Validate gate-runner selftest
+        shell: bash
+        run: npm run gate-runner-selftest
+
+      - name: Validate foundation tests
+        shell: bash
+        run: npm run test:foundation
 
       - name: Validate full regression
         shell: bash
@@ -161,4 +168,4 @@ jobs:
           set -euo pipefail
           git push origin HEAD:agent/issue-906-estate-cut
 
-# Trigger: split validation for branch-protected governance guard.
+# Trigger: isolate foundation validation for branch-protected governance guard.
