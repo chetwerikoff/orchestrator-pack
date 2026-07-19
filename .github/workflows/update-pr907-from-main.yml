@@ -29,16 +29,16 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      - name: Merge main and rebuild base-pinned artifacts
+      - name: Merge main and select the estate-cut conflict resolution
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           MAIN_SHA="$(git rev-parse origin/main)"
+          echo "MAIN_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
+          export MAIN_SHA
 
           set +e
           git merge --no-commit --no-ff origin/main
@@ -57,9 +57,6 @@ jobs:
           config.baseCommitSha = process.env.MAIN_SHA;
           writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
           NODE
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MAIN_SHA: ${{ env.MAIN_SHA }}
 
       - name: Rebuild anchor, cut and declaration
         shell: bash
@@ -67,8 +64,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          MAIN_SHA="$(git rev-parse origin/main)"
-          export MAIN_SHA
           node scripts/estate-cut/capture-base-anchor.mjs
           node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
 
