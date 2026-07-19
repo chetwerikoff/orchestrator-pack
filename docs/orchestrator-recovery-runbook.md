@@ -75,9 +75,18 @@ Workers own red-CI self-fix. Autonomous dead-worker recovery is limited to an al
 assigned unfinished task and must fail closed on ambiguous identity, liveness, PR, or head
 state. Operator kill suppresses automatic recovery.
 
-When a replacement session claims an existing PR, verify the installed AO 0.10.3 command
-shape directly. The result of `session claim-pr` may include `prs[]`; that does not make
-`prs[]` a field of bulk `ao session ls --json`.
+When an unfinished PR has no live worker after the required identity and liveness checks,
+the operator recovery command is:
+
+```bash
+ao spawn --project orchestrator-pack --name "Claim PR" --claim-pr <PR>
+```
+
+This claims worker execution only. It does not invoke AO Reviews and does not replace the
+pack-owned review runner.
+
+Verify the installed AO 0.10.3 command shape directly. The result of `session claim-pr` may
+include `prs[]`; that does not make `prs[]` a field of bulk `ao session ls --json`.
 
 ## Diagnostics
 
