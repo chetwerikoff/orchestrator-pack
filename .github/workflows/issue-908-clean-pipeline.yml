@@ -34,6 +34,8 @@ jobs:
           NEW_BASE: 27166b6b3d9bf8c887514c638981e26a5e3a6a43
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main
 
           set +e
@@ -103,9 +105,6 @@ jobs:
           NODE
 
           node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "merge: adopt scope pagination prerequisite for issue 906"
 
