@@ -151,4 +151,4 @@ jobs:
           git commit -m "fix: exclude generated census artifacts from self-architect lint"
           git push origin HEAD:agent/issue-906-estate-cut
 
-# Trigger: self-architect lint finalization.
+# Trigger: self-architect lint finalization (active).
