@@ -333,21 +333,21 @@ Describe 'supervisor side-effect drain exemption' {
         New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
         $oldMs = [DateTimeOffset]::UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds()
         $progress = @{
-            childId        = 'ci-green-wake-reconcile'
+            childId        = 'review-trigger-reconcile'
             phase          = 'side_effect'
             pid            = 99999
             lastProgressMs = $oldMs
         }
-        $progressPath = Join-Path $paths.ProgressDir 'ci-green-wake-reconcile.progress.json'
+        $progressPath = Join-Path $paths.ProgressDir 'review-trigger-reconcile.progress.json'
         $progress | ConvertTo-Json -Compress | Set-Content -LiteralPath $progressPath -Encoding utf8 -NoNewline
-        '{"owner":"test"}' | Set-Content -LiteralPath $paths.'ci-green-wake-reconcileLock' -Encoding utf8 -NoNewline
+        '{"owner":"test"}' | Set-Content -LiteralPath $paths.'review-trigger-reconcileLock' -Encoding utf8 -NoNewline
 
-        $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId 'ci-green-wake-reconcile'
+        $entry = Get-OrchestratorWakeSupervisorChildEntry -ChildId 'review-trigger-reconcile'
         $health = Get-OrchestratorSideProcessHealthVerdict -ChildEntry $entry -Paths $paths -ChildAlive $true `
             -Progress $progress -ChildPid 99999 -StallThresholdMs 60000 -ChildStartedMs $oldMs
         $health.Status | Should -Be 'stalled'
 
-        if ($health.Status -eq 'stalled' -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $paths -ChildId 'ci-green-wake-reconcile')) {
+        if ($health.Status -eq 'stalled' -and (Test-OrchestratorWakeSupervisorSideEffectInFlight -Paths $paths -ChildId 'review-trigger-reconcile')) {
             $health.Status = 'working'
             $health.Reason = ''
         }

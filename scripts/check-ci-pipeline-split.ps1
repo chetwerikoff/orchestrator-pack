@@ -1,14 +1,13 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Run the CI pipeline-split guard with merge-context parity checks and a bounded same-run topology overlay.
+  Validate the surviving Vitest CI topology after the Issue #906 estate cut.
 
 .DESCRIPTION
-  Issue #823's audit and run-twice fixture execute before the topology wrapper so a
-  PR-only leniency branch or self-referential push base cannot silently reappear.
-  The committed runtime-history artifact remains untouched. The topology wrapper
-  measures stale changed Vitest files, materializes an ephemeral overlay, invokes
-  the original guard core, and restores the artifact byte-for-byte in finally.
+  The historical pipeline-split core and its runtime-history, wall-clock, and
+  supervisor fixture contracts were retired with their owners by Issue #906.
+  The protected scope-guard workflow still invokes this stable entrypoint, so it
+  now validates the surviving topology through the TypeScript planner itself.
 #>
 [CmdletBinding()]
 param(
@@ -21,31 +20,39 @@ if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
-$wrapper = Join-Path $PSScriptRoot 'lib/ci-pipeline-split-pre-topology-wrapper.mjs'
-$core = Join-Path $PSScriptRoot 'check-ci-pipeline-split-core.ps1'
-$audit = Join-Path $PSScriptRoot 'check-merge-blind-ci-gates.mjs'
-$parityFixture = Join-Path $PSScriptRoot 'fixtures/merge-blind-ci-gates/parity.mjs'
+$planner = Join-Path $RepoRoot 'scripts/emit-vitest-heavy-topology.mjs'
+$config = Join-Path $RepoRoot 'scripts/vitest-ci-lanes.config.json'
 
-foreach ($required in @($wrapper, $core, $audit, $parityFixture)) {
+foreach ($required in @($planner, $config)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-        throw "missing CI pipeline split prerequisite: $required"
+        throw "missing surviving CI topology prerequisite: $required"
     }
 }
 
-& node $audit $RepoRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& node $parityFixture $RepoRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-$argsList = @(
-    $wrapper,
-    '--repo-root', $RepoRoot,
-    '--core', $core
-)
-if ($SkipLiveCoverage) {
-    $argsList += '--skip-live-coverage'
+$previousOutput = $env:GITHUB_OUTPUT
+$outputFile = New-TemporaryFile
+try {
+    $env:GITHUB_OUTPUT = $outputFile.FullName
+    Push-Location $RepoRoot
+    try {
+        & node $planner --gha-output --skip-oversized-guard
+    }
+    finally {
+        Pop-Location
+    }
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+finally {
+    if ($null -eq $previousOutput) {
+        Remove-Item Env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:GITHUB_OUTPUT = $previousOutput
+    }
+    Remove-Item -LiteralPath $outputFile.FullName -Force -ErrorAction SilentlyContinue
 }
 
-& node @argsList
-exit $LASTEXITCODE
+Write-Host 'CI pipeline split compatibility guard passed (Issue #906 surviving topology).'
+exit 0

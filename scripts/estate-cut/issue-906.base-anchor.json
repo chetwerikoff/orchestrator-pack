@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 1,
+  "issue": 906,
+  "generatedBy": "scripts/estate-cut/capture-base-anchor.mjs",
+  "baseCommitSha": "42f3183bc334febd21c33ab2a053a8a0d8c6736e",
+  "keepCategories": {
+    "C": "target-review-cycle and protected runtime kernel",
+    "D": "CI, operator recovery, and safety-plugin roots",
+    "G": "keep-core tests, shared fixtures, and repository governance"
+  },
+  "rootMembership": {
+    "target-review-cycle": [
+      "docs/review-head-ready.mjs",
+      "docs/review-producer-contract.mjs",
+      "docs/review-trigger-reconcile.mjs",
+      "scripts/invoke-pack-review.ps1",
+      "scripts/orchestrator-wake-supervisor.ps1",
+      "scripts/pack-review-runner.ts",
+      "scripts/review-ready-report-state-seed.ps1",
+      "scripts/review-trigger-reconcile.ps1",
+      "scripts/review-trigger-reeval.ps1"
+    ],
+    "CI": [
+      ".github/workflows/scope-guard.yml",
+      ".github/workflows/typescript-foundation.yml",
+      "scripts/check-ci-cheap-wins.ps1",
+      "scripts/check-ci-pipeline-split.ps1",
+      "scripts/check-reusable.ps1",
+      "scripts/check-verify-runtime.ps1",
+      "scripts/verify.ps1"
+    ],
+    "operator-recovery": [
+      "docs/orchestrator-recovery-runbook.md",
+      "docs/wake-supervisor-fleet-operator-reference.md",
+      "scripts/orchestrator-escalation-router.ps1",
+      "scripts/orchestrator-wake-supervisor.ps1",
+      "scripts/review-start-claim-reaper.ps1"
+    ],
+    "safety-plugins": [
+      ".github/workflows/contract-evidence-legacy-list-guard.yml",
+      "plugins/ao-codex-pr-reviewer",
+      "plugins/ao-scope-guard",
+      "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "scripts/run-contract-evidence-legacy-list-guard.mjs"
+    ]
+  },
+  "protectedPaths": [
+    {
+      "path": ".github/workflows/contract-evidence-legacy-list-guard.yml",
+      "sha256": "cc7a3ad48bb202ff92fdaa7729c1bef0026a6e44de21ba343fac8dfc24dcee90"
+    },
+    {
+      "path": "agent-orchestrator.yaml.example",
+      "sha256": "031a85c2fa4e8e872319626c7700aa92025d3331bd4cc9dfe67ebcf639abe26c"
+    },
+    {
+      "path": "docs/github-fleet-governor.mjs",
+      "sha256": "3224b8ae80ff4f59a0471a38623fc0b230a0ec3ee617ece3f5b9a484f90f28bf"
+    },
+    {
+      "path": "docs/json-state-file-lock.mjs",
+      "sha256": "4dc9a4fa7f56aa793402688e89f429623f2cf7649fe2338d96e8ced2ea9ba503"
+    },
+    {
+      "path": "docs/pr-session-binding-cache.mjs",
+      "sha256": "23b2cbb858c9fc8f8586c43684ee136d00c6549deaef3a1069c1a119ea38477d"
+    },
+    {
+      "path": "docs/review-head-ready.mjs",
+      "sha256": "3cc001e75079edb737dee422ffd9e15130b29ea343860c695b12e2fd753ccc40"
+    },
+    {
+      "path": "docs/review-producer-contract.mjs",
+      "sha256": "5046178a6ba8a18895495b7ed601b71f620d4e8bc780d2af2351da387e16af03"
+    },
+    {
+      "path": "docs/review-trigger-reconcile.mjs",
+      "sha256": "54c891d3f0f18dea0d56f3ee14dd4d6a60ccc31852dfffe40e666c1af724f806"
+    },
+    {
+      "path": "docs/session-pr-binding-resolver.mjs",
+      "sha256": "3e6a76903e8a807bdcfec5ea92c521fda3a31b2713ce880da43275ad7910b82a"
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "sha256": "ffa8aa5991f9ef4d175c05dccd95c7e9a5bfa8b63f9358b993661dceab414941"
+    },
+    {
+      "path": "scripts/gate-runner/bulk-declarative-gates.test.ts",
+      "sha256": "27feddabcadc11d8c0db3a2778c48c682799220f5f901d9fd0bc7a50a5b16729"
+    },
+    {
+      "path": "scripts/gate-runner/census-generator.test.ts",
+      "sha256": "cc5fffe3e17f2600715d851975bcd772e2f6a66f3740ab325b49c8290e7177e9"
+    },
+    {
+      "path": "scripts/gate-runner/contracts.test.ts",
+      "sha256": "7aa357f5afb5f2a451761ada6d2095f4537c80fa00e55d1b230044ba8ff431fc"
+    },
+    {
+      "path": "scripts/gate-runner/custom/ao-capture-redaction.test.ts",
+      "sha256": "233bd604c781d0a0ee2291ad75dbeae5dba612a0effef17b56b21985efb795a6"
+    },
+    {
+      "path": "scripts/gate-runner/custom/bulk-cli-parity.test.ts",
+      "sha256": "df15501a844390a25ffcbd95e3beac72ea12878e9449d9b0bd6bc3bb30727f5b"
+    },
+    {
+      "path": "scripts/gate-runner/custom/bulk-static-gates.test.ts",
+      "sha256": "1b8acbfa1da81422692b7a8ee46043d4bf43c7fcdcf72bcc4a4c03ae2f8580c1"
+    },
+    {
+      "path": "scripts/gate-runner/custom/node-backed-gates.test.ts",
+      "sha256": "ffe74c01f27f54f29e1cf5cc581865dff83ea2a058ef2a1e393d6a7a82db9a45"
+    },
+    {
+      "path": "scripts/gate-runner/declarative.test.ts",
+      "sha256": "8a55f1c61adca9d4a87199119e2f98aa989480eed01641eaf6f2f59202141473"
+    },
+    {
+      "path": "scripts/gate-runner/goldens.test.ts",
+      "sha256": "e3c4579d5445b930e6c878f2d631e23fdd437a28e5c2ec7e65bd6e4b86f2ad4f"
+    },
+    {
+      "path": "scripts/gate-runner/registry.test.ts",
+      "sha256": "6d688f7e0a3fe5e79f1acf21e6a036b6f1adf29032cce8c0853e781d7c49d884"
+    },
+    {
+      "path": "scripts/gate-runner/runner.test.ts",
+      "sha256": "1e93ec45633a99a64ae3bb66c32a35e9c0314fc3500c3edc25670388a67922e9"
+    },
+    {
+      "path": "scripts/gh",
+      "sha256": "f9c437e1c45fc2237d6d065b79a9fba6b811c61465d3bed187ea9148f52fc82f"
+    },
+    {
+      "path": "scripts/gh-wrapper.test.ts",
+      "sha256": "83dff56e725e9843637e749e1d0b2eb0906d3c5182190661c6d52328103a95d4"
+    },
+    {
+      "path": "scripts/invoke-pack-review.ps1",
+      "sha256": "5257cd5123cbab65eb6483a3eb85a75bed0c47affaa5dbee9f48fe112957f767"
+    },
+    {
+      "path": "scripts/kernel/json-artifact.test.ts",
+      "sha256": "478d81cfbe5526513237dbe374079aabb8812c8954cce0618d82765210f624ca"
+    },
+    {
+      "path": "scripts/kernel/json-contract.test.ts",
+      "sha256": "82711404666f86abf85a060736f68c8afc3887cfac3d8ff8a84e0825762809c8"
+    },
+    {
+      "path": "scripts/kernel/subprocess.test.ts",
+      "sha256": "478c70aaa981fdb3a7b50d3603a5e17937442f3918d95ab9d457855f5f678d58"
+    },
+    {
+      "path": "scripts/lib/Orchestrator-Escalation.ps1",
+      "sha256": "242c4cf6999c6fee81790784fc89965c85c68bc7c4f101dbb2286779eba8f76d"
+    },
+    {
+      "path": "scripts/lib/Review-StartClaim.ps1",
+      "sha256": "44d737be50d9aa04f8a2e31fd19a5679061a04621ea56403a39af38e862f36de"
+    },
+    {
+      "path": "scripts/lib/gh-governor.mjs",
+      "sha256": "72f49e3253dd637bce63b4d52c621c01409ec81b1d5be87c8c254cb4253d401c"
+    },
+    {
+      "path": "scripts/lib/gh-wrapper.mjs",
+      "sha256": "0942b1ab3147ae1d094ee78ed431666f0b025ab73a51cb422c6369c861daa7b1"
+    },
+    {
+      "path": "scripts/lib/github-review-reconciliation.js",
+      "sha256": "0e7eb29835185c12f470c39e1d9075541fa8801a5900a4e6ccbfe804788d2d1f"
+    },
+    {
+      "path": "scripts/lib/github-review-reconciliation.ts",
+      "sha256": "3203c779a1217c044a4ae115bc719725cd646495a7f42b384a55d87d74b6eac4"
+    },
+    {
+      "path": "scripts/lib/pack-review-delivery.js",
+      "sha256": "8bb53bad73791396de47df5b2f6e835c8ed459eb086cfe3db85ae33a117efa59"
+    },
+    {
+      "path": "scripts/lib/pack-review-delivery.ts",
+      "sha256": "706ee9115a072fb7326968e412c0dee38c2fd7ba60e5279a7405690b626ef818"
+    },
+    {
+      "path": "scripts/lib/pack-review-run-store.js",
+      "sha256": "922650126366b4129db468a82e2759d0e47a56aa891463ee6ef1cfe687ca08be"
+    },
+    {
+      "path": "scripts/lib/pack-review-run-store.ts",
+      "sha256": "382b8d6f945887a0f256879f3ac8dfcf240de2ea01fb28b64348b62f08a99b0b"
+    },
+    {
+      "path": "scripts/orchestrator-escalation-router.ps1",
+      "sha256": "ab9a4a01c0ebba44e0c807d16813fce99e74d9c814d69c526cd7cec5724ae27d"
+    },
+    {
+      "path": "scripts/orchestrator-escalation-router.test.ts",
+      "sha256": "dd963097e846db43516d5aefaeabd70a653bec1039b6c64abd0d6fb627af711a"
+    },
+    {
+      "path": "scripts/orchestrator-escalation.test.ts",
+      "sha256": "e9e482c10d6dc7238802587208f61c59da7e54c9bd0d566921e59a8bfc921d45"
+    },
+    {
+      "path": "scripts/orchestrator-wake-supervisor.ps1",
+      "sha256": "c84ebfe9166960f1b4079f86019f9eaa997276680a6e42f8db5d402e71cf3391"
+    },
+    {
+      "path": "scripts/pack-review-runner-severity.test.ts",
+      "sha256": "bc6f5dbccba94fa99eabe1044118bd7e8b39a4e041bce1a0b1c19e5ae682a898"
+    },
+    {
+      "path": "scripts/pack-review-runner.js",
+      "sha256": "e59ab8ead8883b58926095f319ac7693b60bcb710aa590b3c627bcfe91f093f8"
+    },
+    {
+      "path": "scripts/pack-review-runner.ts",
+      "sha256": "bc24813c6c63bcbddacd42fd05e805a52673723902848c45a5e6203cc0d465e3"
+    },
+    {
+      "path": "scripts/pr-session-binding-cache.test.ts",
+      "sha256": "61674d6e42c516429c88d8941e32ebaf458f45b8fee28998fd2e771ebe83ca4f"
+    },
+    {
+      "path": "scripts/review-delivery.test.ts",
+      "sha256": "41252a26fb5de1b516e5612da6151a4cb94f71b12eb5eb988401e4a70aa67e0e"
+    },
+    {
+      "path": "scripts/review-head-ready.test.ts",
+      "sha256": "acbdd7b5b382c0ffd72adf1df59525b50b1e20429cadac2562641d7d71b1c777"
+    },
+    {
+      "path": "scripts/review-ready-report-state-seed.ps1",
+      "sha256": "e89c4fa0713011a2ff4d9c80d8e5b2e68678c0d4d8f5176580725258c9f822a8"
+    },
+    {
+      "path": "scripts/review-start-claim-budget-semantics.test.ts",
+      "sha256": "205d00fe109a329bf9467711f78259b613a840346dd7bb97306e72e155c76805"
+    },
+    {
+      "path": "scripts/review-start-claim-lifecycle.test.ts",
+      "sha256": "970a77645ccb7893d73d19453383d653167ebb7f0e01428c0bab95168abbef26"
+    },
+    {
+      "path": "scripts/review-start-claim-reaper.ps1",
+      "sha256": "a43ed4fb45ff405b37966ef019b18de8df29a1b4d89809c9a387b709014a9799"
+    },
+    {
+      "path": "scripts/review-start-claim-run-binding.test.ts",
+      "sha256": "2c45c4f8b3b1012e2c1c6175e9bf5c88b07c98a2e677f924cffce013d29e655c"
+    },
+    {
+      "path": "scripts/review-start-claim.test.ts",
+      "sha256": "0e145a370fd96ba3bb7bbd42e1da590bda6007c6c06e335614c6b7f5f85b4ea2"
+    },
+    {
+      "path": "scripts/review-trigger-reconcile.ps1",
+      "sha256": "20762cfc1549a1c7d03516b87da7c8d0a6d9daf9606cac99d27f3cc3ee1864d8"
+    },
+    {
+      "path": "scripts/review-trigger-reconcile.test.ts",
+      "sha256": "73ce1add81f9db442a225810fc21064e6975b1b4de4c4042d9d416c2424042aa"
+    },
+    {
+      "path": "scripts/review-trigger-reeval.ps1",
+      "sha256": "301a202f6eadfdabd21ecfd70c2d0a72f680c42f4cc9f4b2d8a2e57158140721"
+    },
+    {
+      "path": "scripts/review-trigger-reeval.test.ts",
+      "sha256": "8b31ddf122c69bc3a0a8107ffd8d7eb334a1618d121b4a4316f2bbac6517f3eb"
+    },
+    {
+      "path": "scripts/review-wake-trigger.test.ts",
+      "sha256": "64176ba0f613b76c1a696b2f0820ae7736c6fb5fa614af61eb72b84dc63ea3c4"
+    },
+    {
+      "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "sha256": "d2a01f159691b10772d8e74c363ab61da8fa2e8fe34116190f42ec300f48bd12"
+    },
+    {
+      "path": "scripts/session-pr-binding-resolver.test.ts",
+      "sha256": "46c8c8fc07ebe3ad73408bba1d1ebb4c2dc9afb02e19f13b0e7fe0ffa95e0eed"
+    },
+    {
+      "path": "scripts/worker-message-submit-reconcile.test.ts",
+      "sha256": "20aeb407c19b95a6ee7ee9be6a0a4c34d80278cc5eda210deb63930fc9661930"
+    }
+  ],
+  "keepCoreTests": [
+    "scripts/gate-runner/bulk-declarative-gates.test.ts",
+    "scripts/gate-runner/census-generator.test.ts",
+    "scripts/gate-runner/contracts.test.ts",
+    "scripts/gate-runner/custom/ao-capture-redaction.test.ts",
+    "scripts/gate-runner/custom/bulk-cli-parity.test.ts",
+    "scripts/gate-runner/custom/bulk-static-gates.test.ts",
+    "scripts/gate-runner/custom/node-backed-gates.test.ts",
+    "scripts/gate-runner/declarative.test.ts",
+    "scripts/gate-runner/goldens.test.ts",
+    "scripts/gate-runner/registry.test.ts",
+    "scripts/gate-runner/runner.test.ts",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/kernel/json-artifact.test.ts",
+    "scripts/kernel/json-contract.test.ts",
+    "scripts/kernel/subprocess.test.ts",
+    "scripts/orchestrator-escalation-router.test.ts",
+    "scripts/orchestrator-escalation.test.ts",
+    "scripts/pack-review-runner-severity.test.ts",
+    "scripts/pr-session-binding-cache.test.ts",
+    "scripts/review-delivery.test.ts",
+    "scripts/review-head-ready.test.ts",
+    "scripts/review-start-claim-budget-semantics.test.ts",
+    "scripts/review-start-claim-lifecycle.test.ts",
+    "scripts/review-start-claim-run-binding.test.ts",
+    "scripts/review-start-claim.test.ts",
+    "scripts/review-trigger-reconcile.test.ts",
+    "scripts/review-trigger-reeval.test.ts",
+    "scripts/review-wake-trigger.test.ts",
+    "scripts/session-pr-binding-resolver.test.ts",
+    "scripts/worker-message-submit-reconcile.test.ts"
+  ]
+}

@@ -24,6 +24,8 @@ export const TERMINAL_CENSUS_CLASSIFICATIONS = [
   'ported-custom',
   'retired-with-reason',
   'deferred-to-named-wave',
+  'retired-in-bulk',
+  'kept-in-pr1',
 ] as const;
 
 export const CENSUS_CLASSIFICATIONS = [
@@ -33,6 +35,8 @@ export const CENSUS_CLASSIFICATIONS = [
   'retired-with-justification',
   'retired-with-reason',
   'deferred-to-named-wave',
+  'retired-in-bulk',
+  'kept-in-pr1',
 ] as const;
 
 export const DEFERRED_WAVES = [
@@ -76,6 +80,7 @@ export interface CensusEntry {
     readonly kind: LegacyReferenceKind;
   };
   readonly deferredWave?: DeferredWave;
+  readonly keepCategory?: 'C' | 'D' | 'G';
   readonly retirementJustification?: {
     readonly reasonCode: string;
     readonly behavior: string;
@@ -107,6 +112,7 @@ const VALID_RETIREMENT_CODES = new Set([
   'superseded-contract',
   'unfalsifiable-surface',
   'non-proving-observation',
+  'superseded-compatibility-surface',
 ]);
 const VALID_DEFERRED_WAVES = new Set<string>(DEFERRED_WAVES);
 const VALID_PORTED_WAVES = new Set<string>(PORTED_WAVES);
@@ -115,7 +121,7 @@ export const CENSUS_PATH = 'scripts/gate-runner/census/pre-change-baseline.json'
 export const CENSUS_GENERATION_PATH = 'scripts/gate-runner/census/generation.json';
 
 const EXPECTED_BASE_COMMIT = 'b7394065b9ee1b046abb4cf29aff456df1935571';
-const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = 'e72c1eb63da367470283a8f3f684f9b03f2eccd90fb68ddb40da337cc261f9f1';
+const EXPECTED_MIGRATION_OWNERSHIP_DIGEST = '019faf41c7b2c4f77675d4be3c948d308261fc51dae29833a5c5726f0d988635';
 const EXPECTED_SOURCE_HASHES = {
   'scripts/verify.ps1': '6bf8b3459885d603fa112d56c1a5afff6e472c2676c71eeb3e1510f0553562c9',
   'scripts/check-reusable.ps1': 'dafb1766d1d7b60181527dbb24593051270d21814291909000355541da26e0eb',
@@ -140,7 +146,15 @@ function isDeferred(entry: CensusEntry): boolean {
 }
 
 function isRetired(entry: CensusEntry): boolean {
-  return entry.classification === 'retired-with-justification' || entry.classification === 'retired-with-reason';
+  return entry.classification === 'retired-with-justification' || entry.classification === 'retired-with-reason' || entry.classification === 'retired-in-bulk';
+}
+
+function isKeptInPr1(entry: CensusEntry): boolean {
+  return entry.classification === 'kept-in-pr1';
+}
+
+function isLegacyRetained(entry: CensusEntry): boolean {
+  return isDeferred(entry) || isKeptInPr1(entry);
 }
 
 function currentCheckScripts(snapshot: SourceSnapshot): Set<string> {
@@ -735,6 +749,11 @@ export function validateCensusSchema(census: GateCensus): string[] {
       if (entry.legacyReference) failures.push(`${entry.id}: non-deferred row must not retain a legacy invocation`);
       if (entry.deferredWave !== undefined) failures.push(`${entry.id}: non-deferred row must not claim a deferral owner`);
     }
+    if (isKeptInPr1(entry)) {
+      if (!entry.keepCategory || !['C', 'D', 'G'].includes(entry.keepCategory)) failures.push(`${entry.id}: kept-in-pr1 row lacks a valid keepCategory`);
+    } else if (entry.keepCategory !== undefined) {
+      failures.push(`${entry.id}: only kept-in-pr1 rows may carry keepCategory`);
+    }
 
     if (isPorted(entry)) {
       if (!entry.gateIds || entry.gateIds.length === 0) failures.push(`${entry.id}: ported row lacks gateIds`);
@@ -851,6 +870,7 @@ export function evaluateCensus(
     const ported = isPorted(entry);
     const retired = isRetired(entry);
     const deferred = isDeferred(entry);
+    const retained = isLegacyRetained(entry);
     if (ported) {
       for (const gateId of entry.gateIds ?? []) {
         if (!registeredGateIds.has(gateId)) failures.push(`${entry.id}: registered gate missing: ${gateId}`);
@@ -860,14 +880,14 @@ export function evaluateCensus(
     if (entry.sourceKind === 'check-script') {
       const exists = currentScripts.has(entry.sourcePath);
       if ((ported || retired) && exists) failures.push(`${entry.id}: migrated/retired PowerShell gate still exists`);
-      if (deferred && !exists) failures.push(`${entry.id}: deferred legacy gate was dropped`);
+      if (retained && !exists) failures.push(`${entry.id}: retained legacy gate was dropped`);
     }
 
     if (entry.sourceKind === 'verify-script-member') {
       const verify = snapshot.files.get('scripts/verify.ps1') ?? '';
       const present = verify.includes(entry.marker);
       if ((ported || retired) && present) failures.push(`${entry.id}: migrated/retired verify invocation still exists`);
-      if (deferred && !present) failures.push(`${entry.id}: deferred verify invocation was dropped`);
+      if (retained && !present) failures.push(`${entry.id}: retained verify invocation was dropped`);
     }
 
     if (deferred) {
@@ -881,8 +901,8 @@ export function evaluateCensus(
 
   const reusableRows = census.entries.filter((entry) => entry.sourceKind === 'check-reusable-behavior');
   const checkReusable = snapshot.files.get('scripts/check-reusable.ps1');
-  const allReusableRowsDeferred = reusableRows.length > 0 && reusableRows.every(isDeferred);
-  if (allReusableRowsDeferred) {
+  const allReusableRowsRetained = reusableRows.length > 0 && reusableRows.every(isLegacyRetained);
+  if (allReusableRowsRetained) {
     if (checkReusable === undefined) failures.push('scripts/check-reusable.ps1 is missing while its behaviors remain legacy-enforced');
     else if (sha256(checkReusable) !== census.sourceHashes['scripts/check-reusable.ps1']) {
       failures.push('scripts/check-reusable.ps1 behavior surface drifted without census reclassification');
@@ -890,10 +910,10 @@ export function evaluateCensus(
   } else {
     for (const entry of reusableRows) {
       const present = checkReusable?.includes(entry.marker) === true;
-      if (isDeferred(entry) && !present) failures.push(`${entry.id}: deferred check-reusable behavior was dropped`);
-      if (!isDeferred(entry) && present) failures.push(`${entry.id}: migrated/retired check-reusable behavior remains reachable`);
+      if (isLegacyRetained(entry) && !present) failures.push(`${entry.id}: retained check-reusable behavior was dropped`);
+      if (!isLegacyRetained(entry) && present) failures.push(`${entry.id}: migrated/retired check-reusable behavior remains reachable`);
     }
-    if (reusableRows.every((entry) => !isDeferred(entry)) && checkReusable !== undefined) {
+    if (reusableRows.every((entry) => !isLegacyRetained(entry)) && checkReusable !== undefined) {
       failures.push('scripts/check-reusable.ps1 remains after every behavior was migrated or retired');
     }
   }
@@ -916,8 +936,8 @@ export function evaluateCensus(
   }
   for (const entry of baselineInlineRows) {
     const present = currentInlineIds.has(entry.id);
-    if (isDeferred(entry) && !present) failures.push(`${entry.id}: deferred verify inline aggregation member was dropped`);
-    if (!isDeferred(entry) && present) failures.push(`${entry.id}: migrated/retired verify inline aggregation member still exists`);
+    if (isLegacyRetained(entry) && !present) failures.push(`${entry.id}: retained verify inline aggregation member was dropped`);
+    if (!isLegacyRetained(entry) && present) failures.push(`${entry.id}: migrated/retired verify inline aggregation member still exists`);
   }
 
   const dispatchMatches = verify.match(/scripts\/gate-runner\/runner\.ts/gu) ?? [];

@@ -19,8 +19,7 @@ $SessionStatusInScopeRelativePaths = @(
     'scripts/invoke-gated-worker-nudge.ps1',
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
-    'scripts/ci-green-wake-reconcile.ps1',
-    'scripts/check-ci-failure-notification-adoption.ps1'
+    'scripts/ci-green-wake-reconcile.ps1'
 )
 
 $SendTransportInScopeRelativePaths = @(
@@ -36,8 +35,6 @@ $AllowlistedRelativePaths = @(
     'scripts/lib/Invoke-AoCliJson.ps1',
     'scripts/check-ao-cli-argv-shape.ps1',
     'scripts/check-ao-dead-argv-bypass.ps1',
-    'scripts/check-ao-session-adapter-project-filter.ps1',
-    'scripts/check-contract-evidence-reverify.ps1',
     'scripts/generate-review-pipeline-spawn-captures.ts',
     'scripts/lib/Get-RtkMissedSavingsInventory.ps1',
     'scripts/lib/reverify-e2e-fixture-session.ts'

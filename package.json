@@ -15,7 +15,9 @@
     "check:pwsh-test-growth": "node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
     "test:foundation": "vitest run --config scripts/toolchain/vitest-foundation.config.ts",
     "gate-runner-selftest": "vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
-    "gate-census-generate": "node --experimental-strip-types scripts/gate-runner/census-generator.ts"
+    "gate-census-generate": "node --experimental-strip-types scripts/gate-runner/census-generator.ts",
+    "estate-cut:check": "node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --check",
+    "test:issue-906": "vitest run --config scripts/estate-cut/vitest.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
