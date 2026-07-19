@@ -1,0 +1,40 @@
+name: issue-900-ci-diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-900-ci-diagnostic
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Capture policy and foundation test output
+        shell: bash
+        run: |
+          set +e
+          npm run lint:foundation > issue-900-policy.log 2>&1
+          policy_exit=$?
+          npm run test:foundation > issue-900-tests.log 2>&1
+          tests_exit=$?
+          printf 'policy_exit=%s\ntests_exit=%s\n' "$policy_exit" "$tests_exit" > issue-900-summary.txt
+          exit 0
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-900-ci-diagnostic
+          path: |
+            issue-900-policy.log
+            issue-900-tests.log
+            issue-900-summary.txt
+          if-no-files-found: error
