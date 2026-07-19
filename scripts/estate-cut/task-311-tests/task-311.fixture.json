@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "issue": 918,
+  "task": 311,
+  "repoSlug": "chetwerikoff/orchestrator-pack",
+  "capture": {
+    "path": "tests/external-output-references/captures/ao-0-10-cli/session-ls.raw.json",
+    "selectors": {
+      "sessionId": "$.data[0].id",
+      "projectId": "$.data[0].projectId",
+      "role": "$.data[0].role",
+      "status": "$.data[0].status",
+      "issueId": "$.data[0].issueId",
+      "harness": "$.data[0].harness",
+      "isTerminated": "$.data[0].isTerminated",
+      "lastActivityAt": "$.data[0].lastActivityAt",
+      "createdAt": "$.data[0].createdAt",
+      "updatedAt": "$.data[0].updatedAt"
+    },
+    "expected": {
+      "$.data[0].id": "orchestrator-pack-7",
+      "$.data[0].projectId": "orchestrator-pack",
+      "$.data[0].role": "worker",
+      "$.data[0].status": "needs_input",
+      "$.data[0].issueId": "619",
+      "$.data[0].harness": "cursor",
+      "$.data[0].isTerminated": false
+    }
+  },
+  "assembly": {
+    "prNumber": 619,
+    "reviewer": "codex",
+    "requiredOrder": [
+      "fresh-head-input",
+      "open-pr-exact-head",
+      "binding-resolution",
+      "binding-cache",
+      "fresh-head-admission",
+      "atomic-claim",
+      "runner-wrapper",
+      "reviewer-wrapper",
+      "journal-verdict",
+      "github-comment",
+      "required-status",
+      "worker-message"
+    ],
+    "consumer": {
+      "source": "cache",
+      "reason": "cache_hit",
+      "failClosed": false
+    }
+  },
+  "scope": {
+    "root": "scripts/estate-cut/task-311-tests/",
+    "allowedSuffixes": [
+      ".test.ts",
+      ".test-support.ts",
+      ".fixture.json"
+    ],
+    "expectedAddedPaths": [
+      "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts",
+      "scripts/estate-cut/task-311-tests/task-311.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311.fixture.json"
+    ]
+  }
+}
