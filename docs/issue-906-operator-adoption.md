@@ -12,6 +12,8 @@ The final implementation tree was also validated with `npm run typecheck:foundat
 
 Generated census snapshots under `scripts/gate-runner/census/**` are machine-produced evidence and are excluded from duplicate-literal self-architect lint; their integrity remains enforced by the census validator and gate-runner self-test.
 
+The independent base anchor protects 61 exact paths while keeping the keep-core test partition at 30 tests. The protected safety/governance surface includes the contract-evidence legacy-list workflow, its pinned trusted entrypoint, and its regression test because the governed manifest and anti-tamper contract remain active after the cut.
+
 The surviving supervisor entry point remains `scripts/orchestrator-wake-supervisor.ps1`. Its registry now starts exactly:
 
 - `review-trigger-reconcile`
