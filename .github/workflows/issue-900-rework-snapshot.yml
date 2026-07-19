@@ -34,7 +34,7 @@ jobs:
           set -euo pipefail
           cat \
             payload/scripts/toolchain/.issue900-rework-patch-00.b64 \
-            payload/scripts/toolchain/.issue900-rework-xz-01.b64 \
+            payload/scripts/toolchain/.issue900-rework-patch-01.b64 \
             payload/scripts/toolchain/.issue900-rework-patch-02.b64 \
             payload/scripts/toolchain/.issue900-rework-patch-03.b64 \
             payload/scripts/toolchain/.issue900-rework-patch-04.b64 \
