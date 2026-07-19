@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export const SUPPORTED_NODE_MAJOR = 22;
-export const NODE_VERSION_FILE = '.nvmrc';
+export const NODE_VERSION_SOURCE = 'package.json engines.node';
 export const NODE_ENGINE_DECLARATION = '22.x';
 export const OPERATOR_RUNBOOK = 'scripts/toolchain/NODE_22_OPERATOR_RUNBOOK.md';
 
@@ -24,18 +24,6 @@ export function parseNodeVersionMajor(value, label = 'Node.js version') {
   return Number(match[1]);
 }
 
-export function parseNvmrcMajor(value) {
-  const text = String(value ?? '').trim();
-  const match = /^v?(\d+)(?:\.\d+(?:\.\d+)?)?$/u.exec(text);
-  if (!match?.[1]) {
-    throw contractError(
-      'OPK_NODE_RUNTIME_DECLARATION_MALFORMED',
-      `${NODE_VERSION_FILE} must declare one Node major or semantic version; received ${JSON.stringify(text)}`,
-    );
-  }
-  return Number(match[1]);
-}
-
 export function parseEngineMajor(value) {
   const text = String(value ?? '').trim();
   const match = /^(\d+)\.x$/u.exec(text);
@@ -48,22 +36,14 @@ export function parseEngineMajor(value) {
   return Number(match[1]);
 }
 
-export function evaluateNodeRuntimeContract({ nvmrcText, engineText, actualVersion }) {
-  const versionFileMajor = parseNvmrcMajor(nvmrcText);
+export function evaluateNodeRuntimeContract({ engineText, actualVersion }) {
   const engineMajor = parseEngineMajor(engineText);
   const actualMajor = parseNodeVersionMajor(actualVersion, 'installed Node.js version');
 
-  if (versionFileMajor !== engineMajor) {
-    throw contractError(
-      'OPK_NODE_RUNTIME_DECLARATION_DRIFT',
-      `${NODE_VERSION_FILE} declares Node ${versionFileMajor}, but package.json engines.node declares Node ${engineMajor}`,
-    );
-  }
-  if (versionFileMajor !== SUPPORTED_NODE_MAJOR) {
+  if (engineMajor !== SUPPORTED_NODE_MAJOR) {
     throw contractError(
       'OPK_NODE_RUNTIME_DECLARATION_UNSUPPORTED',
-      `${NODE_VERSION_FILE} and package.json engines.node must both declare Node ${SUPPORTED_NODE_MAJOR}; `
-        + `received ${versionFileMajor}`,
+      `package.json engines.node must declare Node ${SUPPORTED_NODE_MAJOR}.x; received ${String(engineText).trim()}`,
     );
   }
   if (actualMajor !== SUPPORTED_NODE_MAJOR) {
@@ -77,14 +57,13 @@ export function evaluateNodeRuntimeContract({ nvmrcText, engineText, actualVersi
 
   return {
     supportedMajor: SUPPORTED_NODE_MAJOR,
-    versionFileMajor,
     engineMajor,
     actualMajor,
     actualVersion: String(actualVersion).trim(),
   };
 }
 
-export function readNodeRuntimeDeclarations(repoRoot) {
+export function readNodeRuntimeDeclaration(repoRoot) {
   const root = resolve(repoRoot);
   let packageManifest;
   try {
@@ -96,16 +75,6 @@ export function readNodeRuntimeDeclarations(repoRoot) {
     );
   }
 
-  let nvmrcText;
-  try {
-    nvmrcText = readFileSync(resolve(root, NODE_VERSION_FILE), 'utf8');
-  } catch (error) {
-    throw contractError(
-      'OPK_NODE_RUNTIME_DECLARATION_UNREADABLE',
-      `cannot read ${NODE_VERSION_FILE}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
   const engineText = packageManifest?.engines?.node;
   if (typeof engineText !== 'string') {
     throw contractError(
@@ -113,12 +82,12 @@ export function readNodeRuntimeDeclarations(repoRoot) {
       'package.json engines.node must be present and string-valued',
     );
   }
-  return { nvmrcText, engineText };
+  return { engineText };
 }
 
 export function assertNodeRuntimeContract(repoRoot, actualVersion = process.versions.node) {
   return evaluateNodeRuntimeContract({
-    ...readNodeRuntimeDeclarations(repoRoot),
+    ...readNodeRuntimeDeclaration(repoRoot),
     actualVersion,
   });
 }
