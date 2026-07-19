@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - diag/issue-908-clean-pipeline
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -14,75 +11,37 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/scope-guard-pr-files-pagination
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci --ignore-scripts
-
-      - name: Build and commit the final three-file prerequisite
+      - name: Restore base file modes
         shell: bash
         run: |
           set -euo pipefail
-          git checkout f10fd0051dd28f4cea865e4859b495e369219698 -- \
-            scripts/vitest-ci-lanes.config.json \
-            scripts/vitest-runtime-history.json
-          rm -f scripts/pr-scope-check-pagination.test.ts
-
-          python - <<'PY'
-          from pathlib import Path
-          import json
-
-          test_path = Path('scripts/pr-scope-check.test.ts')
-          text = test_path.read_text()
-          anchor = "  it('NON_CLOSING_ISSUE_REF_PATTERN stays aligned with documented Refs form', () => {\n"
-          block = """  it('enumerates all PR file pages and fails closed on malformed entries', () => {\n    const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');\n    expect(ps1).not.toContain('gh pr diff');\n    expect(ps1).toContain(\"pulls/$PrNumber/files?per_page=100\");\n    expect(ps1).toContain(\"'--paginate'\");\n    expect(ps1).toContain('foreach ($entry in @($filesRead.value))');\n    expect(ps1).toContain('$paths.Add($filename)');\n    expect(ps1).toContain('if (-not $filesRead.ok)');\n    expect(ps1).toContain('Format-GhSignalFailureDetail -Result $filesRead');\n    expect(ps1).toContain('[string]::IsNullOrWhiteSpace($filename)');\n    expect(ps1).toContain('entry without filename');\n  });\n\n"""
-          if block.strip() not in text:
-              if text.count(anchor) != 1:
-                  raise SystemExit('scope test insertion anchor drifted')
-              text = text.replace(anchor, block + anchor, 1)
-          test_path.write_text(text)
-
-          declaration_path = Path('docs/declarations/908.scope-pagination.json')
-          declaration = json.loads(declaration_path.read_text())
-          declaration['created_at'] = '2026-07-19T01:00:00.000Z'
-          declaration['baseline']['active_scope_hash'] = 'sha256:9aecedc6de759578460982a72b036f2b8a7ec0965d9aa1d0098228dc35e8a570'
-          declaration['declared_paths'] = [
-              'scripts/pr-scope-check.ps1',
-              'scripts/pr-scope-check.test.ts',
-          ]
-          declaration['declared_globs'] = []
-          declaration['amendments'] = []
-          declaration_path.write_text(json.dumps(declaration, indent=2) + '\n')
-          PY
-
+          git update-index --chmod=-x \
+            plugins/ao-codex-pr-reviewer/bin/review.ts \
+            plugins/ao-scope-guard/bin/agent-wrap.ts \
+            plugins/ao-scope-guard/bin/scope-check.ts \
+            plugins/ao-task-declaration/bin/declare.ts \
+            plugins/ao-token-chain-ledger/bin/ledger.mjs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: keep scope pagination within owned test surfaces"
+          git commit -m "fix: restore unchanged CLI file modes"
 
-      - name: Validate the committed prerequisite tree
+      - name: Verify final PR boundary
         shell: bash
         run: |
           set -euo pipefail
-          test -z "$(git status --porcelain)"
-          node scripts/run-vitest-with-harness.mjs run scripts/pr-scope-check.test.ts
-          npm run typecheck:foundation
-          npm run lint:foundation
-          pwsh -NoProfile -Command "[void][scriptblock]::Create((Get-Content -LiteralPath './scripts/pr-scope-check.ps1' -Raw))"
-          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1
-          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 2
-          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          git diff --summary f10fd0051dd28f4cea865e4859b495e369219698 HEAD | tee /tmp/summary.txt
+          ! grep -q 'mode change' /tmp/summary.txt
+          unexpected="$(git diff --name-only f10fd0051dd28f4cea865e4859b495e369219698 HEAD -- | grep -Ev '^(docs/declarations/908\.scope-pagination\.json|scripts/pr-scope-check\.ps1|scripts/pr-scope-check\.test\.ts)$' || true)"
+          test -z "$unexpected"
 
-      - name: Publish the validated prerequisite
+      - name: Publish mode cleanup
         shell: bash
         run: |
           set -euo pipefail
