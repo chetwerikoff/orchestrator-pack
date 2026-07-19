@@ -137,3 +137,5 @@ jobs:
           fi
           git commit -m "fix: align issue 906 declaration scope"
           git push origin HEAD:agent/issue-906-estate-cut
+
+# Rerun after the stale delivery race published an older tree.
