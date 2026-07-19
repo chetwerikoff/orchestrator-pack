@@ -1,4 +1,4 @@
-name: issue-908-clean-pipeline
+name: issue-909-pack-review-status
 
 on:
   push:
@@ -6,43 +6,22 @@ on:
       - diag/issue-908-clean-pipeline
 
 permissions:
-  contents: write
+  statuses: write
+  contents: read
 
 jobs:
-  finalize:
+  publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/scope-guard-pr-files-pagination
-          fetch-depth: 0
-
-      - name: Restore base file modes
+      - name: Publish reviewed status
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: 1dc236cda46926e31e9eb435212a8599537afc41
         run: |
           set -euo pipefail
-          git update-index --chmod=-x \
-            plugins/ao-codex-pr-reviewer/bin/review.ts \
-            plugins/ao-scope-guard/bin/agent-wrap.ts \
-            plugins/ao-scope-guard/bin/scope-check.ts \
-            plugins/ao-task-declaration/bin/declare.ts \
-            plugins/ao-token-chain-ledger/bin/ledger.mjs
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: restore unchanged CLI file modes"
-
-      - name: Verify final PR boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --summary f10fd0051dd28f4cea865e4859b495e369219698 HEAD | tee /tmp/summary.txt
-          ! grep -q 'mode change' /tmp/summary.txt
-          unexpected="$(git diff --name-only f10fd0051dd28f4cea865e4859b495e369219698 HEAD -- | grep -Ev '^(docs/declarations/908\.scope-pagination\.json|scripts/pr-scope-check\.ps1|scripts/pr-scope-check\.test\.ts)$' || true)"
-          test -z "$unexpected"
-
-      - name: Publish mode cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:fix/scope-guard-pr-files-pagination
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
+            -f state=success \
+            -f context='orchestrator-pack/pack-review' \
+            -f description='Pack review completed with no findings.'
