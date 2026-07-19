@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
 
 jobs:
   inspect:
@@ -18,13 +19,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: d3051a2cad81894d596434b760219dde65078ea6
-          fetch-depth: 0
-      - name: Capture validated tree SHA
+          ref: main
+      - name: Extract issue 906 scope constraints
         shell: bash
-        run: git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/pr907-tree-sha.txt"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > "$RUNNER_TEMP/issue-906-body.md"
+          node --experimental-strip-types --input-type=module <<'NODE' | tee "$RUNNER_TEMP/issue-906-constraints.json"
+          import { readFileSync } from 'node:fs';
+          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
+          const parsed = parseIssueBody(readFileSync(process.env.RUNNER_TEMP + '/issue-906-body.md', 'utf8'));
+          console.log(JSON.stringify({
+            allowed_roots: parsed.allowed_roots ?? null,
+            denylist: [...parsed.denylist].sort(),
+          }, null, 2));
+          NODE
       - uses: actions/upload-artifact@v4
         with:
-          name: pr907-tree-sha
-          path: ${{ runner.temp }}/pr907-tree-sha.txt
+          name: issue-906-constraints
+          path: ${{ runner.temp }}/issue-906-constraints.json
           retention-days: 1
