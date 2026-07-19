@@ -1,4 +1,4 @@
-name: issue-906-adopt-main
+name: issue-912-compact-pr-file-pages
 
 on:
   push:
@@ -8,15 +8,16 @@ on:
 permissions:
   contents: write
   issues: read
+  pull-requests: read
 
 jobs:
-  adopt:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-906-estate-cut
+          ref: fix/issue-912-compact-pr-file-pages
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -24,66 +25,113 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts
 
-      - name: Merge prerequisite and rebuild the base-pinned cut
+      - name: Implement compact fail-closed page loop
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          NEW_BASE: 27166b6b3d9bf8c887514c638981e26a5e3a6a43
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-
-          set +e
-          git merge --no-commit --no-ff "$NEW_BASE"
-          merge_exit=$?
-          set -e
-
-          unmerged="$(git diff --name-only --diff-filter=U)"
-          if [ -n "$unmerged" ]; then
-            if [ "$unmerged" != "scripts/pr-scope-check.test.ts" ]; then
-              printf 'unexpected merge conflicts:\n%s\n' "$unmerged" >&2
-              exit 1
-            fi
-            git rm -f scripts/pr-scope-check.test.ts
-          elif [ "$merge_exit" -ne 0 ]; then
-            echo "merge failed without a resolvable expected conflict" >&2
-            exit "$merge_exit"
-          fi
-
           python - <<'PY'
           from pathlib import Path
-          import json
-          path = Path('scripts/estate-cut/issue-906.config.json')
-          data = json.loads(path.read_text())
-          data['baseCommitSha'] = '27166b6b3d9bf8c887514c638981e26a5e3a6a43'
-          path.write_text(json.dumps(data, indent=2) + '\n')
+
+          ps_path = Path('scripts/pr-scope-check.ps1')
+          text = ps_path.read_text()
+          start = text.index('function Get-PrChangedPaths {')
+          end = text.index('$prPaths = @(Get-PrChangedPaths', start)
+          replacement = r'''function Get-PrChangedPaths {
+              param(
+                  [string]$Repository,
+                  [int]$PrNumber,
+                  [string]$WorkingDirectory
+              )
+
+              $pageSize = 100
+              $maxPages = 30
+              $page = 1
+              $paths = [System.Collections.Generic.List[string]]::new()
+
+              while ($true) {
+                  $endpoint = "repos/$Repository/pulls/$PrNumber/files?per_page=$pageSize&page=$page"
+                  $filesRead = Invoke-GhSignalJsonCommand `
+                      -Arguments @('api', $endpoint, '--jq', '[.[].filename]') `
+                      -ExpectedRoot 'array' `
+                      -WorkingDirectory $WorkingDirectory
+                  if (-not $filesRead.ok) {
+                      Write-Error "failed to enumerate PR files page $page for PR #${PrNumber}: $(Format-GhSignalFailureDetail -Result $filesRead)"
+                  }
+
+                  $pagePaths = @($filesRead.value)
+                  foreach ($filenameValue in $pagePaths) {
+                      $filename = [string]$filenameValue
+                      if ([string]::IsNullOrWhiteSpace($filename)) {
+                          Write-Error "PR files response contained an entry without filename for PR #$PrNumber on page $page"
+                      }
+                      $paths.Add($filename)
+                  }
+
+                  if ($pagePaths.Count -lt $pageSize) {
+                      break
+                  }
+                  if ($page -ge $maxPages) {
+                      Write-Error "PR files response reached the 3000-file API ceiling for PR #$PrNumber; refusing a possibly truncated scope"
+                  }
+                  $page += 1
+              }
+
+              return @($paths)
+          }
+
+          '''
+          ps_path.write_text(text[:start] + replacement + text[end:])
+
+          test_path = Path('scripts/pr-scope-check.test.ts')
+          test = test_path.read_text()
+          old = '''  it('enumerates all PR file pages and fails closed on malformed entries', () => {
+              const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');
+              expect(ps1).not.toContain('gh pr diff');
+              expect(ps1).toContain("pulls/$PrNumber/files?per_page=100");
+              expect(ps1).toContain("'--paginate'");
+              expect(ps1).toContain('foreach ($entry in @($filesRead.value))');
+              expect(ps1).toContain('$paths.Add($filename)');
+              expect(ps1).toContain('if (-not $filesRead.ok)');
+              expect(ps1).toContain('Format-GhSignalFailureDetail -Result $filesRead');
+              expect(ps1).toContain('[string]::IsNullOrWhiteSpace($filename)');
+              expect(ps1).toContain('entry without filename');
+            });
+          '''
+          new = '''  it('enumerates compact filename-only pages and fails closed at every boundary', () => {
+              const ps1 = readFileSync(join('scripts', 'pr-scope-check.ps1'), 'utf8');
+              expect(ps1).not.toContain('gh pr diff');
+              expect(ps1).not.toContain("'--paginate'");
+              expect(ps1).toContain('files?per_page=$pageSize&page=$page');
+              expect(ps1).toContain("'--jq', '[.[].filename]'");
+              expect(ps1).toContain("-ExpectedRoot 'array'");
+              expect(ps1).toContain('$pagePaths = @($filesRead.value)');
+              expect(ps1).toContain('if ($pagePaths.Count -lt $pageSize)');
+              expect(ps1).toContain('$page += 1');
+              expect(ps1).toContain('$maxPages = 30');
+              expect(ps1).toContain('3000-file API ceiling');
+              expect(ps1).toContain('if (-not $filesRead.ok)');
+              expect(ps1).toContain('Format-GhSignalFailureDetail -Result $filesRead');
+              expect(ps1).toContain('[string]::IsNullOrWhiteSpace($filename)');
+              expect(ps1).toContain('entry without filename');
+            });
+          '''
+          if old not in test:
+              raise SystemExit('scope pagination regression block drifted')
+          test_path.write_text(test.replace(old, new, 1))
           PY
 
-          node scripts/estate-cut/capture-base-anchor.mjs
-          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --apply --write --check
-
-          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
+          gh api "repos/${GITHUB_REPOSITORY}/issues/912" --jq .body > /tmp/issue-912-body.md
           node --experimental-strip-types --input-type=module <<'NODE'
           import { createHash } from 'node:crypto';
-          import { execFileSync } from 'node:child_process';
           import { readFileSync, writeFileSync } from 'node:fs';
           import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
 
-          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
-          const constraints = parseIssueBody(readFileSync('/tmp/issue-906-body.md', 'utf8'));
-          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
-          const splitZero = (value) => value.split('\0').filter(Boolean).map((entry) => entry.replaceAll('\\', '/'));
-          const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
-          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
-          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
-          const declaredPaths = [...new Set([...changed, ...untracked])]
-            .filter((entry) => !control.has(entry))
-            .sort();
+          const declaredPaths = ['scripts/pr-scope-check.ps1', 'scripts/pr-scope-check.test.ts'];
+          const constraints = parseIssueBody(readFileSync('/tmp/issue-912-body.md', 'utf8'));
           const payload = {
             declared_paths: declaredPaths,
             declared_globs: [],
@@ -91,42 +139,47 @@ jobs:
           };
           if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
           const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
-          const snapshot = JSON.parse(readFileSync('docs/declarations/906.chatgpt-estate-cut.json', 'utf8'));
-          snapshot.created_at = new Date().toISOString();
-          snapshot.baseline = {
-            commit_sha: baseCommitSha,
-            worktree_dirty: false,
-            active_scope_hash: activeScopeHash,
+          const snapshot = {
+            issue_number: 912,
+            iteration_id: 'compact-filename-pages',
+            iteration_id_source: 'wrapper_generated',
+            supersedes: null,
+            created_at: new Date().toISOString(),
+            baseline: {
+              commit_sha: '27166b6b3d9bf8c887514c638981e26a5e3a6a43',
+              worktree_dirty: false,
+              active_scope_hash: activeScopeHash,
+            },
+            declared_paths: declaredPaths,
+            declared_globs: [],
+            amendments: [],
           };
-          snapshot.declared_paths = declaredPaths;
-          snapshot.declared_globs = [];
-          snapshot.amendments = [];
-          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
+          writeFileSync('docs/declarations/912.compact-filename-pages.json', `${JSON.stringify(snapshot, null, 2)}\n`);
           NODE
 
-          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
-          git add -A
-          git commit -m "merge: adopt scope pagination prerequisite for issue 906"
-
-      - name: Validate committed estate cut
+      - name: Validate compact pagination
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -z "$(git status --porcelain)"
-          npm run estate-cut:check
+          node scripts/run-vitest-with-harness.mjs run scripts/pr-scope-check.test.ts
           npm run typecheck:foundation
           npm run lint:foundation
-          npm run gate-runner-selftest
-          npm run test:issue-906
-          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
-          npm run test:foundation
-          npm test
-          git diff --check HEAD^
-          grep -q "pulls/\$PrNumber/files?per_page=100" scripts/pr-scope-check.ps1
-          test ! -e scripts/pr-scope-check.test.ts
+          pwsh -NoProfile -Command "[void][scriptblock]::Create((Get-Content -LiteralPath './scripts/pr-scope-check.ps1' -Raw))"
+          gh api 'repos/chetwerikoff/orchestrator-pack/pulls/907/files?per_page=100&page=1' --jq '[.[].filename]' > /tmp/page1.json
+          gh api 'repos/chetwerikoff/orchestrator-pack/pulls/907/files?per_page=100&page=4' --jq '[.[].filename]' > /tmp/page4.json
+          jq -e 'type == "array" and length == 100 and all(.[]; type == "string" and length > 0)' /tmp/page1.json
+          jq -e 'type == "array" and length > 0 and length < 100 and all(.[]; type == "string" and length > 0)' /tmp/page4.json
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          git diff --check
 
-      - name: Publish updated estate cut
+      - name: Publish prerequisite
         shell: bash
         run: |
           set -euo pipefail
-          git push origin HEAD:agent/issue-906-estate-cut
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/declarations/912.compact-filename-pages.json scripts/pr-scope-check.ps1 scripts/pr-scope-check.test.ts
+          git commit -m "fix: bound scope pagination to compact filename pages"
+          git push origin HEAD:fix/issue-912-compact-pr-file-pages
