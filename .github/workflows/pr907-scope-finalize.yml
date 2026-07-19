@@ -15,7 +15,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,14 +27,15 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
 
-      - name: Retain branch-protected governance guard
+      - name: Build retained-guard candidate
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-
           git checkout origin/main -- \
             .github/workflows/contract-evidence-legacy-list-guard.yml \
             scripts/run-contract-evidence-legacy-list-guard.mjs \
@@ -43,7 +44,6 @@ jobs:
 
           python - <<'PY'
           from pathlib import Path
-
           path = Path('scripts/estate-cut/manifest-generator.mjs')
           text = path.read_text()
           text = text.replace("  '.github/workflows/contract-evidence-legacy-list-guard.yml',\n", '')
@@ -51,122 +51,33 @@ jobs:
           marker = "const SHARED_TEST_SURVIVORS = new Set([\n"
           entry = "  'scripts/contract-evidence-legacy-list-guard.test.ts',\n"
           if entry not in text:
-              if marker not in text:
-                  raise SystemExit('shared-test survivor marker missing')
               text = text.replace(marker, marker + entry, 1)
           path.write_text(text)
-
-          doc = Path('docs/issue-906-operator-adoption.md')
-          body = doc.read_text()
-          paragraph = (
-              'The branch-protected contract-evidence legacy-list anti-tamper guard remains '
-              'governance keep-core in PR 1. Retiring that guard requires a separate maintainer-owned '
-              'branch-protection and trust-root change; an ordinary estate-cut PR must not delete or '
-              'self-authorize it.\n\n'
-          )
-          anchor = 'The surviving supervisor entry point remains'
-          if paragraph not in body:
-              if anchor not in body:
-                  raise SystemExit('operator-adoption insertion anchor missing')
-              body = body.replace(anchor, paragraph + anchor, 1)
-          doc.write_text(body)
           PY
 
-      - name: Rebuild manifest and declaration
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
-          gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > /tmp/issue-906-body.md
-          node --experimental-strip-types --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { execFileSync } from 'node:child_process';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import { parseIssueBody } from './plugins/_shared/lib/issue_parser.ts';
-          const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.config.json', 'utf8')).baseCommitSha;
-          const constraints = parseIssueBody(readFileSync('/tmp/issue-906-body.md', 'utf8'));
-          const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
-          const splitZero = (value) => value.split('\0').filter(Boolean).map((value) => value.replaceAll('\\', '/'));
-          const changed = splitZero(runGit(['diff', '--name-only', '-z', 'origin/main', '--']));
-          const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
-          const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
-          const declaredPaths = [...new Set([...changed, ...untracked])].filter((path) => !control.has(path)).sort();
-          const payload = { declared_paths: declaredPaths, declared_globs: [], issue_denylist: [...constraints.denylist].sort() };
-          if (constraints.allowed_roots !== undefined) payload.issue_allowed_roots = [...constraints.allowed_roots].sort();
-          const activeScopeHash = `sha256:${createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')}`;
-          const snapshot = JSON.parse(readFileSync('docs/declarations/906.chatgpt-estate-cut.json', 'utf8'));
-          snapshot.created_at = new Date().toISOString();
-          snapshot.baseline = { commit_sha: baseCommitSha, worktree_dirty: false, active_scope_hash: activeScopeHash };
-          snapshot.declared_paths = declaredPaths;
-          snapshot.declared_globs = [];
-          snapshot.amendments = [];
-          writeFileSync('docs/declarations/906.chatgpt-estate-cut.json', `${JSON.stringify(snapshot, null, 2)}\n`);
-          NODE
           node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
 
-          git add -A
-          if ! git diff --cached --quiet; then
-            git commit -m "fix: retain branch-protected legacy-list guard"
-          fi
-
-      - name: Validate estate-cut contract
+      - name: Capture foundation policy lint
+        id: policy
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          npm run estate-cut:check
-          npm run test:issue-906
+          set -o pipefail
+          npm run lint:foundation 2>&1 | tee policy-lint.log
 
-      - name: Validate trusted legacy-list guard
+      - name: Upload policy lint diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr907-policy-lint
+          path: policy-lint.log
+          if-no-files-found: error
+
+      - name: Fail on policy lint
+        if: steps.policy.outcome != 'success'
         shell: bash
         run: |
-          set -euo pipefail
-          git worktree add --detach /tmp/pr907-trusted-main origin/main
-          LEGACY_LIST_GUARD_BASE_SHA="$(git rev-parse origin/main)" \
-          LEGACY_LIST_GUARD_HEAD_SHA="$(git rev-parse HEAD)" \
-          LEGACY_LIST_GUARD_REPO_ROOT="$PWD" \
-          LEGACY_LIST_GUARD_TRUSTED_ROOT="/tmp/pr907-trusted-main" \
-            node /tmp/pr907-trusted-main/scripts/run-contract-evidence-legacy-list-guard.mjs
-          git worktree remove --force /tmp/pr907-trusted-main
+          cat policy-lint.log
+          exit 1
 
-      - name: Validate foundation typecheck
-        shell: bash
-        run: npm run typecheck:foundation
-
-      - name: Validate foundation policy lint
-        shell: bash
-        run: npm run lint:foundation
-
-      - name: Validate gate-runner selftest
-        shell: bash
-        run: npm run gate-runner-selftest
-
-      - name: Validate foundation tests
-        shell: bash
-        run: npm run test:foundation
-
-      - name: Validate full regression
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm test
-          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
-          pwsh -NoProfile -File ./scripts/check-reusable.ps1
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
-
-      - name: Validate clean candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check
-          git status --short
-          test -z "$(git status --porcelain)"
-
-      - name: Publish corrected PR 907 tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:agent/issue-906-estate-cut
-
-# Trigger: restore retained guard raw-child-process baseline.
+# Trigger: capture retained-guard policy lint diagnostics.
