@@ -1,53 +1,126 @@
 name: pr907-required-checks
 
 on:
-  push:
-    branches:
-      - diag/pr907-required-checks
   pull_request:
     branches:
       - main
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: pr907-legacy-guard-finalizer
+  cancel-in-progress: true
 
 jobs:
-  diagnose:
+  finalize:
+    if: github.head_ref == 'diag/pr907-required-checks'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-906-estate-cut
+          path: target
           fetch-depth: 0
-      - name: Inspect manifest objects
+      - uses: actions/checkout@v4
+        with:
+          ref: 42f3183bc334febd21c33ab2a053a8a0d8c6736e
+          path: trusted
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        working-directory: target
+        run: npm ci --ignore-scripts
+      - name: Retain governed legacy-list guard closure
+        working-directory: target
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY' > "$RUNNER_TEMP/pr907-manifest-objects.txt"
-          import json
+          python - <<'PY'
           from pathlib import Path
-          targets = {
+
+          surface = [
               'scripts/run-contract-evidence-legacy-list-guard.mjs',
               'scripts/contract-evidence-legacy-list-guard.test.ts',
               '.github/workflows/contract-evidence-legacy-list-guard.yml',
-          }
-          data = json.loads(Path('scripts/estate-cut/issue-906.manifest.json').read_text())
-          def walk(value, trail='$'):
-              if isinstance(value, dict):
-                  if value.get('path') in targets:
-                      print(trail)
-                      print(json.dumps(value, indent=2, sort_keys=True))
-                  for key, child in value.items():
-                      walk(child, f'{trail}.{key}')
-              elif isinstance(value, list):
-                  for index, child in enumerate(value):
-                      walk(child, f'{trail}[{index}]')
-          walk(data)
+          ]
+          surface_array = "const LEGACY_LIST_GUARD_SURFACE = [\n" + ''.join(f"  '{p}',\n" for p in surface) + "];\n\n"
+          surface_set = "const LEGACY_LIST_GUARD_SURFACE = new Set([\n" + ''.join(f"  '{p}',\n" for p in surface) + "]);\n"
+
+          capture_path = Path('scripts/estate-cut/capture-base-anchor.mjs')
+          capture = capture_path.read_text()
+          if 'const LEGACY_LIST_GUARD_SURFACE = [' not in capture:
+              capture = capture.replace('const KEEP_CORE_PATHS = [\n', surface_array + 'const KEEP_CORE_PATHS = [\n', 1)
+          if 'const KEEP_CORE_PATHS = [\n  ...LEGACY_LIST_GUARD_SURFACE,' not in capture:
+              capture = capture.replace('const KEEP_CORE_PATHS = [\n', 'const KEEP_CORE_PATHS = [\n  ...LEGACY_LIST_GUARD_SURFACE,\n', 1)
+          old_safety = "  'safety-plugins': [\n    'plugins/ao-scope-guard',\n    'plugins/ao-codex-pr-reviewer',\n  ],"
+          new_safety = "  'safety-plugins': [\n    'plugins/ao-scope-guard',\n    'plugins/ao-codex-pr-reviewer',\n    ...LEGACY_LIST_GUARD_SURFACE,\n  ],"
+          if '...LEGACY_LIST_GUARD_SURFACE' not in capture.split("'safety-plugins':", 1)[1]:
+              if old_safety not in capture:
+                  raise SystemExit('capture safety-plugin block not found')
+              capture = capture.replace(old_safety, new_safety, 1)
+          capture_path.write_text(capture)
+
+          generator_path = Path('scripts/estate-cut/manifest-generator.mjs')
+          generator = generator_path.read_text()
+          if 'const LEGACY_LIST_GUARD_SURFACE = new Set([' not in generator:
+              generator = generator.replace('const PINNED_LEGACY_SUBJECTS = new Set([\n', surface_set + 'const PINNED_LEGACY_SUBJECTS = new Set([\n', 1)
+          generator = generator.replace("  '.github/workflows/contract-evidence-legacy-list-guard.yml',\n", '')
+          generator = generator.replace("  'scripts/run-contract-evidence-legacy-list-guard.mjs',\n", '')
+          category_needle = 'function pathCategory(rel, rootClosure, dynamicHeld) {\n'
+          category_line = "  if (LEGACY_LIST_GUARD_SURFACE.has(rel)) return 'D';\n"
+          if category_line not in generator:
+              if category_needle not in generator:
+                  raise SystemExit('pathCategory function not found')
+              generator = generator.replace(category_needle, category_needle + category_line, 1)
+          generator_path.write_text(generator)
           PY
-          cat "$RUNNER_TEMP/pr907-manifest-objects.txt"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr907-manifest-objects
-          path: ${{ runner.temp }}/pr907-manifest-objects.txt
-          retention-days: 1
+
+          git checkout 42f3183bc334febd21c33ab2a053a8a0d8c6736e -- \
+            scripts/run-contract-evidence-legacy-list-guard.mjs \
+            scripts/contract-evidence-legacy-list-guard.test.ts \
+            .github/workflows/contract-evidence-legacy-list-guard.yml
+          node scripts/estate-cut/capture-base-anchor.mjs
+          node scripts/estate-cut/manifest-generator.mjs --apply --write --check
+          git diff --check
+
+      - name: Commit final tree locally
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: retain governed legacy-list guard closure"
+
+      - name: Validate final commit
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run estate-cut:check
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run gate-runner-selftest
+          npm run test:issue-906
+          npm run test:foundation
+          npm test
+          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          LEGACY_LIST_GUARD_BASE_SHA=42f3183bc334febd21c33ab2a053a8a0d8c6736e \
+          LEGACY_LIST_GUARD_HEAD_SHA="$(git rev-parse HEAD)" \
+          LEGACY_LIST_GUARD_REPO_ROOT="$GITHUB_WORKSPACE/target" \
+          LEGACY_LIST_GUARD_TRUSTED_ROOT="$GITHUB_WORKSPACE/trusted" \
+            node "$GITHUB_WORKSPACE/trusted/scripts/run-contract-evidence-legacy-list-guard.mjs"
+          git diff --check HEAD^
+
+      - name: Publish PR 907 fix
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:agent/issue-906-estate-cut
