@@ -36,7 +36,7 @@ Representative failures are deterministic:
 - `OPK_NODE_RUNTIME_UNSUPPORTED`
 - `OPK_NODE_RUNTIME_MISSING` from a PowerShell bridge when `node` is absent
 
-These failures occur before a TypeScript target or external effect runs.
+These failures occur before a TypeScript target or external effect runs. CI jobs and operator processes must inherit Node 22 through their configured environment; the bridge does not search a runner toolcache or rewrite `PATH` to hide an unsupported parent runtime.
 
 ## Production-shaped bridge proof
 
