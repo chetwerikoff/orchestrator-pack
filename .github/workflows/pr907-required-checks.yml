@@ -9,7 +9,6 @@ on:
       - main
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
@@ -17,16 +16,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Download failing legacy guard log
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-906-estate-cut
+          fetch-depth: 0
+      - name: Inspect classification records
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/88164007326/logs" > "$RUNNER_TEMP/pr907-legacy-guard.log"
-          tail -n 250 "$RUNNER_TEMP/pr907-legacy-guard.log"
+          out="$RUNNER_TEMP/pr907-legacy-classification.txt"
+          {
+            echo 'run-contract entrypoint'
+            grep -n -F 'scripts/run-contract-evidence-legacy-list-guard.mjs' scripts/estate-cut/issue-906.manifest.json scripts/estate-cut/issue-906.config.json || true
+            echo 'legacy guard test'
+            grep -n -F 'scripts/contract-evidence-legacy-list-guard.test.ts' scripts/estate-cut/issue-906.manifest.json scripts/estate-cut/issue-906.config.json || true
+            echo 'legacy guard workflow'
+            grep -n -F '.github/workflows/contract-evidence-legacy-list-guard.yml' scripts/estate-cut/issue-906.manifest.json scripts/estate-cut/issue-906.config.json || true
+            echo 'config'
+            cat scripts/estate-cut/issue-906.config.json
+          } | tee "$out"
       - uses: actions/upload-artifact@v4
         with:
-          name: pr907-legacy-guard-log
-          path: ${{ runner.temp }}/pr907-legacy-guard.log
+          name: pr907-legacy-classification
+          path: ${{ runner.temp }}/pr907-legacy-classification.txt
           retention-days: 1
