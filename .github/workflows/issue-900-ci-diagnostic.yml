@@ -21,7 +21,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Capture policy and foundation test output
+      - name: Capture policy, tests, and launch inventory evidence
         shell: bash
         run: |
           set +e
@@ -29,6 +29,8 @@ jobs:
           policy_exit=$?
           npm run test:foundation > issue-900-tests.log 2>&1
           tests_exit=$?
+          grep -RInE --exclude-dir=node_modules --exclude-dir=.git -- '(--import[[:space:]]+tsx|--loader|ts-node|typescript-loader\.mjs|node[^[:cntrl:]]+\.[cm]?ts)' package.json scripts docs plugins tests > issue-900-launch-grep.log 2>&1 || true
+          cp scripts/estate-cut/issue-906.manifest.json issue-900-estate-manifest.json
           printf 'policy_exit=%s\ntests_exit=%s\n' "$policy_exit" "$tests_exit" > issue-900-summary.txt
           exit 0
       - name: Upload diagnostic logs
@@ -39,5 +41,7 @@ jobs:
           path: |
             issue-900-policy.log
             issue-900-tests.log
+            issue-900-launch-grep.log
+            issue-900-estate-manifest.json
             issue-900-summary.txt
           if-no-files-found: error
