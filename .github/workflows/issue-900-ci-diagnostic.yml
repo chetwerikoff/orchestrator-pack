@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/issue-900-ci-diagnostic
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
