@@ -1,0 +1,48 @@
+name: pr907-required-checks
+
+on:
+  push:
+    branches:
+      - diag/pr907-required-checks
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  pull-requests: read
+  statuses: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Query PR and commit checks
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: cbcd46e699e4d9bb080c1664fdcfeb309c3f2204
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr907-required-checks.txt"
+          {
+            echo '=== gh pr view ==='
+            gh pr view 907 --repo "$GITHUB_REPOSITORY" --json headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup
+            echo
+            echo '=== check-runs ==='
+            gh api "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100" --jq '.check_runs[] | [.name,.status,.conclusion,.app.slug] | @tsv'
+            echo
+            echo '=== commit statuses ==='
+            gh api "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/status" --jq '.statuses[] | [.context,.state,.description,.creator.login] | @tsv'
+            echo
+            echo '=== required status checks ==='
+            gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" || true
+          } | tee "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr907-required-checks
+          path: ${{ runner.temp }}/pr907-required-checks.txt
+          retention-days: 1
