@@ -15,10 +15,20 @@ git checkout origin/main -- .github/workflows/typescript-foundation.yml \
   plugins/ao-token-chain-ledger/bin/ledger.mjs
 
 gh api "repos/${GITHUB_REPOSITORY}/issues/906" --jq .body > "$ARTIFACT_DIR/issue-906-body.md"
-if ! grep -q 'Issue #906 root-level integration amendment' "$ARTIFACT_DIR/issue-906-body.md"; then
-  echo 'issue-906: required root-level integration amendment is missing from the linked issue body' >&2
-  exit 1
-fi
+ISSUE_BODY="$ARTIFACT_DIR/issue-906-body.md" python - <<'PY'
+from pathlib import Path
+import os
+import re
+
+body = Path(os.environ['ISSUE_BODY']).read_text()
+match = re.search(r'```allowed-roots\n(.*?)\n```', body, flags=re.S)
+if not match:
+    raise SystemExit('issue-906: authoritative allowed-roots block is missing')
+rows = {line.strip() for line in match.group(1).splitlines() if line.strip()}
+missing = {'package.json', 'vitest.config.ts'} - rows
+if missing:
+    raise SystemExit(f"issue-906: authoritative allowed-roots block is missing: {', '.join(sorted(missing))}")
+PY
 
 node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --write --check
 ISSUE_BODY="$ARTIFACT_DIR/issue-906-body.md" node --experimental-strip-types --input-type=module <<'NODE'
@@ -31,7 +41,7 @@ const baseCommitSha = JSON.parse(readFileSync('scripts/estate-cut/issue-906.conf
 const constraints = parseIssueBody(readFileSync(process.env.ISSUE_BODY, 'utf8'));
 const runGit = (args) => execFileSync('git', args, { encoding: 'utf8' });
 const splitZero = (value) => value.split('\0').filter(Boolean).map((value) => value.replaceAll('\\', '/'));
-const changed = splitZero(runGit(['diff', '--name-only', '-z', baseCommitSha, '--']));
+const changed = splitZero(runGit(['diff', '--name-only', '-z', 'origin/main', '--']));
 const untracked = splitZero(runGit(['ls-files', '--others', '--exclude-standard', '-z']));
 const control = new Set(['docs/declarations/906.chatgpt-estate-cut.json']);
 const declaredPaths = [...new Set([...changed, ...untracked])].filter((path) => !control.has(path)).sort();
