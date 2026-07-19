@@ -15,7 +15,7 @@
     "check:typescript-runtime": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-typescript-runtime-policy.ts",
     "check:pwsh-test-growth": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
     "test:foundation": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts",
-    "test:issue-900": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/node22-runtime-policy.test.ts",
+    "test:issue-900": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/node22-runtime-policy.spec.ts",
     "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
     "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",
     "estate-cut:check": "npm run check:node-major --silent && node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --check",
