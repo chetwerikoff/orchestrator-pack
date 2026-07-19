@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "issue": 906,
   "generatedBy": "scripts/estate-cut/manifest-generator.mjs",
-  "baseCommitSha": "f10fd0051dd28f4cea865e4859b495e369219698",
+  "baseCommitSha": "27166b6b3d9bf8c887514c638981e26a5e3a6a43",
   "objectiveStateDomain": [
     "deleted-now",
     "kept",
@@ -20,107 +20,107 @@
       {
         "category": "CI",
         "path": ".github/workflows/scope-guard.yml",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "CI",
         "path": ".github/workflows/typescript-foundation.yml",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "CI",
         "path": "scripts/check-ci-cheap-wins.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "CI",
         "path": "scripts/check-ci-pipeline-split.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "CI",
         "path": "scripts/check-reusable.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "CI",
         "path": "scripts/check-verify-runtime.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "CI",
         "path": "scripts/verify.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "operator-recovery",
         "path": "docs/orchestrator-recovery-runbook.md",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "operator-recovery",
         "path": "docs/wake-supervisor-fleet-operator-reference.md",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "operator-recovery",
         "path": "scripts/orchestrator-escalation-router.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "operator-recovery",
         "path": "scripts/orchestrator-wake-supervisor.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "operator-recovery",
         "path": "scripts/review-start-claim-reaper.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "docs/review-head-ready.mjs",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "docs/review-producer-contract.mjs",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "docs/review-trigger-reconcile.mjs",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "scripts/invoke-pack-review.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "scripts/orchestrator-wake-supervisor.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "scripts/pack-review-runner.ts",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "scripts/review-ready-report-state-seed.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "scripts/review-trigger-reconcile.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       },
       {
         "category": "target-review-cycle",
         "path": "scripts/review-trigger-reeval.ps1",
-        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ f10fd0051dd28f4cea865e4859b495e369219698"
+        "evidence": "scripts/estate-cut/issue-906.base-anchor.json @ 27166b6b3d9bf8c887514c638981e26a5e3a6a43"
       }
     ],
     "rejectedRules": [
@@ -29756,7 +29756,7 @@
       "tests/worker-status-store-issue854.test.ts",
       "vitest.config.ts"
     ],
-    "rowCount": 2616
+    "rowCount": 2617
   },
   "rows": [
     {
@@ -33025,6 +33025,13 @@
       "baseTracked": false,
       "terminalState": "pr1-artifact",
       "reason": "Issue #906 generated implementation artifact"
+    },
+    {
+      "path": "docs/declarations/908.scope-pagination.json",
+      "baseTracked": true,
+      "terminalState": "kept",
+      "keepCategory": "G",
+      "reason": "keep-core tests, shared fixtures, and repository governance"
     },
     {
       "path": "docs/declarations/91.architect-91.json",

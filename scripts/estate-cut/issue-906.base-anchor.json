@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "issue": 906,
   "generatedBy": "scripts/estate-cut/capture-base-anchor.mjs",
-  "baseCommitSha": "f10fd0051dd28f4cea865e4859b495e369219698",
+  "baseCommitSha": "27166b6b3d9bf8c887514c638981e26a5e3a6a43",
   "keepCategories": {
     "C": "target-review-cycle and protected runtime kernel",
     "D": "CI, operator recovery, and safety-plugin roots",

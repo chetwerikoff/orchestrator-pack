@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "issue": 906,
-  "baseCommitSha": "f10fd0051dd28f4cea865e4859b495e369219698",
+  "baseCommitSha": "27166b6b3d9bf8c887514c638981e26a5e3a6a43",
   "pr2Owner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
   "keepCategories": {
     "C": "target-review-cycle and protected runtime kernel",

@@ -218,10 +218,33 @@ if ($isFork -and $issueReadFailed) {
     }
 }
 
-$prPaths = @(gh pr diff $prNumber --name-only)
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "gh pr diff failed for PR #$prNumber"
+function Get-PrChangedPaths {
+    param(
+        [string]$Repository,
+        [int]$PrNumber,
+        [string]$WorkingDirectory
+    )
+
+    $filesRead = Invoke-GhSignalJsonCommand `
+        -Arguments @('api', "repos/$Repository/pulls/$PrNumber/files?per_page=100", '--paginate') `
+        -ExpectedRoot 'array' `
+        -WorkingDirectory $WorkingDirectory
+    if (-not $filesRead.ok) {
+        Write-Error "failed to enumerate PR files for PR #${PrNumber}: $(Format-GhSignalFailureDetail -Result $filesRead)"
+    }
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in @($filesRead.value)) {
+        $filename = [string]$entry.filename
+        if ([string]::IsNullOrWhiteSpace($filename)) {
+            Write-Error "PR files response contained an entry without filename for PR #$PrNumber"
+        }
+        $paths.Add($filename)
+    }
+    return @($paths)
 }
+
+$prPaths = @(Get-PrChangedPaths -Repository $repository -PrNumber $prNumber -WorkingDirectory $TrustedRoot)
 
 $operatorAdoptionCheck = Join-Path $PSScriptRoot 'check-operator-adoption-example.ps1'
 if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
