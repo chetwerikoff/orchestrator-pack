@@ -70,7 +70,8 @@
     "scripts/review-wake-trigger.test.ts": "heavy",
     "scripts/session-pr-binding-resolver.test.ts": "light",
     "scripts/session-runtime-liveness.test.ts": "heavy",
-    "scripts/worker-message-submit-reconcile.test.ts": "heavy"
+    "scripts/worker-message-submit-reconcile.test.ts": "heavy",
+    "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

@@ -1,0 +1,44 @@
+# Trusted enforcement for Issue #377 — runs from the merge-base workflow definition
+# (pull_request_target), so ordinary PRs cannot replace job steps with a no-op.
+name: contract-evidence-legacy-list-guard
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  contract-evidence-legacy-list-guard:
+    name: Contract evidence legacy list guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Checkout trusted legacy list guard (base ref)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-legacy-list-guard
+
+      - name: Run legacy list guard from trusted entrypoint
+        shell: bash
+        env:
+          LEGACY_LIST_GUARD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LEGACY_LIST_GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEGACY_LIST_GUARD_REPO_ROOT: ${{ github.workspace }}
+          LEGACY_LIST_GUARD_TRUSTED_ROOT: ${{ github.workspace }}/trusted-legacy-list-guard
+        run: |
+          set -euo pipefail
+          TRUSTED_ROOT="$LEGACY_LIST_GUARD_TRUSTED_ROOT"
+          ENTRY="$TRUSTED_ROOT/scripts/run-contract-evidence-legacy-list-guard.mjs"
+          if [ ! -f "$ENTRY" ]; then
+            echo "legacy-list guard bootstrap: trusted entrypoint absent on base; using head copy for fixture/e2e only"
+            ENTRY="$LEGACY_LIST_GUARD_REPO_ROOT/scripts/run-contract-evidence-legacy-list-guard.mjs"
+          fi
+          node "$ENTRY"

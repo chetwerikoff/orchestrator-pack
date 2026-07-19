@@ -37,11 +37,18 @@
       "scripts/review-start-claim-reaper.ps1"
     ],
     "safety-plugins": [
+      ".github/workflows/contract-evidence-legacy-list-guard.yml",
       "plugins/ao-codex-pr-reviewer",
-      "plugins/ao-scope-guard"
+      "plugins/ao-scope-guard",
+      "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "scripts/run-contract-evidence-legacy-list-guard.mjs"
     ]
   },
   "protectedPaths": [
+    {
+      "path": ".github/workflows/contract-evidence-legacy-list-guard.yml",
+      "sha256": "cc7a3ad48bb202ff92fdaa7729c1bef0026a6e44de21ba343fac8dfc24dcee90"
+    },
     {
       "path": "agent-orchestrator.yaml.example",
       "sha256": "031a85c2fa4e8e872319626c7700aa92025d3331bd4cc9dfe67ebcf639abe26c"
@@ -73,6 +80,10 @@
     {
       "path": "docs/session-pr-binding-resolver.mjs",
       "sha256": "3e6a76903e8a807bdcfec5ea92c521fda3a31b2713ce880da43275ad7910b82a"
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "sha256": "ffa8aa5991f9ef4d175c05dccd95c7e9a5bfa8b63f9358b993661dceab414941"
     },
     {
       "path": "scripts/gate-runner/bulk-declarative-gates.test.ts",
@@ -265,6 +276,10 @@
     {
       "path": "scripts/review-wake-trigger.test.ts",
       "sha256": "64176ba0f613b76c1a696b2f0820ae7736c6fb5fa614af61eb72b84dc63ea3c4"
+    },
+    {
+      "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "sha256": "d2a01f159691b10772d8e74c363ab61da8fa2e8fe34116190f42ec300f48bd12"
     },
     {
       "path": "scripts/session-pr-binding-resolver.test.ts",

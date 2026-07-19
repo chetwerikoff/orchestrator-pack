@@ -51,6 +51,7 @@
     "scripts/review-wake-trigger.test.ts",
     "scripts/session-pr-binding-resolver.test.ts",
     "scripts/session-runtime-liveness.test.ts",
-    "scripts/worker-message-submit-reconcile.test.ts"
+    "scripts/worker-message-submit-reconcile.test.ts",
+    "scripts/contract-evidence-legacy-list-guard.test.ts"
   ]
 }

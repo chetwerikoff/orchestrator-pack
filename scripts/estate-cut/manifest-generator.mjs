@@ -20,6 +20,11 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const config = JSON.parse(readFileSync(path.join(repoRoot, CONFIG), 'utf8'));
 const anchor = JSON.parse(readFileSync(path.join(repoRoot, ANCHOR), 'utf8'));
 
+const LEGACY_LIST_GUARD_SURFACE = new Set([
+  'scripts/run-contract-evidence-legacy-list-guard.mjs',
+  'scripts/contract-evidence-legacy-list-guard.test.ts',
+  '.github/workflows/contract-evidence-legacy-list-guard.yml',
+]);
 const PINNED_LEGACY_SUBJECTS = new Set([
   'scripts/check-ao-cli-argv-shape.ps1',
   'scripts/check-ao-dead-argv-bypass.ps1',
@@ -66,8 +71,6 @@ const PR2_OWNED = new Set([
   'scripts/reaction-config-messages.mjs',
 ]);
 const EXPLICIT_DELETE = new Set([
-  '.github/workflows/contract-evidence-legacy-list-guard.yml',
-  'scripts/run-contract-evidence-legacy-list-guard.mjs',
   'scripts/review-send-reconcile.ps1',
   'scripts/json-producers/retired-surfaces.json',
   'docs/ao-reviews-board-runbook.md',
@@ -158,6 +161,7 @@ async function buildReachabilityWithoutGeneratedManifest() {
   }
 }
 function pathCategory(rel, rootClosure, dynamicHeld) {
+  if (LEGACY_LIST_GUARD_SURFACE.has(rel)) return 'D';
   if (anchor.keepCoreTests.includes(rel) || rel.startsWith('scripts/gate-runner/') || rel.startsWith('scripts/kernel/')) return 'G';
   if (rel.startsWith('plugins/ao-scope-guard/') || rel.startsWith('plugins/ao-codex-pr-reviewer/') || rel.startsWith('.github/workflows/')) return 'D';
   if (dynamicHeld.has(rel)) return 'D';
@@ -287,6 +291,37 @@ function transformCensus(census, deletedSet, retainedVerifyInlineIds) {
     return next;
   });
   return { census: { ...census, entries }, counts: { retired, pinned, total: retired + pinned } };
+}
+function containsRestoredInventoryPath(value) {
+  if (typeof value === 'string') return LEGACY_LIST_GUARD_SURFACE.has(normalize(value));
+  if (Array.isArray(value)) return value.some((entry) => containsRestoredInventoryPath(entry));
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, entry]) => LEGACY_LIST_GUARD_SURFACE.has(normalize(key)) || containsRestoredInventoryPath(entry));
+  }
+  return false;
+}
+function mergeRestoredInventoryEntries(currentValue, baseValue) {
+  if (Array.isArray(currentValue) && Array.isArray(baseValue)) {
+    const merged = [...currentValue];
+    const seen = new Set(currentValue.map((entry) => JSON.stringify(entry)));
+    for (const entry of baseValue) {
+      const identity = JSON.stringify(entry);
+      if (containsRestoredInventoryPath(entry) && !seen.has(identity)) {
+        merged.push(entry);
+        seen.add(identity);
+      }
+    }
+    return merged;
+  }
+  if (currentValue && baseValue && typeof currentValue === 'object' && typeof baseValue === 'object') {
+    const merged = { ...currentValue };
+    for (const [key, entry] of Object.entries(baseValue)) {
+      if (Object.hasOwn(merged, key)) merged[key] = mergeRestoredInventoryEntries(merged[key], entry);
+      else if (LEGACY_LIST_GUARD_SURFACE.has(normalize(key)) || containsRestoredInventoryPath(entry)) merged[key] = entry;
+    }
+    return merged;
+  }
+  return currentValue;
 }
 function pruneJsonPathReferences(value, deletedSet) {
   if (Array.isArray(value)) {
@@ -539,7 +574,14 @@ function applyTree({ transformedCensus, deletedSet }) {
     const pruneSet = rel.startsWith('scripts/toolchain/')
       ? new Set([...deletedSet, ...MUTABLE_CUT_TESTS])
       : deletedSet;
-    try { writeFileSync(full, stable(pruneJsonPathReferences(JSON.parse(readFileSync(full, 'utf8')), pruneSet))); } catch { /* non-JSON or unrelated */ }
+    try {
+    const currentJson = JSON.parse(readFileSync(full, 'utf8'));
+    const baseBytes = readAt(config.baseCommitSha, rel);
+    const seededJson = baseBytes
+      ? mergeRestoredInventoryEntries(currentJson, JSON.parse(baseBytes.toString('utf8')))
+      : currentJson;
+    writeFileSync(full, stable(pruneJsonPathReferences(seededJson, pruneSet)));
+  } catch { /* non-JSON or unrelated */ }
   }
 }
 

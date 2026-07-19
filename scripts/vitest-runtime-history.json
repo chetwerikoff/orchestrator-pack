@@ -55,7 +55,8 @@
     "scripts/session-pr-binding-resolver.test.ts": 120000,
     "scripts/session-runtime-liveness.test.ts": 45000,
     "scripts/worker-message-submit-reconcile.test.ts": 70000,
-    "scripts/pr-session-binding-cache.test.ts": 120000
+    "scripts/pr-session-binding-cache.test.ts": 120000,
+    "scripts/contract-evidence-legacy-list-guard.test.ts": 45000
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -109,7 +110,8 @@
     "scripts/review-wake-trigger.test.ts": "measured",
     "scripts/session-pr-binding-resolver.test.ts": "measured",
     "scripts/session-runtime-liveness.test.ts": "measured",
-    "scripts/worker-message-submit-reconcile.test.ts": "measured"
+    "scripts/worker-message-submit-reconcile.test.ts": "measured",
+    "scripts/contract-evidence-legacy-list-guard.test.ts": "measured"
   },
   "recentSamples": {},
   "fileChangedAt": {}

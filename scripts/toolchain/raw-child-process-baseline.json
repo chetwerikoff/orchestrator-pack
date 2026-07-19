@@ -1449,6 +1449,104 @@
       "fingerprint": "493928d23c59ffcaaa0f",
       "ordinal": 1,
       "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "0e1938a92abdd8fafd40",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "417c4f49c26f9c68670f",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "417c4f49c26f9c68670f",
+      "ordinal": 2,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "647881bd28d1f7f57091",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "6653b315d8a312f41257",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "694225ca2fadcbff16e4",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "77342cdfbda72e9870f4",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "781febce11abec30a22a",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "beda6705298b626da4cd",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/contract-evidence-legacy-list-guard.test.ts",
+      "api": "execFileSync",
+      "fingerprint": "f1240a2f905f2b5ccf73",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "api": "execFileSync",
+      "fingerprint": "4687598afe19bc7b3715",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "api": "execFileSync",
+      "fingerprint": "750065fd6c13d2b8bad2",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "api": "execFileSync",
+      "fingerprint": "b3a1074e6d7dc0f49a86",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
+    },
+    {
+      "path": "scripts/run-contract-evidence-legacy-list-guard.mjs",
+      "api": "execFileSync",
+      "fingerprint": "b7562b21ae84409883b7",
+      "ordinal": 1,
+      "justification": "Pre-existing direct child-process call grandfathered by Issue #800; migrate it to the sanctioned kernel when its consumer is ported."
     }
   ]
 }

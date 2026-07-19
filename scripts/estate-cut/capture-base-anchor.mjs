@@ -11,7 +11,14 @@ const CONFIG = 'scripts/estate-cut/issue-906.config.json';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const config = JSON.parse(readFileSync(path.join(repoRoot, CONFIG), 'utf8'));
 
+const LEGACY_LIST_GUARD_SURFACE = [
+  'scripts/run-contract-evidence-legacy-list-guard.mjs',
+  'scripts/contract-evidence-legacy-list-guard.test.ts',
+  '.github/workflows/contract-evidence-legacy-list-guard.yml',
+];
+
 const KEEP_CORE_PATHS = [
+  ...LEGACY_LIST_GUARD_SURFACE,
   'agent-orchestrator.yaml.example',
   'scripts/pack-review-runner.ts',
   'scripts/pack-review-runner.js',
@@ -106,6 +113,7 @@ const ROOT_MEMBERSHIP = {
   'safety-plugins': [
     'plugins/ao-scope-guard',
     'plugins/ao-codex-pr-reviewer',
+    ...LEGACY_LIST_GUARD_SURFACE,
   ],
 };
 
