@@ -110,21 +110,17 @@ jobs:
             git commit -m "fix: retain branch-protected legacy-list guard"
           fi
 
-      - name: Validate corrected target tree
+      - name: Validate estate-cut contract
         shell: bash
         run: |
           set -euo pipefail
           npm run estate-cut:check
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run gate-runner-selftest
           npm run test:issue-906
-          npm run test:foundation
-          npm test
-          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
-          pwsh -NoProfile -File ./scripts/check-reusable.ps1
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
 
+      - name: Validate trusted legacy-list guard
+        shell: bash
+        run: |
+          set -euo pipefail
           git worktree add --detach /tmp/pr907-trusted-main origin/main
           LEGACY_LIST_GUARD_BASE_SHA="$(git rev-parse origin/main)" \
           LEGACY_LIST_GUARD_HEAD_SHA="$(git rev-parse HEAD)" \
@@ -133,6 +129,28 @@ jobs:
             node /tmp/pr907-trusted-main/scripts/run-contract-evidence-legacy-list-guard.mjs
           git worktree remove --force /tmp/pr907-trusted-main
 
+      - name: Validate TypeScript foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run gate-runner-selftest
+          npm run test:foundation
+
+      - name: Validate full regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+          pwsh -NoProfile -File ./scripts/test-all.ps1 -SkipNpm
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
+
+      - name: Validate clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
           git diff --check
           git status --short
           test -z "$(git status --porcelain)"
@@ -143,4 +161,4 @@ jobs:
           set -euo pipefail
           git push origin HEAD:agent/issue-906-estate-cut
 
-# Trigger: retain branch-protected governance guard.
+# Trigger: split validation for branch-protected governance guard.
