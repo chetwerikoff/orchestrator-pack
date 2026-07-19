@@ -1,0 +1,44 @@
+name: update-pr907-from-main
+
+on:
+  push:
+    branches:
+      - ops/manual-pack-review-911-b997f2d
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-906-estate-cut
+          fetch-depth: 0
+      - name: Probe merge with main
+        shell: bash
+        run: |
+          set +e
+          git fetch origin main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-commit --no-ff origin/main > "$RUNNER_TEMP/merge.log" 2>&1
+          code=$?
+          {
+            echo "merge_exit=$code"
+            echo "--- status ---"
+            git status --short
+            echo "--- conflicts ---"
+            git diff --name-only --diff-filter=U
+            echo "--- merge log ---"
+            cat "$RUNNER_TEMP/merge.log"
+          } > "$RUNNER_TEMP/pr907-merge-probe.txt"
+          cat "$RUNNER_TEMP/pr907-merge-probe.txt"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr907-merge-probe
+          path: ${{ runner.temp }}/pr907-merge-probe.txt
+          retention-days: 1
