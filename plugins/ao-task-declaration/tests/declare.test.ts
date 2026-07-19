@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { runProcessSync } from '../../../scripts/kernel/subprocess.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const declareScript = join(
@@ -21,21 +21,15 @@ const workspaceBinScript = join(
 );
 
 function expectHelpFailure(scriptPath: string): void {
-  try {
-    execFileSync(process.execPath, ['--experimental-strip-types', scriptPath, '--help'], {
-      encoding: 'utf8',
-    });
-    throw new Error(`expected ${scriptPath} --help to exit with code 1`);
-  } catch (error) {
-    const execError = error as NodeJS.ErrnoException & {
-      stderr?: string | Buffer;
-      status?: number;
-    };
-    const stderr = String(execError.stderr ?? '');
-    expect(stderr).toContain('Usage: ao-declare');
-    expect(stderr).not.toContain('ERR_INVALID_URL');
-    expect(execError.status).toBe(1);
-  }
+  const result = runProcessSync({
+    command: process.execPath,
+    args: ['--experimental-strip-types', scriptPath, '--help'],
+    inheritParentEnv: true,
+  });
+  expect(result.ok).toBe(false);
+  expect(result.stderr).toContain('Usage: ao-declare');
+  expect(result.stderr).not.toContain('ERR_INVALID_URL');
+  expect(result.exitCode).toBe(1);
 }
 
 describe('declare CLI entrypoint', () => {
