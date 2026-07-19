@@ -47,7 +47,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "3fd8b7e0a4fc55ac6b31831e45a6e92f69d58d4f"
           git apply --check /tmp/issue900-rework.patch
           git apply --index /tmp/issue900-rework.patch
-          test "$(git diff --cached --name-only | wc -l)" -eq 98
+          test "$(git diff --cached --name-only | wc -l)" -eq 97
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
