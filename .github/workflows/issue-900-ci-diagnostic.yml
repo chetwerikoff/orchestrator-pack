@@ -1,0 +1,47 @@
+name: issue-900-ci-diagnostic
+
+on:
+  push:
+    branches:
+      - agent/issue-900-ci-diagnostic
+
+permissions:
+  contents: read
+
+jobs:
+  capture-heavy-one:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture the failing legacy heavy shard
+        shell: bash
+        run: |
+          set +e
+          export OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT=1
+          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard > issue-900-heavy-topology.log 2>&1
+          topology_exit=$?
+          export OPK_VITEST_TOPOLOGY_PLAN_PATH="$PWD/scripts/vitest-heavy-topology.plan.json"
+          pwsh -NoProfile -File ./scripts/run-vitest-heavy-shard.ps1 -Shard 1 > issue-900-heavy-1.log 2>&1
+          shard_exit=$?
+          printf 'node=%s\ntopology_exit=%s\nshard_exit=%s\n' "$(node --version)" "$topology_exit" "$shard_exit" > issue-900-heavy-summary.txt
+          exit 0
+      - name: Upload heavy-shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-900-heavy-one-diagnostic
+          path: |
+            issue-900-heavy-topology.log
+            issue-900-heavy-1.log
+            issue-900-heavy-summary.txt
+            scripts/vitest-heavy-topology.plan.json
+            .vitest-runtime-report-heavy-1*.json
+          if-no-files-found: warn
