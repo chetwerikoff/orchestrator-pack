@@ -8,11 +8,27 @@ function missingTypedReferenceFailure(entry: GateCensus['entries'][number]): str
   return `${entry.id}: typed legacy invocation is no longer executable at ${reference.path} (${reference.kind})`;
 }
 
-function checkScriptIsDirectlyVerified(entry: GateCensus['entries'][number], snapshot: SourceSnapshot): boolean {
+function sourceInvokesCheck(source: string, checkPath: string): boolean {
+  const bare = checkPath.replace(/^scripts\//u, '');
+  if (!source.includes(checkPath) && !source.includes(bare)) return false;
+  return /(?:^|\s)&\s/u.test(source)
+    || /\bpwsh(?:\.exe)?\b[^\r\n]*\s-File\s/iu.test(source)
+    || /^\s*run:\s*/imu.test(source)
+    || /Join-Path\s+\$(?:Root|PSScriptRoot)/u.test(source);
+}
+
+function checkScriptHasRuntimeRoute(entry: GateCensus['entries'][number], snapshot: SourceSnapshot): boolean {
   if (entry.sourceKind !== 'check-script' || !snapshot.files.has(entry.sourcePath)) return false;
+
   const verify = snapshot.files.get('scripts/verify.ps1') ?? '';
-  const escaped = entry.sourcePath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  return new RegExp(`(?:Join-Path\\s+\\$Root\\s+['\"]${escaped}['\"]|['\"]${escaped}['\"])`, 'u').test(verify);
+  if (sourceInvokesCheck(verify, entry.sourcePath)) return true;
+
+  for (const [path, source] of snapshot.files) {
+    if (path === entry.sourcePath) continue;
+    if (/^scripts\/check-.*\.ps1$/u.test(path) && sourceInvokesCheck(source, entry.sourcePath)) return true;
+    if (/^\.github\/workflows\/.*\.ya?ml$/iu.test(path) && sourceInvokesCheck(source, entry.sourcePath)) return true;
+  }
+  return false;
 }
 
 function historicalReferenceFailure(
@@ -29,9 +45,9 @@ function historicalReferenceFailure(
   if (reference.kind === 'operator-command') return missingTypedReferenceFailure(entry);
 
   // Some frozen rows used a secondary test invocation as reachability proof. When the
-  // retained check script is still directly dispatched by verify.ps1, that real runtime
-  // invocation is the stronger proof and the old duplicate test binding may be removed.
-  if (checkScriptIsDirectlyVerified(entry, snapshot)) return missingTypedReferenceFailure(entry);
+  // retained check still has a runtime route from verify.ps1, a workflow, or another
+  // check-wrapper, that route is the stronger proof and the duplicate test binding may move.
+  if (checkScriptHasRuntimeRoute(entry, snapshot)) return missingTypedReferenceFailure(entry);
 
   return undefined;
 }
@@ -39,11 +55,8 @@ function historicalReferenceFailure(
 /**
  * Reconcile the frozen Wave 3.b census against the current executable tree.
  *
- * The frozen census retains historical documentation and duplicate test references for
- * migration provenance. Current enforcement must not make Markdown/YAML wording or an
- * obsolete duplicate test call executable policy. Deferred check scripts remain protected
- * independently by evaluateCensus(): deleting a script, removing its actual verify.ps1
- * dispatch, or adding an unaccounted check still fails before this compatibility filter.
+ * Historical documentation and duplicate test references remain provenance only. The source
+ * check script and an executable route to it remain mandatory; deleting either still fails.
  */
 export function evaluateCurrentCensus(
   census: GateCensus,
