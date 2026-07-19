@@ -225,22 +225,37 @@ function Get-PrChangedPaths {
         [string]$WorkingDirectory
     )
 
-    $filesRead = Invoke-GhSignalJsonCommand `
-        -Arguments @('api', "repos/$Repository/pulls/$PrNumber/files?per_page=100", '--paginate') `
-        -ExpectedRoot 'array' `
-        -WorkingDirectory $WorkingDirectory
-    if (-not $filesRead.ok) {
-        Write-Error "failed to enumerate PR files for PR #${PrNumber}: $(Format-GhSignalFailureDetail -Result $filesRead)"
+    $pageSize = 100
+    $maxPages = 30
+    $page = 1
+    $paths = [System.Collections.Generic.List[string]]::new()
+
+    while ($true) {
+        $endpoint = "repos/$Repository/pulls/$PrNumber/files?per_page=$pageSize&page=$page"
+        $filesRead = Invoke-GhSignalJsonCommand `
+            -Arguments @('api', $endpoint, '--jq', '[.[].filename]') `
+            -ExpectedRoot 'array' `
+            -WorkingDirectory $WorkingDirectory
+        if (-not $filesRead.ok) {
+            Write-Error "failed to enumerate PR files page $page for PR #${PrNumber}: $(Format-GhSignalFailureDetail -Result $filesRead)"
+        }
+
+        $pagePaths = @($filesRead.value)
+        foreach ($filenameValue in $pagePaths) {
+            $filename = [string]$filenameValue
+            if ([string]::IsNullOrWhiteSpace($filename)) {
+                Write-Error "PR files response contained an entry without filename for PR #$PrNumber on page $page"
+            }
+            $paths.Add($filename)
+        }
+
+        if ($pagePaths.Count -lt $pageSize) { break }
+        if ($page -ge $maxPages) {
+            Write-Error "PR files response reached the 3000-file API ceiling for PR #$PrNumber; refusing a possibly truncated scope"
+        }
+        $page += 1
     }
 
-    $paths = [System.Collections.Generic.List[string]]::new()
-    foreach ($entry in @($filesRead.value)) {
-        $filename = [string]$entry.filename
-        if ([string]::IsNullOrWhiteSpace($filename)) {
-            Write-Error "PR files response contained an entry without filename for PR #$PrNumber"
-        }
-        $paths.Add($filename)
-    }
     return @($paths)
 }
 
