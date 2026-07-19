@@ -9,10 +9,10 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  stage:
+  inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -20,12 +20,11 @@ jobs:
         with:
           ref: d3051a2cad81894d596434b760219dde65078ea6
           fetch-depth: 0
-      - name: Create identical child commit on staging ref
+      - name: Capture validated tree SHA
         shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit --allow-empty -m "chore: trigger final CI for PR 907"
-          git push --force origin HEAD:staging/pr907-final-ci
-          git rev-parse HEAD
+        run: git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/pr907-tree-sha.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr907-tree-sha
+          path: ${{ runner.temp }}/pr907-tree-sha.txt
+          retention-days: 1
