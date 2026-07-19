@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": 918,
   "task": 311,
   "repoSlug": "chetwerikoff/orchestrator-pack",
@@ -30,14 +30,13 @@
   "assembly": {
     "prNumber": 619,
     "reviewer": "codex",
-    "requiredOrder": [
-      "fresh-head-input",
-      "open-pr-exact-head",
-      "binding-resolution",
-      "binding-cache",
-      "fresh-head-admission",
+    "subjects": [
+      "preRunHeadReadyRecheck",
+      "bindingResolverCacheClosure",
+      "startPackReview:acquire"
+    ],
+    "runnerOrder": [
       "atomic-claim",
-      "runner-wrapper",
       "reviewer-wrapper",
       "journal-verdict",
       "github-comment",
@@ -50,8 +49,60 @@
       "failClosed": false
     }
   },
+  "mutationControls": {
+    "AC1": [
+      "real-subject-boundary-broken",
+      "reviewer-argv-broken",
+      "resolver-output-constant-substitution",
+      "subject-internals-reimplemented",
+      "runner-internal-hop-omitted",
+      "runner-internal-hop-reordered"
+    ],
+    "AC2": [
+      "invented-ao-field",
+      "identity-substitution",
+      "wrong-sha-status",
+      "non-comment-review",
+      "worker-message-cardinality"
+    ],
+    "AC3": [
+      "double-acquisition",
+      "live-claim-theft",
+      "cross-key-interference",
+      "stale-claim-not-recovered",
+      "ambiguous-ownership-recovered",
+      "duplicate-start-with-visible-run"
+    ],
+    "AC4": [
+      "pre-journal-delivery",
+      "reviewer-rerun-after-journal",
+      "blind-comment-replay",
+      "invalid-comment-recovery",
+      "changed-idempotency-or-head",
+      "j4-j5-attempt-evidence-lost",
+      "false-exactly-once",
+      "recoverable-orphan-left"
+    ],
+    "AC5": [
+      "advanced-head-run-emitted",
+      "advanced-head-delivery-emitted",
+      "current-head-not-reread",
+      "unchanged-head-wrongly-denied"
+    ],
+    "AC6": [
+      "unrelated-existing-path",
+      "lane-config-overreach",
+      "classification-missing-extra-or-nonheavy",
+      "production-or-core-edit",
+      "non-regular-artifact",
+      "intentional-external-egress",
+      "untraced-ao-field",
+      "capture-corpus-change"
+    ]
+  },
   "scope": {
     "root": "scripts/estate-cut/task-311-tests/",
+    "laneConfig": "scripts/vitest-ci-lanes.config.json",
     "allowedSuffixes": [
       ".test.ts",
       ".test-support.ts",
@@ -59,8 +110,18 @@
     ],
     "expectedAddedPaths": [
       "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts",
-      "scripts/estate-cut/task-311-tests/task-311.test-support.ts",
-      "scripts/estate-cut/task-311-tests/task-311.fixture.json"
+      "scripts/estate-cut/task-311-tests/task-311.fixture.json",
+      "scripts/estate-cut/task-311-tests/task-311-common.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts",
+      "scripts/estate-cut/task-311-tests/task-311-scope.test-support.ts"
+    ],
+    "expectedHeavyTests": [
+      "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts"
+    ],
+    "regularModes": [
+      "100644",
+      "100755"
     ]
   }
 }
