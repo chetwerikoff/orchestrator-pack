@@ -1,0 +1,24 @@
+name: issue-912-repurpose-pr
+
+on:
+  push:
+    branches:
+      - diag/issue-908-clean-pipeline
+
+permissions:
+  contents: write
+
+jobs:
+  repurpose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/issue-912-compact-pr-file-pages
+          fetch-depth: 0
+      - name: Move diagnostic PR head to validated issue 912 commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force origin HEAD:diag/issue-906-observer
