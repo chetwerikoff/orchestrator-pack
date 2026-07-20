@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -32,12 +33,21 @@ interface ChangedPath {
   mode: string;
 }
 
+interface ProcessWideEgressTrap extends EgressTrap {
+  currentProcessNode: true;
+}
+
 interface ScopeSnapshot {
   changes: ChangedPath[];
   baseConfig: Record<string, unknown>;
   currentConfig: Record<string, unknown>;
   captureSelectors: string[];
-  trap: { active: boolean; unexpectedAttempts: number; nativeLibrary: boolean };
+  trap: {
+    active: boolean;
+    unexpectedAttempts: number;
+    nativeLibrary: boolean;
+    currentProcessNode: boolean;
+  };
 }
 
 function resolveExecutable(name: string, explicit = ''): string {
@@ -150,7 +160,60 @@ int connect(int fd, const struct sockaddr *addr, socklen_t length) {
   return libraryPath;
 }
 
-export function installEgressTrap(root: string): EgressTrap {
+function installCurrentProcessNodeTrap(statePath: string): () => void {
+  const require = createRequire(import.meta.url);
+  const restorers: Array<() => void> = [];
+  const record = (edge: string, detail = ''): never => {
+    appendFileSync(statePath, `${JSON.stringify({ kind: 'node-current', edge, detail })}\n`, 'utf8');
+    const error = new Error(`TASK311_EGRESS_BLOCKED:${edge}`) as Error & { code?: string };
+    error.code = 'TASK311_EGRESS_BLOCKED';
+    throw error;
+  };
+  const patchFunction = (target: Record<string, unknown>, name: string, edge: string): void => {
+    const descriptor = Object.getOwnPropertyDescriptor(target, name);
+    invariant(descriptor && typeof descriptor.value === 'function', `current-process egress edge is not patchable: ${edge}`);
+    Object.defineProperty(target, name, {
+      ...descriptor,
+      value: (...args: unknown[]) => record(edge, String(args[0] ?? '')),
+    });
+    restorers.push(() => Object.defineProperty(target, name, descriptor));
+  };
+
+  const moduleEdges: Array<[Record<string, unknown>, string, string]> = [];
+  for (const [moduleName, names] of [
+    ['node:http', ['request', 'get']],
+    ['node:https', ['request', 'get']],
+    ['node:net', ['connect', 'createConnection']],
+    ['node:dns', ['lookup', 'resolve', 'resolve4', 'resolve6']],
+    ['node:dns/promises', ['lookup', 'resolve', 'resolve4', 'resolve6']],
+  ] as const) {
+    const module = require(moduleName) as Record<string, unknown>;
+    for (const name of names) moduleEdges.push([module, name, `${moduleName}.${name}`]);
+  }
+  const dns = require('node:dns') as { promises?: Record<string, unknown> };
+  if (dns.promises) {
+    for (const name of ['lookup', 'resolve', 'resolve4', 'resolve6']) {
+      moduleEdges.push([dns.promises, name, `node:dns.promises.${name}`]);
+    }
+  }
+  for (const [module, name, edge] of moduleEdges) patchFunction(module, name, edge);
+
+  const fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+  invariant(fetchDescriptor && typeof fetchDescriptor.value === 'function', 'global fetch is unavailable for current-process trapping');
+  Object.defineProperty(globalThis, 'fetch', {
+    ...fetchDescriptor,
+    value: (...args: unknown[]) => record('fetch', String(args[0] ?? '')),
+  });
+  restorers.push(() => Object.defineProperty(globalThis, 'fetch', fetchDescriptor));
+
+  syncBuiltinESMExports();
+  return () => {
+    for (const restore of restorers.reverse()) restore();
+    syncBuiltinESMExports();
+  };
+}
+
+export function installEgressTrap(root: string): ProcessWideEgressTrap {
   const statePath = path.join(root, 'egress.jsonl');
   const preloadPath = path.join(root, 'egress-preload.cjs');
   writeFileSync(statePath, '', 'utf8');
@@ -159,7 +222,7 @@ export function installEgressTrap(root: string): EgressTrap {
 const fs = require('node:fs');
 const state = process.env.TASK311_EGRESS_STATE;
 const record = (edge, detail='') => {
-  if (state) fs.appendFileSync(state, JSON.stringify({ kind: 'node', edge, detail }) + '\\n');
+  if (state) fs.appendFileSync(state, JSON.stringify({ kind: 'node-child', edge, detail }) + '\\n');
   const error = new Error('TASK311_EGRESS_BLOCKED:' + edge);
   error.code = 'TASK311_EGRESS_BLOCKED';
   throw error;
@@ -168,7 +231,8 @@ for (const [moduleName, names] of [
   ['node:http', ['request', 'get']],
   ['node:https', ['request', 'get']],
   ['node:net', ['connect', 'createConnection']],
-  ['node:dns', ['lookup', 'resolve', 'resolve4', 'resolve6']]
+  ['node:dns', ['lookup', 'resolve', 'resolve4', 'resolve6']],
+  ['node:dns/promises', ['lookup', 'resolve', 'resolve4', 'resolve6']]
 ]) {
   const mod = require(moduleName);
   for (const name of names) {
@@ -183,12 +247,14 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
   const originalLdPreload = process.env.LD_PRELOAD;
   const nodeOptions = [originalNodeOptions ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
   const binDir = buildAllowedPath(root, nodeOptions);
+  const restoreCurrentProcessNodeTrap = installCurrentProcessNodeTrap(statePath);
   process.env.PATH = binDir;
   process.env.TASK311_EGRESS_STATE = statePath;
   if (nativeLibrary) process.env.LD_PRELOAD = [nativeLibrary, originalLdPreload ?? ''].filter(Boolean).join(':');
 
   return {
     active: true,
+    currentProcessNode: true,
     root,
     binDir,
     statePath,
@@ -200,6 +266,7 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
         .map((line) => JSON.parse(line) as EgressAttempt);
     },
     restore() {
+      restoreCurrentProcessNodeTrap();
       if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
       if (originalState === undefined) delete process.env.TASK311_EGRESS_STATE; else process.env.TASK311_EGRESS_STATE = originalState;
       if (originalLdPreload === undefined) delete process.env.LD_PRELOAD; else process.env.LD_PRELOAD = originalLdPreload;
@@ -239,7 +306,12 @@ function currentScopeSnapshot(trap: EgressTrap): ScopeSnapshot {
     baseConfig,
     currentConfig,
     captureSelectors: Object.values(fixture.capture.selectors),
-    trap: { active: trap.active, unexpectedAttempts: trap.attempts().length, nativeLibrary: Boolean(trap.nativeLibrary) },
+    trap: {
+      active: trap.active,
+      unexpectedAttempts: trap.attempts().length,
+      nativeLibrary: Boolean(trap.nativeLibrary),
+      currentProcessNode: (trap as Partial<ProcessWideEgressTrap>).currentProcessNode === true,
+    },
   };
 }
 
@@ -296,6 +368,7 @@ function validateScopeSnapshot(candidate: ScopeSnapshot): void {
   const declaredSelectors = new Set(Object.values(fixture.capture.selectors));
   invariant(candidate.captureSelectors.every((selector) => declaredSelectors.has(selector)), 'untraced AO selector used');
   invariant(candidate.trap.active === true && candidate.trap.unexpectedAttempts === 0, 'egress trap inactive or unexpected egress observed');
+  invariant(candidate.trap.currentProcessNode === true, 'positive boundary lacks current Vitest-process network enforcement');
   invariant(candidate.trap.nativeLibrary || process.platform !== 'linux', 'positive boundary lacks native child-process network enforcement');
 }
 
@@ -321,6 +394,19 @@ function intentionalEgressControl(trap: EgressTrap): MutationRecord {
   const priorState = existsSync(trap.statePath) ? readFileSync(trap.statePath, 'utf8') : '';
   const priorAttempts = trap.attempts().length;
   try {
+    let currentProcessBlocked = false;
+    try {
+      void globalThis.fetch('https://task311.invalid/current-process-probe');
+    } catch (error) {
+      currentProcessBlocked = (error as { code?: string }).code === 'TASK311_EGRESS_BLOCKED';
+    }
+    invariant(currentProcessBlocked, 'intentional current-process fetch was not rejected');
+    const currentAttempts = trap.attempts().slice(priorAttempts);
+    invariant(
+      currentAttempts.some((attempt) => attempt.kind === 'node-current' && attempt.edge === 'fetch'),
+      'intentional current-process fetch was not durably observed',
+    );
+
     const childEnv = { ...process.env, NODE_OPTIONS: '' };
     const result = runProcessSync({
       command: process.execPath,
