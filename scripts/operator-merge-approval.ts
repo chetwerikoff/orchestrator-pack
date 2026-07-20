@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { runProcess } from './kernel/subprocess.ts';
@@ -11,9 +12,6 @@ import {
   type OperatorMergeApprovalRecord,
 } from './lib/operator-merge-approval.ts';
 import { PACK_REVIEW_REQUIRED_STATUS_CONTEXT } from './lib/pack-review-delivery.ts';
-
-const BLOCKING_STATUS_RECONCILE_ATTEMPTS = 4;
-const BLOCKING_STATUS_SETTLE_MS = 250;
 
 interface ParsedArguments {
   command: 'approve' | 'show' | 'revoke';
@@ -32,28 +30,44 @@ export interface OperatorMergeApprovalStatusRequest {
   description: string;
 }
 
-export interface OperatorMergeApprovalStatusSnapshot {
-  state: string;
-  context: string;
-  id?: number | string;
-  createdAtUtc?: string;
-}
-
 export interface OperatorMergeApprovalCommentRequest {
   repoSlug: string;
   prNumber: number;
   body: string;
 }
 
+export interface OperatorMergeApprovalLatestStatusRequest {
+  repoSlug: string;
+  prNumber: number;
+  headSha: string;
+  context: string;
+}
+
+export type OperatorMergeApprovalRemoteStatusState = 'error' | 'failure' | 'pending' | 'success';
+
+export interface OperatorMergeApprovalStatusSnapshot {
+  state: OperatorMergeApprovalRemoteStatusState;
+  context: string;
+  description: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface OperatorMergeApprovalGithubTransport {
   postStatus(request: OperatorMergeApprovalStatusRequest): Promise<void>;
   postComment(request: OperatorMergeApprovalCommentRequest): Promise<void>;
-  getLatestStatus(request: { repoSlug: string; headSha: string }): Promise<OperatorMergeApprovalStatusSnapshot | null>;
+  readLatestStatus(
+    request: OperatorMergeApprovalLatestStatusRequest,
+  ): Promise<OperatorMergeApprovalStatusSnapshot | null>;
+  waitForStatusVisibility(delayMs: number): Promise<void>;
 }
 
 export interface RunOperatorMergeApprovalCommandOptions {
   transport?: OperatorMergeApprovalGithubTransport;
 }
+
+const BLOCKING_STATUS_RECONCILE_ATTEMPTS = 4;
+const BLOCKING_STATUS_VISIBILITY_DELAY_MS = 250;
 
 function usage(): never {
   throw new Error([
@@ -100,10 +114,6 @@ function describeResult(result: Awaited<ReturnType<typeof runProcess>>): string 
   return String(result.stderr || result.error || result.stdout || result.outcome).trim();
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
-}
-
 export function assertOperatorMergeApprovalSession(): void {
   const sessionId = String(process.env.AO_SESSION_ID ?? '').trim();
   const sessionKind = String(process.env.AO_SESSION_KIND ?? '').trim().toLowerCase();
@@ -125,24 +135,37 @@ async function ghPost(endpoint: string, payload: Record<string, unknown>): Promi
     allowEmptyStdout: true,
     timeoutMs: 30_000,
   });
-  if (!result.ok) throw new Error(`GitHub write failed for ${endpoint}: ${describeResult(result)}`);
+  if (!result.ok) throw new Error(`GitHub POST failed for ${endpoint}: ${describeResult(result)}`);
 }
 
-async function ghGetJson(endpoint: string): Promise<unknown> {
+async function ghJson(
+  args: string[],
+  label: string,
+  acceptedExitCodes: readonly number[] = [0],
+): Promise<unknown> {
   const result = await runProcess({
     command: 'gh',
-    args: ['api', endpoint],
+    args,
     cwd: process.cwd(),
     inheritParentEnv: true,
     allowEmptyStdout: false,
     timeoutMs: 30_000,
   });
-  if (!result.ok) throw new Error(`GitHub read failed for ${endpoint}: ${describeResult(result)}`);
+  if (result.outcome !== 'exit' || result.exitCode === null || !acceptedExitCodes.includes(result.exitCode)) {
+    throw new Error(`${label} failed: ${describeResult(result)}`);
+  }
+  if (!result.stdout) throw new Error(`${label} returned empty stdout`);
   try {
     return JSON.parse(result.stdout);
   } catch (error) {
-    throw new Error(`GitHub read returned malformed JSON for ${endpoint}: ${describeError(error)}`);
+    throw new Error(`${label} returned malformed JSON: ${describeError(error)}`);
   }
+}
+
+function normalizeRemoteStatusState(value: unknown): OperatorMergeApprovalRemoteStatusState {
+  const state = String(value ?? '').trim().toLowerCase();
+  if (state === 'error' || state === 'failure' || state === 'pending' || state === 'success') return state;
+  throw new Error(`GitHub returned unsupported status state '${state || '<empty>'}'`);
 }
 
 function defaultGithubTransport(): OperatorMergeApprovalGithubTransport {
@@ -159,26 +182,43 @@ function defaultGithubTransport(): OperatorMergeApprovalGithubTransport {
         body: request.body,
       });
     },
-    async getLatestStatus(request) {
-      const payload = await ghGetJson(
-        `repos/${request.repoSlug}/commits/${request.headSha}/statuses?per_page=100`,
-      );
-      if (!Array.isArray(payload)) {
-        throw new Error('GitHub commit statuses response must be an array');
+    async readLatestStatus(request) {
+      const pr = await ghJson([
+        'pr', 'view', String(request.prNumber),
+        '--repo', request.repoSlug,
+        '--json', 'headRefOid,headRefName',
+      ], 'GitHub PR head read');
+      if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
+        throw new Error('GitHub PR head read must return an object');
       }
-      const latest = payload.find((entry) => (
-        entry
-        && typeof entry === 'object'
-        && !Array.isArray(entry)
-        && String((entry as Record<string, unknown>).context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT
+      const currentHead = String((pr as Record<string, unknown>).headRefOid ?? '').trim().toLowerCase();
+      if (currentHead !== request.headSha.toLowerCase()) {
+        throw new Error(`GitHub PR head drifted during status reconciliation: ${currentHead || '<missing>'}`);
+      }
+
+      const payload = await ghJson([
+        'pr', 'checks', String(request.prNumber),
+        '--repo', request.repoSlug,
+        '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description',
+      ], 'GitHub PR checks read', [0, 1, 8]);
+      if (!Array.isArray(payload)) throw new Error('GitHub PR checks read must return an array');
+      const row = payload.find((candidate) => (
+        candidate
+        && typeof candidate === 'object'
+        && !Array.isArray(candidate)
+        && String((candidate as Record<string, unknown>).name ?? '') === request.context
       )) as Record<string, unknown> | undefined;
-      if (!latest) return null;
+      if (!row) return null;
       return {
-        state: String(latest.state ?? ''),
-        context: String(latest.context ?? ''),
-        ...(latest.id !== undefined ? { id: String(latest.id) } : {}),
-        ...(latest.created_at ? { createdAtUtc: String(latest.created_at) } : {}),
+        state: normalizeRemoteStatusState(row.state),
+        context: request.context,
+        description: String(row.description ?? ''),
+        ...(row.startedAt ? { startedAt: String(row.startedAt) } : {}),
+        ...(row.completedAt ? { completedAt: String(row.completedAt) } : {}),
       };
+    },
+    async waitForStatusVisibility(delayMs) {
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, delayMs));
     },
   };
 }
@@ -207,16 +247,31 @@ function revocationComment(args: ParsedArguments): string {
   ].join('\n');
 }
 
+function reconciliationDescription(description: string): string {
+  const token = randomUUID().replaceAll('-', '').slice(0, 20);
+  const suffix = ` [opk-reconcile:${token}]`;
+  return `${description.slice(0, Math.max(0, 140 - suffix.length))}${suffix}`;
+}
+
 async function readLatestPackReviewStatus(
   args: ParsedArguments,
   transport: OperatorMergeApprovalGithubTransport,
 ): Promise<OperatorMergeApprovalStatusSnapshot | null> {
-  const status = await transport.getLatestStatus({ repoSlug: args.repoSlug, headSha: args.headSha });
-  if (!status) return null;
-  if (status.context !== PACK_REVIEW_REQUIRED_STATUS_CONTEXT) {
-    throw new Error(`unexpected status context '${status.context}'`);
-  }
-  return status;
+  return transport.readLatestStatus({
+    repoSlug: args.repoSlug,
+    prNumber: args.prNumber,
+    headSha: args.headSha,
+    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+  });
+}
+
+function isOwnBlockingStatus(
+  status: OperatorMergeApprovalStatusSnapshot | null,
+  description: string,
+): boolean {
+  return status?.state === 'failure'
+    && status.context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT
+    && status.description === description;
 }
 
 async function reconcileBlockingStatus(
@@ -224,43 +279,48 @@ async function reconcileBlockingStatus(
   transport: OperatorMergeApprovalGithubTransport,
   description: string,
 ): Promise<void> {
-  const failures: string[] = [];
+  let lastObservation = 'not_attempted';
   for (let attempt = 1; attempt <= BLOCKING_STATUS_RECONCILE_ATTEMPTS; attempt += 1) {
+    const ownDescription = reconciliationDescription(description);
     try {
       await transport.postStatus({
         repoSlug: args.repoSlug,
         headSha: args.headSha,
         state: 'failure',
-        description,
+        description: ownDescription,
       });
     } catch (error) {
-      failures.push(`attempt ${attempt} write: ${describeError(error)}`);
-    }
-
-    await delay(BLOCKING_STATUS_SETTLE_MS * attempt);
-    let first: OperatorMergeApprovalStatusSnapshot | null = null;
-    try {
-      first = await readLatestPackReviewStatus(args, transport);
-    } catch (error) {
-      failures.push(`attempt ${attempt} first read: ${describeError(error)}`);
-    }
-    if (first?.state !== 'failure') {
-      failures.push(`attempt ${attempt} first read state: ${first?.state || 'missing'}`);
+      // A pre-existing failure can never confirm a write that did not succeed.
+      lastObservation = `attempt ${attempt} failure write error: ${describeError(error)}`;
       continue;
     }
 
-    await delay(BLOCKING_STATUS_SETTLE_MS * attempt);
-    let second: OperatorMergeApprovalStatusSnapshot | null = null;
+    await transport.waitForStatusVisibility(BLOCKING_STATUS_VISIBILITY_DELAY_MS * attempt);
+    let first: OperatorMergeApprovalStatusSnapshot | null;
+    try {
+      first = await readLatestPackReviewStatus(args, transport);
+    } catch (error) {
+      lastObservation = `attempt ${attempt} first read error: ${describeError(error)}`;
+      continue;
+    }
+    if (!isOwnBlockingStatus(first, ownDescription)) {
+      lastObservation = `attempt ${attempt} first read: ${first?.state ?? 'missing'} ${first?.description ?? ''}`.trim();
+      continue;
+    }
+
+    await transport.waitForStatusVisibility(BLOCKING_STATUS_VISIBILITY_DELAY_MS * attempt);
+    let second: OperatorMergeApprovalStatusSnapshot | null;
     try {
       second = await readLatestPackReviewStatus(args, transport);
     } catch (error) {
-      failures.push(`attempt ${attempt} confirmation read: ${describeError(error)}`);
+      lastObservation = `attempt ${attempt} confirmation read error: ${describeError(error)}`;
+      continue;
     }
-    if (second?.state === 'failure') return;
-    failures.push(`attempt ${attempt} confirmation state: ${second?.state || 'missing'}`);
+    if (isOwnBlockingStatus(second, ownDescription)) return;
+    lastObservation = `attempt ${attempt} confirmation: ${second?.state ?? 'missing'} ${second?.description ?? ''}`.trim();
   }
   throw new Error(
-    `blocking status reconciliation unconfirmed after ${BLOCKING_STATUS_RECONCILE_ATTEMPTS} attempts: ${failures.join('; ')}`,
+    `blocking status reconciliation did not confirm its own write after ${BLOCKING_STATUS_RECONCILE_ATTEMPTS} attempts: ${lastObservation}`,
   );
 }
 
