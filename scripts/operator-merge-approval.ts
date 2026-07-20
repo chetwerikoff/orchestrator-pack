@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   approveOperatorMerge,
   readOperatorMergeApproval,
   revokeOperatorMerge,
+  type OperatorMergeApprovalLookup,
   type OperatorMergeApprovalRecord,
 } from './lib/operator-merge-approval.ts';
 import { PACK_REVIEW_REQUIRED_STATUS_CONTEXT } from './lib/pack-review-delivery.ts';
@@ -19,12 +22,35 @@ interface ParsedArguments {
   storeRoot?: string;
 }
 
+export interface OperatorMergeApprovalStatusRequest {
+  repoSlug: string;
+  headSha: string;
+  state: 'success' | 'failure';
+  description: string;
+}
+
+export interface OperatorMergeApprovalCommentRequest {
+  repoSlug: string;
+  prNumber: number;
+  body: string;
+}
+
+export interface OperatorMergeApprovalGithubTransport {
+  postStatus(request: OperatorMergeApprovalStatusRequest): Promise<void>;
+  postComment(request: OperatorMergeApprovalCommentRequest): Promise<void>;
+}
+
+export interface RunOperatorMergeApprovalCommandOptions {
+  env?: NodeJS.ProcessEnv;
+  transport?: OperatorMergeApprovalGithubTransport;
+}
+
 function usage(): never {
   throw new Error([
     'Usage:',
-    '  node --experimental-strip-types scripts/operator-merge-approval.ts approve --pr-number N --head-sha SHA [--reason TEXT] [--repo-slug owner/repo]',
-    '  node --experimental-strip-types scripts/operator-merge-approval.ts show --pr-number N --head-sha SHA',
-    '  node --experimental-strip-types scripts/operator-merge-approval.ts revoke --pr-number N --head-sha SHA [--reason TEXT]',
+    '  AO_SESSION_KIND=operator node --experimental-strip-types scripts/operator-merge-approval.ts approve --pr-number N --head-sha SHA [--reason TEXT] [--repo-slug owner/repo]',
+    '  AO_SESSION_KIND=operator node --experimental-strip-types scripts/operator-merge-approval.ts show --pr-number N --head-sha SHA',
+    '  AO_SESSION_KIND=operator node --experimental-strip-types scripts/operator-merge-approval.ts revoke --pr-number N --head-sha SHA [--reason TEXT]',
   ].join('\n'));
 }
 
@@ -56,8 +82,23 @@ function parseArguments(argv: string[]): ParsedArguments {
   };
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function describeResult(result: Awaited<ReturnType<typeof runProcess>>): string {
   return String(result.stderr || result.error || result.stdout || result.outcome).trim();
+}
+
+export function assertOperatorMergeApprovalSession(env: NodeJS.ProcessEnv = process.env): void {
+  const sessionId = String(env.AO_SESSION_ID ?? '').trim();
+  const sessionKind = String(env.AO_SESSION_KIND ?? '').trim().toLowerCase();
+  if (sessionId) {
+    throw new Error('operator merge approval is forbidden inside an AO-managed session');
+  }
+  if (sessionKind !== 'operator') {
+    throw new Error('operator merge approval requires trusted AO_SESSION_KIND=operator');
+  }
 }
 
 async function ghPost(endpoint: string, payload: Record<string, unknown>): Promise<void> {
@@ -71,6 +112,23 @@ async function ghPost(endpoint: string, payload: Record<string, unknown>): Promi
     timeoutMs: 30_000,
   });
   if (!result.ok) throw new Error(`GitHub write failed for ${endpoint}: ${describeResult(result)}`);
+}
+
+function defaultGithubTransport(): OperatorMergeApprovalGithubTransport {
+  return {
+    async postStatus(request) {
+      await ghPost(`repos/${request.repoSlug}/statuses/${request.headSha}`, {
+        state: request.state,
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description: request.description,
+      });
+    },
+    async postComment(request) {
+      await ghPost(`repos/${request.repoSlug}/issues/${request.prNumber}/comments`, {
+        body: request.body,
+      });
+    },
+  };
 }
 
 function approvalComment(record: OperatorMergeApprovalRecord): string {
@@ -87,73 +145,131 @@ function approvalComment(record: OperatorMergeApprovalRecord): string {
   ].join('\n');
 }
 
-async function publishApproval(record: OperatorMergeApprovalRecord): Promise<void> {
-  await ghPost(`repos/${record.repoSlug}/issues/${record.prNumber}/comments`, {
-    body: approvalComment(record),
-  });
-  await ghPost(`repos/${record.repoSlug}/statuses/${record.headSha}`, {
-    state: 'success',
-    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-    description: 'Pack review findings accepted by explicit operator merge command.',
+function revocationComment(args: ParsedArguments): string {
+  return [
+    '## Operator direct-merge approval revoked',
+    '',
+    `Approval for exact head \`${args.headSha}\` was revoked.`,
+    '',
+    `Reason: ${args.reason}`,
+  ].join('\n');
+}
+
+async function publishBlockingStatus(
+  args: ParsedArguments,
+  transport: OperatorMergeApprovalGithubTransport,
+  description: string,
+): Promise<void> {
+  await transport.postStatus({
+    repoSlug: args.repoSlug,
+    headSha: args.headSha,
+    state: 'failure',
+    description,
   });
 }
 
-async function publishRevocationStatus(args: ParsedArguments): Promise<void> {
-  await ghPost(`repos/${args.repoSlug}/statuses/${args.headSha}`, {
-    state: 'pending',
-    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-    description: 'Operator merge approval revoked; pack review must be re-evaluated.',
-  });
-}
-
-async function publishRevocationComment(args: ParsedArguments): Promise<void> {
-  await ghPost(`repos/${args.repoSlug}/issues/${args.prNumber}/comments`, {
-    body: [
-      '## Operator direct-merge approval revoked',
-      '',
-      `Approval for exact head \`${args.headSha}\` was revoked.`,
-      '',
-      `Reason: ${args.reason}`,
-    ].join('\n'),
-  });
-}
-
-async function main(): Promise<void> {
-  const args = parseArguments(process.argv.slice(2));
-  if (args.command === 'show') {
-    console.log(JSON.stringify(readOperatorMergeApproval(args), null, 2));
-    return;
+async function reconcileFailedApprovalPublication(
+  args: ParsedArguments,
+  transport: OperatorMergeApprovalGithubTransport,
+  publicationError: unknown,
+): Promise<never> {
+  const publicationReason = describeError(publicationError);
+  let revocationError = '';
+  try {
+    revokeOperatorMerge({
+      ...args,
+      reason: `approval publication failed: ${publicationReason}`,
+    });
+  } catch (error) {
+    revocationError = describeError(error);
   }
+
+  let statusError = '';
+  try {
+    await publishBlockingStatus(
+      args,
+      transport,
+      'Operator approval publication failed; pack review remains blocking.',
+    );
+  } catch (error) {
+    statusError = describeError(error);
+  }
+
+  const details = [
+    `approval publication failed: ${publicationReason}`,
+    revocationError ? `local revocation failed: ${revocationError}` : '',
+    statusError ? `blocking status reconciliation failed: ${statusError}` : '',
+  ].filter(Boolean).join('; ');
+  throw new Error(details);
+}
+
+export async function runOperatorMergeApprovalCommand(
+  argv: string[],
+  options: RunOperatorMergeApprovalCommandOptions = {},
+): Promise<{ ok: true; approval: OperatorMergeApprovalRecord | OperatorMergeApprovalLookup }> {
+  const args = parseArguments(argv);
+  assertOperatorMergeApprovalSession(options.env ?? process.env);
+  const transport = options.transport ?? defaultGithubTransport();
+
+  if (args.command === 'show') {
+    return { ok: true, approval: readOperatorMergeApproval(args) };
+  }
+
   if (args.command === 'approve') {
     const record = approveOperatorMerge(args);
     try {
-      await publishApproval(record);
-    } catch (error) {
-      revokeOperatorMerge({
-        ...args,
-        reason: `approval publication failed: ${error instanceof Error ? error.message : String(error)}`,
+      await transport.postComment({
+        repoSlug: record.repoSlug,
+        prNumber: record.prNumber,
+        body: approvalComment(record),
       });
-      throw error;
+      await transport.postStatus({
+        repoSlug: record.repoSlug,
+        headSha: record.headSha,
+        state: 'success',
+        description: 'Pack review findings accepted by explicit operator merge command.',
+      });
+    } catch (error) {
+      return reconcileFailedApprovalPublication(args, transport, error);
     }
-    console.log(JSON.stringify({ ok: true, approval: record }, null, 2));
-    return;
+    return { ok: true, approval: record };
   }
 
-  const current = readOperatorMergeApproval(args);
-  if (!current.approved) {
-    console.log(JSON.stringify({ ok: true, approval: current }, null, 2));
-    return;
+  const before = readOperatorMergeApproval(args);
+  let after = before;
+  let transitioned = false;
+  if (before.approved) {
+    after = revokeOperatorMerge(args);
+    transitioned = after.reason === 'revoked';
   }
-  await publishRevocationStatus(args);
-  const revoked = revokeOperatorMerge(args);
-  if (revoked.reason !== 'revoked') {
-    throw new Error(`operator merge approval changed during revocation: ${revoked.reason}`);
+
+  await publishBlockingStatus(
+    args,
+    transport,
+    'Operator merge approval revoked; pack review must be re-evaluated.',
+  );
+  if (transitioned) {
+    await transport.postComment({
+      repoSlug: args.repoSlug,
+      prNumber: args.prNumber,
+      body: revocationComment(args),
+    });
   }
-  await publishRevocationComment(args);
-  console.log(JSON.stringify({ ok: true, approval: revoked }, null, 2));
+  return { ok: true, approval: after };
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+function isDirectExecution(): boolean {
+  const entry = process.argv[1];
+  return Boolean(entry) && resolve(entry) === resolve(fileURLToPath(import.meta.url));
+}
+
+if (isDirectExecution()) {
+  runOperatorMergeApprovalCommand(process.argv.slice(2))
+    .then((result) => {
+      console.log(JSON.stringify(result, null, 2));
+    })
+    .catch((error) => {
+      console.error(describeError(error));
+      process.exitCode = 1;
+    });
+}
