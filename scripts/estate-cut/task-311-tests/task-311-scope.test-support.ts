@@ -1,6 +1,6 @@
-import dns from 'node:dns';
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -9,9 +9,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import http from 'node:http';
-import https from 'node:https';
-import net from 'node:net';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -45,19 +42,17 @@ interface ScopeSnapshot {
 
 function resolveExecutable(name: string, explicit = ''): string {
   if (explicit && existsSync(explicit)) return explicit;
-  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
-  const result = runProcessSync({
-    command: locator,
-    args: [name],
-    cwd: repoRoot,
-    env: process.env,
-    inheritParentEnv: false,
-    encoding: 'utf8',
-  });
-  invariant(result.exitCode === 0, `cannot resolve ${name}: ${result.stderr || result.error || result.outcome}`);
-  const resolved = result.stdout.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
-  invariant(resolved && existsSync(resolved), `empty executable resolution for ${name}`);
-  return resolved;
+  const pathValue = process.env.PATH ?? '';
+  const extensions = process.platform === 'win32'
+    ? ['', '.exe', '.cmd', '.bat']
+    : [''];
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${name}${extension}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  throw new Error(`cannot resolve required executable ${name} from PATH`);
 }
 
 function linkAllowedExecutable(binDir: string, name: string, target: string): void {
@@ -68,14 +63,37 @@ function linkAllowedExecutable(binDir: string, name: string, target: string): vo
   symlinkSync(target, path.join(binDir, name));
 }
 
-function buildAllowedPath(root: string): string {
+function shellSingleQuoted(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function writeAllowedNodeWrapper(binDir: string, nodeOptions: string): void {
+  const target = process.execPath;
+  if (process.platform === 'win32') {
+    writeFileSync(
+      path.join(binDir, 'node.cmd'),
+      `@echo off\r\nset "NODE_OPTIONS=${nodeOptions}"\r\n"${target}" %*\r\n`,
+      'utf8',
+    );
+    return;
+  }
+  const wrapper = path.join(binDir, 'node');
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh\nexport NODE_OPTIONS=${shellSingleQuoted(nodeOptions)}\nexec "${target}" "$@"\n`,
+    'utf8',
+  );
+  chmodSync(wrapper, 0o700);
+}
+
+function buildAllowedPath(root: string, nodeOptions: string): string {
   const binDir = path.join(root, 'allowed-bin');
   mkdirSync(binDir, { recursive: true });
-  linkAllowedExecutable(binDir, 'node', process.execPath);
+  writeAllowedNodeWrapper(binDir, nodeOptions);
   linkAllowedExecutable(binDir, 'git', resolveExecutable('git', process.env.GIT_REAL_BINARY || process.env.GIT_SYSTEM_BINARY || ''));
   linkAllowedExecutable(binDir, 'pwsh', resolveExecutable('pwsh', process.env.OPK_REAL_PWSH || ''));
   if (process.platform !== 'win32') {
-    for (const name of ['sh', 'bash', 'cc', 'which', 'uname', 'hostname']) {
+    for (const name of ['sh', 'bash', 'cc']) {
       linkAllowedExecutable(binDir, name, resolveExecutable(name));
     }
   }
@@ -137,7 +155,6 @@ export function installEgressTrap(root: string): EgressTrap {
   const preloadPath = path.join(root, 'egress-preload.cjs');
   writeFileSync(statePath, '', 'utf8');
   const nativeLibrary = buildNativeNetworkTrap(root);
-  const binDir = buildAllowedPath(root);
   writeFileSync(preloadPath, `
 const fs = require('node:fs');
 const state = process.env.TASK311_EGRESS_STATE;
@@ -160,42 +177,22 @@ for (const [moduleName, names] of [
 }
 globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
 `, 'utf8');
-
   const originalPath = process.env.PATH;
   const originalNodeOptions = process.env.NODE_OPTIONS;
   const originalState = process.env.TASK311_EGRESS_STATE;
   const originalLdPreload = process.env.LD_PRELOAD;
-  const originalFetch = globalThis.fetch;
-  const patched: Array<{ target: Record<string, unknown>; key: string; value: unknown }> = [];
-  const block = (edge: string) => (...args: unknown[]): never => {
-    appendFileSync(statePath, `${JSON.stringify({ kind: 'node', edge, detail: String(args[0] ?? '') })}\n`, 'utf8');
-    throw Object.assign(new Error(`TASK311_EGRESS_BLOCKED:${edge}`), { code: 'TASK311_EGRESS_BLOCKED' });
-  };
-  const patch = (target: Record<string, unknown>, key: string, edge: string): void => {
-    patched.push({ target, key, value: target[key] });
-    Object.defineProperty(target, key, { configurable: true, writable: true, value: block(edge) });
-  };
-
+  const nodeOptions = [originalNodeOptions ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
+  const binDir = buildAllowedPath(root, nodeOptions);
   process.env.PATH = binDir;
   process.env.TASK311_EGRESS_STATE = statePath;
-  process.env.NODE_OPTIONS = [originalNodeOptions ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
   if (nativeLibrary) process.env.LD_PRELOAD = [nativeLibrary, originalLdPreload ?? ''].filter(Boolean).join(':');
-  globalThis.fetch = block('fetch') as typeof fetch;
-  patch(http as unknown as Record<string, unknown>, 'request', 'node:http.request');
-  patch(http as unknown as Record<string, unknown>, 'get', 'node:http.get');
-  patch(https as unknown as Record<string, unknown>, 'request', 'node:https.request');
-  patch(https as unknown as Record<string, unknown>, 'get', 'node:https.get');
-  patch(net as unknown as Record<string, unknown>, 'connect', 'node:net.connect');
-  patch(net as unknown as Record<string, unknown>, 'createConnection', 'node:net.createConnection');
-  patch(dns as unknown as Record<string, unknown>, 'lookup', 'node:dns.lookup');
-  patch(dns as unknown as Record<string, unknown>, 'resolve', 'node:dns.resolve');
 
   return {
     active: true,
     root,
     binDir,
     statePath,
-    nodeOptions: process.env.NODE_OPTIONS,
+    nodeOptions,
     nativeLibrary,
     attempts() {
       if (!existsSync(statePath)) return [];
@@ -203,12 +200,7 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
         .map((line) => JSON.parse(line) as EgressAttempt);
     },
     restore() {
-      globalThis.fetch = originalFetch;
-      for (const entry of patched.reverse()) {
-        Object.defineProperty(entry.target, entry.key, { configurable: true, writable: true, value: entry.value });
-      }
       if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
-      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = originalNodeOptions;
       if (originalState === undefined) delete process.env.TASK311_EGRESS_STATE; else process.env.TASK311_EGRESS_STATE = originalState;
       if (originalLdPreload === undefined) delete process.env.LD_PRELOAD; else process.env.LD_PRELOAD = originalLdPreload;
     },
