@@ -10,8 +10,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { evaluateMergePolicy } from '../docs/merge-triage-gate.mjs';
+import {
+  buildFindingText,
+  computeOpenFindingsSnapshotHash,
+  evaluateMergePolicy,
+  loadMarkerList,
+  normalizeTriageText,
+  sha256,
+} from '../docs/merge-triage-gate.mjs';
 import { runProcess } from './kernel/subprocess.ts';
+import { classifyArgv } from './lib/gh-inventory-match.mjs';
 import {
   approveOperatorMerge,
   operatorMergeApprovalRecordPath,
@@ -23,6 +31,7 @@ import {
   assertOperatorMergeApprovalSession,
   runOperatorMergeApprovalCommand,
   type OperatorMergeApprovalGithubTransport,
+  type OperatorMergeApprovalStatusSnapshot,
   type OperatorMergeApprovalStatusRequest,
   type RunOperatorMergeApprovalCommandOptions,
 } from './operator-merge-approval.ts';
@@ -75,25 +84,33 @@ function revokeArgs(storeRoot: string): string[] {
 function captureTransport(options: {
   initialRemoteState?: 'success' | 'failure';
   failComment?: boolean;
-  ambiguousSuccess?: boolean;
-  delayedSuccessAfterFirstFailureRead?: boolean;
+  ambiguousSuccess?: 'applied' | 'late';
+  failFirstFailureWrite?: boolean;
 } = {}): {
   transport: OperatorMergeApprovalGithubTransport;
   statuses: OperatorMergeApprovalStatusRequest[];
   comments: string[];
-  remoteState: () => 'success' | 'failure' | undefined;
-  latestReads: () => number;
+  statusReads: OperatorMergeApprovalStatusSnapshot[];
+  remoteStatus: () => OperatorMergeApprovalStatusSnapshot | null;
 } {
   const statuses: OperatorMergeApprovalStatusRequest[] = [];
   const comments: string[] = [];
-  let remoteState = options.initialRemoteState;
-  let pendingLateSuccess = false;
-  let latestReads = 0;
+  const statusReads: OperatorMergeApprovalStatusSnapshot[] = [];
+  let failedFailureWrites = 0;
+  let lateSuccessPending = false;
+  let remoteStatus: OperatorMergeApprovalStatusSnapshot | null = options.initialRemoteState
+    ? {
+        state: options.initialRemoteState,
+        context: 'orchestrator-pack/pack-review',
+        description: 'pre-existing pack review status',
+      }
+    : null;
+
   return {
     statuses,
     comments,
-    remoteState: () => remoteState,
-    latestReads: () => latestReads,
+    statusReads,
+    remoteStatus: () => remoteStatus,
     transport: {
       async postComment(request) {
         comments.push(request.body);
@@ -101,26 +118,36 @@ function captureTransport(options: {
       },
       async postStatus(request) {
         statuses.push(request);
-        if (request.state === 'success' && options.ambiguousSuccess) {
-          if (options.delayedSuccessAfterFirstFailureRead) {
-            pendingLateSuccess = true;
-          } else {
-            remoteState = 'success';
-          }
+        if (request.state === 'failure' && options.failFirstFailureWrite && failedFailureWrites === 0) {
+          failedFailureWrites += 1;
+          throw new Error('injected compensating failure write rejection');
+        }
+        if (request.state === 'success' && options.ambiguousSuccess === 'late') {
+          lateSuccessPending = true;
+          throw new Error('injected timeout before delayed GitHub success became visible');
+        }
+        remoteStatus = {
+          state: request.state,
+          context: 'orchestrator-pack/pack-review',
+          description: request.description,
+        };
+        if (request.state === 'success' && options.ambiguousSuccess === 'applied') {
           throw new Error('injected timeout after GitHub accepted success');
         }
-        remoteState = request.state;
       },
-      async getLatestStatus() {
-        latestReads += 1;
-        if (pendingLateSuccess && latestReads === 2) {
-          remoteState = 'success';
-          pendingLateSuccess = false;
+      async readLatestStatus(): Promise<OperatorMergeApprovalStatusSnapshot | null> {
+        if (lateSuccessPending) {
+          lateSuccessPending = false;
+          remoteStatus = {
+            state: 'success',
+            context: 'orchestrator-pack/pack-review',
+            description: 'late success from ambiguous approval publication',
+          };
         }
-        return remoteState
-          ? { state: remoteState, context: 'orchestrator-pack/pack-review' }
-          : null;
+        if (remoteStatus) statusReads.push({ ...remoteStatus });
+        return remoteStatus ? { ...remoteStatus } : null;
       },
+      async waitForStatusVisibility() {},
     },
   };
 }
@@ -136,55 +163,129 @@ function basePolicyInput(stateRoot: string) {
   };
 }
 
-function seedPackReview(findings: unknown[], reviewVerdict: 'clean' | 'findings' = 'findings'): string {
-  const storeRoot = tempRoot();
-  process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
-  const runsDir = join(storeRoot, 'runs');
-  mkdirSync(runsDir, { recursive: true });
-  const now = '2026-07-20T12:10:00.000Z';
-  const record = {
+function packReviewStoreRoot(): string {
+  const root = tempRoot();
+  process.env.PACK_REVIEW_RUN_STORE_ROOT = root;
+  mkdirSync(join(root, 'runs'), { recursive: true });
+  return root;
+}
+
+function writePackReviewRecord(
+  findings: unknown[],
+  options: { terminal?: boolean; status?: 'up_to_date' | 'commented' | 'changes_requested' } = {},
+): Record<string, unknown> {
+  const root = packReviewStoreRoot();
+  const terminal = options.terminal !== false;
+  const status = options.status ?? (findings.length === 0 ? 'up_to_date' : 'commented');
+  const reviewVerdict = findings.length === 0 ? 'clean' : 'findings';
+  const runId = 'prr-operator-approval-fixture';
+  const journalAt = '2026-07-20T12:10:00.000Z';
+  const deliveredAt = '2026-07-20T12:11:00.000Z';
+  const completedAt = '2026-07-20T12:12:00.000Z';
+  const record: Record<string, unknown> = {
     schemaVersion: 1,
-    id: 'prr-operator-approval-fixture',
-    runId: 'prr-operator-approval-fixture',
+    id: runId,
+    runId,
     projectId: 'orchestrator-pack',
     key: `pr-933-${HEAD_A}`,
     prNumber: 933,
     targetSha: HEAD_A,
     headSha: HEAD_A,
-    status: reviewVerdict === 'clean' ? 'up_to_date' : 'changes_requested',
-    latestRunStatus: reviewVerdict === 'clean' ? 'up_to_date' : 'changes_requested',
-    createdAt: now,
-    updatedAt: now,
-    completedAtUtc: now,
+    status: terminal ? status : 'reviewing',
+    latestRunStatus: terminal ? status : 'reviewing',
+    linkedSessionId: 'session-933',
+    startReason: 'test',
+    surface: 'pack-review-runner',
+    trustedPackRoot: repoRoot,
+    sourceRepoRoot: repoRoot,
+    runnerPid: process.pid,
+    createdAt: journalAt,
+    updatedAt: terminal ? completedAt : journalAt,
+    heartbeatAtUtc: journalAt,
     reviewVerdict,
     findingCount: findings.length,
     findings,
-    journalOutcome: { state: 'persisted' },
+    journalOutcome: {
+      state: 'persisted',
+      recordedAtUtc: journalAt,
+      reason: 'verdict_persisted',
+      idempotencyKey: `verdict:${runId}:${HEAD_A}`,
+      attempts: 1,
+    },
+    deliveryOutcomes: terminal
+      ? {
+          githubComment: {
+            state: 'succeeded',
+            recordedAtUtc: deliveredAt,
+            reason: 'comment_posted',
+            idempotencyKey: `github-comment:${runId}:${HEAD_A}`,
+          },
+          requiredStatus: {
+            state: 'succeeded',
+            recordedAtUtc: deliveredAt,
+            reason: status === 'changes_requested' ? 'status_failure' : 'status_success',
+            idempotencyKey: `required-status:orchestrator-pack/pack-review:${HEAD_A}`,
+          },
+        }
+      : {},
+    ...(terminal
+      ? {
+          completedAtUtc: completedAt,
+          githubReviewId: 'review-933',
+          githubReviewUrl: 'https://example.invalid/review-933',
+          githubReviewEvent: 'COMMENT',
+          githubReviewReconciliation: {
+            event: 'COMMENT',
+            phase: 'complete',
+            actorLogin: 'reviewer',
+            commentBody: 'review',
+            commentReviewId: 'review-933',
+            commentReviewUrl: 'https://example.invalid/review-933',
+            pendingDismissalReviewIds: [],
+            dismissedReviewIds: [],
+            preparedAtUtc: journalAt,
+            updatedAtUtc: deliveredAt,
+          },
+        }
+      : {}),
   };
-  writeFileSync(join(runsDir, `${record.id}.json`), `${JSON.stringify(record)}\n`, 'utf8');
-  return storeRoot;
+  writeFileSync(join(root, 'runs', `${runId}.json`), `${JSON.stringify(record)}\n`, 'utf8');
+  return record;
 }
 
-function seedDeferredPackReview(): void {
-  seedPackReview([{
-    id: 'finding-defer-1',
-    fingerprint: 'finding-defer-1',
+function deferFinding(): Record<string, unknown> {
+  return {
+    id: 'defer-1',
+    fingerprint: 'defer-1',
+    status: 'open',
+    headSha: HEAD_A,
     title: 'TOCTOU under concurrent head movement',
-    body: 'When the head moves between validation and merge, revalidation is required.',
-  }]);
+    body: 'When the head moves between validation and merge, exact-head revalidation is required.',
+  };
 }
 
-function seedPendingInbox(stateRoot: string): void {
-  const inboxPath = join(stateRoot, 'merge-triage', 'architect-inbox.jsonl');
-  mkdirSync(dirname(inboxPath), { recursive: true });
-  writeFileSync(inboxPath, `${JSON.stringify({
+function blockFinding(): Record<string, unknown> {
+  return {
+    id: 'block-1',
+    fingerprint: 'block-1',
+    status: 'open',
+    headSha: HEAD_A,
+    title: 'Parser error makes this exact head unsafe to merge',
+    body: 'The documented path cannot start.',
+  };
+}
+
+function writePendingAdjudication(stateRoot: string): void {
+  const path = join(stateRoot, 'merge-triage', 'architect-inbox.jsonl');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({
     schema_version: 1,
     adjudication_id: 'adj-pending-933',
     status: 'pending',
     pr_number: 933,
     head_sha: HEAD_A,
-    finding_id: 'finding-pending-1',
-    fingerprint: 'finding-pending-1',
+    finding_id: 'pending-1',
+    fingerprint: 'pending-1',
   })}\n`, 'utf8');
 }
 
@@ -295,7 +396,7 @@ describe('operator merge approval store', () => {
         approved: false,
         reason: 'malformed',
       });
-      expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
+      expect(evaluateMergePolicy({ ...basePolicyInput(stateRoot), findings: [] })).toMatchObject({
         allow: false,
         reason: 'operator_merge_approval_unavailable',
         approvalReason: 'approval_malformed',
@@ -303,37 +404,7 @@ describe('operator merge approval store', () => {
     }
   });
 
-  it.each(['0', '1', '2026-7-2', '2026-02-30T12:00:00.000Z'])(
-    'rejects non-canonical createdAtUtc %s in both readers',
-    (createdAtUtc) => {
-      const stateRoot = tempRoot();
-      const storeRoot = policyStoreRoot(stateRoot);
-      const record = approveOperatorMerge({
-        storeRoot,
-        repoSlug: REPO,
-        prNumber: 933,
-        headSha: HEAD_A,
-        reason: 'approve',
-        actor: 'operator-test',
-      });
-      const malformed = { ...record, createdAtUtc };
-      const path = operatorMergeApprovalRecordPath(933, { storeRoot });
-      writeFileSync(path, `${JSON.stringify(malformed, null, 2)}\n`, 'utf8');
-      setOperatorProcessEnvironment();
-
-      expect(() => parseOperatorMergeApprovalRecord(malformed)).toThrow(/canonical UTC ISO timestamp/);
-      expect(readOperatorMergeApproval({ storeRoot, prNumber: 933, headSha: HEAD_A })).toEqual({
-        approved: false,
-        reason: 'malformed',
-      });
-      expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
-        allow: false,
-        approvalReason: 'approval_malformed',
-      });
-    },
-  );
-
-  it('rejects a non-canonical revokedAtUtc in both readers', () => {
+  it('rejects non-canonical timestamps in both approval readers', () => {
     const stateRoot = tempRoot();
     const storeRoot = policyStoreRoot(stateRoot);
     const record = approveOperatorMerge({
@@ -343,17 +414,33 @@ describe('operator merge approval store', () => {
       headSha: HEAD_A,
       reason: 'approve',
       actor: 'operator-test',
+      now: new Date('2026-07-20T12:00:00.000Z'),
     });
-    const malformed = { ...record, revokedAtUtc: '1', revocationReason: 'revoked' };
     const path = operatorMergeApprovalRecordPath(933, { storeRoot });
-    writeFileSync(path, `${JSON.stringify(malformed, null, 2)}\n`, 'utf8');
     setOperatorProcessEnvironment();
 
-    expect(() => parseOperatorMergeApprovalRecord(malformed)).toThrow(/canonical UTC ISO timestamp/);
-    expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
-      allow: false,
-      approvalReason: 'approval_malformed',
-    });
+    for (const malformed of [
+      { ...record, createdAtUtc: '0' },
+      { ...record, createdAtUtc: '2026-7-2' },
+      { ...record, createdAtUtc: '2026-07-20T12:00:00Z' },
+      {
+        ...record,
+        revokedAtUtc: '2026-07-20T12:05:00Z',
+        revocationReason: 'non-canonical revocation timestamp',
+      },
+    ]) {
+      writeFileSync(path, `${JSON.stringify(malformed, null, 2)}\n`, 'utf8');
+      expect(() => parseOperatorMergeApprovalRecord(malformed)).toThrow(/canonical UTC ISO timestamp/);
+      expect(readOperatorMergeApproval({ storeRoot, prNumber: 933, headSha: HEAD_A })).toEqual({
+        approved: false,
+        reason: 'malformed',
+      });
+      expect(evaluateMergePolicy({ ...basePolicyInput(stateRoot), findings: [] })).toMatchObject({
+        allow: false,
+        reason: 'operator_merge_approval_unavailable',
+        approvalReason: 'approval_malformed',
+      });
+    }
   });
 
   it('fails closed on a structurally incomplete record', () => {
@@ -387,29 +474,39 @@ describe('operator merge approval store', () => {
 });
 
 describe('operator approval CLI authority and delivery', () => {
-  it('requires the real trusted operator process environment even for read-only show', () => {
+  it('keeps both status reconciliation reads on inventory-listed wrapper routes', () => {
+    expect(classifyArgv([
+      'pr', 'view', '933',
+      '--repo', REPO,
+      '--json', 'headRefOid,headRefName',
+    ]).route?.id).toBe('pr-view');
+    expect(classifyArgv([
+      'pr', 'checks', '933',
+      '--repo', REPO,
+      '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description',
+    ]).route?.id).toBe('pr-checks');
+  });
+
+  it('requires the real trusted operator environment even for read-only show', () => {
     delete process.env.AO_SESSION_ID;
     delete process.env.AO_SESSION_KIND;
     expect(() => assertOperatorMergeApprovalSession()).toThrow(/AO_SESSION_KIND=operator/);
+
     setOperatorProcessEnvironment();
     expect(() => assertOperatorMergeApprovalSession()).not.toThrow();
+
+    process.env.AO_SESSION_ID = 'worker-session-933';
+    expect(() => assertOperatorMergeApprovalSession()).toThrow(/forbidden inside an AO-managed session/);
   });
 
   it.each(['worker', 'coding'])('rejects an AO-managed %s CLI before writing state or invoking gh', async (kind) => {
     const storeRoot = tempRoot();
     const result = await runProcess({
       command: process.execPath,
-      args: [
-        '--experimental-strip-types',
-        cliPath,
-        ...approvalArgs(storeRoot),
-      ],
+      args: ['--experimental-strip-types', cliPath, ...approvalArgs(storeRoot)],
       cwd: repoRoot,
       inheritParentEnv: true,
-      env: {
-        AO_SESSION_ID: `${kind}-session-933`,
-        AO_SESSION_KIND: kind,
-      },
+      env: { AO_SESSION_ID: `${kind}-session-933`, AO_SESSION_KIND: kind },
       allowEmptyStdout: true,
       timeoutMs: 30_000,
     });
@@ -419,7 +516,7 @@ describe('operator approval CLI authority and delivery', () => {
     expect(existsSync(join(storeRoot, 'pr-933.json'))).toBe(false);
   });
 
-  it('ignores a forged injectable env and denies the real managed process before effects', async () => {
+  it('does not let forged options.env bypass the real managed-session guard', async () => {
     const storeRoot = tempRoot();
     const capture = captureTransport();
     process.env.AO_SESSION_ID = 'worker-session-933';
@@ -432,8 +529,8 @@ describe('operator approval CLI authority and delivery', () => {
     await expect(runOperatorMergeApprovalCommand(approvalArgs(storeRoot), forgedOptions))
       .rejects.toThrow(/forbidden inside an AO-managed session/);
     expect(existsSync(join(storeRoot, 'pr-933.json'))).toBe(false);
-    expect(capture.statuses).toHaveLength(0);
     expect(capture.comments).toHaveLength(0);
+    expect(capture.statuses).toHaveLength(0);
   });
 
   it('publishes an audited success for a normal operator approval', async () => {
@@ -447,10 +544,10 @@ describe('operator approval CLI authority and delivery', () => {
     expect(result.approval).toMatchObject({ event: 'operator_merge_approved', headSha: HEAD_A });
     expect(capture.comments).toHaveLength(1);
     expect(capture.statuses.map((request) => request.state)).toEqual(['success']);
-    expect(capture.remoteState()).toBe('success');
+    expect(capture.remoteStatus()).toMatchObject({ state: 'success' });
   });
 
-  it('overwrites a pre-existing remote success with verified failure when repeat publication fails', async () => {
+  it('overwrites a pre-existing remote success with its own verified failure', async () => {
     const storeRoot = tempRoot();
     const capture = captureTransport({ initialRemoteState: 'success', failComment: true });
     setOperatorProcessEnvironment();
@@ -459,18 +556,43 @@ describe('operator approval CLI authority and delivery', () => {
       transport: capture.transport,
     })).rejects.toThrow(/approval publication failed/);
 
-    expect(capture.statuses.map((request) => request.state)).toEqual(['failure']);
-    expect(capture.latestReads()).toBeGreaterThanOrEqual(2);
-    expect(capture.remoteState()).toBe('failure');
+    const failure = capture.statuses.find((request) => request.state === 'failure');
+    expect(failure?.description).toMatch(/\[opk-reconcile:[0-9a-f]{20}\]$/);
+    expect(capture.statusReads).toHaveLength(2);
+    expect(capture.statusReads.every((status) => status.description === failure?.description)).toBe(true);
+    expect(capture.remoteStatus()).toMatchObject({ state: 'failure', description: failure?.description });
     expect(readOperatorMergeApproval({ storeRoot, prNumber: 933, headSha: HEAD_A })).toMatchObject({
       approved: false,
       reason: 'revoked',
     });
   });
 
-  it('reconciles an applied-but-client-failed success with verified blocking status', async () => {
+  it('does not confirm compensation from a pre-existing failure when its first write is rejected', async () => {
     const storeRoot = tempRoot();
-    const capture = captureTransport({ ambiguousSuccess: true });
+    const capture = captureTransport({
+      initialRemoteState: 'failure',
+      failComment: true,
+      failFirstFailureWrite: true,
+    });
+    setOperatorProcessEnvironment();
+
+    await expect(runOperatorMergeApprovalCommand(approvalArgs(storeRoot), {
+      transport: capture.transport,
+    })).rejects.toThrow(/approval publication failed/);
+
+    const failures = capture.statuses.filter((request) => request.state === 'failure');
+    expect(failures).toHaveLength(2);
+    expect(capture.statusReads).toHaveLength(2);
+    expect(capture.statusReads.every((status) => status.description === failures[1]?.description)).toBe(true);
+    expect(capture.remoteStatus()).toMatchObject({
+      state: 'failure',
+      description: failures[1]?.description,
+    });
+  });
+
+  it('reconciles an applied-but-client-failed success with its own blocking status', async () => {
+    const storeRoot = tempRoot();
+    const capture = captureTransport({ ambiguousSuccess: 'applied' });
     setOperatorProcessEnvironment();
 
     await expect(runOperatorMergeApprovalCommand(approvalArgs(storeRoot), {
@@ -478,29 +600,26 @@ describe('operator approval CLI authority and delivery', () => {
     })).rejects.toThrow(/timeout after GitHub accepted success/);
 
     expect(capture.statuses.map((request) => request.state)).toEqual(['success', 'failure']);
-    expect(capture.latestReads()).toBeGreaterThanOrEqual(2);
-    expect(capture.remoteState()).toBe('failure');
-    expect(readOperatorMergeApproval({ storeRoot, prNumber: 933, headSha: HEAD_A })).toMatchObject({
-      approved: false,
-      reason: 'revoked',
-    });
+    const failure = capture.statuses[1];
+    expect(capture.statusReads).toHaveLength(2);
+    expect(capture.statusReads.every((status) => status.description === failure?.description)).toBe(true);
+    expect(capture.remoteStatus()).toMatchObject({ state: 'failure', description: failure?.description });
   });
 
-  it('detects a late ambiguous success and writes a newer verified failure', async () => {
+  it('retries after a delayed success supersedes the first compensating failure', async () => {
     const storeRoot = tempRoot();
-    const capture = captureTransport({
-      ambiguousSuccess: true,
-      delayedSuccessAfterFirstFailureRead: true,
-    });
+    const capture = captureTransport({ ambiguousSuccess: 'late' });
     setOperatorProcessEnvironment();
 
     await expect(runOperatorMergeApprovalCommand(approvalArgs(storeRoot), {
       transport: capture.transport,
-    })).rejects.toThrow(/timeout after GitHub accepted success/);
+    })).rejects.toThrow(/delayed GitHub success/);
 
     expect(capture.statuses.map((request) => request.state)).toEqual(['success', 'failure', 'failure']);
-    expect(capture.latestReads()).toBeGreaterThanOrEqual(4);
-    expect(capture.remoteState()).toBe('failure');
+    const lastFailure = capture.statuses[2];
+    expect(capture.statusReads.at(-2)?.description).toBe(lastFailure?.description);
+    expect(capture.statusReads.at(-1)?.description).toBe(lastFailure?.description);
+    expect(capture.remoteStatus()).toMatchObject({ state: 'failure', description: lastFailure?.description });
   });
 
   it('repairs the remote status when revoke is retried for an already-revoked record', async () => {
@@ -529,16 +648,15 @@ describe('operator approval CLI authority and delivery', () => {
 
     expect(result.approval).toMatchObject({ approved: false, reason: 'revoked' });
     expect(capture.statuses.map((request) => request.state)).toEqual(['failure']);
-    expect(capture.latestReads()).toBeGreaterThanOrEqual(2);
-    expect(capture.remoteState()).toBe('failure');
+    expect(capture.statusReads).toHaveLength(2);
+    expect(capture.remoteStatus()).toMatchObject({ state: 'failure' });
     expect(capture.comments).toHaveLength(0);
   });
 });
 
 describe('direct operator merge policy', () => {
-  it('allows an active exact-head approval only when current findings are triage-deferred', () => {
-    const stateRoot = tempRoot();
-    const record = approveOperatorMerge({
+  function approve(stateRoot: string): ReturnType<typeof approveOperatorMerge> {
+    return approveOperatorMerge({
       storeRoot: policyStoreRoot(stateRoot),
       repoSlug: REPO,
       prNumber: 933,
@@ -546,7 +664,12 @@ describe('direct operator merge policy', () => {
       reason: 'Explicit operator direct-merge command',
       actor: 'operator-test',
     });
-    seedDeferredPackReview();
+  }
+
+  it('allows an active exact-head approval only with terminal delivered review evidence', () => {
+    const stateRoot = tempRoot();
+    const record = approve(stateRoot);
+    writePackReviewRecord([deferFinding()]);
     setOperatorProcessEnvironment();
 
     expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
@@ -558,87 +681,103 @@ describe('direct operator merge policy', () => {
     });
   });
 
-  it('keeps a current-head BLOCK finding blocking despite an active approval', () => {
+  it('rejects a matching mid-flight journal row before GitHub review and status delivery complete', () => {
     const stateRoot = tempRoot();
-    approveOperatorMerge({
-      storeRoot: policyStoreRoot(stateRoot),
-      repoSlug: REPO,
-      prNumber: 933,
-      headSha: HEAD_A,
-      reason: 'approve',
-      actor: 'operator-test',
+    approve(stateRoot);
+    writePackReviewRecord([deferFinding()], { terminal: false });
+    setOperatorProcessEnvironment();
+
+    expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
+      allow: false,
+      reason: 'operator_merge_review_findings_unavailable',
+      reviewReason: 'pack_review_terminal_evidence_missing',
+      evidenceReasons: expect.arrayContaining(['run_not_terminal']),
     });
-    seedPackReview([{
-      id: 'finding-block-1',
-      fingerprint: 'finding-block-1',
-      title: 'CI will fail',
-      body: 'The current implementation cannot pass the required validation.',
-    }]);
+  });
+
+  it('keeps an active approval blocked by a terminal current-head BLOCK finding', () => {
+    const stateRoot = tempRoot();
+    approve(stateRoot);
+    writePackReviewRecord([blockFinding()], { status: 'changes_requested' });
     setOperatorProcessEnvironment();
 
     expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
       allow: false,
       reason: 'operator_merge_block_findings',
       reviewRunId: 'prr-operator-approval-fixture',
+      classifications: [{ verdict: 'BLOCK', findingId: 'block-1' }],
     });
   });
 
-  it('keeps pending architect adjudication blocking despite an active approval', () => {
+  it('keeps an active approval blocked by pending adjudication', () => {
     const stateRoot = tempRoot();
-    approveOperatorMerge({
-      storeRoot: policyStoreRoot(stateRoot),
-      repoSlug: REPO,
-      prNumber: 933,
-      headSha: HEAD_A,
-      reason: 'approve',
-      actor: 'operator-test',
-    });
-    seedDeferredPackReview();
-    seedPendingInbox(stateRoot);
+    approve(stateRoot);
+    writePackReviewRecord([deferFinding()]);
+    writePendingAdjudication(stateRoot);
     setOperatorProcessEnvironment();
 
     expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
       allow: false,
       reason: 'operator_merge_pending_adjudication',
-      pending: [expect.objectContaining({ adjudication_id: 'adj-pending-933' })],
+      pending: [{ adjudication_id: 'adj-pending-933', status: 'pending' }],
     });
   });
 
-  it('keeps an unclassified current finding pending despite an active approval', () => {
+  it('honors canonical resolved clearance instead of reclassifying the original BLOCK text', () => {
     const stateRoot = tempRoot();
-    approveOperatorMerge({
-      storeRoot: policyStoreRoot(stateRoot),
-      repoSlug: REPO,
-      prNumber: 933,
-      headSha: HEAD_A,
-      reason: 'approve',
-      actor: 'operator-test',
-    });
-    seedPackReview([{
-      id: 'finding-pending-1',
-      fingerprint: 'finding-pending-1',
-      title: 'Ambiguous finding',
-      body: 'This requires adjudication and has no defer marker.',
-    }]);
+    const record = approve(stateRoot);
+    const findings = [blockFinding()];
+    writePackReviewRecord(findings, { status: 'changes_requested' });
+    const markerList = loadMarkerList();
+    const normalizedTextHash = sha256(normalizeTriageText(buildFindingText(findings[0])));
+    const token = 'resolved-token-933';
+    const triageRoot = join(stateRoot, 'merge-triage');
+    const clearanceDir = join(triageRoot, 'clearance');
+    mkdirSync(clearanceDir, { recursive: true });
+    writeFileSync(join(clearanceDir, `pr-933-${HEAD_A}.json`), `${JSON.stringify({
+      schema_version: 1,
+      terminal: 'merge_triage_cleared',
+      pr_number: 933,
+      head_sha: HEAD_A,
+      gate_run_id: 'resolved-gate-933',
+      marker_list_version: markerList.schemaVersion,
+      marker_list_hash: markerList.markerListHash,
+      open_findings_snapshot_hash: computeOpenFindingsSnapshotHash(findings),
+    })}\n`, 'utf8');
+    writeFileSync(join(triageRoot, 'verdict-journal.jsonl'), `${JSON.stringify({
+      schema_version: 1,
+      event: 'merge_triage_verdict',
+      gate_run_id: 'resolved-gate-933',
+      finding_id: 'block-1',
+      fingerprint: 'block-1',
+      pr_number: 933,
+      head_sha: HEAD_A,
+      verdict: 'DEFER',
+      actor: 'architect',
+      actor_session: 'architect-session-933',
+      reason: 'architect_adjudication',
+      adjudication_provenance_token_hash: sha256(token),
+      normalized_text_hash: normalizedTextHash,
+    })}\n`, 'utf8');
+    writeFileSync(join(triageRoot, 'architect-tokens.json'), `${JSON.stringify({
+      'adj-resolved-933': {
+        tokenHash: sha256(token),
+        normalizedTextHash,
+      },
+    })}\n`, 'utf8');
     setOperatorProcessEnvironment();
 
     expect(evaluateMergePolicy(basePolicyInput(stateRoot))).toMatchObject({
-      allow: false,
-      reason: 'operator_merge_pending_adjudication',
-      reviewRunId: 'prr-operator-approval-fixture',
+      allow: true,
+      reason: 'operator_merge_approved',
+      approvalId: record.approvalId,
+      canonicalPolicyReason: 'merge_triage_cleared',
     });
   });
 
   it('denies caller-supplied operator sessionKind when trusted environment is absent', () => {
     const stateRoot = tempRoot();
-    approveOperatorMerge({
-      storeRoot: policyStoreRoot(stateRoot),
-      repoSlug: REPO,
-      prNumber: 933,
-      headSha: HEAD_A,
-      reason: 'approve',
-      actor: 'operator-test',
-    });
+    approve(stateRoot);
     delete process.env.AO_SESSION_KIND;
     delete process.env.AO_SESSION_ID;
 
@@ -654,36 +793,25 @@ describe('direct operator merge policy', () => {
 
   it('denies missing, mismatched, and AO-managed consumption', () => {
     const stateRoot = tempRoot();
-    approveOperatorMerge({
-      storeRoot: policyStoreRoot(stateRoot),
-      repoSlug: REPO,
-      prNumber: 933,
-      headSha: HEAD_A,
-      reason: 'Explicit operator direct-merge command',
-      actor: 'operator-test',
-    });
+    approve(stateRoot);
     setOperatorProcessEnvironment();
 
     expect(evaluateMergePolicy({ ...basePolicyInput(stateRoot), headSha: HEAD_B })).toMatchObject({
       allow: false,
-      reason: 'operator_merge_approval_unavailable',
       approvalReason: 'approval_head_mismatch',
     });
     expect(evaluateMergePolicy({ ...basePolicyInput(stateRoot), repoSlug: 'other/repository' })).toMatchObject({
       allow: false,
-      reason: 'operator_merge_approval_unavailable',
       approvalReason: 'approval_repository_mismatch',
     });
     expect(evaluateMergePolicy({ ...basePolicyInput(stateRoot), prNumber: 934 })).toMatchObject({
       allow: false,
-      reason: 'operator_merge_approval_unavailable',
       approvalReason: 'approval_missing',
     });
 
     process.env.AO_SESSION_ID = 'worker-session-933';
     expect(evaluateMergePolicy({ ...basePolicyInput(stateRoot), sessionKind: 'operator' })).toMatchObject({
       allow: false,
-      reason: 'operator_merge_approval_unavailable',
       approvalReason: 'ao_managed_session_forbidden',
     });
   });
@@ -691,14 +819,7 @@ describe('direct operator merge policy', () => {
   it('denies a revoked exact-head approval', () => {
     const stateRoot = tempRoot();
     const storeRoot = policyStoreRoot(stateRoot);
-    approveOperatorMerge({
-      storeRoot,
-      repoSlug: REPO,
-      prNumber: 933,
-      headSha: HEAD_A,
-      reason: 'approve',
-      actor: 'operator-test',
-    });
+    approve(stateRoot);
     revokeOperatorMerge({
       storeRoot,
       repoSlug: REPO,
