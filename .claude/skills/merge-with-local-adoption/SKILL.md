@@ -128,6 +128,15 @@ Under a direct order the default posture flips: a blocking status is **not** a s
 something to transition into a merge-appropriate state before Step 5. Do not ask the user
 to unblock what you can normalize yourself.
 
+**Precondition for every `--admin` bypass below — the at-cap triage gate.** If the PR
+latched `at_cap_open_findings`, merge eligibility belongs to `docs/merge-triage-gate.mjs`
+/ `scripts/lib/Merge-TriageGate.ps1` (`AGENTS.md` § At-cap merge triage, Issue #648), and
+a direct order is not an override for it. Consult it before bypassing **any** status —
+`REVIEW_REQUIRED`, `CHANGES_REQUESTED`, `BLOCKED`, `UNSTABLE` alike. Proceed only on
+current-head `clean_early_stop` or a validated `merge_triage_cleared`; otherwise stop and
+report that the gate denies eligibility. Steps 1 and 2 (draft, `BEHIND`) do not merge and
+are unaffected.
+
 Normalize, in this order, then re-run the Step 3 status read:
 
 1. **Draft PR** (`isDraft: true`) → `gh pr ready P --repo chetwerikoff/orchestrator-pack`,
@@ -137,12 +146,7 @@ Normalize, in this order, then re-run the Step 3 status read:
 3. **Review blocking** — `reviewDecision` is `REVIEW_REQUIRED`, a reviewer is pending or
    stale, or it is `CHANGES_REQUESTED` and the user's order supersedes those findings →
    merge with `--admin`. Never fabricate an approval or dismiss a review to fake a green
-   decision. **Before bypassing `CHANGES_REQUESTED`, check the at-cap gate:** if the PR
-   latched `at_cap_open_findings`, merge eligibility belongs to
-   `docs/merge-triage-gate.mjs` / `scripts/lib/Merge-TriageGate.ps1` (`AGENTS.md`
-   § At-cap merge triage) — a direct order does not override it. Proceed only on
-   current-head `clean_early_stop` or a validated `merge_triage_cleared`; otherwise stop
-   and report that the gate denies eligibility.
+   decision.
 4. **`mergeStateStatus` `BLOCKED`/`UNSTABLE` from checks you have proven non-required** →
    merge with `--admin`, and name the bypassed status in the Step 10 report. Prove it
    from the branch protection contract, not from appearance: a required check that is
