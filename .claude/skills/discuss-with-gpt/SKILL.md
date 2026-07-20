@@ -84,6 +84,7 @@ Every invocation resolves to exactly one state. The driver writes a record under
 | `invalid` | `echo-missing` / `hash-mismatch` / `truncated` / `malformed` |
 | `chrome_not_running` / `login_required` / `quota_limit` / `challenge` / `wrong_project` / `cdp_profile_mismatch` | Preflight blockers — fix and retry |
 | `stream_timeout` / `no_reply` | Generation incomplete — retry once |
+| `send_failed` | Prompt never landed as a user message — the turn was not submitted; resend, do not wait |
 | `driver_error` | Unexpected Playwright/UI exception — inspect artifact, fix, retry |
 | `skipped` | Browser unavailable and user absent |
 | `fallback_codex` | Ran `adversarial-draft-review` instead |
@@ -93,12 +94,13 @@ Every invocation resolves to exactly one state. The driver writes a record under
 
 Exit-code hints: `chrome_not_running`(3) / `login_required`(4) /
 `stream_timeout`(5) / `no_reply`(6) / `invalid`(7) / `quota_limit`(8) /
-`challenge`(9).
+`challenge`(9) / `send_failed`(14).
 
 ## Long turns: poll the page, never infer from the process
 
-GPT routinely thinks **10–15+ minutes** on a large spec. Set the driver timeout to
-at least `900000` ms; below that a real answer gets killed mid-generation.
+GPT routinely thinks **10–15+ minutes** on a large spec. The driver's `--timeout`
+therefore defaults to **900000 ms**; never lower it below that for a real draft —
+a shorter deadline discards a genuine reply as `stream_timeout`.
 
 **A running process proves nothing.** `pgrep` only shows that the local Node
 process has not exited. It looks identical whether GPT is generating, the answer
@@ -114,20 +116,27 @@ read-only over CDP and read three signals from the chat tab:
 | stop-button absent + last assistant message ends mid-sentence | stalled — retry |
 | stop-button absent + message complete | **done** — take the text from the page |
 
-When the page says the answer is complete but the driver is still waiting, stop
-waiting: read the reply off the page and kill the poller. Do not let a stuck
-detector burn the whole timeout.
+**Never hand-copy a reply off the page.** Text scraped by hand carries no
+`PASS_ID`/`DRAFT_SHA256` echo check, no parsed packet, no durable state record —
+so it can never be a `completed_valid` pass, and treating it as one breaks the
+validation contract in step 3. If the page shows a finished answer while the
+driver is still waiting, that is a **driver defect**: kill the run, record it as
+`driver_error`, fix the detector, and re-run so the reply is validated on the
+normal path. The two known causes are already fixed — a mid-render message count
+taken before the history settled, and duplicate tabs of one chat (below).
 
-**Verify delivery before waiting at all.** After sending, confirm a new
-**user-role** message carrying your prompt's opening text actually appeared in the
-thread. If it did not, the send failed and no amount of waiting will produce a
-reply — resend instead. A silent non-delivery is otherwise indistinguishable from
-a slow answer.
+**Delivery is verified by the driver, not by you.** After sending it confirms the
+prompt appeared as a user message and exits `send_failed`(14) if it did not.
+A silent non-delivery is otherwise indistinguishable from a slow answer, and
+waiting on it can only ever end in a misleading `stream_timeout`.
 
 ## Tabs: reuse, never accumulate
 
-When the operator supplies a **chat URL**, converse in the tab already open on
-that chat. Do not open a new page per turn.
+When the operator supplies a **chat URL**, pass it as `--chat-url <url>`: the
+driver then converses inside that conversation and reuses the tab already showing
+it, foregrounding rather than duplicating it. Without the flag (and with
+`--new-chat`) behaviour is unchanged — a new page on the project URL, i.e. a cold
+fresh chat, which is what every adversarial pass requires.
 
 Accumulated tabs are an active failure source, not clutter: several tabs of one
 conversation render at **different message counts**, so a message-count snapshot
@@ -138,9 +147,8 @@ to piled-up tabs.
 
 Rules:
 
-- reuse the existing tab matching the chat id; create a page only for a
-  deliberately fresh chat (`--new-chat`);
-- `bringToFront()` the tab before typing;
+- pass `--chat-url` whenever the operator named a conversation; the driver matches
+  the tab by chat id and foregrounds it;
 - close stale ChatGPT tabs when a turn ends, keeping one per live conversation;
 - a **fresh chat is still required** for each adversarial re-run (step 6) — tab
   reuse is about not duplicating the *same* conversation, not about reusing
