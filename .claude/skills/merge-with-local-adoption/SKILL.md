@@ -122,6 +122,14 @@ gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckR
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
 review blocking — **except** under a direct merge order (Step 3a).
 
+**At-cap triage gate — every merge path, green statuses included.** If the PR latched
+`at_cap_open_findings`, merge eligibility belongs to `docs/merge-triage-gate.mjs` /
+`scripts/lib/Merge-TriageGate.ps1` (`AGENTS.md` § At-cap merge triage, Issue #648).
+Consult it before Step 5 whether or not anything is blocking: all-green statuses are not
+a substitute for it, because the latch outlives the CI that went green. Merge only on
+current-head `clean_early_stop` or a validated `merge_triage_cleared`; otherwise stop and
+report that the gate denies eligibility. A direct order is not an override for it.
+
 ## Step 3a — Direct merge order: normalize blocking statuses
 
 **Applies only when the user gave a direct, concrete merge command** («мерж 385», «смержи
@@ -132,14 +140,8 @@ Under a direct order the default posture flips: a blocking status is **not** a s
 something to transition into a merge-appropriate state before Step 5. Do not ask the user
 to unblock what you can normalize yourself.
 
-**Precondition for every `--admin` bypass below — the at-cap triage gate.** If the PR
-latched `at_cap_open_findings`, merge eligibility belongs to `docs/merge-triage-gate.mjs`
-/ `scripts/lib/Merge-TriageGate.ps1` (`AGENTS.md` § At-cap merge triage, Issue #648), and
-a direct order is not an override for it. Consult it before bypassing **any** status —
-`REVIEW_REQUIRED`, `CHANGES_REQUESTED`, `BLOCKED`, `UNSTABLE` alike. Proceed only on
-current-head `clean_early_stop` or a validated `merge_triage_cleared`; otherwise stop and
-report that the gate denies eligibility. Steps 1 and 2 (draft, `BEHIND`) do not merge and
-are unaffected.
+The Step 3 at-cap triage gate governs this path too, and a direct order is not an
+override for it — no bypass below reaches Step 5 while that gate denies eligibility.
 
 Normalize, in this order, then re-run the Step 3 status read:
 
