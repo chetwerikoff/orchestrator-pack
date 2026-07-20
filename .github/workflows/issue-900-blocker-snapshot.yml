@@ -6,81 +6,36 @@ on:
       - main
 
 permissions:
-  contents: write
-
-concurrency:
-  group: issue-900-review4-publisher
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  publish:
+  rollback-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
-      - name: Checkout transfer payload
+      - name: Checkout PR merge ref
         uses: actions/checkout@v4
         with:
-          path: payload
-          fetch-depth: 1
-
-      - name: Checkout exact PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: agent/issue-900-node22-runtime
-          path: target
+          ref: refs/pull/916/merge
           fetch-depth: 0
 
-      - name: Reconstruct, verify, and commit patch locally
+      - name: Prove one-revert rollback
         shell: bash
         run: |
           set -euo pipefail
-          cp payload/scripts/toolchain/.issue900-review4.patch.xz /tmp/issue900-review4.patch.xz
-          test "$(wc -c < /tmp/issue900-review4.patch.xz)" -eq 2456
-          echo "235bff8d91a5977e5c869dad2faab4b693b978e82256ab3e2d60e96725a27ad8  /tmp/issue900-review4.patch.xz" | sha256sum --check --strict
-          xz --decompress --stdout /tmp/issue900-review4.patch.xz > /tmp/issue900-review4.patch
-          cd target
-          test "$(git rev-parse HEAD)" = "e4087667febf68e66b9726a1d8dfdcd5a77a0a21"
-          git apply --check /tmp/issue900-review4.patch
-          git apply --index /tmp/issue900-review4.patch
-          test "$(git diff --cached --name-only | wc -l)" -eq 2
-          test "$(git diff --cached --name-only | sort | paste -sd, -)" = "scripts/toolchain/check-typescript-runtime-policy.ts,scripts/toolchain/node22-runtime-policy.spec.ts"
-          git diff --cached --check
+          merge_sha="$(git rev-parse HEAD)"
+          base_parent="$(git rev-parse HEAD^1)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: close remaining Node 22 policy gaps"
+          git revert -m 1 --no-edit HEAD
+          revert_sha="$(git rev-parse HEAD)"
+          git diff --exit-code "$base_parent" HEAD
+          test -f scripts/lib/Invoke-TypeScriptCli.ps1
+          test -f scripts/toolchain/typescript-loader.mjs
+          printf 'merge_sha=%s\nbase_parent=%s\nrevert_sha=%s\nrollback_tree_matches_base=true\n' \
+            "$merge_sha" "$base_parent" "$revert_sha" | tee rollback-proof.txt
 
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: target/package-lock.json
-
-      - name: Install dependencies
-        working-directory: target
-        run: npm ci
-
-      - name: Validate latest review blocker fixes
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run check:node-major
-          npm run typecheck:foundation
-          npx tsc -p tsconfig.base.json --noEmit
-          npm run lint:foundation
-          npm run test:issue-900
-          npm run gate-runner-selftest
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-codex-pr-reviewer
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-scope-guard
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-task-declaration
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-token-chain-ledger
-          git fetch origin main:refs/remotes/origin/main --no-tags
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
-
-      - name: Push latest review fixes
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:agent/issue-900-node22-runtime
+          name: issue-900-rollback-proof
+          path: rollback-proof.txt
