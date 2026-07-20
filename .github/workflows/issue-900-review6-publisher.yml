@@ -30,42 +30,38 @@ jobs:
           path: target
           fetch-depth: 0
 
-      - name: Reconstruct chunked payload
+      - name: Reconstruct no-dependency patch
         shell: bash
         run: |
           set -euo pipefail
-          cat payload/scripts/toolchain/review6.0{0,1,2,3,4,5,6} > /tmp/issue900-review6.patch.xz.b64
-          test "$(wc -c < /tmp/issue900-review6.patch.xz.b64)" -eq 11372
-          base64 --decode /tmp/issue900-review6.patch.xz.b64 > /tmp/issue900-review6.patch.xz
-          test "$(wc -c < /tmp/issue900-review6.patch.xz)" -eq 8528
-          test "$(sha256sum /tmp/issue900-review6.patch.xz | awk '{print $1}')" = "90205fec088f46ac0a55b839d80134bca2909e8e2b249e1db0b021cfbd4d5d3b"
-          xz --decompress --stdout /tmp/issue900-review6.patch.xz > /tmp/issue900-review6.patch
+          cat payload/scripts/toolchain/no-yaml.0{0,1,2,3} > /tmp/issue900-no-yaml.patch.xz.b64
+          test "$(wc -c < /tmp/issue900-no-yaml.patch.xz.b64)" -eq 5164
+          base64 --decode /tmp/issue900-no-yaml.patch.xz.b64 > /tmp/issue900-no-yaml.patch.xz
+          test "$(wc -c < /tmp/issue900-no-yaml.patch.xz)" -eq 3872
+          test "$(sha256sum /tmp/issue900-no-yaml.patch.xz | awk '{print $1}')" = "1b20dd8ef1bd6f629cc40b66d22f086333318650d2fe0156bae176ce1f2ff9c0"
+          xz --decompress --stdout /tmp/issue900-no-yaml.patch.xz > /tmp/issue900-no-yaml.patch
 
-      - name: Apply exact reviewed patch
+      - name: Apply exact no-dependency patch
         working-directory: target
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "1f2bfb4c21c156527d2dbb553bbcf78c9bd36b83"
-          git apply --check /tmp/issue900-review6.patch
-          git apply --index /tmp/issue900-review6.patch
+          test "$(git rev-parse HEAD)" = "03d1aaa8d733866c628625d33ba2903bed754a7a"
+          git apply --check /tmp/issue900-no-yaml.patch
+          git apply --index /tmp/issue900-no-yaml.patch
           git diff --cached --check
           git diff --cached --name-only | sort > /tmp/actual-paths.txt
           printf '%s\n' \
-            AGENTS.md \
-            docs/declarations/900.zz-chatgpt-node22-ts-launcher.json \
             package-lock.json \
             package.json \
-            scripts/gate-runner/goldens/pre-delete-captures.json \
             scripts/toolchain/check-typescript-runtime-policy.ts \
-            scripts/toolchain/node22-runtime-policy.spec.ts \
             > /tmp/expected-paths.txt
           diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: close Node 22 workspace and YAML policy gaps"
+          git commit -m "fix: remove YAML registry dependency from runtime policy"
 
-      - name: Push review fixes
+      - name: Push no-dependency policy fix
         working-directory: target
         shell: bash
         run: git push origin HEAD:agent/issue-900-node22-runtime
