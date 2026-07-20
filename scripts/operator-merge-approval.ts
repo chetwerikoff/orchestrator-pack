@@ -12,6 +12,9 @@ import {
 } from './lib/operator-merge-approval.ts';
 import { PACK_REVIEW_REQUIRED_STATUS_CONTEXT } from './lib/pack-review-delivery.ts';
 
+const BLOCKING_STATUS_RECONCILE_ATTEMPTS = 4;
+const BLOCKING_STATUS_SETTLE_MS = 250;
+
 interface ParsedArguments {
   command: 'approve' | 'show' | 'revoke';
   prNumber: number;
@@ -29,6 +32,13 @@ export interface OperatorMergeApprovalStatusRequest {
   description: string;
 }
 
+export interface OperatorMergeApprovalStatusSnapshot {
+  state: string;
+  context: string;
+  id?: number | string;
+  createdAtUtc?: string;
+}
+
 export interface OperatorMergeApprovalCommentRequest {
   repoSlug: string;
   prNumber: number;
@@ -38,10 +48,10 @@ export interface OperatorMergeApprovalCommentRequest {
 export interface OperatorMergeApprovalGithubTransport {
   postStatus(request: OperatorMergeApprovalStatusRequest): Promise<void>;
   postComment(request: OperatorMergeApprovalCommentRequest): Promise<void>;
+  getLatestStatus(request: { repoSlug: string; headSha: string }): Promise<OperatorMergeApprovalStatusSnapshot | null>;
 }
 
 export interface RunOperatorMergeApprovalCommandOptions {
-  env?: NodeJS.ProcessEnv;
   transport?: OperatorMergeApprovalGithubTransport;
 }
 
@@ -90,9 +100,13 @@ function describeResult(result: Awaited<ReturnType<typeof runProcess>>): string 
   return String(result.stderr || result.error || result.stdout || result.outcome).trim();
 }
 
-export function assertOperatorMergeApprovalSession(env: NodeJS.ProcessEnv = process.env): void {
-  const sessionId = String(env.AO_SESSION_ID ?? '').trim();
-  const sessionKind = String(env.AO_SESSION_KIND ?? '').trim().toLowerCase();
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+export function assertOperatorMergeApprovalSession(): void {
+  const sessionId = String(process.env.AO_SESSION_ID ?? '').trim();
+  const sessionKind = String(process.env.AO_SESSION_KIND ?? '').trim().toLowerCase();
   if (sessionId) {
     throw new Error('operator merge approval is forbidden inside an AO-managed session');
   }
@@ -114,6 +128,23 @@ async function ghPost(endpoint: string, payload: Record<string, unknown>): Promi
   if (!result.ok) throw new Error(`GitHub write failed for ${endpoint}: ${describeResult(result)}`);
 }
 
+async function ghGetJson(endpoint: string): Promise<unknown> {
+  const result = await runProcess({
+    command: 'gh',
+    args: ['api', endpoint],
+    cwd: process.cwd(),
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  if (!result.ok) throw new Error(`GitHub read failed for ${endpoint}: ${describeResult(result)}`);
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`GitHub read returned malformed JSON for ${endpoint}: ${describeError(error)}`);
+  }
+}
+
 function defaultGithubTransport(): OperatorMergeApprovalGithubTransport {
   return {
     async postStatus(request) {
@@ -127,6 +158,27 @@ function defaultGithubTransport(): OperatorMergeApprovalGithubTransport {
       await ghPost(`repos/${request.repoSlug}/issues/${request.prNumber}/comments`, {
         body: request.body,
       });
+    },
+    async getLatestStatus(request) {
+      const payload = await ghGetJson(
+        `repos/${request.repoSlug}/commits/${request.headSha}/statuses?per_page=100`,
+      );
+      if (!Array.isArray(payload)) {
+        throw new Error('GitHub commit statuses response must be an array');
+      }
+      const latest = payload.find((entry) => (
+        entry
+        && typeof entry === 'object'
+        && !Array.isArray(entry)
+        && String((entry as Record<string, unknown>).context ?? '') === PACK_REVIEW_REQUIRED_STATUS_CONTEXT
+      )) as Record<string, unknown> | undefined;
+      if (!latest) return null;
+      return {
+        state: String(latest.state ?? ''),
+        context: String(latest.context ?? ''),
+        ...(latest.id !== undefined ? { id: String(latest.id) } : {}),
+        ...(latest.created_at ? { createdAtUtc: String(latest.created_at) } : {}),
+      };
     },
   };
 }
@@ -155,17 +207,61 @@ function revocationComment(args: ParsedArguments): string {
   ].join('\n');
 }
 
-async function publishBlockingStatus(
+async function readLatestPackReviewStatus(
+  args: ParsedArguments,
+  transport: OperatorMergeApprovalGithubTransport,
+): Promise<OperatorMergeApprovalStatusSnapshot | null> {
+  const status = await transport.getLatestStatus({ repoSlug: args.repoSlug, headSha: args.headSha });
+  if (!status) return null;
+  if (status.context !== PACK_REVIEW_REQUIRED_STATUS_CONTEXT) {
+    throw new Error(`unexpected status context '${status.context}'`);
+  }
+  return status;
+}
+
+async function reconcileBlockingStatus(
   args: ParsedArguments,
   transport: OperatorMergeApprovalGithubTransport,
   description: string,
 ): Promise<void> {
-  await transport.postStatus({
-    repoSlug: args.repoSlug,
-    headSha: args.headSha,
-    state: 'failure',
-    description,
-  });
+  const failures: string[] = [];
+  for (let attempt = 1; attempt <= BLOCKING_STATUS_RECONCILE_ATTEMPTS; attempt += 1) {
+    try {
+      await transport.postStatus({
+        repoSlug: args.repoSlug,
+        headSha: args.headSha,
+        state: 'failure',
+        description,
+      });
+    } catch (error) {
+      failures.push(`attempt ${attempt} write: ${describeError(error)}`);
+    }
+
+    await delay(BLOCKING_STATUS_SETTLE_MS * attempt);
+    let first: OperatorMergeApprovalStatusSnapshot | null = null;
+    try {
+      first = await readLatestPackReviewStatus(args, transport);
+    } catch (error) {
+      failures.push(`attempt ${attempt} first read: ${describeError(error)}`);
+    }
+    if (first?.state !== 'failure') {
+      failures.push(`attempt ${attempt} first read state: ${first?.state || 'missing'}`);
+      continue;
+    }
+
+    await delay(BLOCKING_STATUS_SETTLE_MS * attempt);
+    let second: OperatorMergeApprovalStatusSnapshot | null = null;
+    try {
+      second = await readLatestPackReviewStatus(args, transport);
+    } catch (error) {
+      failures.push(`attempt ${attempt} confirmation read: ${describeError(error)}`);
+    }
+    if (second?.state === 'failure') return;
+    failures.push(`attempt ${attempt} confirmation state: ${second?.state || 'missing'}`);
+  }
+  throw new Error(
+    `blocking status reconciliation unconfirmed after ${BLOCKING_STATUS_RECONCILE_ATTEMPTS} attempts: ${failures.join('; ')}`,
+  );
 }
 
 async function reconcileFailedApprovalPublication(
@@ -186,7 +282,7 @@ async function reconcileFailedApprovalPublication(
 
   let statusError = '';
   try {
-    await publishBlockingStatus(
+    await reconcileBlockingStatus(
       args,
       transport,
       'Operator approval publication failed; pack review remains blocking.',
@@ -208,7 +304,7 @@ export async function runOperatorMergeApprovalCommand(
   options: RunOperatorMergeApprovalCommandOptions = {},
 ): Promise<{ ok: true; approval: OperatorMergeApprovalRecord | OperatorMergeApprovalLookup }> {
   const args = parseArguments(argv);
-  assertOperatorMergeApprovalSession(options.env ?? process.env);
+  assertOperatorMergeApprovalSession();
   const transport = options.transport ?? defaultGithubTransport();
 
   if (args.command === 'show') {
@@ -243,7 +339,7 @@ export async function runOperatorMergeApprovalCommand(
     transitioned = after.reason === 'revoked';
   }
 
-  await publishBlockingStatus(
+  await reconcileBlockingStatus(
     args,
     transport,
     'Operator merge approval revoked; pack review must be re-evaluated.',
