@@ -41,6 +41,8 @@ interface ScopeSnapshot {
   changes: ChangedPath[];
   baseConfig: Record<string, unknown>;
   currentConfig: Record<string, unknown>;
+  baseConfigText: string;
+  currentConfigText: string;
   captureSelectors: string[];
   trap: {
     active: boolean;
@@ -299,12 +301,16 @@ function gitMode(file: string): string {
 function currentScopeSnapshot(trap: EgressTrap): ScopeSnapshot {
   const nameStatus = runGit(['diff', '--name-status', '-z', 'origin/main...HEAD']);
   const changes = parseNameStatus(nameStatus).map((entry) => ({ ...entry, mode: gitMode(entry.path) }));
-  const baseConfig = JSON.parse(runGit(['show', `origin/main:${fixture.scope.laneConfig}`])) as Record<string, unknown>;
-  const currentConfig = JSON.parse(readFileSync(path.join(repoRoot, fixture.scope.laneConfig), 'utf8')) as Record<string, unknown>;
+  const baseConfigText = runGit(['show', `origin/main:${fixture.scope.laneConfig}`]);
+  const currentConfigText = readFileSync(path.join(repoRoot, fixture.scope.laneConfig), 'utf8');
+  const baseConfig = JSON.parse(baseConfigText) as Record<string, unknown>;
+  const currentConfig = JSON.parse(currentConfigText) as Record<string, unknown>;
   return {
     changes,
     baseConfig,
     currentConfig,
+    baseConfigText,
+    currentConfigText,
     captureSelectors: Object.values(fixture.capture.selectors),
     trap: {
       active: trap.active,
@@ -318,6 +324,22 @@ function currentScopeSnapshot(trap: EgressTrap): ScopeSnapshot {
 function stringRecord(value: unknown): Record<string, string> {
   invariant(value !== null && typeof value === 'object' && !Array.isArray(value), 'classification must be an object');
   return value as Record<string, string>;
+}
+
+function expectedLaneConfigText(baseConfigText: string): string {
+  invariant(fixture.scope.expectedHeavyTests.length === 1, 'byte-level lane config fence requires exactly one TASK-311 classification');
+  const file = fixture.scope.expectedHeavyTests[0]!;
+  const base = JSON.parse(baseConfigText) as Record<string, unknown>;
+  const classification = stringRecord(base.classification);
+  invariant(!(file in classification), `TASK-311 classification already exists in base config: ${file}`);
+  const nextKey = Object.keys(classification).find((candidate) => candidate.localeCompare(file) > 0);
+  invariant(nextKey, `cannot locate deterministic insertion anchor for ${file}`);
+  const newline = baseConfigText.includes('\r\n') ? '\r\n' : '\n';
+  const anchor = `    ${JSON.stringify(nextKey)}: ${JSON.stringify(classification[nextKey])}`;
+  const offset = baseConfigText.indexOf(anchor);
+  invariant(offset >= 0, `lane config insertion anchor missing for ${nextKey}`);
+  const inserted = `    ${JSON.stringify(file)}: "heavy",${newline}`;
+  return `${baseConfigText.slice(0, offset)}${inserted}${baseConfigText.slice(offset)}`;
 }
 
 function validateScopeSnapshot(candidate: ScopeSnapshot): void {
@@ -346,6 +368,9 @@ function validateScopeSnapshot(candidate: ScopeSnapshot): void {
     const absolute = path.join(repoRoot, file);
     invariant(existsSync(absolute) && lstatSync(absolute).isFile(), `task artifact is not a regular file: ${file}`);
   }
+
+  const expectedConfigText = expectedLaneConfigText(candidate.baseConfigText);
+  invariant(candidate.currentConfigText === expectedConfigText, 'lane config bytes changed outside the exact TASK-311 classification insertion');
 
   const baseWithoutClassification = jsonClone(candidate.baseConfig);
   const currentWithoutClassification = jsonClone(candidate.currentConfig);
@@ -457,7 +482,7 @@ export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>
     candidate.changes.push({ status: 'M', path: 'README.md', mode: '100644' });
   }, 'unrelated-existing-path'));
   rows.push(expectCandidateRed(baseline, (candidate) => {
-    candidate.currentConfig.lightMaxWorkers = Number(candidate.currentConfig.lightMaxWorkers) + 1;
+    candidate.currentConfigText += '\n';
   }, 'lane-config-overreach'));
   rows.push(expectCandidateRed(baseline, (candidate) => {
     const classification = stringRecord(candidate.currentConfig.classification);
@@ -485,7 +510,7 @@ export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>
       addedHeavyTests: fixture.scope.expectedHeavyTests,
       capturePath: fixture.capture.path,
       captureSelectors: baseline.captureSelectors,
-      nonClassificationConfigByteEquivalent: true,
+      nonClassificationConfigByteEquivalent: baseline.currentConfigText === expectedLaneConfigText(baseline.baseConfigText),
       regularGitModesOnly: true,
     },
     mutations: rows,
