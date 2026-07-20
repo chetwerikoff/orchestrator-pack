@@ -235,6 +235,13 @@ gh pr view P --json state,mergedAt,mergeCommit
 `--squash`/`--rebase` only if the user asked. Record `MERGE_SHA` from `mergeCommit.oid`.
 On failure: stop, report stderr, no force-retry. No local `git merge` of the PR branch.
 
+**Carry a Step 3a decision into this command.** When Step 3a resolved a status by
+bypassing it (rules 3 and 4 — and only after its at-cap precondition passed), append
+`--admin` here; otherwise the merge stops at the very gate the direct order already
+adjudicated. `--admin` is never a reaction to this command failing: it is applied because
+Step 3a decided it, and adding it after an unexpected failure is the force-retry this
+step forbids.
+
 ## Step 6 — Safe pull in the live checkout
 
 Run when the user asked for pull or adoption needs merged `main`. Skip only when the user
