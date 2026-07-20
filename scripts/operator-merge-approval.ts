@@ -99,6 +99,11 @@ async function publishApproval(record: OperatorMergeApprovalRecord): Promise<voi
 }
 
 async function publishRevocation(args: ParsedArguments): Promise<void> {
+  await ghPost(`repos/${args.repoSlug}/statuses/${args.headSha}`, {
+    state: 'pending',
+    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+    description: 'Operator merge approval revoked; pack review must be re-evaluated.',
+  });
   await ghPost(`repos/${args.repoSlug}/issues/${args.prNumber}/comments`, {
     body: [
       '## Operator direct-merge approval revoked',
@@ -107,11 +112,6 @@ async function publishRevocation(args: ParsedArguments): Promise<void> {
       '',
       `Reason: ${args.reason}`,
     ].join('\n'),
-  });
-  await ghPost(`repos/${args.repoSlug}/statuses/${args.headSha}`, {
-    state: 'pending',
-    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-    description: 'Operator merge approval revoked; pack review must be re-evaluated.',
   });
 }
 
