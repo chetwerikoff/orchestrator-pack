@@ -49,7 +49,9 @@ export const acknowledgeArchitectPermissiveBudget = core.acknowledgeArchitectPer
 
 const OPERATOR_APPROVAL_SCHEMA_VERSION = 1;
 const OPERATOR_APPROVAL_EVENT = 'operator_merge_approved';
-const CANONICAL_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const CANONICAL_ISO_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const PACK_REVIEW_REQUIRED_STATUS_CONTEXT = 'orchestrator-pack/pack-review';
+const PACK_REVIEW_TERMINAL_STATUSES = new Set(['up_to_date', 'commented', 'changes_requested']);
 
 function normalizeProjectId(value = 'orchestrator-pack') {
   const normalized = String(value ?? '')
@@ -64,9 +66,9 @@ function normalizeRepoSlug(value) {
   return /^[^/\s]+\/[^/\s]+$/.test(repoSlug) ? repoSlug : null;
 }
 
-function isCanonicalUtcTimestamp(value) {
+function isCanonicalIsoTimestamp(value) {
   const text = String(value ?? '').trim();
-  if (!CANONICAL_UTC_TIMESTAMP.test(text)) return false;
+  if (!CANONICAL_ISO_UTC_PATTERN.test(text)) return false;
   const parsed = new Date(text);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === text;
 }
@@ -138,7 +140,7 @@ function readExactHeadOperatorApproval(input = {}) {
     !String(record.approvalId ?? '').trim() ||
     !String(record.reason ?? '').trim() ||
     !String(record.actor ?? '').trim() ||
-    !isCanonicalUtcTimestamp(record.createdAtUtc)
+    !isCanonicalIsoTimestamp(record.createdAtUtc)
   ) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
@@ -147,7 +149,7 @@ function readExactHeadOperatorApproval(input = {}) {
   if (Boolean(revokedAtUtc) !== Boolean(revocationReason)) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
-  if (revokedAtUtc && !isCanonicalUtcTimestamp(revokedAtUtc)) {
+  if (revokedAtUtc && !isCanonicalIsoTimestamp(revokedAtUtc)) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
   if (String(record.projectId ?? '') !== projectId) {
@@ -177,14 +179,116 @@ function resolvePackReviewRunStoreRoot(projectId) {
   return path.join(homedir(), '.orchestrator-pack', 'review-runs', projectId);
 }
 
-function readLatestExactHeadPackReview(input, projectId, prNumber, headSha) {
-  const storeRoot = resolvePackReviewRunStoreRoot(projectId);
-  const recordsDir = path.join(storeRoot, 'runs');
-  if (!existsSync(recordsDir)) {
-    return { ok: false, reason: 'pack_review_store_missing' };
+function timestampAtOrBefore(left, right) {
+  return Date.parse(left) <= Date.parse(right);
+}
+
+function terminalPackReviewEvidence(record, projectId, prNumber, headSha) {
+  if (Number(record.schemaVersion) !== 1) return { ok: false, reason: 'schema_version_invalid' };
+  const runId = String(record.id ?? record.runId ?? '').trim();
+  if (!/^prr-[a-zA-Z0-9._-]+$/.test(runId)) return { ok: false, reason: 'run_id_invalid' };
+  if (String(record.projectId ?? '') !== projectId) return { ok: false, reason: 'project_mismatch' };
+  if (Number(record.prNumber) !== prNumber) return { ok: false, reason: 'pr_mismatch' };
+  const targetSha = String(record.targetSha ?? record.headSha ?? '').trim().toLowerCase();
+  if (targetSha !== headSha) return { ok: false, reason: 'head_mismatch' };
+  if (String(record.key ?? '') !== `pr-${prNumber}-${headSha}`) return { ok: false, reason: 'key_mismatch' };
+
+  const status = String(record.status ?? '');
+  if (!PACK_REVIEW_TERMINAL_STATUSES.has(status) || record.latestRunStatus !== status) {
+    return { ok: false, reason: 'run_not_terminal' };
+  }
+  const completedAtUtc = String(record.completedAtUtc ?? '').trim();
+  if (!isCanonicalIsoTimestamp(completedAtUtc)) {
+    return { ok: false, reason: 'completed_timestamp_invalid' };
   }
 
+  const findings = Array.isArray(record.findings) ? record.findings : null;
+  const findingCount = Number(record.findingCount);
+  if (
+    (record.reviewVerdict !== 'clean' && record.reviewVerdict !== 'findings') ||
+    !findings ||
+    !Number.isInteger(findingCount) ||
+    findingCount < 0 ||
+    findings.length !== findingCount
+  ) {
+    return { ok: false, reason: 'verdict_payload_invalid' };
+  }
+  if (status === 'up_to_date' && (record.reviewVerdict !== 'clean' || findingCount !== 0)) {
+    return { ok: false, reason: 'terminal_status_verdict_mismatch' };
+  }
+  if (status !== 'up_to_date' && record.reviewVerdict !== 'findings') {
+    return { ok: false, reason: 'terminal_status_verdict_mismatch' };
+  }
+
+  const journal = record.journalOutcome;
+  const journalKey = `verdict:${runId}:${headSha}`;
+  if (
+    journal?.state !== 'persisted' ||
+    journal.idempotencyKey !== journalKey ||
+    !Number.isInteger(Number(journal.attempts)) ||
+    Number(journal.attempts) <= 0 ||
+    !isCanonicalIsoTimestamp(journal.recordedAtUtc) ||
+    !timestampAtOrBefore(journal.recordedAtUtc, completedAtUtc)
+  ) {
+    return { ok: false, reason: 'journal_not_authoritative' };
+  }
+
+  const reconciliation = record.githubReviewReconciliation;
+  const githubReviewId = record.githubReviewId ?? reconciliation?.commentReviewId;
+  if (
+    record.githubReviewEvent !== 'COMMENT' ||
+    reconciliation?.event !== 'COMMENT' ||
+    reconciliation.phase !== 'complete' ||
+    githubReviewId === undefined ||
+    !Array.isArray(reconciliation.pendingDismissalReviewIds) ||
+    reconciliation.pendingDismissalReviewIds.length > 0 ||
+    !Array.isArray(reconciliation.dismissedReviewIds) ||
+    !isCanonicalIsoTimestamp(reconciliation.preparedAtUtc) ||
+    !timestampAtOrBefore(reconciliation.preparedAtUtc, reconciliation.updatedAtUtc) ||
+    !isCanonicalIsoTimestamp(reconciliation.updatedAtUtc) ||
+    !timestampAtOrBefore(reconciliation.updatedAtUtc, completedAtUtc)
+  ) {
+    return { ok: false, reason: 'github_review_not_authoritative' };
+  }
+  if (
+    record.githubReviewId !== undefined &&
+    reconciliation.commentReviewId !== undefined &&
+    String(record.githubReviewId) !== String(reconciliation.commentReviewId)
+  ) {
+    return { ok: false, reason: 'github_review_identity_mismatch' };
+  }
+
+  const githubOutcome = record.deliveryOutcomes?.githubComment;
+  if (
+    githubOutcome?.state !== 'succeeded' ||
+    githubOutcome.idempotencyKey !== `github-comment:${runId}:${headSha}` ||
+    !isCanonicalIsoTimestamp(githubOutcome.recordedAtUtc) ||
+    !timestampAtOrBefore(githubOutcome.recordedAtUtc, completedAtUtc)
+  ) {
+    return { ok: false, reason: 'github_review_delivery_incomplete' };
+  }
+
+  const requiredOutcome = record.deliveryOutcomes?.requiredStatus;
+  const expectedRequiredReason = status === 'changes_requested' ? 'status_failure' : 'status_success';
+  if (
+    requiredOutcome?.state !== 'succeeded' ||
+    requiredOutcome.reason !== expectedRequiredReason ||
+    requiredOutcome.idempotencyKey !== `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${headSha}` ||
+    !isCanonicalIsoTimestamp(requiredOutcome.recordedAtUtc) ||
+    !timestampAtOrBefore(requiredOutcome.recordedAtUtc, completedAtUtc)
+  ) {
+    return { ok: false, reason: 'required_status_delivery_incomplete' };
+  }
+
+  return { ok: true, record, findings, timestampMs: Date.parse(completedAtUtc) };
+}
+
+function readLatestExactHeadPackReview(projectId, prNumber, headSha) {
+  const recordsDir = path.join(resolvePackReviewRunStoreRoot(projectId), 'runs');
+  if (!existsSync(recordsDir)) return { ok: false, reason: 'pack_review_store_missing' };
+
   const matches = [];
+  const rejected = [];
   try {
     for (const name of readdirSync(recordsDir)) {
       if (!name.endsWith('.json')) continue;
@@ -192,32 +296,13 @@ function readLatestExactHeadPackReview(input, projectId, prNumber, headSha) {
       if (!record || typeof record !== 'object' || Array.isArray(record)) {
         return { ok: false, reason: 'pack_review_store_malformed' };
       }
-      const targetSha = String(record.targetSha ?? record.headSha ?? '').trim().toLowerCase();
-      if (
-        String(record.projectId ?? '') !== projectId ||
-        Number(record.prNumber) !== prNumber ||
-        targetSha !== headSha
-      ) {
-        continue;
-      }
-      const findings = Array.isArray(record.findings) ? record.findings : null;
-      const findingCount = Number(record.findingCount);
-      if (
-        record.journalOutcome?.state !== 'persisted' ||
-        (record.reviewVerdict !== 'clean' && record.reviewVerdict !== 'findings') ||
-        !findings ||
-        !Number.isInteger(findingCount) ||
-        findingCount < 0 ||
-        findings.length !== findingCount
-      ) {
-        continue;
-      }
-      const timestamp = String(record.completedAtUtc ?? record.updatedAt ?? record.createdAt ?? '');
-      const timestampMs = Date.parse(timestamp);
-      if (!Number.isFinite(timestampMs)) {
-        return { ok: false, reason: 'pack_review_store_malformed' };
-      }
-      matches.push({ record, findings, timestampMs });
+      const recordProject = String(record.projectId ?? '');
+      const recordPr = Number(record.prNumber);
+      const recordHead = String(record.targetSha ?? record.headSha ?? '').trim().toLowerCase();
+      if (recordProject !== projectId || recordPr !== prNumber || recordHead !== headSha) continue;
+      const evidence = terminalPackReviewEvidence(record, projectId, prNumber, headSha);
+      if (evidence.ok) matches.push(evidence);
+      else rejected.push(evidence.reason);
     }
   } catch {
     return { ok: false, reason: 'pack_review_store_malformed' };
@@ -225,9 +310,13 @@ function readLatestExactHeadPackReview(input, projectId, prNumber, headSha) {
 
   matches.sort((left, right) => right.timestampMs - left.timestampMs);
   if (matches.length === 0) {
-    return { ok: false, reason: 'pack_review_exact_head_missing' };
+    return {
+      ok: false,
+      reason: rejected.length > 0 ? 'pack_review_terminal_evidence_missing' : 'pack_review_exact_head_missing',
+      evidenceReasons: [...new Set(rejected)],
+    };
   }
-  return { ok: true, ...matches[0] };
+  return matches[0];
 }
 
 function directOperatorSafetyResult(input, approval) {
@@ -239,16 +328,10 @@ function directOperatorSafetyResult(input, approval) {
   try {
     inbox = core.readArchitectInbox({ ...input, prNumber, headSha });
   } catch {
-    return {
-      allow: false,
-      reason: 'operator_merge_pending_state_unavailable',
-    };
+    return { allow: false, reason: 'operator_merge_pending_state_unavailable' };
   }
   if (!inbox || !Array.isArray(inbox.pending)) {
-    return {
-      allow: false,
-      reason: 'operator_merge_pending_state_unavailable',
-    };
+    return { allow: false, reason: 'operator_merge_pending_state_unavailable' };
   }
   if (inbox.pending.length > 0) {
     return {
@@ -258,36 +341,70 @@ function directOperatorSafetyResult(input, approval) {
     };
   }
 
-  const review = readLatestExactHeadPackReview(input, projectId, prNumber, headSha);
+  const review = readLatestExactHeadPackReview(projectId, prNumber, headSha);
   if (!review.ok) {
     return {
       allow: false,
       reason: 'operator_merge_review_findings_unavailable',
       reviewReason: review.reason,
+      ...(review.evidenceReasons ? { evidenceReasons: review.evidenceReasons } : {}),
     };
   }
 
-  const classifications = review.findings.map((finding) => core.classifyFinding(finding));
-  const block = classifications.filter((classification) => classification.verdict === VERDICT_BLOCK);
-  if (block.length > 0) {
-    return {
-      allow: false,
-      reason: 'operator_merge_block_findings',
-      reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
-      classifications: block,
-    };
+  // Reuse the canonical core policy only when its durable exact-head clearance exists.
+  // Caller-supplied terminal/clearance payloads are deliberately excluded: direct mode reads
+  // the trusted state root and lets the core validate marker/hash/journal provenance itself.
+  const clearancePath = path.join(
+    resolveStateRoot(input),
+    'merge-triage',
+    'clearance',
+    `pr-${prNumber}-${headSha}.json`,
+  );
+  let canonicalPolicy = { allow: false, reason: 'canonical_clearance_missing' };
+  if (existsSync(clearancePath)) {
+    try {
+      canonicalPolicy = core.evaluateMergePolicy({
+        stateRoot: resolveStateRoot(input),
+        prNumber,
+        headSha,
+        findings: review.findings,
+        markerFile: DEFAULT_MARKER_FILE,
+        atCapRecord: {
+          terminal: TERMINAL_AT_CAP_OPEN_FINDINGS,
+          pr_number: prNumber,
+          head_sha: headSha,
+        },
+      });
+    } catch {
+      canonicalPolicy = { allow: false, reason: 'canonical_policy_unavailable' };
+    }
   }
-  const pending = classifications.filter((classification) => (
-    classification.verdict === VERDICT_PENDING_ARCHITECT ||
-    classification.verdict === VERDICT_PENDING_OPERATOR
-  ));
-  if (pending.length > 0) {
-    return {
-      allow: false,
-      reason: 'operator_merge_pending_adjudication',
-      reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
-      classifications: pending,
-    };
+  const canonicallyCleared = canonicalPolicy?.allow === true
+    && canonicalPolicy.reason === 'merge_triage_cleared';
+
+  if (!canonicallyCleared) {
+    const classifications = review.findings.map((finding) => core.classifyFinding(finding));
+    const block = classifications.filter((classification) => classification.verdict === VERDICT_BLOCK);
+    if (block.length > 0) {
+      return {
+        allow: false,
+        reason: 'operator_merge_block_findings',
+        reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
+        classifications: block,
+      };
+    }
+    const pending = classifications.filter((classification) => (
+      classification.verdict === VERDICT_PENDING_ARCHITECT ||
+      classification.verdict === VERDICT_PENDING_OPERATOR
+    ));
+    if (pending.length > 0) {
+      return {
+        allow: false,
+        reason: 'operator_merge_pending_adjudication',
+        reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
+        classifications: pending,
+      };
+    }
   }
 
   return {
@@ -298,6 +415,7 @@ function directOperatorSafetyResult(input, approval) {
     approvalActor: approval.record.actor,
     approvalReason: approval.record.reason,
     reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
+    ...(canonicallyCleared ? { canonicalPolicyReason: canonicalPolicy.reason } : {}),
   };
 }
 
@@ -331,7 +449,13 @@ export function runMergeTriageGate(input = {}) {
   return {
     ok: true,
     ran: true,
-    ...direct,
+    reason: direct.reason,
+    approvalId: direct.approvalId,
+    approvedHeadSha: direct.approvedHeadSha,
+    approvalActor: direct.approvalActor,
+    approvalReason: direct.approvalReason,
+    reviewRunId: direct.reviewRunId,
+    ...(direct.canonicalPolicyReason ? { canonicalPolicyReason: direct.canonicalPolicyReason } : {}),
   };
 }
 
@@ -365,9 +489,8 @@ function directCliFailure(command, result) {
     return String(result?.reason ?? '').startsWith('operator_merge_') && result?.allow !== true;
   }
   if (command !== 'runGate' || result?.ok !== false || result?.ran !== true) return false;
-  if (result.reason === 'open_findings_unavailable' || String(result.reason ?? '').startsWith('operator_merge_')) {
-    return true;
-  }
+  if (String(result?.reason ?? '').startsWith('operator_merge_')) return true;
+  if (result.reason === 'open_findings_unavailable') return true;
   return Array.isArray(result.classifications)
     && result.classifications.some((classification) => classification?.reason === 'empty_finding_text');
 }
