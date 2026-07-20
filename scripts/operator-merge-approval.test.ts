@@ -1,6 +1,6 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   approveOperatorMerge,
@@ -93,6 +93,7 @@ describe('operator merge approval store', () => {
   it('fails closed on malformed state instead of treating it as approval', () => {
     const storeRoot = tempRoot();
     const path = operatorMergeApprovalRecordPath(933, { storeRoot });
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, '{"schemaVersion":1,"event":"operator_merge_approved"}\n', 'utf8');
 
     expect(readOperatorMergeApproval({ storeRoot, prNumber: 933, headSha: HEAD_A })).toEqual({
