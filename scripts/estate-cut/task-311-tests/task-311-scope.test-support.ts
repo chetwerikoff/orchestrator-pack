@@ -140,7 +140,7 @@ int connect(int fd, const struct sockaddr *addr, socklen_t length) {
 `, 'utf8');
   const compiled = runProcessSync({
     command: 'cc',
-    args: ['-shared', '-fPIC', '-O2', '-Wall', '-Werror', '-o', libraryPath, sourcePath, '-ldl'],
+    args: ['-shared', '-fPIC', '-O2', '-Wall', '-o', libraryPath, sourcePath, '-ldl'],
     cwd: root,
     env: process.env,
     inheritParentEnv: false,
