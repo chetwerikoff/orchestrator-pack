@@ -369,11 +369,11 @@ reconcile/reeval/wake/turn surfaces; uses #611 pre-fetched runs only. Tier caps 
 
 #### At-cap merge triage (#648/#933)
 
-For latched `at_cap_open_findings`, `docs/merge-triage-gate.mjs` is read-only policy.
-Autonomous/AO paths allow only exact-head `clean_early_stop` or hash-valid
-`merge_triage_cleared`. Direct operator commands also allow exact-tuple
-`operator_merge_approved` only with `AO_SESSION_KIND=operator` and no `AO_SESSION_ID`; payload
-claims never count. BLOCK, malformed/revoked approval, or pending adjudication deny.
+For `at_cap_open_findings`, autonomous/AO paths allow exact-head `clean_early_stop` or
+hash-valid `merge_triage_cleared`. Direct operator commands allow exact-tuple
+`operator_merge_approved` with `AO_SESSION_KIND=operator` and no `AO_SESSION_ID`; payload
+claims never grant authority. BLOCK, malformed/revoked approval, and pending adjudication deny;
+`docs/merge-triage-gate.mjs` is read-only policy, not an executor.
 
 #### Worker pre-flight (blocking)
 
