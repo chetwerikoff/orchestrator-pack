@@ -108,7 +108,11 @@ Record PR `P`, title, linked issue `I` from the PR body.
 ## Step 3 — Confirm merge readiness
 
 Unless the user explicitly waives checks (see also **Step 3a** — a direct merge order
-normalizes blocking statuses instead of stopping on them):
+normalizes blocking statuses instead of stopping on them). **A waiver never skips the
+status read under a direct order:** Step 3a needs it to see the draft flag, `BEHIND`,
+the review state, required CI, and the at-cap latch, and without it the run reaches
+Step 5 with no normalization decision and no way to honour the required-CI stop. Waiving
+optional checks waives waiting on them, not reading where the PR stands.
 
 ```bash
 gh pr checks P --repo chetwerikoff/orchestrator-pack
