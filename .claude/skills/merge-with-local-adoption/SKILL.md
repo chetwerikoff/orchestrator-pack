@@ -122,17 +122,24 @@ gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckR
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
 review blocking — **except** under a direct merge order (Step 3a).
 
-**At-cap triage gate — every merge path, green statuses included.** Neither command above
-exposes the pack-store `at_cap_open_findings` latch, so never gate this on your own
-reading of whether the PR is at cap. Ask the policy helper on **every** merge, before
-Step 5: `Get-MergeTriagePolicy` in `scripts/lib/Merge-TriageGate.ps1` (the `policy` /
-`evaluateMergePolicy` command over `docs/merge-triage-gate.mjs`), for the current PR and
-head. Merge only when it returns `allow` — it answers `no_at_cap_gate_required` when
-nothing is latched, and grants on current-head `clean_early_stop` or a validated
-`merge_triage_cleared`. Anything else (`BLOCK`, `DEFER`, `PENDING_ARCHITECT`) stops the
-merge: report that the gate denies eligibility. All-green statuses are not a substitute —
-the latch outlives the CI that went green — and a direct order is not an override
-(`AGENTS.md` § At-cap merge triage, Issue #648).
+**At-cap triage gate — every merge path, green statuses included.** Merge eligibility for
+a PR latched `at_cap_open_findings` belongs to `Get-MergeTriagePolicy` in
+`scripts/lib/Merge-TriageGate.ps1` (`evaluateMergePolicy` over
+`docs/merge-triage-gate.mjs`), not to your own reading of the statuses above — none of
+them expose the latch, and it outlives the CI that went green. A direct order is not an
+override (`AGENTS.md` § At-cap merge triage, Issue #648).
+
+Consult it before Step 5 on every merge. Merge only on an explicit `allow`
+(`no_at_cap_gate_required` when nothing is latched; current-head `clean_early_stop` or a
+validated `merge_triage_cleared` when it is). `BLOCK` / `DEFER` / `PENDING_ARCHITECT`
+stop the merge — report that the gate denies eligibility.
+
+**`allow` only counts when the helper was given authoritative input.** It reads the
+terminal record from its payload (`terminals` / `terminalRecords` / `atCapRecord`), not
+from the pack store, so a call made without that record answers
+`no_at_cap_gate_required` for an at-cap PR — a false pass, not a clearance. Supplying it
+from the store is **not yet wired in this skill**: until it is, treat a call you cannot
+feed authoritatively as a **stop and a contract gap to report**, never as an `allow`.
 
 ## Step 3a — Direct merge order: normalize blocking statuses
 
