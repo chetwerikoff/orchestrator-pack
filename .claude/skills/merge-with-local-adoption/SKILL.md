@@ -5,7 +5,8 @@ description: >-
   local adoption. A direct concrete merge command such as «мерж 919» is also an
   exact-head operator decision: keep real required CI mandatory, normalize closed,
   draft, and behind states, record an audited operator approval for pack-review findings,
-  then merge normally without --admin. Never runs from an AO-managed worker session.
+  require merge-policy acceptance, then merge normally without --admin. Never runs from
+  an AO-managed worker session.
 ---
 
 # Merge with local adoption
@@ -40,8 +41,9 @@ A direct merge command means:
 
 > The operator has considered the current pack-review findings and accepts them for this
 > exact PR head. Normalize mergeable metadata, keep real required CI mandatory, publish an
-> audited exact-head operator approval for the pack-review context, and complete the normal
-> merge-with-local-adoption flow.
+> audited exact-head operator approval for the pack-review context, require the merge-policy
+> evaluator to consume that same approval, and complete the normal merge-with-local-adoption
+> flow.
 
 The approval never claims that findings were fixed. It preserves the review history and
 expires automatically when the PR head changes.
@@ -125,10 +127,36 @@ This command:
 - publishes `orchestrator-pack/pack-review: success` for that exact head;
 - leaves the raw findings and prior failed statuses in history.
 
-For direct-order merge policy, an active exact-head `operator_merge_approved` record is the
-operator adjudication of any latched at-cap findings. Do not require a separate
-`merge_triage_cleared` record for the same direct command. This is not available to workers
-and does not alter autonomous merge policy.
+### Require merge-policy consumption of the same approval
+
+Immediately after publication, call the existing merge-policy entrypoint in explicit direct
+operator mode. Do not pass at-cap terminal payloads or synthesize a clearance: the evaluator
+reads the canonical exact-head record itself.
+
+```bash
+POLICY_JSON="$(node -e '
+  const [pr, head] = process.argv.slice(1);
+  process.stdout.write(JSON.stringify({
+    projectId: "orchestrator-pack",
+    repoSlug: "chetwerikoff/orchestrator-pack",
+    prNumber: Number(pr),
+    headSha: head,
+    sessionKind: "operator",
+    directOperatorMerge: true
+  }));
+' "$P" "$APPROVED_HEAD" | node docs/merge-triage-gate.mjs evaluateMergePolicy)"
+
+printf '%s' "$POLICY_JSON" | node -e '
+  const fs = require("node:fs");
+  const result = JSON.parse(fs.readFileSync(0, "utf8"));
+  if (result.allow !== true || result.reason !== "operator_merge_approved") process.exit(2);
+'
+```
+
+Any non-zero exit, malformed result, or reason other than `operator_merge_approved` means the
+operator decision was not admitted. Revoke the approval and stop. This is the mechanical
+at-cap adjudication for a direct command; autonomous merge policy still uses the original
+`clean_early_stop` / `merge_triage_cleared` rules.
 
 ### Revalidate after the write
 
@@ -139,7 +167,8 @@ Stop and revoke the approval if:
 - `headRefOid` differs from `APPROVED_HEAD`;
 - any real required CI is no longer green;
 - the PR is no longer open/mergeable;
-- the required `orchestrator-pack/pack-review` success is not present for `APPROVED_HEAD`.
+- the required `orchestrator-pack/pack-review` success is not present for `APPROVED_HEAD`;
+- merge policy no longer returns `operator_merge_approved` for the exact tuple.
 
 Revocation command:
 
@@ -171,6 +200,7 @@ In addition to the base Step 10 report, include:
 - closed→open, draft→ready, and behind→updated transitions performed;
 - `APPROVED_HEAD`;
 - operator approval id and reason;
+- merge-policy result and approval id;
 - real required-CI result excluding only the exact pack-review context;
 - whether approval was revoked;
 - confirmation that merge used normal protection and `--match-head-commit`, not `--admin`.
