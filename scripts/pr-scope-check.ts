@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
+import './toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {

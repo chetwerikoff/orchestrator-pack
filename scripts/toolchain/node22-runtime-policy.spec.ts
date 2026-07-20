@@ -1,9 +1,12 @@
 import {
+  chmodSync,
+  cpSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -71,6 +74,7 @@ function makePolicyFixture(): string {
     engines: { node: '22.x' },
   }, null, 2)}\n`);
   write(join(root, 'scripts/toolchain/node-version.json'), '{"schemaVersion":1,"nodeMajor":22}\n');
+  write(join(root, 'scripts/toolchain/native-entrypoint-preflight.ts'), "export const ready: boolean = true;\n");
   write(join(root, 'tsconfig.base.json'), `${JSON.stringify({
     compilerOptions: {
       module: 'NodeNext',
@@ -83,7 +87,11 @@ function makePolicyFixture(): string {
     },
   }, null, 2)}\n`);
   write(join(root, 'scripts/toolchain/typescript-launch-inventory.json'), fixtureInventory());
-  write(join(root, 'scripts/example.ts'), 'export const answer: number = 42;\n');
+  write(join(root, 'scripts/example.ts'), [
+    "import './toolchain/native-entrypoint-preflight.ts';",
+    'export const answer: number = 42;',
+    '',
+  ].join('\n'));
   write(join(root, 'scripts/example.test.ts'), "import { answer } from './example.ts';\nvoid answer;\n");
   write(join(root, 'scripts/native.sh'), 'node --experimental-strip-types scripts/example.ts\n');
   write(join(root, 'scripts/lib/Invoke-TypeScriptCli.ts'), [
@@ -92,6 +100,25 @@ function makePolicyFixture(): string {
     '',
   ].join('\n'));
   write(join(root, 'scripts/wrapper.ps1'), "$launcher = Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ts'\n");
+  return root;
+}
+
+
+function makeRealDeclareBinFixture(): string {
+  const root = tempRoot('opk-real-declare-bin-');
+  cpSync(join(repoRoot, 'plugins/_shared'), join(root, 'plugins/_shared'), { recursive: true });
+  cpSync(join(repoRoot, 'plugins/ao-task-declaration'), join(root, 'plugins/ao-task-declaration'), { recursive: true });
+  mkdirSync(join(root, 'scripts/toolchain'), { recursive: true });
+  for (const name of ['native-entrypoint-preflight.ts', 'node-runtime-contract.mjs', 'node-runtime-contract.d.mts', 'node-version.json']) {
+    cpSync(join(repoRoot, 'scripts/toolchain', name), join(root, 'scripts/toolchain', name));
+  }
+  cpSync(join(repoRoot, 'package.json'), join(root, 'package.json'));
+  mkdirSync(join(root, 'node_modules/@orchestrator-pack'), { recursive: true });
+  symlinkSync(
+    join(root, 'plugins/_shared'),
+    join(root, 'node_modules/@orchestrator-pack/shared'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
   return root;
 }
 
@@ -246,6 +273,67 @@ describe('launch inventory and fail-closed policy', () => {
     expect(violations.some((violation) => violation.rule === 'workflow-node-version' && violation.path === workflow)).toBe(true);
   });
 
+  it('rejects an unlisted workflow whose setup-node version is dynamic', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/dynamic.yml';
+    write(join(root, workflow), [
+      'name: dynamic',
+      'jobs:',
+      '  test:',
+      '    strategy:',
+      '      matrix:',
+      '        node: [20, 22]',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version: ${{ matrix.node }}',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow
+      && violation.message.includes('literal'))).toBe(true);
+  });
+
+  it('does not accept comment-only setup-node text for a required workflow', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/comment-only.yml';
+    write(join(root, workflow), [
+      'name: comment-only',
+      '# - uses: actions/setup-node@v4',
+      "#   with: { node-version: '22' }",
+      'jobs: {}',
+      '',
+    ].join('\n'));
+    write(join(root, 'scripts/toolchain/typescript-launch-inventory.json'), fixtureInventory([workflow]));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow
+      && violation.message.includes('no live actions/setup-node'))).toBe(true);
+  });
+
+  it('rejects node-version-file even when it points at the canonical declaration', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/version-file.yml';
+    write(join(root, workflow), [
+      'name: version-file',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        with:',
+      '          node-version-file: scripts/toolchain/node-version.json',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow
+      && violation.message.includes('node-version-file'))).toBe(true);
+  });
+
   it.each([
     ['static import', "import { value } from './dep.js';\nvoid value;\n"],
     ['static export', "export { value } from './dep.js';\n"],
@@ -267,6 +355,42 @@ describe('launch inventory and fail-closed policy', () => {
       violation.rule === 'runtime-import-specifier' && violation.path === 'scripts/good.ts')).toEqual([]);
   });
 });
+
+
+  it.skipIf(process.platform === 'win32').each([
+    ['missing', undefined, 'OPK_NODE_RUNTIME_VERSION_FILE_MISSING'],
+    ['drifted', '{"schemaVersion":1,"nodeMajor":24}\n', 'OPK_NODE_RUNTIME_DECLARATION_DRIFT'],
+  ])('fails a real plugin bin before effects when the canonical version file is %s', async (_label, content, code) => {
+    const root = makeRealDeclareBinFixture();
+    const versionFile = join(root, 'scripts/toolchain/node-version.json');
+    if (content === undefined) unlinkSync(versionFile);
+    else write(versionFile, content);
+    const marker = join(root, 'gh-effect.txt');
+    const binDir = join(root, 'bin');
+    const fakeGh = join(binDir, 'gh');
+    write(fakeGh, `#!/usr/bin/env bash\nprintf effect > ${JSON.stringify(marker)}\nexit 99\n`);
+    chmodSync(fakeGh, 0o755);
+
+    const result = await runProcess({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        join(root, 'plugins/ao-task-declaration/bin/declare.ts'),
+        '--issue', '900',
+        '--declared-paths', 'scripts/example.ts',
+        '--repo-root', root,
+      ],
+      cwd: root,
+      env: { PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}` },
+      inheritParentEnv: true,
+      timeoutMs: 30_000,
+      allowEmptyStdout: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(code);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(root, 'docs/declarations'))).toBe(false);
+  });
 
 describe('representative real entrypoints', () => {
   it('executes toolchain, gate, supervised-child, and plugin-bin paths under Node 22', async () => {

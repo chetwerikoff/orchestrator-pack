@@ -86,6 +86,7 @@ const FORBIDDEN_RUNTIME_PACKAGES = ['tsx', 'ts-node'] as const;
 const RETIRED_LOADER = 'scripts/toolchain/typescript-loader.mjs';
 const RETIRED_POWERSHELL_BRIDGE = 'scripts/lib/Invoke-TypeScriptCli.ps1';
 const TYPESCRIPT_CLI_LAUNCHER = 'scripts/lib/Invoke-TypeScriptCli.ts';
+const NATIVE_ENTRYPOINT_PREFLIGHT = 'scripts/toolchain/native-entrypoint-preflight.ts';
 const NATIVE_TS_EXTENSIONS = ['.ts', '.mts', '.cts'] as const;
 const RUNTIME_JS_EXTENSIONS = ['.js', '.mjs', '.cjs'] as const;
 const TEST_FRAMEWORK_PATHS = new Set([
@@ -166,7 +167,45 @@ function nativeShebang(line: string): boolean {
 }
 
 function directTypeScriptLaunch(line: string): boolean {
-  return /(?:^|[\s"'`:=&|])node(?:\.exe)?\s+(?:(?:--[A-Za-z0-9-]+)(?:=[^\s]+)?\s+)*[^\s"'`]+\.(?:[cm]?ts)\b/u.test(line);
+  return /(?:^|[\s"'`:=&|])node(?:\.exe)?\s+(?:(?:--[A-Za-z0-9-]+)(?:=[^\s]+)?\s+)*["']?[^\s"'`]+\.(?:[cm]?ts)\b/u.test(line);
+}
+
+function directTypeScriptTarget(line: string): string | undefined {
+  const match = /(?:^|[\s"'`:=&|])node(?:\.exe)?\s+(?:(?:--[A-Za-z0-9-]+)(?:=[^\s]+)?\s+)*["']?([^\s"'`]+\.(?:[cm]?ts))\b/u.exec(line);
+  return match?.[1];
+}
+
+function firstImportSpecifier(source: string, path: string): string | undefined {
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const first = sourceFile.statements[0];
+  return first && ts.isImportDeclaration(first) && ts.isStringLiteralLike(first.moduleSpecifier)
+    ? first.moduleSpecifier.text
+    : undefined;
+}
+
+function hasCanonicalEntrypointPreflight(repoRoot: string, absoluteTarget: string): boolean {
+  const targetPath = normalizePath(relative(repoRoot, absoluteTarget));
+  if (targetPath === TYPESCRIPT_CLI_LAUNCHER || targetPath === NATIVE_ENTRYPOINT_PREFLIGHT) return true;
+  if (!existsSync(absoluteTarget)) return false;
+  const source = readFileSync(absoluteTarget, 'utf8');
+  const specifier = firstImportSpecifier(source, targetPath);
+  if (!specifier || (!specifier.startsWith('./') && !specifier.startsWith('../'))) return false;
+  const imported = normalizePath(relative(repoRoot, resolve(dirname(absoluteTarget), specifier)));
+  return imported === NATIVE_ENTRYPOINT_PREFLIGHT;
+}
+
+function nativeLaunchTarget(
+  repoRoot: string,
+  sourceAbsolute: string,
+  line: string,
+): string | undefined {
+  if (nativeShebang(line)) return sourceAbsolute;
+  if (line.includes(TYPESCRIPT_CLI_LAUNCHER) || line.includes('Invoke-TypeScriptCli.ts')) {
+    return resolve(repoRoot, TYPESCRIPT_CLI_LAUNCHER);
+  }
+  const target = directTypeScriptTarget(line);
+  if (!target || /[$`{}]/u.test(target)) return undefined;
+  return resolve(repoRoot, target);
 }
 
 function nativeTypeScriptLaunch(line: string): boolean {
@@ -211,6 +250,84 @@ function loadInventoryContract(repoRoot: string): InventoryContract {
   return value;
 }
 
+function stripYamlComment(line: string): string {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === "'" && !doubleQuoted) singleQuoted = !singleQuoted;
+    if (character === '"' && !singleQuoted && line[index - 1] !== '\\') doubleQuoted = !doubleQuoted;
+    if (character === '#' && !singleQuoted && !doubleQuoted) return line.slice(0, index);
+  }
+  return line;
+}
+
+function yamlIndent(line: string): number {
+  return /^\s*/u.exec(line)?.[0].length ?? 0;
+}
+
+function setupNodeStepRange(lines: readonly string[], usesIndex: number): { start: number; end: number } {
+  const usesLine = stripYamlComment(lines[usesIndex] ?? '');
+  const usesIndent = yamlIndent(usesLine);
+  let start = usesIndex;
+  let stepIndent = usesIndent;
+
+  if (!/^\s*-\s*uses\s*:/u.test(usesLine)) {
+    for (let index = usesIndex - 1; index >= 0; index -= 1) {
+      const line = stripYamlComment(lines[index] ?? '');
+      if (!line.trim()) continue;
+      const match = /^(\s*)-\s+\S/u.exec(line);
+      const indentation = match?.[1];
+      if (indentation !== undefined && indentation.length <= usesIndent) {
+        start = index;
+        stepIndent = indentation.length;
+        break;
+      }
+    }
+  }
+
+  let end = lines.length;
+  for (let index = usesIndex + 1; index < lines.length; index += 1) {
+    const line = stripYamlComment(lines[index] ?? '');
+    if (!line.trim()) continue;
+    const indent = yamlIndent(line);
+    if (indent < stepIndent || (indent === stepIndent && /^\s*-\s+\S/u.test(line))) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function workflowVersionSelectors(
+  lines: readonly string[],
+  range: { readonly start: number; readonly end: number },
+): readonly { readonly kind: 'node-version' | 'node-version-file'; readonly value: string; readonly line: number }[] {
+  const selectors: { kind: 'node-version' | 'node-version-file'; value: string; line: number }[] = [];
+  for (let index = range.start; index < range.end; index += 1) {
+    const line = stripYamlComment(lines[index] ?? '');
+    const pattern = /\b(node-version-file|node-version)\s*:\s*([^,}\n]+)/gu;
+    for (const match of line.matchAll(pattern)) {
+      selectors.push({
+        kind: match[1] as 'node-version' | 'node-version-file',
+        value: (match[2] ?? '').trim(),
+        line: index + 1,
+      });
+    }
+  }
+  return selectors;
+}
+
+function literalNodeMajor(value: string): number | undefined {
+  const trimmed = value.trim();
+  const unquoted = ((trimmed.startsWith("'") && trimmed.endsWith("'"))
+    || (trimmed.startsWith('"') && trimmed.endsWith('"')))
+    ? trimmed.slice(1, -1)
+    : trimmed;
+  const match = /^(\d+)(?:\.x)?$/u.exec(unquoted);
+  return match?.[1] ? Number(match[1]) : undefined;
+}
+
 function scanWorkflowNodeVersions(
   repoRoot: string,
   allFiles: readonly string[],
@@ -218,30 +335,67 @@ function scanWorkflowNodeVersions(
 ): { inventory: LaunchInventoryEntry[]; violations: RuntimePolicyViolation[] } {
   const inventory: LaunchInventoryEntry[] = [];
   const violations: RuntimePolicyViolation[] = [];
-  const seen = new Set<string>();
+  const setupNodeCounts = new Map<string, number>();
 
   for (const absolute of allFiles) {
     const path = normalizePath(relative(repoRoot, absolute));
     if (!/^\.github\/workflows\/[^/]+\.ya?ml$/u.test(path)) continue;
     const lines = readFileSync(absolute, 'utf8').split(/\r?\n/u);
     for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index] ?? '';
-      const match = /\bnode-version:\s*['"]?(\d+)(?:\.x)?['"]?/u.exec(line);
-      if (!match?.[1]) continue;
-      seen.add(path);
-      const major = Number(match[1]);
+      const line = stripYamlComment(lines[index] ?? '');
+      if (!/^\s*(?:-\s*)?uses\s*:\s*['"]?actions\/setup-node@[^'"\s]+['"]?\s*$/u.test(line.trimEnd())) continue;
+
+      setupNodeCounts.set(path, (setupNodeCounts.get(path) ?? 0) + 1);
+      const range = setupNodeStepRange(lines, index);
+      const selectors = workflowVersionSelectors(lines, range);
+      const valid = selectors.length === 1
+        && selectors[0]?.kind === 'node-version'
+        && literalNodeMajor(selectors[0].value) === SUPPORTED_NODE_MAJOR;
       inventory.push({
         path,
         line: index + 1,
-        classification: major === SUPPORTED_NODE_MAJOR ? 'native-node-22' : 'invalid',
-        evidence: compactEvidence(line),
+        classification: valid ? 'native-node-22' : 'invalid',
+        evidence: compactEvidence(lines.slice(range.start, range.end).join(' ')),
       });
-      if (major !== SUPPORTED_NODE_MAJOR) {
+
+      if (selectors.length === 0) {
         violations.push({
           path,
           line: index + 1,
           rule: 'workflow-node-version',
-          message: `every live workflow Node declaration must select ${SUPPORTED_NODE_MAJOR}; received ${major}.`,
+          message: `actions/setup-node must declare one literal node-version: '${SUPPORTED_NODE_MAJOR}'.`,
+        });
+        continue;
+      }
+      if (selectors.length !== 1) {
+        violations.push({
+          path,
+          line: selectors[0]?.line ?? index + 1,
+          rule: 'workflow-node-version',
+          message: 'actions/setup-node must have exactly one version selector.',
+        });
+        continue;
+      }
+      const selector = selectors[0];
+      if (!selector) continue;
+      if (selector.kind === 'node-version-file') {
+        violations.push({
+          path,
+          line: selector.line,
+          rule: 'workflow-node-version',
+          message: `node-version-file is not allowed; select literal Node ${SUPPORTED_NODE_MAJOR}.`,
+        });
+        continue;
+      }
+      const major = literalNodeMajor(selector.value);
+      if (major !== SUPPORTED_NODE_MAJOR) {
+        violations.push({
+          path,
+          line: selector.line,
+          rule: 'workflow-node-version',
+          message: major === undefined
+            ? `actions/setup-node version must be a literal ${SUPPORTED_NODE_MAJOR} or ${SUPPORTED_NODE_MAJOR}.x; received ${JSON.stringify(selector.value)}.`
+            : `every live workflow Node declaration must select ${SUPPORTED_NODE_MAJOR}; received ${major}.`,
         });
       }
     }
@@ -250,8 +404,8 @@ function scanWorkflowNodeVersions(
   for (const path of contract.workflowFiles) {
     if (!existsSync(resolve(repoRoot, path))) {
       violations.push({ path, line: 1, rule: 'inventory-contract', message: 'required workflow file is missing.' });
-    } else if (!seen.has(path)) {
-      violations.push({ path, line: 1, rule: 'workflow-node-version', message: 'required workflow has no explicit setup-node declaration.' });
+    } else if ((setupNodeCounts.get(path) ?? 0) === 0) {
+      violations.push({ path, line: 1, rule: 'workflow-node-version', message: 'required workflow has no live actions/setup-node step.' });
     }
   }
   return { inventory, violations };
@@ -320,14 +474,24 @@ function scanLaunches(
         inventory.push({ path, line: lineNo, classification: oldClass ?? 'test-framework-owned', evidence });
       }
       if (directTypeScriptLaunch(line) || nativeShebang(line) || line.includes('runNativeTypeScriptCli')) {
-        const classification: LaunchClassification = oldClass ?? (nativeTypeScriptLaunch(line) ? 'native-node-22' : 'invalid');
+        const native = nativeTypeScriptLaunch(line);
+        const target = native && path !== 'package.json' && !path.endsWith('/package.json')
+          ? nativeLaunchTarget(repoRoot, absolute, line)
+          : undefined;
+        const preflighted = oldClass !== undefined
+          || path === 'package.json'
+          || path.endsWith('/package.json')
+          || (target !== undefined && hasCanonicalEntrypointPreflight(repoRoot, target));
+        const classification: LaunchClassification = oldClass ?? (native && preflighted ? 'native-node-22' : 'invalid');
         inventory.push({ path, line: lineNo, classification, evidence });
         if (classification === 'invalid') {
           violations.push({
             path,
             line: lineNo,
-            rule: 'direct-typescript-launch',
-            message: 'direct TypeScript launches must use native Node 22 type stripping or the canonical TypeScript launcher.',
+            rule: native ? 'node-contract' : 'direct-typescript-launch',
+            message: native
+              ? 'direct native TypeScript entrypoints must run the canonical declaration preflight before importing business modules.'
+              : 'direct TypeScript launches must use native Node 22 type stripping or the canonical TypeScript launcher.',
           });
         }
       }
@@ -427,6 +591,14 @@ function packageViolations(repoRoot: string, allFiles: readonly string[]): Runti
             line: 1,
             rule: 'direct-typescript-launch',
             message: `TypeScript bin ${bin} must use the native Node 22 shebang.`,
+          });
+        }
+        if (!hasCanonicalEntrypointPreflight(repoRoot, absoluteBin)) {
+          violations.push({
+            path,
+            line: 1,
+            rule: 'node-contract',
+            message: `TypeScript bin ${bin} must import ${NATIVE_ENTRYPOINT_PREFLIGHT} before business modules.`,
           });
         }
       } else if (/\.[cm]?js$/u.test(bin) && !source.includes('runNativeTypeScriptCli')) {

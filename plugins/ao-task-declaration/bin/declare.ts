@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
+import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';

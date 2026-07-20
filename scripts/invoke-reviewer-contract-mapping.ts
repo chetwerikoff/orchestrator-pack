@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
+import './toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
 import { readLines, readText } from './lib/reviewer-cli-io.ts';
 import {

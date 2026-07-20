@@ -9,7 +9,7 @@
     ]
   },
   "classifications": {
-    "native-node-22": "A live Node 22 launch whose argv uses native TypeScript type stripping or a native wrapper that enforces the canonical preflight.",
+    "native-node-22": "A live Node 22 launch that enters through the canonical TypeScript launcher or imports the canonical native-entrypoint preflight before all business modules.",
     "powershell-bridge": "A PowerShell caller that invokes scripts/lib/Invoke-TypeScriptCli.ts with native Node 22 type stripping; the TypeScript launcher validates node-version.json and package.json before importing the target.",
     "test-framework-owned": "A Vitest-owned TypeScript execution path.",
     "historical-fixture-only": "A non-live archived document, declaration, test fixture, or migration artifact.",
@@ -76,6 +76,22 @@
     },
     {
       "path": "plugins/ao-token-chain-ledger/bin/ledger.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/pack-review-runner.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/pr-scope-check.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/invoke-reviewer-contract-mapping.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/gh",
       "classification": "native-node-22"
     }
   ]

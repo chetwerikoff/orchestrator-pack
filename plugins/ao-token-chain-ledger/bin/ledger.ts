@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
+import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import { aggregateChain, formatChainReport } from '../lib/aggregate.ts';
 import { defaultLedgerPath, readLedgerRows } from '../lib/writer.ts';

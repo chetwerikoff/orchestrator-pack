@@ -1,3 +1,4 @@
+import './toolchain/native-entrypoint-preflight.ts';
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
