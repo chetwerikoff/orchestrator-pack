@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -216,6 +216,7 @@ async function resumeViaRunner(options: {
   statusWriter: (request: any) => Promise<void>;
   workerNotifier: (request: any) => Promise<{ state: 'delivered' | 'failed' | 'escalated'; reason: string }>;
 }): Promise<{ result: Record<string, unknown>; tracePath: string; persisted: PackReviewRunRecord }> {
+  mkdirSync(options.root, { recursive: true });
   const tracePath = path.join(options.root, `trace-${Math.random()}.jsonl`);
   writeFileSync(tracePath, '', 'utf8');
   const result = await runPackReviewEntry({
@@ -732,14 +733,15 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       },
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
-    const M4Evidence = attemptEvidence(readAttempts(M4File));
+    const M4Rows = readAttempts(M4File);
+    const M4Evidence = attemptEvidence(M4Rows);
     mutations.push(actualRowRed(delivery, 'changed-idempotency-or-head', 'J4', {
       statusPosts: M4Evidence.count,
       duplicateAccounted: M4Evidence.duplicateAccounted,
       exactlyOnceClaimed: M4Evidence.exactlyOnceClaimed,
-      attemptId: readAttempts(M4File)[1]?.idempotencyKey,
+      attemptId: M4Rows[1]?.idempotencyKey,
       expectedAttemptId: requiredStatusKey(M4Run),
-      attemptHead: readAttempts(M4File)[1]?.headSha,
+      attemptHead: M4Rows[1]?.headSha,
       expectedHead: M4Run.targetSha,
     }));
 
