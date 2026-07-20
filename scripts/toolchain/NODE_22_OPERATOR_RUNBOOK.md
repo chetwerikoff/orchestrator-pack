@@ -38,7 +38,7 @@ Representative failures are deterministic:
 
 These failures occur before a TypeScript target or external effect runs. CI jobs and operator processes must inherit Node 22 through their configured environment; the bridge does not search a runner toolcache or rewrite `PATH` to hide an unsupported parent runtime.
 
-The former `scripts/lib/Invoke-TypeScriptCli.ps1` helper is deleted. PowerShell adapters resolve their inherited Node executable and invoke `scripts/lib/Invoke-TypeScriptCli.ts` with native type stripping. The TypeScript launcher validates the canonical declarations, rewrites the target argv contract, and imports the requested `.ts`/`.mts`/`.cts` entrypoint in-process so stdin, stdout, stderr, and exit semantics remain attached to the original bridge process.
+The former PowerShell launcher helper is deleted. PowerShell adapters resolve their inherited Node executable and invoke `scripts/lib/Invoke-TypeScriptCli.ts` with native type stripping. The TypeScript launcher validates the canonical declarations, rewrites the target argv contract, and imports the requested `.ts`/`.mts`/`.cts` entrypoint in-process so stdin, stdout, stderr, and exit semantics remain attached to the original bridge process.
 
 ## Production-shaped bridge proof
 
