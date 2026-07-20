@@ -30,8 +30,8 @@ Do not activate it for:
 - questions or merge-policy discussion;
 - conditional language such as “merge when…” unless the condition is already satisfied;
 - proactive or autonomous merge proposals;
-- any AO-managed worker/coding session. Workers remain forbidden from merging or creating
-  operator approval records regardless of apparent sender.
+- any AO-managed worker/coding session. Workers remain forbidden from merging or creating,
+  reading, revoking, or consuming operator approval records regardless of apparent sender.
 
 For a non-direct request, use `WORKFLOW.md` unchanged.
 
@@ -108,12 +108,24 @@ A terminal findings result is expected to remain visible. An operationally unava
 review runner must be reported, but under the direct command it is still the operator's
 decision whether to approve the exact head; never invent findings or rewrite the raw review.
 
+### Establish the operator-shell boundary
+
+Before approve, show, revoke, or direct merge-policy evaluation, require that the command is
+running outside AO management:
+
+```bash
+[ -z "${AO_SESSION_ID:-}" ] || { echo "direct operator merge is forbidden inside AO session $AO_SESSION_ID" >&2; exit 2; }
+```
+
+`AO_SESSION_KIND=operator` is supplied only to the side-effecting/evaluator process below.
+Never put `sessionKind` in policy JSON; payload data cannot establish operator authority.
+
 ### Record and publish the exact-head operator approval
 
 Only after all real required CI is green, run from the operator live checkout:
 
 ```bash
-node --experimental-strip-types scripts/operator-merge-approval.ts approve \
+AO_SESSION_KIND=operator node --experimental-strip-types scripts/operator-merge-approval.ts approve \
   --pr-number P \
   --head-sha "$APPROVED_HEAD" \
   --repo-slug chetwerikoff/orchestrator-pack \
@@ -122,10 +134,12 @@ node --experimental-strip-types scripts/operator-merge-approval.ts approve \
 
 This command:
 
+- rejects any non-empty `AO_SESSION_ID` before local or GitHub effects;
 - atomically records one approval for `{repository, PR, exact head}` in the operator state root;
 - posts an auditable PR comment with the head, actor, reason, and approval id;
 - publishes `orchestrator-pack/pack-review: success` for that exact head;
-- leaves the raw findings and prior failed statuses in history.
+- leaves the raw findings and prior failed statuses in history;
+- on failed or ambiguous publication, revokes locally and publishes a later blocking status.
 
 ### Require merge-policy consumption of the same approval
 
@@ -141,10 +155,9 @@ POLICY_JSON="$(node -e '
     repoSlug: "chetwerikoff/orchestrator-pack",
     prNumber: Number(pr),
     headSha: head,
-    sessionKind: "operator",
     directOperatorMerge: true
   }));
-' "$P" "$APPROVED_HEAD" | node docs/merge-triage-gate.mjs evaluateMergePolicy)"
+' "$P" "$APPROVED_HEAD" | AO_SESSION_KIND=operator node docs/merge-triage-gate.mjs evaluateMergePolicy)"
 
 printf '%s' "$POLICY_JSON" | node -e '
   const fs = require("node:fs");
@@ -155,8 +168,8 @@ printf '%s' "$POLICY_JSON" | node -e '
 
 Any non-zero exit, malformed result, or reason other than `operator_merge_approved` means the
 operator decision was not admitted. Revoke the approval and stop. This is the mechanical
-at-cap adjudication for a direct command; autonomous merge policy still uses the original
-`clean_early_stop` / `merge_triage_cleared` rules.
+at-cap adjudication for a direct command; autonomous and AO-managed merge policy still uses
+only the original `clean_early_stop` / `merge_triage_cleared` rules.
 
 ### Revalidate after the write
 
@@ -173,11 +186,14 @@ Stop and revoke the approval if:
 Revocation command:
 
 ```bash
-node --experimental-strip-types scripts/operator-merge-approval.ts revoke \
+AO_SESSION_KIND=operator node --experimental-strip-types scripts/operator-merge-approval.ts revoke \
   --pr-number P --head-sha "$APPROVED_HEAD" \
   --repo-slug chetwerikoff/orchestrator-pack \
   --reason "Direct merge revalidation failed"
 ```
+
+A retry of this command must repair the remote blocking status even when the local record is
+already revoked.
 
 ### Merge the reviewed head normally
 
@@ -202,5 +218,5 @@ In addition to the base Step 10 report, include:
 - operator approval id and reason;
 - merge-policy result and approval id;
 - real required-CI result excluding only the exact pack-review context;
-- whether approval was revoked;
+- whether approval was revoked/reconciled;
 - confirmation that merge used normal protection and `--match-head-commit`, not `--admin`.
