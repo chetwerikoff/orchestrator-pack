@@ -11,11 +11,21 @@
 //   chrome_not_running(3)  login_required(4)  stream_timeout(5)  no_reply(6)
 //   quota_limit(8)  challenge(9)  wrong_project(10)  playwright_missing(2)
 //   driver_error(11)  cdp_profile_mismatch(13)  config_missing(12)
+//   send_failed(14)
 //
 // Usage:
 //   node driver.mjs --draft docs/issues_drafts/NN-slug.md
 //                   [--extra-file <path>] [--source-url <http(s) url>]
-//                   [--cdp http://localhost:9222] [--timeout 180000]
+//                   [--cdp http://localhost:9222] [--timeout 900000]
+//                   [--chat-url <existing chat url>] [--new-chat]
+//
+// --timeout defaults to 900000 ms: GPT routinely thinks 10-15+ minutes on a large
+//   draft, and a shorter deadline discards a genuine reply as stream_timeout.
+//
+// --chat-url: converse inside an existing conversation instead of opening a fresh
+//   chat, reusing the tab already showing it (foregrounded, never duplicated).
+//   Adversarial passes must NOT use it — each pass requires a cold fresh chat.
+//   Default (and --new-chat) opens a new page on the project URL as before.
 //
 // Operator config (required): DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR env var or
 // local.config.json (see local.config.example.json). Project URL from
@@ -109,16 +119,22 @@ try {
 if (!PROJECT_URL) {
   exitConfigMissing('discuss-with-gpt: project URL not set. Set DISCUSS_WITH_GPT_PROJECT_URL or use --project-url.');
 }
-const timeout = parseInt(get('--timeout', '180000'), 10);
+// 900000 ms: large drafts routinely take 10-15+ minutes of GPT reasoning, and a
+// shorter deadline throws away a real answer as stream_timeout.
+const timeout = parseInt(get('--timeout', '900000'), 10);
+const chatUrl = get('--chat-url', '');
+const forceNewChat = process.argv.includes('--new-chat');
 
 const BEGIN_NONCE = randomUUID();   // (#3) echo proves the draft HEAD was received
 const END_NONCE = randomUUID();     // (#2) appears ONLY after the draft → echo proves the TAIL
 const LEDGER_NONCE = randomUUID();  // (#7) unpredictable ledger delimiter → untrusted content can't escape
 const tok = (s) => Math.round(s.length / 4);
 
-let browser = null, page = null;
+let browser = null, page = null, reusedPage = false;
 async function closeAll() {
-  try { if (page) await page.close(); } catch { /* ignore */ }
+  // Close only what this run opened: a tab reused via --chat-url belongs to the
+  // operator's live conversation and must survive the turn.
+  try { if (page && !reusedPage) await page.close(); } catch { /* ignore */ }
   try { if (browser) await browser.close(); } catch { /* ignore */ }
 }
 async function fail(state, code, fields = {}) {
@@ -229,8 +245,27 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   browser = await chromium.connectOverCDP(cdp).catch(() => null);
   if (!browser) { await fail('chrome_not_running', 3, { note: 'cdp=' + cdp }); }
   const ctx = browser.contexts()[0];
-  page = await ctx.newPage();
-  await page.goto(PROJECT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  // Tab discipline: an adversarial pass needs a cold fresh chat, so the default
+  // still opens a new page on the project URL. Only an operator-supplied
+  // --chat-url continues an existing conversation, and then we reuse the tab
+  // already showing it: several tabs of one chat render at different message
+  // counts, which makes the new-turn anchor below misread another tab's state.
+  // --new-chat means a cold chat, so it lands on the project URL even when a
+  // --chat-url was supplied; navigating a new page to that chat would just
+  // duplicate the conversation this reuse path exists to keep single.
+  const targetUrl = forceNewChat ? PROJECT_URL : (chatUrl || PROJECT_URL);
+  const chatId = chatUrl ? (chatUrl.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '') : '';
+  const existing = chatId && !forceNewChat
+    ? ctx.pages().find((p) => p.url().includes(chatId))
+    : undefined;
+  if (existing) {
+    page = existing;
+    reusedPage = true;   // operator's tab: never closed by this run
+    await page.bringToFront().catch(() => {});
+  } else {
+    page = await ctx.newPage();
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  }
 
   // richer preflight: distinguish login vs quota vs challenge vs wrong project
   const composer = '#prompt-textarea';
@@ -245,19 +280,57 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
     await page.waitForTimeout(1500);
   }
   if (!ready) await fail('login_required', 4, { note: 'composer never appeared' });
-  const projId = (PROJECT_URL.match(/\/g\/([^/?#]+)/) || [])[1] || '';
-  if (projId && !page.url().includes(projId))
+  // A chat URL carries the bare project token (g-p-<hash>) while the project URL
+  // may append a slug, so compare the stable token when one is present.
+  const projSeg = (PROJECT_URL.match(/\/g\/([^/?#]+)/) || [])[1] || '';
+  const projCore = (projSeg.match(/^(g-p-[0-9a-z]+)/i) || [])[1] || projSeg;
+  if (projCore && !page.url().includes(projCore))
     await fail('wrong_project', 10,
-      { note: 'expected project id ' + projId + ' not in url=' + page.url() + ' (pass --project-url for a different project)' });
+      { note: 'expected project id ' + projCore + ' not in url=' + page.url() + ' (pass --project-url for a different project)' });
+
+  const asst = '[data-message-author-role="assistant"]';
+  // Let an existing conversation finish rendering before anchoring: a count taken
+  // mid-render undercounts, so the loop below would compare against the wrong
+  // turn and never settle, burning the whole deadline on an answer already there.
+  {
+    let prev = -1, same = 0;
+    for (let i = 0; i < 40; i++) {
+      const c = await page.locator(asst).count().catch(() => 0);
+      if (c === prev) { if (++same >= 3) break; } else same = 0;
+      prev = c;
+      await page.waitForTimeout(1000);
+    }
+  }
 
   await page.locator(composer).click();
   await page.keyboard.press('Control+A');   // clear any stale composer text first
   await page.keyboard.press('Delete');
   await page.keyboard.insertText(prompt);
-  const asst = '[data-message-author-role="assistant"]';
   const preCount = await page.locator(asst).count().catch(() => 0);  // anchor to the NEW turn
+  const userSel = '[data-message-author-role="user"]';
+  const preUserCount = await page.locator(userSel).count().catch(() => 0);
   const send = page.locator('[data-testid="send-button"]');
   if (await send.count()) await send.click(); else await page.keyboard.press('Enter');
+
+  // Prove the turn was actually submitted. A silent non-delivery is otherwise
+  // indistinguishable from a slow answer, and waiting on it can only ever end in
+  // a misleading stream_timeout.
+  // Growth of the user-turn count is the primary signal: it cannot match an
+  // earlier turn (which a boilerplate text marker would, since every driver
+  // prompt opens identically) and it survives ChatGPT collapsing a long message,
+  // which can hide PASS_ID deep inside the body. A visible PASS_ID confirms it.
+  let delivered = false;
+  for (let i = 0; i < 20 && !delivered; i++) {
+    const uc = await page.locator(userSel).count().catch(() => 0);
+    if (uc > preUserCount) { delivered = true; break; }
+    for (let j = uc - 1; j >= 0 && j >= uc - 3; j--) {
+      const t = await page.locator(userSel).nth(j).innerText().catch(() => '');
+      if (t.includes(PASS_ID)) { delivered = true; break; }
+    }
+    if (!delivered) await page.waitForTimeout(1000);
+  }
+  if (!delivered) await fail('send_failed', 14,
+    { note: 'prompt never appeared as a user message; the turn was not submitted' });
 
   // completion: a NEW assistant message, stable, no stop/continue button
   let lastText = '', stable = 0, completed = false;
