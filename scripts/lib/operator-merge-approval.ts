@@ -12,6 +12,9 @@ import { dirname, join, resolve } from 'node:path';
 
 export const OPERATOR_MERGE_APPROVAL_SCHEMA_VERSION = 1;
 export const OPERATOR_MERGE_APPROVAL_EVENT = 'operator_merge_approved';
+const RECORD_RENAME_ATTEMPTS = 4;
+const RECORD_RENAME_BACKOFF_MS = 10;
+const TRANSIENT_RENAME_ERROR_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
 
 export interface OperatorMergeApprovalRecord {
   schemaVersion: 1;
@@ -30,6 +33,7 @@ export interface OperatorMergeApprovalRecord {
 
 export interface OperatorMergeApprovalStoreOptions {
   projectId?: string;
+  repoSlug?: string;
   storeRoot?: string;
 }
 
@@ -59,6 +63,52 @@ function requiredText(value: unknown, name: string): string {
   const text = String(value ?? '').trim();
   if (!text) throw new Error(`operator merge approval requires ${name}`);
   return text;
+}
+
+function normalizeRepoSlug(value: unknown): string {
+  const repoSlug = requiredText(value, 'repoSlug');
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repoSlug)) {
+    throw new Error(`invalid operator merge approval repoSlug '${repoSlug}'`);
+  }
+  return repoSlug;
+}
+
+function requireIsoTimestamp(value: unknown, name: string): string {
+  const text = requiredText(value, name);
+  if (!Number.isFinite(Date.parse(text))) {
+    throw new Error(`operator merge approval requires an ISO timestamp for ${name}`);
+  }
+  return text;
+}
+
+function sleepSync(milliseconds: number): void {
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(cell, 0, 0, milliseconds);
+}
+
+function errorCode(error: unknown): string {
+  return error instanceof Error && 'code' in error
+    ? String((error as NodeJS.ErrnoException).code ?? '')
+    : '';
+}
+
+function renameRecordWithRetry(temporary: string, destination: string): void {
+  for (let attempt = 1; attempt <= RECORD_RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      renameSync(temporary, destination);
+      return;
+    } catch (error) {
+      const code = errorCode(error);
+      if (!TRANSIENT_RENAME_ERROR_CODES.has(code)) throw error;
+      if (attempt === RECORD_RENAME_ATTEMPTS) {
+        throw new Error(
+          `operator merge approval atomic replace failed: rename_retry_exhausted code=${code} attempts=${RECORD_RENAME_ATTEMPTS} destination=${destination}`,
+          { cause: error },
+        );
+      }
+      sleepSync(RECORD_RENAME_BACKOFF_MS * attempt);
+    }
+  }
 }
 
 export function normalizeOperatorMergeApprovalProjectId(value = 'orchestrator-pack'): string {
@@ -92,7 +142,7 @@ export function resolveOperatorMergeApprovalStoreRoot(
   const explicit = process.env.OPERATOR_MERGE_APPROVAL_STORE_ROOT?.trim();
   if (explicit) return resolve(explicit);
   const stateRoot = process.env.ORCHESTRATOR_PACK_STATE_ROOT?.trim()
-    || join(homedir(), '.orchestrator-pack');
+    || join(homedir(), '.local', 'state', 'orchestrator-pack');
   return join(
     resolve(stateRoot),
     'operator-merge-approvals',
@@ -127,16 +177,15 @@ export function parseOperatorMergeApprovalRecord(value: unknown): OperatorMergeA
   }
   const approvalId = requiredText(raw.approvalId, 'approvalId');
   const projectId = normalizeOperatorMergeApprovalProjectId(requiredText(raw.projectId, 'projectId'));
-  const repoSlug = requiredText(raw.repoSlug, 'repoSlug');
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repoSlug)) {
-    throw new Error(`invalid operator merge approval repoSlug '${repoSlug}'`);
-  }
+  const repoSlug = normalizeRepoSlug(raw.repoSlug);
   const prNumber = normalizeOperatorMergeApprovalPrNumber(raw.prNumber);
   const headSha = normalizeOperatorMergeApprovalHeadSha(raw.headSha);
   const reason = requiredText(raw.reason, 'reason');
   const actor = requiredText(raw.actor, 'actor');
-  const createdAtUtc = requiredText(raw.createdAtUtc, 'createdAtUtc');
-  const revokedAtUtc = String(raw.revokedAtUtc ?? '').trim() || undefined;
+  const createdAtUtc = requireIsoTimestamp(raw.createdAtUtc, 'createdAtUtc');
+  const revokedAtUtc = String(raw.revokedAtUtc ?? '').trim()
+    ? requireIsoTimestamp(raw.revokedAtUtc, 'revokedAtUtc')
+    : undefined;
   const revocationReason = String(raw.revocationReason ?? '').trim() || undefined;
   if (revokedAtUtc && !revocationReason) {
     throw new Error('revoked operator merge approval requires revocationReason');
@@ -165,7 +214,7 @@ function atomicWrite(path: string, value: OperatorMergeApprovalRecord): void {
       encoding: 'utf8',
       mode: 0o600,
     });
-    renameSync(temporary, path);
+    renameRecordWithRetry(temporary, path);
   } finally {
     rmSync(temporary, { force: true });
   }
@@ -175,10 +224,7 @@ export function approveOperatorMerge(input: ApproveOperatorMergeInput): Operator
   const projectId = normalizeOperatorMergeApprovalProjectId(input.projectId);
   const prNumber = normalizeOperatorMergeApprovalPrNumber(input.prNumber);
   const headSha = normalizeOperatorMergeApprovalHeadSha(input.headSha);
-  const repoSlug = requiredText(input.repoSlug, 'repoSlug');
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repoSlug)) {
-    throw new Error(`invalid operator merge approval repoSlug '${repoSlug}'`);
-  }
+  const repoSlug = normalizeRepoSlug(input.repoSlug);
   const record: OperatorMergeApprovalRecord = {
     schemaVersion: 1,
     event: OPERATOR_MERGE_APPROVAL_EVENT,
@@ -201,9 +247,11 @@ export function approveOperatorMerge(input: ApproveOperatorMergeInput): Operator
 export function readOperatorMergeApproval(
   input: OperatorMergeApprovalStoreOptions & { prNumber: number; headSha: string },
 ): OperatorMergeApprovalLookup {
+  const projectId = normalizeOperatorMergeApprovalProjectId(input.projectId);
+  const repoSlug = input.repoSlug === undefined ? undefined : normalizeRepoSlug(input.repoSlug);
   const prNumber = normalizeOperatorMergeApprovalPrNumber(input.prNumber);
   const headSha = normalizeOperatorMergeApprovalHeadSha(input.headSha);
-  const path = operatorMergeApprovalRecordPath(prNumber, input);
+  const path = operatorMergeApprovalRecordPath(prNumber, { ...input, projectId });
   if (!existsSync(path)) return { approved: false, reason: 'missing' };
   let record: OperatorMergeApprovalRecord;
   try {
@@ -211,7 +259,12 @@ export function readOperatorMergeApproval(
   } catch {
     return { approved: false, reason: 'malformed' };
   }
-  if (record.prNumber !== prNumber) return { approved: false, reason: 'malformed' };
+  if (record.projectId !== projectId || record.prNumber !== prNumber) {
+    return { approved: false, reason: 'malformed' };
+  }
+  if (repoSlug !== undefined && record.repoSlug !== repoSlug) {
+    return { approved: false, reason: 'malformed' };
+  }
   if (record.revokedAtUtc) return { approved: false, reason: 'revoked', record };
   if (record.headSha !== headSha) return { approved: false, reason: 'head_mismatch', record };
   return { approved: true, reason: 'approved', record };
