@@ -1,21 +1,11 @@
 ---
 name: merge-with-local-adoption
 description: >-
-  Merge a ready PR, safely pull main in the live checkout, and apply documented
-  local operator adoption; verify the AO orchestrator runtime worktree contains
-  the merge commit (Step 6e), recycle affected sessions for runtime-sensitive
-  merges (Step 8), then kill the merged PR's worker session (no blanket ao
-  session cleanup while the orchestrator is live — Step 9c). Use when the user
-  asks to merge a finished task — «мерж», «мерж 385», «мерж и пул», «смерж»,
-  «merge», «merge and pull» — or clearly wants a ready PR merged after
-  review/CI. On a direct merge order, normalize what can be normalized instead
-  of stopping — draft → ready for review, BEHIND → update-branch — while
-  required CI that is not green (red, pending, or never reported) still stops,
-  and `--admin` cannot force it because `main` sets `enforce_admins` (Step 3a).
-  If CI is red or the branch is behind base, delegate the fix to the PR worker
-  (Step 3b) and merge only after CI is green. Operates on the operator's live
-  working tree; never discards uncommitted local work. Skip when the user only
-  discusses merge policy without a concrete PR.
+  Merge a PR from the operator live checkout, safely pull main, and apply documented
+  local adoption. A direct concrete merge command such as «мерж 919» is also an
+  exact-head operator decision: keep real required CI mandatory, normalize draft and
+  behind states, record an audited operator approval for pack-review findings, then
+  merge normally without --admin. Never runs from an AO-managed worker session.
 ---
 
 Read and execute [`.claude/skills/merge-with-local-adoption/SKILL.md`](../../../.claude/skills/merge-with-local-adoption/SKILL.md) in full. Do not re-derive the workflow inline.
