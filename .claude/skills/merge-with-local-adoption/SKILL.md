@@ -133,9 +133,10 @@ Normalize, in this order, then re-run the Step 3 status read:
    then continue the normal flow (merge **with local adoption**, Steps 4–10 unchanged).
 2. **Branch `BEHIND`** → `gh pr update-branch P` from the operator session; wait for the
    new head's checks before merging.
-3. **Review blocking** (`REVIEW_REQUIRED`, pending/stale reviewer, `CHANGES_REQUIRED`
-   whose findings the user's order supersedes) → merge with `--admin`. Never fabricate an
-   approval or dismiss a review to fake a green decision.
+3. **Review blocking** — `reviewDecision` is `REVIEW_REQUIRED`, a reviewer is pending or
+   stale, or it is `CHANGES_REQUESTED` and the user's order supersedes those findings →
+   merge with `--admin`. Never fabricate an approval or dismiss a review to fake a green
+   decision.
 4. **`mergeStateStatus` `BLOCKED`/`UNSTABLE` from non-required or stuck checks** → merge
    with `--admin`, and name the bypassed status in the Step 10 report.
 
