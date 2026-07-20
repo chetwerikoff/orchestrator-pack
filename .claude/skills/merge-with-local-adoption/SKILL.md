@@ -3,9 +3,9 @@ name: merge-with-local-adoption
 description: >-
   Merge a PR from the operator live checkout, safely pull main, and apply documented
   local adoption. A direct concrete merge command such as «мерж 919» is also an
-  exact-head operator decision: keep real required CI mandatory, normalize draft and
-  behind states, record an audited operator approval for pack-review findings, then
-  merge normally without --admin. Never runs from an AO-managed worker session.
+  exact-head operator decision: keep real required CI mandatory, normalize closed,
+  draft, and behind states, record an audited operator approval for pack-review findings,
+  then merge normally without --admin. Never runs from an AO-managed worker session.
 ---
 
 # Merge with local adoption
@@ -52,7 +52,7 @@ Always read the state even if optional checks were otherwise waived:
 
 ```bash
 gh pr view P --repo chetwerikoff/orchestrator-pack \
-  --json number,title,body,state,isDraft,mergeable,mergeStateStatus,headRefOid,headRefName,statusCheckRollup
+  --json number,title,body,state,isDraft,mergedAt,mergeable,mergeStateStatus,headRefOid,headRefName,statusCheckRollup
 
 gh pr checks P --repo chetwerikoff/orchestrator-pack --required \
   --json name,state,bucket,link,startedAt,completedAt,workflow,description
@@ -64,12 +64,18 @@ Record `APPROVED_HEAD` from `headRefOid`. It must be a full 40-hex SHA.
 
 In order:
 
-1. `state != OPEN`, an already merged PR, or a real merge conflict remains a stop. Route a
-   resolvable conflict to the PR worker under the base workflow.
-2. `isDraft: true` → run `gh pr ready P --repo chetwerikoff/orchestrator-pack`, then re-read
+1. `mergedAt` present → the merge effect already exists; report it and do not create an
+   approval or attempt another merge. Apply the base workflow's already-merged/local-
+   adoption recovery only when its evidence says adoption is still outstanding.
+2. `state: CLOSED` with no `mergedAt` → run
+   `gh pr reopen P --repo chetwerikoff/orchestrator-pack`, then re-read the PR. If GitHub
+   cannot reopen it (for example, the head branch is gone), stop and report the reason.
+3. A real merge conflict remains a stop. Route a resolvable conflict to the PR worker under
+   the base workflow.
+4. `isDraft: true` → run `gh pr ready P --repo chetwerikoff/orchestrator-pack`, then re-read
    the PR. A direct command does not leave the PR merely ready; continue through merge and
    local adoption.
-3. `mergeStateStatus: BEHIND` → update the branch from the operator terminal when GitHub
+5. `mergeStateStatus: BEHIND` → update the branch from the operator terminal when GitHub
    permits it; otherwise delegate synchronization to the PR worker. Re-read the new
    `headRefOid` and wait for the new head's checks. Any old approval is irrelevant because
    approval is exact-head.
@@ -114,7 +120,7 @@ node --experimental-strip-types scripts/operator-merge-approval.ts approve \
 
 This command:
 
-- atomically records one approval for `{PR, exact head}` in the operator state root;
+- atomically records one approval for `{repository, PR, exact head}` in the operator state root;
 - posts an auditable PR comment with the head, actor, reason, and approval id;
 - publishes `orchestrator-pack/pack-review: success` for that exact head;
 - leaves the raw findings and prior failed statuses in history.
@@ -162,7 +168,7 @@ branch protection, or publish another approval without re-reading a new exact he
 In addition to the base Step 10 report, include:
 
 - whether direct-order mode activated;
-- draft/behind transitions performed;
+- closed→open, draft→ready, and behind→updated transitions performed;
 - `APPROVED_HEAD`;
 - operator approval id and reason;
 - real required-CI result excluding only the exact pack-review context;
