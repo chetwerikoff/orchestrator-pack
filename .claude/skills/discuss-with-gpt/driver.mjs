@@ -130,9 +130,11 @@ const END_NONCE = randomUUID();     // (#2) appears ONLY after the draft → ech
 const LEDGER_NONCE = randomUUID();  // (#7) unpredictable ledger delimiter → untrusted content can't escape
 const tok = (s) => Math.round(s.length / 4);
 
-let browser = null, page = null;
+let browser = null, page = null, reusedPage = false;
 async function closeAll() {
-  try { if (page) await page.close(); } catch { /* ignore */ }
+  // Close only what this run opened: a tab reused via --chat-url belongs to the
+  // operator's live conversation and must survive the turn.
+  try { if (page && !reusedPage) await page.close(); } catch { /* ignore */ }
   try { if (browser) await browser.close(); } catch { /* ignore */ }
 }
 async function fail(state, code, fields = {}) {
@@ -248,13 +250,17 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   // --chat-url continues an existing conversation, and then we reuse the tab
   // already showing it: several tabs of one chat render at different message
   // counts, which makes the new-turn anchor below misread another tab's state.
-  const targetUrl = chatUrl || PROJECT_URL;
+  // --new-chat means a cold chat, so it lands on the project URL even when a
+  // --chat-url was supplied; navigating a new page to that chat would just
+  // duplicate the conversation this reuse path exists to keep single.
+  const targetUrl = forceNewChat ? PROJECT_URL : (chatUrl || PROJECT_URL);
   const chatId = chatUrl ? (chatUrl.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '') : '';
   const existing = chatId && !forceNewChat
     ? ctx.pages().find((p) => p.url().includes(chatId))
     : undefined;
   if (existing) {
     page = existing;
+    reusedPage = true;   // operator's tab: never closed by this run
     await page.bringToFront().catch(() => {});
   } else {
     page = await ctx.newPage();
@@ -301,20 +307,25 @@ END-OF-DRAFT TOKEN (echo as "SPEC_RECEIVED: ..."): ${END_NONCE}`;
   await page.keyboard.press('Delete');
   await page.keyboard.insertText(prompt);
   const preCount = await page.locator(asst).count().catch(() => 0);  // anchor to the NEW turn
+  const userSel = '[data-message-author-role="user"]';
+  const preUserCount = await page.locator(userSel).count().catch(() => 0);
   const send = page.locator('[data-testid="send-button"]');
   if (await send.count()) await send.click(); else await page.keyboard.press('Enter');
 
   // Prove the turn was actually submitted. A silent non-delivery is otherwise
   // indistinguishable from a slow answer, and waiting on it can only ever end in
   // a misleading stream_timeout.
-  const userSel = '[data-message-author-role="user"]';
-  const marker = prompt.trim().slice(0, 40);
+  // Growth of the user-turn count is the primary signal: it cannot match an
+  // earlier turn (which a boilerplate text marker would, since every driver
+  // prompt opens identically) and it survives ChatGPT collapsing a long message,
+  // which can hide PASS_ID deep inside the body. A visible PASS_ID confirms it.
   let delivered = false;
   for (let i = 0; i < 20 && !delivered; i++) {
     const uc = await page.locator(userSel).count().catch(() => 0);
+    if (uc > preUserCount) { delivered = true; break; }
     for (let j = uc - 1; j >= 0 && j >= uc - 3; j--) {
       const t = await page.locator(userSel).nth(j).innerText().catch(() => '');
-      if (t.includes(marker)) { delivered = true; break; }
+      if (t.includes(PASS_ID)) { delivered = true; break; }
     }
     if (!delivered) await page.waitForTimeout(1000);
   }
