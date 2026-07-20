@@ -84,6 +84,8 @@ const SKIP_DIRS = new Set(['.git', '.ao', 'node_modules', 'vendor']);
 const TEXT_EXTENSIONS = new Set(['.cjs', '.cts', '.js', '.json', '.md', '.mjs', '.mts', '.ps1', '.sh', '.ts', '.txt', '.yaml', '.yml']);
 const FORBIDDEN_RUNTIME_PACKAGES = ['tsx', 'ts-node'] as const;
 const RETIRED_LOADER = 'scripts/toolchain/typescript-loader.mjs';
+const RETIRED_POWERSHELL_BRIDGE = 'scripts/lib/Invoke-TypeScriptCli.ps1';
+const TYPESCRIPT_CLI_LAUNCHER = 'scripts/lib/Invoke-TypeScriptCli.ts';
 const NATIVE_TS_EXTENSIONS = ['.ts', '.mts', '.cts'] as const;
 const RUNTIME_JS_EXTENSIONS = ['.js', '.mjs', '.cjs'] as const;
 const TEST_FRAMEWORK_PATHS = new Set([
@@ -271,6 +273,14 @@ function scanLaunches(
       message: 'Node-below-22 TypeScript compatibility loader must not exist.',
     });
   }
+  if (existsSync(resolve(repoRoot, RETIRED_POWERSHELL_BRIDGE))) {
+    violations.push({
+      path: RETIRED_POWERSHELL_BRIDGE,
+      line: 1,
+      rule: 'inventory-contract',
+      message: `retired PowerShell TypeScript launcher must not exist; use ${TYPESCRIPT_CLI_LAUNCHER}.`,
+    });
+  }
 
   for (const absolute of allFiles) {
     const path = normalizePath(relative(repoRoot, absolute));
@@ -287,6 +297,14 @@ function scanLaunches(
         message: `retired compatibility loader reference must be removed: ${RETIRED_LOADER}`,
       });
     }
+    if (!isHistorical && !fixture && source.includes(RETIRED_POWERSHELL_BRIDGE)) {
+      violations.push({
+        path,
+        line: 1,
+        rule: 'inventory-contract',
+        message: `retired PowerShell launcher reference must be removed: ${RETIRED_POWERSHELL_BRIDGE}`,
+      });
+    }
 
     for (let index = 0; index < lines.length; index += 1) {
       if (fixture) continue;
@@ -295,7 +313,7 @@ function scanLaunches(
       const evidence = compactEvidence(line);
       const oldClass = isHistorical ? 'historical-fixture-only' as const : undefined;
 
-      if (line.includes('Get-OpkTypeScriptNodeArguments')) {
+      if (path.endsWith('.ps1') && line.includes(TYPESCRIPT_CLI_LAUNCHER.split('/').pop() ?? TYPESCRIPT_CLI_LAUNCHER)) {
         inventory.push({ path, line: lineNo, classification: oldClass ?? 'powershell-bridge', evidence });
       }
       if (vitestLaunch(line)) {
@@ -309,7 +327,7 @@ function scanLaunches(
             path,
             line: lineNo,
             rule: 'direct-typescript-launch',
-            message: 'direct TypeScript launches must use native Node 22 type stripping or the canonical PowerShell bridge.',
+            message: 'direct TypeScript launches must use native Node 22 type stripping or the canonical TypeScript launcher.',
           });
         }
       }

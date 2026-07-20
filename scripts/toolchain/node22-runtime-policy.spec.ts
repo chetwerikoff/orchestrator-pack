@@ -86,7 +86,12 @@ function makePolicyFixture(): string {
   write(join(root, 'scripts/example.ts'), 'export const answer: number = 42;\n');
   write(join(root, 'scripts/example.test.ts'), "import { answer } from './example.ts';\nvoid answer;\n");
   write(join(root, 'scripts/native.sh'), 'node --experimental-strip-types scripts/example.ts\n');
-  write(join(root, 'scripts/wrapper.ps1'), '$args = Get-OpkTypeScriptNodeArguments -ScriptPath scripts/example.ts\n');
+  write(join(root, 'scripts/lib/Invoke-TypeScriptCli.ts'), [
+    '#!/usr/bin/env -S node --experimental-strip-types',
+    "export const marker: string = 'launcher';",
+    '',
+  ].join('\n'));
+  write(join(root, 'scripts/wrapper.ps1'), "$launcher = Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ts'\n");
   return root;
 }
 
@@ -363,15 +368,58 @@ describe('representative real entrypoints', () => {
     expect(existsSync(artifact)).toBe(true);
   }, 30_000);
 
-  it('has one bridge argv shape and no compatibility or CI toolcache branch', () => {
-    const bridgeSource = readFileSync(join(repoRoot, 'scripts/lib/Invoke-TypeScriptCli.ps1'), 'utf8');
-    const preflight = bridgeSource.indexOf('Invoke-OpkNodeRuntimePreflight -RepoRoot');
-    const nativeArgv = bridgeSource.indexOf("return @('--experimental-strip-types', $ScriptPath)");
+  it('has one TypeScript launcher with declaration preflight and no PowerShell compatibility helper', () => {
+    const launcherPath = join(repoRoot, 'scripts/lib/Invoke-TypeScriptCli.ts');
+    const launcherSource = readFileSync(launcherPath, 'utf8');
+    const preflight = launcherSource.indexOf('assertNodeRuntimeContract(invocation.repoRoot)');
+    const targetImport = launcherSource.indexOf('await import(pathToFileURL(invocation.scriptPath).href)');
+    expect(launcherSource.split(/\r?\n/u)[0]).toBe('#!/usr/bin/env -S node --experimental-strip-types');
     expect(preflight).toBeGreaterThanOrEqual(0);
-    expect(nativeArgv).toBeGreaterThan(preflight);
-    expect(bridgeSource).not.toContain('--loader');
-    expect(bridgeSource).not.toContain('RUNNER_TOOL_CACHE');
-    expect(bridgeSource).not.toContain('OPK_VITEST_HARNESS');
+    expect(targetImport).toBeGreaterThan(preflight);
+    expect(launcherSource).not.toContain('node:child_process');
+    expect(launcherSource).not.toContain('--loader');
+    expect(launcherSource).not.toContain('RUNNER_TOOL_CACHE');
+    expect(launcherSource).not.toContain('OPK_VITEST_HARNESS');
+    expect(existsSync(join(repoRoot, 'scripts/lib/Invoke-TypeScriptCli.ps1'))).toBe(false);
     expect(existsSync(join(repoRoot, 'scripts/toolchain', ['typescript', 'loader.mjs'].join('-')))).toBe(false);
+  });
+
+  it('forwards argv through the TypeScript launcher and reaches direct-execution target code', async () => {
+    const targetRoot = tempRoot('opk-typescript-cli-target-');
+    const target = join(targetRoot, 'target.ts');
+    write(target, [
+      "const payload: { argv: string[]; direct: boolean } = {",
+      '  argv: process.argv.slice(2),',
+      '  direct: process.argv[1] === import.meta.filename,',
+      '};',
+      'process.stdout.write(`${JSON.stringify(payload)}\n`);',
+      '',
+    ].join('\n'));
+    const launched = await runNode([
+      '--experimental-strip-types',
+      'scripts/lib/Invoke-TypeScriptCli.ts',
+      '--script', target,
+      '--', 'alpha', '--beta', 'two words',
+    ]);
+    expect(launched.ok, launched.stderr || launched.error).toBe(true);
+    expect(JSON.parse(launched.stdout)).toEqual({
+      argv: ['alpha', '--beta', 'two words'],
+      direct: true,
+    });
+  });
+
+  it('rejects unsupported launcher targets before importing target code', async () => {
+    const targetRoot = tempRoot('opk-typescript-cli-invalid-');
+    const marker = join(targetRoot, 'effect.txt');
+    const target = join(targetRoot, 'target.js');
+    write(target, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+    const launched = await runNode([
+      '--experimental-strip-types',
+      'scripts/lib/Invoke-TypeScriptCli.ts',
+      '--script', target,
+    ]);
+    expect(launched.ok).toBe(false);
+    expect(launched.stderr).toContain('OPK_TYPESCRIPT_CLI_TARGET_EXTENSION_UNSUPPORTED');
+    expect(existsSync(marker)).toBe(false);
   });
 });

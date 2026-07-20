@@ -3,7 +3,7 @@
 
 ## Node 22 single-runtime normalization (Issue #900)
 
-The canonical runtime declaration is `scripts/toolchain/node-version.json`; it must agree with `package.json.engines.node` (`22.x`). All live workflow Node declarations select Node 22. Live TypeScript launchers use native `--experimental-strip-types`, PowerShell callers use `Get-OpkTypeScriptNodeArguments`, plugin bins execute natively, and workspace packages have no direct `tsx` or `ts-node` dependency.
+The canonical runtime declaration is `scripts/toolchain/node-version.json`; it must agree with `package.json.engines.node` (`22.x`). All live workflow Node declarations select Node 22. Live TypeScript launchers use native `--experimental-strip-types`; PowerShell callers invoke the shared `scripts/lib/Invoke-TypeScriptCli.ts` entrypoint, plugin bins execute natively, and workspace packages have no direct `tsx` or `ts-node` dependency.
 
 Before adoption, run `npm run check:node-major` and the production-shaped bridge proof in `scripts/toolchain/NODE_22_OPERATOR_RUNBOOK.md` from the environment inherited by side processes. Restart the wake supervisor, AO sessions/services, scheduled jobs, shells, and tmux sessions so they inherit the Node 22 `PATH`. CI does not replace sanitized live-host evidence. Emergency rollback is one revert of the Issue #900 PR.
 

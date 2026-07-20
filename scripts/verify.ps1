@@ -107,7 +107,7 @@ Write-Host "Root: $Root"
 Write-Host ''
 
 Write-Host '== Tool versions =='
-[void](Test-CommandVersion -Command 'node' -Minimum ([version]'20.0.0') -Required)
+[void](Test-CommandVersion -Command 'node' -Minimum ([version]'22.0.0') -Required)
 [void](Test-CommandVersion -Command 'git' -Minimum ([version]'2.25.0') -Required)
 [void](Test-CommandVersion -Command 'gh' -Required)
 [void](Test-CommandVersion -Command 'npm' -Required)
@@ -203,12 +203,16 @@ else {
 Write-Host ''
 Write-Host '== TypeScript gate runner core (Issue #830 / Wave 3.a) =='
 $gateRunnerPath = Join-Path $Root 'scripts/gate-runner/runner.ts'
-$typeScriptCliHelper = Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ps1'
+$typeScriptCliHelper = Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ts'
 if ((Test-Path -LiteralPath $gateRunnerPath -PathType Leaf) -and (Test-Path -LiteralPath $typeScriptCliHelper -PathType Leaf)) {
     try {
-        . $typeScriptCliHelper
-        $gateRunnerNodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $gateRunnerPath)
-        & node @gateRunnerNodeArgs '--repo-root' $Root
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+        $nodeVersion = ((& $node.Source '--version' 2>&1 | Out-String).Trim())
+        if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $nodeVersion. Install/use Node 22 and run npm run check:node-major." }
+        $typeScriptLauncher = $typeScriptCliHelper
+        $gateRunnerNodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $gateRunnerPath, '--')
+        & $node.Source @gateRunnerNodeArgs '--repo-root' $Root
         if ($LASTEXITCODE -eq 0) {
             Write-Check 'gate-runner/core' 'PASS' 'completed'
         }

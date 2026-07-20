@@ -5,7 +5,8 @@
     "scripts/kernel/**/*.ts",
     "scripts/json-producers/**/*.ts",
     "scripts/toolchain/**/*.ts",
-    "scripts/gate-runner/**/*.ts"
+    "scripts/gate-runner/**/*.ts",
+    "scripts/lib/Invoke-TypeScriptCli.ts"
   ],
   "compilerOptions": {
     "allowImportingTsExtensions": true,

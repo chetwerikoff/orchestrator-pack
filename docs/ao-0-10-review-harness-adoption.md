@@ -26,7 +26,7 @@ Operational status:
 node --experimental-strip-types scripts/pack-review-runner.ts list --project-id orchestrator-pack
 ```
 
-The adjacent modules are NodeNext runtime bridges; do not invoke internal bridge files directly. Operators continue to invoke the TypeScript entrypoint shown above. Existing PowerShell adapters resolve it through `Get-OpkTypeScriptNodeArguments`, which validates `scripts/toolchain/node-version.json` and `package.json.engines.node`, requires Node 22, and returns one native `--experimental-strip-types` argv shape.
+The adjacent modules are NodeNext runtime bridges; do not invoke internal bridge files directly. Operators continue to invoke the TypeScript entrypoint shown above. Existing PowerShell adapters invoke `scripts/lib/Invoke-TypeScriptCli.ts` through native Node 22 type stripping. The launcher validates `scripts/toolchain/node-version.json` and `package.json.engines.node` before importing the requested TypeScript entrypoint.
 
 Automatic review uses the same runner through the existing PowerShell reconcile and wake adapters. The preserved `scripts/lib/Review-StartClaim.ps1` mutex, atomic-write, and stale-reclaim primitive remains the concurrency authority. Do not use daemon review endpoints or `ao review submit` as a transition or fallback path.
 

@@ -11,6 +11,11 @@ else {
 }
 # Trusted/base checker only; PR head supplies repoRoot for snapshots/diff (Issue #6 / #691).
 $CheckScript = Join-Path $PSScriptRoot 'pr-scope-check.ts'
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+$nodeVersion = ((& $node.Source '--version' 2>&1 | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $nodeVersion. Install/use Node 22 and run npm run check:node-major." }
+$typeScriptLauncher = (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ts')
 . (Join-Path $PSScriptRoot 'lib/Gh-SignalDispatch.ps1')
 
 function Write-ScopeGuardComment {
@@ -43,9 +48,8 @@ function Format-ScopeGuardComment {
         $Result | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
         Push-Location $TrustedRoot
         try {
-            . (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
-            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $CheckScript
-            $output = & node @nodeArgs --format-comment --input $payloadFile.FullName
+            $nodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $CheckScript, '--')
+            $output = & $node.Source @nodeArgs --format-comment --input $payloadFile.FullName
             return $output
         }
         finally {
@@ -115,9 +119,8 @@ function Invoke-PrScopeCheckCore {
         $InputJson | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
         Push-Location $TrustedRoot
         try {
-            . (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
-            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $CheckScript
-            $output = node @nodeArgs --input $payloadFile.FullName
+            $nodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $CheckScript, '--')
+            $output = & $node.Source @nodeArgs --input $payloadFile.FullName
         }
         finally {
             Pop-Location
@@ -162,9 +165,8 @@ function Get-ScopeGuardIssueNumber {
         (@{ prBody = $Body } | ConvertTo-Json -Depth 5 -Compress) | Set-Content -LiteralPath $payloadFile.FullName -Encoding utf8NoBOM
         Push-Location $TrustedRoot
         try {
-            . (Join-Path $TrustedRoot 'scripts/lib/Invoke-TypeScriptCli.ps1')
-            $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $CheckScript
-            $output = node @nodeArgs --resolve-issue-number --input $payloadFile.FullName
+            $nodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $CheckScript, '--')
+            $output = & $node.Source @nodeArgs --resolve-issue-number --input $payloadFile.FullName
         }
         finally {
             Pop-Location
