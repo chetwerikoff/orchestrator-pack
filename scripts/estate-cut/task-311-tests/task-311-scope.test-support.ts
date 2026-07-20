@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import dns from 'node:dns';
 import {
   appendFileSync,
@@ -88,12 +87,15 @@ int connect(int fd, const struct sockaddr *addr, socklen_t length) {
 }
 
 `, 'utf8');
-  const compiled = spawnSync('cc', ['-shared', '-fPIC', '-O2', '-Wall', '-Werror', '-o', libraryPath, sourcePath, '-ldl'], {
+  const compiled = runProcessSync({
+    command: 'cc',
+    args: ['-shared', '-fPIC', '-O2', '-Wall', '-Werror', '-o', libraryPath, sourcePath, '-ldl'],
     cwd: root,
     env: process.env,
+    inheritParentEnv: false,
     encoding: 'utf8',
   });
-  invariant(compiled.status === 0 && existsSync(libraryPath), `native egress trap compilation failed: ${compiled.stderr || compiled.stdout}`);
+  invariant(compiled.exitCode === 0 && existsSync(libraryPath), `native egress trap compilation failed: ${compiled.stderr || compiled.stdout || compiled.error}`);
   return libraryPath;
 }
 
