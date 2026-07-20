@@ -15,6 +15,7 @@ export const OPERATOR_MERGE_APPROVAL_EVENT = 'operator_merge_approved';
 const APPROVAL_REPLACE_LIMIT = 4;
 const APPROVAL_REPLACE_DELAY_MS = 10;
 const RETRYABLE_APPROVAL_REPLACE_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const CANONICAL_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export interface OperatorMergeApprovalRecord {
   schemaVersion: 1;
@@ -73,10 +74,14 @@ function normalizeRepoSlug(value: unknown): string {
   return repoSlug;
 }
 
-function requireIsoTimestamp(value: unknown, name: string): string {
+function requireCanonicalUtcTimestamp(value: unknown, name: string): string {
   const text = requiredText(value, name);
-  if (!Number.isFinite(Date.parse(text))) {
-    throw new Error(`operator merge approval requires an ISO timestamp for ${name}`);
+  if (!CANONICAL_UTC_TIMESTAMP.test(text)) {
+    throw new Error(`operator merge approval requires a canonical UTC ISO timestamp for ${name}`);
+  }
+  const parsed = new Date(text);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== text) {
+    throw new Error(`operator merge approval requires a canonical UTC ISO timestamp for ${name}`);
   }
   return text;
 }
@@ -184,14 +189,14 @@ export function parseOperatorMergeApprovalRecord(value: unknown): OperatorMergeA
   const headSha = normalizeOperatorMergeApprovalHeadSha(raw.headSha);
   const reason = requiredText(raw.reason, 'reason');
   const actor = requiredText(raw.actor, 'actor');
-  const createdAtUtc = requireIsoTimestamp(raw.createdAtUtc, 'createdAtUtc');
+  const createdAtUtc = requireCanonicalUtcTimestamp(raw.createdAtUtc, 'createdAtUtc');
   const revokedAtText = String(raw.revokedAtUtc ?? '').trim();
   const revocationReason = String(raw.revocationReason ?? '').trim();
   if (Boolean(revokedAtText) !== Boolean(revocationReason)) {
     throw new Error('operator merge approval revocation fields must be both present or both absent');
   }
   const revokedAtUtc = revokedAtText
-    ? requireIsoTimestamp(revokedAtText, 'revokedAtUtc')
+    ? requireCanonicalUtcTimestamp(revokedAtText, 'revokedAtUtc')
     : undefined;
   return {
     schemaVersion: 1,
