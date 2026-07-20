@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './toolchain/native-entrypoint-preflight.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   approveOperatorMerge,
