@@ -1,23 +1,24 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env -S node --experimental-strip-types
 
+import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { execFileSync } from 'node:child_process';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import { validateDeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
-import { applyAmendment } from '../lib/amendment.js';
-import { assertCleanWorktree, computeBaseline } from '../lib/baseline.js';
-import { resolveIterationId } from '../lib/iteration.js';
-import { findLatestMirrorIterationId, writeMirror } from '../lib/mirror.js';
+import { applyAmendment } from '../lib/amendment.ts';
+import { assertCleanWorktree, computeBaseline } from '../lib/baseline.ts';
+import { resolveIterationId } from '../lib/iteration.ts';
+import { findLatestMirrorIterationId, writeMirror } from '../lib/mirror.ts';
 import {
   findLatestIterationId,
   readSnapshot,
   writeSnapshot,
-} from '../lib/snapshot.js';
+} from '../lib/snapshot.ts';
 import {
   normalizeIssueConstraints,
   validateDeclaredScope,
-} from '../lib/validate.js';
+} from '../lib/validate.ts';
 
 interface CliOptions {
   issueNumber: number;

@@ -1,11 +1,12 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env -S node --experimental-strip-types
 
+import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
-import { formatViolationReport } from '../lib/check.js';
-import { loadLatestActiveDeclaration } from '../lib/declaration_loader.js';
-import { parseScopeCheckArgs, runScopeCheck } from './scope-check.js';
+import { formatViolationReport } from '../lib/check.ts';
+import { loadLatestActiveDeclaration } from '../lib/declaration_loader.ts';
+import { parseScopeCheckArgs, runScopeCheck } from './scope-check.ts';
 
 interface WrapOptions {
   repoRoot: string;

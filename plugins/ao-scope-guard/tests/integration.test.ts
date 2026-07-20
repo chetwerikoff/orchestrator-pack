@@ -1,11 +1,11 @@
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createSyntheticGitRepo } from '@orchestrator-pack/shared/lib/git_fixture.js';
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
-import { runScopeCheck } from '../bin/scope-check.js';
+import { runProcessSync } from '../../../scripts/kernel/subprocess.ts';
+import { runScopeCheck } from '../bin/scope-check.ts';
 
 const scopeCheckScript = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -13,6 +13,18 @@ const scopeCheckScript = join(
   'bin',
   'scope-check.ts',
 );
+
+
+function runGit(repoRoot: string, args: readonly string[]): string {
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  expect(result.ok, result.stderr || result.error).toBe(true);
+  return result.stdout.trim();
+}
 
 function writeDeclaration(repoRoot: string, snapshot: DeclarationSnapshot): void {
   const mirrorDir = join(repoRoot, '.ao', 'declarations');
@@ -41,10 +53,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
       },
     });
 
-    const baseline = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: repo.root,
-      encoding: 'utf8',
-    }).trim();
+    const baseline = runGit(repo.root, ['rev-parse', 'HEAD']);
 
     const declaration: DeclarationSnapshot = {
       issue_number: 99,
@@ -65,7 +74,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
     writeDeclaration(repo.root, declaration);
 
     writeFileSync(join(repo.root, 'plugins/demo/in-scope.txt'), 'changed', 'utf8');
-    execFileSync('git', ['add', 'plugins/demo/in-scope.txt'], { cwd: repo.root });
+    runGit(repo.root, ['add', 'plugins/demo/in-scope.txt']);
 
     const inScope = runScopeCheck({
       repoRoot: repo.root,
@@ -76,7 +85,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
     expect(inScope.ok).toBe(true);
 
     writeFileSync(join(repo.root, 'plugins/demo/outside-scope.txt'), 'changed', 'utf8');
-    execFileSync('git', ['add', 'plugins/demo/outside-scope.txt'], { cwd: repo.root });
+    runGit(repo.root, ['add', 'plugins/demo/outside-scope.txt']);
 
     const outOfScope = runScopeCheck({
       repoRoot: repo.root,
@@ -101,7 +110,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
     );
     mkdirSync(dirname(snapshotPath), { recursive: true });
     writeFileSync(snapshotPath, '{}\n', 'utf8');
-    execFileSync('git', ['add', snapshotPath], { cwd: repo.root });
+    runGit(repo.root, ['add', snapshotPath]);
 
     const result = runScopeCheck({
       repoRoot: repo.root,
@@ -121,10 +130,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
       },
     });
 
-    const baseline = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: repo.root,
-      encoding: 'utf8',
-    }).trim();
+    const baseline = runGit(repo.root, ['rev-parse', 'HEAD']);
 
     writeDeclaration(repo.root, {
       issue_number: 99,
@@ -143,7 +149,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
     });
 
     writeFileSync(join(repo.root, 'plugins/demo/in-scope.txt'), 'changed', 'utf8');
-    execFileSync('git', ['add', 'plugins/demo/in-scope.txt'], { cwd: repo.root });
+    runGit(repo.root, ['add', 'plugins/demo/in-scope.txt']);
 
     const result = runScopeCheck({
       repoRoot: repo.root,
@@ -199,10 +205,7 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
       },
     });
 
-    const baseline = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: repo.root,
-      encoding: 'utf8',
-    }).trim();
+    const baseline = runGit(repo.root, ['rev-parse', 'HEAD']);
 
     writeDeclaration(repo.root, {
       issue_number: 99,
@@ -225,8 +228,8 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
       'committed violation',
       'utf8',
     );
-    execFileSync('git', ['add', 'plugins/demo/outside-scope.txt'], { cwd: repo.root });
-    execFileSync('git', ['commit', '-m', 'out of scope commit'], { cwd: repo.root });
+    runGit(repo.root, ['add', 'plugins/demo/outside-scope.txt']);
+    runGit(repo.root, ['commit', '-m', 'out of scope commit']);
 
     const snapshotPath = join(repo.root, 'docs/declarations/99.baseline-locked.json');
     mkdirSync(dirname(snapshotPath), { recursive: true });
@@ -245,18 +248,13 @@ describe('scope-guard integration', { timeout: 15_000 }, () => {
   });
 
   it('runs the scope-check CLI entrypoint', () => {
-    try {
-      execFileSync(process.execPath, ['--import', 'tsx', scopeCheckScript, '--help'], {
-        encoding: 'utf8',
-      });
-      throw new Error('expected scope-check --help to exit with code 1');
-    } catch (error) {
-      const execError = error as NodeJS.ErrnoException & {
-        stderr?: string | Buffer;
-        status?: number;
-      };
-      expect(String(execError.stderr ?? '')).toContain('Usage: scope-check');
-      expect(execError.status).toBe(1);
-    }
+    const result = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', scopeCheckScript, '--help'],
+      inheritParentEnv: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain('Usage: scope-check');
+    expect(result.exitCode).toBe(1);
   });
 });

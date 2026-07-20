@@ -16,7 +16,11 @@ function Get-TrustedBootstrapScriptRoot {
 
     $bootstrapHelperPaths = @(
         'scripts/lib/Resolve-TrustedPackRoot.ps1',
-        'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1'
+        'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1',
+        'scripts/lib/Invoke-TypeScriptCli.ts',
+        'scripts/toolchain/node-runtime-contract.mjs',
+        'scripts/toolchain/node-version.json',
+        'package.json'
     )
 
     if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {

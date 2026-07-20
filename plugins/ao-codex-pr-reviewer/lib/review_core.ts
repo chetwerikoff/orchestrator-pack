@@ -1,28 +1,28 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReviewPrompt } from './prompt.js';
-import { selectReviewVerdict } from './verdict.js';
+import { buildReviewPrompt } from './prompt.ts';
+import { selectReviewVerdict } from './verdict.ts';
 import {
   defaultSourceFromEnv,
   emitAoReviewPayload,
   emitTerminalVerdictPayload,
   formatGithubComment,
   toAoFindings,
-} from './emit.js';
+} from './emit.ts';
 import {
   resolveIssueNumber,
   resolveScopeContext,
   scopeUnavailableWarningFinding,
-} from './scope_context.js';
-import { runCodexReview, type RunCodexReviewResult } from './run_review.js';
-import { createReviewerBudgetLedger } from './reviewer_budget.js';
+} from './scope_context.ts';
+import { runCodexReview, type RunCodexReviewResult } from './run_review.ts';
+import { createReviewerBudgetLedger } from './reviewer_budget.ts';
 import {
   buildReviewerFailureLogLines,
   classifyReviewerFailure,
   isSpawnTimeoutResult,
-} from './reviewer_failure.js';
-import type { ReviewSource, StructuredFinding } from './types.js';
+} from './reviewer_failure.ts';
+import type { ReviewSource, StructuredFinding } from './types.ts';
 
 const REVIEW_FAILURE_LINE =
   /^(ERROR:|error:|Fatal|review-failure:)/i;
@@ -86,17 +86,17 @@ export interface ReviewResult {
   githubComment?: string;
 }
 
-/** orchestrator-pack root (where npm ci installs tsx for the wrapper process). */
+/** orchestrator-pack root where npm ci installs workspace links for native TypeScript execution. */
 export function resolvePackRepoRoot(): string {
   const libDir = dirname(fileURLToPath(import.meta.url));
   return join(libDir, '..', '..', '..');
 }
 
 export function hasReviewRuntimeDeps(root: string): boolean {
-  return existsSync(join(root, 'node_modules', 'tsx', 'package.json'));
+  return existsSync(join(root, 'node_modules', '@orchestrator-pack', 'shared', 'package.json'));
 }
 
-/** Roots to probe for tsx: pack checkout first, then optional reviewed repo (AO op-rev). */
+/** Roots to probe for installed workspace dependencies: pack checkout first, then optional reviewed repo. */
 export function reviewDependencySearchRoots(repoRoot: string): string[] {
   const packRoot = resolvePackRepoRoot();
   if (repoRoot === packRoot) {
@@ -112,7 +112,7 @@ function assertReviewDependencies(repoRoot: string): void {
   }
   console.error(
     [
-      'Pack Codex review requires tsx from npm ci in the pack checkout (or in the reviewed repo for AO workspaces).',
+      'Pack Codex review requires workspace dependencies from npm ci in the pack checkout (or in the reviewed repo for AO workspaces).',
       `Checked: ${roots.join(', ')}`,
       'Run npm ci --include=dev in the pack checkout, or scripts/run-pack-review.ps1 for AO local review.',
     ].join('\n'),

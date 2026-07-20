@@ -11,7 +11,11 @@
 
 . (Join-Path $PSScriptRoot 'Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
-. (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')
+$Script:OpkTsNode = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Script:OpkTsNode) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+$Script:OpkTsNodeVersion = ((& $Script:OpkTsNode.Source '--version' 2>&1 | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $Script:OpkTsNodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $Script:OpkTsNodeVersion. Install/use Node 22 and run npm run check:node-major." }
+$Script:OpkTypeScriptLauncher = (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ts')
 
 $Script:AoReviewApiCli = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path 'docs/ao-0-10-review-api.mjs'
 
@@ -95,9 +99,9 @@ function Invoke-PackReviewRunnerCli {
     $prior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)
+        $nodeArgs = @('--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $trusted.runner, '--')
         $nodeArgs += $Subcommand
-        $raw = $json | & node @nodeArgs 2>&1
+        $raw = $json | & $Script:OpkTsNode.Source @nodeArgs 2>&1
         $exit = $LASTEXITCODE
     }
     finally {
@@ -391,7 +395,7 @@ function Invoke-AoReviewTriggerForWorker {
 function Get-ReviewTriggerInvocationLine {
     param([Parameter(Mandatory = $true)][string]$SessionId)
     $trusted = Resolve-PackReviewTrustedRoot
-    $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $trusted.runner)
+    $nodeArgs = @('--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $trusted.runner, '--')
     $nodeArgs += @('start', '--session-id', $SessionId, '--claim-mode', 'preacquired')
     return ('node ' + ($nodeArgs -join ' '))
 }

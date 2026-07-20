@@ -15,7 +15,7 @@ import {
   integerArgument,
   isDirectExecution,
   parseArguments,
-} from './cli.js';
+} from './cli.ts';
 
 export type RtkRiskTier = 'low' | 'medium' | 'high' | 'unknown';
 

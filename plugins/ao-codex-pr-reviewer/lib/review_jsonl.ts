@@ -5,8 +5,8 @@ import {
   extractStrictPackFindingsArray,
   NO_FINDINGS_TOKEN,
   normalizeStructuredPackFindings,
-} from './parse_output.js';
-import type { FindingType, ReviewSource, StructuredFinding } from './types.js';
+} from './parse_output.ts';
+import type { FindingType, ReviewSource, StructuredFinding } from './types.ts';
 
 /** Fail-closed message when JSONL has empty findings[] and non-clean overall verdict. */
 export const SPLIT_CHANNEL_EMPTY_FINDINGS_MESSAGE =

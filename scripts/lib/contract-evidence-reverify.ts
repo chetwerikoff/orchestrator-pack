@@ -18,7 +18,7 @@ import {
   collectAuthoritativeReferences,
   hashIssueBodySnapshot,
   sha256Hex,
-} from './reviewer-contract-mapping.js';
+} from './reviewer-contract-mapping.ts';
 import {
   DEFAULT_REVERIFY_MANIFEST_PATH,
   isCommandSafe,
@@ -28,9 +28,9 @@ import {
   listNodeScriptDependencyClosureRelPaths,
   listNpmTestDependencyClosureRelPaths,
   resolveAllowlistedCommand,
-} from './reverify-command-resolution.js';
-import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.js';
-import { runSandboxedAllowlistedCommand } from './reverify-sandbox.js';
+} from './reverify-command-resolution.ts';
+import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
+import { runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
 
 export { DEFAULT_REVERIFY_MANIFEST_PATH };
 
@@ -263,10 +263,10 @@ function isProducerClosureExecutionBlocked(
 }
 
 function remapResolvedCommandToReviewTarget(
-  resolved: import('./reverify-command-resolution.js').ResolvedAllowlistedCommand,
+  resolved: import('./reverify-command-resolution.ts').ResolvedAllowlistedCommand,
   trustedBaseRoot: string,
   reviewTargetRoot: string,
-): import('./reverify-command-resolution.js').ResolvedAllowlistedCommand {
+): import('./reverify-command-resolution.ts').ResolvedAllowlistedCommand {
   const remappedArgs = resolved.args.map((arg) => {
     const trustedPrefix = `${trustedBaseRoot}${path.sep}`;
     if (path.isAbsolute(arg) && (arg === trustedBaseRoot || arg.startsWith(trustedPrefix))) {

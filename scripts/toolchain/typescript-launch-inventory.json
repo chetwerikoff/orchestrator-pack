@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "issue": "#900",
+  "canonicalRuntime": {
+    "nodeMajor": 22,
+    "versionFile": "scripts/toolchain/node-version.json",
+    "nativeArgvPrefix": [
+      "--experimental-strip-types"
+    ]
+  },
+  "classifications": {
+    "native-node-22": "A live Node 22 launch that enters through the canonical TypeScript launcher or imports the canonical native-entrypoint preflight before all business modules.",
+    "powershell-bridge": "A PowerShell caller that invokes scripts/lib/Invoke-TypeScriptCli.ts with native Node 22 type stripping; the TypeScript launcher validates node-version.json and package.json before importing the target.",
+    "test-framework-owned": "A Vitest-owned TypeScript execution path.",
+    "historical-fixture-only": "A non-live archived document, declaration, test fixture, or migration artifact.",
+    "invalid": "A live TypeScript launch that bypasses the Node 22 contract, selects Node below 22, or relies on compatibility machinery."
+  },
+  "historicalPathPrefixes": [
+    "docs/archive",
+    "docs/declarations",
+    "docs/issues_drafts",
+    "scripts/estate-cut",
+    "scripts/fixtures"
+  ],
+  "workflowFiles": [
+    ".github/workflows/codex-pr-review.yml",
+    ".github/workflows/read-delegation-audit.yml",
+    ".github/workflows/scope-guard.yml",
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    ".github/workflows/vitest-wallclock-e2e.yml"
+  ],
+  "requiredLiveSurfaces": [
+    {
+      "path": "package.json",
+      "classification": "native-node-22"
+    },
+    {
+      "path": ".github/workflows/codex-pr-review.yml",
+      "classification": "native-node-22"
+    },
+    {
+      "path": ".github/workflows/read-delegation-audit.yml",
+      "classification": "native-node-22"
+    },
+    {
+      "path": ".github/workflows/scope-guard.yml",
+      "classification": "native-node-22"
+    },
+    {
+      "path": ".github/workflows/vitest-runtime-history-refresh.yml",
+      "classification": "native-node-22"
+    },
+    {
+      "path": ".github/workflows/vitest-wallclock-e2e.yml",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/lib/Invoke-TypeScriptCli.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "plugins/ao-codex-pr-reviewer/bin/review.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "plugins/ao-scope-guard/bin/scope-check.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "plugins/ao-scope-guard/bin/agent-wrap.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "plugins/ao-task-declaration/bin/declare.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "plugins/ao-token-chain-ledger/bin/ledger.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/pack-review-runner.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/pr-scope-check.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/invoke-reviewer-contract-mapping.ts",
+      "classification": "native-node-22"
+    },
+    {
+      "path": "scripts/gh",
+      "classification": "native-node-22"
+    }
+  ]
+}

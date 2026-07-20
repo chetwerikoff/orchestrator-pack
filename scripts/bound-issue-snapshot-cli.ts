@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-import { readText } from './lib/reviewer-cli-io.js';
+import { readText } from './lib/reviewer-cli-io.ts';
 import {
   isDirectCliExecution,
   parseRequiredNonEmptyString,
   parseRequiredPositiveInt,
   runReviewerTsCli,
-} from './lib/reviewer-ts-cli.js';
+} from './lib/reviewer-ts-cli.ts';
 import {
   captureBoundIssueSnapshot,
   resolveBoundIssueSnapshot,
   resolveDefaultAoProjectId,
-} from './lib/reverify-bound-issue-snapshot.js';
+} from './lib/reverify-bound-issue-snapshot.ts';
 
 type Mode = 'capture' | 'resolve';
 

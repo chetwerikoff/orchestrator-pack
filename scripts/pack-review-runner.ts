@@ -1,3 +1,4 @@
+import './toolchain/native-entrypoint-preflight.ts';
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
@@ -9,7 +10,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProcess, type ProcessResult } from './kernel/subprocess.js';
+import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -22,14 +23,14 @@ import {
   updatePackReviewRun,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
-} from './lib/pack-review-run-store.js';
+} from './lib/pack-review-run-store.ts';
 import {
   createGithubReviewTransport,
   requireProcess,
   reconcileGithubCommentReview,
   writeGithubReviewCapture,
   type GithubReviewTransport,
-} from './lib/github-review-reconciliation.js';
+} from './lib/github-review-reconciliation.ts';
 import {
   deliverPackReviewVerdict,
   packReviewDeliveryNeedsResume,
@@ -42,7 +43,7 @@ import {
   type PackReviewJournalWriter,
   type PackReviewRequiredStatusWriter,
   type PackReviewWorkerNotifier,
-} from './lib/pack-review-delivery.js';
+} from './lib/pack-review-delivery.ts';
 
 interface StartInput {
   projectId?: string;

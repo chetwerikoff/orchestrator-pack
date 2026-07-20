@@ -14,6 +14,11 @@ $resolvedRoot = (Resolve-Path -LiteralPath $cli.RepoRoot).Path
 $packRoot = Split-Path -Parent $PSScriptRoot
 $reviewTs = Join-Path $packRoot 'plugins/ao-codex-pr-reviewer/bin/review.ts'
 $fixtureRunner = Join-Path $packRoot 'scripts/run-pack-review-fixture.mjs'
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+$nodeVersion = ((& $node.Source '--version' 2>&1 | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $nodeVersion. Install/use Node 22 and run npm run check:node-major." }
+$typeScriptLauncher = (Join-Path $packRoot 'scripts/lib/Invoke-TypeScriptCli.ts')
 $defaultModel = 'claude-sonnet-4-6'
 
 if (-not (Test-Path -LiteralPath $reviewTs -PathType Leaf)) {
@@ -36,8 +41,8 @@ Push-Location -LiteralPath $resolvedRoot
 try {
     Install-PackReviewDependencies -WrapperName $Script:WrapperName
 
-    $promptArgs = @(
-        '--import', 'tsx', $reviewTs,
+    $promptArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $reviewTs, '--')
+    $promptArgs += @(
         '--repo-root', $resolvedRoot,
         '--base', $cli.Base,
         '--prompt-only'
@@ -51,7 +56,7 @@ try {
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $promptRaw = @(& node @promptArgs 2>&1)
+        $promptRaw = @(& $node.Source @promptArgs 2>&1)
         $promptExit = $LASTEXITCODE
     }
     finally {
@@ -113,8 +118,8 @@ try {
 
         [System.IO.File]::WriteAllText($claudeFile, $claudeOut, [System.Text.UTF8Encoding]::new($false))
 
-        $parseArgs = @(
-            '--import', 'tsx', $fixtureRunner,
+        $parseArgs = @($fixtureRunner)
+        $parseArgs += @(
             '--fixture-file', $claudeFile,
             '--repo-root', $resolvedRoot,
             '--base', $cli.Base
@@ -129,7 +134,7 @@ try {
 
         $ErrorActionPreference = 'Continue'
         try {
-            & node @parseArgs
+            & $node.Source @parseArgs
             $parseExit = $LASTEXITCODE
         }
         finally {

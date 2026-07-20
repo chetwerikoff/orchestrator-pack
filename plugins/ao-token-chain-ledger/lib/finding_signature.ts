@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
-import type { StructuredFinding } from './types.js';
+import type { StructuredFinding } from './types.ts';
 
 export function computeFindingSignature(
   finding: Pick<StructuredFinding, 'type' | 'code' | 'path'>,

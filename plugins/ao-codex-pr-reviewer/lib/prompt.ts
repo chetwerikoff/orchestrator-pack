@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { formatScopeSection, type ResolvedScopeContext } from './scope_context.js';
-import type { ReviewSource } from './types.js';
+import { formatScopeSection, type ResolvedScopeContext } from './scope_context.ts';
+import type { ReviewSource } from './types.ts';
 
 function bundledPromptPath(): string {
   const here = dirname(fileURLToPath(import.meta.url));

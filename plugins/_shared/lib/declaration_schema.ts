@@ -1,4 +1,4 @@
-import { normalizePath } from './normalize.js';
+import { normalizePath } from './normalize.ts';
 
 export type IterationIdSource = 'ao_session' | 'wrapper_generated';
 

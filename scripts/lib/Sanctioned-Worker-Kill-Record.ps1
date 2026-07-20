@@ -1,6 +1,10 @@
 #requires -Version 5.1
 
-. (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')
+$Script:OpkTsNode = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Script:OpkTsNode) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+$Script:OpkTsNodeVersion = ((& $Script:OpkTsNode.Source '--version' 2>&1 | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $Script:OpkTsNodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $Script:OpkTsNodeVersion. Install/use Node 22 and run npm run check:node-major." }
+$Script:OpkTypeScriptLauncher = (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ts')
 
 function Get-SanctionedWorkerKillRecordPath {
     if ($env:AO_SANCTIONED_WORKER_KILL_RECORD_PATH) {
@@ -19,8 +23,8 @@ function Invoke-SanctionedWorkerKillRecordCli {
     param([string[]]$Arguments)
 
     $cli = Get-SanctionedWorkerKillRecordCliPath
-    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
-    $output = & node @nodeArgs @Arguments 2>&1
+    $nodeArgs = @('--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $cli, '--')
+    $output = & $Script:OpkTsNode.Source @nodeArgs @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "sanctioned-worker-kill-record.ts exited $LASTEXITCODE`: $($output | Out-String)"
     }

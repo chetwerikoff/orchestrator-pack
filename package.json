@@ -6,18 +6,20 @@
     "plugins/*"
   ],
   "scripts": {
+    "check:node-major": "node scripts/toolchain/check-node-major.mjs",
     "test": "node scripts/run-vitest-with-harness.mjs run",
     "test:watch": "node scripts/run-vitest-with-harness.mjs watch",
-    "ts:smoke": "node --experimental-strip-types scripts/typescript-smoke.ts",
-    "check:node-major": "node --experimental-strip-types scripts/toolchain/check-node-major.ts",
-    "typecheck:foundation": "tsc -p tsconfig.json --noEmit",
-    "lint:foundation": "node --experimental-strip-types scripts/toolchain/check-ts-policy.ts",
-    "check:pwsh-test-growth": "node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
-    "test:foundation": "vitest run --config scripts/toolchain/vitest-foundation.config.ts",
-    "gate-runner-selftest": "vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
-    "gate-census-generate": "node --experimental-strip-types scripts/gate-runner/census-generator.ts",
-    "estate-cut:check": "node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --check",
-    "test:issue-906": "vitest run --config scripts/estate-cut/vitest.config.ts"
+    "ts:smoke": "npm run check:node-major --silent && node --experimental-strip-types scripts/typescript-smoke.ts",
+    "typecheck:foundation": "npm run check:node-major --silent && tsc -p tsconfig.json --noEmit",
+    "lint:foundation": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-ts-policy.ts && node --experimental-strip-types scripts/toolchain/check-typescript-runtime-policy.ts",
+    "check:typescript-runtime": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-typescript-runtime-policy.ts",
+    "check:pwsh-test-growth": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
+    "test:foundation": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts",
+    "test:issue-900": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/node22-runtime-policy.spec.ts",
+    "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
+    "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",
+    "estate-cut:check": "npm run check:node-major --silent && node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --check",
+    "test:issue-906": "npm run check:node-major --silent && vitest run --config scripts/estate-cut/vitest.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

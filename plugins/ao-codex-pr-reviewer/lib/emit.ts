@@ -1,5 +1,5 @@
 import { withFindingSignature } from '@orchestrator-pack/ao-token-chain-ledger/lib/finding_signature.js';
-import type { AoReviewFinding, ReviewSource, StructuredFinding } from './types.js';
+import type { AoReviewFinding, ReviewSource, StructuredFinding } from './types.ts';
 
 function mapSeverity(severity: string): AoReviewFinding['severity'] {
   if (severity === 'blocking') {

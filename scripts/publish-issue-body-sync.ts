@@ -10,13 +10,13 @@ import {
   parseRequiredNonEmptyString,
   parseRequiredPositiveInt,
   runReviewerTsCli,
-} from './lib/reviewer-ts-cli.js';
+} from './lib/reviewer-ts-cli.ts';
 import {
   readDraftFile,
   syncPublishIssueBody,
   type MutationAuditRecord,
   type PublishIssueBodySyncInput,
-} from './lib/publish-issue-body-sync.js';
+} from './lib/publish-issue-body-sync.ts';
 
 type Mode = 'create' | 'edit' | 'verify';
 

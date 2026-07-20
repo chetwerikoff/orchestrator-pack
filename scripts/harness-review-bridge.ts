@@ -2,10 +2,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { executeReview, type ReviewOptions } from '../plugins/ao-codex-pr-reviewer/lib/review_core.js';
+import { executeReview, type ReviewOptions } from '../plugins/ao-codex-pr-reviewer/lib/review_core.ts';
 import {
   type TerminalVerdictPayload,
-} from '../plugins/ao-codex-pr-reviewer/lib/emit.js';
+} from '../plugins/ao-codex-pr-reviewer/lib/emit.ts';
 import {
   HARNESS_NESTED_BUDGET_ENV,
   validateMapperSubmitPayload,

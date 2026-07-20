@@ -41,5 +41,5 @@ scripts/**
 ```powershell
 npm ci --include=dev
 npx ao-declare --issue <n> --declared-paths src/example.ts
-node --import tsx plugins/ao-scope-guard/bin/scope-check.ts --issue <n> --mode worktree
+node --experimental-strip-types plugins/ao-scope-guard/bin/scope-check.ts --issue <n> --mode worktree
 ```

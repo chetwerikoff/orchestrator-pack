@@ -86,8 +86,8 @@ required `pack_ref` input set to the same ref as the caller's `uses: ...@pin`
 (e.g. `main`, a tag, or branch). `job.workflow_sha` / `job.workflow_ref` are not
 populated for the called reusable workflow pin — do not rely on them or on
 `github.workflow_ref` (that is the caller workflow). The reviewer runs via
-`./node_modules/.bin/tsx` inside the pack checkout so caller repos do not need
-`tsx` installed.
+`node --experimental-strip-types` inside the pack checkout so caller repos do not need
+a separate TypeScript runtime dependency installed.
 
 ### Sandbox trust split (coworker delegation)
 
@@ -143,7 +143,7 @@ per #135, not the primary prompt contract per #136):
 ```powershell
 # From the repository root (reviewer workspace or target repo checkout)
 ao review run <worker-session-id> --execute --command `
-  "node --import tsx plugins/ao-codex-pr-reviewer/bin/review.ts --repo-root . --base origin/main"
+  "node --experimental-strip-types plugins/ao-codex-pr-reviewer/bin/review.ts --repo-root . --base origin/main"
 ```
 
 On Windows, prefer the PowerShell launcher:

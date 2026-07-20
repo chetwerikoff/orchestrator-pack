@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { withFindingSignature } from './finding_signature.js';
+import { withFindingSignature } from './finding_signature.ts';
 import {
   chainIdFromSessionInfo,
   parentSessionIdFromSessionInfo,
@@ -11,17 +11,17 @@ import {
   taskIdFromSessionInfo,
   unavailableCost,
   type AgentSessionInfo,
-} from './session_cost.js';
+} from './session_cost.ts';
 import type {
   ChainIdSource,
   LedgerCost,
   LedgerRow,
   ParentSessionIdSource,
   StructuredFinding,
-} from './types.js';
-import { RECOGNIZED_EVENT_KINDS } from './event_kinds.js';
+} from './types.ts';
+import { RECOGNIZED_EVENT_KINDS } from './event_kinds.ts';
 
-export type { LedgerRow, LedgerCost, StructuredFinding } from './types.js';
+export type { LedgerRow, LedgerCost, StructuredFinding } from './types.ts';
 
 const ACTIVE_CHAIN_FILENAME = 'active-chain.json';
 const LEDGER_FILENAME = 'events.jsonl';

@@ -5,7 +5,7 @@
  */
 
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
-import { pathMatchesAnyPattern } from '../plugins/ao-scope-guard/lib/glob_match.js';
+import { pathMatchesAnyPattern } from '../plugins/ao-scope-guard/lib/glob_match.ts';
 
 /** Alternation fragment shared with drift tests (must stay stable). */
 export const CLOSING_KEYWORD_ALTERNATION =

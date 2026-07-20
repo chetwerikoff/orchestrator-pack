@@ -1,7 +1,11 @@
 #requires -Version 5.1
 <# Thin PowerShell dispatch for the TypeScript gh signal classifier (Issue #849). #>
 
-. (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ps1')
+$Script:OpkTsNode = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Script:OpkTsNode) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+$Script:OpkTsNodeVersion = ((& $Script:OpkTsNode.Source '--version' 2>&1 | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $Script:OpkTsNodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $Script:OpkTsNodeVersion. Install/use Node 22 and run npm run check:node-major." }
+$Script:OpkTypeScriptLauncher = (Join-Path $PSScriptRoot 'Invoke-TypeScriptCli.ts')
 
 $Script:GhSignalClassifierCli = Join-Path $PSScriptRoot 'gh-signal-classifier.ts'
 
@@ -36,8 +40,8 @@ function Invoke-GhSignalJsonCommand {
             [System.IO.File]::WriteAllText($inputPath, $json, [System.Text.UTF8Encoding]::new($false))
         }
 
-        $nodeArgs = @(Get-OpkTypeScriptNodeArguments -ScriptPath $Script:GhSignalClassifierCli)
-        $nodeDiagnostic = & node @nodeArgs run `
+        $nodeArgs = @('--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $Script:GhSignalClassifierCli, '--')
+        $nodeDiagnostic = & $Script:OpkTsNode.Source @nodeArgs run `
             --input-file $inputPath --output-file $outputPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "gh signal classifier failed (exit $LASTEXITCODE): $nodeDiagnostic"

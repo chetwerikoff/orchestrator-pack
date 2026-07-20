@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { runProcess, type ProcessResult } from '../kernel/subprocess.js';
+import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
@@ -11,7 +11,7 @@ import {
   type GithubCommentReviewReconciliation,
   type PackReviewRunRecord,
   type PackReviewStoreOptions,
-} from './pack-review-run-store.js';
+} from './pack-review-run-store.ts';
 
 export type GithubReviewEvent = 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
 export type GithubReviewPostOutcome = 'not_attempted' | 'definitely_rejected' | 'ambiguous' | 'accepted';

@@ -174,6 +174,9 @@ When adding behavior, prefer in order: (1) prompt/rules, (2) config, (3) plugin/
 (4) CI guard, (5) documentation. Never choose a core patch unless the user explicitly asks for
 an upstream contribution plan. **TS-first:** New `scripts/**` files MUST use TypeScript/Node. PowerShell is frozen during migration; new `.ps1` needs explicit task-spec justification that TS/Node is unsuitable. Existing `.ps1` and wrappers/shims stay with #830/#831.
 
+
+**Node 22-only TypeScript runtime:** New/changed TS, npm scripts, tests/workflows MUST match `scripts/toolchain/node-version.json` + `package.json.engines.node`; ban Node 20, `tsx`/`ts-node`, loader/fallback/emitted JS. Preflight before effects; `actions/setup-node` = 22/22.x; run `npm run check:node-major` first.
+
 **Rule delivery (AO 0.10.2):** Worker policy lives in this file. After merge, **recycle live
 worker AO sessions** so worktrees pick up the new tracked `AGENTS.md` — AO restart alone is
 insufficient and not required for worker rule delivery.

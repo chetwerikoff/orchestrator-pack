@@ -14,10 +14,18 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
     "types": [
       "node",
       "vitest/globals"
     ],
     "allowImportingTsExtensions": true
-  }
+  },
+  "exclude": [
+    "plugins/**/tests/**",
+    "scripts/**/*.test.ts",
+    "scripts/**/*.spec.ts",
+    "tests/**"
+  ]
 }
