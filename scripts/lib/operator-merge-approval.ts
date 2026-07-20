@@ -12,9 +12,9 @@ import { dirname, join, resolve } from 'node:path';
 
 export const OPERATOR_MERGE_APPROVAL_SCHEMA_VERSION = 1;
 export const OPERATOR_MERGE_APPROVAL_EVENT = 'operator_merge_approved';
-const RECORD_RENAME_ATTEMPTS = 4;
-const RECORD_RENAME_BACKOFF_MS = 10;
-const TRANSIENT_RENAME_ERROR_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const APPROVAL_REPLACE_LIMIT = 4;
+const APPROVAL_REPLACE_DELAY_MS = 10;
+const RETRYABLE_APPROVAL_REPLACE_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
 
 export interface OperatorMergeApprovalRecord {
   schemaVersion: 1;
@@ -81,34 +81,36 @@ function requireIsoTimestamp(value: unknown, name: string): string {
   return text;
 }
 
-function sleepSync(milliseconds: number): void {
-  const cell = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(cell, 0, 0, milliseconds);
+function pauseApprovalReplace(delayMs: number): void {
+  const waiter = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(waiter, 0, 0, delayMs);
 }
 
-function errorCode(error: unknown): string {
-  return error instanceof Error && 'code' in error
-    ? String((error as NodeJS.ErrnoException).code ?? '')
-    : '';
+function filesystemErrorCode(error: unknown): string {
+  if (!(error instanceof Error) || !('code' in error)) return '';
+  return String((error as NodeJS.ErrnoException).code ?? '');
 }
 
-function renameRecordWithRetry(temporary: string, destination: string): void {
-  for (let attempt = 1; attempt <= RECORD_RENAME_ATTEMPTS; attempt += 1) {
+function replaceApprovalFile(temporaryPath: string, finalPath: string): void {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < APPROVAL_REPLACE_LIMIT; attempt += 1) {
     try {
-      renameSync(temporary, destination);
+      renameSync(temporaryPath, finalPath);
       return;
     } catch (error) {
-      const code = errorCode(error);
-      if (!TRANSIENT_RENAME_ERROR_CODES.has(code)) throw error;
-      if (attempt === RECORD_RENAME_ATTEMPTS) {
-        throw new Error(
-          `operator merge approval atomic replace failed: rename_retry_exhausted code=${code} attempts=${RECORD_RENAME_ATTEMPTS} destination=${destination}`,
-          { cause: error },
-        );
+      lastError = error;
+      const code = filesystemErrorCode(error);
+      if (!RETRYABLE_APPROVAL_REPLACE_CODES.has(code)) throw error;
+      if (attempt + 1 < APPROVAL_REPLACE_LIMIT) {
+        pauseApprovalReplace(APPROVAL_REPLACE_DELAY_MS * (attempt + 1));
       }
-      sleepSync(RECORD_RENAME_BACKOFF_MS * attempt);
     }
   }
+  const code = filesystemErrorCode(lastError);
+  throw new Error(
+    `operator merge approval atomic replace failed: rename_retry_exhausted code=${code} attempts=${APPROVAL_REPLACE_LIMIT} destination=${finalPath}`,
+    { cause: lastError },
+  );
 }
 
 export function normalizeOperatorMergeApprovalProjectId(value = 'orchestrator-pack'): string {
@@ -206,17 +208,15 @@ export function parseOperatorMergeApprovalRecord(value: unknown): OperatorMergeA
   };
 }
 
-function atomicWrite(path: string, value: OperatorMergeApprovalRecord): void {
+function writeApprovalRecord(path: string, value: OperatorMergeApprovalRecord): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
-    renameRecordWithRetry(temporary, path);
+    const serialized = `${JSON.stringify(value, null, 2)}\n`;
+    writeFileSync(temporaryPath, serialized, { encoding: 'utf8', mode: 0o600 });
+    replaceApprovalFile(temporaryPath, path);
   } finally {
-    rmSync(temporary, { force: true });
+    rmSync(temporaryPath, { force: true });
   }
 }
 
@@ -240,7 +240,7 @@ export function approveOperatorMerge(input: ApproveOperatorMergeInput): Operator
       || 'operator',
     createdAtUtc: (input.now ?? new Date()).toISOString(),
   };
-  atomicWrite(operatorMergeApprovalRecordPath(prNumber, { ...input, projectId }), record);
+  writeApprovalRecord(operatorMergeApprovalRecordPath(prNumber, { ...input, projectId }), record);
   return record;
 }
 
@@ -280,6 +280,6 @@ export function revokeOperatorMerge(input: RevokeOperatorMergeInput): OperatorMe
     revokedAtUtc: (input.now ?? new Date()).toISOString(),
     revocationReason: requiredText(input.reason, 'reason'),
   };
-  atomicWrite(operatorMergeApprovalRecordPath(revoked.prNumber, input), revoked);
+  writeApprovalRecord(operatorMergeApprovalRecordPath(revoked.prNumber, input), revoked);
   return { approved: false, reason: 'revoked', record: revoked };
 }
