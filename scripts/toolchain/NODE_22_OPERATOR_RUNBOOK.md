@@ -40,6 +40,8 @@ These failures occur before a TypeScript target or external effect runs. CI jobs
 
 The former PowerShell launcher helper is deleted. PowerShell adapters resolve their inherited Node executable and invoke `scripts/lib/Invoke-TypeScriptCli.ts` with native type stripping. The TypeScript launcher validates the canonical declarations, rewrites the target argv contract, and imports the requested `.ts`/`.mts`/`.cts` entrypoint in-process so stdin, stdout, stderr, and exit semantics remain attached to the original bridge process.
 
+Direct native TypeScript bins and supervised-child entrypoints import `scripts/toolchain/native-entrypoint-preflight.ts` before business modules. The runtime policy rejects any direct native entrypoint that cannot prove this ordering. CI workflows must pair every live `actions/setup-node` step with exactly one literal `node-version: '22'` or `node-version: '22.x'`; dynamic expressions, `node-version-file`, duplicate selectors, and comment-only matches fail closed.
+
 ## Production-shaped bridge proof
 
 Run the check and one real bridge from the exact shell, service account, or tmux environment used to start side processes:
