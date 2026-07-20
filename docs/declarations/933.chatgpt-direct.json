@@ -1,0 +1,23 @@
+{
+  "issue_number": 933,
+  "iteration_id": "chatgpt-direct",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-20T12:55:00.000Z",
+  "baseline": {
+    "commit_sha": "96e8970af0acd8a12a7d9eec3a83ceb5b3b65d61",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f75a28d9b487ed03e2311ae4c8ca2e86b413506046269863f922266bbd1e2e29"
+  },
+  "declared_paths": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".claude/skills/merge-with-local-adoption/WORKFLOW.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/933.chatgpt-direct.json",
+    "scripts/lib/operator-merge-approval.ts",
+    "scripts/operator-merge-approval.test.ts",
+    "scripts/operator-merge-approval.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
