@@ -178,7 +178,10 @@ function directTypeScriptTarget(line: string): string | undefined {
 function firstImportSpecifier(source: string, path: string): string | undefined {
   const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const first = sourceFile.statements[0];
-  return first && ts.isImportDeclaration(first) && ts.isStringLiteralLike(first.moduleSpecifier)
+  return first
+    && ts.isImportDeclaration(first)
+    && first.importClause === undefined
+    && ts.isStringLiteralLike(first.moduleSpecifier)
     ? first.moduleSpecifier.text
     : undefined;
 }
@@ -299,23 +302,79 @@ function setupNodeStepRange(lines: readonly string[], usesIndex: number): { star
   return { start, end };
 }
 
+interface WorkflowVersionSelector {
+  readonly kind: 'node-version' | 'node-version-file';
+  readonly value: string;
+  readonly line: number;
+}
+
+interface WorkflowVersionSelectorScan {
+  readonly withMappings: number;
+  readonly selectors: readonly WorkflowVersionSelector[];
+}
+
+function stepMappingIndent(lines: readonly string[], range: { readonly start: number }): number {
+  const first = stripYamlComment(lines[range.start] ?? '');
+  const sequencePrefix = /^(\s*)-\s*/u.exec(first)?.[0];
+  return sequencePrefix?.length ?? yamlIndent(first);
+}
+
+function inlineWorkflowVersionSelectors(value: string, line: number): readonly WorkflowVersionSelector[] {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return [];
+  const selectors: WorkflowVersionSelector[] = [];
+  const body = trimmed.slice(1, -1);
+  const pattern = /(?:^|,)\s*(node-version-file|node-version)\s*:\s*([^,}]+)/gu;
+  for (const match of body.matchAll(pattern)) {
+    selectors.push({
+      kind: match[1] as WorkflowVersionSelector['kind'],
+      value: (match[2] ?? '').trim(),
+      line,
+    });
+  }
+  return selectors;
+}
+
 function workflowVersionSelectors(
   lines: readonly string[],
   range: { readonly start: number; readonly end: number },
-): readonly { readonly kind: 'node-version' | 'node-version-file'; readonly value: string; readonly line: number }[] {
-  const selectors: { kind: 'node-version' | 'node-version-file'; value: string; line: number }[] = [];
+): WorkflowVersionSelectorScan {
+  const selectors: WorkflowVersionSelector[] = [];
+  const mappingIndent = stepMappingIndent(lines, range);
+  let withMappings = 0;
+
   for (let index = range.start; index < range.end; index += 1) {
     const line = stripYamlComment(lines[index] ?? '');
-    const pattern = /\b(node-version-file|node-version)\s*:\s*([^,}\n]+)/gu;
-    for (const match of line.matchAll(pattern)) {
+    if (!line.trim() || yamlIndent(line) !== mappingIndent) continue;
+    const withMatch = /^\s*with\s*:\s*(.*)$/u.exec(line);
+    if (!withMatch) continue;
+    withMappings += 1;
+
+    const inlineValue = (withMatch[1] ?? '').trim();
+    if (inlineValue) {
+      selectors.push(...inlineWorkflowVersionSelectors(inlineValue, index + 1));
+      continue;
+    }
+
+    let childIndent: number | undefined;
+    for (let childIndex = index + 1; childIndex < range.end; childIndex += 1) {
+      const childLine = stripYamlComment(lines[childIndex] ?? '');
+      if (!childLine.trim()) continue;
+      const indent = yamlIndent(childLine);
+      if (indent <= mappingIndent) break;
+      childIndent ??= indent;
+      if (indent !== childIndent) continue;
+      const selectorMatch = /^\s*(node-version-file|node-version)\s*:\s*(.+?)\s*$/u.exec(childLine);
+      if (!selectorMatch) continue;
       selectors.push({
-        kind: match[1] as 'node-version' | 'node-version-file',
-        value: (match[2] ?? '').trim(),
-        line: index + 1,
+        kind: selectorMatch[1] as WorkflowVersionSelector['kind'],
+        value: (selectorMatch[2] ?? '').trim(),
+        line: childIndex + 1,
       });
     }
   }
-  return selectors;
+
+  return { withMappings, selectors };
 }
 
 function literalNodeMajor(value: string): number | undefined {
@@ -347,8 +406,10 @@ function scanWorkflowNodeVersions(
 
       setupNodeCounts.set(path, (setupNodeCounts.get(path) ?? 0) + 1);
       const range = setupNodeStepRange(lines, index);
-      const selectors = workflowVersionSelectors(lines, range);
-      const valid = selectors.length === 1
+      const selectorScan = workflowVersionSelectors(lines, range);
+      const selectors = selectorScan.selectors;
+      const valid = selectorScan.withMappings === 1
+        && selectors.length === 1
         && selectors[0]?.kind === 'node-version'
         && literalNodeMajor(selectors[0].value) === SUPPORTED_NODE_MAJOR;
       inventory.push({
@@ -358,12 +419,30 @@ function scanWorkflowNodeVersions(
         evidence: compactEvidence(lines.slice(range.start, range.end).join(' ')),
       });
 
+      if (selectorScan.withMappings === 0) {
+        violations.push({
+          path,
+          line: index + 1,
+          rule: 'workflow-node-version',
+          message: `actions/setup-node must declare one literal with.node-version: '${SUPPORTED_NODE_MAJOR}'.`,
+        });
+        continue;
+      }
+      if (selectorScan.withMappings !== 1) {
+        violations.push({
+          path,
+          line: index + 1,
+          rule: 'workflow-node-version',
+          message: 'actions/setup-node must have exactly one with mapping.',
+        });
+        continue;
+      }
       if (selectors.length === 0) {
         violations.push({
           path,
           line: index + 1,
           rule: 'workflow-node-version',
-          message: `actions/setup-node must declare one literal node-version: '${SUPPORTED_NODE_MAJOR}'.`,
+          message: `actions/setup-node with mapping must declare one literal node-version: '${SUPPORTED_NODE_MAJOR}'.`,
         });
         continue;
       }

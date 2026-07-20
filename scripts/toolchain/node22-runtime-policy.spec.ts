@@ -232,6 +232,22 @@ describe('launch inventory and fail-closed policy', () => {
     expect(checkTypeScriptRuntimePolicy(root).violations.some((violation) => violation.rule === rule)).toBe(true);
   });
 
+  it('rejects a type-only canonical preflight import that Node erases at runtime', () => {
+    const root = makePolicyFixture();
+    write(join(root, 'scripts/example.ts'), [
+      "import type { ready } from './toolchain/native-entrypoint-preflight.ts';",
+      'type RuntimeContract = typeof ready;',
+      'export const answer: number = 42;',
+      'void (0 as unknown as RuntimeContract);',
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'node-contract'
+      && violation.path === 'scripts/native.sh'
+      && violation.message.includes('preflight'))).toBe(true);
+  });
+
   it('rejects a direct workspace runtime dependency', () => {
     const root = makePolicyFixture();
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, unknown>;
@@ -312,6 +328,26 @@ describe('launch inventory and fail-closed policy', () => {
       violation.rule === 'workflow-node-version'
       && violation.path === workflow
       && violation.message.includes('no live actions/setup-node'))).toBe(true);
+  });
+
+  it('rejects node-version outside the setup-node with mapping', () => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/env-version.yml';
+    write(join(root, workflow), [
+      'name: env-version',
+      'jobs:',
+      '  test:',
+      '    steps:',
+      '      - uses: actions/setup-node@v4',
+      '        env:',
+      "          node-version: '22'",
+      '',
+    ].join('\n'));
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow
+      && violation.message.includes('with.node-version'))).toBe(true);
   });
 
   it('rejects node-version-file even when it points at the canonical declaration', () => {
