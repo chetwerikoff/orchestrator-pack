@@ -26,6 +26,7 @@ import {
   readTrace,
   repoRoot,
   requiredStatusKey,
+  runGit,
   runPackReviewEntry,
   tempRoot,
   validateMutationArray,
@@ -39,6 +40,8 @@ const blockingPayload: PackReviewTerminalPayload = {
   findingCount: 1,
   findings: [{ title: 'Blocking task-311 fixture', severity: 'error' }],
 };
+const checkedOutHead = runGit(['rev-parse', 'HEAD']).trim().toLowerCase();
+invariant(/^[0-9a-f]{40}$/.test(checkedOutHead), `TASK-311 delivery fixture received invalid checkout head ${checkedOutHead}`);
 
 interface AttemptRow {
   channel: 'github' | 'status' | 'worker';
@@ -48,12 +51,16 @@ interface AttemptRow {
   semantics?: 'at-least-once' | 'exactly-once';
 }
 
+interface Counter {
+  value: number;
+}
+
 function createDeliveryRun(storeRoot: string, suffix: string): PackReviewRunRecord {
   return createPackReviewRun({
     projectId,
     storeRoot,
     prNumber: 918,
-    headSha: suffix.repeat(40),
+    headSha: checkedOutHead,
     linkedSessionId: `worker-${suffix}`,
     startReason: `task-311-${suffix}`,
     surface: 'task-311-delivery-matrix',
@@ -170,13 +177,51 @@ async function waitFor(predicate: () => boolean, message: string): Promise<void>
   throw new Error(message);
 }
 
-function emptyTransport(): GithubReviewTransport {
+function makeReview(
+  run: PackReviewRunRecord,
+  id: number,
+  body = reviewBody(run),
+  commitId = run.targetSha,
+  actorLogin = 'task-311-reviewer',
+): GithubReviewSummary {
+  return {
+    id,
+    state: 'COMMENTED',
+    userLogin: actorLogin,
+    submittedAt: new Date().toISOString(),
+    body,
+    commitId,
+    url: `fixture://task-311/review/${id}`,
+  };
+}
+
+function listBackedTransport(options: {
+  reviews: GithubReviewSummary[];
+  run: PackReviewRunRecord;
+  postCounter?: Counter;
+  onPost?: (input: { event: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES'; body: string; commitId: string }) => Promise<{ id: number | string; url: string }>;
+}): GithubReviewTransport {
   return {
     async resolveActorLogin() { return 'task-311-reviewer'; },
-    async listReviews() { return []; },
-    async postReview() { throw new Error('unexpected GitHub COMMENT post'); },
+    async listReviews() { return [...options.reviews]; },
+    async postReview(input) {
+      if (options.postCounter) options.postCounter.value += 1;
+      if (options.onPost) return options.onPost(input);
+      const review = makeReview(options.run, 31000 + options.reviews.length, input.body, input.commitId);
+      options.reviews.push(review);
+      return { id: review.id, url: review.url };
+    },
     async dismissReview() {},
   };
+}
+
+function noPostTransport(run: PackReviewRunRecord, counter?: Counter): GithubReviewTransport {
+  return listBackedTransport({
+    run,
+    reviews: [],
+    postCounter: counter,
+    onPost: async () => { throw new Error('unexpected GitHub COMMENT post'); },
+  });
 }
 
 async function resumeViaRunner(options: {
@@ -198,6 +243,7 @@ async function resumeViaRunner(options: {
     statusWriter: options.statusWriter,
     workerNotifier: options.workerNotifier,
   });
+  invariant(result.ok === true, `runner recovery failed: ${String(result.reason)}`);
   const persisted = getPackReviewRun(options.run.id, { projectId, storeRoot: options.storeRoot });
   invariant(persisted, `runner resume lost persisted run ${options.run.id}`);
   return { result, tracePath, persisted };
@@ -266,17 +312,16 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     const J1Run = journalRun(createDeliveryRun(J1Store, '1'), J1Store);
     const J1Order: string[] = [];
     const J1Reviews: GithubReviewSummary[] = [];
-    const J1Transport: GithubReviewTransport = {
-      async resolveActorLogin() { return 'task-311-reviewer'; },
-      async listReviews() { return [...J1Reviews]; },
-      async postReview(input) {
+    const J1Transport = listBackedTransport({
+      run: J1Run,
+      reviews: J1Reviews,
+      onPost: async (input) => {
         J1Order.push('github');
-        const review = { id: 11, state: 'COMMENTED', userLogin: 'task-311-reviewer', submittedAt: new Date().toISOString(), body: input.body, commitId: input.commitId, url: 'fixture://11' } satisfies GithubReviewSummary;
+        const review = makeReview(J1Run, 11, input.body, input.commitId);
         J1Reviews.push(review);
         return { id: review.id, url: review.url };
       },
-      async dismissReview() {},
-    };
+    });
     const J1Resumed = await resumeViaRunner({
       root: path.join(root, 'j1-runner'),
       run: J1Run,
@@ -293,14 +338,14 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       ...completedGithubFields(J2Base, 22),
       deliveryOutcomes: { githubComment: channelOutcome('succeeded', 'comment_posted', githubKey(J2Base)) },
     });
-    let J2Github = 0;
+    const J2Github = { value: 0 };
     let J2Status = 0;
     let J2Worker = 0;
     await resumeViaRunner({
       root: path.join(root, 'j2-runner'),
       run: J2Run,
       storeRoot: J2Store,
-      transport: { ...emptyTransport(), async postReview() { J2Github += 1; return { id: 23, url: 'fixture://23' }; } },
+      transport: noPostTransport(J2Run, J2Github),
       statusWriter: async (request) => { if (request.state !== 'pending') J2Status += 1; },
       workerNotifier: async () => { J2Worker += 1; return { state: 'delivered', reason: 'delivered' }; },
     });
@@ -308,25 +353,16 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     const J3Store = path.join(root, 'j3');
     const J3Run = journalRun(createDeliveryRun(J3Store, '3'), J3Store);
     const J3ReviewFile = path.join(root, 'j3-reviews.json');
-    let J3PreCrashPosts = 0;
-    const J3CrashTransport: GithubReviewTransport = {
-      async resolveActorLogin() { return 'task-311-reviewer'; },
-      async listReviews() { return []; },
-      async postReview(input) {
-        J3PreCrashPosts += 1;
-        writeReviews(J3ReviewFile, [{
-          id: 33,
-          state: 'COMMENTED',
-          userLogin: 'task-311-reviewer',
-          submittedAt: new Date().toISOString(),
-          body: input.body,
-          commitId: input.commitId,
-          url: 'fixture://33',
-        }]);
+    const J3PreCrash = { value: 0 };
+    const J3CrashTransport = listBackedTransport({
+      run: J3Run,
+      reviews: [],
+      postCounter: J3PreCrash,
+      onPost: async (input) => {
+        writeReviews(J3ReviewFile, [makeReview(J3Run, 33, input.body, input.commitId)]);
         return never<{ id: number; url: string }>();
       },
-      async dismissReview() {},
-    };
+    });
     void reconcileGithubCommentReview({
       projectId,
       storeRoot: J3Store,
@@ -336,24 +372,23 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     });
     await waitFor(() => {
       const persisted = getPackReviewRun(J3Run.id, { projectId, storeRoot: J3Store }) as any;
-      return J3PreCrashPosts === 1 && persisted?.githubReviewReconciliation?.postOutcome === 'ambiguous';
+      return J3PreCrash.value === 1 && persisted?.githubReviewReconciliation?.postOutcome === 'ambiguous';
     }, 'J3 did not persist ambiguous pre-crash COMMENT attempt');
-    let J3RestartPosts = 0;
-    const J3ResumeTransport: GithubReviewTransport = {
-      async resolveActorLogin() { return 'task-311-reviewer'; },
-      async listReviews() { return readReviews(J3ReviewFile); },
-      async postReview() { J3RestartPosts += 1; throw new Error('J3 must recover, not repost'); },
-      async dismissReview() {},
-    };
+    const J3Restart = { value: 0 };
+    const J3Reviews = readReviews(J3ReviewFile);
     const J3Resumed = await resumeViaRunner({
       root: path.join(root, 'j3-runner'),
       run: getPackReviewRun(J3Run.id, { projectId, storeRoot: J3Store })!,
       storeRoot: J3Store,
-      transport: J3ResumeTransport,
+      transport: listBackedTransport({
+        run: J3Run,
+        reviews: J3Reviews,
+        postCounter: J3Restart,
+        onPost: async () => { throw new Error('J3 must recover, not repost'); },
+      }),
       statusWriter: async () => undefined,
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
-    const J3Reviews = readReviews(J3ReviewFile);
 
     const J4Store = path.join(root, 'j4');
     const J4Base = createDeliveryRun(J4Store, '4');
@@ -379,7 +414,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       root: path.join(root, 'j4-runner'),
       run: getPackReviewRun(J4Run.id, { projectId, storeRoot: J4Store })!,
       storeRoot: J4Store,
-      transport: emptyTransport(),
+      transport: noPostTransport(J4Run),
       statusWriter: async (request) => {
         appendAttempt(J4AttemptFile, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: J4Run.targetSha, outcome: 'succeeded', semantics: 'at-least-once' });
       },
@@ -414,7 +449,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       root: path.join(root, 'j5-runner'),
       run: getPackReviewRun(J5Run.id, { projectId, storeRoot: J5Store })!,
       storeRoot: J5Store,
-      transport: emptyTransport(),
+      transport: noPostTransport(J5Run),
       statusWriter: async () => { throw new Error('J5 must not repost status'); },
       workerNotifier: async (request) => {
         appendAttempt(J5AttemptFile, { channel: 'worker', idempotencyKey: request.idempotencyKey, headSha: J5Run.targetSha, outcome: 'succeeded', semantics: 'at-least-once' });
@@ -433,14 +468,14 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
         workerNotification: channelOutcome('delivered', 'worker_delivered', workerKey(J6Base)),
       },
     });
-    let J6Github = 0;
+    const J6Github = { value: 0 };
     let J6Status = 0;
     let J6Worker = 0;
     const J6Resumed = await resumeViaRunner({
       root: path.join(root, 'j6-runner'),
       run: J6Run,
       storeRoot: J6Store,
-      transport: { ...emptyTransport(), async postReview() { J6Github += 1; return { id: 67, url: 'fixture://67' }; } },
+      transport: noPostTransport(J6Run, J6Github),
       statusWriter: async () => { J6Status += 1; },
       workerNotifier: async () => { J6Worker += 1; return { state: 'delivered', reason: 'unexpected' }; },
     });
@@ -454,10 +489,10 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
         recovered: J1Resumed.result.recovered === true,
         persistedVerdict: J1Resumed.persisted.reviewVerdict,
       },
-      J2: { githubAttempts: J2Github, statusAttempts: J2Status, workerAttempts: J2Worker },
+      J2: { githubAttempts: J2Github.value, statusAttempts: J2Status, workerAttempts: J2Worker },
       J3: {
-        preCrashPostAttempts: J3PreCrashPosts,
-        restartPostAttempts: J3RestartPosts,
+        preCrashPostAttempts: J3PreCrash.value,
+        restartPostAttempts: J3Restart.value,
         commentCount: J3Reviews.length,
         matchingCount: J3Reviews.filter((review) => review.body.includes(`Run: \`${J3Run.id}\``)).length,
         phase: J3Resumed.persisted.githubReviewReconciliation?.phase,
@@ -482,7 +517,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
         attemptHead: J5Attempts[0]?.headSha,
         expectedHead: J5Run.targetSha,
       },
-      J6: { githubAttempts: J6Github, statusAttempts: J6Status, workerAttempts: J6Worker, status: J6Resumed.persisted.status },
+      J6: { githubAttempts: J6Github.value, statusAttempts: J6Status, workerAttempts: J6Worker, status: J6Resumed.persisted.status },
     };
     validateDeliveryMatrix(delivery);
 
@@ -522,24 +557,16 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     const M1Trace = path.join(root, 'm1-trace.jsonl');
     writeFileSync(M1Trace, '', 'utf8');
     const M1Reviews: GithubReviewSummary[] = [];
-    await runPackReviewEntry({
+    const M1Result = await runPackReviewEntry({
       root: path.join(root, 'm1-runner'),
       target: targetFor(M1Base),
       storeRoot: M1Store,
       tracePath: M1Trace,
-      githubTransport: {
-        async resolveActorLogin() { return 'task-311-reviewer'; },
-        async listReviews() { return [...M1Reviews]; },
-        async postReview(input) {
-          const row = { id: 101, state: 'COMMENTED', userLogin: 'task-311-reviewer', submittedAt: new Date().toISOString(), body: input.body, commitId: input.commitId, url: 'fixture://101' } satisfies GithubReviewSummary;
-          M1Reviews.push(row);
-          return { id: row.id, url: row.url };
-        },
-        async dismissReview() {},
-      },
+      githubTransport: listBackedTransport({ run: M1Base, reviews: M1Reviews }),
       statusWriter: async () => undefined,
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
+    invariant(M1Result.ok === true, `reviewer-rerun control did not reach a replacement run: ${String(M1Result.reason)}`);
     mutations.push(actualRowRed(delivery, 'reviewer-rerun-after-journal', 'J1', {
       order: ['github', 'status', 'worker'],
       reviewerRuns: readTrace(M1Trace).filter((row) => row.event === 'reviewer-wrapper').length,
@@ -549,31 +576,21 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
 
     const M2Store = path.join(root, 'm2');
     const M2Run = journalRun(createDeliveryRun(M2Store, 'c'), M2Store);
-    const M2Reviews: GithubReviewSummary[] = [{ id: 201, state: 'COMMENTED', userLogin: 'someone-else', submittedAt: new Date().toISOString(), body: 'existing external comment', commitId: M2Run.targetSha, url: 'fixture://201' }];
-    let M2Posts = 0;
+    const M2Reviews = [makeReview(M2Run, 201, 'existing external comment', M2Run.targetSha, 'someone-else')];
+    const M2Posts = { value: 0 };
     await resumeViaRunner({
       root: path.join(root, 'm2-runner'),
       run: M2Run,
       storeRoot: M2Store,
-      transport: {
-        async resolveActorLogin() { return 'task-311-reviewer'; },
-        async listReviews() { return [...M2Reviews]; },
-        async postReview(input) {
-          M2Posts += 1;
-          const row = { id: 202, state: 'COMMENTED', userLogin: 'task-311-reviewer', submittedAt: new Date().toISOString(), body: input.body, commitId: input.commitId, url: 'fixture://202' } satisfies GithubReviewSummary;
-          M2Reviews.push(row);
-          return { id: row.id, url: row.url };
-        },
-        async dismissReview() {},
-      },
+      transport: listBackedTransport({ run: M2Run, reviews: M2Reviews, postCounter: M2Posts }),
       statusWriter: async () => undefined,
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
-    mutations.push(actualRowRed(delivery, 'blind-comment-replay', 'J2', { githubAttempts: M2Posts, statusAttempts: 1, workerAttempts: 1 }));
+    mutations.push(actualRowRed(delivery, 'blind-comment-replay', 'J2', { githubAttempts: M2Posts.value, statusAttempts: 1, workerAttempts: 1 }));
 
     const M3Store = path.join(root, 'm3');
     const M3Run = journalRun(createDeliveryRun(M3Store, 'd'), M3Store);
-    const wrongReview: GithubReviewSummary = { id: 301, state: 'COMMENTED', userLogin: 'task-311-reviewer', submittedAt: new Date().toISOString(), body: reviewBody(M3Run), commitId: 'e'.repeat(40), url: 'fixture://301' };
+    const wrongReview = makeReview(M3Run, 301, reviewBody(M3Run), 'e'.repeat(40));
     updatePackReviewRun(M3Run.id, {
       githubReviewReconciliation: {
         schemaVersion: 1,
@@ -592,12 +609,11 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       root: path.join(root, 'm3-runner'),
       run: getPackReviewRun(M3Run.id, { projectId, storeRoot: M3Store })!,
       storeRoot: M3Store,
-      transport: {
-        async resolveActorLogin() { return 'task-311-reviewer'; },
-        async listReviews() { return [wrongReview]; },
-        async postReview() { throw new Error('must not blind repost invalid recovery'); },
-        async dismissReview() {},
-      },
+      transport: listBackedTransport({
+        run: M3Run,
+        reviews: [wrongReview],
+        onPost: async () => { throw new Error('must not blind repost invalid recovery'); },
+      }),
       statusWriter: async () => undefined,
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
@@ -617,31 +633,31 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       ...completedGithubFields(M4Base, 404),
       deliveryOutcomes: { githubComment: channelOutcome('succeeded', 'comment_posted', githubKey(M4Base)) },
     });
-    const M4AttemptsFile = path.join(root, 'm4-attempts.jsonl');
-    writeFileSync(M4AttemptsFile, '', 'utf8');
+    const M4File = path.join(root, 'm4-attempts.jsonl');
+    writeFileSync(M4File, '', 'utf8');
     void resumePackReviewVerdictDelivery({
       projectId,
       storeRoot: M4Store,
       run: M4Run,
       postGithubComment: async () => { throw new Error('M4 must not repost COMMENT'); },
       writeRequiredStatus: async (request) => {
-        appendAttempt(M4AttemptsFile, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: M4Run.targetSha, outcome: 'unknown', semantics: 'at-least-once' });
+        appendAttempt(M4File, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: M4Run.targetSha, outcome: 'unknown', semantics: 'at-least-once' });
         return never<void>();
       },
       notifyWorker: async () => ({ state: 'delivered', reason: 'not_reached' }),
     });
-    await waitFor(() => readAttempts(M4AttemptsFile).length === 1, 'M4 did not persist first status attempt');
+    await waitFor(() => readAttempts(M4File).length === 1, 'M4 did not persist first status attempt');
     await resumeViaRunner({
       root: path.join(root, 'm4-runner'),
       run: getPackReviewRun(M4Run.id, { projectId, storeRoot: M4Store })!,
       storeRoot: M4Store,
-      transport: emptyTransport(),
+      transport: noPostTransport(M4Run),
       statusWriter: async (request) => {
-        appendAttempt(M4AttemptsFile, { channel: 'status', idempotencyKey: `changed:${request.idempotencyKey}`, headSha: 'f'.repeat(40), outcome: 'succeeded', semantics: 'at-least-once' });
+        appendAttempt(M4File, { channel: 'status', idempotencyKey: `changed:${request.idempotencyKey}`, headSha: 'f'.repeat(40), outcome: 'succeeded', semantics: 'at-least-once' });
       },
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
-    const M4Attempts = readAttempts(M4AttemptsFile);
+    const M4Attempts = readAttempts(M4File);
     mutations.push(actualRowRed(delivery, 'changed-idempotency-or-head', 'J4', {
       statusPosts: M4Attempts.length,
       duplicateAccounted: M4Attempts.length > 1 && new Set(M4Attempts.map((row) => `${row.idempotencyKey}:${row.headSha}`)).size === 1,
@@ -677,7 +693,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       root: path.join(root, 'm5-lost-runner'),
       run: getPackReviewRun(M5LostRun.id, { projectId, storeRoot: M5LostStore })!,
       storeRoot: M5LostStore,
-      transport: emptyTransport(),
+      transport: noPostTransport(M5LostRun),
       statusWriter: async (request) => {
         appendAttempt(M5LostFile, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: M5LostRun.targetSha, outcome: 'succeeded', semantics: 'at-least-once' });
       },
@@ -721,7 +737,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       root: path.join(root, 'm5-false-runner'),
       run: getPackReviewRun(M5FalseRun.id, { projectId, storeRoot: M5FalseStore })!,
       storeRoot: M5FalseStore,
-      transport: emptyTransport(),
+      transport: noPostTransport(M5FalseRun),
       statusWriter: async () => { throw new Error('M5-false must not repost status'); },
       workerNotifier: async (request) => {
         appendAttempt(M5FalseFile, { channel: 'worker', idempotencyKey: request.idempotencyKey, headSha: M5FalseRun.targetSha, outcome: 'succeeded', semantics: 'exactly-once' });
