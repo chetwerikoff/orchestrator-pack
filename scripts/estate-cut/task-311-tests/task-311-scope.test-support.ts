@@ -1,4 +1,8 @@
+import { spawnSync } from 'node:child_process';
+import dns from 'node:dns';
 import {
+  appendFileSync,
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -7,19 +11,22 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import path from 'node:path';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import path, { delimiter } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { runProcessSync } from '../../kernel/subprocess.js';
 import {
   fixture,
-  installEgressTrap,
   invariant,
   jsonClone,
   repoRoot,
   runGit,
   tempRoot,
   validateMutationArray,
+  type EgressAttempt,
   type EgressTrap,
   type MutationRecord,
 } from './task-311-common.test-support.js';
@@ -35,7 +42,150 @@ interface ScopeSnapshot {
   baseConfig: Record<string, unknown>;
   currentConfig: Record<string, unknown>;
   captureSelectors: string[];
-  trap: { active: boolean; unexpectedAttempts: number };
+  trap: { active: boolean; unexpectedAttempts: number; nativeLibrary: boolean };
+}
+
+function writeExecutable(file: string, content: string): void {
+  writeFileSync(file, content, 'utf8');
+  if (process.platform !== 'win32') chmodSync(file, 0o700);
+}
+
+function buildNativeNetworkTrap(root: string): string {
+  if (process.platform !== 'linux') return '';
+  const sourcePath = path.join(root, 'task311-nettrap.c');
+  const libraryPath = path.join(root, 'task311-nettrap.so');
+  writeFileSync(sourcePath, String.raw`
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+static void record_attempt(const char *edge, int family) {
+  const char *state = getenv("TASK311_EGRESS_STATE");
+  if (!state || !*state) return;
+  int fd = open(state, O_WRONLY | O_CREAT | O_APPEND, 0600);
+  if (fd < 0) return;
+  char row[256];
+  int n = snprintf(row, sizeof(row), "{\"kind\":\"native\",\"edge\":\"%s\",\"detail\":\"family=%d\"}\n", edge, family);
+  if (n > 0) (void)write(fd, row, (size_t)n);
+  close(fd);
+}
+
+int connect(int fd, const struct sockaddr *addr, socklen_t length) {
+  static int (*real_connect)(int, const struct sockaddr *, socklen_t) = NULL;
+  if (addr && (addr->sa_family == AF_INET || addr->sa_family == AF_INET6)) {
+    record_attempt("native-connect", addr->sa_family);
+    errno = EPERM;
+    return -1;
+  }
+  if (!real_connect) real_connect = dlsym(RTLD_NEXT, "connect");
+  return real_connect(fd, addr, length);
+}
+
+`, 'utf8');
+  const compiled = spawnSync('cc', ['-shared', '-fPIC', '-O2', '-Wall', '-Werror', '-o', libraryPath, sourcePath, '-ldl'], {
+    cwd: root,
+    env: process.env,
+    encoding: 'utf8',
+  });
+  invariant(compiled.status === 0 && existsSync(libraryPath), `native egress trap compilation failed: ${compiled.stderr || compiled.stdout}`);
+  return libraryPath;
+}
+
+export function installEgressTrap(root: string): EgressTrap {
+  const binDir = path.join(root, 'egress-bin');
+  const statePath = path.join(root, 'egress.jsonl');
+  const preloadPath = path.join(root, 'egress-preload.cjs');
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(statePath, '', 'utf8');
+  const nativeLibrary = buildNativeNetworkTrap(root);
+  writeFileSync(preloadPath, `
+const fs = require('node:fs');
+const state = process.env.TASK311_EGRESS_STATE;
+const record = (edge, detail='') => {
+  if (state) fs.appendFileSync(state, JSON.stringify({ kind: 'node', edge, detail }) + '\\n');
+  const error = new Error('TASK311_EGRESS_BLOCKED:' + edge);
+  error.code = 'TASK311_EGRESS_BLOCKED';
+  throw error;
+};
+for (const [moduleName, names] of [
+  ['node:http', ['request', 'get']],
+  ['node:https', ['request', 'get']],
+  ['node:net', ['connect', 'createConnection']],
+  ['node:dns', ['lookup', 'resolve', 'resolve4', 'resolve6']]
+]) {
+  const mod = require(moduleName);
+  for (const name of names) {
+    try { Object.defineProperty(mod, name, { configurable: true, writable: true, value: (...args) => record(moduleName + '.' + name, String(args[0] ?? '')) }); } catch {}
+  }
+}
+globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
+`, 'utf8');
+  for (const edge of ['gh', 'ao', 'curl', 'wget', 'ssh', 'nc']) {
+    if (process.platform === 'win32') {
+      writeExecutable(path.join(binDir, `${edge}.cmd`), `@echo {"kind":"process","edge":"${edge}"}>>"%TASK311_EGRESS_STATE%"\r\necho TASK311_EGRESS_BLOCKED:${edge} 1>&2\r\nexit /b 91\r\n`);
+    } else {
+      writeExecutable(path.join(binDir, edge), `#!/usr/bin/env sh\nprintf '%s\\n' '{"kind":"process","edge":"${edge}"}' >> "$TASK311_EGRESS_STATE"\necho 'TASK311_EGRESS_BLOCKED:${edge}' >&2\nexit 91\n`);
+    }
+  }
+
+  const originalPath = process.env.PATH;
+  const originalNodeOptions = process.env.NODE_OPTIONS;
+  const originalState = process.env.TASK311_EGRESS_STATE;
+  const originalLdPreload = process.env.LD_PRELOAD;
+  const originalFetch = globalThis.fetch;
+  const patched: Array<{ target: Record<string, unknown>; key: string; value: unknown }> = [];
+  const block = (edge: string) => (...args: unknown[]): never => {
+    appendFileSync(statePath, `${JSON.stringify({ kind: 'node', edge, detail: String(args[0] ?? '') })}\n`, 'utf8');
+    throw Object.assign(new Error(`TASK311_EGRESS_BLOCKED:${edge}`), { code: 'TASK311_EGRESS_BLOCKED' });
+  };
+  const patch = (target: Record<string, unknown>, key: string, edge: string): void => {
+    patched.push({ target, key, value: target[key] });
+    Object.defineProperty(target, key, { configurable: true, writable: true, value: block(edge) });
+  };
+
+  process.env.PATH = `${binDir}${delimiter}${originalPath ?? ''}`;
+  process.env.TASK311_EGRESS_STATE = statePath;
+  process.env.NODE_OPTIONS = [originalNodeOptions ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
+  if (nativeLibrary) process.env.LD_PRELOAD = [nativeLibrary, originalLdPreload ?? ''].filter(Boolean).join(':');
+  globalThis.fetch = block('fetch') as typeof fetch;
+  patch(http as unknown as Record<string, unknown>, 'request', 'node:http.request');
+  patch(http as unknown as Record<string, unknown>, 'get', 'node:http.get');
+  patch(https as unknown as Record<string, unknown>, 'request', 'node:https.request');
+  patch(https as unknown as Record<string, unknown>, 'get', 'node:https.get');
+  patch(net as unknown as Record<string, unknown>, 'connect', 'node:net.connect');
+  patch(net as unknown as Record<string, unknown>, 'createConnection', 'node:net.createConnection');
+  patch(dns as unknown as Record<string, unknown>, 'lookup', 'node:dns.lookup');
+  patch(dns as unknown as Record<string, unknown>, 'resolve', 'node:dns.resolve');
+
+  return {
+    active: true,
+    root,
+    binDir,
+    statePath,
+    nodeOptions: process.env.NODE_OPTIONS,
+    nativeLibrary,
+    attempts() {
+      if (!existsSync(statePath)) return [];
+      return readFileSync(statePath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+        .map((line) => JSON.parse(line) as EgressAttempt);
+    },
+    restore() {
+      globalThis.fetch = originalFetch;
+      for (const entry of patched.reverse()) {
+        Object.defineProperty(entry.target, entry.key, { configurable: true, writable: true, value: entry.value });
+      }
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = originalNodeOptions;
+      if (originalState === undefined) delete process.env.TASK311_EGRESS_STATE; else process.env.TASK311_EGRESS_STATE = originalState;
+      if (originalLdPreload === undefined) delete process.env.LD_PRELOAD; else process.env.LD_PRELOAD = originalLdPreload;
+    },
+  };
 }
 
 function parseNameStatus(output: string): Array<{ status: string; path: string }> {
@@ -70,7 +220,7 @@ function currentScopeSnapshot(trap: EgressTrap): ScopeSnapshot {
     baseConfig,
     currentConfig,
     captureSelectors: Object.values(fixture.capture.selectors),
-    trap: { active: trap.active, unexpectedAttempts: trap.attempts().length },
+    trap: { active: trap.active, unexpectedAttempts: trap.attempts().length, nativeLibrary: Boolean(trap.nativeLibrary) },
   };
 }
 
@@ -127,6 +277,7 @@ function validateScopeSnapshot(candidate: ScopeSnapshot): void {
   const declaredSelectors = new Set(Object.values(fixture.capture.selectors));
   invariant(candidate.captureSelectors.every((selector) => declaredSelectors.has(selector)), 'untraced AO selector used');
   invariant(candidate.trap.active === true && candidate.trap.unexpectedAttempts === 0, 'egress trap inactive or unexpected egress observed');
+  invariant(candidate.trap.nativeLibrary || process.platform !== 'linux', 'positive boundary lacks native child-process network enforcement');
 }
 
 function mutationRecord(mutationId: string): MutationRecord {
@@ -151,17 +302,18 @@ function intentionalEgressControl(): MutationRecord {
   const root = tempRoot('task-311-egress-control-');
   const trap = installEgressTrap(root);
   try {
+    const childEnv = { ...process.env, NODE_OPTIONS: '' };
     const result = runProcessSync({
-      command: 'gh',
-      args: ['api', 'repos/fixture/fixture'],
+      command: process.execPath,
+      args: ['-e', "const net=require('node:net');const s=net.connect(9,'127.0.0.1');s.on('error',()=>process.exit(91));setTimeout(()=>process.exit(92),500);"],
       cwd: repoRoot,
-      env: process.env,
+      env: childEnv,
       inheritParentEnv: false,
       encoding: 'utf8',
     });
-    invariant(result.exitCode === 91, 'intentional GitHub egress was not rejected by process trap');
+    invariant(result.exitCode === 91, `intentional native egress was not rejected (${result.exitCode ?? result.outcome})`);
     const attempts = trap.attempts();
-    invariant(attempts.length === 1 && attempts[0]?.edge === 'gh', 'intentional egress was not durably observed');
+    invariant(attempts.some((attempt) => attempt.edge === 'native-connect'), 'intentional native egress was not durably observed');
     return mutationRecord('intentional-external-egress');
   } finally {
     trap.restore();
@@ -220,16 +372,18 @@ export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>
     candidate.changes.push({ status: 'M', path: fixture.capture.path, mode: '100644' });
   }, 'capture-corpus-change'));
   validateMutationArray('AC6', rows);
-  const scope = {
-    result: 'test-only-offline-capture-backed',
-    trap: baseline.trap,
-    changedPaths: baseline.changes,
-    laneConfig: fixture.scope.laneConfig,
-    addedHeavyTests: fixture.scope.expectedHeavyTests,
-    capturePath: fixture.capture.path,
-    captureSelectors: baseline.captureSelectors,
-    nonClassificationConfigByteEquivalent: true,
-    regularGitModesOnly: true,
+  return {
+    scope: {
+      result: 'test-only-offline-capture-backed',
+      trap: baseline.trap,
+      changedPaths: baseline.changes,
+      laneConfig: fixture.scope.laneConfig,
+      addedHeavyTests: fixture.scope.expectedHeavyTests,
+      capturePath: fixture.capture.path,
+      captureSelectors: baseline.captureSelectors,
+      nonClassificationConfigByteEquivalent: true,
+      regularGitModesOnly: true,
+    },
+    mutations: rows,
   };
-  return { scope, mutations: rows };
 }
