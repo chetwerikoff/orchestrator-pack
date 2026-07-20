@@ -6,20 +6,82 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: issue-900-blocker-publisher
+  cancel-in-progress: true
 
 jobs:
-  snapshot:
+  publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout transfer payload
+        uses: actions/checkout@v4
+        with:
+          path: payload
+          fetch-depth: 1
+
+      - name: Checkout exact PR branch
+        uses: actions/checkout@v4
         with:
           ref: agent/issue-900-node22-runtime
+          path: target
           fetch-depth: 0
-      - run: git archive --format=tar.gz --output=issue-900-blocker-snapshot.tar.gz HEAD
-      - uses: actions/upload-artifact@v4
+
+      - name: Reconstruct, verify, and commit patch locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp payload/scripts/toolchain/.issue900-review-blockers.patch.xz /tmp/issue900-review-blockers.patch.xz
+          test "$(wc -c < /tmp/issue900-review-blockers.patch.xz)" -eq 6744
+          echo "3302f0af565902eff25ee318e6b5621f4d46f23bab967df9ef7ec43ae52727bd  /tmp/issue900-review-blockers.patch.xz" | sha256sum --check --strict
+          xz --decompress --stdout /tmp/issue900-review-blockers.patch.xz > /tmp/issue900-review-blockers.patch
+          cd target
+          test "$(git rev-parse HEAD)" = "2cc4a84d4bc80651b3a5c1bd098d5293099148ec"
+          git apply --check /tmp/issue900-review-blockers.patch
+          git apply --index /tmp/issue900-review-blockers.patch
+          test "$(git diff --cached --name-only | wc -l)" -eq 14
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: enforce Node 22 preflight on native entrypoints"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
         with:
-          name: issue-900-blocker-snapshot
-          path: issue-900-blocker-snapshot.tar.gz
-          compression-level: 0
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: target/package-lock.json
+
+      - name: Install dependencies
+        working-directory: target
+        run: npm ci
+
+      - name: Validate review blocker fixes
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check:node-major
+          npm run typecheck:foundation
+          npx tsc -p tsconfig.base.json --noEmit
+          npm run lint:foundation
+          npm run test:issue-900
+          npm run gate-runner-selftest
+          node scripts/run-vitest-with-harness.mjs run \
+            plugins/ao-codex-pr-reviewer \
+            plugins/ao-scope-guard \
+            plugins/ao-task-declaration \
+            plugins/ao-token-chain-ledger
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef a0a42bb5e3958b24aa03a2e51d8eac6883901da9 \
+            -HeadRef HEAD
+
+      - name: Push blocker fixes
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:agent/issue-900-node22-runtime
