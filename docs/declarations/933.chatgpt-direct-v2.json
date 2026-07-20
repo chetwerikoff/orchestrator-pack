@@ -13,6 +13,7 @@
     ".claude/skills/merge-with-local-adoption/SKILL.md",
     ".claude/skills/merge-with-local-adoption/WORKFLOW.md",
     ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/merge-triage-gate-core.mjs",
     "docs/merge-triage-gate.mjs",
     "scripts/lib/operator-merge-approval.ts",
     "scripts/operator-merge-approval.test.ts",
@@ -20,5 +21,20 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bc4fde61ef5175ba0dc8c3864b119c566ad43895b8c56f23a1a2b37077d91033",
+      "new_active_scope_hash": "sha256:2d9ed37858b2af063744f0bc1b3711dc3193c4154f67c8b64e79a8c47def8508",
+      "changed": {
+        "added": [
+          "docs/merge-triage-gate-core.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Preserve the existing merge-triage implementation byte-identically behind a short public wrapper that adds exact-head operator approval consumption without rewriting the mature gate",
+      "actor": "chatgpt-direct",
+      "timestamp": "2026-07-20T13:31:00.000Z",
+      "applied": true
+    }
+  ]
 }
