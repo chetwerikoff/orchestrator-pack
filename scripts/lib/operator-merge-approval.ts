@@ -185,13 +185,14 @@ export function parseOperatorMergeApprovalRecord(value: unknown): OperatorMergeA
   const reason = requiredText(raw.reason, 'reason');
   const actor = requiredText(raw.actor, 'actor');
   const createdAtUtc = requireIsoTimestamp(raw.createdAtUtc, 'createdAtUtc');
-  const revokedAtUtc = String(raw.revokedAtUtc ?? '').trim()
-    ? requireIsoTimestamp(raw.revokedAtUtc, 'revokedAtUtc')
-    : undefined;
-  const revocationReason = String(raw.revocationReason ?? '').trim() || undefined;
-  if (revokedAtUtc && !revocationReason) {
-    throw new Error('revoked operator merge approval requires revocationReason');
+  const revokedAtText = String(raw.revokedAtUtc ?? '').trim();
+  const revocationReason = String(raw.revocationReason ?? '').trim();
+  if (Boolean(revokedAtText) !== Boolean(revocationReason)) {
+    throw new Error('operator merge approval revocation fields must be both present or both absent');
   }
+  const revokedAtUtc = revokedAtText
+    ? requireIsoTimestamp(revokedAtText, 'revokedAtUtc')
+    : undefined;
   return {
     schemaVersion: 1,
     event: OPERATOR_MERGE_APPROVAL_EVENT,
