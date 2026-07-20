@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode payload/scripts/toolchain/.issue900-review6.patch.xz.b64 > /tmp/issue900-review6.patch.xz
+          cp payload/scripts/toolchain/.issue900-review6.patch.xz /tmp/issue900-review6.patch.xz
           test "$(wc -c < /tmp/issue900-review6.patch.xz)" -eq 8528
           test "$(sha256sum /tmp/issue900-review6.patch.xz | awk '{print $1}')" = "90205fec088f46ac0a55b839d80134bca2909e8e2b249e1db0b021cfbd4d5d3b"
           xz --decompress --stdout /tmp/issue900-review6.patch.xz > /tmp/issue900-review6.patch
