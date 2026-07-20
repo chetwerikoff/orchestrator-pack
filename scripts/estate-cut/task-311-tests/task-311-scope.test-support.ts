@@ -317,9 +317,9 @@ function expectCandidateRed(baseline: ScopeSnapshot, mutate: (candidate: ScopeSn
   return mutationRecord(mutationId);
 }
 
-function intentionalEgressControl(): MutationRecord {
-  const root = tempRoot('task-311-egress-control-');
-  const trap = installEgressTrap(root);
+function intentionalEgressControl(trap: EgressTrap): MutationRecord {
+  const priorState = existsSync(trap.statePath) ? readFileSync(trap.statePath, 'utf8') : '';
+  const priorAttempts = trap.attempts().length;
   try {
     const childEnv = { ...process.env, NODE_OPTIONS: '' };
     const result = runProcessSync({
@@ -331,12 +331,11 @@ function intentionalEgressControl(): MutationRecord {
       encoding: 'utf8',
     });
     invariant(result.exitCode === 91, `intentional native egress was not rejected (${result.exitCode ?? result.outcome})`);
-    const attempts = trap.attempts();
-    invariant(attempts.some((attempt) => attempt.edge === 'native-connect'), 'intentional native egress was not durably observed');
+    const addedAttempts = trap.attempts().slice(priorAttempts);
+    invariant(addedAttempts.some((attempt) => attempt.edge === 'native-connect'), 'intentional native egress was not durably observed');
     return mutationRecord('intentional-external-egress');
   } finally {
-    trap.restore();
-    rmSync(root, { recursive: true, force: true });
+    writeFileSync(trap.statePath, priorState, 'utf8');
   }
 }
 
@@ -383,7 +382,7 @@ export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>
     candidate.changes.push({ status: 'M', path: 'packages/core/src/index.ts', mode: '100644' });
   }, 'production-or-core-edit'));
   rows.push(nonRegularArtifactControl(baseline));
-  rows.push(intentionalEgressControl());
+  rows.push(intentionalEgressControl(trap));
   rows.push(expectCandidateRed(baseline, (candidate) => {
     candidate.captureSelectors.push('$.data[0].prNumber');
   }, 'untraced-ao-field'));
