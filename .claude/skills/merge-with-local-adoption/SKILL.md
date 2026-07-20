@@ -111,7 +111,7 @@ normalizes blocking statuses instead of stopping on them):
 
 ```bash
 gh pr checks P --repo chetwerikoff/orchestrator-pack
-gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckRollup
+gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckRollup,isDraft
 ```
 
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
@@ -155,6 +155,10 @@ operator sees what the direct order overrode.
 
 If checks fail or `mergeStateStatus` is `BEHIND`: **stop before Step 4**. Do not patch
 worker-scope implementation from the architect session — delegate to the PR worker.
+
+**Under a direct merge order, `BEHIND` does not reach this step** — Step 3a already
+updated the branch, and you arrive here only for red required CI or a real conflict.
+Everywhere else `BEHIND` still stops and delegates.
 
 1. **Resolve worker:** `ao session ls --json -p orchestrator-pack`; find `role`
    `worker`/`coding` with `issue == I` (or branch matches PR head). No worker → report
