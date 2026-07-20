@@ -196,50 +196,57 @@ export function runMergeTriageGate(input = {}) {
   };
 }
 
-const MERGE_TRIAGE_CLI_HANDLERS = {
-  classifyFinding: () => classifyFinding(readStdinJson()),
-  runGate: () => runMergeTriageGate(readStdinJson()),
-  evaluateMergePolicy: () => evaluateMergePolicy(readStdinJson()),
-  readArchitectInbox: () => readArchitectInbox(readStdinJson()),
-  issueArchitectToken: () => issueArchitectProvenanceToken(readStdinJson()),
-  fileWorkerAppeal: () => fileWorkerAppeal(readStdinJson()),
-  adjudicateArchitectFinding: () => adjudicateArchitectFinding(readStdinJson()),
-  acknowledgeArchitectBudget: () => acknowledgeArchitectPermissiveBudget(readStdinJson()),
-};
+const CLI_COMMANDS = [
+  'classifyFinding',
+  'runGate',
+  'evaluateMergePolicy',
+  'readArchitectInbox',
+  'issueArchitectToken',
+  'fileWorkerAppeal',
+  'adjudicateArchitectFinding',
+  'acknowledgeArchitectBudget',
+];
 
-function mergeTriageCliShouldExitNonZero(subcommand, result) {
-  if (subcommand === 'evaluateMergePolicy') {
-    return result?.reason === 'operator_merge_approval_unavailable';
+function invokeCliCommand(command, payload) {
+  switch (command) {
+    case 'classifyFinding': return classifyFinding(payload);
+    case 'runGate': return runMergeTriageGate(payload);
+    case 'evaluateMergePolicy': return evaluateMergePolicy(payload);
+    case 'readArchitectInbox': return readArchitectInbox(payload);
+    case 'issueArchitectToken': return issueArchitectProvenanceToken(payload);
+    case 'fileWorkerAppeal': return fileWorkerAppeal(payload);
+    case 'adjudicateArchitectFinding': return adjudicateArchitectFinding(payload);
+    case 'acknowledgeArchitectBudget': return acknowledgeArchitectPermissiveBudget(payload);
+    default: throw new Error(`unknown merge triage command: ${String(command ?? '<empty>')}`);
   }
-  if (subcommand !== 'runGate' || !result || result.ok !== false || result.ran !== true) {
-    return false;
-  }
-  if (
-    result.reason === 'open_findings_unavailable' ||
-    result.reason === 'operator_merge_approval_unavailable'
-  ) {
-    return true;
-  }
-  return Array.isArray(result.classifications) &&
-    result.classifications.some((classification) => classification?.reason === 'empty_finding_text');
 }
 
-const mergeTriageCliEntry = process.argv[1] ?? '';
-const isMergeTriageCli =
-  mergeTriageCliEntry.endsWith('merge-triage-gate.mjs') ||
-  mergeTriageCliEntry.endsWith('merge-triage-gate.js');
+function directCliFailure(command, result) {
+  if (command === 'evaluateMergePolicy') {
+    return result?.reason === 'operator_merge_approval_unavailable';
+  }
+  if (command !== 'runGate' || result?.ok !== false || result?.ran !== true) return false;
+  if (result.reason === 'open_findings_unavailable' || result.reason === 'operator_merge_approval_unavailable') {
+    return true;
+  }
+  return Array.isArray(result.classifications)
+    && result.classifications.some((classification) => classification?.reason === 'empty_finding_text');
+}
 
-if (isMergeTriageCli) {
-  const subcommand = process.argv[2];
-  const handler = MERGE_TRIAGE_CLI_HANDLERS[subcommand];
-  if (!handler) {
-    console.error(`Usage: node merge-triage-gate.mjs <${Object.keys(MERGE_TRIAGE_CLI_HANDLERS).join('|')}>`);
+function isPublicCliInvocation(entry) {
+  return /(?:^|[\\/])merge-triage-gate\.(?:mjs|js)$/.test(String(entry ?? ''));
+}
+
+if (isPublicCliInvocation(process.argv[1])) {
+  const command = process.argv[2];
+  if (!CLI_COMMANDS.includes(command)) {
+    console.error(`Usage: node merge-triage-gate.mjs <${CLI_COMMANDS.join('|')}>`);
     process.exit(2);
   }
   try {
-    const result = handler();
+    const result = invokeCliCommand(command, readStdinJson());
     printJson(result);
-    process.exit(mergeTriageCliShouldExitNonZero(subcommand, result) ? 1 : 0);
+    process.exit(directCliFailure(command, result) ? 1 : 0);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
