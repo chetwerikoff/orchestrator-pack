@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
-import { isMap, isScalar, isSeq, LineCounter, parseDocument } from 'yaml';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import {
   assertNodeRuntimeContract,
@@ -271,82 +270,347 @@ interface WorkflowSetupNodeStep {
   readonly selectors: readonly WorkflowVersionSelector[];
 }
 
-function yamlScalarText(node: unknown): string | undefined {
-  if (!isScalar(node)) return undefined;
-  const value = node.value;
-  return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
+function stripYamlComment(line: string): string {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index] ?? '';
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && doubleQuoted) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !doubleQuoted) {
+      if (singleQuoted && line[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      singleQuoted = !singleQuoted;
+      continue;
+    }
+    if (character === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+      continue;
+    }
+    if (character === '#' && !singleQuoted && !doubleQuoted) return line.slice(0, index);
+  }
+  return line;
 }
 
-function yamlMapPair(map: unknown, key: string) {
-  if (!isMap(map)) return undefined;
-  return map.items.find((pair) => yamlScalarText(pair.key) === key);
+function yamlIndent(line: string): number {
+  return /^\s*/u.exec(line)?.[0].length ?? 0;
 }
 
-function yamlNodeLine(lineCounter: LineCounter, node: unknown): number {
-  if (!node || typeof node !== 'object') return 1;
-  const range = (node as { readonly range?: readonly number[] }).range;
-  return range?.[0] === undefined ? 1 : lineCounter.linePos(range[0]).line;
+function yamlScalarValue(raw: string): string {
+  const value = raw.trim();
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replace(/''/gu, "'");
+  }
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value) as string;
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
 }
 
-function yamlNodeEvidence(source: string, node: unknown): string {
-  if (!node || typeof node !== 'object') return '';
-  const range = (node as { readonly range?: readonly number[] }).range;
-  if (range?.[0] === undefined || range[1] === undefined) return '';
-  return compactEvidence(source.slice(range[0], range[1]));
+interface SimpleYamlPair {
+  readonly key: string;
+  readonly value: string;
+  readonly line: number;
+  readonly indent: number;
+}
+
+function topLevelColon(text: string): number {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  let braces = 0;
+  let brackets = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && doubleQuoted) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !doubleQuoted) {
+      if (singleQuoted && text[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      singleQuoted = !singleQuoted;
+      continue;
+    }
+    if (character === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+      continue;
+    }
+    if (singleQuoted || doubleQuoted) continue;
+    if (character === '{') braces += 1;
+    else if (character === '}') braces -= 1;
+    else if (character === '[') brackets += 1;
+    else if (character === ']') brackets -= 1;
+    else if (character === ':' && braces === 0 && brackets === 0) return index;
+  }
+  return -1;
+}
+
+function parseSimpleYamlPair(text: string, line: number, indent: number): SimpleYamlPair | undefined {
+  const colon = topLevelColon(text);
+  if (colon < 0) return undefined;
+  const keyRaw = text.slice(0, colon).trim();
+  if (!keyRaw) return undefined;
+  return {
+    key: yamlScalarValue(keyRaw),
+    value: text.slice(colon + 1).trim(),
+    line,
+    indent,
+  };
+}
+
+function splitFlowItems(text: string): readonly string[] | undefined {
+  const items: string[] = [];
+  let start = 0;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  let braces = 0;
+  let brackets = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && doubleQuoted) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !doubleQuoted) {
+      if (singleQuoted && text[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      singleQuoted = !singleQuoted;
+      continue;
+    }
+    if (character === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+      continue;
+    }
+    if (singleQuoted || doubleQuoted) continue;
+    if (character === '{') braces += 1;
+    else if (character === '}') braces -= 1;
+    else if (character === '[') brackets += 1;
+    else if (character === ']') brackets -= 1;
+    else if (character === ',' && braces === 0 && brackets === 0) {
+      items.push(text.slice(start, index).trim());
+      start = index + 1;
+    }
+    if (braces < 0 || brackets < 0) return undefined;
+  }
+  if (singleQuoted || doubleQuoted || escaped || braces !== 0 || brackets !== 0) return undefined;
+  items.push(text.slice(start).trim());
+  return items;
+}
+
+function parseFlowMap(raw: string, line: number): readonly SimpleYamlPair[] | undefined {
+  const value = raw.trim();
+  if (!value.startsWith('{') || !value.endsWith('}')) return undefined;
+  const items = splitFlowItems(value.slice(1, -1));
+  if (!items) return undefined;
+  const pairs: SimpleYamlPair[] = [];
+  for (const item of items) {
+    if (!item) continue;
+    const pair = parseSimpleYamlPair(item, line, 0);
+    if (!pair) return undefined;
+    pairs.push(pair);
+  }
+  return pairs;
+}
+
+function yamlStepRange(lines: readonly string[], occurrenceIndex: number): { readonly start: number; readonly end: number } | undefined {
+  const occurrenceIndent = yamlIndent(lines[occurrenceIndex] ?? '');
+  let start = -1;
+  let stepIndent = -1;
+  for (let index = occurrenceIndex; index >= 0; index -= 1) {
+    const line = stripYamlComment(lines[index] ?? '');
+    if (!line.trim()) continue;
+    const match = /^(\s*)-\s*/u.exec(line);
+    if (match && match[1] !== undefined && match[1].length <= occurrenceIndent) {
+      start = index;
+      stepIndent = match[1].length;
+      break;
+    }
+    if (yamlIndent(line) < occurrenceIndent && /^\s*\S/u.test(line) && !/^\s+/u.test(line)) break;
+  }
+  if (start < 0) return undefined;
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = stripYamlComment(lines[index] ?? '');
+    if (!line.trim()) continue;
+    const indent = yamlIndent(line);
+    if (indent < stepIndent || (indent === stepIndent && /^\s*-\s*/u.test(line))) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function parseBlockStepPairs(lines: readonly string[], range: { readonly start: number; readonly end: number }): readonly SimpleYamlPair[] {
+  const stepIndent = yamlIndent(lines[range.start] ?? '');
+  const expectedIndent = stepIndent + 2;
+  const pairs: SimpleYamlPair[] = [];
+  for (let index = range.start; index < range.end; index += 1) {
+    let line = stripYamlComment(lines[index] ?? '');
+    if (!line.trim()) continue;
+    let indent = yamlIndent(line);
+    let text = line.trimStart();
+    if (index === range.start) {
+      const dash = /^-\s*(.*)$/u.exec(text);
+      if (!dash) continue;
+      text = dash[1] ?? '';
+      indent = expectedIndent;
+      if (!text || text.startsWith('{')) continue;
+    }
+    if (indent !== expectedIndent) continue;
+    const pair = parseSimpleYamlPair(text, index + 1, indent);
+    if (pair) pairs.push(pair);
+  }
+  return pairs;
+}
+
+function blockWithSelectors(
+  lines: readonly string[],
+  range: { readonly start: number; readonly end: number },
+  withPair: SimpleYamlPair,
+): readonly WorkflowVersionSelector[] {
+  if (withPair.value) {
+    const flow = parseFlowMap(withPair.value, withPair.line);
+    if (!flow) return [];
+    return flow
+      .filter((pair) => pair.key === 'node-version' || pair.key === 'node-version-file')
+      .map((pair) => ({ kind: pair.key as WorkflowVersionSelector['kind'], value: pair.value, line: pair.line }));
+  }
+
+  const selectors: WorkflowVersionSelector[] = [];
+  const childPairs: SimpleYamlPair[] = [];
+  for (let index = withPair.line; index < range.end; index += 1) {
+    const line = stripYamlComment(lines[index] ?? '');
+    if (!line.trim()) continue;
+    const indent = yamlIndent(line);
+    if (indent <= withPair.indent) break;
+    const pair = parseSimpleYamlPair(line.trimStart(), index + 1, indent);
+    if (pair) childPairs.push(pair);
+  }
+  const childIndent = childPairs.length > 0 ? Math.min(...childPairs.map((pair) => pair.indent)) : undefined;
+  for (const pair of childPairs) {
+    if (pair.indent !== childIndent) continue;
+    if (pair.key !== 'node-version' && pair.key !== 'node-version-file') continue;
+    selectors.push({ kind: pair.key, value: pair.value, line: pair.line });
+  }
+  return selectors;
+}
+
+function parseSetupNodeStep(
+  lines: readonly string[],
+  range: { readonly start: number; readonly end: number },
+): WorkflowSetupNodeStep | undefined {
+  const first = stripYamlComment(lines[range.start] ?? '').trimStart();
+  const flowText = /^-\s*(\{.*\})\s*$/u.exec(first)?.[1];
+  let usesPairs: readonly SimpleYamlPair[];
+  let withPairs: readonly SimpleYamlPair[];
+  let selectors: readonly WorkflowVersionSelector[] = [];
+  let withIsMapping = false;
+
+  if (flowText) {
+    const pairs = parseFlowMap(flowText, range.start + 1);
+    if (!pairs) return undefined;
+    usesPairs = pairs.filter((pair) => pair.key === 'uses');
+    withPairs = pairs.filter((pair) => pair.key === 'with');
+    if (withPairs.length === 1) {
+      const nested = parseFlowMap(withPairs[0]?.value ?? '', withPairs[0]?.line ?? range.start + 1);
+      if (nested) {
+        withIsMapping = true;
+        selectors = nested
+          .filter((pair) => pair.key === 'node-version' || pair.key === 'node-version-file')
+          .map((pair) => ({ kind: pair.key as WorkflowVersionSelector['kind'], value: pair.value, line: pair.line }));
+      }
+    }
+  } else {
+    const pairs = parseBlockStepPairs(lines, range);
+    usesPairs = pairs.filter((pair) => pair.key === 'uses');
+    withPairs = pairs.filter((pair) => pair.key === 'with');
+    if (withPairs.length === 1) {
+      const withPair = withPairs[0];
+      if (withPair) {
+        const flow = withPair.value ? parseFlowMap(withPair.value, withPair.line) : undefined;
+        withIsMapping = !withPair.value || flow !== undefined;
+        selectors = blockWithSelectors(lines, range, withPair);
+      }
+    }
+  }
+
+  if (usesPairs.length !== 1) return undefined;
+  const uses = yamlScalarValue(usesPairs[0]?.value ?? '');
+  if (!/^actions\/setup-node@[^\s]+$/u.test(uses)) return undefined;
+  return {
+    line: usesPairs[0]?.line ?? range.start + 1,
+    evidence: compactEvidence(lines.slice(range.start, range.end).join(' ')),
+    withMappings: withPairs.length,
+    withIsMapping,
+    selectors,
+  };
 }
 
 function workflowSetupNodeSteps(
   source: string,
   path: string,
 ): { readonly steps: readonly WorkflowSetupNodeStep[]; readonly violations: readonly RuntimePolicyViolation[] } {
-  const lineCounter = new LineCounter();
-  const document = parseDocument(source, { lineCounter, prettyErrors: false, uniqueKeys: true });
-  const violations: RuntimePolicyViolation[] = document.errors.map((error) => ({
-    path,
-    line: error.linePos?.[0]?.line ?? 1,
-    rule: 'workflow-node-version',
-    message: `workflow YAML must parse unambiguously before Node runtime policy can be evaluated: ${error.message}`,
-  }));
-  if (document.errors.length > 0 || !isMap(document.contents)) return { steps: [], violations };
-
-  const jobsPair = yamlMapPair(document.contents, 'jobs');
-  if (!jobsPair || !isMap(jobsPair.value)) return { steps: [], violations };
-
+  const lines = source.split(/\r?\n/u);
   const steps: WorkflowSetupNodeStep[] = [];
-  for (const jobPair of jobsPair.value.items) {
-    if (!isMap(jobPair.value)) continue;
-    const stepsPair = yamlMapPair(jobPair.value, 'steps');
-    if (!stepsPair || !isSeq(stepsPair.value)) continue;
+  const violations: RuntimePolicyViolation[] = [];
+  const seenRanges = new Set<string>();
 
-    for (const stepNode of stepsPair.value.items) {
-      if (!isMap(stepNode)) continue;
-      const usesPair = yamlMapPair(stepNode, 'uses');
-      const uses = yamlScalarText(usesPair?.value);
-      if (!uses || !/^actions\/setup-node@[^\s]+$/u.test(uses)) continue;
-
-      const withPairs = stepNode.items.filter((pair) => yamlScalarText(pair.key) === 'with');
-      const selectors: WorkflowVersionSelector[] = [];
-      const withValue = withPairs[0]?.value;
-      if (isMap(withValue)) {
-        for (const pair of withValue.items) {
-          const kind = yamlScalarText(pair.key);
-          if (kind !== 'node-version' && kind !== 'node-version-file') continue;
-          selectors.push({
-            kind,
-            value: yamlScalarText(pair.value) ?? yamlNodeEvidence(source, pair.value),
-            line: yamlNodeLine(lineCounter, pair.key),
-          });
-        }
-      }
-
-      steps.push({
-        line: yamlNodeLine(lineCounter, usesPair?.key ?? stepNode),
-        evidence: yamlNodeEvidence(source, stepNode),
-        withMappings: withPairs.length,
-        withIsMapping: withPairs.length === 1 && isMap(withValue),
-        selectors,
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = stripYamlComment(lines[index] ?? '');
+    if (!line.includes('actions/setup-node@')) continue;
+    const range = yamlStepRange(lines, index);
+    if (!range) {
+      violations.push({
+        path,
+        line: index + 1,
+        rule: 'workflow-node-version',
+        message: 'setup-node reference must be expressed as a structurally verifiable workflow step.',
       });
+      continue;
     }
+    const identity = `${range.start}:${range.end}`;
+    if (seenRanges.has(identity)) continue;
+    seenRanges.add(identity);
+    const step = parseSetupNodeStep(lines, range);
+    if (!step) {
+      violations.push({
+        path,
+        line: index + 1,
+        rule: 'workflow-node-version',
+        message: 'setup-node step could not be parsed unambiguously; use a block or single-line flow mapping with literal uses/with keys.',
+      });
+      continue;
+    }
+    steps.push(step);
   }
   return { steps, violations };
 }
