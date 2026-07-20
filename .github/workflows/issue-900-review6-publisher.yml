@@ -30,12 +30,13 @@ jobs:
           path: target
           fetch-depth: 0
 
-      - name: Locate binary payload
+      - name: Reconstruct chunked payload
         shell: bash
         run: |
           set -euo pipefail
-          test -f payload/scripts/toolchain/.issue900-review6.patch.xz
-          cp payload/scripts/toolchain/.issue900-review6.patch.xz /tmp/issue900-review6.patch.xz
+          cat payload/scripts/toolchain/review6.0{0,1,2,3,4,5,6} > /tmp/issue900-review6.patch.xz.b64
+          test "$(wc -c < /tmp/issue900-review6.patch.xz.b64)" -eq 11372
+          base64 --decode /tmp/issue900-review6.patch.xz.b64 > /tmp/issue900-review6.patch.xz
 
       - name: Verify payload size
         shell: bash
