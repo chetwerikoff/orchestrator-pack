@@ -1,7 +1,6 @@
 import dns from 'node:dns';
 import {
   appendFileSync,
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,7 +12,7 @@ import {
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
-import path, { delimiter } from 'node:path';
+import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { runProcessSync } from '../../kernel/subprocess.js';
@@ -44,9 +43,43 @@ interface ScopeSnapshot {
   trap: { active: boolean; unexpectedAttempts: number; nativeLibrary: boolean };
 }
 
-function writeExecutable(file: string, content: string): void {
-  writeFileSync(file, content, 'utf8');
-  if (process.platform !== 'win32') chmodSync(file, 0o700);
+function resolveExecutable(name: string, explicit = ''): string {
+  if (explicit && existsSync(explicit)) return explicit;
+  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+  const result = runProcessSync({
+    command: locator,
+    args: [name],
+    cwd: repoRoot,
+    env: process.env,
+    inheritParentEnv: false,
+    encoding: 'utf8',
+  });
+  invariant(result.exitCode === 0, `cannot resolve ${name}: ${result.stderr || result.error || result.outcome}`);
+  const resolved = result.stdout.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
+  invariant(resolved && existsSync(resolved), `empty executable resolution for ${name}`);
+  return resolved;
+}
+
+function linkAllowedExecutable(binDir: string, name: string, target: string): void {
+  if (process.platform === 'win32') {
+    writeFileSync(path.join(binDir, `${name}.cmd`), `@echo off\r\n"${target}" %*\r\n`, 'utf8');
+    return;
+  }
+  symlinkSync(target, path.join(binDir, name));
+}
+
+function buildAllowedPath(root: string): string {
+  const binDir = path.join(root, 'allowed-bin');
+  mkdirSync(binDir, { recursive: true });
+  linkAllowedExecutable(binDir, 'node', process.execPath);
+  linkAllowedExecutable(binDir, 'git', resolveExecutable('git', process.env.GIT_REAL_BINARY || process.env.GIT_SYSTEM_BINARY || ''));
+  linkAllowedExecutable(binDir, 'pwsh', resolveExecutable('pwsh', process.env.OPK_REAL_PWSH || ''));
+  if (process.platform !== 'win32') {
+    for (const name of ['sh', 'bash', 'cc', 'which', 'uname', 'hostname']) {
+      linkAllowedExecutable(binDir, name, resolveExecutable(name));
+    }
+  }
+  return binDir;
 }
 
 function buildNativeNetworkTrap(root: string): string {
@@ -100,12 +133,11 @@ int connect(int fd, const struct sockaddr *addr, socklen_t length) {
 }
 
 export function installEgressTrap(root: string): EgressTrap {
-  const binDir = path.join(root, 'egress-bin');
   const statePath = path.join(root, 'egress.jsonl');
   const preloadPath = path.join(root, 'egress-preload.cjs');
-  mkdirSync(binDir, { recursive: true });
   writeFileSync(statePath, '', 'utf8');
   const nativeLibrary = buildNativeNetworkTrap(root);
+  const binDir = buildAllowedPath(root);
   writeFileSync(preloadPath, `
 const fs = require('node:fs');
 const state = process.env.TASK311_EGRESS_STATE;
@@ -128,13 +160,6 @@ for (const [moduleName, names] of [
 }
 globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
 `, 'utf8');
-  for (const edge of ['gh', 'ao', 'curl', 'wget', 'ssh', 'nc']) {
-    if (process.platform === 'win32') {
-      writeExecutable(path.join(binDir, `${edge}.cmd`), `@echo {"kind":"process","edge":"${edge}"}>>"%TASK311_EGRESS_STATE%"\r\necho TASK311_EGRESS_BLOCKED:${edge} 1>&2\r\nexit /b 91\r\n`);
-    } else {
-      writeExecutable(path.join(binDir, edge), `#!/usr/bin/env sh\nprintf '%s\\n' '{"kind":"process","edge":"${edge}"}' >> "$TASK311_EGRESS_STATE"\necho 'TASK311_EGRESS_BLOCKED:${edge}' >&2\nexit 91\n`);
-    }
-  }
 
   const originalPath = process.env.PATH;
   const originalNodeOptions = process.env.NODE_OPTIONS;
@@ -151,7 +176,7 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
     Object.defineProperty(target, key, { configurable: true, writable: true, value: block(edge) });
   };
 
-  process.env.PATH = `${binDir}${delimiter}${originalPath ?? ''}`;
+  process.env.PATH = binDir;
   process.env.TASK311_EGRESS_STATE = statePath;
   process.env.NODE_OPTIONS = [originalNodeOptions ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
   if (nativeLibrary) process.env.LD_PRELOAD = [nativeLibrary, originalLdPreload ?? ''].filter(Boolean).join(':');
