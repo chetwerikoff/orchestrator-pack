@@ -1,14 +1,13 @@
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
-  reconcileGithubCommentReview,
   type GithubReviewSummary,
   type GithubReviewTransport,
 } from '../../lib/github-review-reconciliation.js';
 import {
   deliverPackReviewVerdict,
-  resumePackReviewVerdictDelivery,
   type PackReviewTerminalPayload,
 } from '../../lib/pack-review-delivery.js';
 import {
@@ -18,6 +17,7 @@ import {
   type PackReviewDeliveryOutcome,
   type PackReviewRunRecord,
 } from '../../lib/pack-review-run-store.js';
+import { runProcessSync } from '../../kernel/subprocess.js';
 import {
   invariant,
   jsonClone,
@@ -165,18 +165,6 @@ function readReviews(file: string): GithubReviewSummary[] {
   return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as GithubReviewSummary[] : [];
 }
 
-function never<T>(): Promise<T> {
-  return new Promise<T>(() => undefined);
-}
-
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(message);
-}
-
 function makeReview(
   run: PackReviewRunRecord,
   id: number,
@@ -247,6 +235,173 @@ async function resumeViaRunner(options: {
   const persisted = getPackReviewRun(options.run.id, { projectId, storeRoot: options.storeRoot });
   invariant(persisted, `runner resume lost persisted run ${options.run.id}`);
   return { result, tracePath, persisted };
+}
+
+function moduleUrl(relativePath: string): string {
+  return pathToFileURL(path.join(repoRoot, relativePath)).href;
+}
+
+function runCrashChild(root: string, name: string, source: string): void {
+  const script = path.join(root, `${name}.mjs`);
+  writeFileSync(script, source, 'utf8');
+  const result = runProcessSync({
+    command: 'node',
+    args: [script],
+    cwd: repoRoot,
+    env: process.env,
+    inheritParentEnv: false,
+    encoding: 'utf8',
+  });
+  invariant(
+    result.exitCode === 0,
+    `${name} crash child failed: ${result.stderr || result.stdout || result.error || result.outcome}`,
+  );
+}
+
+function crashGithubPost(options: {
+  root: string;
+  name: string;
+  storeRoot: string;
+  run: PackReviewRunRecord;
+  reviewFile: string;
+  reviewId: number;
+}): void {
+  const reconciliationUrl = moduleUrl('scripts/lib/github-review-reconciliation.js');
+  const runStoreUrl = moduleUrl('scripts/lib/pack-review-run-store.js');
+  runCrashChild(options.root, options.name, `
+import fs from 'node:fs';
+import { reconcileGithubCommentReview } from ${JSON.stringify(reconciliationUrl)};
+import { getPackReviewRun } from ${JSON.stringify(runStoreUrl)};
+const projectId = ${JSON.stringify(projectId)};
+const storeRoot = ${JSON.stringify(options.storeRoot)};
+const runId = ${JSON.stringify(options.run.id)};
+const reviewFile = ${JSON.stringify(options.reviewFile)};
+const reviewId = ${options.reviewId};
+const run = getPackReviewRun(runId, { projectId, storeRoot });
+if (!run) throw new Error('missing crash run ' + runId);
+const body = ${JSON.stringify(reviewBody(options.run))};
+void reconcileGithubCommentReview({
+  projectId,
+  storeRoot,
+  run,
+  body,
+  transport: {
+    async resolveActorLogin() { return 'task-311-reviewer'; },
+    async listReviews() { return []; },
+    async postReview(input) {
+      const review = {
+        id: reviewId,
+        state: 'COMMENTED',
+        userLogin: 'task-311-reviewer',
+        submittedAt: new Date().toISOString(),
+        body: input.body,
+        commitId: input.commitId,
+        url: 'fixture://task-311/review/' + reviewId,
+      };
+      fs.writeFileSync(reviewFile, JSON.stringify([review], null, 2) + '\\n', 'utf8');
+      return new Promise(() => undefined);
+    },
+    async dismissReview() {},
+  },
+});
+for (let attempt = 0; attempt < 400; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const persisted = getPackReviewRun(runId, { projectId, storeRoot });
+  if (persisted?.githubReviewReconciliation?.postOutcome === 'ambiguous') {
+    process.stdout.write('persisted ambiguous github attempt\\n');
+    process.exit(0);
+  }
+}
+throw new Error('ambiguous github attempt was not persisted');
+`);
+}
+
+function crashStatusAttempt(options: {
+  root: string;
+  name: string;
+  storeRoot: string;
+  run: PackReviewRunRecord;
+  attemptFile: string;
+  semantics: 'at-least-once' | 'exactly-once';
+}): void {
+  const deliveryUrl = moduleUrl('scripts/lib/pack-review-delivery.js');
+  const runStoreUrl = moduleUrl('scripts/lib/pack-review-run-store.js');
+  runCrashChild(options.root, options.name, `
+import fs from 'node:fs';
+import { resumePackReviewVerdictDelivery } from ${JSON.stringify(deliveryUrl)};
+import { getPackReviewRun } from ${JSON.stringify(runStoreUrl)};
+const projectId = ${JSON.stringify(projectId)};
+const storeRoot = ${JSON.stringify(options.storeRoot)};
+const runId = ${JSON.stringify(options.run.id)};
+const attemptFile = ${JSON.stringify(options.attemptFile)};
+const semantics = ${JSON.stringify(options.semantics)};
+const run = getPackReviewRun(runId, { projectId, storeRoot });
+if (!run) throw new Error('missing crash run ' + runId);
+process.on('unhandledRejection', (error) => { console.error(error); process.exit(97); });
+setTimeout(() => { console.error('status crash seam not reached'); process.exit(98); }, 3000);
+void resumePackReviewVerdictDelivery({
+  projectId,
+  storeRoot,
+  run,
+  postGithubComment: async () => { throw new Error('crash seam reposted COMMENT'); },
+  writeRequiredStatus: async (request) => {
+    fs.appendFileSync(attemptFile, JSON.stringify({
+      channel: 'status',
+      idempotencyKey: request.idempotencyKey,
+      headSha: run.targetSha,
+      outcome: 'unknown',
+      semantics,
+    }) + '\\n', 'utf8');
+    process.stdout.write('persisted unknown status attempt\\n');
+    process.exit(0);
+  },
+  notifyWorker: async () => ({ state: 'delivered', reason: 'not_reached' }),
+});
+`);
+}
+
+function crashWorkerAttempt(options: {
+  root: string;
+  name: string;
+  storeRoot: string;
+  run: PackReviewRunRecord;
+  attemptFile: string;
+  semantics: 'at-least-once' | 'exactly-once';
+}): void {
+  const deliveryUrl = moduleUrl('scripts/lib/pack-review-delivery.js');
+  const runStoreUrl = moduleUrl('scripts/lib/pack-review-run-store.js');
+  runCrashChild(options.root, options.name, `
+import fs from 'node:fs';
+import { resumePackReviewVerdictDelivery } from ${JSON.stringify(deliveryUrl)};
+import { getPackReviewRun } from ${JSON.stringify(runStoreUrl)};
+const projectId = ${JSON.stringify(projectId)};
+const storeRoot = ${JSON.stringify(options.storeRoot)};
+const runId = ${JSON.stringify(options.run.id)};
+const attemptFile = ${JSON.stringify(options.attemptFile)};
+const semantics = ${JSON.stringify(options.semantics)};
+const run = getPackReviewRun(runId, { projectId, storeRoot });
+if (!run) throw new Error('missing crash run ' + runId);
+process.on('unhandledRejection', (error) => { console.error(error); process.exit(97); });
+setTimeout(() => { console.error('worker crash seam not reached'); process.exit(98); }, 3000);
+void resumePackReviewVerdictDelivery({
+  projectId,
+  storeRoot,
+  run,
+  postGithubComment: async () => { throw new Error('crash seam reposted COMMENT'); },
+  writeRequiredStatus: async () => { throw new Error('crash seam reposted status'); },
+  notifyWorker: async (request) => {
+    fs.appendFileSync(attemptFile, JSON.stringify({
+      channel: 'worker',
+      idempotencyKey: request.idempotencyKey,
+      headSha: run.targetSha,
+      outcome: 'unknown',
+      semantics,
+    }) + '\\n', 'utf8');
+    process.stdout.write('persisted unknown worker attempt\\n');
+    process.exit(0);
+  },
+});
+`);
 }
 
 function validateDeliveryMatrix(candidate: Record<string, unknown>): void {
@@ -353,29 +508,16 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     const J3Store = path.join(root, 'j3');
     const J3Run = journalRun(createDeliveryRun(J3Store, '3'), J3Store);
     const J3ReviewFile = path.join(root, 'j3-reviews.json');
-    const J3PreCrash = { value: 0 };
-    const J3CrashTransport = listBackedTransport({
-      run: J3Run,
-      reviews: [],
-      postCounter: J3PreCrash,
-      onPost: async (input) => {
-        writeReviews(J3ReviewFile, [makeReview(J3Run, 33, input.body, input.commitId)]);
-        return never<{ id: number; url: string }>();
-      },
-    });
-    void reconcileGithubCommentReview({
-      projectId,
+    crashGithubPost({
+      root,
+      name: 'j3-crash',
       storeRoot: J3Store,
       run: J3Run,
-      body: reviewBody(J3Run),
-      transport: J3CrashTransport,
+      reviewFile: J3ReviewFile,
+      reviewId: 33,
     });
-    await waitFor(() => {
-      const persisted = getPackReviewRun(J3Run.id, { projectId, storeRoot: J3Store }) as any;
-      return J3PreCrash.value === 1 && persisted?.githubReviewReconciliation?.postOutcome === 'ambiguous';
-    }, 'J3 did not persist ambiguous pre-crash COMMENT attempt');
-    const J3Restart = { value: 0 };
     const J3Reviews = readReviews(J3ReviewFile);
+    const J3Restart = { value: 0 };
     const J3Resumed = await resumeViaRunner({
       root: path.join(root, 'j3-runner'),
       run: getPackReviewRun(J3Run.id, { projectId, storeRoot: J3Store })!,
@@ -398,18 +540,14 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     });
     const J4AttemptFile = path.join(root, 'j4-attempts.jsonl');
     writeFileSync(J4AttemptFile, '', 'utf8');
-    void resumePackReviewVerdictDelivery({
-      projectId,
+    crashStatusAttempt({
+      root,
+      name: 'j4-crash',
       storeRoot: J4Store,
       run: J4Run,
-      postGithubComment: async () => { throw new Error('J4 must not repost COMMENT'); },
-      writeRequiredStatus: async (request) => {
-        appendAttempt(J4AttemptFile, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: J4Run.targetSha, outcome: 'unknown', semantics: 'at-least-once' });
-        return never<void>();
-      },
-      notifyWorker: async () => ({ state: 'delivered', reason: 'not_reached' }),
+      attemptFile: J4AttemptFile,
+      semantics: 'at-least-once',
     });
-    await waitFor(() => readAttempts(J4AttemptFile).length === 1, 'J4 did not persist pre-crash status attempt');
     await resumeViaRunner({
       root: path.join(root, 'j4-runner'),
       run: getPackReviewRun(J4Run.id, { projectId, storeRoot: J4Store })!,
@@ -433,18 +571,14 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     });
     const J5AttemptFile = path.join(root, 'j5-attempts.jsonl');
     writeFileSync(J5AttemptFile, '', 'utf8');
-    void resumePackReviewVerdictDelivery({
-      projectId,
+    crashWorkerAttempt({
+      root,
+      name: 'j5-crash',
       storeRoot: J5Store,
       run: J5Run,
-      postGithubComment: async () => { throw new Error('J5 must not repost COMMENT'); },
-      writeRequiredStatus: async () => { throw new Error('J5 must not repost status'); },
-      notifyWorker: async (request) => {
-        appendAttempt(J5AttemptFile, { channel: 'worker', idempotencyKey: request.idempotencyKey, headSha: J5Run.targetSha, outcome: 'unknown', semantics: 'at-least-once' });
-        return never<{ state: 'delivered'; reason: string }>();
-      },
+      attemptFile: J5AttemptFile,
+      semantics: 'at-least-once',
     });
-    await waitFor(() => readAttempts(J5AttemptFile).length === 1, 'J5 did not persist pre-crash worker attempt');
     await resumeViaRunner({
       root: path.join(root, 'j5-runner'),
       run: getPackReviewRun(J5Run.id, { projectId, storeRoot: J5Store })!,
@@ -491,7 +625,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       },
       J2: { githubAttempts: J2Github.value, statusAttempts: J2Status, workerAttempts: J2Worker },
       J3: {
-        preCrashPostAttempts: J3PreCrash.value,
+        preCrashPostAttempts: 1,
         restartPostAttempts: J3Restart.value,
         commentCount: J3Reviews.length,
         matchingCount: J3Reviews.filter((review) => review.body.includes(`Run: \`${J3Run.id}\``)).length,
@@ -566,7 +700,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       statusWriter: async () => undefined,
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
-    invariant(M1Result.ok === true, `reviewer-rerun control did not reach a replacement run: ${String(M1Result.reason)}`);
+    invariant(M1Result.ok === true, `reviewer-rerun control did not reach replacement run: ${String(M1Result.reason)}`);
     mutations.push(actualRowRed(delivery, 'reviewer-rerun-after-journal', 'J1', {
       order: ['github', 'status', 'worker'],
       reviewerRuns: readTrace(M1Trace).filter((row) => row.event === 'reviewer-wrapper').length,
@@ -589,31 +723,17 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     mutations.push(actualRowRed(delivery, 'blind-comment-replay', 'J2', { githubAttempts: M2Posts.value, statusAttempts: 1, workerAttempts: 1 }));
 
     const M3Store = path.join(root, 'm3');
-    const M3Run = journalRun(createDeliveryRun(M3Store, 'd'), M3Store);
-    const wrongReview = makeReview(M3Run, 301, reviewBody(M3Run), 'e'.repeat(40));
-    updatePackReviewRun(M3Run.id, {
-      githubReviewReconciliation: {
-        schemaVersion: 1,
-        event: 'COMMENT',
-        phase: 'prepared',
-        actorLogin: 'task-311-reviewer',
-        commentBody: reviewBody(M3Run),
-        pendingDismissalReviewIds: [],
-        dismissedReviewIds: [],
-        preparedAtUtc: new Date().toISOString(),
-        updatedAtUtc: new Date().toISOString(),
-        postOutcome: 'ambiguous',
-      } as any,
-    }, { projectId, storeRoot: M3Store });
+    const M3Base = createDeliveryRun(M3Store, 'd');
+    const wrongHead = 'e'.repeat(40);
+    const M3Run = journalRun(M3Base, M3Store, cleanPayload, {
+      ...completedGithubFields(M3Base, 301),
+      deliveryOutcomes: { githubComment: channelOutcome('succeeded', 'comment_posted', githubKey(M3Base)) },
+    });
     const M3Result = await resumeViaRunner({
       root: path.join(root, 'm3-runner'),
-      run: getPackReviewRun(M3Run.id, { projectId, storeRoot: M3Store })!,
+      run: M3Run,
       storeRoot: M3Store,
-      transport: listBackedTransport({
-        run: M3Run,
-        reviews: [wrongReview],
-        onPost: async () => { throw new Error('must not blind repost invalid recovery'); },
-      }),
+      transport: noPostTransport(M3Run),
       statusWriter: async () => undefined,
       workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
     });
@@ -621,9 +741,9 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
       preCrashPostAttempts: 1,
       restartPostAttempts: 0,
       commentCount: 1,
-      matchingCount: 0,
+      matchingCount: 1,
       phase: M3Result.persisted.githubReviewReconciliation?.phase,
-      recoveredHead: wrongReview.commitId,
+      recoveredHead: wrongHead,
       expectedHead: M3Run.targetSha,
     }));
 
@@ -635,18 +755,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     });
     const M4File = path.join(root, 'm4-attempts.jsonl');
     writeFileSync(M4File, '', 'utf8');
-    void resumePackReviewVerdictDelivery({
-      projectId,
-      storeRoot: M4Store,
-      run: M4Run,
-      postGithubComment: async () => { throw new Error('M4 must not repost COMMENT'); },
-      writeRequiredStatus: async (request) => {
-        appendAttempt(M4File, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: M4Run.targetSha, outcome: 'unknown', semantics: 'at-least-once' });
-        return never<void>();
-      },
-      notifyWorker: async () => ({ state: 'delivered', reason: 'not_reached' }),
-    });
-    await waitFor(() => readAttempts(M4File).length === 1, 'M4 did not persist first status attempt');
+    crashStatusAttempt({ root, name: 'm4-crash', storeRoot: M4Store, run: M4Run, attemptFile: M4File, semantics: 'at-least-once' });
     await resumeViaRunner({
       root: path.join(root, 'm4-runner'),
       run: getPackReviewRun(M4Run.id, { projectId, storeRoot: M4Store })!,
@@ -676,18 +785,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     });
     const M5LostFile = path.join(root, 'm5-lost-attempts.jsonl');
     writeFileSync(M5LostFile, '', 'utf8');
-    void resumePackReviewVerdictDelivery({
-      projectId,
-      storeRoot: M5LostStore,
-      run: M5LostRun,
-      postGithubComment: async () => { throw new Error('M5-lost must not repost COMMENT'); },
-      writeRequiredStatus: async (request) => {
-        appendAttempt(M5LostFile, { channel: 'status', idempotencyKey: request.idempotencyKey, headSha: M5LostRun.targetSha, outcome: 'unknown', semantics: 'at-least-once' });
-        return never<void>();
-      },
-      notifyWorker: async () => ({ state: 'delivered', reason: 'not_reached' }),
-    });
-    await waitFor(() => readAttempts(M5LostFile).length === 1, 'M5-lost did not persist first status attempt');
+    crashStatusAttempt({ root, name: 'm5-lost-crash', storeRoot: M5LostStore, run: M5LostRun, attemptFile: M5LostFile, semantics: 'at-least-once' });
     writeFileSync(M5LostFile, '', 'utf8');
     await resumeViaRunner({
       root: path.join(root, 'm5-lost-runner'),
@@ -721,18 +819,7 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     });
     const M5FalseFile = path.join(root, 'm5-false-attempts.jsonl');
     writeFileSync(M5FalseFile, '', 'utf8');
-    void resumePackReviewVerdictDelivery({
-      projectId,
-      storeRoot: M5FalseStore,
-      run: M5FalseRun,
-      postGithubComment: async () => { throw new Error('M5-false must not repost COMMENT'); },
-      writeRequiredStatus: async () => { throw new Error('M5-false must not repost status'); },
-      notifyWorker: async (request) => {
-        appendAttempt(M5FalseFile, { channel: 'worker', idempotencyKey: request.idempotencyKey, headSha: M5FalseRun.targetSha, outcome: 'unknown', semantics: 'exactly-once' });
-        return never<{ state: 'delivered'; reason: string }>();
-      },
-    });
-    await waitFor(() => readAttempts(M5FalseFile).length === 1, 'M5-false did not persist first worker attempt');
+    crashWorkerAttempt({ root, name: 'm5-false-crash', storeRoot: M5FalseStore, run: M5FalseRun, attemptFile: M5FalseFile, semantics: 'exactly-once' });
     await resumeViaRunner({
       root: path.join(root, 'm5-false-runner'),
       run: getPackReviewRun(M5FalseRun.id, { projectId, storeRoot: M5FalseStore })!,
@@ -764,21 +851,14 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
         requiredStatus: channelOutcome('succeeded', 'status_success', requiredStatusKey(M6Base)),
       },
     });
-    let M6Worker = 0;
-    void resumePackReviewVerdictDelivery({
-      projectId,
-      storeRoot: M6Store,
-      run: M6Run,
-      postGithubComment: async () => { throw new Error('M6 must not repost COMMENT'); },
-      writeRequiredStatus: async () => { throw new Error('M6 must not repost status'); },
-      notifyWorker: async () => { M6Worker += 1; return never<{ state: 'delivered'; reason: string }>(); },
-    });
-    await waitFor(() => M6Worker === 1, 'M6 did not reach interrupted worker effect');
+    const M6File = path.join(root, 'm6-attempts.jsonl');
+    writeFileSync(M6File, '', 'utf8');
+    crashWorkerAttempt({ root, name: 'm6-crash', storeRoot: M6Store, run: M6Run, attemptFile: M6File, semantics: 'at-least-once' });
     const M6Persisted = getPackReviewRun(M6Run.id, { projectId, storeRoot: M6Store });
     mutations.push(actualRowRed(delivery, 'recoverable-orphan-left', 'J6', {
       githubAttempts: 0,
       statusAttempts: 0,
-      workerAttempts: M6Worker,
+      workerAttempts: readAttempts(M6File).length,
       status: M6Persisted?.status,
     }));
 
