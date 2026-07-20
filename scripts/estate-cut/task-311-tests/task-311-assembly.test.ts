@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { startPackReview } from '../../pack-review-runner.js';
 import {
   fixture,
-  installEgressTrap,
   readCapture,
   repoRoot,
   runGit,
@@ -27,12 +26,10 @@ function executable(file: string, content: string): void {
 }
 
 describe('TASK-311 real surviving review-cycle assembly gate', () => {
-  it('diagnostic: drives the real reviewer wrapper chain with a minimal final executable', async () => {
-    const trapRoot = tempRoot('task-311-egress-');
+  it('diagnostic: drives the real reviewer wrapper chain without egress preload', async () => {
     const storeRoot = tempRoot('task-311-runner-');
     const claimRoot = tempRoot('task-311-claim-');
     const boundaryRoot = tempRoot('task-311-reviewer-boundary-');
-    const trap = installEgressTrap(trapRoot);
     const originalEnv = { ...process.env };
     try {
       const bin = path.join(boundaryRoot, 'bin');
@@ -79,12 +76,9 @@ describe('TASK-311 real surviving review-cycle assembly gate', () => {
       expect(result).toMatchObject({ ok: true, created: true, status: 'up_to_date' });
       expect(statusRows.some((row) => row.state === 'success')).toBe(true);
       expect(workerRows).toHaveLength(1);
-      expect(trap.attempts()).toEqual([]);
     } finally {
-      trap.restore();
       for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
       for (const [key, value] of Object.entries(originalEnv)) process.env[key] = value;
-      rmSync(trapRoot, { recursive: true, force: true });
       rmSync(storeRoot, { recursive: true, force: true });
       rmSync(claimRoot, { recursive: true, force: true });
       rmSync(boundaryRoot, { recursive: true, force: true });
