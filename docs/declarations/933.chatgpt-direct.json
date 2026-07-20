@@ -16,8 +16,24 @@
     "docs/declarations/933.chatgpt-direct.json",
     "scripts/lib/operator-merge-approval.ts",
     "scripts/operator-merge-approval.test.ts",
-    "scripts/operator-merge-approval.ts"
+    "scripts/operator-merge-approval.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f75a28d9b487ed03e2311ae4c8ca2e86b413506046269863f922266bbd1e2e29",
+      "new_active_scope_hash": "sha256:324363f08301a79e4b736b49c024a6c7bc5b99d8a018e7b376f792123a6ef4fd",
+      "changed": {
+        "added": [
+          "scripts/vitest-ci-lanes.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "CI requires every newly discovered Vitest file to be explicitly classified; conservatively register the filesystem-backed approval store test in the heavy lane",
+      "actor": "chatgpt-direct",
+      "timestamp": "2026-07-20T13:02:00.000Z",
+      "applied": true
+    }
+  ]
 }
