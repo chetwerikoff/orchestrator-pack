@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe('operator merge approval store', () => {
-  it('binds approval to one exact PR head and does not inherit across commits', () => {
+  it('binds approval to one repository, PR, and exact head without inheriting across commits', () => {
     const storeRoot = tempRoot();
     const record = approveOperatorMerge({
       storeRoot,
@@ -39,12 +39,18 @@ describe('operator merge approval store', () => {
     expect(record).toMatchObject({
       schemaVersion: 1,
       event: 'operator_merge_approved',
+      repoSlug: 'chetwerikoff/orchestrator-pack',
       prNumber: 933,
       headSha: HEAD_A,
       actor: 'operator-test',
       createdAtUtc: '2026-07-20T12:00:00.000Z',
     });
-    expect(readOperatorMergeApproval({ storeRoot, prNumber: 933, headSha: HEAD_A })).toMatchObject({
+    expect(readOperatorMergeApproval({
+      storeRoot,
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber: 933,
+      headSha: HEAD_A,
+    })).toMatchObject({
       approved: true,
       reason: 'approved',
       record: { approvalId: record.approvalId },
@@ -53,6 +59,15 @@ describe('operator merge approval store', () => {
       approved: false,
       reason: 'head_mismatch',
       record: { approvalId: record.approvalId, headSha: HEAD_A },
+    });
+    expect(readOperatorMergeApproval({
+      storeRoot,
+      repoSlug: 'other/repository',
+      prNumber: 933,
+      headSha: HEAD_A,
+    })).toEqual({
+      approved: false,
+      reason: 'malformed',
     });
 
     const names = readdirSync(storeRoot);
@@ -72,6 +87,7 @@ describe('operator merge approval store', () => {
 
     expect(revokeOperatorMerge({
       storeRoot,
+      repoSlug: 'chetwerikoff/orchestrator-pack',
       prNumber: 933,
       headSha: HEAD_A,
       reason: 'revalidation failed',
