@@ -129,13 +129,10 @@ function writeAoBoundary(
 function githubTransport(
   headSha: string,
   tracePath: string,
-  options: { externalEvent?: 'COMMENT' | 'APPROVE'; earlyEffect?: boolean } = {},
+  options: { externalEvent?: 'COMMENT' | 'APPROVE' } = {},
 ): ObservedGithubTransport {
   const actions: GithubReviewCaptureAction[] = [];
   const reviews: GithubReviewSummary[] = [];
-  if (options.earlyEffect) {
-    appendTrace(tracePath, 'github-comment', { eventType: 'COMMENT', headSha, body: 'injected early external effect' });
-  }
   return {
     actions,
     observedReviews: reviews,
@@ -145,13 +142,11 @@ function githubTransport(
       invariant(input.event === 'COMMENT', 'runner must publish COMMENT');
       invariant(input.commitId === headSha, 'COMMENT must target exact head');
       const externalEvent = options.externalEvent ?? input.event;
-      if (!options.earlyEffect) {
-        appendTrace(tracePath, 'github-comment', {
-          eventType: externalEvent,
-          headSha: input.commitId,
-          body: input.body,
-        });
-      }
+      appendTrace(tracePath, 'github-comment', {
+        eventType: externalEvent,
+        headSha: input.commitId,
+        body: input.body,
+      });
       const review: GithubReviewSummary = {
         id: 31101 + reviews.length,
         state: externalEvent === 'APPROVE' ? 'APPROVED' : 'COMMENTED',
@@ -354,7 +349,7 @@ process.exit(result.status === null ? 71 : result.status);
 interface RunnerFaults {
   expectedPr?: number;
   journalFailure?: boolean;
-  earlyGithub?: boolean;
+  commentBeforeJournal?: boolean;
   statusHead?: string;
   externalReviewEvent?: 'COMMENT' | 'APPROVE';
   workerCopies?: number;
@@ -384,7 +379,6 @@ async function runRunnerSubject(
   const workerRows: Array<Record<string, unknown>> = [];
   const transport = githubTransport(target.headSha, tracePath, {
     externalEvent: faults.externalReviewEvent,
-    earlyEffect: faults.earlyGithub,
   });
   const entryOptions: Parameters<typeof runPackReviewEntry>[0] = {
     root: entryRoot,
@@ -410,6 +404,14 @@ async function runRunnerSubject(
     journalWriter: faults.journalFailure
       ? () => { throw new Error('task-311 omitted durable journal hop'); }
       : (runId, fields, options) => {
+        if (faults.commentBeforeJournal) {
+          void transport.postReview({
+            event: 'COMMENT',
+            body: `TASK-311 injected COMMENT before durable verdict for ${runId}`,
+            commitId: target.headSha,
+          });
+          invariant(transport.actions.length === 1, 'pre-journal COMMENT fault did not cross the real transport seam');
+        }
         const persisted = updatePackReviewRun(runId, fields, options);
         appendTrace(tracePath, 'journal-verdict', {
           runId,
@@ -501,6 +503,8 @@ function validateTask311AssemblyEvidence(candidate: Record<string, unknown>): vo
   invariant(reviewerRoot !== trustedRoot, 'reviewer was pointed at the trusted pack checkout instead of the review worktree');
   const rootIndex = value.runner.reviewerArgv.indexOf('--repo-root');
   invariant(rootIndex >= 0 && canonicalPath(value.runner.reviewerArgv[rootIndex + 1], 'reviewer argv --repo-root') === reviewerRoot, 'reviewer trace root did not come from actual argv');
+  const runnerOwned = (value.runner?.order ?? []).filter((event: string) => fixture.assembly.runnerOrder.includes(event));
+  invariant(runnerOwned.join(',') === fixture.assembly.runnerOrder.join(','), 'runner-owned hops were duplicated or reordered');
   const actions = value.runner?.githubTransport?.actions;
   const reviews = value.runner?.githubTransport?.reviews;
   invariant(Array.isArray(actions) && actions.length === 1 && actions[0]?.kind === 'post' && actions[0]?.event === 'COMMENT', 'fake GitHub transport did not actually post COMMENT');
@@ -573,7 +577,7 @@ async function runThreeSubjectAssembly(trap: EgressTrap): Promise<{
       await runRunnerSubject(root, bindingPath, trap, { journalFailure: true });
     }, () => validateTask311AssemblyEvidence(assembly)));
     AC1.push(await expectAssemblyRed('AC1', 'runner-internal-hop-reordered', async () => {
-      const badRunner = readArtifact<Record<string, unknown>>(await runRunnerSubject(root, bindingPath, trap, { earlyGithub: true }));
+      const badRunner = readArtifact<Record<string, unknown>>(await runRunnerSubject(root, bindingPath, trap, { commentBeforeJournal: true }));
       return assembleEvidence(target, ao, preRun, binding, badRunner, trap);
     }, assembly));
     validateMutationArray('AC1', AC1);
