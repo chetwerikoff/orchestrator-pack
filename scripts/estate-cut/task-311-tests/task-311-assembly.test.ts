@@ -1,15 +1,27 @@
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import path, { delimiter } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { startPackReview } from '../../pack-review-runner.js';
+import { runProcessSync } from '../../kernel/subprocess.js';
+import { runClaimMatrix } from './task-311-claim.test-support.js';
 import {
-  fixture,
-  readCapture,
+  captureEvidenceDocument,
+  installEgressTrap,
   repoRoot,
-  runGit,
+  runStaleHeadGate,
+  runThreeSubjectAssembly,
   tempRoot,
+  validateCompleteEvidence,
+  type AcceptanceEvidence,
 } from './task-311-common.test-support.js';
+import { runDeliveryMatrix } from './task-311-delivery.test-support.js';
+import { runScopeGate } from './task-311-scope.test-support.js';
 
 declare global {
   interface Array<T> {
@@ -20,68 +32,93 @@ declare global {
   }
 }
 
-function executable(file: string, content: string): void {
-  writeFileSync(file, content, 'utf8');
-  if (process.platform !== 'win32') chmodSync(file, 0o700);
+function resolveExecutable(name: string, explicit = ''): string {
+  if (explicit && existsSync(explicit)) return explicit;
+  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+  const result = runProcessSync({
+    command: locator,
+    args: [name],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    encoding: 'utf8',
+  });
+  expect(result.ok, `cannot resolve ${name}: ${result.stderr || result.error || result.outcome}`).toBe(true);
+  const resolved = result.stdout.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
+  expect(resolved, `empty executable resolution for ${name}`).not.toBe('');
+  return resolved;
+}
+
+function writeCommandWrapper(binDir: string, name: string, target: string): void {
+  if (process.platform === 'win32') {
+    writeFileSync(path.join(binDir, `${name}.cmd`), `@echo off\r\n"${target}" %*\r\n`, 'utf8');
+    return;
+  }
+  symlinkSync(target, path.join(binDir, name));
+}
+
+function installHermeticAllowedPath(root: string): string {
+  const binDir = path.join(root, 'allowed-bin');
+  mkdirSync(binDir, { recursive: true });
+  const git = resolveExecutable('git', process.env.GIT_REAL_BINARY || process.env.GIT_SYSTEM_BINARY || '');
+  const pwsh = resolveExecutable('pwsh', process.env.OPK_REAL_PWSH || '');
+  writeCommandWrapper(binDir, 'node', process.execPath);
+  writeCommandWrapper(binDir, 'git', git);
+  writeCommandWrapper(binDir, 'pwsh', pwsh);
+  if (process.platform !== 'win32') {
+    writeCommandWrapper(binDir, 'sh', resolveExecutable('sh'));
+    writeCommandWrapper(binDir, 'bash', resolveExecutable('bash'));
+  }
+  return binDir;
 }
 
 describe('TASK-311 real surviving review-cycle assembly gate', () => {
-  it('diagnostic: drives the real reviewer wrapper chain without egress preload', async () => {
-    const storeRoot = tempRoot('task-311-runner-');
-    const claimRoot = tempRoot('task-311-claim-');
-    const boundaryRoot = tempRoot('task-311-reviewer-boundary-');
-    const originalEnv = { ...process.env };
+  it('drives three real subjects, C1-C7 and J0-J6 with exact mutation and hermetic evidence', async () => {
+    const trapRoot = tempRoot('task-311-egress-');
+    const allowedPath = installHermeticAllowedPath(trapRoot);
+    const trap = installEgressTrap(trapRoot);
+    process.env.PATH = allowedPath;
     try {
-      const bin = path.join(boundaryRoot, 'bin');
-      mkdirSync(bin, { recursive: true });
-      const fakeReviewer = path.join(boundaryRoot, 'fake-reviewer.cjs');
-      writeFileSync(fakeReviewer, "process.stdout.write(JSON.stringify({verdict:'clean',findingCount:0,findings:[]})+'\\n');\n", 'utf8');
-      if (process.platform === 'win32') {
-        executable(path.join(bin, 'node.cmd'), `@echo off\r\necho %* | findstr /C:"plugins\\ao-codex-pr-reviewer\\bin\\review.ts" >nul\r\nif %errorlevel%==0 ("${process.execPath}" "${fakeReviewer}" %*) else ("${process.execPath}" %*)\r\n`);
-        executable(path.join(bin, 'npm.cmd'), '@echo off\r\nexit /b 0\r\n');
-      } else {
-        executable(path.join(bin, 'node'), `#!/usr/bin/env sh\ncase "$*" in *plugins/ao-codex-pr-reviewer/bin/review.ts*) exec "${process.execPath}" "${fakeReviewer}" "$@" ;; *) exec "${process.execPath}" "$@" ;; esac\n`);
-        executable(path.join(bin, 'npm'), '#!/usr/bin/env sh\nexit 0\n');
-      }
+      expect(trap.active).toBe(true);
+      expect(trap.attempts()).toEqual([]);
 
-      const { row: session } = readCapture();
-      const headSha = runGit(['rev-parse', 'HEAD']).trim().toLowerCase();
-      const sessionId = String(session.id);
-      const statusRows: Array<Record<string, unknown>> = [];
-      const workerRows: Array<Record<string, unknown>> = [];
-      process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
-      process.env.PACK_REVIEWER = fixture.assembly.reviewer;
-      process.env.OPK_VITEST_HARNESS = '1';
-      process.env.AO_REVIEW_CLAIM_DIR = claimRoot;
-      process.env.AO_REVIEW_START_MONOTONIC_NOW_MS = '1000';
-      const result = await startPackReview({
-        projectId: 'orchestrator-pack',
-        sessionId,
-        prNumber: fixture.assembly.prNumber,
-        headSha,
-        repoRoot,
-        sourceRepoRoot: repoRoot,
-        baseRef: 'origin/main',
-        startReason: 'task_311_wrapper_diagnostic',
-        surface: 'task-311-wrapper-diagnostic',
-        storeRoot,
-        fixtureRepoSlug: fixture.repoSlug,
-        fixtureGithubReviewId: 31101,
-        fixtureRequiredStatusWriter: async (request) => { statusRows.push({ ...request }); },
-        fixtureWorkerNotifier: async (request) => {
-          workerRows.push({ ...request, sessionId });
-          return { state: 'delivered', reason: 'diagnostic_delivered' };
+      const assembled = await runThreeSubjectAssembly(trap);
+      const claim = runClaimMatrix();
+      const delivery = await runDeliveryMatrix();
+      const reviewStart = runStaleHeadGate();
+      expect(trap.attempts()).toEqual([]);
+      const scope = runScopeGate(trap);
+
+      const evidence: AcceptanceEvidence = {
+        schemaVersion: 2,
+        issue: 918,
+        task: 311,
+        assembly: assembled.assembly,
+        capture: captureEvidenceDocument(),
+        claim: claim.claim,
+        delivery: delivery.delivery,
+        reviewStart: reviewStart.reviewStart,
+        scope: scope.scope,
+        mutationEvidence: {
+          AC1: assembled.mutations.AC1,
+          AC2: assembled.mutations.AC2,
+          AC3: claim.mutations,
+          AC4: delivery.mutations,
+          AC5: reviewStart.mutations,
+          AC6: scope.mutations,
         },
-      });
-      expect(result).toMatchObject({ ok: true, created: true, status: 'up_to_date' });
-      expect(statusRows.some((row) => row.state === 'success')).toBe(true);
-      expect(workerRows).toHaveLength(1);
+      };
+
+      validateCompleteEvidence(evidence);
+      expect((evidence.assembly as any).binding.consumer.source).toBe('cache');
+      expect((evidence.assembly as any).identity).toBe('one-pr-head-worker-chain');
+      expect((evidence.claim as any).classes).toBe('C1-C7-pass');
+      expect((evidence.delivery as any).classes).toBe('J0-J6-pass');
+      expect((evidence.reviewStart as any).headDecision).toBe('stale-head-review-start-denied');
+      expect((evidence.scope as any).result).toBe('test-only-offline-capture-backed');
+      process.stdout.write(`TASK311_ACCEPTANCE_EVIDENCE=${JSON.stringify(evidence)}\n`);
     } finally {
-      for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
-      for (const [key, value] of Object.entries(originalEnv)) process.env[key] = value;
-      rmSync(storeRoot, { recursive: true, force: true });
-      rmSync(claimRoot, { recursive: true, force: true });
-      rmSync(boundaryRoot, { recursive: true, force: true });
+      trap.restore();
+      rmSync(trapRoot, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 300_000);
 });
