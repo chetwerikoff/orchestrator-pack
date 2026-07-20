@@ -7,7 +7,8 @@
  * adding the Issue #933 direct-operator decision: an active approval for the exact
  * repository/PR/head is a fail-closed merge-policy result, never an implicit payload bypass.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { readStdinJson, printJson } from './review-mechanical-cli.mjs';
 
@@ -48,6 +49,7 @@ export const acknowledgeArchitectPermissiveBudget = core.acknowledgeArchitectPer
 
 const OPERATOR_APPROVAL_SCHEMA_VERSION = 1;
 const OPERATOR_APPROVAL_EVENT = 'operator_merge_approved';
+const CANONICAL_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 function normalizeProjectId(value = 'orchestrator-pack') {
   const normalized = String(value ?? '')
@@ -60,6 +62,13 @@ function normalizeProjectId(value = 'orchestrator-pack') {
 function normalizeRepoSlug(value) {
   const repoSlug = String(value ?? '').trim();
   return /^[^/\s]+\/[^/\s]+$/.test(repoSlug) ? repoSlug : null;
+}
+
+function isCanonicalUtcTimestamp(value) {
+  const text = String(value ?? '').trim();
+  if (!CANONICAL_UTC_TIMESTAMP.test(text)) return false;
+  const parsed = new Date(text);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === text;
 }
 
 function resolveDirectOperatorSessionKind() {
@@ -129,7 +138,7 @@ function readExactHeadOperatorApproval(input = {}) {
     !String(record.approvalId ?? '').trim() ||
     !String(record.reason ?? '').trim() ||
     !String(record.actor ?? '').trim() ||
-    !Number.isFinite(Date.parse(String(record.createdAtUtc ?? '')))
+    !isCanonicalUtcTimestamp(record.createdAtUtc)
   ) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
@@ -138,7 +147,7 @@ function readExactHeadOperatorApproval(input = {}) {
   if (Boolean(revokedAtUtc) !== Boolean(revocationReason)) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
-  if (revokedAtUtc && !Number.isFinite(Date.parse(revokedAtUtc))) {
+  if (revokedAtUtc && !isCanonicalUtcTimestamp(revokedAtUtc)) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
   if (String(record.projectId ?? '') !== projectId) {
@@ -160,6 +169,138 @@ function readExactHeadOperatorApproval(input = {}) {
   return { applicable: true, approved: true, reason: 'approved', record };
 }
 
+function resolvePackReviewRunStoreRoot(projectId) {
+  const explicit = String(process.env.PACK_REVIEW_RUN_STORE_ROOT ?? '').trim();
+  if (explicit) return path.resolve(explicit);
+  const stateRoot = String(process.env.ORCHESTRATOR_PACK_STATE_ROOT ?? '').trim();
+  if (stateRoot) return path.join(path.resolve(stateRoot), 'review-runs', projectId);
+  return path.join(homedir(), '.orchestrator-pack', 'review-runs', projectId);
+}
+
+function readLatestExactHeadPackReview(input, projectId, prNumber, headSha) {
+  const storeRoot = resolvePackReviewRunStoreRoot(projectId);
+  const recordsDir = path.join(storeRoot, 'runs');
+  if (!existsSync(recordsDir)) {
+    return { ok: false, reason: 'pack_review_store_missing' };
+  }
+
+  const matches = [];
+  try {
+    for (const name of readdirSync(recordsDir)) {
+      if (!name.endsWith('.json')) continue;
+      const record = JSON.parse(readFileSync(path.join(recordsDir, name), 'utf8'));
+      if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        return { ok: false, reason: 'pack_review_store_malformed' };
+      }
+      const targetSha = String(record.targetSha ?? record.headSha ?? '').trim().toLowerCase();
+      if (
+        String(record.projectId ?? '') !== projectId ||
+        Number(record.prNumber) !== prNumber ||
+        targetSha !== headSha
+      ) {
+        continue;
+      }
+      const findings = Array.isArray(record.findings) ? record.findings : null;
+      const findingCount = Number(record.findingCount);
+      if (
+        record.journalOutcome?.state !== 'persisted' ||
+        (record.reviewVerdict !== 'clean' && record.reviewVerdict !== 'findings') ||
+        !findings ||
+        !Number.isInteger(findingCount) ||
+        findingCount < 0 ||
+        findings.length !== findingCount
+      ) {
+        continue;
+      }
+      const timestamp = String(record.completedAtUtc ?? record.updatedAt ?? record.createdAt ?? '');
+      const timestampMs = Date.parse(timestamp);
+      if (!Number.isFinite(timestampMs)) {
+        return { ok: false, reason: 'pack_review_store_malformed' };
+      }
+      matches.push({ record, findings, timestampMs });
+    }
+  } catch {
+    return { ok: false, reason: 'pack_review_store_malformed' };
+  }
+
+  matches.sort((left, right) => right.timestampMs - left.timestampMs);
+  if (matches.length === 0) {
+    return { ok: false, reason: 'pack_review_exact_head_missing' };
+  }
+  return { ok: true, ...matches[0] };
+}
+
+function directOperatorSafetyResult(input, approval) {
+  const projectId = normalizeProjectId(input.projectId ?? 'orchestrator-pack');
+  const prNumber = Number(input.prNumber);
+  const headSha = String(input.headSha ?? input.currentHeadSha ?? '').trim().toLowerCase();
+
+  let inbox;
+  try {
+    inbox = core.readArchitectInbox({ ...input, prNumber, headSha });
+  } catch {
+    return {
+      allow: false,
+      reason: 'operator_merge_pending_state_unavailable',
+    };
+  }
+  if (!inbox || !Array.isArray(inbox.pending)) {
+    return {
+      allow: false,
+      reason: 'operator_merge_pending_state_unavailable',
+    };
+  }
+  if (inbox.pending.length > 0) {
+    return {
+      allow: false,
+      reason: 'operator_merge_pending_adjudication',
+      pending: inbox.pending,
+    };
+  }
+
+  const review = readLatestExactHeadPackReview(input, projectId, prNumber, headSha);
+  if (!review.ok) {
+    return {
+      allow: false,
+      reason: 'operator_merge_review_findings_unavailable',
+      reviewReason: review.reason,
+    };
+  }
+
+  const classifications = review.findings.map((finding) => core.classifyFinding(finding));
+  const block = classifications.filter((classification) => classification.verdict === VERDICT_BLOCK);
+  if (block.length > 0) {
+    return {
+      allow: false,
+      reason: 'operator_merge_block_findings',
+      reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
+      classifications: block,
+    };
+  }
+  const pending = classifications.filter((classification) => (
+    classification.verdict === VERDICT_PENDING_ARCHITECT ||
+    classification.verdict === VERDICT_PENDING_OPERATOR
+  ));
+  if (pending.length > 0) {
+    return {
+      allow: false,
+      reason: 'operator_merge_pending_adjudication',
+      reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
+      classifications: pending,
+    };
+  }
+
+  return {
+    allow: true,
+    reason: 'operator_merge_approved',
+    approvalId: approval.record.approvalId,
+    approvedHeadSha: approval.record.headSha,
+    approvalActor: approval.record.actor,
+    approvalReason: approval.record.reason,
+    reviewRunId: String(review.record.id ?? review.record.runId ?? ''),
+  };
+}
+
 function directOperatorPolicyResult(input = {}) {
   const approval = readExactHeadOperatorApproval(input);
   if (!approval.applicable) return null;
@@ -170,14 +311,7 @@ function directOperatorPolicyResult(input = {}) {
       approvalReason: approval.reason,
     };
   }
-  return {
-    allow: true,
-    reason: 'operator_merge_approved',
-    approvalId: approval.record.approvalId,
-    approvedHeadSha: approval.record.headSha,
-    approvalActor: approval.record.actor,
-    approvalReason: approval.record.reason,
-  };
+  return directOperatorSafetyResult(input, approval);
 }
 
 export function evaluateMergePolicy(input = {}) {
@@ -191,18 +325,13 @@ export function runMergeTriageGate(input = {}) {
     return {
       ok: false,
       ran: true,
-      reason: direct.reason,
-      approvalReason: direct.approvalReason,
+      ...direct,
     };
   }
   return {
     ok: true,
     ran: true,
-    reason: direct.reason,
-    approvalId: direct.approvalId,
-    approvedHeadSha: direct.approvedHeadSha,
-    approvalActor: direct.approvalActor,
-    approvalReason: direct.approvalReason,
+    ...direct,
   };
 }
 
@@ -233,10 +362,10 @@ function invokeCliCommand(command, payload) {
 
 function directCliFailure(command, result) {
   if (command === 'evaluateMergePolicy') {
-    return result?.reason === 'operator_merge_approval_unavailable';
+    return String(result?.reason ?? '').startsWith('operator_merge_') && result?.allow !== true;
   }
   if (command !== 'runGate' || result?.ok !== false || result?.ran !== true) return false;
-  if (result.reason === 'open_findings_unavailable' || result.reason === 'operator_merge_approval_unavailable') {
+  if (result.reason === 'open_findings_unavailable' || String(result.reason ?? '').startsWith('operator_merge_')) {
     return true;
   }
   return Array.isArray(result.classifications)
