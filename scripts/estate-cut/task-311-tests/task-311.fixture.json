@@ -90,12 +90,20 @@
       "unchanged-head-wrongly-denied"
     ],
     "AC6": [
-      "intentional-external-egress"
+      "unrelated-existing-path",
+      "lane-config-overreach",
+      "classification-missing-extra-or-nonheavy",
+      "production-or-core-edit",
+      "non-regular-artifact",
+      "intentional-external-egress",
+      "untraced-ao-field",
+      "capture-corpus-change"
     ]
   },
   "scope": {
     "lifetime": "one-time-pr-only",
     "enforcedBy": "PR scope guard and pack review on PR #919",
+    "persistentValidatorInput": "immutable-synthetic-snapshot",
     "root": "scripts/estate-cut/task-311-tests/",
     "laneConfig": "scripts/vitest-ci-lanes.config.json",
     "allowedSuffixes": [
