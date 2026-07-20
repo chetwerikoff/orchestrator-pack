@@ -638,51 +638,107 @@ export async function runDeliveryMatrix(): Promise<{ delivery: Record<string, un
     mutations.push(actualRowRed(delivery, 'pre-journal-delivery', 'J0', { journalAttempts: M0Journal, channelAttempts: M0Channels }));
 
     const M1Store = path.join(root, 'm1');
-    const M1Base = createDeliveryRun(M1Store, 'b');
-    journalRun(M1Base, M1Store);
-    updatePackReviewRun(M1Base.id, {
-      status: 'failed',
-      latestRunStatus: 'failed',
-      journalOutcome: undefined,
-      reviewVerdict: undefined,
-      findingCount: undefined,
-      findings: [],
-    }, { projectId, storeRoot: M1Store });
+    const M1Run = journalRun(createDeliveryRun(M1Store, 'b'), M1Store);
+    invariant(M1Run.journalOutcome?.state === 'persisted' && M1Run.reviewVerdict === 'clean', 'reviewer-rerun control did not start from a durable verdict');
     const M1Trace = path.join(root, 'm1-trace.jsonl');
     writeFileSync(M1Trace, '', 'utf8');
-    const M1Result = await runPackReviewEntry({
-      root: path.join(root, 'm1-runner'),
-      target: targetFor(M1Base),
+    const M1Order: string[] = [];
+    const M1Reviews: GithubReviewSummary[] = [];
+    const M1Transport = listBackedTransport({
+      run: M1Run,
+      reviews: M1Reviews,
+      onPost: async (input) => {
+        M1Order.push('github');
+        const review = makeReview(M1Run, 101, input.body, input.commitId);
+        M1Reviews.push(review);
+        return { id: review.id, url: review.url };
+      },
+    });
+    const M1RunnerRoot = path.join(root, 'm1-runner');
+    const M1Pending = runPackReviewEntry({
+      root: M1RunnerRoot,
+      target: targetFor(M1Run),
       storeRoot: M1Store,
       tracePath: M1Trace,
-      githubTransport: listBackedTransport({ run: M1Base, reviews: [] }),
-      statusWriter: async () => undefined,
-      workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
+      githubTransport: M1Transport,
+      statusWriter: async (request) => { if (request.state !== 'pending') M1Order.push('status'); },
+      workerNotifier: async () => { M1Order.push('worker'); return { state: 'delivered', reason: 'delivered' }; },
     });
-    invariant(M1Result.ok === true, `reviewer-rerun control failed: ${String(M1Result.reason)}`);
+    const injectedReviewer = runProcessSync({
+      command: 'pwsh',
+      args: [
+        '-NoProfile',
+        '-File', path.join(repoRoot, 'scripts/invoke-pack-review.ps1'),
+        '--repo-root', repoRoot,
+        '--base', 'origin/main',
+        '--pr-number', String(M1Run.prNumber),
+      ],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        AO_REVIEW_RUN_ID: M1Run.id,
+        PACK_REVIEW_RUN_ID: M1Run.id,
+        AO_SESSION_ID: M1Run.linkedSessionId,
+        AO_WORKER_SESSION_ID: M1Run.linkedSessionId,
+      },
+      inheritParentEnv: false,
+      encoding: 'utf8',
+    });
+    invariant(injectedReviewer.exitCode === 0, `reviewer-rerun fault did not execute the real wrapper: ${injectedReviewer.stderr || injectedReviewer.stdout || injectedReviewer.error}`);
+    const M1Result = await M1Pending;
+    invariant(M1Result.ok === true && M1Result.recovered === true, `reviewer-rerun recovery failed: ${String(M1Result.reason)}`);
+    const M1Persisted = getPackReviewRun(M1Run.id, { projectId, storeRoot: M1Store });
+    invariant(
+      M1Persisted?.journalOutcome?.state === 'persisted'
+        && M1Persisted.reviewVerdict === 'clean'
+        && M1Persisted.findingCount === 0,
+      'reviewer-rerun control lost the durable verdict',
+    );
     mutations.push(actualRowRed(delivery, 'reviewer-rerun-after-journal', 'J1', {
-      order: ['github', 'status', 'worker'],
+      order: M1Order,
       reviewerRuns: readTrace(M1Trace).filter((row) => row.event === 'reviewer-wrapper').length,
-      recovered: false,
-      persistedVerdict: 'clean',
+      recovered: M1Result.recovered === true,
+      persistedVerdict: M1Persisted.reviewVerdict,
     }));
 
     const M2Store = path.join(root, 'm2');
-    const M2Run = journalRun(createDeliveryRun(M2Store, 'c'), M2Store);
+    const M2Base = createDeliveryRun(M2Store, 'c');
+    const M2Run = journalRun(M2Base, M2Store, cleanPayload, {
+      ...completedGithubFields(M2Base, 201),
+      deliveryOutcomes: { githubComment: channelOutcome('succeeded', 'comment_posted', githubKey(M2Base)) },
+    });
+    invariant(
+      M2Run.githubReviewReconciliation?.phase === 'complete'
+        && M2Run.deliveryOutcomes.githubComment?.state === 'succeeded',
+      'blind replay control did not start from a completed COMMENT',
+    );
+    const M2Reviews = [makeReview(M2Run, 201)];
     const M2Posts = { value: 0 };
+    const M2Transport = listBackedTransport({
+      run: M2Run,
+      reviews: M2Reviews,
+      postCounter: M2Posts,
+    });
+    await M2Transport.postReview({
+      event: 'COMMENT',
+      body: reviewBody(M2Run),
+      commitId: M2Run.targetSha,
+    });
+    let M2Status = 0;
+    let M2Worker = 0;
     await resumeViaRunner({
       root: path.join(root, 'm2-runner'),
       run: M2Run,
       storeRoot: M2Store,
-      transport: listBackedTransport({
-        run: M2Run,
-        reviews: [makeReview(M2Run, 201, 'unrelated external comment', M2Run.targetSha, 'someone-else')],
-        postCounter: M2Posts,
-      }),
-      statusWriter: async () => undefined,
-      workerNotifier: async () => ({ state: 'delivered', reason: 'delivered' }),
+      transport: M2Transport,
+      statusWriter: async (request) => { if (request.state !== 'pending') M2Status += 1; },
+      workerNotifier: async () => { M2Worker += 1; return { state: 'delivered', reason: 'delivered' }; },
     });
-    mutations.push(actualRowRed(delivery, 'blind-comment-replay', 'J2', { githubAttempts: M2Posts.value, statusAttempts: 1, workerAttempts: 1 }));
+    mutations.push(actualRowRed(delivery, 'blind-comment-replay', 'J2', {
+      githubAttempts: M2Posts.value,
+      statusAttempts: M2Status,
+      workerAttempts: M2Worker,
+    }));
 
     const M3Store = path.join(root, 'm3');
     const M3Run = journalRun(createDeliveryRun(M3Store, 'd'), M3Store);
