@@ -54,7 +54,7 @@ Always read the state even if optional checks were otherwise waived:
 gh pr view P --repo chetwerikoff/orchestrator-pack \
   --json number,title,body,state,isDraft,mergeable,mergeStateStatus,headRefOid,headRefName,statusCheckRollup
 
-gh pr checks P --repo chetwerikoff/orchestrator-pack \
+gh pr checks P --repo chetwerikoff/orchestrator-pack --required \
   --json name,state,bucket,link,startedAt,completedAt,workflow,description
 ```
 
