@@ -15,7 +15,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout transfer payload
         uses: actions/checkout@v4
@@ -30,38 +30,30 @@ jobs:
           path: target
           fetch-depth: 0
 
-      - name: Reconstruct no-dependency patch
+      - name: Reconstruct lock cleanup
         shell: bash
         run: |
           set -euo pipefail
-          cat payload/scripts/toolchain/no-yaml.0{0,1,2,3} > /tmp/issue900-no-yaml.patch.xz.b64
-          test "$(wc -c < /tmp/issue900-no-yaml.patch.xz.b64)" -eq 5164
-          base64 --decode /tmp/issue900-no-yaml.patch.xz.b64 > /tmp/issue900-no-yaml.patch.xz
-          test "$(wc -c < /tmp/issue900-no-yaml.patch.xz)" -eq 3872
-          test "$(sha256sum /tmp/issue900-no-yaml.patch.xz | awk '{print $1}')" = "1b20dd8ef1bd6f629cc40b66d22f086333318650d2fe0156bae176ce1f2ff9c0"
-          xz --decompress --stdout /tmp/issue900-no-yaml.patch.xz > /tmp/issue900-no-yaml.patch
+          base64 --decode payload/scripts/toolchain/lock-clean.patch.xz.b64 > /tmp/issue900-lock-clean.patch.xz
+          test "$(wc -c < /tmp/issue900-lock-clean.patch.xz)" -eq 564
+          test "$(sha256sum /tmp/issue900-lock-clean.patch.xz | awk '{print $1}')" = "c802778be0e74ebda8e738f07a814c08c19c7cc0fd4e922a2e1a1735cb1cee50"
+          xz --decompress --stdout /tmp/issue900-lock-clean.patch.xz > /tmp/issue900-lock-clean.patch
 
-      - name: Apply exact no-dependency patch
+      - name: Apply exact lock cleanup
         working-directory: target
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "03d1aaa8d733866c628625d33ba2903bed754a7a"
-          git apply --check /tmp/issue900-no-yaml.patch
-          git apply --index /tmp/issue900-no-yaml.patch
+          test "$(git rev-parse HEAD)" = "f5019ecc9391acd974ca7a237fe047a2b833322f"
+          git apply --check /tmp/issue900-lock-clean.patch
+          git apply --index /tmp/issue900-lock-clean.patch
           git diff --cached --check
-          git diff --cached --name-only | sort > /tmp/actual-paths.txt
-          printf '%s\n' \
-            package-lock.json \
-            package.json \
-            scripts/toolchain/check-typescript-runtime-policy.ts \
-            > /tmp/expected-paths.txt
-          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+          test "$(git diff --cached --name-only)" = "package-lock.json"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: remove YAML registry dependency from runtime policy"
+          git commit -m "fix: remove stale YAML registry lock entry"
 
-      - name: Push no-dependency policy fix
+      - name: Push clean lockfile
         working-directory: target
         shell: bash
         run: git push origin HEAD:agent/issue-900-node22-runtime
