@@ -175,7 +175,7 @@ $mvB = Acquire-ReviewStartClaim -PrNumber 406 -HeadSha $shaA -Surface 'm-visible
 [ordered]@{
   baseline = $baseline
   controls = [ordered]@{
-    doubleAcquisition = @{ winners=@([bool]$mdA.acquired, [bool]$mdB.acquired | Where-Object { $_ }).Count; activeCount=2 }
+    doubleAcquisition = @{ winners=@(@([bool]$mdA.acquired, [bool]$mdB.acquired) | Where-Object { $_ }).Count; activeCount=2 }
     liveClaimTheft = @{ firstAcquired=[bool]$mlA.acquired; secondAcquired=[bool]$mlB.acquired; loserReason=[string]$mlB.reason; sameOwner=($mlOwner -eq [string]$mlB.claim.holder.processGuid) }
     crossKeyInterference = @{ firstAcquired=[bool]$mxA.acquired; secondAcquired=[bool]$mxB.acquired; activeCount=@((Get-ChildItem -LiteralPath $mx -File -Filter 'pr-*.json')).Count }
     staleNotRecovered = @{ reclaimed=$false; winners=@($msRows | Where-Object { $_.acquired }).Count; activeCount=@((Get-ChildItem -LiteralPath $ms -File -Filter 'pr-404-*.json')).Count }
