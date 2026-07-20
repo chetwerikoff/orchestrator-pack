@@ -14,6 +14,18 @@ import {
 import { runDeliveryMatrix } from './task-311-delivery.test-support.js';
 import { runScopeGate } from './task-311-scope.test-support.js';
 
+// The repository intentionally targets ES2022 while CI runs Node 20, whose runtime
+// provides Array.prototype.findLast. Keep the compatibility declaration test-local
+// rather than widening the pack's production TypeScript library surface.
+declare global {
+  interface Array<T> {
+    findLast(
+      predicate: (value: T, index: number, array: T[]) => unknown,
+      thisArg?: unknown,
+    ): T | undefined;
+  }
+}
+
 describe('TASK-311 real surviving review-cycle assembly gate', () => {
   it('drives three real subjects, C1-C7 and J0-J6 with exact mutation and hermetic evidence', async () => {
     const trapRoot = tempRoot('task-311-egress-');
