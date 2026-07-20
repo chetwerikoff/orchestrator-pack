@@ -122,13 +122,17 @@ gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckR
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
 review blocking — **except** under a direct merge order (Step 3a).
 
-**At-cap triage gate — every merge path, green statuses included.** If the PR latched
-`at_cap_open_findings`, merge eligibility belongs to `docs/merge-triage-gate.mjs` /
-`scripts/lib/Merge-TriageGate.ps1` (`AGENTS.md` § At-cap merge triage, Issue #648).
-Consult it before Step 5 whether or not anything is blocking: all-green statuses are not
-a substitute for it, because the latch outlives the CI that went green. Merge only on
-current-head `clean_early_stop` or a validated `merge_triage_cleared`; otherwise stop and
-report that the gate denies eligibility. A direct order is not an override for it.
+**At-cap triage gate — every merge path, green statuses included.** Neither command above
+exposes the pack-store `at_cap_open_findings` latch, so never gate this on your own
+reading of whether the PR is at cap. Ask the policy helper on **every** merge, before
+Step 5: `Get-MergeTriagePolicy` in `scripts/lib/Merge-TriageGate.ps1` (the `policy` /
+`evaluateMergePolicy` command over `docs/merge-triage-gate.mjs`), for the current PR and
+head. Merge only when it returns `allow` — it answers `no_at_cap_gate_required` when
+nothing is latched, and grants on current-head `clean_early_stop` or a validated
+`merge_triage_cleared`. Anything else (`BLOCK`, `DEFER`, `PENDING_ARCHITECT`) stops the
+merge: report that the gate denies eligibility. All-green statuses are not a substitute —
+the latch outlives the CI that went green — and a direct order is not an override
+(`AGENTS.md` § At-cap merge triage, Issue #648).
 
 ## Step 3a — Direct merge order: normalize blocking statuses
 
