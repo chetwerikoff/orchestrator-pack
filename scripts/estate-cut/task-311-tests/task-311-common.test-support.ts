@@ -394,7 +394,7 @@ export function validateAssemblyEvidence(candidate: Record<string, unknown>): vo
   invariant(value.trap?.active === true && value.trap?.unexpectedAttempts === 0, 'egress trap was inactive or observed unexpected egress');
 }
 
-function greenCiChecks(): Array<Record<string, string>> {
+export function greenCiChecks(): Array<Record<string, string>> {
   return [
     { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
     { name: 'PR scope guard', state: 'SUCCESS' },
