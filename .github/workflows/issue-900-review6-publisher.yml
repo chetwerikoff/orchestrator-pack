@@ -30,37 +30,53 @@ jobs:
           path: target
           fetch-depth: 0
 
-      - name: Reconstruct and verify patch
+      - name: Verify payload bytes
         shell: bash
         run: |
           set -euo pipefail
           base64 --decode payload/scripts/toolchain/.issue900-review6.patch.xz.b64 > /tmp/issue900-review6.patch.xz
-          actual_size="$(wc -c < /tmp/issue900-review6.patch.xz)"
-          actual_sha="$(sha256sum /tmp/issue900-review6.patch.xz | awk '{print $1}')"
-          printf 'payload size=%s sha=%s\n' "$actual_size" "$actual_sha"
-          test "$actual_size" -eq 8528
-          test "$actual_sha" = "90205fec088f46ac0a55b839d80134bca2909e8e2b249e1db0b021cfbd4d5d3b"
+          test "$(wc -c < /tmp/issue900-review6.patch.xz)" -eq 8528
+          test "$(sha256sum /tmp/issue900-review6.patch.xz | awk '{print $1}')" = "90205fec088f46ac0a55b839d80134bca2909e8e2b249e1db0b021cfbd4d5d3b"
           xz --decompress --stdout /tmp/issue900-review6.patch.xz > /tmp/issue900-review6.patch
-          cd target
-          actual_head="$(git rev-parse HEAD)"
-          printf 'target head=%s\n' "$actual_head"
-          test "$actual_head" = "1f2bfb4c21c156527d2dbb553bbcf78c9bd36b83"
+
+      - name: Verify exact target head
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "1f2bfb4c21c156527d2dbb553bbcf78c9bd36b83"
+
+      - name: Apply patch
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
           git apply --check /tmp/issue900-review6.patch
           git apply --index /tmp/issue900-review6.patch
-          git diff --cached --name-only | sort > /tmp/actual-paths.txt
-          cat > /tmp/expected-paths.txt <<'PATHS'
-          AGENTS.md
-          docs/declarations/900.zz-chatgpt-node22-ts-launcher.json
-          package-lock.json
-          package.json
-          scripts/gate-runner/goldens/pre-delete-captures.json
-          scripts/toolchain/check-typescript-runtime-policy.ts
-          scripts/toolchain/node22-runtime-policy.spec.ts
-          PATHS
-          printf '%s\n' 'staged paths:'
-          cat /tmp/actual-paths.txt
-          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
           git diff --cached --check
+
+      - name: Verify changed-path allowlist
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --cached --name-only | sort > /tmp/actual-paths.txt
+          printf '%s\n' \
+            AGENTS.md \
+            docs/declarations/900.zz-chatgpt-node22-ts-launcher.json \
+            package-lock.json \
+            package.json \
+            scripts/gate-runner/goldens/pre-delete-captures.json \
+            scripts/toolchain/check-typescript-runtime-policy.ts \
+            scripts/toolchain/node22-runtime-policy.spec.ts \
+            > /tmp/expected-paths.txt
+          diff -u /tmp/expected-paths.txt /tmp/actual-paths.txt
+
+      - name: Commit staged patch
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix: close Node 22 workspace and YAML policy gaps"
