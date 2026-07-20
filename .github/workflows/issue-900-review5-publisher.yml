@@ -6,81 +6,38 @@ on:
       - main
 
 permissions:
-  contents: write
-
-concurrency:
-  group: issue-900-review5-publisher
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  publish:
+  rollback-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
-      - name: Checkout transfer payload
+      - name: Checkout final PR merge ref
         uses: actions/checkout@v4
         with:
-          path: payload
-          fetch-depth: 1
-
-      - name: Checkout exact PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: agent/issue-900-node22-runtime
-          path: target
+          ref: refs/pull/916/merge
           fetch-depth: 0
 
-      - name: Reconstruct and verify patch
+      - name: Prove one-revert rollback on final head
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode payload/scripts/toolchain/.issue900-review5.patch.xz.b64 > /tmp/issue900-review5.patch.xz
-          test "$(wc -c < /tmp/issue900-review5.patch.xz)" -eq 1312
-          echo "ce718dd1ddb8e3d36013c1f00db3fbbf44d79c6a0cfe2ce251a3feb7779040c9  /tmp/issue900-review5.patch.xz" | sha256sum --check --strict
-          xz --decompress --stdout /tmp/issue900-review5.patch.xz > /tmp/issue900-review5.patch
-          cd target
-          test "$(git rev-parse HEAD)" = "f7315d7ed6f71fb79a442aca9adb7d9654bec829"
-          git apply --check /tmp/issue900-review5.patch
-          git apply --index /tmp/issue900-review5.patch
-          test "$(git diff --cached --name-only | wc -l)" -eq 2
-          test "$(git diff --cached --name-only | sort | paste -sd, -)" = "scripts/toolchain/check-typescript-runtime-policy.ts,scripts/toolchain/node22-runtime-policy.spec.ts"
-          git diff --cached --check
+          merge_sha="$(git rev-parse HEAD)"
+          pr_head="$(git rev-parse HEAD^2)"
+          base_parent="$(git rev-parse HEAD^1)"
+          test "$pr_head" = "1f2bfb4c21c156527d2dbb553bbcf78c9bd36b83"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: enforce npm preflight ordering"
+          git revert -m 1 --no-edit HEAD
+          revert_sha="$(git rev-parse HEAD)"
+          git diff --exit-code "$base_parent" HEAD
+          test -f scripts/lib/Invoke-TypeScriptCli.ps1
+          test -f scripts/toolchain/typescript-loader.mjs
+          printf 'merge_sha=%s\npr_head=%s\nbase_parent=%s\nrevert_sha=%s\nrollback_tree_matches_base=true\n' \
+            "$merge_sha" "$pr_head" "$base_parent" "$revert_sha" | tee rollback-proof.txt
 
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: target/package-lock.json
-
-      - name: Install dependencies
-        working-directory: target
-        run: npm ci
-
-      - name: Validate final review fix
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run check:node-major
-          npm run typecheck:foundation
-          npx tsc -p tsconfig.base.json --noEmit
-          npm run lint:foundation
-          npm run test:issue-900
-          npm run gate-runner-selftest
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-codex-pr-reviewer
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-scope-guard
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-task-declaration
-          node scripts/run-vitest-with-harness.mjs run plugins/ao-token-chain-ledger
-          git fetch origin main:refs/remotes/origin/main --no-tags
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 -Strict -BaseRef origin/main -HeadRef HEAD
-
-      - name: Push final review fix
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push origin HEAD:agent/issue-900-node22-runtime
+          name: issue-900-final-rollback-proof
+          path: rollback-proof.txt
