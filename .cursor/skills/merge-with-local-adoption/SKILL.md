@@ -9,8 +9,9 @@ description: >-
   asks to merge a finished task — «мерж», «мерж 385», «мерж и пул», «смерж»,
   «merge», «merge and pull» — or clearly wants a ready PR merged after
   review/CI. On a direct merge order, normalize blocking statuses instead of
-  stopping — draft → ready for review, BEHIND → update-branch, review/
-  non-required blocks → `--admin` — but genuinely red required CI still stops
+  stopping — draft → ready for review, BEHIND → update-branch, review and
+  proven-non-required blocks → `--admin` — while required CI that is not green
+  (red, pending, or never reported) still stops, as does the at-cap triage gate
   (Step 3a). If CI is red or the branch is behind base, delegate the fix to the
   PR worker (Step 3b) and merge only after CI is green. Operates on the
   operator's live working tree; never discards uncommitted local work. Skip when

@@ -9,8 +9,9 @@ description: >-
   finished task — «мерж», «мерж 385»,
   «мерж и пул», «смерж», «merge», «merge and pull» — or clearly wants a ready
   PR merged after review/CI. On a direct merge order, normalize blocking statuses
-  instead of stopping — draft → ready for review, BEHIND → update-branch, review/
-  non-required blocks → `--admin` — but genuinely red required CI still stops (Step 3a).
+  instead of stopping — draft → ready for review, BEHIND → update-branch, review and
+  proven-non-required blocks → `--admin` — while required CI that is not green (red,
+  pending, or never reported) still stops, as does the at-cap triage gate (Step 3a).
   If CI is red or the branch is behind base, delegate
   the fix to the PR worker (Step 3b) and merge only after CI is green. Operates
   on the operator's live working tree; never discards uncommitted local work.
@@ -136,13 +137,27 @@ Normalize, in this order, then re-run the Step 3 status read:
 3. **Review blocking** — `reviewDecision` is `REVIEW_REQUIRED`, a reviewer is pending or
    stale, or it is `CHANGES_REQUESTED` and the user's order supersedes those findings →
    merge with `--admin`. Never fabricate an approval or dismiss a review to fake a green
-   decision.
-4. **`mergeStateStatus` `BLOCKED`/`UNSTABLE` from non-required or stuck checks** → merge
-   with `--admin`, and name the bypassed status in the Step 10 report.
+   decision. **Before bypassing `CHANGES_REQUESTED`, check the at-cap gate:** if the PR
+   latched `at_cap_open_findings`, merge eligibility belongs to
+   `docs/merge-triage-gate.mjs` / `scripts/lib/Merge-TriageGate.ps1` (`AGENTS.md`
+   § At-cap merge triage) — a direct order does not override it. Proceed only on
+   current-head `clean_early_stop` or a validated `merge_triage_cleared`; otherwise stop
+   and report that the gate denies eligibility.
+4. **`mergeStateStatus` `BLOCKED`/`UNSTABLE` from checks you have proven non-required** →
+   merge with `--admin`, and name the bypassed status in the Step 10 report. Prove it
+   from the branch protection contract, not from appearance: a required check that is
+   pending, queued, or was never posted at all is **not** «stuck» — it is required CI
+   that has not gone green, and it stops the merge exactly like a red one. `--admin` does
+   not force it either; GitHub reports `Required status check "<context>" is expected`.
+   Get the check to run and report (for `orchestrator-pack/pack-review`, the session-less
+   form is `node --experimental-strip-types scripts/pack-review-runner.ts start
+   --pr-number P --head-sha <head>`), then resume at Step 3.
 
-**The one status that stays a stop: genuinely red required CI.** A direct order does not
-authorize merging failing checks — go to Step 3b (delegate the fix to the PR worker) and
-resume at Step 3 when green. Say so in one line; do not silently `--admin` past red CI.
+**The status that stays a stop: required CI that is not green** — failing, pending,
+queued, or never reported. A direct order does not authorize merging past it — go to
+Step 3b (delegate the fix to the PR worker) when it is red, or make the missing check
+report when it simply never ran, and resume at Step 3 when green. Say so in one line; do
+not silently `--admin` past required CI.
 
 Also still a stop, direct order or not: PR state ≠ `OPEN` (already merged/closed), and
 merge conflicts that need a real resolution (`mergeable: CONFLICTING`) — those go to the
@@ -469,8 +484,10 @@ Never claim CI/adoption/recycle succeeded without the commands actually run.
 
 - Merge or run adoption while a Step 3b worker fix is in flight; skip the adoption scan
   because CI is green; skip Step 6e/9 after a successful merge.
-- Apply Step 3a normalization without a direct user merge order, `--admin` past red
-  required CI, or flip a draft to ready without then running the full adoption flow.
+- Apply Step 3a normalization without a direct user merge order, `--admin` past required
+  CI that is not green (red, pending, or never reported), bypass `CHANGES_REQUESTED`
+  while the at-cap triage gate denies eligibility, or flip a draft to ready without then
+  running the full adoption flow.
 - `git push --force` to main; fix red CI from the architect session when a PR worker
   exists (unless `direct-fix-checklist` authorized).
 - `ao session kill` the orchestrator outside Step 8, the recovery runbook, or the 9c
