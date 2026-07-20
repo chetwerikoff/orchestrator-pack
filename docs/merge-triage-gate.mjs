@@ -62,16 +62,18 @@ function normalizeRepoSlug(value) {
   return /^[^/\s]+\/[^/\s]+$/.test(repoSlug) ? repoSlug : null;
 }
 
-function resolveDirectOperatorSessionKind(input = {}) {
+function resolveDirectOperatorSessionKind() {
+  const sessionId = String(process.env.AO_SESSION_ID ?? '').trim();
   const envKind = normalizeTriageText(process.env.AO_SESSION_KIND ?? '');
-  const payloadKind = normalizeTriageText(input.sessionKind ?? '');
-  if (envKind && payloadKind && envKind !== payloadKind) {
-    return { ok: false, reason: 'session_kind_conflict' };
+  if (sessionId) {
+    return { ok: false, reason: 'ao_managed_session_forbidden' };
   }
-  const kind = envKind || payloadKind;
-  return kind === 'operator'
-    ? { ok: true, kind }
-    : { ok: false, reason: kind ? 'session_kind_not_operator' : 'operator_session_kind_missing' };
+  if (!envKind) {
+    return { ok: false, reason: 'operator_session_kind_missing' };
+  }
+  return envKind === 'operator'
+    ? { ok: true, kind: envKind }
+    : { ok: false, reason: 'session_kind_not_operator' };
 }
 
 function operatorApprovalRecordPath(input, prNumber) {
@@ -90,7 +92,7 @@ function readExactHeadOperatorApproval(input = {}) {
     return { applicable: false, approved: false, reason: 'not_direct_operator_merge' };
   }
 
-  const session = resolveDirectOperatorSessionKind(input);
+  const session = resolveDirectOperatorSessionKind();
   if (!session.ok) return { applicable: true, approved: false, reason: session.reason };
 
   const projectId = normalizeProjectId(input.projectId ?? 'orchestrator-pack');
@@ -131,6 +133,14 @@ function readExactHeadOperatorApproval(input = {}) {
   ) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
   }
+  const revokedAtUtc = String(record.revokedAtUtc ?? '').trim();
+  const revocationReason = String(record.revocationReason ?? '').trim();
+  if (Boolean(revokedAtUtc) !== Boolean(revocationReason)) {
+    return { applicable: true, approved: false, reason: 'approval_malformed' };
+  }
+  if (revokedAtUtc && !Number.isFinite(Date.parse(revokedAtUtc))) {
+    return { applicable: true, approved: false, reason: 'approval_malformed' };
+  }
   if (String(record.projectId ?? '') !== projectId) {
     return { applicable: true, approved: false, reason: 'approval_project_mismatch', record };
   }
@@ -143,7 +153,7 @@ function readExactHeadOperatorApproval(input = {}) {
   if (String(record.headSha ?? '').toLowerCase() !== headSha) {
     return { applicable: true, approved: false, reason: 'approval_head_mismatch', record };
   }
-  if (String(record.revokedAtUtc ?? '').trim()) {
+  if (revokedAtUtc) {
     return { applicable: true, approved: false, reason: 'approval_revoked', record };
   }
 
