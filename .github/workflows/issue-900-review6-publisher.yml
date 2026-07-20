@@ -1,4 +1,4 @@
-name: issue-900-review6-publisher
+name: issue-900-final-rollback-proof
 
 on:
   pull_request:
@@ -6,52 +6,41 @@ on:
       - main
 
 permissions:
-  contents: write
-
-concurrency:
-  group: issue-900-review6-publisher
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  publish:
+  rollback-proof:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Checkout transfer payload
+      - name: Checkout final PR merge ref
         uses: actions/checkout@v4
         with:
-          path: payload
-          fetch-depth: 1
-
-      - name: Checkout exact PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: agent/issue-900-node22-runtime
-          path: target
+          ref: refs/pull/916/merge
           fetch-depth: 0
 
-      - name: Verify plain lock cleanup patch
+      - name: Prove one-revert rollback on final head
         shell: bash
         run: |
           set -euo pipefail
-          test "$(wc -c < payload/scripts/toolchain/lock-clean.patch)" -eq 872
-          test "$(sha256sum payload/scripts/toolchain/lock-clean.patch | awk '{print $1}')" = "dbbaa77578c196431c33e66d3d345bbfca5e99f9b89ecc9dca0eda476af89caf"
-
-      - name: Apply exact lock cleanup
-        working-directory: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "f5019ecc9391acd974ca7a237fe047a2b833322f"
-          git apply --check ../payload/scripts/toolchain/lock-clean.patch
-          git apply --index ../payload/scripts/toolchain/lock-clean.patch
-          git diff --cached --check
-          test "$(git diff --cached --name-only)" = "package-lock.json"
+          merge_sha="$(git rev-parse HEAD)"
+          read -r _ first_parent pr_parent <<< "$(git rev-list --parents -n 1 HEAD)"
+          test "$pr_parent" = "14477d33d80eed47b3a79e55e4bcf85e0c06820b"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: remove stale YAML registry lock entry"
+          git revert -m 1 --no-edit "$merge_sha"
+          revert_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse "$first_parent^{tree}")"
+          {
+            printf 'merge_sha=%s\n' "$merge_sha"
+            printf 'pr_parent=%s\n' "$pr_parent"
+            printf 'first_parent=%s\n' "$first_parent"
+            printf 'revert_sha=%s\n' "$revert_sha"
+            printf 'tree_match=true\n'
+          } | tee issue-900-final-rollback-proof.txt
 
-      - name: Push clean lockfile
-        working-directory: target
-        shell: bash
-        run: git push origin HEAD:agent/issue-900-node22-runtime
+      - name: Upload rollback proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-900-final-rollback-proof
+          path: issue-900-final-rollback-proof.txt
