@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(wc -c < payload/scripts/toolchain/lock-clean.patch)" -eq 872
-          test "$(sha256sum payload/scripts/toolchain/lock-clean.patch | awk '{print $1}')" = "5a1f5ed9975346ef61a5b9f40baf317d59e65ca27de55cae834edab7b77f73a7"
+          test "$(sha256sum payload/scripts/toolchain/lock-clean.patch | awk '{print $1}')" = "dbbaa77578c196431c33e66d3d345bbfca5e99f9b89ecc9dca0eda476af89caf"
 
       - name: Apply exact lock cleanup
         working-directory: target
