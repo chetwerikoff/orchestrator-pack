@@ -1,12 +1,12 @@
-import type { RunCodexReviewResult } from './run_review.js';
+import type { RunCodexReviewResult } from './run_review.ts';
 import {
   buildReviewerEvidence,
   formatReviewerEvidenceMarker,
   type ReviewerBudgetLedger,
   type ReviewerEvidencePayload,
   type ReviewerFailureClass,
-} from './reviewer_budget.js';
-import type { SelectReviewVerdictResult } from './verdict.js';
+} from './reviewer_budget.ts';
+import type { SelectReviewVerdictResult } from './verdict.ts';
 
 export const TIMEOUT_NO_VERDICT_MESSAGE =
   'reviewer timeout before verdict — structured timeout/no-verdict failure';

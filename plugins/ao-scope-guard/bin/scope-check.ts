@@ -1,20 +1,21 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env -S node --experimental-strip-types
 
+import '../../../scripts/toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { isDirectCliExecution } from '@orchestrator-pack/shared/lib/cli_direct_execution.js';
 import {
   checkScope,
   formatViolationReport,
   type ScopeCheckResult,
-} from '../lib/check.js';
-import { partitionControlArtifacts } from '../lib/control_artifacts.js';
-import { loadLatestActiveDeclaration } from '../lib/declaration_loader.js';
-import { resolveIssueDenylist } from '../lib/denylist.js';
-import { listStagedPaths } from '../lib/diff_index.js';
+} from '../lib/check.ts';
+import { partitionControlArtifacts } from '../lib/control_artifacts.ts';
+import { loadLatestActiveDeclaration } from '../lib/declaration_loader.ts';
+import { resolveIssueDenylist } from '../lib/denylist.ts';
+import { listStagedPaths } from '../lib/diff_index.ts';
 import {
   listWorktreeChanges,
   resolveWorktreeBaseline,
-} from '../lib/diff_worktree.js';
+} from '../lib/diff_worktree.ts';
 
 export type ScopeCheckMode = 'index' | 'worktree';
 

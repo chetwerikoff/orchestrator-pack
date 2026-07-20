@@ -1,0 +1,7 @@
+export interface Input {
+  readonly count: number;
+}
+
+export function double(input: Input): number {
+  return input.count * 2;
+}

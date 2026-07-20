@@ -1,4 +1,4 @@
-import { matchesGlob } from './glob_match.js';
+import { matchesGlob } from './glob_match.ts';
 
 /** Hardcoded control-artifact prefixes (#3.C / issue #5). */
 export const CONTROL_ARTIFACT_GLOBS = ['docs/declarations/**', '.ao/**'] as const;

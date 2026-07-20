@@ -113,7 +113,7 @@ git commit -m "..."
 Wrap cursor/codex invocations so scope is checked after each agent turn:
 
 ```powershell
-node --import tsx plugins/ao-scope-guard/bin/agent-wrap.ts `
+node --experimental-strip-types plugins/ao-scope-guard/bin/agent-wrap.ts `
   --issue 5 `
   -- cursor agent ...
 ```
@@ -133,11 +133,11 @@ Environment variables:
 Direct invocation (used by the hook and wrapper):
 
 ```powershell
-node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `
+node --experimental-strip-types plugins/ao-scope-guard/bin/scope-check.ts `
   --issue 5 `
   --mode index
 
-node --import tsx plugins/ao-scope-guard/bin/scope-check.ts `
+node --experimental-strip-types plugins/ao-scope-guard/bin/scope-check.ts `
   --issue 5 `
   --mode worktree `
   --iteration-id <id>

@@ -74,6 +74,11 @@ detail: $Detail
         $disposableScriptBootstrapRoot = [bool]$scriptBootstrap.DisposableBootstrapRoot
         . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Ensure-ReverifyWorkspaceDeps.ps1')
         . (Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Resolve-TrustedPackRoot.ps1')
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+        $nodeVersion = ((& $node.Source '--version' 2>&1 | Out-String).Trim())
+        if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $nodeVersion. Install/use Node 22 and run npm run check:node-major." }
+        $typeScriptLauncher = Join-Path $scriptBootstrap.BootstrapRoot 'scripts/lib/Invoke-TypeScriptCli.ts'
 
         if ($disposableScriptBootstrapRoot) {
             $runnerTrustedBase = if (-not [string]::IsNullOrWhiteSpace($TrustedBaseRoot)) {
@@ -161,8 +166,10 @@ detail: $Detail
 
         Push-Location $reviewTargetRoot
         try {
-            $tsxImport = Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $effectiveTrustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1'
-            & node --import $tsxImport @args
+            Ensure-ReverifyWorkspaceDeps -RepoRoot $reviewTargetRoot -TrustedBaseRoot $effectiveTrustedBaseRoot -WrapperName 'launch-contract-evidence-reverify.ps1' | Out-Null
+            $nodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $runner, '--')
+            $forwardArgs = @($args | Select-Object -Skip 1)
+            & $node.Source @nodeArgs @forwardArgs
         }
         finally {
             Pop-Location

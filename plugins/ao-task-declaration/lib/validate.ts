@@ -4,7 +4,7 @@ import {
   globIsWithinAllowedRoot,
   globPatternsOverlap,
   pathMatchesAnyPattern,
-} from './glob_match.js';
+} from './glob_match.ts';
 
 export interface DeclaredScopeInput {
   declared_paths: string[];

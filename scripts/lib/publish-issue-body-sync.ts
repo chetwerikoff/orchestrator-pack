@@ -3,12 +3,12 @@ import { dirname, join } from 'node:path';
 import {
   checkTierGateGuard,
   formatTierGatePassMessage,
-} from './tier-gate-core.js';
+} from './tier-gate-core.ts';
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
   resolveRepoRootFromDraftPath,
-} from './stage-completeness-core.js';
+} from './stage-completeness-core.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 
 export type IssueMutationSubcommand = 'issue create' | 'issue edit';

@@ -6,8 +6,7 @@
     "ao-declare": "./bin/declare.ts"
   },
   "dependencies": {
-    "@orchestrator-pack/shared": "*",
-    "tsx": "^4.8.1"
+    "@orchestrator-pack/shared": "*"
   },
   "scripts": {
     "test": "npm --prefix ../.. run test -- plugins/ao-task-declaration/tests"

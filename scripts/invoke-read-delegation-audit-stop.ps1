@@ -13,13 +13,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 try {
-    . (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ps1')
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+    $nodeVersion = ((& $node.Source '--version' 2>&1 | Out-String).Trim())
+    if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $nodeVersion. Install/use Node 22 and run npm run check:node-major." }
+    $typeScriptLauncher = (Join-Path $PSScriptRoot 'lib/Invoke-TypeScriptCli.ts')
     $cli = Join-Path $PSScriptRoot 'json-producers/read-delegation-audit-stop.ts'
-    $nodeArgs = Get-OpkTypeScriptNodeArguments -ScriptPath $cli
+    $nodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $cli, '--')
     if ($ArtifactPath) { $nodeArgs += @('--artifact-path', $ArtifactPath) }
     if ($RepoRoot) { $nodeArgs += @('--repo-root', $RepoRoot) }
     $stdin = [Console]::In.ReadToEnd()
-    $stdin | & node @nodeArgs
+    $stdin | & $node.Source @nodeArgs
 }
 catch {
     Write-Warning "read-delegation audit wrapper failed open: $($_.Exception.Message)"

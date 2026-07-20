@@ -18,11 +18,11 @@ function Ensure-ReverifyWorkspaceDeps {
         $depsRoot = $RepoRoot
     }
 
-    $tsxPackage = Join-Path $depsRoot 'node_modules/tsx/package.json'
-    if (-not (Test-Path -LiteralPath $tsxPackage)) {
+    $workspaceMarker = Join-Path $depsRoot 'node_modules/@orchestrator-pack/shared/package.json'
+    if (-not (Test-Path -LiteralPath $workspaceMarker -PathType Leaf)) {
         Push-Location $depsRoot
         try {
-            # Bootstrap from trusted-base lockfile only; never run PR-controlled lifecycle scripts.
+            # Bootstrap from the trusted lockfile only; never run PR-controlled lifecycle scripts.
             npm ci --include=dev --ignore-scripts --loglevel=error --no-audit 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 [Console]::Error.WriteLine("${WrapperName}: npm ci failed in trusted base (exit $LASTEXITCODE)")
@@ -34,11 +34,10 @@ function Ensure-ReverifyWorkspaceDeps {
         }
     }
 
-    $loader = Join-Path $depsRoot 'node_modules/tsx/dist/loader.mjs'
-    if (-not (Test-Path -LiteralPath $loader)) {
-        [Console]::Error.WriteLine("${WrapperName}: tsx loader missing in $depsRoot after npm ci")
+    if (-not (Test-Path -LiteralPath $workspaceMarker -PathType Leaf)) {
+        [Console]::Error.WriteLine("${WrapperName}: workspace dependencies missing in $depsRoot after npm ci")
         exit 1
     }
 
-    return (Resolve-Path -LiteralPath $loader).Path
+    return $depsRoot
 }

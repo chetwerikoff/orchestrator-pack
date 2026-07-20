@@ -1,10 +1,10 @@
-import { parseCodexOutput, type ParseCodexOutputResult } from './parse_output.js';
+import { parseCodexOutput, type ParseCodexOutputResult } from './parse_output.ts';
 import {
   diagnosticSnippet,
   parseReviewModeFromChannels,
   type ParseReviewOutputResult,
-} from './review_jsonl.js';
-import type { ReviewSource } from './types.js';
+} from './review_jsonl.ts';
+import type { ReviewSource } from './types.ts';
 
 export interface ReviewVerdictChannels {
   processJsonl: string;

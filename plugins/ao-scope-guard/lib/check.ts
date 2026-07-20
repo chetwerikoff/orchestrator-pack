@@ -1,7 +1,7 @@
 import type { DeclarationSnapshot } from '@orchestrator-pack/shared/lib/declaration_schema.js';
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
-import { partitionControlArtifacts } from './control_artifacts.js';
-import { pathMatchesAnyPattern } from './glob_match.js';
+import { partitionControlArtifacts } from './control_artifacts.ts';
+import { pathMatchesAnyPattern } from './glob_match.ts';
 
 export interface ScopeViolationReport {
   ok: false;

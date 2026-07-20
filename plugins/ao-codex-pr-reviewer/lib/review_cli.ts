@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
-import { executeReview, type ReviewOptions } from './review_core.js';
-import type { ReviewSource } from './types.js';
+import { executeReview, type ReviewOptions } from './review_core.ts';
+import type { ReviewSource } from './types.ts';
 
 function usage(): string {
   return [

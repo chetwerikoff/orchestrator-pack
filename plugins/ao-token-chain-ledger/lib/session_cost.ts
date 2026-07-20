@@ -1,4 +1,4 @@
-import type { LedgerCost, CostSource } from './types.js';
+import type { LedgerCost, CostSource } from './types.ts';
 
 /** Documented AO AgentSessionInfo.cost — accepts AO camelCase and ledger snake_case. */
 export interface AgentSessionCost {

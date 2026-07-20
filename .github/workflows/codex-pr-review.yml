@@ -97,7 +97,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: orchestrator-pack/package-lock.json
 
@@ -129,7 +129,7 @@ jobs:
           PR_REPO_ROOT: ${{ github.workspace }}
         run: |
           set -o pipefail
-          ./node_modules/.bin/tsx plugins/ao-codex-pr-reviewer/bin/review.ts \
+          node --experimental-strip-types plugins/ao-codex-pr-reviewer/bin/review.ts \
             --repo-root "$PR_REPO_ROOT" \
             --base "origin/${{ github.base_ref }}" \
             --pr-number "${{ github.event.pull_request.number }}" \

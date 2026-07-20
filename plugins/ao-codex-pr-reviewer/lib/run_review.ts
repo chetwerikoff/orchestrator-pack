@@ -7,8 +7,8 @@ import {
   buildReviewerBudgetSpawnEnv,
   createReviewerBudgetLedger,
   type ReviewerBudgetLedger,
-} from './reviewer_budget.js';
-import type { ReviewSource } from './types.js';
+} from './reviewer_budget.ts';
+import type { ReviewSource } from './types.ts';
 
 export interface RunCodexReviewOptions {
   repoRoot: string;

@@ -1,3 +1,4 @@
+import '../toolchain/native-entrypoint-preflight.ts';
 import { resolve } from 'node:path';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import { aggregateLane, type GateResult } from './contracts.ts';

@@ -7,8 +7,7 @@
   },
   "dependencies": {
     "@orchestrator-pack/ao-token-chain-ledger": "*",
-    "@orchestrator-pack/shared": "*",
-    "tsx": "^4.8.1"
+    "@orchestrator-pack/shared": "*"
   },
   "scripts": {
     "test": "npm --prefix ../.. run test -- plugins/ao-codex-pr-reviewer/tests"

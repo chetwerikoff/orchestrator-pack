@@ -3,8 +3,8 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { parseComplexityTierFence } from './tier-gate-core.js';
-import { resolveReviewArtifacts } from './tier-gate-floor.js';
+import { parseComplexityTierFence } from './tier-gate-core.ts';
+import { resolveReviewArtifacts } from './tier-gate-floor.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',

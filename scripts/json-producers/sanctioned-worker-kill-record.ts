@@ -19,7 +19,7 @@ import {
   integerArgument,
   isDirectExecution,
   parseArguments,
-} from './cli.js';
+} from './cli.ts';
 
 export interface SanctionedWorkerKillRecord {
   readonly sessionId: string;

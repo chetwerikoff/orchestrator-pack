@@ -23,8 +23,13 @@ if (-not (Test-Path -LiteralPath $scopeCheck -PathType Leaf)) {
     Write-Error "ao-scope-guard pre-commit: scope-check not found at $scopeCheck"
 }
 
-$node = Get-Command node -ErrorAction Stop
-& $node.Source --import tsx $scopeCheck `
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $node) { throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript entrypoints.' }
+$nodeVersion = ((& $node.Source '--version' 2>&1 | Out-String).Trim())
+if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v22\.') { throw "OPK_NODE_RUNTIME_UNSUPPORTED: Node.js 22.x is required; running $nodeVersion. Install/use Node 22 and run npm run check:node-major." }
+$typeScriptLauncher = (Join-Path $Root 'scripts/lib/Invoke-TypeScriptCli.ts')
+$nodeArgs = @('--experimental-strip-types', $typeScriptLauncher, '--script', $scopeCheck, '--')
+& $node.Source @nodeArgs `
     --issue $issueNumber `
     --mode index `
     --repo-root $Root

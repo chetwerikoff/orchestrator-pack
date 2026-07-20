@@ -1,6 +1,6 @@
-import { computeConvergence, formatConvergenceReport } from './convergence.js';
-import { computeFindingSignature } from './finding_signature.js';
-import { RECOGNIZED_EVENT_KINDS } from './event_kinds.js';
+import { computeConvergence, formatConvergenceReport } from './convergence.ts';
+import { computeFindingSignature } from './finding_signature.ts';
+import { RECOGNIZED_EVENT_KINDS } from './event_kinds.ts';
 import type {
   ChainAggregateReport,
   FindingSignatureCount,
@@ -9,7 +9,7 @@ import type {
   LedgerRow,
   MissingDataReport,
   RoleBreakdown,
-} from './types.js';
+} from './types.ts';
 
 function addNullable(current: number | null, delta: number | null): number | null {
   if (delta === null) {
