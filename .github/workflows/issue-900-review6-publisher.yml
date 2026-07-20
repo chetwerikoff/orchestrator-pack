@@ -99,7 +99,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: target
-        run: npm ci
+        run: timeout 180 npm ci --no-audit --no-fund --ignore-scripts
 
       - name: Validate latest review fixes
         working-directory: target
