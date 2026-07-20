@@ -8,11 +8,11 @@ description: >-
   cleanup while the orchestrator is live — Step 9c). Use when the user asks to merge a
   finished task — «мерж», «мерж 385»,
   «мерж и пул», «смерж», «merge», «merge and pull» — or clearly wants a ready
-  PR merged after review/CI. On a direct merge order, normalize blocking statuses
-  instead of stopping — draft → ready for review, BEHIND → update-branch, review and
-  proven-non-required blocks → `--admin` — while required CI that is not green (red,
-  pending, or never reported) still stops (Step 3a). If CI is red or the branch is
-  behind base, delegate
+  PR merged after review/CI. On a direct merge order, normalize what can be normalized
+  instead of stopping — draft → ready for review, BEHIND → update-branch — while required
+  CI that is not green (red, pending, or never reported) still stops, and `--admin`
+  cannot force it because `main` sets `enforce_admins` (Step 3a). If CI is red or the
+  branch is behind base, delegate
   the fix to the PR worker (Step 3b) and merge only after CI is green. Operates
   on the operator's live working tree; never discards uncommitted local work.
   Skip when the user only discusses merge policy without a concrete PR.
@@ -109,10 +109,10 @@ Record PR `P`, title, linked issue `I` from the PR body.
 
 Unless the user explicitly waives checks (see also **Step 3a** — a direct merge order
 normalizes blocking statuses instead of stopping on them). **A waiver never skips the
-status read under a direct order:** Step 3a needs it to see the draft flag, `BEHIND`,
-the review state, required CI, and the at-cap latch, and without it the run reaches
-Step 5 with no normalization decision and no way to honour the required-CI stop. Waiving
-optional checks waives waiting on them, not reading where the PR stands.
+status read under a direct order:** Step 3a needs it to see the draft flag, `BEHIND`, and
+required CI, and without it the run reaches Step 5 with no normalization decision and no
+way to honour the required-CI stop. Waiving optional checks waives waiting on them, not
+reading where the PR stands.
 
 ```bash
 gh pr checks P --repo chetwerikoff/orchestrator-pack
@@ -120,15 +120,8 @@ gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckR
 ```
 
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
-review blocking — **except** under a direct merge order (Step 3a).
-
-**At-cap triage gate is not consulted under a direct merge order** (operator decision,
-2026-07-20). The gate (`at_cap_open_findings` → `Get-MergeTriagePolicy`, `AGENTS.md`
-§ At-cap merge triage, Issue #648) adjudicates merges nobody has adjudicated; a direct
-order from the operator **is** that adjudication. Do not query it, and do not stop on it,
-when the operator named this PR. Outside a direct order this skill neither adds nor
-removes gate behaviour — it never consulted the gate before, and that is tracked
-separately, not here.
+review blocking — **except** for the statuses Step 3a normalizes under a direct merge
+order.
 
 ## Step 3a — Direct merge order: normalize blocking statuses
 
@@ -136,9 +129,9 @@ separately, not here.
 этот PR», "merge #907"). It does **not** apply to autonomous/proactive merges, to a merge
 you proposed yourself, or to policy discussion without a concrete PR.
 
-Under a direct order the default posture flips: a blocking status is **not** a stop, it is
-something to transition into a merge-appropriate state before Step 5. Do not ask the user
-to unblock what you can normalize yourself.
+Under a direct order the default posture flips for the statuses below: they are **not** a
+stop, they are something to transition into a merge-appropriate state before Step 5. Do
+not ask the user to unblock what you can normalize yourself.
 
 Normalize, in this order, then re-run the Step 3 status read:
 
@@ -146,25 +139,21 @@ Normalize, in this order, then re-run the Step 3 status read:
    then continue the normal flow (merge **with local adoption**, Steps 4–10 unchanged).
 2. **Branch `BEHIND`** → `gh pr update-branch P` from the operator session; wait for the
    new head's checks before merging.
-3. **Review blocking** — `reviewDecision` is `REVIEW_REQUIRED`, a reviewer is pending or
-   stale, or it is `CHANGES_REQUESTED` and the user's order supersedes those findings →
-   merge with `--admin`. Never fabricate an approval or dismiss a review to fake a green
-   decision.
-4. **`mergeStateStatus` `BLOCKED`/`UNSTABLE` from checks you have proven non-required** →
-   merge with `--admin`, and name the bypassed status in the Step 10 report. Prove it
-   from the branch protection contract, not from appearance: a required check that is
-   pending, queued, or was never posted at all is **not** «stuck» — it is required CI
-   that has not gone green, and it stops the merge exactly like a red one. `--admin` does
-   not force it either; GitHub reports `Required status check "<context>" is expected`.
-   Get the check to run and report (for `orchestrator-pack/pack-review`, the session-less
-   form is `node --experimental-strip-types scripts/pack-review-runner.ts start
-   --pr-number P --head-sha <head>`), then resume at Step 3.
 
-**The status that stays a stop: required CI that is not green** — failing, pending,
-queued, or never reported. A direct order does not authorize merging past it — go to
-Step 3b (delegate the fix to the PR worker) when it is red, or make the missing check
-report when it simply never ran, and resume at Step 3 when green. Say so in one line; do
-not silently `--admin` past required CI.
+**Required CI that is not green stays a stop** — failing, pending, queued, or never
+reported. A direct order does not authorize merging past it. Go to Step 3b (delegate the
+fix to the PR worker) when it is red; when a required check simply never ran, make it
+report and resume at Step 3 (for `orchestrator-pack/pack-review`, the session-less form is
+`node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number P
+--head-sha <head>`). `--admin` is not an escape from this: on `main` the branch protection
+sets `enforce_admins`, so GitHub refuses an admin merge over a required check that is
+`expected` or `failing` (verified live 2026-07-20). Say so in one line rather than
+attempting a merge that cannot succeed.
+
+**A blocking review verdict is also a stop today.** Nothing in this skill overrides it:
+`orchestrator-pack/pack-review` is a required status, so an unresolved blocking finding
+holds the merge, and no flag available here changes that. Fix the finding, or bring the
+operator the decision.
 
 Also still a stop, direct order or not: PR state ≠ `OPEN` (already merged/closed), and
 merge conflicts that need a real resolution (`mergeable: CONFLICTING`) — those go to the
@@ -238,12 +227,10 @@ gh pr view P --json state,mergedAt,mergeCommit
 `--squash`/`--rebase` only if the user asked. Record `MERGE_SHA` from `mergeCommit.oid`.
 On failure: stop, report stderr, no force-retry. No local `git merge` of the PR branch.
 
-**Carry a Step 3a decision into this command.** When Step 3a resolved a status by
-bypassing it (rules 3 and 4), append
-`--admin` here; otherwise the merge stops at the very gate the direct order already
-adjudicated. `--admin` is never a reaction to this command failing: it is applied because
-Step 3a decided it, and adding it after an unexpected failure is the force-retry this
-step forbids.
+**Do not reach for `--admin` when this command fails.** `main` protection sets
+`enforce_admins`, so the flag cannot force a required check that is `expected` or
+`failing` — the attempt just fails again, and reaching for it after a failure is the
+force-retry this step forbids. Take the failure to Step 3 / Step 3b instead.
 
 ## Step 6 — Safe pull in the live checkout
 
@@ -475,7 +462,7 @@ From the operator terminal, after Step 7 (and Step 8 when it ran).
 ## Merge и локальная адаптация — отчёт
 **PR:** #P — <title>  **Issue:** #I  **Merge commit:** <sha>
 ### Статусы (3a — если была прямая команда на мерж)
-- Нормализовано: <draft→ready / update-branch / --admin поверх <status> / ничего не требовалось>
+- Нормализовано: <draft→ready / update-branch / ничего не требовалось>
 ### Git
 - Pull: <checkout+pull / merge origin/main / stash+pop / пропущен>; dirty на старте: да/нет
 - Pre-flight пути сохранены: да / <исключения>; stash: <state>; запрещённые команды не использовались
@@ -498,9 +485,10 @@ Never claim CI/adoption/recycle succeeded without the commands actually run.
 
 - Merge or run adoption while a Step 3b worker fix is in flight; skip the adoption scan
   because CI is green; skip Step 6e/9 after a successful merge.
-- Apply Step 3a normalization without a direct user merge order, `--admin` past required
-  CI that is not green (red, pending, or never reported), or flip a draft to ready
-  without then running the full adoption flow.
+- Apply Step 3a normalization without a direct user merge order, attempt `--admin` past
+  required CI that is not green (red, pending, or never reported — `enforce_admins`
+  refuses it anyway), or flip a draft to ready without then running the full adoption
+  flow.
 - `git push --force` to main; fix red CI from the architect session when a PR worker
   exists (unless `direct-fix-checklist` authorized).
 - `ao session kill` the orchestrator outside Step 8, the recovery runbook, or the 9c
