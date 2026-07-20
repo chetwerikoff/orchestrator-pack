@@ -215,6 +215,44 @@ function installCurrentProcessNodeTrap(statePath: string): () => void {
   };
 }
 
+function runEgressProbe(trap: EgressTrap): void {
+  const priorState = existsSync(trap.statePath) ? readFileSync(trap.statePath, 'utf8') : '';
+  const priorAttempts = trap.attempts().length;
+  try {
+    let currentProcessBlocked = false;
+    try {
+      void globalThis.fetch('https://task311.invalid/current-process-probe');
+    } catch (error) {
+      currentProcessBlocked = (error as { code?: string }).code === 'TASK311_EGRESS_BLOCKED';
+    }
+    invariant(currentProcessBlocked, 'intentional current-process fetch was not rejected');
+    const currentAttempts = trap.attempts().slice(priorAttempts);
+    invariant(
+      currentAttempts.some((attempt) => attempt.kind === 'node-current' && attempt.edge === 'fetch'),
+      'intentional current-process fetch was not durably observed',
+    );
+
+    if (process.platform === 'linux') {
+      invariant(Boolean(trap.nativeLibrary), 'native egress probe requires the Linux preload library');
+      const childEnv = { ...process.env, NODE_OPTIONS: '' };
+      const result = runProcessSync({
+        command: process.execPath,
+        args: ['-e', "const net=require('node:net');const s=net.connect(9,'127.0.0.1');s.on('error',()=>process.exit(91));setTimeout(()=>process.exit(92),500);"],
+        cwd: repoRoot,
+        env: childEnv,
+        inheritParentEnv: false,
+        encoding: 'utf8',
+      });
+      invariant(result.exitCode === 91, `intentional native egress was not rejected (${result.exitCode ?? result.outcome})`);
+      const addedAttempts = trap.attempts().slice(priorAttempts);
+      invariant(addedAttempts.some((attempt) => attempt.edge === 'native-connect'), 'intentional native egress was not durably observed');
+    }
+  } finally {
+    writeFileSync(trap.statePath, priorState, 'utf8');
+  }
+  invariant(trap.attempts().length === priorAttempts, 'egress probe state was not restored');
+}
+
 export function installEgressTrap(root: string): ProcessWideEgressTrap {
   const statePath = path.join(root, 'egress.jsonl');
   const preloadPath = path.join(root, 'egress-preload.cjs');
@@ -254,7 +292,7 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
   process.env.TASK311_EGRESS_STATE = statePath;
   if (nativeLibrary) process.env.LD_PRELOAD = [nativeLibrary, originalLdPreload ?? ''].filter(Boolean).join(':');
 
-  return {
+  const trap: ProcessWideEgressTrap = {
     active: true,
     currentProcessNode: true,
     root,
@@ -274,6 +312,12 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
       if (originalLdPreload === undefined) delete process.env.LD_PRELOAD; else process.env.LD_PRELOAD = originalLdPreload;
     },
   };
+
+  // Callers cannot run any real subject until both current-process and native
+  // child-process edges have been blocked, observed, and the probe state reset.
+  runEgressProbe(trap);
+  invariant(trap.attempts().length === 0, 'pre-subject egress self-check left recorded attempts');
+  return trap;
 }
 
 function parseNameStatus(output: string): Array<{ status: string; path: string }> {
@@ -416,38 +460,8 @@ function expectCandidateRed(baseline: ScopeSnapshot, mutate: (candidate: ScopeSn
 }
 
 function intentionalEgressControl(trap: EgressTrap): MutationRecord {
-  const priorState = existsSync(trap.statePath) ? readFileSync(trap.statePath, 'utf8') : '';
-  const priorAttempts = trap.attempts().length;
-  try {
-    let currentProcessBlocked = false;
-    try {
-      void globalThis.fetch('https://task311.invalid/current-process-probe');
-    } catch (error) {
-      currentProcessBlocked = (error as { code?: string }).code === 'TASK311_EGRESS_BLOCKED';
-    }
-    invariant(currentProcessBlocked, 'intentional current-process fetch was not rejected');
-    const currentAttempts = trap.attempts().slice(priorAttempts);
-    invariant(
-      currentAttempts.some((attempt) => attempt.kind === 'node-current' && attempt.edge === 'fetch'),
-      'intentional current-process fetch was not durably observed',
-    );
-
-    const childEnv = { ...process.env, NODE_OPTIONS: '' };
-    const result = runProcessSync({
-      command: process.execPath,
-      args: ['-e', "const net=require('node:net');const s=net.connect(9,'127.0.0.1');s.on('error',()=>process.exit(91));setTimeout(()=>process.exit(92),500);"],
-      cwd: repoRoot,
-      env: childEnv,
-      inheritParentEnv: false,
-      encoding: 'utf8',
-    });
-    invariant(result.exitCode === 91, `intentional native egress was not rejected (${result.exitCode ?? result.outcome})`);
-    const addedAttempts = trap.attempts().slice(priorAttempts);
-    invariant(addedAttempts.some((attempt) => attempt.edge === 'native-connect'), 'intentional native egress was not durably observed');
-    return mutationRecord('intentional-external-egress');
-  } finally {
-    writeFileSync(trap.statePath, priorState, 'utf8');
-  }
+  runEgressProbe(trap);
+  return mutationRecord('intentional-external-egress');
 }
 
 function nonRegularArtifactControl(baseline: ScopeSnapshot): MutationRecord {
