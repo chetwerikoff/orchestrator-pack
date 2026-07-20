@@ -95,6 +95,57 @@ Exit-code hints: `chrome_not_running`(3) / `login_required`(4) /
 `stream_timeout`(5) / `no_reply`(6) / `invalid`(7) / `quota_limit`(8) /
 `challenge`(9).
 
+## Long turns: poll the page, never infer from the process
+
+GPT routinely thinks **10–15+ minutes** on a large spec. Set the driver timeout to
+at least `900000` ms; below that a real answer gets killed mid-generation.
+
+**A running process proves nothing.** `pgrep` only shows that the local Node
+process has not exited. It looks identical whether GPT is generating, the answer
+arrived and the completion detector stuck, the tab errored, or the message never
+landed. Never report "GPT is still thinking" on process liveness alone.
+
+**Poll the page itself every 5–10 minutes** while a turn is outstanding. Connect
+read-only over CDP and read three signals from the chat tab:
+
+| Signal | Meaning |
+|--------|---------|
+| `[data-testid="stop-button"]` present | generation genuinely in progress |
+| stop-button absent + last assistant message ends mid-sentence | stalled — retry |
+| stop-button absent + message complete | **done** — take the text from the page |
+
+When the page says the answer is complete but the driver is still waiting, stop
+waiting: read the reply off the page and kill the poller. Do not let a stuck
+detector burn the whole timeout.
+
+**Verify delivery before waiting at all.** After sending, confirm a new
+**user-role** message carrying your prompt's opening text actually appeared in the
+thread. If it did not, the send failed and no amount of waiting will produce a
+reply — resend instead. A silent non-delivery is otherwise indistinguishable from
+a slow answer.
+
+## Tabs: reuse, never accumulate
+
+When the operator supplies a **chat URL**, converse in the tab already open on
+that chat. Do not open a new page per turn.
+
+Accumulated tabs are an active failure source, not clutter: several tabs of one
+conversation render at **different message counts**, so a message-count snapshot
+taken in one tab misreads another, completion detection never settles, and a
+freshly created tab's composer may not be ready when the send fires. Both a
+false "still generating" and a real `send_failed` in this repository traced back
+to piled-up tabs.
+
+Rules:
+
+- reuse the existing tab matching the chat id; create a page only for a
+  deliberately fresh chat (`--new-chat`);
+- `bringToFront()` the tab before typing;
+- close stale ChatGPT tabs when a turn ends, keeping one per live conversation;
+- a **fresh chat is still required** for each adversarial re-run (step 6) — tab
+  reuse is about not duplicating the *same* conversation, not about reusing
+  context across passes.
+
 ## Flow
 
 ### 1. Author the draft
@@ -221,6 +272,9 @@ Resume from "Codex review the draft" onward. GPT loop **never replaces** archite
 - Over-specify the draft to satisfy a finding.
 - Trust `VALIDATION≠ok` replies without manual checks.
 - Type credentials / attempt login.
+- Report "GPT is still thinking" from process liveness instead of polling the page.
+- Wait on a turn whose delivery you never confirmed.
+- Open a new tab for a chat the operator already gave you a URL for.
 - **Exceed 3 passes**, or re-run with no accepted change.
 - Stop after accepting findings without another pass.
 - Skip decision logging, pass-state record, or the **audit line**.
