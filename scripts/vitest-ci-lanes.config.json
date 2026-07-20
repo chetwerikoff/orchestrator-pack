@@ -46,6 +46,7 @@
     "scripts/gate-runner/registry.test.ts": "light",
     "scripts/gate-runner/runner.test.ts": "light",
     "scripts/gh-wrapper.test.ts": "heavy",
+    "scripts/json-producers/generate-capture-manifest.test.ts": "light",
     "scripts/kernel/json-artifact.test.ts": "light",
     "scripts/kernel/json-contract.test.ts": "light",
     "scripts/kernel/subprocess.test.ts": "heavy",
