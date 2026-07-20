@@ -11,8 +11,8 @@ description: >-
   PR merged after review/CI. On a direct merge order, normalize blocking statuses
   instead of stopping — draft → ready for review, BEHIND → update-branch, review and
   proven-non-required blocks → `--admin` — while required CI that is not green (red,
-  pending, or never reported) still stops, as does the at-cap triage gate (Step 3a).
-  If CI is red or the branch is behind base, delegate
+  pending, or never reported) still stops (Step 3a). If CI is red or the branch is
+  behind base, delegate
   the fix to the PR worker (Step 3b) and merge only after CI is green. Operates
   on the operator's live working tree; never discards uncommitted local work.
   Skip when the user only discusses merge policy without a concrete PR.
@@ -122,24 +122,13 @@ gh pr view P --json mergeable,reviewDecision,state,mergeStateStatus,statusCheckR
 Stop without merging if state ≠ `OPEN`, not `MERGEABLE`, required checks failing, or
 review blocking — **except** under a direct merge order (Step 3a).
 
-**At-cap triage gate — every merge path, green statuses included.** Merge eligibility for
-a PR latched `at_cap_open_findings` belongs to `Get-MergeTriagePolicy` in
-`scripts/lib/Merge-TriageGate.ps1` (`evaluateMergePolicy` over
-`docs/merge-triage-gate.mjs`), not to your own reading of the statuses above — none of
-them expose the latch, and it outlives the CI that went green. A direct order is not an
-override (`AGENTS.md` § At-cap merge triage, Issue #648).
-
-Consult it before Step 5 on every merge. Merge only on an explicit `allow`
-(`no_at_cap_gate_required` when nothing is latched; current-head `clean_early_stop` or a
-validated `merge_triage_cleared` when it is). `BLOCK` / `DEFER` / `PENDING_ARCHITECT`
-stop the merge — report that the gate denies eligibility.
-
-**`allow` only counts when the helper was given authoritative input.** It reads the
-terminal record from its payload (`terminals` / `terminalRecords` / `atCapRecord`), not
-from the pack store, so a call made without that record answers
-`no_at_cap_gate_required` for an at-cap PR — a false pass, not a clearance. Supplying it
-from the store is **not yet wired in this skill**: until it is, treat a call you cannot
-feed authoritatively as a **stop and a contract gap to report**, never as an `allow`.
+**At-cap triage gate is not consulted under a direct merge order** (operator decision,
+2026-07-20). The gate (`at_cap_open_findings` → `Get-MergeTriagePolicy`, `AGENTS.md`
+§ At-cap merge triage, Issue #648) adjudicates merges nobody has adjudicated; a direct
+order from the operator **is** that adjudication. Do not query it, and do not stop on it,
+when the operator named this PR. Outside a direct order this skill neither adds nor
+removes gate behaviour — it never consulted the gate before, and that is tracked
+separately, not here.
 
 ## Step 3a — Direct merge order: normalize blocking statuses
 
@@ -150,9 +139,6 @@ you proposed yourself, or to policy discussion without a concrete PR.
 Under a direct order the default posture flips: a blocking status is **not** a stop, it is
 something to transition into a merge-appropriate state before Step 5. Do not ask the user
 to unblock what you can normalize yourself.
-
-The Step 3 at-cap triage gate governs this path too, and a direct order is not an
-override for it — no bypass below reaches Step 5 while that gate denies eligibility.
 
 Normalize, in this order, then re-run the Step 3 status read:
 
@@ -253,7 +239,7 @@ gh pr view P --json state,mergedAt,mergeCommit
 On failure: stop, report stderr, no force-retry. No local `git merge` of the PR branch.
 
 **Carry a Step 3a decision into this command.** When Step 3a resolved a status by
-bypassing it (rules 3 and 4 — and only after its at-cap precondition passed), append
+bypassing it (rules 3 and 4), append
 `--admin` here; otherwise the merge stops at the very gate the direct order already
 adjudicated. `--admin` is never a reaction to this command failing: it is applied because
 Step 3a decided it, and adding it after an unexpected failure is the force-retry this
@@ -513,9 +499,8 @@ Never claim CI/adoption/recycle succeeded without the commands actually run.
 - Merge or run adoption while a Step 3b worker fix is in flight; skip the adoption scan
   because CI is green; skip Step 6e/9 after a successful merge.
 - Apply Step 3a normalization without a direct user merge order, `--admin` past required
-  CI that is not green (red, pending, or never reported), bypass `CHANGES_REQUESTED`
-  while the at-cap triage gate denies eligibility, or flip a draft to ready without then
-  running the full adoption flow.
+  CI that is not green (red, pending, or never reported), or flip a draft to ready
+  without then running the full adoption flow.
 - `git push --force` to main; fix red CI from the architect session when a PR worker
   exists (unless `direct-fix-checklist` authorized).
 - `ao session kill` the orchestrator outside Step 8, the recovery runbook, or the 9c
