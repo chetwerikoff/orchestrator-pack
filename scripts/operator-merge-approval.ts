@@ -98,12 +98,15 @@ async function publishApproval(record: OperatorMergeApprovalRecord): Promise<voi
   });
 }
 
-async function publishRevocation(args: ParsedArguments): Promise<void> {
+async function publishRevocationStatus(args: ParsedArguments): Promise<void> {
   await ghPost(`repos/${args.repoSlug}/statuses/${args.headSha}`, {
     state: 'pending',
     context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
     description: 'Operator merge approval revoked; pack review must be re-evaluated.',
   });
+}
+
+async function publishRevocationComment(args: ParsedArguments): Promise<void> {
   await ghPost(`repos/${args.repoSlug}/issues/${args.prNumber}/comments`, {
     body: [
       '## Operator direct-merge approval revoked',
@@ -135,8 +138,18 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ ok: true, approval: record }, null, 2));
     return;
   }
+
+  const current = readOperatorMergeApproval(args);
+  if (!current.approved) {
+    console.log(JSON.stringify({ ok: true, approval: current }, null, 2));
+    return;
+  }
+  await publishRevocationStatus(args);
   const revoked = revokeOperatorMerge(args);
-  if (revoked.reason === 'revoked') await publishRevocation(args);
+  if (revoked.reason !== 'revoked') {
+    throw new Error(`operator merge approval changed during revocation: ${revoked.reason}`);
+  }
+  await publishRevocationComment(args);
   console.log(JSON.stringify({ ok: true, approval: revoked }, null, 2));
 }
 
