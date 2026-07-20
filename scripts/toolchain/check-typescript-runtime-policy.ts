@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
+import { isMap, isScalar, isSeq, LineCounter, parseDocument } from 'yaml';
 import { isDirectExecution } from '#opk-toolchain/baseline-io';
 import {
   assertNodeRuntimeContract,
@@ -35,7 +36,8 @@ export interface RuntimePolicyViolation {
     | 'runtime-import-specifier'
     | 'inventory-contract'
     | 'compiler-contract'
-    | 'non-erasable-syntax';
+    | 'non-erasable-syntax'
+    | 'agent-runtime-contract';
   readonly message: string;
 }
 
@@ -77,6 +79,8 @@ interface WorkspacePackage {
 }
 
 const INVENTORY_PATH = 'scripts/toolchain/typescript-launch-inventory.json';
+const AGENTS_PATH = 'AGENTS.md';
+const AGENTS_NODE_22_RULE = '**Node 22-only TypeScript runtime:**';
 const POLICY_PATH = 'scripts/toolchain/check-typescript-runtime-policy.ts';
 const POLICY_TEST_PATH = 'scripts/toolchain/node22-runtime-policy.spec.ts';
 const ROOTS = ['package.json', 'agent-orchestrator.yaml.example', '.github', 'docs', 'plugins', 'scripts', 'tests'] as const;
@@ -253,133 +257,225 @@ function loadInventoryContract(repoRoot: string): InventoryContract {
   return value;
 }
 
-function stripYamlComment(line: string): string {
-  let singleQuoted = false;
-  let doubleQuoted = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (character === "'" && !doubleQuoted) singleQuoted = !singleQuoted;
-    if (character === '"' && !singleQuoted && line[index - 1] !== '\\') doubleQuoted = !doubleQuoted;
-    if (character === '#' && !singleQuoted && !doubleQuoted) return line.slice(0, index);
-  }
-  return line;
-}
-
-function yamlIndent(line: string): number {
-  return /^\s*/u.exec(line)?.[0].length ?? 0;
-}
-
-function setupNodeStepRange(lines: readonly string[], usesIndex: number): { start: number; end: number } {
-  const usesLine = stripYamlComment(lines[usesIndex] ?? '');
-  const usesIndent = yamlIndent(usesLine);
-  let start = usesIndex;
-  let stepIndent = usesIndent;
-
-  if (!/^\s*-\s*uses\s*:/u.test(usesLine)) {
-    for (let index = usesIndex - 1; index >= 0; index -= 1) {
-      const line = stripYamlComment(lines[index] ?? '');
-      if (!line.trim()) continue;
-      const match = /^(\s*)-\s+\S/u.exec(line);
-      const indentation = match?.[1];
-      if (indentation !== undefined && indentation.length <= usesIndent) {
-        start = index;
-        stepIndent = indentation.length;
-        break;
-      }
-    }
-  }
-
-  let end = lines.length;
-  for (let index = usesIndex + 1; index < lines.length; index += 1) {
-    const line = stripYamlComment(lines[index] ?? '');
-    if (!line.trim()) continue;
-    const indent = yamlIndent(line);
-    if (indent < stepIndent || (indent === stepIndent && /^\s*-\s+\S/u.test(line))) {
-      end = index;
-      break;
-    }
-  }
-  return { start, end };
-}
-
 interface WorkflowVersionSelector {
   readonly kind: 'node-version' | 'node-version-file';
   readonly value: string;
   readonly line: number;
 }
 
-interface WorkflowVersionSelectorScan {
+interface WorkflowSetupNodeStep {
+  readonly line: number;
+  readonly evidence: string;
   readonly withMappings: number;
+  readonly withIsMapping: boolean;
   readonly selectors: readonly WorkflowVersionSelector[];
 }
 
-function stepMappingIndent(lines: readonly string[], range: { readonly start: number }): number {
-  const first = stripYamlComment(lines[range.start] ?? '');
-  const sequencePrefix = /^(\s*)-\s*/u.exec(first)?.[0];
-  return sequencePrefix?.length ?? yamlIndent(first);
+function yamlScalarText(node: unknown): string | undefined {
+  if (!isScalar(node)) return undefined;
+  const value = node.value;
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
 }
 
-function inlineWorkflowVersionSelectors(value: string, line: number): readonly WorkflowVersionSelector[] {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return [];
-  const selectors: WorkflowVersionSelector[] = [];
-  const body = trimmed.slice(1, -1);
-  const pattern = /(?:^|,)\s*(node-version-file|node-version)\s*:\s*([^,}]+)/gu;
-  for (const match of body.matchAll(pattern)) {
-    selectors.push({
-      kind: match[1] as WorkflowVersionSelector['kind'],
-      value: (match[2] ?? '').trim(),
-      line,
-    });
-  }
-  return selectors;
+function yamlMapPair(map: unknown, key: string) {
+  if (!isMap(map)) return undefined;
+  return map.items.find((pair) => yamlScalarText(pair.key) === key);
 }
 
-function workflowVersionSelectors(
-  lines: readonly string[],
-  range: { readonly start: number; readonly end: number },
-): WorkflowVersionSelectorScan {
-  const selectors: WorkflowVersionSelector[] = [];
-  const mappingIndent = stepMappingIndent(lines, range);
-  let withMappings = 0;
+function yamlNodeLine(lineCounter: LineCounter, node: unknown): number {
+  if (!node || typeof node !== 'object') return 1;
+  const range = (node as { readonly range?: readonly number[] }).range;
+  return range?.[0] === undefined ? 1 : lineCounter.linePos(range[0]).line;
+}
 
-  for (let index = range.start; index < range.end; index += 1) {
-    const line = stripYamlComment(lines[index] ?? '');
-    if (!line.trim() || yamlIndent(line) !== mappingIndent) continue;
-    const withMatch = /^\s*with\s*:\s*(.*)$/u.exec(line);
-    if (!withMatch) continue;
-    withMappings += 1;
+function yamlNodeEvidence(source: string, node: unknown): string {
+  if (!node || typeof node !== 'object') return '';
+  const range = (node as { readonly range?: readonly number[] }).range;
+  if (range?.[0] === undefined || range[1] === undefined) return '';
+  return compactEvidence(source.slice(range[0], range[1]));
+}
 
-    const inlineValue = (withMatch[1] ?? '').trim();
-    if (inlineValue) {
-      selectors.push(...inlineWorkflowVersionSelectors(inlineValue, index + 1));
-      continue;
-    }
+function workflowSetupNodeSteps(
+  source: string,
+  path: string,
+): { readonly steps: readonly WorkflowSetupNodeStep[]; readonly violations: readonly RuntimePolicyViolation[] } {
+  const lineCounter = new LineCounter();
+  const document = parseDocument(source, { lineCounter, prettyErrors: false, uniqueKeys: true });
+  const violations: RuntimePolicyViolation[] = document.errors.map((error) => ({
+    path,
+    line: error.linePos?.[0]?.line ?? 1,
+    rule: 'workflow-node-version',
+    message: `workflow YAML must parse unambiguously before Node runtime policy can be evaluated: ${error.message}`,
+  }));
+  if (document.errors.length > 0 || !isMap(document.contents)) return { steps: [], violations };
 
-    let childIndent: number | undefined;
-    for (let childIndex = index + 1; childIndex < range.end; childIndex += 1) {
-      const childLine = stripYamlComment(lines[childIndex] ?? '');
-      if (!childLine.trim()) continue;
-      const indent = yamlIndent(childLine);
-      if (indent <= mappingIndent) break;
-      childIndent ??= indent;
-      if (indent !== childIndent) continue;
-      const selectorMatch = /^\s*(node-version-file|node-version)\s*:\s*(.+?)\s*$/u.exec(childLine);
-      if (!selectorMatch) continue;
-      selectors.push({
-        kind: selectorMatch[1] as WorkflowVersionSelector['kind'],
-        value: (selectorMatch[2] ?? '').trim(),
-        line: childIndex + 1,
+  const jobsPair = yamlMapPair(document.contents, 'jobs');
+  if (!jobsPair || !isMap(jobsPair.value)) return { steps: [], violations };
+
+  const steps: WorkflowSetupNodeStep[] = [];
+  for (const jobPair of jobsPair.value.items) {
+    if (!isMap(jobPair.value)) continue;
+    const stepsPair = yamlMapPair(jobPair.value, 'steps');
+    if (!stepsPair || !isSeq(stepsPair.value)) continue;
+
+    for (const stepNode of stepsPair.value.items) {
+      if (!isMap(stepNode)) continue;
+      const usesPair = yamlMapPair(stepNode, 'uses');
+      const uses = yamlScalarText(usesPair?.value);
+      if (!uses || !/^actions\/setup-node@[^\s]+$/u.test(uses)) continue;
+
+      const withPairs = stepNode.items.filter((pair) => yamlScalarText(pair.key) === 'with');
+      const selectors: WorkflowVersionSelector[] = [];
+      const withValue = withPairs[0]?.value;
+      if (isMap(withValue)) {
+        for (const pair of withValue.items) {
+          const kind = yamlScalarText(pair.key);
+          if (kind !== 'node-version' && kind !== 'node-version-file') continue;
+          selectors.push({
+            kind,
+            value: yamlScalarText(pair.value) ?? yamlNodeEvidence(source, pair.value),
+            line: yamlNodeLine(lineCounter, pair.key),
+          });
+        }
+      }
+
+      steps.push({
+        line: yamlNodeLine(lineCounter, usesPair?.key ?? stepNode),
+        evidence: yamlNodeEvidence(source, stepNode),
+        withMappings: withPairs.length,
+        withIsMapping: withPairs.length === 1 && isMap(withValue),
+        selectors,
       });
     }
   }
-
-  return { withMappings, selectors };
+  return { steps, violations };
 }
 
-function npmScriptHasLeadingNodePreflight(command: string): boolean {
-  return /^\s*(?:npm\s+run\s+check:node-major(?:\s+--silent)?|node\s+scripts\/toolchain\/check-node-major\.mjs)\s*&&\s*/u
-    .test(command);
+interface ShellChain {
+  readonly segments: readonly string[];
+  readonly operators: readonly ('&&' | '||' | ';' | '|' | '&')[];
+}
+
+function parseShellChain(command: string): ShellChain | undefined {
+  const segments: string[] = [];
+  const operators: ('&&' | '||' | ';' | '|' | '&')[] = [];
+  let start = 0;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index] ?? '';
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && !singleQuoted) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !doubleQuoted) {
+      singleQuoted = !singleQuoted;
+      continue;
+    }
+    if (character === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+      continue;
+    }
+    if (singleQuoted || doubleQuoted) continue;
+
+    const pair = command.slice(index, index + 2);
+    const operator = pair === '&&' || pair === '||'
+      ? pair
+      : character === ';' || character === '|' || character === '&'
+        ? character
+        : undefined;
+    if (!operator) continue;
+    segments.push(command.slice(start, index).trim());
+    operators.push(operator);
+    index += operator.length - 1;
+    start = index + 1;
+  }
+
+  if (singleQuoted || doubleQuoted || escaped) return undefined;
+  segments.push(command.slice(start).trim());
+  return { segments, operators };
+}
+
+function shellWords(command: string): readonly string[] | undefined {
+  const words: string[] = [];
+  let current = '';
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  const push = (): void => {
+    if (current) words.push(current);
+    current = '';
+  };
+
+  for (const character of command) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && !singleQuoted) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" && !doubleQuoted) {
+      singleQuoted = !singleQuoted;
+      continue;
+    }
+    if (character === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+      continue;
+    }
+    if (!singleQuoted && !doubleQuoted && /\s/u.test(character)) {
+      push();
+      continue;
+    }
+    current += character;
+  }
+  if (singleQuoted || doubleQuoted || escaped) return undefined;
+  push();
+  return words;
+}
+
+function canonicalNodePreflightSegment(segment: string, packageRoot: string, repoRoot: string): boolean {
+  const words = shellWords(segment);
+  if (!words) return false;
+  const optionalSilent = (offset: number): boolean =>
+    words.length === offset || (words.length === offset + 1 && words[offset] === '--silent');
+
+  if (words[0] === 'npm' && words[1] === 'run' && words[2] === 'check:node-major' && optionalSilent(3)) {
+    return packageRoot === repoRoot;
+  }
+  if (words[0] === 'npm' && words[1] === '--prefix' && words[3] === 'run' && words[4] === 'check:node-major' && optionalSilent(5)) {
+    const prefix = words[2];
+    return prefix !== undefined && resolve(packageRoot, prefix) === repoRoot;
+  }
+  if (words[0] === 'node' && words.length === 2) {
+    const checkPath = words[1];
+    return checkPath !== undefined && resolve(packageRoot, checkPath) === resolve(repoRoot, 'scripts/toolchain/check-node-major.mjs');
+  }
+  return false;
+}
+
+function npmScriptHasSafeNodePreflight(command: string, packageRoot: string, repoRoot: string): boolean {
+  const chain = parseShellChain(command);
+  if (!chain) return false;
+  const targetIndexes = chain.segments
+    .map((segment, index) => directTypeScriptLaunch(segment) ? index : -1)
+    .filter((index) => index >= 0);
+  if (targetIndexes.length === 0) return true;
+
+  return targetIndexes.every((targetIndex) => {
+    const target = chain.segments[targetIndex] ?? '';
+    if (target.includes(TYPESCRIPT_CLI_LAUNCHER) || target.includes('Invoke-TypeScriptCli.ts')) return true;
+    if (targetIndex === 0 || !canonicalNodePreflightSegment(chain.segments[0] ?? '', packageRoot, repoRoot)) return false;
+    return chain.operators.slice(0, targetIndex).every((operator) => operator === '&&');
+  });
 }
 
 function literalNodeMajor(value: string): number | undefined {
@@ -404,48 +500,56 @@ function scanWorkflowNodeVersions(
   for (const absolute of allFiles) {
     const path = normalizePath(relative(repoRoot, absolute));
     if (!/^\.github\/workflows\/[^/]+\.ya?ml$/u.test(path)) continue;
-    const lines = readFileSync(absolute, 'utf8').split(/\r?\n/u);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = stripYamlComment(lines[index] ?? '');
-      if (!/^\s*(?:-\s*)?uses\s*:\s*['"]?actions\/setup-node@[^'"\s]+['"]?\s*$/u.test(line.trimEnd())) continue;
+    const source = readFileSync(absolute, 'utf8');
+    const scan = workflowSetupNodeSteps(source, path);
+    violations.push(...scan.violations);
 
+    for (const step of scan.steps) {
       setupNodeCounts.set(path, (setupNodeCounts.get(path) ?? 0) + 1);
-      const range = setupNodeStepRange(lines, index);
-      const selectorScan = workflowVersionSelectors(lines, range);
-      const selectors = selectorScan.selectors;
-      const valid = selectorScan.withMappings === 1
+      const selectors = step.selectors;
+      const valid = step.withMappings === 1
+        && step.withIsMapping
         && selectors.length === 1
         && selectors[0]?.kind === 'node-version'
         && literalNodeMajor(selectors[0].value) === SUPPORTED_NODE_MAJOR;
       inventory.push({
         path,
-        line: index + 1,
+        line: step.line,
         classification: valid ? 'native-node-22' : 'invalid',
-        evidence: compactEvidence(lines.slice(range.start, range.end).join(' ')),
+        evidence: step.evidence,
       });
 
-      if (selectorScan.withMappings === 0) {
+      if (step.withMappings === 0) {
         violations.push({
           path,
-          line: index + 1,
+          line: step.line,
           rule: 'workflow-node-version',
           message: `actions/setup-node must declare one literal with.node-version: '${SUPPORTED_NODE_MAJOR}'.`,
         });
         continue;
       }
-      if (selectorScan.withMappings !== 1) {
+      if (step.withMappings !== 1) {
         violations.push({
           path,
-          line: index + 1,
+          line: step.line,
           rule: 'workflow-node-version',
           message: 'actions/setup-node must have exactly one with mapping.',
+        });
+        continue;
+      }
+      if (!step.withIsMapping) {
+        violations.push({
+          path,
+          line: step.line,
+          rule: 'workflow-node-version',
+          message: 'actions/setup-node with must be a YAML mapping containing one literal node-version.',
         });
         continue;
       }
       if (selectors.length === 0) {
         violations.push({
           path,
-          line: index + 1,
+          line: step.line,
           rule: 'workflow-node-version',
           message: `actions/setup-node with mapping must declare one literal node-version: '${SUPPORTED_NODE_MAJOR}'.`,
         });
@@ -454,7 +558,7 @@ function scanWorkflowNodeVersions(
       if (selectors.length !== 1) {
         violations.push({
           path,
-          line: selectors[0]?.line ?? index + 1,
+          line: selectors[0]?.line ?? step.line,
           rule: 'workflow-node-version',
           message: 'actions/setup-node must have exactly one version selector.',
         });
@@ -557,7 +661,8 @@ function scanLaunches(
       if (vitestLaunch(line)) {
         inventory.push({ path, line: lineNo, classification: oldClass ?? 'test-framework-owned', evidence });
       }
-      if (directTypeScriptLaunch(line) || nativeShebang(line) || line.includes('runNativeTypeScriptCli')) {
+      if (path !== 'package.json' && !path.endsWith('/package.json')
+        && (directTypeScriptLaunch(line) || nativeShebang(line) || line.includes('runNativeTypeScriptCli'))) {
         const native = nativeTypeScriptLaunch(line);
         const target = native && path !== 'package.json' && !path.endsWith('/package.json')
           ? nativeLaunchTarget(repoRoot, absolute, line)
@@ -602,34 +707,85 @@ function scanLaunches(
     }
   }
 
-  const rootManifest = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as PackageManifest;
-  for (const [name, command] of Object.entries(rootManifest.scripts ?? {})) {
-    const testFrameworkOwned = /\bvitest\b/u.test(command) || command.includes('run-vitest-with-harness.mjs');
-    if (testFrameworkOwned) {
-      inventory.push({ path: 'package.json', line: 1, classification: 'test-framework-owned', evidence: `${name}: ${command}` });
+
+
+  return { inventory, violations };
+}
+
+function scanPackageScripts(
+  repoRoot: string,
+  allFiles: readonly string[],
+): { readonly inventory: readonly LaunchInventoryEntry[]; readonly violations: readonly RuntimePolicyViolation[] } {
+  const inventory: LaunchInventoryEntry[] = [];
+  const violations: RuntimePolicyViolation[] = [];
+
+  for (const absolute of allFiles) {
+    const path = normalizePath(relative(repoRoot, absolute));
+    if (path !== 'package.json' && !path.endsWith('/package.json')) continue;
+    let manifest: PackageManifest;
+    try {
+      manifest = JSON.parse(readFileSync(absolute, 'utf8')) as PackageManifest;
+    } catch {
       continue;
     }
-    if (directTypeScriptLaunch(command)) {
+    const packageRoot = dirname(absolute);
+    for (const [name, command] of Object.entries(manifest.scripts ?? {})) {
+      const testFrameworkOwned = /vitest/u.test(command) || command.includes('run-vitest-with-harness.mjs');
+      if (testFrameworkOwned && !directTypeScriptLaunch(command)) {
+        inventory.push({ path, line: 1, classification: 'test-framework-owned', evidence: `${name}: ${command}` });
+        continue;
+      }
+      if (!directTypeScriptLaunch(command)) continue;
       const native = nativeTypeScriptLaunch(command);
-      const preflighted = npmScriptHasLeadingNodePreflight(command);
+      const preflighted = npmScriptHasSafeNodePreflight(command, packageRoot, repoRoot);
       inventory.push({
-        path: 'package.json',
+        path,
         line: 1,
         classification: native && preflighted ? 'native-node-22' : 'invalid',
         evidence: `${name}: ${command}`,
       });
-      if (!preflighted) {
+      if (!native) {
         violations.push({
-          path: 'package.json',
+          path,
+          line: 1,
+          rule: 'direct-typescript-launch',
+          message: `npm script ${name} must use native Node 22 type stripping or the canonical TypeScript launcher.`,
+        });
+      } else if (!preflighted) {
+        violations.push({
+          path,
           line: 1,
           rule: 'node-contract',
-          message: `npm script ${name} must run the canonical Node runtime preflight before its TypeScript target.`,
+          message: `npm script ${name} must prove a successful canonical Node runtime preflight before every TypeScript target.`,
         });
       }
     }
   }
-
   return { inventory, violations };
+}
+
+function agentsRuntimeViolations(repoRoot: string): RuntimePolicyViolation[] {
+  const path = resolve(repoRoot, AGENTS_PATH);
+  if (!existsSync(path)) {
+    return [{ path: AGENTS_PATH, line: 1, rule: 'agent-runtime-contract', message: 'worker rulebook is missing.' }];
+  }
+  const source = readFileSync(path, 'utf8');
+  const required = [
+    AGENTS_NODE_22_RULE,
+    'scripts/toolchain/node-version.json',
+    'package.json.engines.node',
+    'Node 20',
+    'actions/setup-node',
+  ];
+  const missing = required.filter((marker) => !source.includes(marker));
+  return missing.length === 0
+    ? []
+    : [{
+      path: AGENTS_PATH,
+      line: 1,
+      rule: 'agent-runtime-contract',
+      message: `AGENTS.md must state the Node 22-only worker contract; missing markers: ${missing.join(', ')}.`,
+    }];
 }
 
 function packageViolations(repoRoot: string, allFiles: readonly string[]): RuntimePolicyViolation[] {
@@ -960,11 +1116,14 @@ export function checkTypeScriptRuntimePolicy(repoRoot = resolve('.')): RuntimePo
   const allFiles = repositoryFiles(root);
   const workflows = scanWorkflowNodeVersions(root, allFiles, contract);
   const launches = scanLaunches(root, allFiles, contract);
-  const inventory = [...workflows.inventory, ...launches.inventory];
+  const packageScripts = scanPackageScripts(root, allFiles);
+  const inventory = [...workflows.inventory, ...launches.inventory, ...packageScripts.inventory];
   violations.push(
     ...workflows.violations,
     ...launches.violations,
+    ...packageScripts.violations,
     ...packageViolations(root, allFiles),
+    ...agentsRuntimeViolations(root),
     ...compilerViolations(root),
     ...syntaxViolations(root, allFiles, contract),
     ...importSpecifierViolations(root, allFiles, contract),

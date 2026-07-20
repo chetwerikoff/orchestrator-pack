@@ -74,6 +74,12 @@ function makePolicyFixture(): string {
     engines: { node: '22.x' },
   }, null, 2)}\n`);
   write(join(root, 'scripts/toolchain/node-version.json'), '{"schemaVersion":1,"nodeMajor":22}\n');
+  write(join(root, 'AGENTS.md'), [
+    '# Worker rules',
+    '**Node 22-only TypeScript runtime:** use scripts/toolchain/node-version.json and package.json.engines.node.',
+    'Do not add Node 20 actions/setup-node declarations.',
+    '',
+  ].join('\n'));
   write(join(root, 'scripts/toolchain/native-entrypoint-preflight.ts'), "export const ready: boolean = true;\n");
   write(join(root, 'tsconfig.base.json'), `${JSON.stringify({
     compilerOptions: {
@@ -248,22 +254,58 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.message.includes('preflight'))).toBe(true);
   });
 
-  it('rejects an npm script that runs its TypeScript target before the canonical preflight', () => {
+  it.each([
+    [
+      'reversed ordering',
+      'node --experimental-strip-types scripts/example.ts && npm run check:node-major --silent',
+    ],
+    [
+      'failure fallback',
+      'npm run check:node-major --silent || node --experimental-strip-types scripts/example.ts',
+    ],
+  ])('rejects npm preflight bypass via %s', (_label, command) => {
     const root = makePolicyFixture();
     const manifestPath = join(root, 'package.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
       scripts: Record<string, string>;
     };
-    manifest.scripts['gate-census-generate'] = [
-      'node --experimental-strip-types scripts/example.ts',
-      'npm run check:node-major --silent',
-    ].join(' && ');
+    manifest.scripts['gate-census-generate'] = command;
     write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     const violations = checkTypeScriptRuntimePolicy(root).violations;
     expect(violations.some((violation) =>
       violation.rule === 'node-contract'
       && violation.path === 'package.json'
-      && violation.message.includes('before its TypeScript target'))).toBe(true);
+      && violation.message.includes('preflight'))).toBe(true);
+  });
+
+  it('rejects an unpreflighted TypeScript npm script in a workspace package', () => {
+    const root = makePolicyFixture();
+    const manifestPath = join(root, 'plugins/example/package.json');
+    write(join(root, 'plugins/example/bin/run.ts'), [
+      '#!/usr/bin/env -S node --experimental-strip-types',
+      "import '../../../scripts/toolchain/native-entrypoint-preflight.ts';",
+      '',
+    ].join('\n'));
+    write(manifestPath, `${JSON.stringify({
+      name: '@orchestrator-pack/example',
+      scripts: {
+        bad: 'node --experimental-strip-types bin/run.ts',
+      },
+    }, null, 2)}\n`);
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'node-contract'
+      && violation.path === 'plugins/example/package.json'
+      && violation.message.includes('preflight'))).toBe(true);
+  });
+
+  it('requires the tracked worker rulebook to state the Node 22-only contract', () => {
+    const root = makePolicyFixture();
+    write(join(root, 'AGENTS.md'), '# Worker rules\n');
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'agent-runtime-contract'
+      && violation.path === 'AGENTS.md')).toBe(true);
   });
 
   it('rejects a direct workspace runtime dependency', () => {
@@ -366,6 +408,42 @@ describe('launch inventory and fail-closed policy', () => {
       violation.rule === 'workflow-node-version'
       && violation.path === workflow
       && violation.message.includes('with.node-version'))).toBe(true);
+  });
+
+  it.each([
+    [
+      'quoted keys',
+      [
+        'name: quoted-keys',
+        'jobs:',
+        '  test:',
+        '    steps:',
+        '      - "uses": actions/setup-node@v4',
+        '        "with":',
+        '          "node-version": "20"',
+        '',
+      ].join('\n'),
+    ],
+    [
+      'flow-style mapping',
+      [
+        'name: flow-style',
+        'jobs:',
+        '  test:',
+        '    steps:',
+        '      - { uses: actions/setup-node@v4, with: { node-version: "20" } }',
+        '',
+      ].join('\n'),
+    ],
+  ])('rejects Node 20 in an additional workflow using %s', (_label, source) => {
+    const root = makePolicyFixture();
+    const workflow = '.github/workflows/yaml-equivalent.yml';
+    write(join(root, workflow), source);
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'workflow-node-version'
+      && violation.path === workflow
+      && violation.message.includes('received 20'))).toBe(true);
   });
 
   it('rejects node-version-file even when it points at the canonical declaration', () => {

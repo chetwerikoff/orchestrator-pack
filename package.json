@@ -24,7 +24,8 @@
   "devDependencies": {
     "@types/node": "^22.15.29",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "yaml": "^2.9.0"
   },
   "engines": {
     "node": "22.x"

@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "ddc5d4add70d0d2c3f31fedf2cd2d081e247f1cf",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:c68f7622ee7a37d6f6ae0beff0f5d47f9e7b4030c22e858a2fc73b785f931810"
+    "active_scope_hash": "sha256:6e1ed79dc9c26e00de45c50af6efb84ba074ef857b4ca271e8520238ed2954ec"
   },
   "declared_paths": [
     "tsconfig.json",
@@ -25,7 +25,8 @@
     ".github/workflows/vitest-runtime-history-refresh.yml",
     ".github/workflows/scope-guard.yml",
     ".github/workflows/read-delegation-audit.yml",
-    ".github/workflows/codex-pr-review.yml"
+    ".github/workflows/codex-pr-review.yml",
+    "AGENTS.md"
   ],
   "declared_globs": [
     "tests/**",
@@ -36,5 +37,20 @@
     "plugins/ao-codex-pr-reviewer/**",
     "plugins/_shared/lib/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:c68f7622ee7a37d6f6ae0beff0f5d47f9e7b4030c22e858a2fc73b785f931810",
+      "new_active_scope_hash": "sha256:6e1ed79dc9c26e00de45c50af6efb84ba074ef857b4ca271e8520238ed2954ec",
+      "changed": {
+        "added": [
+          "AGENTS.md"
+        ],
+        "removed": []
+      },
+      "reason": "Operator-authorized Node 22 worker rule and fail-closed policy hardening",
+      "actor": "operator",
+      "timestamp": "2026-07-20T05:06:34.962Z",
+      "applied": true
+    }
+  ]
 }
