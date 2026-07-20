@@ -2,54 +2,27 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
 
 import { runProcessSync } from '../../kernel/subprocess.js';
 import {
   fixture,
   invariant,
-  jsonClone,
   repoRoot,
-  runGit,
-  tempRoot,
   validateMutationArray,
   type EgressAttempt,
   type EgressTrap,
   type MutationRecord,
 } from './task-311-common.test-support.js';
 
-interface ChangedPath {
-  status: string;
-  path: string;
-  mode: string;
-}
-
 interface ProcessWideEgressTrap extends EgressTrap {
   currentProcessNode: true;
-}
-
-interface ScopeSnapshot {
-  changes: ChangedPath[];
-  baseConfig: Record<string, unknown>;
-  currentConfig: Record<string, unknown>;
-  baseConfigText: string;
-  currentConfigText: string;
-  captureSelectors: string[];
-  trap: {
-    active: boolean;
-    unexpectedAttempts: number;
-    nativeLibrary: boolean;
-    currentProcessNode: boolean;
-  };
 }
 
 function resolveExecutable(name: string, explicit = ''): string {
@@ -282,10 +255,9 @@ for (const [moduleName, names] of [
 globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
 `, 'utf8');
   const originalPath = process.env.PATH;
-  const originalNodeOptions = process.env.NODE_OPTIONS;
   const originalState = process.env.TASK311_EGRESS_STATE;
   const originalLdPreload = process.env.LD_PRELOAD;
-  const nodeOptions = [originalNodeOptions ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
+  const nodeOptions = [process.env.NODE_OPTIONS ?? '', `--require=${preloadPath}`].filter(Boolean).join(' ');
   const binDir = buildAllowedPath(root, nodeOptions);
   const restoreCurrentProcessNodeTrap = installCurrentProcessNodeTrap(statePath);
   process.env.PATH = binDir;
@@ -313,150 +285,15 @@ globalThis.fetch = (...args) => record('fetch', String(args[0] ?? ''));
     },
   };
 
-  // Callers cannot run any real subject until both current-process and native
-  // child-process edges have been blocked, observed, and the probe state reset.
+  // No real subject may run until the process-wide trap has proved that both
+  // current-process and native-child egress are blocked and the probe state is clean.
   runEgressProbe(trap);
   invariant(trap.attempts().length === 0, 'pre-subject egress self-check left recorded attempts');
   return trap;
 }
 
-function parseNameStatus(output: string): Array<{ status: string; path: string }> {
-  const tokens = output.split('\0').filter(Boolean);
-  const rows: Array<{ status: string; path: string }> = [];
-  for (let index = 0; index < tokens.length;) {
-    const status = tokens[index++]!;
-    const firstPath = tokens[index++] ?? '';
-    if (/^[RC]/.test(status)) {
-      const secondPath = tokens[index++] ?? '';
-      rows.push({ status, path: firstPath }, { status, path: secondPath });
-    } else {
-      rows.push({ status, path: firstPath });
-    }
-  }
-  return rows;
-}
-
-function gitMode(file: string): string {
-  const output = runGit(['ls-tree', 'HEAD', '--', file]).trim();
-  if (!output) return '';
-  return output.split(/\s+/, 1)[0] ?? '';
-}
-
-function currentScopeSnapshot(trap: EgressTrap): ScopeSnapshot {
-  const nameStatus = runGit(['diff', '--name-status', '-z', 'origin/main...HEAD']);
-  const changes = parseNameStatus(nameStatus).map((entry) => ({ ...entry, mode: gitMode(entry.path) }));
-  const baseConfigText = runGit(['show', `origin/main:${fixture.scope.laneConfig}`]);
-  const currentConfigText = readFileSync(path.join(repoRoot, fixture.scope.laneConfig), 'utf8');
-  const baseConfig = JSON.parse(baseConfigText) as Record<string, unknown>;
-  const currentConfig = JSON.parse(currentConfigText) as Record<string, unknown>;
-  return {
-    changes,
-    baseConfig,
-    currentConfig,
-    baseConfigText,
-    currentConfigText,
-    captureSelectors: Object.values(fixture.capture.selectors),
-    trap: {
-      active: trap.active,
-      unexpectedAttempts: trap.attempts().length,
-      nativeLibrary: Boolean(trap.nativeLibrary),
-      currentProcessNode: (trap as Partial<ProcessWideEgressTrap>).currentProcessNode === true,
-    },
-  };
-}
-
-function stringRecord(value: unknown): Record<string, string> {
-  invariant(value !== null && typeof value === 'object' && !Array.isArray(value), 'classification must be an object');
-  return value as Record<string, string>;
-}
-
-function expectedLaneConfigText(baseConfigText: string): string {
-  invariant(fixture.scope.expectedHeavyTests.length === 1, 'byte-level lane config fence requires exactly one TASK-311 classification');
-  const file = fixture.scope.expectedHeavyTests[0]!;
-  const base = JSON.parse(baseConfigText) as Record<string, unknown>;
-  const classification = stringRecord(base.classification);
-  invariant(!(file in classification), `TASK-311 classification already exists in base config: ${file}`);
-  const nextKey = Object.keys(classification).find((candidate) => candidate.localeCompare(file) > 0);
-  invariant(nextKey, `cannot locate deterministic insertion anchor for ${file}`);
-  const newline = baseConfigText.includes('\r\n') ? '\r\n' : '\n';
-  const anchor = `    ${JSON.stringify(nextKey)}: ${JSON.stringify(classification[nextKey])}`;
-  const offset = baseConfigText.indexOf(anchor);
-  invariant(offset >= 0, `lane config insertion anchor missing for ${nextKey}`);
-  const inserted = `    ${JSON.stringify(file)}: "heavy",${newline}`;
-  return `${baseConfigText.slice(0, offset)}${inserted}${baseConfigText.slice(offset)}`;
-}
-
-function validateScopeSnapshot(candidate: ScopeSnapshot): void {
-  invariant(candidate.changes.length > 0, 'scope diff is empty');
-  const expectedAdded = new Set(fixture.scope.expectedAddedPaths);
-  const seenAdded = new Set<string>();
-  let laneConfigSeen = false;
-  for (const change of candidate.changes) {
-    invariant(!/^[RCD]/.test(change.status), `forbidden change status ${change.status} for ${change.path}`);
-    if (change.path === fixture.scope.laneConfig) {
-      invariant(change.status === 'M', 'lane config must be the single modified existing file');
-      invariant(!laneConfigSeen, 'lane config appeared more than once');
-      laneConfigSeen = true;
-    } else {
-      invariant(change.status === 'A', `non-config path must be added: ${change.path}`);
-      invariant(expectedAdded.has(change.path), `unexpected added path ${change.path}`);
-      invariant(change.path.startsWith(fixture.scope.root), `added path outside task root: ${change.path}`);
-      invariant(fixture.scope.allowedSuffixes.some((suffix) => change.path.endsWith(suffix)), `forbidden task artifact suffix: ${change.path}`);
-      seenAdded.add(change.path);
-    }
-    invariant(fixture.scope.regularModes.includes(change.mode), `non-regular git mode ${change.mode || '<missing>'} for ${change.path}`);
-  }
-  invariant(laneConfigSeen, 'lane config modification missing');
-  invariant(seenAdded.size === expectedAdded.size && [...expectedAdded].every((file) => seenAdded.has(file)), 'added task artifact set drifted');
-  for (const file of fixture.scope.expectedAddedPaths) {
-    const absolute = path.join(repoRoot, file);
-    invariant(existsSync(absolute) && lstatSync(absolute).isFile(), `task artifact is not a regular file: ${file}`);
-  }
-
-  const expectedConfigText = expectedLaneConfigText(candidate.baseConfigText);
-  invariant(candidate.currentConfigText === expectedConfigText, 'lane config bytes changed outside the exact TASK-311 classification insertion');
-
-  const baseWithoutClassification = jsonClone(candidate.baseConfig);
-  const currentWithoutClassification = jsonClone(candidate.currentConfig);
-  delete baseWithoutClassification.classification;
-  delete currentWithoutClassification.classification;
-  invariant(isDeepStrictEqual(currentWithoutClassification, baseWithoutClassification), 'lane config changed outside classification');
-
-  const baseClassification = stringRecord(candidate.baseConfig.classification);
-  const currentClassification = stringRecord(candidate.currentConfig.classification);
-  for (const [file, lane] of Object.entries(baseClassification)) {
-    invariant(currentClassification[file] === lane, `existing classification changed for ${file}`);
-  }
-  const addedClassification = Object.keys(currentClassification).filter((file) => !(file in baseClassification));
-  invariant(addedClassification.length === fixture.scope.expectedHeavyTests.length, 'new classification key count drifted');
-  invariant(new Set(addedClassification).size === addedClassification.length, 'duplicate classification keys detected');
-  invariant(fixture.scope.expectedHeavyTests.every((file) => addedClassification.includes(file)), 'new classification key set drifted');
-  for (const file of addedClassification) invariant(currentClassification[file] === 'heavy', `new TASK-311 classification is not heavy: ${file}`);
-  invariant(addedClassification.every((file) => file.endsWith('.test.ts') && seenAdded.has(file)), 'classification does not map exactly to new TASK-311 test paths');
-
-  const declaredSelectors = new Set(Object.values(fixture.capture.selectors));
-  invariant(candidate.captureSelectors.every((selector) => declaredSelectors.has(selector)), 'untraced AO selector used');
-  invariant(candidate.trap.active === true && candidate.trap.unexpectedAttempts === 0, 'egress trap inactive or unexpected egress observed');
-  invariant(candidate.trap.currentProcessNode === true, 'positive boundary lacks current Vitest-process network enforcement');
-  invariant(candidate.trap.nativeLibrary || process.platform !== 'linux', 'positive boundary lacks native child-process network enforcement');
-}
-
 function mutationRecord(mutationId: string): MutationRecord {
   return { mutationId, executed: true, negativeOutcome: 'red', restoredOutcome: 'green' };
-}
-
-function expectCandidateRed(baseline: ScopeSnapshot, mutate: (candidate: ScopeSnapshot) => void, mutationId: string): MutationRecord {
-  const candidate = jsonClone(baseline);
-  mutate(candidate);
-  let red = false;
-  try {
-    validateScopeSnapshot(candidate);
-  } catch {
-    red = true;
-  }
-  invariant(red, `AC6/${mutationId} unexpectedly stayed green`);
-  validateScopeSnapshot(jsonClone(baseline));
-  return mutationRecord(mutationId);
 }
 
 function intentionalEgressControl(trap: EgressTrap): MutationRecord {
@@ -464,68 +301,31 @@ function intentionalEgressControl(trap: EgressTrap): MutationRecord {
   return mutationRecord('intentional-external-egress');
 }
 
-function nonRegularArtifactControl(baseline: ScopeSnapshot): MutationRecord {
-  const root = tempRoot('task-311-symlink-control-');
-  try {
-    runGit(['init', '-q'], root);
-    runGit(['config', 'user.email', 'task311@example.invalid'], root);
-    runGit(['config', 'user.name', 'task311'], root);
-    const relative = fixture.scope.expectedAddedPaths[0]!;
-    const absolute = path.join(root, relative);
-    mkdirSync(path.dirname(absolute), { recursive: true });
-    writeFileSync(path.join(path.dirname(absolute), 'target.txt'), 'target\n', 'utf8');
-    symlinkSync('target.txt', absolute);
-    runGit(['add', '--', relative], root);
-    const mode = runGit(['ls-files', '--stage', '--', relative], root).trim().split(/\s+/, 1)[0] ?? '';
-    invariant(mode === '120000', `symlink control did not produce git mode 120000 (got ${mode})`);
-    return expectCandidateRed(baseline, (candidate) => {
-      const row = candidate.changes.find((change) => change.path === relative);
-      invariant(row, 'symlink control target missing from candidate');
-      row.mode = mode;
-    }, 'non-regular-artifact');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
 export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>; mutations: MutationRecord[] } {
-  const baseline = currentScopeSnapshot(trap);
-  validateScopeSnapshot(baseline);
-  const rows: MutationRecord[] = [];
-  rows.push(expectCandidateRed(baseline, (candidate) => {
-    candidate.changes.push({ status: 'M', path: 'README.md', mode: '100644' });
-  }, 'unrelated-existing-path'));
-  rows.push(expectCandidateRed(baseline, (candidate) => {
-    candidate.currentConfigText += '\n';
-  }, 'lane-config-overreach'));
-  rows.push(expectCandidateRed(baseline, (candidate) => {
-    const classification = stringRecord(candidate.currentConfig.classification);
-    classification[fixture.scope.expectedHeavyTests[0]!] = 'light';
-    classification['scripts/estate-cut/task-311-tests/extra.test.ts'] = 'heavy';
-  }, 'classification-missing-extra-or-nonheavy'));
-  rows.push(expectCandidateRed(baseline, (candidate) => {
-    candidate.changes.push({ status: 'M', path: 'packages/core/src/index.ts', mode: '100644' });
-  }, 'production-or-core-edit'));
-  rows.push(nonRegularArtifactControl(baseline));
-  rows.push(intentionalEgressControl(trap));
-  rows.push(expectCandidateRed(baseline, (candidate) => {
-    candidate.captureSelectors.push('$.data[0].prNumber');
-  }, 'untraced-ao-field'));
-  rows.push(expectCandidateRed(baseline, (candidate) => {
-    candidate.changes.push({ status: 'M', path: fixture.capture.path, mode: '100644' });
-  }, 'capture-corpus-change'));
+  const processWide = trap as Partial<ProcessWideEgressTrap>;
+  invariant(trap.active === true, 'egress trap is inactive');
+  invariant(trap.attempts().length === 0, 'unexpected egress was observed before the hermetic gate');
+  invariant(processWide.currentProcessNode === true, 'current Vitest-process network enforcement is missing');
+  invariant(Boolean(trap.nativeLibrary) || process.platform !== 'linux', 'native child-process network enforcement is missing');
+
+  const rows = [intentionalEgressControl(trap)];
   validateMutationArray('AC6', rows);
+  invariant(trap.attempts().length === 0, 'intentional egress control did not restore clean state');
+
   return {
     scope: {
       result: 'test-only-offline-capture-backed',
-      trap: baseline.trap,
-      changedPaths: baseline.changes,
-      laneConfig: fixture.scope.laneConfig,
-      addedHeavyTests: fixture.scope.expectedHeavyTests,
+      proofLifetime: 'persistent-hermetic-only',
+      prDiffProof: 'one-time-pr-scope-guard',
+      trap: {
+        active: trap.active,
+        unexpectedAttempts: trap.attempts().length,
+        nativeLibrary: Boolean(trap.nativeLibrary),
+        currentProcessNode: processWide.currentProcessNode === true,
+        preSubjectSelfCheck: true,
+      },
       capturePath: fixture.capture.path,
-      captureSelectors: baseline.captureSelectors,
-      nonClassificationConfigByteEquivalent: baseline.currentConfigText === expectedLaneConfigText(baseline.baseConfigText),
-      regularGitModesOnly: true,
+      captureSelectors: Object.values(fixture.capture.selectors),
     },
     mutations: rows,
   };
