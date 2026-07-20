@@ -248,6 +248,24 @@ describe('launch inventory and fail-closed policy', () => {
       && violation.message.includes('preflight'))).toBe(true);
   });
 
+  it('rejects an npm script that runs its TypeScript target before the canonical preflight', () => {
+    const root = makePolicyFixture();
+    const manifestPath = join(root, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    manifest.scripts['gate-census-generate'] = [
+      'node --experimental-strip-types scripts/example.ts',
+      'npm run check:node-major --silent',
+    ].join(' && ');
+    write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const violations = checkTypeScriptRuntimePolicy(root).violations;
+    expect(violations.some((violation) =>
+      violation.rule === 'node-contract'
+      && violation.path === 'package.json'
+      && violation.message.includes('before its TypeScript target'))).toBe(true);
+  });
+
   it('rejects a direct workspace runtime dependency', () => {
     const root = makePolicyFixture();
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, unknown>;

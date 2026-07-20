@@ -377,6 +377,11 @@ function workflowVersionSelectors(
   return { withMappings, selectors };
 }
 
+function npmScriptHasLeadingNodePreflight(command: string): boolean {
+  return /^\s*(?:npm\s+run\s+check:node-major(?:\s+--silent)?|node\s+scripts\/toolchain\/check-node-major\.mjs)\s*&&\s*/u
+    .test(command);
+}
+
 function literalNodeMajor(value: string): number | undefined {
   const trimmed = value.trim();
   const unquoted = ((trimmed.startsWith("'") && trimmed.endsWith("'"))
@@ -605,18 +610,20 @@ function scanLaunches(
       continue;
     }
     if (directTypeScriptLaunch(command)) {
+      const native = nativeTypeScriptLaunch(command);
+      const preflighted = npmScriptHasLeadingNodePreflight(command);
       inventory.push({
         path: 'package.json',
         line: 1,
-        classification: nativeTypeScriptLaunch(command) ? 'native-node-22' : 'invalid',
+        classification: native && preflighted ? 'native-node-22' : 'invalid',
         evidence: `${name}: ${command}`,
       });
-      if (name !== 'check:node-major' && !command.includes('check:node-major')) {
+      if (!preflighted) {
         violations.push({
           path: 'package.json',
           line: 1,
           rule: 'node-contract',
-          message: `npm script ${name} executes TypeScript without the canonical Node runtime preflight.`,
+          message: `npm script ${name} must run the canonical Node runtime preflight before its TypeScript target.`,
         });
       }
     }
