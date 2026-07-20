@@ -124,16 +124,24 @@ function readExactHeadOperatorApproval(input = {}) {
   if (
     Number(record.schemaVersion) !== OPERATOR_APPROVAL_SCHEMA_VERSION ||
     record.event !== OPERATOR_APPROVAL_EVENT ||
-    String(record.projectId ?? '') !== projectId ||
-    String(record.repoSlug ?? '') !== repoSlug ||
-    Number(record.prNumber) !== prNumber ||
-    String(record.headSha ?? '').toLowerCase() !== headSha ||
     !String(record.approvalId ?? '').trim() ||
     !String(record.reason ?? '').trim() ||
     !String(record.actor ?? '').trim() ||
     !Number.isFinite(Date.parse(String(record.createdAtUtc ?? '')))
   ) {
     return { applicable: true, approved: false, reason: 'approval_malformed' };
+  }
+  if (String(record.projectId ?? '') !== projectId) {
+    return { applicable: true, approved: false, reason: 'approval_project_mismatch', record };
+  }
+  if (String(record.repoSlug ?? '') !== repoSlug) {
+    return { applicable: true, approved: false, reason: 'approval_repository_mismatch', record };
+  }
+  if (Number(record.prNumber) !== prNumber) {
+    return { applicable: true, approved: false, reason: 'approval_pr_mismatch', record };
+  }
+  if (String(record.headSha ?? '').toLowerCase() !== headSha) {
+    return { applicable: true, approved: false, reason: 'approval_head_mismatch', record };
   }
   if (String(record.revokedAtUtc ?? '').trim()) {
     return { applicable: true, approved: false, reason: 'approval_revoked', record };
@@ -201,7 +209,7 @@ const MERGE_TRIAGE_CLI_HANDLERS = {
 
 function mergeTriageCliShouldExitNonZero(subcommand, result) {
   if (subcommand === 'evaluateMergePolicy') {
-    return Boolean(result && result.allow === false);
+    return result?.reason === 'operator_merge_approval_unavailable';
   }
   if (subcommand !== 'runGate' || !result || result.ok !== false || result.ran !== true) {
     return false;
