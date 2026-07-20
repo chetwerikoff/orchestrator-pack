@@ -9,35 +9,25 @@ permissions:
   contents: read
 
 concurrency:
-  group: issue-900-self-architect-diagnostic
+  group: issue-900-final-snapshot
   cancel-in-progress: true
 
 jobs:
-  lint:
+  snapshot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout final PR branch
         uses: actions/checkout@v4
         with:
           ref: agent/issue-900-node22-runtime
           fetch-depth: 0
-      - name: Capture strict self-architect lint
-        id: lint
-        shell: pwsh
-        env:
-          PR_BASE_SHA: a0a42bb5e3958b24aa03a2e51d8eac6883901da9
-          PR_HEAD_SHA: ddc5d4add70d0d2c3f31fedf2cd2d081e247f1cf
-        run: |
-          $output = & ./scripts/lint-self-architect.ps1 -Strict -BaseRef $env:PR_BASE_SHA -HeadRef $env:PR_HEAD_SHA 2>&1
-          $status = $LASTEXITCODE
-          $output | ForEach-Object { $_.ToString() } | Set-Content -LiteralPath issue-900-self-architect.log -Encoding utf8
-          $output | ForEach-Object { Write-Host $_ }
-          exit $status
-      - name: Upload lint output
-        if: always()
+      - name: Archive exact branch tree
+        shell: bash
+        run: git archive --format=tar.gz --output=issue-900-final-snapshot.tar.gz HEAD
+      - name: Upload snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: issue-900-self-architect
-          path: issue-900-self-architect.log
-          if-no-files-found: error
+          name: issue-900-final-snapshot
+          path: issue-900-final-snapshot.tar.gz
+          compression-level: 0
