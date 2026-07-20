@@ -2,17 +2,16 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { evaluateMergePolicy } from '../docs/merge-triage-gate.mjs';
+import { runProcess } from './kernel/subprocess.ts';
 import {
   approveOperatorMerge,
   operatorMergeApprovalRecordPath,
@@ -271,23 +270,26 @@ describe('operator approval CLI authority and delivery', () => {
     expect(() => assertOperatorMergeApprovalSession({ AO_SESSION_KIND: 'operator' })).not.toThrow();
   });
 
-  it.each(['worker', 'coding'])('rejects an AO-managed %s CLI before writing state or invoking gh', (kind) => {
+  it.each(['worker', 'coding'])('rejects an AO-managed %s CLI before writing state or invoking gh', async (kind) => {
     const storeRoot = tempRoot();
-    const result = spawnSync(process.execPath, [
-      '--experimental-strip-types',
-      cliPath,
-      ...approvalArgs(storeRoot),
-    ], {
+    const result = await runProcess({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        cliPath,
+        ...approvalArgs(storeRoot),
+      ],
       cwd: repoRoot,
-      encoding: 'utf8',
+      inheritParentEnv: true,
       env: {
-        ...process.env,
         AO_SESSION_ID: `${kind}-session-933`,
         AO_SESSION_KIND: kind,
       },
+      allowEmptyStdout: true,
+      timeoutMs: 30_000,
     });
 
-    expect(result.status).not.toBe(0);
+    expect(result.ok).toBe(false);
     expect(result.stderr).toContain('forbidden inside an AO-managed session');
     expect(existsSync(join(storeRoot, 'pr-933.json'))).toBe(false);
   });
