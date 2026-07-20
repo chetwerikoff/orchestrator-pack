@@ -193,12 +193,12 @@ describe('direct operator merge policy', () => {
     expect(evaluateMergePolicy({ ...base, headSha: HEAD_B })).toMatchObject({
       allow: false,
       reason: 'operator_merge_approval_unavailable',
-      approvalReason: 'approval_malformed',
+      approvalReason: 'approval_head_mismatch',
     });
     expect(evaluateMergePolicy({ ...base, repoSlug: 'other/repository', headSha: HEAD_A })).toMatchObject({
       allow: false,
       reason: 'operator_merge_approval_unavailable',
-      approvalReason: 'approval_malformed',
+      approvalReason: 'approval_repository_mismatch',
     });
     expect(evaluateMergePolicy({ ...base, sessionKind: 'worker', headSha: HEAD_A })).toMatchObject({
       allow: false,
