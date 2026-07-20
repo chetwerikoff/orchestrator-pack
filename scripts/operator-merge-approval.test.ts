@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { evaluateMergePolicy } from '../docs/merge-triage-gate.mjs';
 import {
   approveOperatorMerge,
   operatorMergeApprovalRecordPath,
@@ -12,11 +13,16 @@ import {
 const roots: string[] = [];
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
+const REPO = 'chetwerikoff/orchestrator-pack';
 
 function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'opk-operator-merge-approval-'));
   roots.push(root);
   return root;
+}
+
+function policyStoreRoot(stateRoot: string): string {
+  return join(stateRoot, 'operator-merge-approvals', 'orchestrator-pack');
 }
 
 afterEach(() => {
@@ -28,7 +34,7 @@ describe('operator merge approval store', () => {
     const storeRoot = tempRoot();
     const record = approveOperatorMerge({
       storeRoot,
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 933,
       headSha: HEAD_A,
       reason: 'Explicit operator direct-merge command',
@@ -39,7 +45,7 @@ describe('operator merge approval store', () => {
     expect(record).toMatchObject({
       schemaVersion: 1,
       event: 'operator_merge_approved',
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 933,
       headSha: HEAD_A,
       actor: 'operator-test',
@@ -47,7 +53,7 @@ describe('operator merge approval store', () => {
     });
     expect(readOperatorMergeApproval({
       storeRoot,
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 933,
       headSha: HEAD_A,
     })).toMatchObject({
@@ -78,7 +84,7 @@ describe('operator merge approval store', () => {
     const storeRoot = tempRoot();
     approveOperatorMerge({
       storeRoot,
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 933,
       headSha: HEAD_A,
       reason: 'approve',
@@ -87,7 +93,7 @@ describe('operator merge approval store', () => {
 
     expect(revokeOperatorMerge({
       storeRoot,
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 933,
       headSha: HEAD_A,
       reason: 'revalidation failed',
@@ -122,17 +128,121 @@ describe('operator merge approval store', () => {
     const storeRoot = tempRoot();
     expect(() => approveOperatorMerge({
       storeRoot,
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 0,
       headSha: HEAD_A,
       reason: 'invalid',
     })).toThrow(/positive PR number/);
     expect(() => approveOperatorMerge({
       storeRoot,
-      repoSlug: 'chetwerikoff/orchestrator-pack',
+      repoSlug: REPO,
       prNumber: 933,
       headSha: 'abc123',
       reason: 'invalid',
     })).toThrow(/full 40-hex head SHA/);
+  });
+});
+
+describe('direct operator merge policy', () => {
+  it('allows only an active exact-head approval for an operator session', () => {
+    const stateRoot = tempRoot();
+    const record = approveOperatorMerge({
+      storeRoot: policyStoreRoot(stateRoot),
+      repoSlug: REPO,
+      prNumber: 933,
+      headSha: HEAD_A,
+      reason: 'Explicit operator direct-merge command',
+      actor: 'operator-test',
+    });
+
+    expect(evaluateMergePolicy({
+      stateRoot,
+      projectId: 'orchestrator-pack',
+      repoSlug: REPO,
+      prNumber: 933,
+      headSha: HEAD_A,
+      sessionKind: 'operator',
+      directOperatorMerge: true,
+    })).toMatchObject({
+      allow: true,
+      reason: 'operator_merge_approved',
+      approvalId: record.approvalId,
+      approvedHeadSha: HEAD_A,
+    });
+  });
+
+  it('denies missing, head-mismatched, repository-mismatched, and worker consumption', () => {
+    const stateRoot = tempRoot();
+    approveOperatorMerge({
+      storeRoot: policyStoreRoot(stateRoot),
+      repoSlug: REPO,
+      prNumber: 933,
+      headSha: HEAD_A,
+      reason: 'Explicit operator direct-merge command',
+      actor: 'operator-test',
+    });
+
+    const base = {
+      stateRoot,
+      projectId: 'orchestrator-pack',
+      repoSlug: REPO,
+      prNumber: 933,
+      sessionKind: 'operator',
+      directOperatorMerge: true,
+    };
+    expect(evaluateMergePolicy({ ...base, headSha: HEAD_B })).toMatchObject({
+      allow: false,
+      reason: 'operator_merge_approval_unavailable',
+      approvalReason: 'approval_malformed',
+    });
+    expect(evaluateMergePolicy({ ...base, repoSlug: 'other/repository', headSha: HEAD_A })).toMatchObject({
+      allow: false,
+      reason: 'operator_merge_approval_unavailable',
+      approvalReason: 'approval_malformed',
+    });
+    expect(evaluateMergePolicy({ ...base, sessionKind: 'worker', headSha: HEAD_A })).toMatchObject({
+      allow: false,
+      reason: 'operator_merge_approval_unavailable',
+      approvalReason: 'session_kind_not_operator',
+    });
+    expect(evaluateMergePolicy({ ...base, prNumber: 934, headSha: HEAD_A })).toMatchObject({
+      allow: false,
+      reason: 'operator_merge_approval_unavailable',
+      approvalReason: 'approval_missing',
+    });
+  });
+
+  it('denies a revoked exact-head approval', () => {
+    const stateRoot = tempRoot();
+    const storeRoot = policyStoreRoot(stateRoot);
+    approveOperatorMerge({
+      storeRoot,
+      repoSlug: REPO,
+      prNumber: 933,
+      headSha: HEAD_A,
+      reason: 'approve',
+      actor: 'operator-test',
+    });
+    revokeOperatorMerge({
+      storeRoot,
+      repoSlug: REPO,
+      prNumber: 933,
+      headSha: HEAD_A,
+      reason: 'revoked',
+    });
+
+    expect(evaluateMergePolicy({
+      stateRoot,
+      projectId: 'orchestrator-pack',
+      repoSlug: REPO,
+      prNumber: 933,
+      headSha: HEAD_A,
+      sessionKind: 'operator',
+      directOperatorMerge: true,
+    })).toMatchObject({
+      allow: false,
+      reason: 'operator_merge_approval_unavailable',
+      approvalReason: 'approval_revoked',
+    });
   });
 });
