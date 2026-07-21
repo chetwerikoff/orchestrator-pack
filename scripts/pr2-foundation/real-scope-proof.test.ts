@@ -63,7 +63,9 @@ function commitOrder(baseSha: string): Array<{ sha: string; paths: string[] }> {
   });
 }
 
-function loadCommittedDeclaration(commitSha: string): ReturnType<typeof resolveLatestCommittedSnapshot> {
+function resolveLatestCommittedSnapshotAtCommit(
+  commitSha: string,
+): ReturnType<typeof resolveLatestCommittedSnapshot> {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-pr2-declaration-proof-'));
   try {
     const target = path.join(root, declarationPath);
@@ -103,7 +105,7 @@ describe('[AC9] real committed declaration and base-to-head scope proof', () => 
 
     const declarationCommit = commits[declarationIndex];
     if (!declarationCommit) throw new Error('declaration_commit_missing');
-    const resolved = loadCommittedDeclaration(declarationCommit.sha);
+    const resolved = resolveLatestCommittedSnapshotAtCommit(declarationCommit.sha);
     expect(resolved).toMatchObject({ ok: true });
     if (!resolved.ok) throw new Error(resolved.message);
     const snapshot = resolved.snapshot;
