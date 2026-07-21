@@ -54,6 +54,7 @@
     "scripts/orchestrator-escalation.test.ts": "light",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "postMergeWallclock",
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
+    "scripts/operator-merge-approval-authority.test.ts": "heavy",
     "scripts/operator-merge-approval.test.ts": "heavy",
     "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",
