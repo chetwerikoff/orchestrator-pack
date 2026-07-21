@@ -10,7 +10,11 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { resolveLatestCommittedSnapshot } from '../pr-scope-check.ts';
-import { validateFoundationScope } from './contracts.ts';
+import {
+  EXACT_EXISTING_SCOPE_PATHS,
+  FOUNDATION_DOC_ROWS,
+  validateFoundationScope,
+} from './contracts.ts';
 
 const repoRoot = path.resolve('.');
 const declarationPath = 'docs/declarations/923.chatgpt-issue-923.json';
@@ -22,9 +26,7 @@ function git(args: string[]): string {
     cwd: repoRoot,
     inheritParentEnv: true,
   });
-  if (!result.ok) {
-    throw new Error(`git_failed:${args.join(' ')}:${result.stderr || result.error || result.outcome}`);
-  }
+  if (!result.ok) throw new Error(`git_failed:${args.join(' ')}:${result.stderr || result.error || result.outcome}`);
   return result.stdout.trim();
 }
 
@@ -49,13 +51,7 @@ function basePaths(baseSha: string): string[] {
 
 function commitOrder(baseSha: string): Array<{ sha: string; paths: string[] }> {
   const separator = '__OPK_COMMIT__';
-  const output = git([
-    'log',
-    '--reverse',
-    `--format=${separator}%H`,
-    '--name-only',
-    `${baseSha}..HEAD`,
-  ]);
+  const output = git(['log', '--reverse', `--format=${separator}%H`, '--name-only', `${baseSha}..HEAD`]);
   if (!output) return [];
   return output.split(separator).filter(Boolean).map((block) => {
     const [sha = '', ...paths] = block.trim().split(/\r?\n/);
@@ -83,22 +79,85 @@ function packageJsonOverreach(baseSha: string): string[] {
   const baseScripts = { ...((base.scripts as Record<string, string>) ?? {}) };
   const headScripts = { ...((head.scripts as Record<string, string>) ?? {}) };
   delete headScripts['test:contract-mutations'];
-  const normalizedBase = { ...base, scripts: baseScripts };
-  const normalizedHead = { ...head, scripts: headScripts };
-  return JSON.stringify(normalizedBase) === JSON.stringify(normalizedHead)
+  return JSON.stringify({ ...base, scripts: baseScripts }) === JSON.stringify({ ...head, scripts: headScripts })
     ? ['scripts.test:contract-mutations']
     : ['package-json-overreach'];
 }
 
+function portTarget(source: string): string {
+  const basename = path.basename(source);
+  const targetName = basename.endsWith('.d.mts')
+    ? basename.replace(/\.d\.mts$/, '.d.ts')
+    : basename.replace(/\.mjs$/, '.ts');
+  return path.posix.join('scripts/pr2-foundation/terminalized', targetName);
+}
+
+function relativeSpecifier(fromFile: string, toFile: string): string {
+  let relative = path.posix.relative(path.posix.dirname(fromFile), toFile);
+  if (!relative.startsWith('.')) relative = `./${relative}`;
+  return relative;
+}
+
+function rewriteTerminalizedSpecifier(consumer: string, specifier: string): string {
+  if (!specifier.startsWith('.')) return specifier;
+  const source = path.posix.normalize(path.posix.join(path.posix.dirname(consumer), specifier));
+  if (!(FOUNDATION_DOC_ROWS as readonly string[]).includes(source)) return specifier;
+  const target = consumer === 'scripts/fleet-liveness.cases.ts' && source === 'docs/review-head-ready.mjs'
+    ? 'scripts/pr2-foundation/review-head-ready.ts'
+    : portTarget(source);
+  return relativeSpecifier(consumer, target);
+}
+
+function expectedConsumerRewrite(consumer: string, baseText: string): string {
+  if (consumer === 'scripts/lib/WorkerReportStore.ps1') {
+    return baseText.replace(
+      "docs/worker-report-store.mjs'",
+      "scripts/pr2-foundation/terminalized/worker-report-store.ts'",
+    );
+  }
+  const rewrite = (specifier: string): string => rewriteTerminalizedSpecifier(consumer, specifier);
+  let text = baseText.replace(
+    /(from\s+)(['"])(\.[^'"]+)\2/g,
+    (_match, prefix: string, quote: string, specifier: string) => `${prefix}${quote}${rewrite(specifier)}${quote}`,
+  );
+  text = text.replace(
+    /(import\s*\(\s*)(['"])(\.[^'"]+)\2/g,
+    (_match, prefix: string, quote: string, specifier: string) => `${prefix}${quote}${rewrite(specifier)}${quote}`,
+  );
+  text = text.replace(
+    /(import\s+)(['"])(\.[^'"]+)\2/g,
+    (_match, prefix: string, quote: string, specifier: string) => `${prefix}${quote}${rewrite(specifier)}${quote}`,
+  );
+  return text.replace(
+    /(new\s+URL\(\s*)(['"])(\.[^'"]+)\2(\s*,\s*import\.meta\.url\s*\))/g,
+    (_match, prefix: string, quote: string, specifier: string, suffix: string) =>
+      `${prefix}${quote}${rewrite(specifier)}${quote}${suffix}`,
+  );
+}
+
+function derivedConsumerRewrites(
+  baseSha: string,
+  rows: Array<{ status: string; path: string }>,
+): string[] {
+  const exact = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS]);
+  const derived: string[] = [];
+  for (const row of rows) {
+    if (row.status !== 'M' || exact.has(row.path)) continue;
+    const baseText = git(['show', `${baseSha}:${row.path}`]);
+    const headText = readFileSync(path.join(repoRoot, row.path), 'utf8').trimEnd();
+    const expected = expectedConsumerRewrite(row.path, baseText).trimEnd();
+    if (expected === headText) derived.push(row.path);
+  }
+  return derived;
+}
+
 describe('[AC9] real committed declaration and base-to-head scope proof', () => {
-  it('loads the ancestor snapshot through the repository resolver and validates the real final diff', () => {
+  it('loads the ancestor snapshot and validates exact existing, added, and derived rewrite authority', () => {
     const baseSha = 'faac4525e5e457f7480f99b5f26fcfd96da6d9d5';
     expect(git(['merge-base', '--is-ancestor', baseSha, 'HEAD'])).toBe('');
     const commits = commitOrder(baseSha);
     const declarationIndex = commits.findIndex((commit) => commit.paths.includes(declarationPath));
-    const implementationIndex = commits.findIndex((commit) =>
-      commit.paths.some((file) => file !== declarationPath),
-    );
+    const implementationIndex = commits.findIndex((commit) => commit.paths.some((file) => file !== declarationPath));
     expect(declarationIndex).toBe(0);
     expect(implementationIndex).toBeGreaterThan(declarationIndex);
     expect(git(['ls-tree', 'HEAD', '--', declarationPath])).toBe('');
@@ -115,6 +174,7 @@ describe('[AC9] real committed declaration and base-to-head scope proof', () => 
     expect(rows.some((row) => row.path === declarationPath)).toBe(false);
     const changedPaths = rows.map((row) => row.path);
     const addedPaths = rows.filter((row) => row.status === 'A').map((row) => row.path);
+    const derivedRewritePaths = derivedConsumerRewrites(baseSha, rows);
     const modes = Object.fromEntries(changedPaths.map((file) => [file, treeMode('HEAD', file)]));
     const lanes = JSON.parse(
       readFileSync(path.join(repoRoot, 'scripts/vitest-ci-lanes.config.json'), 'utf8'),
@@ -127,6 +187,7 @@ describe('[AC9] real committed declaration and base-to-head scope proof', () => 
       changedPaths,
       addedPaths,
       basePaths: basePaths(baseSha),
+      derivedRewritePaths,
       modes,
       laneClassification: lanes.classification,
       packageJsonChangedKeys: packageJsonOverreach(baseSha),
