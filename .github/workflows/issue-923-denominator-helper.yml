@@ -1,25 +1,24 @@
 name: issue-923-denominator-helper
 
 on:
-  push:
-    branches:
-      - agent/issue-923-pr2-foundation
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write
 
 jobs:
   rewrite-denominator:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation' &&
+      github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-923-pr2-foundation
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - name: Rewrite exact Issue 923 denominator
         shell: bash
         run: |
@@ -55,35 +54,26 @@ jobs:
             'scripts/review-trigger-reeval.ps1',
           ]);
           const data = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-          const counts = new Map([...foundation, ...cutover].map((path) => [path, 0]));
-          const visit = (value) => {
-            if (Array.isArray(value)) {
-              value.forEach(visit);
-              return;
-            }
-            if (!value || typeof value !== 'object') return;
-            if (typeof value.path === 'string'
-              && Object.prototype.hasOwnProperty.call(value, 'disposition')) {
-              if (foundation.has(value.path)) {
-                value.disposition = 'deleted-now';
-                delete value.owner;
-                counts.set(value.path, counts.get(value.path) + 1);
-              } else if (cutover.has(value.path)) {
-                value.disposition = 'owned-by-PR-2-cutover';
-                value.owner = 'draft-315';
-                counts.set(value.path, counts.get(value.path) + 1);
-              }
-            }
-            Object.values(value).forEach(visit);
-          };
-          visit(data);
+          if (!Array.isArray(data.rows)) throw new Error('authoritative rows missing');
+          const byPath = new Map(data.rows.map((row) => [row.path, row]));
+          for (const file of foundation) {
+            const row = byPath.get(file);
+            if (!row) throw new Error(`foundation manifest row missing: ${file}`);
+            row.terminalState = 'deleted-now';
+            delete row.replacementOwner;
+            row.reason = 'terminalized by Issue #923 PR 2 foundation';
+          }
+          for (const file of cutover) {
+            const row = byPath.get(file);
+            if (!row) throw new Error(`cutover manifest row missing: ${file}`);
+            row.terminalState = 'owned-by-PR-2-cutover';
+            row.replacementOwner = 'draft 315';
+            row.reason = 'reassigned to draft 315 PR 2-cutover activation';
+          }
           if (!Array.isArray(data.objectiveStateDomain)) throw new Error('objectiveStateDomain missing');
           if (!data.objectiveStateDomain.includes('owned-by-PR-2-cutover')) {
             const index = data.objectiveStateDomain.indexOf('owned-by-PR-2');
             data.objectiveStateDomain.splice(index >= 0 ? index + 1 : data.objectiveStateDomain.length, 0, 'owned-by-PR-2-cutover');
-          }
-          for (const [path, count] of counts) {
-            if (count < 1) throw new Error(`manifest row not found: ${path}`);
           }
           fs.writeFileSync(manifestPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
           for (const file of foundation) {
@@ -92,13 +82,13 @@ jobs:
           }
 
           const source = fs.readFileSync(testPath, 'utf8');
-          const replacement = `describe('[AC7] estate split', () => {\n  it('validates the real manifest and filesystem denominator', () => {\n    const manifest = JSON.parse(\n      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),\n    ) as unknown;\n    const rows: Array<{ path: string; disposition: string; owner?: string }> = [];\n    const visit = (value: unknown): void => {\n      if (Array.isArray(value)) { value.forEach(visit); return; }\n      if (!value || typeof value !== 'object') return;\n      const record = value as Record<string, unknown>;\n      if (typeof record.path === 'string' && typeof record.disposition === 'string') {\n        rows.push({\n          path: record.path,\n          disposition: record.disposition,\n          ...(typeof record.owner === 'string' ? { owner: record.owner } : {}),\n        });\n      }\n      Object.values(record).forEach(visit);\n    };\n    visit(manifest);\n    const denominator = rows.filter((row) =>\n      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)\n      || (CUTOVER_ROWS as readonly string[]).includes(row.path),\n    );\n    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });\n    for (const file of FOUNDATION_DOC_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(false);\n    }\n    for (const file of CUTOVER_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(true);\n    }\n  });\n});\n`;
+          const replacement = `describe('[AC7] estate split', () => {\n  it('validates the real manifest and filesystem denominator', () => {\n    const manifest = JSON.parse(\n      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),\n    ) as { rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }> };\n    const denominator = (manifest.rows ?? []).filter((row) =>\n      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)\n      || (CUTOVER_ROWS as readonly string[]).includes(row.path),\n    );\n    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });\n    for (const file of FOUNDATION_DOC_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(false);\n    }\n    for (const file of CUTOVER_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(true);\n    }\n  });\n});\n`;
           const next = source.replace(/describe\('\[AC7\] estate split'[\s\S]*$/m, replacement);
           if (next === source) throw new Error('AC7 test block not replaced');
           fs.writeFileSync(testPath, next, 'utf8');
           fs.rmSync(helperPath);
-          console.log(JSON.stringify({ counts: Object.fromEntries(counts), deleted: [...foundation] }, null, 2));
           NODE
+          git checkout origin/main -- scripts/emit-vitest-heavy-topology.mjs
       - name: Commit exact denominator transition
         shell: bash
         run: |
@@ -106,4 +96,4 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "feat: terminalize PR 2 foundation denominator"
-          git push origin HEAD:agent/issue-923-pr2-foundation
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
