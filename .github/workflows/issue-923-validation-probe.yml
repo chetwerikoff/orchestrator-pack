@@ -1,112 +1,41 @@
-name: issue-923-final-scope-normalizer
+name: issue-923-final-light-validation
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  normalize:
+  validate:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
+    env:
+      PR_BASE_SHA: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
+      PR_HEAD_SHA: 50722cde9571877d482dfb893d925a23d32617fa
+      OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-923-pr2-foundation
           fetch-depth: 0
+      - name: Checkout exact PR 939 merge ref
+        shell: bash
+        run: |
+          git fetch origin refs/pull/939/merge
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD^2)" = "$PR_HEAD_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Normalize every non-exact existing modification
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Run exact light lane 1
         shell: bash
         run: |
           set -euo pipefail
-          node --experimental-strip-types --input-type=module <<'NODE'
-          import { execFileSync } from 'node:child_process';
-          import { readFileSync, writeFileSync } from 'node:fs';
-          import path from 'node:path';
-          import {
-            EXACT_EXISTING_SCOPE_PATHS,
-            FOUNDATION_DOC_ROWS,
-          } from './scripts/pr2-foundation/contracts.ts';
-
-          const baseSha = 'faac4525e5e457f7480f99b5f26fcfd96da6d9d5';
-          const git = (args) => execFileSync('git', args, { encoding: 'utf8' }).trimEnd();
-          const portTarget = (source) => {
-            const basename = path.posix.basename(source);
-            const targetName = basename.endsWith('.d.mts')
-              ? basename.replace(/\.d\.mts$/, '.d.ts')
-              : basename.replace(/\.mjs$/, '.ts');
-            return path.posix.join('scripts/pr2-foundation/terminalized', targetName);
-          };
-          const relativeSpecifier = (fromFile, toFile) => {
-            let relative = path.posix.relative(path.posix.dirname(fromFile), toFile);
-            if (!relative.startsWith('.')) relative = `./${relative}`;
-            return relative;
-          };
-          const rewriteSpecifier = (consumer, specifier) => {
-            if (!specifier.startsWith('.')) return specifier;
-            const source = path.posix.normalize(path.posix.join(path.posix.dirname(consumer), specifier));
-            if (!FOUNDATION_DOC_ROWS.includes(source)) return specifier;
-            const target = consumer === 'scripts/fleet-liveness.cases.ts' && source === 'docs/review-head-ready.mjs'
-              ? 'scripts/pr2-foundation/review-head-ready.ts'
-              : portTarget(source);
-            return relativeSpecifier(consumer, target);
-          };
-          const expectedRewrite = (consumer, baseText) => {
-            const rewrite = (specifier) => rewriteSpecifier(consumer, specifier);
-            let text = baseText.replace(
-              /(from\s+)(['"])(\.[^'"]+)\2/g,
-              (_match, prefix, quote, specifier) => `${prefix}${quote}${rewrite(specifier)}${quote}`,
-            );
-            text = text.replace(
-              /(import\s*\(\s*)(['"])(\.[^'"]+)\2/g,
-              (_match, prefix, quote, specifier) => `${prefix}${quote}${rewrite(specifier)}${quote}`,
-            );
-            text = text.replace(
-              /(import\s+)(['"])(\.[^'"]+)\2/g,
-              (_match, prefix, quote, specifier) => `${prefix}${quote}${rewrite(specifier)}${quote}`,
-            );
-            return text.replace(
-              /(new\s+URL\(\s*)(['"])(\.[^'"]+)\2(\s*,\s*import\.meta\.url\s*\))/g,
-              (_match, prefix, quote, specifier, suffix) =>
-                `${prefix}${quote}${rewrite(specifier)}${quote}${suffix}`,
-            );
-          };
-
-          const exact = new Set([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS]);
-          const rows = git(['diff', '--name-status', '--find-renames=0', `${baseSha}...HEAD`])
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .map((line) => {
-              const [status, ...parts] = line.split('\t');
-              return { status, file: parts.join('\t') };
-            });
-          const normalized = [];
-          for (const row of rows) {
-            if (row.status !== 'M' || exact.has(row.file)) continue;
-            const baseText = execFileSync('git', ['show', `${baseSha}:${row.file}`], { encoding: 'utf8' });
-            const expected = expectedRewrite(row.file, baseText);
-            const current = readFileSync(row.file, 'utf8');
-            if (current !== expected) {
-              writeFileSync(row.file, expected, 'utf8');
-              normalized.push(row.file);
-            }
-          }
-          process.stdout.write(`${JSON.stringify({ normalized }, null, 2)}\n`);
-          NODE
-      - name: Commit normalized scope to PR 939
-        shell: bash
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          if git diff --cached --quiet; then
-            echo 'No scope normalization required.'
-            exit 0
-          fi
-          git commit -m "fix: normalize derived consumer rewrites to AC9 authority"
-          git push origin HEAD:agent/issue-923-pr2-foundation
+          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
+          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard
+          export OPK_VITEST_TOPOLOGY_PLAN_PATH="$GITHUB_WORKSPACE/scripts/vitest-heavy-topology.plan.json"
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1
