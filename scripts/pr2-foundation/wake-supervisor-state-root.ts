@@ -18,7 +18,8 @@ function pathApi(platform: NodeJS.Platform): typeof path.posix | typeof path.win
 /**
  * TypeScript parity port of Get-OrchestratorWakeSupervisorStateRoot.
  * The supervisor override is authoritative, followed by XDG_STATE_HOME,
- * Windows LOCALAPPDATA, and the user-home fallback.
+ * Windows LOCALAPPDATA, and the user-home fallback. Keep this precedence
+ * identical to the live reconciler so notification and recovery share bytes.
  */
 export function resolveWakeSupervisorStateRoot(
   options: WakeSupervisorStateRootOptions = {},
