@@ -1,4 +1,4 @@
-name: issue-943-changed-first-retry
+name: issue-943-changed-first-retry-disabled
 
 on:
   pull_request:
@@ -9,132 +9,11 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  publish:
-    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+  disabled:
+    if: ${{ false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      TARGET_BRANCH: agent/issue-943-self-architect-hot-loop
-      TARGET_HEAD: 9b33c5007416280bcdc42b9f3c96f0b60119e253
-      PATCH_WORKFLOW_COMMIT: 123b57c04bd146eb0b0b5863140df946ce06aa0b
-      PR939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
-      PR939_BASE: 296dff446d365cb3c0aba92b93ab16a95ee51fd3
-      FINAL_PATCH_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/issue-943-self-architect-hot-loop
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Reapply exact changed-first patch with explicit scope diagnostics
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$PATCH_WORKFLOW_COMMIT"
-          git show "$PATCH_WORKFLOW_COMMIT:.github/workflows/issue-943-policy-apply.yml" > "$RUNNER_TEMP/source-workflow.yml"
-          RUNNER_TEMP="$RUNNER_TEMP" python3 <<'PY'
-          from pathlib import Path
-          import os
-          import subprocess
-          import textwrap
-
-          workflow = Path(os.environ['RUNNER_TEMP'], 'source-workflow.yml').read_text(encoding='utf-8').splitlines()
-          start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
-          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
-          script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
-          exec(compile(script, '<changed-first-patch>', 'exec'), {'__name__': '__main__'})
-
-          expected = sorted([
-              'scripts/lint-self-architect.ps1',
-              'tests/powershell/Lint-SelfArchitect.Tests.ps1',
-          ])
-          actual = sorted(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
-          print('expected_paths=', expected)
-          print('actual_paths=', actual)
-          if actual != expected:
-              raise SystemExit(f'changed_path_mismatch:{actual}')
-          check = subprocess.run(['git', 'diff', '--check'], text=True, capture_output=True)
-          print('diff_check_stdout=', check.stdout)
-          print('diff_check_stderr=', check.stderr)
-          if check.returncode != 0:
-              raise SystemExit(f'diff_check_failed:{check.returncode}')
-          PY
-      - name: Verify policy and exact PR 939 budget
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci --include=dev
-          npm run check:node-major
-          pwsh -NoProfile -File ./scripts/install-pester-ci.ps1
-          pwsh -NoProfile -Command '$result = Invoke-Pester -Path @("./tests/powershell/Lint-SelfArchitect.Tests.ps1", "./scripts/lint-self-architect.diff-mode.Tests.ps1") -PassThru; if ($result.FailedCount -gt 0) { exit 1 }'
-          pwsh -NoProfile -File ./scripts/verify.ps1
-          pwsh -NoProfile -File ./scripts/check-reusable.ps1
-
-          git fetch origin "$PR939_HEAD" "$FINAL_PATCH_COMMIT" main
-          benchmark="$RUNNER_TEMP/pr939-benchmark"
-          git worktree add --detach "$benchmark" "$PR939_HEAD"
-          git show "$FINAL_PATCH_COMMIT:.github/workflows/issue-923-final-fix-publisher.yml" > "$RUNNER_TEMP/final-publisher.yml"
-          POLICY_SCRIPT="$GITHUB_WORKSPACE/scripts/lint-self-architect.ps1" BENCHMARK_ROOT="$benchmark" RUNNER_TEMP="$RUNNER_TEMP" python3 <<'PY'
-          from pathlib import Path
-          import os
-          import textwrap
-
-          workflow = Path(os.environ['RUNNER_TEMP'], 'final-publisher.yml').read_text(encoding='utf-8').splitlines()
-          start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
-          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
-          script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
-          root = Path(os.environ['BENCHMARK_ROOT'])
-          previous = Path.cwd()
-          try:
-              os.chdir(root)
-              exec(compile(script, '<final-patch>', 'exec'), {'__name__': '__main__'})
-              path = Path('scripts/pr2-foundation/worker-notification-compat.test.ts')
-              source = path.read_text(encoding='utf-8')
-              old = "    expect(source).toContain('worker-message-dispatch-observe.mjs');\n"
-              new = "    expect(source).toContain('worker-message-dispatch-observe');\n"
-              if source.count(old) != 1:
-                  raise SystemExit(f'canonical assertion match count: {source.count(old)}')
-              path.write_text(source.replace(old, new, 1), encoding='utf-8')
-              Path('scripts/lint-self-architect.ps1').write_text(
-                  Path(os.environ['POLICY_SCRIPT']).read_text(encoding='utf-8'),
-                  encoding='utf-8',
-              )
-          finally:
-              os.chdir(previous)
-          PY
-
-          pushd "$benchmark"
-          started="$(date +%s)"
-          set +e
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
-            -Strict \
-            -BaseRef "$PR939_BASE" \
-            -HeadRef HEAD \
-            > "$RUNNER_TEMP/pr939-self-architect.log" 2>&1
-          lint_status=$?
-          set -e
-          elapsed=$(( $(date +%s) - started ))
-          popd
-          tail -n 30 "$RUNNER_TEMP/pr939-self-architect.log"
-          echo "pr939_lint_status=$lint_status"
-          echo "pr939_self_architect_elapsed_seconds=$elapsed"
-          test "$lint_status" -eq 0
-          grep -F 'No findings.' "$RUNNER_TEMP/pr939-self-architect.log"
-          grep -F 'Summary: strict=0 warning=0' "$RUNNER_TEMP/pr939-self-architect.log"
-          test "$elapsed" -lt 600
-      - name: Commit and push verified policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/lint-self-architect.ps1 tests/powershell/Lint-SelfArchitect.Tests.ps1
-          git commit -m 'perf: index changed duplicate blocks first'
-          git push origin HEAD:"$TARGET_BRANCH"
+      - run: echo disabled
