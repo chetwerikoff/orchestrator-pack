@@ -1,0 +1,70 @@
+name: issue-923-final-diagnostics
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture pipeline and Vitest diagnostics
+        shell: pwsh
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
+        run: |
+          New-Item -ItemType Directory -Path diagnostics -Force | Out-Null
+          function Invoke-Captured([string]$Name, [scriptblock]$Command) {
+            try {
+              & $Command *> "diagnostics/$Name.log"
+              $code = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
+            }
+            catch {
+              $_ | Out-String | Add-Content "diagnostics/$Name.log"
+              $code = 1
+            }
+            Set-Content "diagnostics/$Name.exit" ([string]$code)
+          }
+          Invoke-Captured 'pipeline-split' { ./scripts/check-ci-pipeline-split.ps1 }
+          $env:OPK_CHANGED_VITEST_FILES = node scripts/emit-pr-changed-paths-manifest.mjs --base $env:PR_BASE_SHA --head $env:PR_HEAD_SHA
+          Invoke-Captured 'topology' { node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard }
+          $env:OPK_VITEST_TOPOLOGY_PLAN_PATH = Join-Path $PWD 'scripts/vitest-heavy-topology.plan.json'
+          Invoke-Captured 'light-1' { ./scripts/run-vitest-light-lane.ps1 -Shard 1 }
+          Invoke-Captured 'light-2' { ./scripts/run-vitest-light-lane.ps1 -Shard 2 }
+          Invoke-Captured 'heavy-1' { ./scripts/run-vitest-heavy-shard.ps1 -Shard 1 }
+          Invoke-Captured 'heavy-2' { ./scripts/run-vitest-heavy-shard.ps1 -Shard 2 }
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Capture Pester diagnostics
+        shell: pwsh
+        run: |
+          try {
+            ./scripts/test-all.ps1 -SkipNpm *> diagnostics/pester.log
+            $code = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
+          }
+          catch {
+            $_ | Out-String | Add-Content diagnostics/pester.log
+            $code = 1
+          }
+          Set-Content diagnostics/pester.exit ([string]$code)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-final-diagnostics
+          path: diagnostics
+          if-no-files-found: error
