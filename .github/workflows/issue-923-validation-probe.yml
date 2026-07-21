@@ -1,4 +1,4 @@
-name: issue-923-final-fix-script-extract
+name: issue-923-final-fix-script-chunk-1
 
 on:
   pull_request:
@@ -17,34 +17,21 @@ jobs:
       SOURCE_JOB_ID: '88712704384'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Extract echoed Python patch as compressed chunks
+      - name: Extract final-fix patch chunk 1
         shell: bash
         run: |
           set -euo pipefail
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > source.log
+          curl --fail --silent --show-error --location -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" "$api" > source.log
           python3 - <<'PY'
-          import base64
-          import gzip
-          import re
-
+          import base64, gzip, re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           stamp = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z\s')
-          raw = open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()
-          lines = [stamp.sub('', ansi.sub('', line), count=1) for line in raw]
+          lines = [stamp.sub('', ansi.sub('', line), count=1) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           start = next(i for i, line in enumerate(lines) if line == "python3 <<'PY'")
           end = next(i for i in range(start + 1, len(lines)) if lines[i] == 'PY')
           script = '\n'.join(lines[start + 1:end]) + '\n'
-          encoded = base64.b64encode(gzip.compress(script.encode('utf-8'), compresslevel=9)).decode('ascii')
-          print(f'SCRIPT_LINES={end-start-1}')
-          print(f'SCRIPT_SHA256=' + __import__('hashlib').sha256(script.encode()).hexdigest())
-          width = 1400
-          chunks = [encoded[i:i+width] for i in range(0, len(encoded), width)]
-          print(f'CHUNKS={len(chunks)}')
-          for index, chunk in enumerate(chunks):
-              print(f'CHUNK_{index:02d}={chunk}')
+          encoded = base64.b64encode(gzip.compress(script.encode(), compresslevel=9)).decode()
+          chunks = [encoded[i:i+1400] for i in range(0, len(encoded), 1400)]
+          print('CHUNK_01=' + chunks[1])
           PY
