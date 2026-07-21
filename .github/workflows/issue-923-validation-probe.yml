@@ -1,4 +1,4 @@
-name: issue-923-residual-final-45
+name: issue-923-final-fix-failure-tail
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88709369923'
+      SOURCE_JOB_ID: '88712704384'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print final 45 residual log lines
+      - name: Print final final-fix failure lines
         shell: bash
         run: |
           set -euo pipefail
@@ -26,11 +26,11 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > residual.log
+            "$api" > source.log
           python3 - <<'PY'
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
-          lines = [ansi.sub('', line) for line in open('residual.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          for index, line in enumerate(lines[-45:], start=max(1, len(lines) - 44)):
+          lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
+          for index, line in enumerate(lines[-70:], start=max(1, len(lines) - 69)):
               print(f'{index}:{line}')
           PY
