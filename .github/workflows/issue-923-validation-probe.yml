@@ -1,242 +1,32 @@
-name: issue-923-residual-self-architect-fixes
+name: issue-923-residual-fix-log-extract
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
 
 jobs:
-  fix:
+  extract:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    env:
+      SOURCE_JOB_ID: '88704008397'
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/issue-923-pr2-foundation
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Apply five residual duplicate-group fixes
+      - name: Print exact helper failure
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          def replace_once(path: Path, old: str, new: str, label: str) -> None:
-              source = path.read_text()
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one match, found {count}')
-              path.write_text(source.replace(old, new, 1))
-
-          Path('scripts/pr2-foundation/mutation-target-check.ts').write_text(
-              """/** Compatibility CLI: the semantic checker is the single implementation. */
-          import './mutation-semantic-check.ts';
-          """
-          )
-
-          journal_path = Path('scripts/pr2-foundation/worker-dispatch-journal.ts')
-          journal = journal_path.read_text()
-          journal_prefix = """export const CANONICAL_DISPATCH_SOURCE_BLOB_SHA = 'ffae6481d77e47b6bfded236a7f19b1d1fa5dfc5' as const;
-          export const AO_PASTE_CHAR_THRESHOLD = 200;
-          export const DISPATCH_OUTCOME_DISPATCHED = 'dispatched' as const;
-          export const DISPATCH_OUTCOME_SEND_FAILED = 'send_failed' as const;
-          export const DISPATCH_OUTCOME_IN_FLIGHT = 'dispatch_in_flight' as const;
-          export const DISPATCH_OUTCOME_UNKNOWN = 'dispatch_unknown' as const;
-          export const DRAFT_STATE_AUTO_SUBMITTED = 'auto_submitted' as const;
-          export const DRAFT_STATE_DRAFT_PRESENT = 'draft_present' as const;
-          export const DELIVERY_PATH_PENDING_DRAFT = 'pending-draft' as const;
-          export const DELIVERY_PATH_SELF_SUBMITTED = 'self-submitted' as const;
-          
-          """
-          canonical_prefix = """import {
-            AO_PASTE_CHAR_THRESHOLD,
-            classifyDeliveryPath,
-            DELIVERY_PATH_PENDING_DRAFT,
-            DELIVERY_PATH_SELF_SUBMITTED,
-            deriveMessageShape,
-            DISPATCH_OUTCOME_DISPATCHED,
-            DISPATCH_OUTCOME_IN_FLIGHT,
-            DISPATCH_OUTCOME_SEND_FAILED,
-            DISPATCH_OUTCOME_UNKNOWN,
-            DRAFT_STATE_AUTO_SUBMITTED,
-            DRAFT_STATE_DRAFT_PRESENT,
-          } from './terminalized/worker-message-dispatch-observe.ts';
-          
-          export {
-            AO_PASTE_CHAR_THRESHOLD,
-            classifyDeliveryPath,
-            DELIVERY_PATH_PENDING_DRAFT,
-            DELIVERY_PATH_SELF_SUBMITTED,
-            deriveMessageShape,
-            DISPATCH_OUTCOME_DISPATCHED,
-            DISPATCH_OUTCOME_IN_FLIGHT,
-            DISPATCH_OUTCOME_SEND_FAILED,
-            DISPATCH_OUTCOME_UNKNOWN,
-            DRAFT_STATE_AUTO_SUBMITTED,
-            DRAFT_STATE_DRAFT_PRESENT,
-          };
-          
-          export const CANONICAL_DISPATCH_SOURCE_BLOB_SHA = 'ffae6481d77e47b6bfded236a7f19b1d1fa5dfc5' as const;
-          
-          """
-          if journal.count(journal_prefix) != 1:
-              raise SystemExit(f'journal prefix match count: {journal.count(journal_prefix)}')
-          journal = journal.replace(journal_prefix, canonical_prefix, 1)
-          classifier_pattern = re.compile(
-              r"export function classifyDeliveryPath\([\s\S]*?\n\}\n\n/\*\* Exact TypeScript port of the canonical deleted docs classifier\. \*/\nexport function deriveMessageShape\([\s\S]*?\n\}\n\n(?=/\*\*\n \* Exact bounded admission semantics)",
-          )
-          journal, count = classifier_pattern.subn('', journal, count=1)
-          if count != 1:
-              raise SystemExit(f'journal classifier match count: {count}')
-          journal_path.write_text(journal)
-
-          wake_path = Path('scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts')
-          replace_once(
-              wake_path,
-              """export interface AoWebhookEvent {
-            id?: string;
-            type?: string;
-            priority?: string;
-            sessionId?: string;
-            projectId?: string;
-            timestamp?: string;
-            message?: string;
-            data?: Record<string, unknown>;
-            [key: string]: unknown;
-          }
-          """,
-              """export type AoWebhookEvent = Record<string, unknown> & {
-            id?: string;
-            type?: string;
-            priority?: string;
-            sessionId?: string;
-            projectId?: string;
-            timestamp?: string;
-            message?: string;
-            data?: Record<string, unknown>;
-          };
-          """,
-              'wake event type alias',
-          )
-
-          nudge_path = Path('scripts/pr2-foundation/worker-nudge-gate.ts')
-          replace_once(
-              nudge_path,
-              """  if (!claim || ownerSessionId !== requestedSessionId || !targetId || !targetGeneration) {
-              return { ok: false, reason: 'pr_claim_unresolved', verifiable: false };
-            }
-            return {
-          """,
-              """  if (!claim || ownerSessionId !== requestedSessionId || !targetId || !targetGeneration) {
-              return { ok: false, reason: 'pr_claim_unresolved', verifiable: false };
-            }
-            const resolvedWorkerTarget = `${targetId}:${targetGeneration}`;
-            return {
-          """,
-              'worker target local value',
-          )
-          replace_once(
-              nudge_path,
-              "    workerTarget: `${targetId}:${targetGeneration}`,\n",
-              "    workerTarget: resolvedWorkerTarget,\n",
-              'worker target property',
-          )
-
-          foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
-          foundation = foundation_path.read_text()
-          foundation_pattern = re.compile(
-              r"  it\('contains no PowerShell and invokes the canonical dispatch journal CLI', \(\) => \{\n[\s\S]*?\n  \}\);",
-          )
-          foundation_replacement = """  it('contains no PowerShell and invokes the canonical dispatch journal CLI', () => {
-            const source = [
-              'scripts/lib/pack-review-worker-notification.ts',
-              'scripts/pr2-foundation/worker-notification.ts',
-              'scripts/pr2-foundation/worker-dispatch-journal.ts',
-            ].map((file) => readFileSync(path.join(repoRoot, file), 'utf8')).join('\\n');
-            for (const forbidden of [/\\bpwsh\\b/i, /\\.ps1\\b/i]) {
-              expect(source).not.toMatch(forbidden);
-            }
-            for (const required of [
-              'worker-message-dispatch-observe',
-              'admitDispatchJournalRecord',
-              'finalizeDispatchJournalRecord',
-            ]) {
-              expect(source).toContain(required);
-            }
-          });"""
-          foundation, count = foundation_pattern.subn(
-              lambda _match: foundation_replacement,
-              foundation,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit(f'foundation AC4 structural match count: {count}')
-          foundation_path.write_text(foundation)
-
-          port_path = Path('scripts/pr2-foundation/terminalized-port.test.ts')
-          replace_once(
-              port_path,
-              """    expect(suppressions).toEqual(FOUNDATION_DOC_ROWS.map((source) => ({
-                rule: 'duplicate-literal',
-                files: [source, targetFor(source)],
-                reason: 'Issue #923 keeps this exact legacy-live/dormant-TypeScript mirror until draft 315 cutover.',
-              })));
-          """,
-              """    const expectedPairs = FOUNDATION_DOC_ROWS
-                .map((source) => [source, targetFor(source)].join('|'))
-                .sort();
-              const actualPairs = suppressions
-                .map((suppression) => suppression.files.join('|'))
-                .sort();
-              expect(actualPairs).toEqual(expectedPairs);
-              expect(suppressions).toHaveLength(FOUNDATION_DOC_ROWS.length);
-              expect(suppressions.every((suppression) => suppression.rule === 'duplicate-literal')).toBe(true);
-              expect(new Set(suppressions.map((suppression) => suppression.reason))).toEqual(new Set([
-                'Issue #923 migration parity until draft 315; remove at cutover',
-              ]));
-          """,
-              'AC7 policy comparison',
-          )
-          PY
-
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            scripts/pr2-foundation/mutation-target-check.ts \
-            scripts/pr2-foundation/worker-dispatch-journal.ts \
-            scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts \
-            scripts/pr2-foundation/worker-nudge-gate.ts \
-            scripts/pr2-foundation/foundation.test.ts \
-            scripts/pr2-foundation/terminalized-port.test.ts
-          git commit -m 'fix: remove residual self-architect duplicates'
-      - name: Verify focused contracts and strict self-architect budget
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci --include=dev
-          npm run check:node-major
-          npx tsc --project tsconfig.base.json --noEmit
-          npx vitest run \
-            scripts/pr2-foundation/foundation.test.ts \
-            scripts/pr2-foundation/terminalized-port.test.ts \
-            scripts/pr2-foundation/mutation-catalog.test.ts \
-            scripts/pr2-foundation/worker-notification-compat.test.ts
-          started="$(date +%s)"
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
-            -Strict \
-            -BaseRef origin/main \
-            -HeadRef HEAD
-          elapsed=$(( $(date +%s) - started ))
-          echo "self_architect_elapsed_seconds=$elapsed"
-          test "$elapsed" -lt 600
-      - name: Push verified fixes
-        shell: bash
-        run: git push origin HEAD:agent/issue-923-pr2-foundation
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" > helper.log
+          grep -nE 'match count|expected one match|SystemExit|Traceback|Error|error|failed|journal|wake event|worker target|foundation AC4|AC7 policy' helper.log | tail -n 200 || true
+          echo '--- tail ---'
+          tail -n 160 helper.log
