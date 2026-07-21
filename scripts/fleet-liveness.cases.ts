@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { evaluateHeadReadyForReview } from '../docs/review-head-ready.mjs';
+import { evaluateHeadReadyForReview } from './pr2-foundation/review-head-ready.ts';
 import {
   REVIEW_READY_SEED_LIVENESS_EXPECTED,
 } from './lib/review-ready-seed-liveness-matrix.mjs';

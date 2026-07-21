@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
 import path from 'node:path';
-import { hashNudgeMessageContent } from '../../docs/worker-nudge-gate.mjs';
+import { hashNudgeMessageContent } from './worker-nudge-gate.ts';
 
 export type WorkerNudgeClaimPhase =
   | 'CLAIMED'

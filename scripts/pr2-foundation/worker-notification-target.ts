@@ -12,7 +12,7 @@ import {
   resolvePrOwnerSessionForNudge,
   resolveWorkerTargetFromPrClaim,
   syncPrOwnershipClaimRecord,
-} from '../../docs/worker-nudge-gate.mjs';
+} from './worker-nudge-gate.ts';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
   collectOpenPrSnapshot,
