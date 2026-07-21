@@ -503,7 +503,7 @@ describe('session-pr-binding sole-path contract', () => {
   const consumerModules = [
     'docs/ci-failure-notification.mjs',
     'docs/ci-green-wake-reconcile.mjs',
-    'docs/review-trigger-reconcile.mjs',
+    'scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts',
     'docs/review-trigger-reeval.mjs',
     'docs/review-ready-report-state-seed.mjs',
     'docs/review-ready-stuck-guard.mjs',
