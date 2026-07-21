@@ -30,4 +30,16 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       'Ported from docs/events-optional-consumer-signal-recovery.d.mts blob ',
     );
   });
+
+  it('keeps cutover bytes untouched and leaves no temporary workflow in the final tree', () => {
+    const cutoverSource = readFileSync(path.resolve('scripts/reaction-config-messages.mjs'), 'utf8');
+    expect(cutoverSource).toContain("from '../docs/worker-message-dispatch-observe.mjs'");
+    expect(cutoverSource).not.toContain('scripts/pr2-foundation/terminalized');
+    for (const workflow of [
+      '.github/workflows/issue-923-scope-type-diagnostic.yml',
+      '.github/workflows/issue-923-final-cleanup-helper.yml',
+    ]) {
+      expect(existsSync(path.resolve(workflow)), workflow).toBe(false);
+    }
+  });
 });
