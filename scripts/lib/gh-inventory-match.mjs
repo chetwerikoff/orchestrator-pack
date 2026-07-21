@@ -1,6 +1,6 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
+/** @typedef {'api-pull-review' | 'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
 
 /** scm-github prInfoFromView consumer fields (resolvePR + detectPR; Issue #530). */
 export const PR_INFO_FROM_VIEW_FIELDS = Object.freeze([
@@ -39,7 +39,7 @@ export function hasOnlyAllowedFlags(parsed, allowed) {
 
 /**
  * @param {ReturnType<typeof parseGhArgv>} parsed
- * @returns {{ id: InventoryRouteId, prNumber?: number, branch?: string } | null}
+ * @returns {{ id: InventoryRouteId, prNumber?: number, prRef?: string, branch?: string, repoSlug?: string, reviewId?: string } | null}
  */
 export function matchInventoryRoute(parsed) {
   const [root, sub] = parsed.subcommand;
@@ -48,7 +48,23 @@ export function matchInventoryRoute(parsed) {
   }
 
   if (root === 'api') {
-    return null;
+    if (!hasOnlyAllowedFlags(parsed, []) || parsed.repo || parsed.jsonFields || parsed.jq || parsed.positionals.length > 0) {
+      return null;
+    }
+    const match = String(sub ?? '').match(/^repos\/([^/\s]+)\/([^/\s]+)\/pulls\/(\d+)\/reviews\/(\d+)$/);
+    if (!match) {
+      return null;
+    }
+    const prNumber = Number(match[3]);
+    if (!Number.isInteger(prNumber) || prNumber <= 0) {
+      return null;
+    }
+    return {
+      id: 'api-pull-review',
+      repoSlug: `${match[1]}/${match[2]}`,
+      prNumber,
+      reviewId: match[4],
+    };
   }
 
   if (root === 'repo' && sub === 'view') {
