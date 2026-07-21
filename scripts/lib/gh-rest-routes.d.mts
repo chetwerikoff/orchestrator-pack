@@ -7,7 +7,7 @@ export function parsePullReference(
 
 export function routePrView(
   realGh: string,
-  repo: { slug: string; host: string },
+  repo: { slug: string; host: string | null },
   prRef: string,
   fields: string[],
   jq: string | null,
@@ -16,10 +16,25 @@ export function routePrView(
 
 export function routePrChecks(
   realGh: string,
-  repo: { slug: string; host: string },
+  repo: { slug: string; host: string | null },
   prNumber: number,
   cwd: string,
 ): unknown[];
+
+export function routePullReview(
+  realGh: string,
+  repo: { slug: string; host: string | null },
+  prNumber: number,
+  reviewId: string,
+  cwd: string,
+): {
+  id: string;
+  commitId: string;
+  state: string;
+  body: string;
+  submittedAt: string | null;
+  authorLogin: string;
+};
 
 export function executeRestRoute(
   routeId: string,
