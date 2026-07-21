@@ -26,6 +26,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const manifestPath = 'scripts/estate-cut/issue-906.manifest.json';
+          const testPath = 'scripts/pr2-foundation/foundation.test.ts';
           const helperPath = '.github/workflows/issue-923-denominator-helper.yml';
           const foundation = new Set([
             'docs/ao-0-10-review-api.mjs',
@@ -76,9 +77,7 @@ jobs:
             Object.values(value).forEach(visit);
           };
           visit(data);
-          if (!Array.isArray(data.objectiveStateDomain)) {
-            throw new Error('objectiveStateDomain missing');
-          }
+          if (!Array.isArray(data.objectiveStateDomain)) throw new Error('objectiveStateDomain missing');
           if (!data.objectiveStateDomain.includes('owned-by-PR-2-cutover')) {
             const index = data.objectiveStateDomain.indexOf('owned-by-PR-2');
             data.objectiveStateDomain.splice(index >= 0 ? index + 1 : data.objectiveStateDomain.length, 0, 'owned-by-PR-2-cutover');
@@ -91,6 +90,12 @@ jobs:
             if (!fs.existsSync(file)) throw new Error(`foundation doc missing before terminalization: ${file}`);
             fs.rmSync(file);
           }
+
+          const source = fs.readFileSync(testPath, 'utf8');
+          const replacement = `describe('[AC7] estate split', () => {\n  it('validates the real manifest and filesystem denominator', () => {\n    const manifest = JSON.parse(\n      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),\n    ) as unknown;\n    const rows: Array<{ path: string; disposition: string; owner?: string }> = [];\n    const visit = (value: unknown): void => {\n      if (Array.isArray(value)) { value.forEach(visit); return; }\n      if (!value || typeof value !== 'object') return;\n      const record = value as Record<string, unknown>;\n      if (typeof record.path === 'string' && typeof record.disposition === 'string') {\n        rows.push({\n          path: record.path,\n          disposition: record.disposition,\n          ...(typeof record.owner === 'string' ? { owner: record.owner } : {}),\n        });\n      }\n      Object.values(record).forEach(visit);\n    };\n    visit(manifest);\n    const denominator = rows.filter((row) =>\n      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)\n      || (CUTOVER_ROWS as readonly string[]).includes(row.path),\n    );\n    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });\n    for (const file of FOUNDATION_DOC_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(false);\n    }\n    for (const file of CUTOVER_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(true);\n    }\n  });\n});\n`;
+          const next = source.replace(/describe\('\[AC7\] estate split'[\s\S]*$/m, replacement);
+          if (next === source) throw new Error('AC7 test block not replaced');
+          fs.writeFileSync(testPath, next, 'utf8');
           fs.rmSync(helperPath);
           console.log(JSON.stringify({ counts: Object.fromEntries(counts), deleted: [...foundation] }, null, 2));
           NODE
