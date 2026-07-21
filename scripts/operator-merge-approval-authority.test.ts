@@ -301,7 +301,7 @@ describe('shared direct-operator review authority', () => {
     });
   });
 
-  it.skip.each([
+  it.each([
     ['current PR head', { currentHeadSha: OTHER_HEAD }, 'github_review_live_pr_head_mismatch'],
     ['review commit', { reviewHeadSha: OTHER_HEAD }, 'github_review_live_head_mismatch'],
     ['review state', { reviewState: 'PENDING' }, 'github_review_live_state_mismatch'],
@@ -321,7 +321,7 @@ describe('shared direct-operator review authority', () => {
     });
   });
 
-  it.skip('denies approve before every effect when terminal evidence is missing or mid-flight', async () => {
+  it('denies approve before every effect when terminal evidence is missing or mid-flight', async () => {
     for (const terminal of [undefined, false] as const) {
       const fixture = terminal === undefined
         ? (() => {
@@ -345,7 +345,7 @@ describe('shared direct-operator review authority', () => {
     }
   });
 
-  it.skip('denies BLOCK and pending adjudication before approval success', async () => {
+  it('denies BLOCK and pending adjudication before approval success', async () => {
     const blocked = seedReview({ severity: 'blocking', body: reviewBody('CI will fail on the documented path.') });
     const blockedCapture = commandTransport();
     await expect(runOperatorMergeApprovalCommand(approveArgs(blocked.approvalRoot), {
@@ -372,7 +372,7 @@ describe('shared direct-operator review authority', () => {
     expect(pendingCapture.comments).toHaveLength(0);
   });
 
-  it.skip('runs the shared preflight before comment and immediately before success', async () => {
+  it('runs the shared preflight before comment and immediately before success', async () => {
     const fixture = seedReview();
     const capture = commandTransport();
     const livePath = process.env.OPK_OPERATOR_MERGE_GITHUB_REVIEW_FIXTURE!;
