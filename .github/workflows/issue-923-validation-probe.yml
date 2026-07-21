@@ -1,4 +1,4 @@
-name: issue-923-final-self-architect
+name: issue-923-self-architect-log-extract
 
 on:
   pull_request:
@@ -6,29 +6,28 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  validate:
+  extract:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     env:
-      PR_BASE_SHA: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
-      PR_HEAD_SHA: 50722cde9571877d482dfb893d925a23d32617fa
+      SOURCE_JOB_ID: '88674126173'
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Checkout exact PR 939 merge ref
+      - name: Download and print self-architect verdict
         shell: bash
         run: |
-          git fetch origin refs/pull/939/merge
-          git checkout --detach FETCH_HEAD
-          test "$(git rev-parse HEAD^2)" = "$PR_HEAD_SHA"
-      - name: Run strict self-architect lint
-        shell: pwsh
-        run: |
-          ./scripts/lint-self-architect.ps1 `
-            -Strict `
-            -BaseRef $env:PR_BASE_SHA `
-            -HeadRef $env:PR_HEAD_SHA
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" > self-architect.log
+          echo '--- filtered verdict ---'
+          grep -nE 'self-architect|duplicate-literal|near-duplicate-literal|paired-edit|strict|warning|Summary|summary|finding|Finding|error|Error|failed|Failed' self-architect.log | tail -n 1200 || true
+          echo '--- final 400 lines ---'
+          tail -n 400 self-architect.log
