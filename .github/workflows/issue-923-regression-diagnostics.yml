@@ -1,0 +1,68 @@
+name: issue-923-regression-diagnostics
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Build topology
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
+        run: |
+          mkdir -p diagnostics
+          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
+          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard > diagnostics/topology.log 2>&1
+      - name: Capture Vitest lanes
+        continue-on-error: true
+        shell: bash
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
+        run: |
+          set +e
+          pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1 -Shard 1 > diagnostics/light-1.log 2>&1
+          echo $? > diagnostics/light-1.exit
+          pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1 -Shard 2 > diagnostics/light-2.log 2>&1
+          echo $? > diagnostics/light-2.exit
+          pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1 > diagnostics/heavy-1.log 2>&1
+          echo $? > diagnostics/heavy-1.exit
+          pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2 > diagnostics/heavy-2.log 2>&1
+          echo $? > diagnostics/heavy-2.exit
+          exit 0
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Capture Pester and pipeline split
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          pwsh -NoProfile -File scripts/test-all.ps1 -SkipNpm > diagnostics/pester.log 2>&1
+          echo $? > diagnostics/pester.exit
+          pwsh -NoProfile -File scripts/check-ci-pipeline-split.ps1 > diagnostics/pipeline-split.log 2>&1
+          echo $? > diagnostics/pipeline-split.exit
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-923-regression-diagnostics
+          path: diagnostics
+          if-no-files-found: error
