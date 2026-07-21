@@ -1,70 +1,82 @@
-name: issue-941-declaration-pair-fix
+name: issue-941-pr939-policy-validation
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  validate:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      PR_939_HEAD: 50722cde9571877d482dfb893d925a23d32617fa
+      PR_939_BASE: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
+      POLICY_HEAD: f5245db130ad4f5b496a4dfb7db454cc80668ec4
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-941-self-architect-migration-pairs
           fetch-depth: 0
-      - name: Add exact declaration migration pair
+      - name: Assemble exact PR 939 head with Issue 941 policy overlay
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin "$PR_939_HEAD" "$POLICY_HEAD"
+          git checkout --detach "$PR_939_HEAD"
+          test "$(git rev-parse HEAD)" = "$PR_939_HEAD"
+          git checkout "$POLICY_HEAD" -- \
+            scripts/lint-self-architect.ps1 \
+            scripts/lint-self-architect.config.json
+      - name: Prove exact suppressions and existing time budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          started="$(date +%s)"
+          set +e
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef "$PR_939_BASE" \
+            -HeadRef "$PR_939_HEAD" \
+            > self-architect.log 2>&1
+          lint_status=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
           python3 <<'PY'
-          from pathlib import Path
+          from collections import Counter
           import json
+          import re
 
-          config_path = Path('scripts/lint-self-architect.config.json')
-          config = json.loads(config_path.read_text())
-          pair = [
-              'docs/events-optional-consumer-signal-recovery.d.mts',
-              'scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts',
-          ]
-          if any(entry.get('files') == pair for entry in config['suppressions']):
-              raise SystemExit('declaration pair already present')
-          config['suppressions'].append({
-              'rule': 'duplicate-literal',
-              'reason': 'Issue #923 declaration migration parity until draft 315; remove at cutover',
-              'files': pair,
-          })
-          config_path.write_text(json.dumps(config, indent=2) + '\n')
-
-          test_path = Path('tests/powershell/Lint-SelfArchitect.Tests.ps1')
-          tests = test_path.read_text()
-          replacements = {
-              "declares exactly the fifteen Issue 923 runtime migration pairs without wildcards":
-                  "declares exactly the sixteen Issue 923 migration pairs without wildcards",
-              "$suppressions.Count | Should -Be 15":
-                  "$suppressions.Count | Should -Be 16",
-              "            'docs/events-optional-consumer-signal-recovery.mjs',\n":
-                  "            'docs/events-optional-consumer-signal-recovery.d.mts',\n            'docs/events-optional-consumer-signal-recovery.mjs',\n",
-              "$legacy = @($entry.files | Where-Object { $_ -like 'docs/*.mjs' })":
-                  "$legacy = @($entry.files | Where-Object { $_ -like 'docs/*.mjs' -or $_ -like 'docs/*.d.mts' })",
+          config = json.load(open('scripts/lint-self-architect.config.json', encoding='utf-8'))
+          suppressed = {
+              frozenset(entry['files'])
+              for entry in config.get('suppressions', [])
+              if entry.get('rule') == 'duplicate-literal'
           }
-          for old, new in replacements.items():
-              count = tests.count(old)
-              if count != 1:
-                  raise SystemExit(f'test replacement count for {old!r}: {count}')
-              tests = tests.replace(old, new, 1)
-          test_path.write_text(tests)
+          lines = open('self-architect.log', encoding='utf-8-sig', errors='replace').read().splitlines()
+          path_re = re.compile(r'([A-Za-z0-9_.@/-]+\.(?:ps1|sh|bash|js|ts|mts|mjs|cjs|md|yaml|yml|json|example|template|tpl)):\d+-\d+')
+          finding_re = re.compile(r'\[STRICT\]\s+duplicate-literal:\s+(.*?)\s+-\s+')
+          groups = Counter()
+          exact_suppression_leaks = []
+          for line in lines:
+              match = finding_re.search(line)
+              if not match:
+                  continue
+              files = tuple(dict.fromkeys(path_re.findall(match.group(1))))
+              groups[files] += 1
+              if frozenset(files) in suppressed:
+                  exact_suppression_leaks.append(files)
+          print(f'exact_suppressions={len(suppressed)}')
+          print(f'residual_strict={sum(groups.values())}')
+          print(f'residual_groups={len(groups)}')
+          for files, count in sorted(groups.items(), key=lambda item: (-item[1], item[0])):
+              print(f'count={count} files={" | ".join(files)}')
+          if exact_suppression_leaks:
+              raise SystemExit(f'exact_suppression_leak:{exact_suppression_leaks}')
           PY
-      - name: Commit declaration pair
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/lint-self-architect.config.json tests/powershell/Lint-SelfArchitect.Tests.ps1
-          git commit -m "fix: include declaration migration parity"
-          git push origin HEAD:agent/issue-941-self-architect-migration-pairs
+          cat self-architect.log | grep -E 'Summary:' | tail -n 1 || true
+          echo "lint_status=$lint_status"
+          echo "elapsed_seconds=$elapsed"
+          test "$elapsed" -lt 600
