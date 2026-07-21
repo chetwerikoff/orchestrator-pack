@@ -44,6 +44,7 @@ jobs:
           git checkout origin/main -- "${foundation[@]}"
           python3 <<'PY'
           import json
+          import re
           from pathlib import Path
 
           foundation = [
@@ -99,81 +100,67 @@ jobs:
 
           contracts_path = Path('scripts/pr2-foundation/contracts.ts')
           contracts = contracts_path.read_text(encoding='utf-8')
-          before = """    if (!row || row.terminalState !== 'deleted-now') {
-              return { ok: false, reason: `foundation_row_not_terminal:${path}` };
-            }
-            if (row.replacementOwner) return { ok: false, reason: `foundation_row_owner_survived:${path}` };""".replace('          ', '')
-          after = """    if (!row
-              || row.terminalState !== 'foundation-terminalized'
-              || row.replacementOwner !== 'scripts/pr2-foundation/terminalized') {
-              return { ok: false, reason: `foundation_row_not_terminal:${path}` };
-            }""".replace('          ', '')
-          if before not in contracts:
-              raise RuntimeError('contracts foundation terminal-state block not found')
-          contracts_path.write_text(contracts.replace(before, after), encoding='utf-8')
+          contracts, count = re.subn(
+              r"    if \(!row \|\| row\.terminalState !== 'deleted-now'\) \{\n"
+              r"      return \{ ok: false, reason: `foundation_row_not_terminal:\$\{path\}` \};\n"
+              r"    \}\n"
+              r"    if \(row\.replacementOwner\) return \{ ok: false, reason: `foundation_row_owner_survived:\$\{path\}` \};",
+              "    if (!row\n      || row.terminalState !== 'foundation-terminalized'\n      || row.replacementOwner !== 'scripts/pr2-foundation/terminalized') {\n      return { ok: false, reason: `foundation_row_not_terminal:${path}` };\n    }",
+              contracts,
+              count=1,
+          )
+          if count != 1:
+              raise RuntimeError(f'contracts replacement count={count}')
+          contracts_path.write_text(contracts, encoding='utf-8')
 
           gates_path = Path('scripts/pr2-foundation/mutation-semantic-gates.ts')
           gates = gates_path.read_text(encoding='utf-8')
-          before = """  for (const expected of FOUNDATION_DOC_ROWS) {
-              if (existsSync(path.resolve(expected))) return `foundation_doc_not_deleted:${expected}`;
-            }""".replace('          ', '')
-          after = """  for (const expected of FOUNDATION_DOC_ROWS) {
-              const source = path.resolve(expected);
-              if (!existsSync(source)) return `foundation_compatibility_missing:${expected}`;
-              if (!readFileSync(source, 'utf8').startsWith('// Issue #923 foundation-terminalized:')) {
-                return `foundation_terminal_marker_missing:${expected}`;
-              }
-            }""".replace('          ', '')
-          if before not in gates:
-              raise RuntimeError('semantic gate foundation file block not found')
-          gates_path.write_text(gates.replace(before, after), encoding='utf-8')
+          gates, count = re.subn(
+              r"  for \(const expected of FOUNDATION_DOC_ROWS\) \{\n"
+              r"    if \(existsSync\(path\.resolve\(expected\)\)\) return `foundation_doc_not_deleted:\$\{expected\}`;\n"
+              r"  \}",
+              "  for (const expected of FOUNDATION_DOC_ROWS) {\n    const source = path.resolve(expected);\n    if (!existsSync(source)) return `foundation_compatibility_missing:${expected}`;\n    if (!readFileSync(source, 'utf8').startsWith('// Issue #923 foundation-terminalized:')) {\n      return `foundation_terminal_marker_missing:${expected}`;\n    }\n  }",
+              gates,
+              count=1,
+          )
+          if count != 1:
+              raise RuntimeError(f'semantic-gate replacement count={count}')
+          gates_path.write_text(gates, encoding='utf-8')
 
           worker_status_path = Path('scripts/lib/worker-status-store.mjs')
           worker_status = worker_status_path.read_text(encoding='utf-8')
-          before = """export function testSiblingReadiness(env = process.env) {
-              const docsDir = join(dirname(new URL(import.meta.url).pathname), '..', '..', 'docs');
-              const reportStorePath = env.AO_WORKER_REPORT_STORE
-                ? String(env.AO_WORKER_REPORT_STORE)
-                : (env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR
-                  ? join(String(env.ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR), 'worker-report-store.json')
-                  : '');
-              const workerReportStorePresent = reportStorePath
-                ? existsSync(reportStorePath)
-                : existsSync(join(docsDir, 'worker-report-store.mjs'));
-              const sessionPrBindingResolverPresent = existsSync(join(docsDir, 'session-pr-binding-resolver.mjs'));
-              return {
-                ready: workerReportStorePresent && sessionPrBindingResolverPresent,
-                ok: workerReportStorePresent && sessionPrBindingResolverPresent,
-                workerReportStorePresent,
-                sessionPrBindingResolverPresent,
-                disabled: evaluateWorkerStatusKillSwitch(env).disabled,
-              };
-            }""".replace('          ', '')
-          after = """export function testSiblingReadiness(env = process.env) {
-              const packRoot = join(dirname(new URL(import.meta.url).pathname), '..', '..');
-              const workerReportStorePresent = existsSync(join(
-                packRoot,
-                'scripts',
-                'pr2-foundation',
-                'terminalized',
-                'worker-report-store.ts',
-              ));
-              const sessionPrBindingResolverPresent = existsSync(join(
-                packRoot,
-                'docs',
-                'session-pr-binding-resolver.mjs',
-              ));
-              return {
-                ready: workerReportStorePresent && sessionPrBindingResolverPresent,
-                ok: workerReportStorePresent && sessionPrBindingResolverPresent,
-                workerReportStorePresent,
-                sessionPrBindingResolverPresent,
-                disabled: evaluateWorkerStatusKillSwitch(env).disabled,
-              };
-            }""".replace('          ', '')
-          if before not in worker_status:
-              raise RuntimeError('worker-status sibling readiness block not found')
-          worker_status_path.write_text(worker_status.replace(before, after), encoding='utf-8')
+          replacement = """export function testSiblingReadiness(env = process.env) {
+            const packRoot = join(dirname(new URL(import.meta.url).pathname), '..', '..');
+            const workerReportStorePresent = existsSync(join(
+              packRoot,
+              'scripts',
+              'pr2-foundation',
+              'terminalized',
+              'worker-report-store.ts',
+            ));
+            const sessionPrBindingResolverPresent = existsSync(join(
+              packRoot,
+              'docs',
+              'session-pr-binding-resolver.mjs',
+            ));
+            return {
+              ready: workerReportStorePresent && sessionPrBindingResolverPresent,
+              ok: workerReportStorePresent && sessionPrBindingResolverPresent,
+              workerReportStorePresent,
+              sessionPrBindingResolverPresent,
+              disabled: evaluateWorkerStatusKillSwitch(env).disabled,
+            };
+          }""".replace('          ', '')
+          worker_status, count = re.subn(
+              r"export function testSiblingReadiness\(env = process\.env\) \{.*?\n\}",
+              replacement,
+              worker_status,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise RuntimeError(f'worker-status readiness replacement count={count}')
+          worker_status_path.write_text(worker_status, encoding='utf-8')
 
           terminal_test = Path('scripts/pr2-foundation/terminalized-port.test.ts')
           terminal_test.write_text("""import { existsSync, readFileSync } from 'node:fs';
