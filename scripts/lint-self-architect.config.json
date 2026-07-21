@@ -172,7 +172,7 @@
     },
     {
       "rule": "duplicate-literal",
-      "reason": "Issue #923 declaration migration parity until draft 315; remove at cutover",
+      "reason": "Issue #923 declaration migration parity until draft 315; remove after cutover",
       "files": [
         "docs/events-optional-consumer-signal-recovery.d.mts",
         "scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts"
