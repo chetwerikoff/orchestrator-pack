@@ -1,4 +1,4 @@
-name: issue-943-corrected-helper-failure-summary
+name: issue-943-corrected-helper-v2-failure-summary
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88792522529'
+      SOURCE_JOB_ID: '88792684875'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact corrected-helper failure
+      - name: Print exact corrected-helper-v2 failure
         shell: bash
         run: |
           set -euo pipefail
