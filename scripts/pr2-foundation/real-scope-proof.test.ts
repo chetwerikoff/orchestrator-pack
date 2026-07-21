@@ -1,7 +1,7 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { resolveLatestCommittedSnapshot } from '../pr-scope-check.ts';
 import { validateFoundationScope } from './contracts.ts';
 
@@ -9,11 +9,16 @@ const repoRoot = path.resolve('.');
 const declarationPath = 'docs/declarations/923.chatgpt-issue-923.json';
 
 function git(args: string[]): string {
-  return execFileSync('git', args, {
+  const result = runProcessSync({
+    command: 'git',
+    args,
     cwd: repoRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`git_failed:${args.join(' ')}:${result.stderr || result.error || result.outcome}`);
+  }
+  return result.stdout.trim();
 }
 
 function changedRows(baseSha: string): Array<{ status: string; path: string }> {
