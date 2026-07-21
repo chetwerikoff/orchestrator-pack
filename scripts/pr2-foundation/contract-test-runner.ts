@@ -39,14 +39,18 @@ async function main(): Promise<void> {
     resolve('node_modules/vitest/vitest.mjs'),
     'run',
     '--config',
-    'scripts/toolchain/vitest-foundation.config.ts',
+    'vitest.config.ts',
+    'scripts/pr2-foundation/binding-cache.test.ts',
     'scripts/pr2-foundation/foundation.test.ts',
     'scripts/pr2-foundation/migration-symlink.test.ts',
     'scripts/pr2-foundation/mutation-catalog.test.ts',
+    'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
     'scripts/pr2-foundation/real-scope-proof.test.ts',
+    'scripts/pr2-foundation/review-head-ready.test.ts',
+    'scripts/pr2-foundation/terminalized-port.test.ts',
     'scripts/pr2-foundation/worker-notification-compat.test.ts',
   ];
-  if (ac) args.push('--testNamePattern', `^\\[${ac}\\]`);
+  if (ac) args.push('--testNamePattern', `^\[${ac}\]`);
   const result = await runProcess({
     command: process.execPath,
     args,
