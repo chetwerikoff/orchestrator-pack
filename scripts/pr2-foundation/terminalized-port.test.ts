@@ -55,6 +55,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     );
     expect(wrapper).not.toContain('scripts/lib/Invoke-TypeScriptCli.ts');
     expect(wrapper).not.toContain("'--experimental-strip-types'");
+    expect(wrapper).not.toContain('Write-MechanicalTransportPrivateFile');
     expect(existsSync(path.resolve(
       'scripts/pr2-foundation/terminalized/worker-report-store.ts',
     ))).toBe(true);
