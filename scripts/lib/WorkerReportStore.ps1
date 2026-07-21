@@ -73,7 +73,7 @@ function Invoke-WorkerReportStoreCli {
         )
         $stderr = & $node.Source @nodeArgs 2>&1
         if ($LASTEXITCODE -ne 0) {
-  throw "worker-report-store.ts $Subcommand exited $LASTEXITCODE: $stderr"
+  throw "worker-report-store.ts $Subcommand exited ${LASTEXITCODE}: $stderr"
         }
         return Read-MechanicalNodeFilterCliOutput -OutputPath $outputPath -Label 'worker-report-store' -Subcommand $Subcommand
     }
