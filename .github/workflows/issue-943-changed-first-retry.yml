@@ -1,11 +1,11 @@
-name: issue-943-changed-first-retry-v2
+name: issue-943-changed-first-retry-v3
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: issue-943-changed-first-retry-v2
+  group: issue-943-changed-first-retry-v3
   cancel-in-progress: true
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Reapply exact changed-first patch with explicit scope diagnostics
+      - name: Reapply exact changed-first patch and align structural regressions
         shell: bash
         run: |
           set -euo pipefail
@@ -50,6 +50,35 @@ jobs:
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
           script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
           exec(compile(script, '<changed-first-patch>', 'exec'), {'__name__': '__main__'})
+
+          tests_path = Path('tests/powershell/Lint-SelfArchitect.Tests.ps1')
+          tests = tests_path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "        $noveltyIndex = $body.IndexOf('if ($requireIntroduced)')\n",
+                  "        $noveltyIndex = $body.IndexOf('Test-IsBlockNovelAtPath')\n",
+                  'novelty marker',
+              ),
+              (
+                  "        $duplicateBody | Should -Not -Match 'ToBase64String'\n"
+                  "        $duplicateBody | Should -Match '\\$blockKey\\s*=\\s*\\[string\\]\\$block\\.text'\n",
+                  "        $duplicateBody | Should -Not -Match 'ToBase64String'\n"
+                  "        $helperStart = $source.IndexOf('function Add-SlidingBlockLocations')\n"
+                  "        $helperEnd = $source.IndexOf('function Find-DuplicateLiteralFindings')\n"
+                  "        $helperStart | Should -BeGreaterOrEqual 0\n"
+                  "        $helperEnd | Should -BeGreaterThan $helperStart\n"
+                  "        $helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)\n"
+                  "        $helperBody | Should -Not -Match 'ToBase64String'\n"
+                  "        $helperBody | Should -Match '\\$blockKey\\s*=\\s*\\[string\\]::Join'\n",
+                  'changed-first key location',
+              ),
+          ]
+          for old, new, label in replacements:
+              count = tests.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              tests = tests.replace(old, new, 1)
+          tests_path.write_text(tests, encoding='utf-8')
 
           expected = sorted([
               'scripts/lint-self-architect.ps1',
