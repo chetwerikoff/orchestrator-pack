@@ -36,6 +36,21 @@ export const PROTECTED_RUNTIME_PATHS = Object.freeze([
   ...CUTOVER_ROWS,
 ] as const);
 
+export const EXACT_EXISTING_SCOPE_PATHS = Object.freeze([
+  'scripts/estate-cut/issue-906.manifest.json',
+  'agent-orchestrator.yaml.example',
+  'scripts/lib/pack-review-worker-notification.ts',
+  'scripts/lib/pack-review-delivery.ts',
+  'scripts/lib/pack-review-delivery.js',
+  'scripts/pack-review-runner.ts',
+  'scripts/pack-review-worker-notification.cases.ts',
+  'tests/external-output-references/capture-manifest.json',
+  'scripts/vitest-ci-lanes.config.json',
+  'package.json',
+  'docs/migration_notes.md',
+  'docs/orchestrator-recovery-runbook.md',
+] as const);
+
 export const AC_MUTATION_CONTROLS = Object.freeze({
   AC1: [
     'registry-changed', 'scheduler-acquirer-running', 'activation-epoch-enforced',
@@ -118,15 +133,11 @@ export function validateEstateSplit(
     if (!row || row.terminalState !== 'deleted-now') {
       return { ok: false, reason: `foundation_row_not_terminal:${path}` };
     }
-    if (row.replacementOwner) {
-      return { ok: false, reason: `foundation_row_owner_survived:${path}` };
-    }
+    if (row.replacementOwner) return { ok: false, reason: `foundation_row_owner_survived:${path}` };
   }
   for (const path of CUTOVER_ROWS) {
     const row = byPath.get(path);
-    if (!row
-      || row.terminalState !== 'owned-by-PR-2-cutover'
-      || row.replacementOwner !== 'draft 315') {
+    if (!row || row.terminalState !== 'owned-by-PR-2-cutover' || row.replacementOwner !== 'draft 315') {
       return { ok: false, reason: `cutover_row_invalid:${path}` };
     }
   }
@@ -158,6 +169,7 @@ export function validateFoundationScope(input: {
   changedPaths: string[];
   addedPaths: string[];
   basePaths: string[];
+  derivedRewritePaths?: string[];
   modes: Record<string, string>;
   laneClassification: Record<string, string>;
   packageJsonChangedKeys?: string[];
@@ -171,13 +183,24 @@ export function validateFoundationScope(input: {
     return { ok: false, reason: 'declaration_baseline_mismatch' };
   }
   if (Date.parse(declaration.created_at) > Date.now()) return { ok: false, reason: 'declaration_timestamp_invalid' };
+
   const base = new Set(input.basePaths.map(normalize));
+  const added = new Set(input.addedPaths.map(normalize));
+  const derived = new Set((input.derivedRewritePaths ?? []).map(normalize));
+  const exactExisting = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS].map(normalize));
+
   for (const changed of input.changedPaths.map(normalize)) {
-    if (!declarationAllows(changed, declaration)) return { ok: false, reason: `path_not_declared:${changed}` };
     if ((PROTECTED_RUNTIME_PATHS as readonly string[]).includes(changed)) {
       return { ok: false, reason: `protected_runtime_path_changed:${changed}` };
     }
-    if (changed.endsWith('.ps1') && input.addedPaths.map(normalize).includes(changed)) {
+    if (added.has(changed)) {
+      if (!declarationAllows(changed, declaration)) {
+        return { ok: false, reason: `addition_not_declared:${changed}` };
+      }
+    } else if (!exactExisting.has(changed) && !derived.has(changed)) {
+      return { ok: false, reason: `modification_outside_independent_union:${changed}` };
+    }
+    if (changed.endsWith('.ps1') && added.has(changed)) {
       return { ok: false, reason: `new_powershell_logic_added:${changed}` };
     }
     const mode = input.modes[changed] ?? '100644';
@@ -185,10 +208,11 @@ export function validateFoundationScope(input: {
     if (mode === '160000') return { ok: false, reason: `gitlink_mode:${changed}` };
     if (!['100644', '100755'].includes(mode)) return { ok: false, reason: `non_regular_mode:${changed}` };
   }
-  for (const added of input.addedPaths.map(normalize)) {
-    if (base.has(added)) return { ok: false, reason: `addition_root_exists_at_base:${added}` };
+
+  for (const addedPath of added) {
+    if (base.has(addedPath)) return { ok: false, reason: `addition_root_exists_at_base:${addedPath}` };
   }
-  const newTests = input.addedPaths.map(normalize).filter((path) => /^scripts\/.*\.test\.ts$/.test(path));
+  const newTests = [...added].filter((path) => /^scripts\/.*\.test\.ts$/.test(path));
   for (const test of newTests) {
     if (!input.laneClassification[test]) return { ok: false, reason: `test_classification_missing:${test}` };
   }
