@@ -1,4 +1,4 @@
-name: issue-943-changed-first-latest-summary
+name: issue-943-v5-apply-failure-summary
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88735851896'
+      SOURCE_JOB_ID: '88791919838'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact changed-first terminal diagnostics
+      - name: Print exact v5 apply failure
         shell: bash
         run: |
           set -euo pipefail
@@ -32,15 +32,14 @@ jobs:
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           needles = (
-              'pr939_', 'self_architect_elapsed_seconds=', 'Summary:', 'No findings.',
-              '[STRICT]', '[FAIL]', 'AssertionError:', 'Test Files', 'Tests ',
-              'Process completed with exit code', '##[error]', 'scope_', 'Changed files:',
+              'expected one match', 'match count', 'changed_path_mismatch', 'diff_check_failed',
+              'Traceback', 'SystemExit', 'Error:', '##[error]', 'Process completed with exit code',
           )
           print('--- matched ---')
           for index, line in enumerate(lines, start=1):
               if any(needle in line for needle in needles):
-                  print(f'{index}:{line[:3000]}')
-          print('--- final 25 ---')
-          for index, line in enumerate(lines[-25:], start=max(1, len(lines) - 24)):
-              print(f'{index}:{line[:3000]}')
+                  print(f'{index}:{line[:4000]}')
+          print('--- final 35 ---')
+          for index, line in enumerate(lines[-35:], start=max(1, len(lines) - 34)):
+              print(f'{index}:{line[:4000]}')
           PY
