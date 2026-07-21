@@ -57,6 +57,7 @@
     "scripts/orchestrator-wake-supervisor.test.ts": "parked",
     "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",
+    "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
     "scripts/pr2-foundation/migration-symlink.test.ts": "light",
     "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
