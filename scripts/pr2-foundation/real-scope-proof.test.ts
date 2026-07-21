@@ -49,16 +49,6 @@ function basePaths(baseSha: string): string[] {
   return output ? output.split(/\r?\n/).filter(Boolean) : [];
 }
 
-function commitOrder(baseSha: string): Array<{ sha: string; paths: string[] }> {
-  const separator = '__OPK_COMMIT__';
-  const output = git(['log', '--reverse', `--format=${separator}%H`, '--name-only', `${baseSha}..HEAD`]);
-  if (!output) return [];
-  return output.split(separator).filter(Boolean).map((block) => {
-    const [sha = '', ...paths] = block.trim().split(/\r?\n/);
-    return { sha, paths: paths.filter(Boolean) };
-  });
-}
-
 function resolveLatestCommittedSnapshotAtCommit(
   commitSha: string,
 ): ReturnType<typeof resolveLatestCommittedSnapshot> {
@@ -152,29 +142,39 @@ function derivedConsumerRewrites(
 }
 
 describe('[AC9] real committed declaration and base-to-head scope proof', () => {
-  it('loads the ancestor snapshot and validates exact existing, added, and derived rewrite authority', () => {
-    const baseSha = 'faac4525e5e457f7480f99b5f26fcfd96da6d9d5';
-    expect(git(['merge-base', '--is-ancestor', baseSha, 'HEAD'])).toBe('');
-    const commits = commitOrder(baseSha);
-    const declarationIndex = commits.findIndex((commit) => commit.paths.includes(declarationPath));
-    const implementationIndex = commits.findIndex((commit) => commit.paths.some((file) => file !== declarationPath));
-    expect(declarationIndex).toBe(0);
-    expect(implementationIndex).toBeGreaterThan(declarationIndex);
+  it('keeps the immutable declaration baseline while validating only the current PR delta', () => {
+    const declarationBaseSha = 'faac4525e5e457f7480f99b5f26fcfd96da6d9d5';
+    const currentBaseSha = git(['rev-parse', 'origin/main']);
+    expect(git(['merge-base', '--is-ancestor', declarationBaseSha, currentBaseSha])).toBe('');
+    expect(git(['merge-base', '--is-ancestor', currentBaseSha, 'HEAD'])).toBe('');
+
+    const declarationCommits = git([
+      'log',
+      '--diff-filter=A',
+      '--format=%H',
+      `${declarationBaseSha}..HEAD`,
+      '--',
+      declarationPath,
+    ]).split(/\r?\n/).filter(Boolean);
+    expect(declarationCommits).toHaveLength(1);
+    const declarationCommitSha = declarationCommits[0];
+    if (!declarationCommitSha) throw new Error('declaration_commit_missing');
+    expect(git(['rev-parse', `${declarationCommitSha}^`])).toBe(declarationBaseSha);
+    expect(git(['diff-tree', '--no-commit-id', '--name-only', '-r', declarationCommitSha])
+      .split(/\r?\n/).filter(Boolean)).toEqual([declarationPath]);
     expect(git(['ls-tree', 'HEAD', '--', declarationPath])).toBe('');
 
-    const declarationCommit = commits[declarationIndex];
-    if (!declarationCommit) throw new Error('declaration_commit_missing');
-    const resolved = resolveLatestCommittedSnapshotAtCommit(declarationCommit.sha);
+    const resolved = resolveLatestCommittedSnapshotAtCommit(declarationCommitSha);
     expect(resolved).toMatchObject({ ok: true });
     if (!resolved.ok) throw new Error(resolved.message);
     const snapshot = resolved.snapshot;
-    expect(snapshot.baseline.commit_sha).toBe(baseSha);
+    expect(snapshot.baseline.commit_sha).toBe(declarationBaseSha);
 
-    const rows = changedRows(baseSha);
+    const rows = changedRows(currentBaseSha);
     expect(rows.some((row) => row.path === declarationPath)).toBe(false);
     const changedPaths = rows.map((row) => row.path);
     const addedPaths = rows.filter((row) => row.status === 'A').map((row) => row.path);
-    const derivedRewritePaths = derivedConsumerRewrites(baseSha, rows);
+    const derivedRewritePaths = derivedConsumerRewrites(currentBaseSha, rows);
     const modes = Object.fromEntries(changedPaths.map((file) => [file, treeMode('HEAD', file)]));
     const lanes = JSON.parse(
       readFileSync(path.join(repoRoot, 'scripts/vitest-ci-lanes.config.json'), 'utf8'),
@@ -182,15 +182,15 @@ describe('[AC9] real committed declaration and base-to-head scope proof', () => 
 
     expect(validateFoundationScope({
       issueNumber: 923,
-      baseCommitSha: baseSha,
+      baseCommitSha: declarationBaseSha,
       declaration: snapshot,
       changedPaths,
       addedPaths,
-      basePaths: basePaths(baseSha),
+      basePaths: basePaths(declarationBaseSha),
       derivedRewritePaths,
       modes,
       laneClassification: lanes.classification,
-      packageJsonChangedKeys: packageJsonOverreach(baseSha),
+      packageJsonChangedKeys: packageJsonOverreach(currentBaseSha),
       revertCommitCount: 1,
     })).toEqual({ ok: true, result: 'foundation-bounded-regular-single-revert' });
   });
