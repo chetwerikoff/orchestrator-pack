@@ -97,6 +97,14 @@ const CACHE_RANK: Record<CacheSource, number> = {
   backfill_resolver: 1,
 };
 const LIVE_RANK = 2;
+const CACHE_KEYS = Object.freeze([
+  'boundAt',
+  'currentHeadSha',
+  'fresh',
+  'prNumber',
+  'sessionId',
+  'source',
+] as const);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -273,6 +281,38 @@ function cacheBinding(cache: BindingCacheRecord, classId: `B${number}`): Binding
   };
 }
 
+export function validateBindingCacheRecord(
+  value: unknown,
+  expectedSessionId: string,
+): { ok: true; record: BindingCacheRecord } | { ok: false; reason: string } {
+  if (!isRecord(value)) return { ok: false, reason: 'cache_shape_invalid' };
+  if (Object.keys(value).sort().join('\n') !== [...CACHE_KEYS].sort().join('\n')) {
+    return { ok: false, reason: 'cache_shape_invalid' };
+  }
+  if (typeof value.sessionId !== 'string' || !value.sessionId.trim()
+    || !Number.isInteger(value.prNumber) || Number(value.prNumber) <= 0
+    || typeof value.currentHeadSha !== 'string' || !SHA40.test(value.currentHeadSha.toLowerCase())
+    || !['push_register', 'claim_pr', 'backfill_resolver'].includes(String(value.source))
+    || !isIso(value.boundAt)
+    || typeof value.fresh !== 'boolean') {
+    return { ok: false, reason: 'cache_shape_invalid' };
+  }
+  if (value.sessionId !== expectedSessionId) {
+    return { ok: false, reason: 'cache_session_mismatch' };
+  }
+  return {
+    ok: true,
+    record: {
+      sessionId: value.sessionId,
+      prNumber: Number(value.prNumber),
+      currentHeadSha: value.currentHeadSha.toLowerCase(),
+      source: value.source as CacheSource,
+      boundAt: value.boundAt,
+      fresh: value.fresh,
+    },
+  };
+}
+
 export function resolveFoundationBinding(input: {
   session: AoSessionRow;
   configuredRepo: string;
@@ -282,7 +322,14 @@ export function resolveFoundationBinding(input: {
   now?: string;
 }): BindingResult {
   const { session, configuredRepo } = input;
-  const cache = input.cache ?? null;
+  const suppliedCache: unknown = input.cache ?? null;
+  const cacheValidation = suppliedCache === null
+    ? null
+    : validateBindingCacheRecord(suppliedCache, session.id);
+  const cache = cacheValidation?.ok ? cacheValidation.record : null;
+  const rejectedCache = cacheValidation && !cacheValidation.ok
+    ? { reason: cacheValidation.reason }
+    : null;
   const eligible = eligibleLiveRows(session, input.openPrs, configuredRepo, input.iterationBranch ?? '');
   if (eligible === null) {
     return { bound: false, classId: 'B1', sessionId: session.id, reason: 'invalid_open_pr_snapshot' };
@@ -292,14 +339,26 @@ export function resolveFoundationBinding(input: {
   const ambiguous = eligible.length > 1;
 
   if (!cache) {
-    if (eligible.length === 0) return { bound: false, classId: 'B1', sessionId: session.id, reason: 'no_source' };
+    if (eligible.length === 0) {
+      return {
+        bound: false,
+        classId: 'B1',
+        sessionId: session.id,
+        reason: 'no_source',
+        ...(rejectedCache ? { context: { rejectedCache } } : {}),
+      };
+    }
     if (ambiguous) {
       return {
         bound: false,
         classId: 'B3',
         sessionId: session.id,
         reason: 'live_ambiguous',
-        context: { reason: 'issue_correlation_ambiguous', candidates: eligible.map((row) => row.number) },
+        context: {
+          reason: 'issue_correlation_ambiguous',
+          candidates: eligible.map((row) => row.number),
+          ...(rejectedCache ? { rejectedCache } : {}),
+        },
       };
     }
     return {
@@ -310,6 +369,7 @@ export function resolveFoundationBinding(input: {
       currentHeadSha: live!.headRefOid,
       source: 'issue_correlation',
       boundAt: now,
+      ...(rejectedCache ? { retainedConflict: { rejectedCache } } : {}),
     };
   }
 
