@@ -114,7 +114,7 @@ export const FOUNDATION_MUTATION_CATALOG: readonly MutationBinding[] = Object.fr
     'manifest-self-authorizes': 'scripts/pr2-foundation/contracts.ts',
     'cutover-path-modified': 'scripts/review-trigger-reconcile.ps1',
     'registry-or-supervisor-modified': 'scripts/orchestrator-wake-supervisor.ps1',
-    'declaration-snapshot-missing': 'docs/declarations/923.chatgpt-issue-923.json',
+    'declaration-snapshot-missing': 'scripts/pr2-foundation/real-scope-proof.test.ts',
     'declaration-created-after-implementation': 'scripts/pr2-foundation/real-scope-proof.test.ts',
     'addition-root-not-predeclared': 'scripts/pr2-foundation/contracts.ts',
     'candidate-tag-self-authorizes': 'scripts/pr2-foundation/contracts.ts',
@@ -129,7 +129,6 @@ export const FOUNDATION_MUTATION_CATALOG: readonly MutationBinding[] = Object.fr
     'multi-revert-plan': 'scripts/pr2-foundation/contracts.ts',
     'new-powershell-logic-added': 'scripts/pr2-foundation/contracts.ts',
   }, {
-    'declaration-snapshot-missing': 'delete',
     'raw-capture-added': 'create',
   }),
 ]);
