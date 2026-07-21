@@ -1,4 +1,4 @@
-name: issue-923-vitest-failure-extract
+name: issue-923-current-ci-failure-extract
 
 on:
   pull_request:
@@ -12,19 +12,25 @@ jobs:
   extract:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
-      SOURCE_JOB_ID: '88704660019'
+      SOURCE_JOB_IDS: '88704713303 88704808829 88704808843'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print focused Vitest failure
+      - name: Print focused current-head failures
         shell: bash
         run: |
           set -euo pipefail
-          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > helper.log
-          sed -n '575,625p' helper.log
+          for job_id in $SOURCE_JOB_IDS; do
+            echo "===== job ${job_id} ====="
+            api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs"
+            curl --fail --silent --show-error --location \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api" > "job-${job_id}.log"
+            echo '--- filtered ---'
+            grep -nE 'FAIL|Fail|failed|Failed|AssertionError|Error:|##\[error\]|expected|received|pipeline|scope|real-scope|terminalized-port|Test Files|Tests ' "job-${job_id}.log" | tail -n 500 || true
+            echo '--- final 300 ---'
+            tail -n 300 "job-${job_id}.log"
+          done
