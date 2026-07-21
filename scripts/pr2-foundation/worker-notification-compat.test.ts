@@ -1,11 +1,8 @@
 import {
   existsSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -15,6 +12,7 @@ import {
 } from './binding.ts';
 import { DEFAULT_FOUNDATION_CONFIG } from './config.ts';
 import { withJournalLock } from './journal-lock.ts';
+import { createTestRootRegistry } from './test-root.ts';
 import {
   admitDispatchJournalRecord,
   DISPATCH_OUTCOME_IN_FLIGHT,
@@ -29,15 +27,9 @@ import {
 } from './worker-nudge-claim-store.ts';
 import { resolveVerifiedWorkerNotificationTarget } from './worker-notification-target.ts';
 
-const roots: string[] = [];
+const testRoots = createTestRootRegistry();
 const originalAoBaseDir = process.env.AO_BASE_DIR;
 const originalLockStaleMs = process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
-
-function tempRoot(prefix: string): string {
-  const root = mkdtempSync(path.join(tmpdir(), prefix));
-  roots.push(root);
-  return root;
-}
 
 function workerSession(): AoSessionRow {
   return {
@@ -94,7 +86,7 @@ afterEach(() => {
   } else {
     process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = originalLockStaleMs;
   }
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  testRoots.cleanup();
 });
 
 describe('[AC4] TypeScript notification compatibility', () => {
@@ -104,7 +96,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
   });
 
   it('resolves one live owner from one session-list and one bulk PR snapshot, then persists generation ownership', async () => {
-    const root = tempRoot('opk-pr2-target-');
+    const root = testRoots.create('opk-pr2-target-');
     process.env.AO_BASE_DIR = path.join(root, 'ao-base');
     let versionReads = 0;
     let sessionReads = 0;
@@ -167,7 +159,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
   });
 
   it('fails closed when live AO version provenance is not exactly 0.10.3', async () => {
-    const root = tempRoot('opk-pr2-version-');
+    const root = testRoots.create('opk-pr2-version-');
     process.env.AO_BASE_DIR = path.join(root, 'ao-base');
     await expect(resolveVerifiedWorkerNotificationTarget({
       trustedPackRoot: root,
@@ -187,7 +179,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
   });
 
   it('preserves single-flight claim, message hash, send-attempt, terminal dedupe, and material-change escalation', async () => {
-    const root = tempRoot('opk-pr2-claim-');
+    const root = testRoots.create('opk-pr2-claim-');
     process.env.AO_BASE_DIR = path.join(root, 'ao-base');
     const base = {
       prNumber: 923,
@@ -266,7 +258,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
   });
 
   it('reclaims a crashed journal lock but never removes a live owner lock', async () => {
-    const root = tempRoot('opk-pr2-journal-lock-');
+    const root = testRoots.create('opk-pr2-journal-lock-');
     const journalPath = path.join(root, 'dispatch.json');
     const lockPath = `${journalPath}.lock`;
     process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = '1000';
