@@ -256,4 +256,129 @@ Describe 'scripts/lint-self-architect.ps1' {
             Pop-Location
         }
     }
+
+
+    # Issue #941 exact migration-pair suppressions.
+    It 'suppresses only an exact configured migration pair and reactivates on a third file' {
+        $tempRoot = Join-Path -Path $TestDrive -ChildPath 'lint-exact-migration-pair'
+        $scriptsDir = Join-Path -Path $tempRoot -ChildPath 'scripts'
+        New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+
+        $sharedBlock = @(1..12 | ForEach-Object { "migration-line-$($_)" })
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'legacy.mjs') -Value $sharedBlock -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'terminalized.ts') -Value $sharedBlock -Encoding UTF8
+
+        $configPath = Join-Path $tempRoot 'lint-config.json'
+        @{
+            scanPaths = @('scripts/**')
+            excludePaths = @()
+            scriptExtensions = @('.mjs', '.ts')
+            templateExtensions = @()
+            duplicateLiteralMinLines = 10
+            suppressions = @(
+                @{
+                    rule = 'duplicate-literal'
+                    files = @('scripts/legacy.mjs', 'scripts/terminalized.ts')
+                }
+            )
+        } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $exitCode = $LASTEXITCODE
+        $output = $rawOutput | Out-String
+        $exitCode | Should -Be 0
+        $output | Should -Not -Match '\[STRICT\]'
+
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'third.ts') -Value $sharedBlock -Encoding UTF8
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $exitCode = $LASTEXITCODE
+        $output = $rawOutput | Out-String
+        $exitCode | Should -Be 1
+        $output | Should -Match 'duplicate-literal'
+        $output | Should -Match '\[STRICT\]'
+    }
+
+    It 'does not let a broader configured file set suppress a smaller finding set' {
+        $tempRoot = Join-Path -Path $TestDrive -ChildPath 'lint-suppression-cardinality'
+        $scriptsDir = Join-Path -Path $tempRoot -ChildPath 'scripts'
+        New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+
+        $sharedBlock = @(1..12 | ForEach-Object { "cardinality-line-$($_)" })
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $sharedBlock -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $sharedBlock -Encoding UTF8
+
+        $configPath = Join-Path $tempRoot 'lint-config.json'
+        @{
+            scanPaths = @('scripts/**')
+            excludePaths = @()
+            scriptExtensions = @('.ts')
+            templateExtensions = @()
+            duplicateLiteralMinLines = 10
+            suppressions = @(
+                @{
+                    rule = 'duplicate-literal'
+                    files = @('scripts/first.ts', 'scripts/second.ts', 'scripts/absent.ts')
+                }
+            )
+        } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $exitCode = $LASTEXITCODE
+        $output = $rawOutput | Out-String
+        $exitCode | Should -Be 1
+        $output | Should -Match 'duplicate-literal'
+        $output | Should -Match '\[STRICT\]'
+    }
+
+    It 'checks suppressions before novelty reads and shares one base-file cache' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $start = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $end = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+        $start | Should -BeGreaterOrEqual 0
+        $end | Should -BeGreaterThan $start
+        $body = $source.Substring($start, $end - $start)
+
+        $suppressionIndex = $body.IndexOf('if (Test-Suppressed -Config $Config -Rule $rule -Files $files) { continue }')
+        $noveltyIndex = $body.IndexOf('if ($requireIntroduced)')
+        $suppressionIndex | Should -BeGreaterOrEqual 0
+        $suppressionIndex | Should -BeLessThan $noveltyIndex
+        ([regex]::Matches($body, '\$baseLinesCache\s*=\s*@\{\}')).Count | Should -Be 1
+    }
+
+    It 'declares exactly the fifteen Issue 923 runtime migration pairs without wildcards' {
+        $configPath = Join-Path $script:RepoRoot 'scripts/lint-self-architect.config.json'
+        $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $suppressions = @($config.suppressions | Where-Object { $_.rule -eq 'duplicate-literal' })
+        $suppressions.Count | Should -Be 15
+
+        $expectedLegacy = @(
+            'docs/ao-0-10-review-api.mjs',
+            'docs/autonomous-review-retry.mjs',
+            'docs/events-optional-consumer-signal-recovery.mjs',
+            'docs/orchestrator-wake-filter.mjs',
+            'docs/review-bulk-send-diagnose.mjs',
+            'docs/review-finding-delivery-confirm.mjs',
+            'docs/review-head-ready.mjs',
+            'docs/review-producer-contract.mjs',
+            'docs/review-send-reconcile.mjs',
+            'docs/review-trigger-reconcile.mjs',
+            'docs/review-wake-trigger.mjs',
+            'docs/reviewer-failure-evidence-markers.mjs',
+            'docs/worker-iteration-cycle.mjs',
+            'docs/worker-message-dispatch-observe.mjs',
+            'docs/worker-report-store.mjs'
+        )
+        $actualLegacy = @()
+        foreach ($entry in $suppressions) {
+            @($entry.files).Count | Should -Be 2
+            ($entry.files -join "`n") | Should -Not -Match '[*?\[\]]'
+            $legacy = @($entry.files | Where-Object { $_ -like 'docs/*.mjs' })
+            $terminalized = @($entry.files | Where-Object { $_ -like 'scripts/pr2-foundation/terminalized/*.ts' })
+            $legacy.Count | Should -Be 1
+            $terminalized.Count | Should -Be 1
+            $actualLegacy += $legacy[0]
+        }
+        @(Compare-Object -ReferenceObject ($expectedLegacy | Sort-Object) -DifferenceObject ($actualLegacy | Sort-Object)).Count | Should -Be 0
+    }
+
 }

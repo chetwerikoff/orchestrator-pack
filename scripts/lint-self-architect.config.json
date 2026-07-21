@@ -49,5 +49,111 @@
   "heuristicMaxFileLines": 300,
   "pairedOverlapMinLines": 6,
   "pairedOverlapMinRatio": 0.75,
-  "suppressions": []
+  "suppressions": [
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/ao-0-10-review-api.mjs",
+        "scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/autonomous-review-retry.mjs",
+        "scripts/pr2-foundation/terminalized/autonomous-review-retry.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/events-optional-consumer-signal-recovery.mjs",
+        "scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/orchestrator-wake-filter.mjs",
+        "scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-bulk-send-diagnose.mjs",
+        "scripts/pr2-foundation/terminalized/review-bulk-send-diagnose.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-finding-delivery-confirm.mjs",
+        "scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-head-ready.mjs",
+        "scripts/pr2-foundation/terminalized/review-head-ready.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-producer-contract.mjs",
+        "scripts/pr2-foundation/terminalized/review-producer-contract.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-send-reconcile.mjs",
+        "scripts/pr2-foundation/terminalized/review-send-reconcile.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-trigger-reconcile.mjs",
+        "scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/review-wake-trigger.mjs",
+        "scripts/pr2-foundation/terminalized/review-wake-trigger.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/reviewer-failure-evidence-markers.mjs",
+        "scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/worker-iteration-cycle.mjs",
+        "scripts/pr2-foundation/terminalized/worker-iteration-cycle.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/worker-message-dispatch-observe.mjs",
+        "scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "files": [
+        "docs/worker-report-store.mjs",
+        "scripts/pr2-foundation/terminalized/worker-report-store.ts"
+      ]
+    }
+  ]
 }
