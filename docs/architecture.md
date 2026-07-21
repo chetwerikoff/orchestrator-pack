@@ -169,7 +169,9 @@ The common finding format and signature rules are defined in
 
 Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
 bridge (gitignored `.ao/` scripts) instead of Codex; see
-[`reviewer-switch-runbook.md`](reviewer-switch-runbook.md).
+[`reviewer-switch-runbook.md`](reviewer-switch-runbook.md). Operator override when
+pack-review is the sole failing required check:
+[`pack-review-waiver-merge-runbook.md`](pack-review-waiver-merge-runbook.md).
 
 **Post-merge lifecycle (AO 0.9.x).** PR merge triggers AO **worker** session and
 worktree cleanup; it does **not** lifecycle-couple existing `code-reviews/` runs
