@@ -1,50 +1,33 @@
-name: issue-941-pr939-overlay-validation
+name: issue-941-overlay-log-summary
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  validate:
+  summarize:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
-      PR_939_HEAD: 50722cde9571877d482dfb893d925a23d32617fa
-      PR_939_BASE: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
-      POLICY_HEAD: 730245a15151ac87d5bce9de319e9ee6ec482cd4
+      SOURCE_JOB_ID: '88694890317'
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Assemble exact PR 939 head with Issue 941 policy overlay
+      - name: Print exact overlay verdict
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin "$PR_939_HEAD" "$POLICY_HEAD"
-          git checkout --detach "$PR_939_HEAD"
-          test "$(git rev-parse HEAD)" = "$PR_939_HEAD"
-          git checkout "$POLICY_HEAD" -- \
-            scripts/lint-self-architect.ps1 \
-            scripts/lint-self-architect.config.json
-      - name: Run strict self-architect within the existing budget
-        shell: bash
-        run: |
-          set -euo pipefail
-          started="$(date +%s)"
-          set +e
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
-            -Strict \
-            -BaseRef "$PR_939_BASE" \
-            -HeadRef "$PR_939_HEAD" \
-            > self-architect.log 2>&1
-          status=$?
-          set -e
-          elapsed=$(( $(date +%s) - started ))
-          cat self-architect.log
-          echo "elapsed_seconds=$elapsed"
-          test "$status" -eq 0
-          test "$elapsed" -lt 600
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" > overlay.log
+          echo '--- verdict ---'
+          grep -nE 'Summary:|elapsed_seconds=|\[STRICT\]|##\[error\]|Process completed with exit code' overlay.log | tail -n 300 || true
+          echo '--- tail ---'
+          tail -n 200 overlay.log
