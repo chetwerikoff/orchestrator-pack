@@ -169,6 +169,14 @@
         "docs/worker-report-store.mjs",
         "scripts/pr2-foundation/terminalized/worker-report-store.ts"
       ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "reason": "Issue #923 declaration migration parity until draft 315; remove at cutover",
+      "files": [
+        "docs/events-optional-consumer-signal-recovery.d.mts",
+        "scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts"
+      ]
     }
   ]
 }

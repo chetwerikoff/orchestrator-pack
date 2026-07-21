@@ -345,15 +345,16 @@ Describe 'scripts/lint-self-architect.ps1' {
         ([regex]::Matches($body, '\$baseLinesCache\s*=\s*@\{\}')).Count | Should -Be 1
     }
 
-    It 'declares exactly the fifteen Issue 923 runtime migration pairs without wildcards' {
+    It 'declares exactly the sixteen Issue 923 migration pairs without wildcards' {
         $configPath = Join-Path $script:RepoRoot 'scripts/lint-self-architect.config.json'
         $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $suppressions = @($config.suppressions | Where-Object { $_.rule -eq 'duplicate-literal' })
-        $suppressions.Count | Should -Be 15
+        $suppressions.Count | Should -Be 16
 
         $expectedLegacy = @(
             'docs/ao-0-10-review-api.mjs',
             'docs/autonomous-review-retry.mjs',
+            'docs/events-optional-consumer-signal-recovery.d.mts',
             'docs/events-optional-consumer-signal-recovery.mjs',
             'docs/orchestrator-wake-filter.mjs',
             'docs/review-bulk-send-diagnose.mjs',
@@ -372,7 +373,7 @@ Describe 'scripts/lint-self-architect.ps1' {
         foreach ($entry in $suppressions) {
             @($entry.files).Count | Should -Be 2
             ($entry.files -join "`n") | Should -Not -Match '[*?\[\]]'
-            $legacy = @($entry.files | Where-Object { $_ -like 'docs/*.mjs' })
+            $legacy = @($entry.files | Where-Object { $_ -like 'docs/*.mjs' -or $_ -like 'docs/*.d.mts' })
             $terminalized = @($entry.files | Where-Object { $_ -like 'scripts/pr2-foundation/terminalized/*.ts' })
             $legacy.Count | Should -Be 1
             $terminalized.Count | Should -Be 1
