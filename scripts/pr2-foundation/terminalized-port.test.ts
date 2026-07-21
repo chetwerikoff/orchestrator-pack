@@ -39,7 +39,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     );
   });
 
-  it('limits the justified lint suppressions to the sixteen dormant mirror pairs', () => {
+  it('limits the justified lint suppressions to the exact sixteen dormant mirror pairs', () => {
     const config = JSON.parse(readFileSync(
       path.resolve(FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH),
       'utf8',
@@ -52,15 +52,19 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     const nonSuppressionDigest = createHash('sha256')
       .update(JSON.stringify(nonSuppressionConfig))
       .digest('hex');
+    const expectedSuppressions = FOUNDATION_DOC_ROWS.map((source) => ({
+      rule: 'duplicate-literal',
+      reason: 'Issue #923 migration parity until draft 315; remove at cutover',
+      files: [source, targetFor(source)],
+    }));
+    const suppressionKey = (entry: { files: string[] }): string => entry.files.join('\0');
 
     expect(nonSuppressionDigest).toBe('b7e8863fb2bfdcf4f9c3c7e5f393ebe810880b158362fb50cfd37cb2d084eb12');
     expect(config.excludePaths).not.toContain('scripts/pr2-foundation/terminalized/**');
-    expect(suppressions).toEqual(FOUNDATION_DOC_ROWS.map((source) => ({
-      rule: 'duplicate-literal',
-      files: [source, targetFor(source)],
-      reason: 'Issue #923 keeps this exact legacy-live/dormant-TypeScript mirror until draft 315 cutover.',
-    })));
+    expect([...suppressions].sort((left, right) => suppressionKey(left).localeCompare(suppressionKey(right))))
+      .toEqual([...expectedSuppressions].sort((left, right) => suppressionKey(left).localeCompare(suppressionKey(right))));
     for (const suppression of suppressions) {
+      expect(suppression.files).toHaveLength(2);
       const hasWildcard = suppression.files.some((file) =>
         file.includes('*') || file.includes('?') || file.includes('['));
       expect(hasWildcard, suppression.files.join(' | ')).toBe(false);
