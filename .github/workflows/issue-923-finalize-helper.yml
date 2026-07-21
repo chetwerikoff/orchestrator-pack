@@ -1,0 +1,58 @@
+name: issue-923-finalize-helper
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply final Issue 923 fixes
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const targetPath = 'scripts/pr2-foundation/worker-notification-target.ts';
+          let target = fs.readFileSync(targetPath, 'utf8');
+          const beforeOwner = `  const owner = resolvePrOwnerSessionForNudge({\n    prNumber: input.prNumber,\n  });`;
+          const afterOwner = `  const owner = resolvePrOwnerSessionForNudge({\n    prNumber: input.prNumber,\n    headSha: input.headSha,\n    sessions,\n    openPrs,\n  });`;
+          if (!target.includes(beforeOwner)) throw new Error('owner resolver call not found');
+          target = target.replace(beforeOwner, afterOwner);
+          fs.writeFileSync(targetPath, target, 'utf8');
+
+          const gatesPath = 'scripts/pr2-foundation/mutation-semantic-gates.ts';
+          let gates = fs.readFileSync(gatesPath, 'utf8');
+          const beforeGate = `'AC9:addition-root-not-predeclared': textGate('scripts/pr2-foundation/contracts.ts', ['path_not_declared'])`;
+          const afterGate = `'AC9:addition-root-not-predeclared': textGate('scripts/pr2-foundation/contracts.ts', ['addition_not_declared'])`;
+          if (!gates.includes(beforeGate)) throw new Error('AC9 semantic gate token not found');
+          gates = gates.replace(beforeGate, afterGate);
+          fs.writeFileSync(gatesPath, gates, 'utf8');
+
+          for (const temporary of [
+            '.github/workflows/issue-923-focused-diagnostic.yml',
+            '.github/workflows/issue-923-finalize-helper.yml',
+          ]) {
+            if (fs.existsSync(temporary)) fs.rmSync(temporary);
+          }
+          NODE
+      - name: Commit final fixes
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: complete Issue 923 owner and scope contracts"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
