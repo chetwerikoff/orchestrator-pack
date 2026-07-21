@@ -1,4 +1,4 @@
-name: issue-923-atomic-fix-input
+name: issue-941-pr939-overlay-validation
 
 on:
   pull_request:
@@ -8,28 +8,43 @@ permissions:
   contents: read
 
 jobs:
-  export-input:
+  validate:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      PR_939_HEAD: 50722cde9571877d482dfb893d925a23d32617fa
+      PR_939_BASE: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
+      POLICY_HEAD: a757c829b449edf38e0b6df3a5b9fda162b13674
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 50722cde9571877d482dfb893d925a23d32617fa
           fetch-depth: 0
-      - name: Export exact head inputs
+      - name: Assemble exact PR 939 head with Issue 941 policy overlay
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p payload/scripts/pr2-foundation
-          cp scripts/lint-self-architect.config.json payload/scripts/
-          cp scripts/pr2-foundation/contracts.ts payload/scripts/pr2-foundation/
-          cp scripts/pr2-foundation/terminalized-port.test.ts payload/scripts/pr2-foundation/
-          git rev-parse 'HEAD^{tree}' > payload/base-tree-sha.txt
-          git rev-parse HEAD > payload/base-commit-sha.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-923-atomic-fix-input
-          path: payload
-          if-no-files-found: error
-          retention-days: 1
+          git fetch origin "$PR_939_HEAD" "$POLICY_HEAD"
+          git checkout --detach "$PR_939_HEAD"
+          test "$(git rev-parse HEAD)" = "$PR_939_HEAD"
+          git checkout "$POLICY_HEAD" -- \
+            scripts/lint-self-architect.ps1 \
+            scripts/lint-self-architect.config.json
+      - name: Run strict self-architect within the existing budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          started="$(date +%s)"
+          set +e
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef "$PR_939_BASE" \
+            -HeadRef "$PR_939_HEAD" \
+            > self-architect.log 2>&1
+          status=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+          cat self-architect.log
+          echo "elapsed_seconds=$elapsed"
+          test "$status" -eq 0
+          test "$elapsed" -lt 600
