@@ -338,8 +338,11 @@ describe('[AC7] estate split', () => {
     );
     expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
     for (const file of FOUNDATION_DOC_ROWS) {
-      expect(existsSync(path.join(repoRoot, file))).toBe(false);
-    }
+    const source = path.join(repoRoot, file);
+    expect(existsSync(source), file).toBe(true);
+    expect(readFileSync(source, 'utf8'), file)
+      .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
+  }
     for (const file of CUTOVER_ROWS) {
       expect(existsSync(path.join(repoRoot, file))).toBe(true);
     }

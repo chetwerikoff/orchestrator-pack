@@ -47,15 +47,17 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     }
   });
 
-  it('launches the terminalized worker-report store through the canonical Node 22 TypeScript bridge', () => {
+  it('keeps the worker-report PowerShell edge byte-compatible and the TypeScript authority dormant', () => {
     const wrapper = readFileSync(path.resolve('scripts/lib/WorkerReportStore.ps1'), 'utf8');
-    expect(wrapper).toContain('scripts/lib/Invoke-TypeScriptCli.ts');
-    expect(wrapper).toContain("'--experimental-strip-types'");
-    expect(wrapper).toContain("'--script', $Script:WorkerReportStoreCli");
-    expect(wrapper).toContain('exited ${LASTEXITCODE}: $stderr');
-    expect(wrapper).not.toContain(
+    expect(wrapper).toContain("'docs/worker-report-store.mjs'");
+    expect(wrapper).toContain(
       'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',
     );
+    expect(wrapper).not.toContain('scripts/lib/Invoke-TypeScriptCli.ts');
+    expect(wrapper).not.toContain("'--experimental-strip-types'");
+    expect(existsSync(path.resolve(
+      'scripts/pr2-foundation/terminalized/worker-report-store.ts',
+    ))).toBe(true);
   });
 
   it('treats the TypeScript implementation as sibling readiness, not a pre-existing data file', () => {
